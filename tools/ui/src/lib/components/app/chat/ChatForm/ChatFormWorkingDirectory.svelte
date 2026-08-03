@@ -1,17 +1,23 @@
 <script lang="ts">
-	import { Folder, FolderOpen, X } from '@lucide/svelte';
+	import { FolderOpen } from '@lucide/svelte';
 	import { untrack } from 'svelte';
-	import { fly } from 'svelte/transition';
 	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { BuiltInTool } from '$lib/enums';
-	import { abbreviateWorkingDir, abbreviateHome, lastPathSegment } from '$lib/utils';
+	import {
+		abbreviateHome,
+		 buildCaseInsensitiveGlob,
+		 joinPath,
+		 lastPathSegment,
+		 rankEntries,
+		splitPathQuery,
+		type GlobEntry
+	} from '$lib/utils';
 	import { debounce } from '$lib/utils/debounce';
 	import * as Popover from '$lib/components/ui/popover';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
-	import { ActionIcon } from '$lib/components/app/actions';
-	import { cn } from '$lib/components/ui/utils';
+	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
+	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
 
 	interface Props {
 		class?: string;
@@ -23,12 +29,6 @@
 		 * an extra click after the popover closes.
 		 */
 		onClose?: () => void;
-	}
-
-	// One entry of file_glob_search's structured `entries` result field.
-	interface GlobEntry {
-		path: string;
-		type: string;
 	}
 
 	let {
@@ -63,15 +63,6 @@
 	// the tools store. Anchors both the search scope and the chip's `~`
 	// abbreviation.
 	let homeBase = $derived(toolsStore.serverHome);
-
-	let displayLabel = $derived.by(() => {
-		if (!directory) return 'Select working directory';
-		return abbreviateWorkingDir(directory, homeBase);
-	});
-
-	// Full path surface for the chip - lets the user hover the abbreviated
-	// label to recall exactly which directory is set.
-	let displayLabelTitle = $derived(directory ?? '');
 
 	// AbortController + sequence counter to discard stale responses when the user
 	// keeps typing; a newer call aborts the previous one. The sequence counter
@@ -122,60 +113,10 @@
 		isSearching = false;
 	}
 
-	// Path-like queries (starting with / or ~) navigate: search the parent
-	// directory for the last segment instead of glob-matching home-relative
-	// entries.
-	function splitPathQuery(query: string): { parent: string; last: string } | null {
-		if (!query.startsWith('/') && !query.startsWith('~')) return null;
-		const normalized = query.replace(/\/+$/, '');
-		if (!normalized || normalized === '~') {
-			return { parent: normalized === '~' ? '~' : '/', last: '' };
-		}
-		const idx = normalized.lastIndexOf('/');
-		if (idx === 0) return { parent: '/', last: normalized.slice(1) };
-		return { parent: normalized.slice(0, idx), last: normalized.slice(idx + 1) };
-	}
-
 	// Effective directory the current search runs against (shown in the
 	// footer); updated by doSearch, including when an exactly-typed
 	// directory is "entered".
 	let searchScope = $state('~');
-
-	function buildCaseInsensitiveGlob(query: string): string {
-		let out = '*';
-		for (const c of query) {
-			const lo = c.toLowerCase();
-			const up = c.toUpperCase();
-			if (lo !== up) out += `[${lo}${up}]`;
-			else if (!'*?[]'.includes(c)) out += c;
-		}
-		return out + '*';
-	}
-
-	// Client-side ranking: exact basename match first, then prefix, then
-	// substring; ties broken by shorter path, then alphabetically.
-	function rankScore(path: string, query: string): number {
-		const name = lastPathSegment(path).toLowerCase();
-		const q = query.toLowerCase();
-		if (name === q) return 0;
-		if (name.startsWith(q)) return 1;
-		if (name.includes(q)) return 2;
-		return 3;
-	}
-
-	function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
-		return [...entries].sort(
-			(a, b) =>
-				rankScore(a.path, query) - rankScore(b.path, query) ||
-				a.path.length - b.path.length ||
-				a.path.localeCompare(b.path)
-		);
-	}
-
-	function joinPath(base: string, rel: string): string {
-		if (!base) return rel;
-		return base.replace(/\/+$/, '') + '/' + rel;
-	}
 
 	async function doSearch(query: string) {
 		const trimmed = query.trim();
@@ -409,75 +350,11 @@
 		}
 	}
 
-	// Splits `text` into alternating segments at each case-insensitive
-	// occurrence of `query`. Used by the results list to highlight the search
-	// terms inside full-path strings.
-	function highlightMatch(text: string, query: string): { text: string; match: boolean }[] {
-		if (!query) return [{ text, match: false }];
-		const segments: { text: string; match: boolean }[] = [];
-		const lowerText = text.toLowerCase();
-		const lowerQuery = query.toLowerCase();
-		let i = 0;
-		while (i < text.length) {
-			const idx = lowerText.indexOf(lowerQuery, i);
-			if (idx < 0) {
-				segments.push({ text: text.slice(i), match: false });
-				break;
-			}
-			if (idx > i) segments.push({ text: text.slice(i, idx), match: false });
-			segments.push({ text: text.slice(idx, idx + query.length), match: true });
-			i = idx + query.length;
-		}
-		return segments;
-	}
-
 	// Tooltips only on wider viewports - hover surfaces get in the way on
 	// touch / narrow layouts. Mirrors the gate used in ActionIcon.
 	let innerWidth = $state(0);
 	const showTooltip = $derived(innerWidth > 768);
 </script>
-
-{#snippet resultsList()}
-	<div
-		bind:this={listContainer}
-		class="max-h-48 overflow-y-auto"
-		transition:fly={{ y: -4, duration: 100 }}
-	>
-		{#if isSearching && queryResults.length === 0}
-			<div class="px-2 py-1.5 text-sm text-muted-foreground">Searching...</div>
-		{:else if searchError}
-			<div class="px-2 py-1.5 text-sm text-destructive">{searchError}</div>
-		{:else if queryResults.length === 0}
-			<div class="px-2 py-1.5 text-sm text-muted-foreground">No matching folders</div>
-		{:else}
-			{#each queryResults as path, index (path)}
-				<button
-					type="button"
-					data-result-index={index}
-					data-highlighted={index === hoveredIndex ? '' : undefined}
-					class={cn(
-						'relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground'
-					)}
-					onclick={() => commit(path)}
-					onmouseenter={() => (hoveredIndex = index)}
-				>
-					<Folder class="size-4 shrink-0 text-muted-foreground" />
-					<span class="min-w-0 flex-1 truncate font-mono text-left">
-						{#each highlightMatch(path, inputValue.trim()) as seg, segIndex (segIndex)}
-							{#if seg.match}
-								<mark class="rounded bg-yellow-200/60 px-0.5 text-foreground dark:bg-yellow-500/30"
-									>{seg.text}</mark
-								>
-							{:else}
-								{seg.text}
-							{/if}
-						{/each}
-					</span>
-				</button>
-			{/each}
-		{/if}
-	</div>
-{/snippet}
 
 <div
 	class={[
@@ -488,46 +365,13 @@
 >
 	<Popover.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
 		<Popover.Trigger {disabled} class="flex justify-start">
-			<span
-				class="text-muted-foreground inline-flex items-center gap-1 text-xs group"
-				class:text-foreground={directory}
-			>
-				<div class="flex min-w-0 items-center gap-1 cursor-pointer">
-					<Folder class="w-3.5 h-3.5" />
-
-					{#if showTooltip && displayLabelTitle}
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<span {...props} class="max-w-64 truncate">{displayLabel}</span>
-								{/snippet}
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<p>{displayLabelTitle}</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{:else}
-						<span class="max-w-64 truncate">{displayLabel}</span>
-					{/if}
-				</div>
-
-				{#if directory}
-					<div
-						class="w-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 ease-out group-hover:w-auto group-hover:opacity-100"
-					>
-						<ActionIcon
-							icon={X}
-							tooltip="Reset working directory"
-							ariaLabel="Reset working directory"
-							{disabled}
-							onclick={handleDismiss}
-							iconSize="h-3 w-3"
-							stopPropagationOnClick
-							class="!h-4 !w-4 shrink-0 text-muted-foreground hover:text-foreground"
-						/>
-					</div>
-				{/if}
-			</span>
+			<ChatFormWorkingDirectoryChip
+				{directory}
+				{homeBase}
+				{disabled}
+				{showTooltip}
+				onClear={handleDismiss}
+			/>
 		</Popover.Trigger>
 
 		<Popover.Content
@@ -549,7 +393,16 @@
 				/>
 
 				{#if inputValue.trim() && (isSearching || queryResults.length > 0 || searchError)}
-					{@render resultsList()}
+					<ChatFormWorkingDirectoryResultsList
+						results={queryResults}
+						{hoveredIndex}
+						{isSearching}
+						error={searchError}
+						rawQuery={inputValue}
+						bind:container={listContainer}
+						onCommit={commit}
+						onHover={(index) => (hoveredIndex = index)}
+					/>
 				{/if}
 
 				{#if pickerSupported}

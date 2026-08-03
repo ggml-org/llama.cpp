@@ -170,6 +170,17 @@ export {
 	type CwdMessageInfo
 } from './path-display';
 
+// Working-directory picker search helpers
+export {
+	splitPathQuery,
+	buildCaseInsensitiveGlob,
+	rankEntries,
+	joinPath,
+	highlightMatch,
+	type GlobEntry,
+	type PathQuery
+} from './working-directory';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
