@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "last_updated": "2026-08-03T23:25:00Z",
+  "objective": "Reduce inference memory (peak RSS) on Apple Silicon without sacrificing correctness, via low-bit KV paged-attention and calibrated per-tensor quantization.",
+  "phases": [
+    {
+      "id": "p8",
+      "capability": "refactor",
+      "status": "done",
+      "summary": "spec-consolidate: collapsed llama.dflash.acceptance.v1 + llama.spec_calib.v2 + llama.spec_calib.v3 into a single llama.tessera.spec.v1 record. --telemetry-v1-compat removed. Approved by user; review branch evolve-review/spec-consolidate/agent-g ready for promotion.",
+      "artifact": "branch evolve-review/spec-consolidate/agent-g",
+      "last_updated": "2026-08-03T16:25:00Z"
+    }
+  ],
+  "open_questions": [
+    "test-spec-calibration.cpp model-based path aborts on main (GGML_ASSERT has_draft || spec_mtp) - pre-existing, not introduced by spec-consolidate. Logged in findings.jsonl; needs findings-curator fix",
+    "Duplicate spec-calib paths (tools/imatrix/imatrix.cpp compute_imatrix_spec + common/speculative-calibration.cpp) - pre-existing per 20f75c8cf merge message. Logged in findings.jsonl"
+  ],
+  "decision_log": [
+    {
+      "ts": "2026-08-03T16:25:00Z",
+      "decision": "approved spec-consolidate refactor; ready for promotion to main; findings-curator fix 2 for the two pre-existing bugs",
+      "capability": "refactor"
+    }
+  ]
+}
