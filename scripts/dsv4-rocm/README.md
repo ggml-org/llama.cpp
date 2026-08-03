@@ -166,6 +166,20 @@ cd /home/edwin/llama.cpp-rdna2
 DSV4_HASH_MODE=full scripts/dsv4-rocm/run-corpus-validation.sh
 ```
 
+The default arms remain no overrides versus J16. To isolate the second
+optimization, hold J16 in both arms and enable only the candidate HC mixer:
+
+```bash
+DSV4_BASE_MMQ_J=16 DSV4_CANDIDATE_MMQ_J=16 \
+DSV4_BASE_HC_MIXES=0 DSV4_CANDIDATE_HC_MIXES=1 \
+scripts/dsv4-rocm/run-corpus-validation.sh
+```
+
+Empty per-arm controls mean unset; HC controls also accept `0`. MMQ controls
+must be supported multiples of eight. The wrapper removes inherited MMQ/HC
+variables before applying each arm, and records the resolved controls in both
+self-contained command files and `effective-settings.sh`.
+
 It holds the shared GPU lock, refuses active ROCm processes, rechecks before
 each variant, reads the exact UTF-8 prompt bytes through `DSV4_PROMPT_FILE`,
 and requires full hashes of all model shards. The artifact includes clean

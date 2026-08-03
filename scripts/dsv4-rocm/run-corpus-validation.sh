@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Attested base/J16 DSV4 validation on a fixed natural-text prompt.
+# Attested paired DSV4 validation on a fixed natural-text prompt.
 set -Eeuo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -18,6 +18,10 @@ STARTUP_RETRIES=${DSV4_STARTUP_RETRIES:-600}
 REQUEST_TIMEOUT=${DSV4_REQUEST_TIMEOUT:-600}
 HASH_MODE=${DSV4_HASH_MODE:-full}
 ALLOW_BUSY=${DSV4_ALLOW_BUSY_GPUS:-0}
+BASE_MMQ_J=${DSV4_BASE_MMQ_J-}
+CANDIDATE_MMQ_J=${DSV4_CANDIDATE_MMQ_J-16}
+BASE_HC_MIXES=${DSV4_BASE_HC_MIXES-}
+CANDIDATE_HC_MIXES=${DSV4_CANDIDATE_HC_MIXES-}
 
 fail() {
     echo "ERROR: $*" >&2
@@ -32,6 +36,19 @@ for pair in "DSV4_PORT:$BASE_PORT" "DSV4_CTX_SIZE:$CTX_SIZE" "DSV4_N_PREDICT:$N_
     [[ "$value" =~ ^[1-9][0-9]*$ ]] || fail "$name must be a positive integer"
 done
 [[ "$ALLOW_BUSY" == 0 || "$ALLOW_BUSY" == 1 ]] || fail "DSV4_ALLOW_BUSY_GPUS must be 0 or 1"
+for pair in "DSV4_BASE_MMQ_J:$BASE_MMQ_J" "DSV4_CANDIDATE_MMQ_J:$CANDIDATE_MMQ_J"; do
+    name=${pair%%:*}
+    value=${pair#*:}
+    case "$value" in
+        ""|8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128) ;;
+        *) fail "$name must be empty or a multiple of 8 in [8, 128]" ;;
+    esac
+done
+for pair in "DSV4_BASE_HC_MIXES:$BASE_HC_MIXES" "DSV4_CANDIDATE_HC_MIXES:$CANDIDATE_HC_MIXES"; do
+    name=${pair%%:*}
+    value=${pair#*:}
+    [[ -z "$value" || "$value" == 0 || "$value" == 1 ]] || fail "$name must be empty, 0, or 1"
+done
 [[ "$HASH_MODE" == full ]] || fail "attested corpus validation requires DSV4_HASH_MODE=full"
 [[ "$FLASH_ATTN" == on || "$FLASH_ATTN" == off || "$FLASH_ATTN" == auto ]] || fail "invalid DSV4_FLASH_ATTN"
 [[ -f "$MODEL" ]] || fail "model not found: $MODEL"
@@ -94,11 +111,18 @@ export DSV4_FLASH_ATTN="$FLASH_ATTN"
 export DSV4_STARTUP_RETRIES="$STARTUP_RETRIES"
 export DSV4_REQUEST_TIMEOUT="$REQUEST_TIMEOUT"
 export DSV4_HASH_MODE="$HASH_MODE"
+export DSV4_BASE_MMQ_J="$BASE_MMQ_J"
+export DSV4_CANDIDATE_MMQ_J="$CANDIDATE_MMQ_J"
+export DSV4_BASE_HC_MIXES="$BASE_HC_MIXES"
+export DSV4_CANDIDATE_HC_MIXES="$CANDIDATE_HC_MIXES"
 export GGML_CUDA_ALLREDUCE=${GGML_CUDA_ALLREDUCE:-nccl}
 export GGML_CUDA_P2P=${GGML_CUDA_P2P:-1}
 export GGML_HIP_GRAPHS=${GGML_HIP_GRAPHS:-1}
 export HSA_NO_SCRATCH_RECLAIM=${HSA_NO_SCRATCH_RECLAIM:-1}
 export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
+# The per-arm DSV4_* controls above are authoritative. Prevent inherited direct
+# overrides from appearing as contradictory evidence in the parent manifest.
+unset GGML_HIP_RDNA2_MMQ_J GGML_HIP_RDNA2_HC_MIXES
 
 {
     printf 'export DSV4_MODEL=%q\n' "$DSV4_MODEL"
@@ -113,6 +137,10 @@ export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
     printf 'export DSV4_STARTUP_RETRIES=%q\n' "$DSV4_STARTUP_RETRIES"
     printf 'export DSV4_REQUEST_TIMEOUT=%q\n' "$DSV4_REQUEST_TIMEOUT"
     printf 'export DSV4_HASH_MODE=%q\n' "$DSV4_HASH_MODE"
+    printf 'export DSV4_BASE_MMQ_J=%q\n' "$DSV4_BASE_MMQ_J"
+    printf 'export DSV4_CANDIDATE_MMQ_J=%q\n' "$DSV4_CANDIDATE_MMQ_J"
+    printf 'export DSV4_BASE_HC_MIXES=%q\n' "$DSV4_BASE_HC_MIXES"
+    printf 'export DSV4_CANDIDATE_HC_MIXES=%q\n' "$DSV4_CANDIDATE_HC_MIXES"
     printf 'export DSV4_LIBRARY_PATH=%q\n' "$LIBRARY_PATH"
     printf 'export LD_LIBRARY_PATH=%q\n' "$LD_LIBRARY_PATH"
     printf 'export GGML_CUDA_ALLREDUCE=%q\n' "$GGML_CUDA_ALLREDUCE"
@@ -127,15 +155,26 @@ cp "$CORPUS" "$run_dir/corpus.txt"
 
 "$ROOT_DIR/scripts/dsv4-rocm/manifest.sh" "$run_dir" "$SERVER" "$MODEL"
 
+variant_controls() {
+    local variant=$1
+    if [[ "$variant" == base ]]; then
+        printf '%s\n' "$BASE_MMQ_J" "$BASE_HC_MIXES"
+    else
+        printf '%s\n' "$CANDIDATE_MMQ_J" "$CANDIDATE_HC_MIXES"
+    fi
+}
+
 write_command() {
-    local output=$1 variant=$2 port=$3
+    local output=$1 variant=$2 port=$3 mmq_j hc_mixes
+    local -a controls
+    mapfile -t controls < <(variant_controls "$variant")
+    mmq_j=${controls[0]}
+    hc_mixes=${controls[1]}
     {
         printf '#!/usr/bin/env bash\nset -euo pipefail\nsource %q\n' "$run_dir/effective-settings.sh"
-        if [[ "$variant" == base ]]; then
-            printf 'env -u GGML_HIP_RDNA2_MMQ_J '
-        else
-            printf 'env GGML_HIP_RDNA2_MMQ_J=16 '
-        fi
+        printf 'env -u GGML_HIP_RDNA2_MMQ_J -u GGML_HIP_RDNA2_HC_MIXES '
+        [[ -z "$mmq_j" ]] || printf 'GGML_HIP_RDNA2_MMQ_J=%q ' "$mmq_j"
+        [[ -z "$hc_mixes" ]] || printf 'GGML_HIP_RDNA2_HC_MIXES=%q ' "$hc_mixes"
         printf 'DSV4_OUTPUT_DIR=%q DSV4_PORT=%q ' "$run_dir/$variant" "$port"
         printf '%q\n' "$ROOT_DIR/tests/test-dsv4-validation.sh"
     } > "$output"
@@ -146,18 +185,19 @@ write_command "$run_dir/candidate-command.sh" candidate "$((BASE_PORT + 2))"
 printf '%q\n' "$ROOT_DIR/scripts/dsv4-rocm/compare-validation.py" > "$run_dir/comparator-path.txt"
 
 run_variant() {
-    local variant=$1 port=$2 rc
+    local variant=$1 port=$2 rc mmq_j hc_mixes
+    local -a command controls
+    mapfile -t controls < <(variant_controls "$variant")
+    mmq_j=${controls[0]}
+    hc_mixes=${controls[1]}
+    command=(env -u GGML_HIP_RDNA2_MMQ_J -u GGML_HIP_RDNA2_HC_MIXES)
+    [[ -z "$mmq_j" ]] || command+=("GGML_HIP_RDNA2_MMQ_J=$mmq_j")
+    [[ -z "$hc_mixes" ]] || command+=("GGML_HIP_RDNA2_HC_MIXES=$hc_mixes")
+    command+=(DSV4_OUTPUT_DIR="$run_dir/$variant" DSV4_PORT="$port" "$ROOT_DIR/tests/test-dsv4-validation.sh")
+
     check_gpus_idle "pre-$variant safety check"
     set +e
-    if [[ "$variant" == base ]]; then
-        env -u GGML_HIP_RDNA2_MMQ_J \
-            DSV4_OUTPUT_DIR="$run_dir/$variant" DSV4_PORT="$port" \
-            "$ROOT_DIR/tests/test-dsv4-validation.sh" 2>&1 | tee "$run_dir/$variant-validation.log"
-    else
-        env GGML_HIP_RDNA2_MMQ_J=16 \
-            DSV4_OUTPUT_DIR="$run_dir/$variant" DSV4_PORT="$port" \
-            "$ROOT_DIR/tests/test-dsv4-validation.sh" 2>&1 | tee "$run_dir/$variant-validation.log"
-    fi
+    "${command[@]}" 2>&1 | tee "$run_dir/$variant-validation.log"
     rc=${PIPESTATUS[0]}
     set -e
     printf '%s\n' "$rc" > "$run_dir/$variant.rc"
