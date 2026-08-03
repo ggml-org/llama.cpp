@@ -213,7 +213,9 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     inpL = build_inp_embd(model.tok_embd);
 
     ggml_tensor * inp_pos = build_inp_pos();
-    auto inp_attn = build_attn_inp_kv_msa();
+
+    // ==========================================
+    // TODO: avoid such kind of complexity in the model graphs
 
     // MSA calls ggml_flash_attn_ext directly and assumes the non-transposed V layout that
     // llama.cpp only provides when flash attention is enabled. Block selection is anchored
@@ -224,6 +226,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     const bool fa_on       = cparams.flash_attn;
     const bool streams_ok  = cparams.n_seq_max == 1 || !cparams.kv_unified;
     const bool msa_enabled = fa_on && streams_ok;
+
+    auto * inp_attn = build_attn_inp_kv_msa(msa_enabled);
 
     static bool warned_no_fa = false;
     if (!fa_on && !warned_no_fa) {
@@ -237,6 +241,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                        "-> running DENSE attention. Output may be degraded. Drop --kv-unified to enable MSA.\n", __func__);
         warned_unified = true;
     }
+    // ==========================================
 
     // hoisted per-graph MSA state (shared by every sparse layer)
     llm_graph_input_msa * msa = nullptr;
