@@ -281,7 +281,15 @@ def ingest_acceptance(args) -> None:
                 continue
             event = json.loads(line)
             schema = event.get("schema", "")
-            draft_type = "dflash" if "dflash" in schema else "mtp" if "mtp" in schema else "unknown"
+            # The unified v3 schema (`llama.spec_calib.v3`) is emitted by the
+            # dflash spec_calib path; the legacy `llama.dflash.acceptance.v1`
+            # is the v1-compat adapter. MTP has its own schema.
+            if schema in ("llama.dflash.acceptance.v1", "llama.spec_calib.v3"):
+                draft_type = "dflash"
+            elif "mtp" in schema:
+                draft_type = "mtp"
+            else:
+                draft_type = "unknown"
             drafted = int(event["drafted"])
             accepted = int(event["accepted"])
             confidence = [float(value) for value in event.get("confidence", [])]

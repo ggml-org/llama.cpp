@@ -19,13 +19,23 @@ class EvidenceStoreTest(unittest.TestCase):
             root = Path(directory)
             store = root / "store"
             telemetry = root / "events.jsonl"
+            # Mix v1 (legacy adapter) and v3 (default unified schema) records
+            # to verify both are accepted by the consumer.
             telemetry.write_text(
-                json.dumps({
-                    "schema": "llama.dflash.acceptance.v1",
-                    "drafted": 3,
-                    "accepted": 2,
-                    "confidence": [0.9, 0.8, 0.3],
-                }) + "\n",
+                "\n".join([
+                    json.dumps({
+                        "schema": "llama.dflash.acceptance.v1",
+                        "drafted": 3,
+                        "accepted": 2,
+                        "confidence": [0.9, 0.8, 0.3],
+                    }),
+                    json.dumps({
+                        "schema": "llama.spec_calib.v3",
+                        "drafted": 3,
+                        "accepted": 2,
+                        "confidence": [0.9, 0.8, 0.3],
+                    }),
+                ]) + "\n",
                 encoding="utf-8",
             )
             checkpoint = root / "search.attention.json"
@@ -67,8 +77,9 @@ class EvidenceStoreTest(unittest.TestCase):
                 "--store", str(store), "--run-id", "pilot",
                 "--output", str(summary),
             ], check=True, capture_output=True, text=True)
-            self.assertEqual(pl.scan_parquet(store / "acceptance" / "*.parquet").select(pl.len()).collect().item(), 1)
-            self.assertEqual(pl.scan_parquet(store / "acceptance_position" / "*.parquet").select(pl.len()).collect().item(), 3)
+            # Two events written above (one v1, one v3), 3 positions each.
+            self.assertEqual(pl.scan_parquet(store / "acceptance" / "*.parquet").select(pl.len()).collect().item(), 2)
+            self.assertEqual(pl.scan_parquet(store / "acceptance_position" / "*.parquet").select(pl.len()).collect().item(), 6)
             kinds = set(pl.read_parquet(summary)["kind"].to_list())
             self.assertEqual(kinds, {"acceptance", "evolution"})
 

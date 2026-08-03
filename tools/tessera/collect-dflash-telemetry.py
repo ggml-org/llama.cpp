@@ -92,7 +92,13 @@ def count_telemetry(path: Path) -> int:
     if not path.exists():
         return 0
     with path.open("r", encoding="utf-8", errors="replace") as source:
-        return sum('"schema":"llama.dflash.acceptance.v1"' in line for line in source)
+        # Accept both the legacy v1 schema (--telemetry-v1-compat) and the
+        # default unified v3 schema.
+        return sum(
+            '"schema":"llama.dflash.acceptance.v1"' in line
+            or '"schema":"llama.spec_calib.v3"' in line
+            for line in source
+        )
 
 
 def main() -> None:

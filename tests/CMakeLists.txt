@@ -293,6 +293,13 @@ target_include_directories(test-dflash-loader PRIVATE ${PROJECT_SOURCE_DIR}/src)
 llama_build(test-dspark-markov-head.cpp)
 llama_test(test-dspark-markov-head)
 target_include_directories(test-dspark-markov-head PRIVATE ${PROJECT_SOURCE_DIR}/src)
+llama_build(test-telemetry-record.cpp ${PROJECT_SOURCE_DIR}/tools/imatrix/telemetry-record.cpp)
+target_include_directories(test-telemetry-record PRIVATE ${PROJECT_SOURCE_DIR}/tools/imatrix)
+llama_test(test-telemetry-record)
+add_test(
+    NAME test-telemetry-schema-stability
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-telemetry-schema-stability.py
+)
 add_executable(test-tessera-engram test-tessera-engram.cpp)
 target_include_directories(test-tessera-engram PRIVATE ${PROJECT_SOURCE_DIR}/tools/tessera)
 add_test(NAME test-tessera-engram COMMAND test-tessera-engram)
