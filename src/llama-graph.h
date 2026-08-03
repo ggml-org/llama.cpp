@@ -426,8 +426,7 @@ public:
     const llama_kv_cache_dsa_context * mctx;
 };
 
-// standard K/V attention input against the base cache, plus destination indices 
-// for the indexer key cache. the two caches share cell layout
+// standard K/V attention input against the base cache, plus destination indices for the indexer key cache
 class llm_graph_input_attn_kv_msa : public llm_graph_input_attn_kv {
 public:
     llm_graph_input_attn_kv_msa(

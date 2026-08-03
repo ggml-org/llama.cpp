@@ -458,7 +458,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         ggml_tensor * v_s = ggml_view_4d(ctx0, v, D, HKV, n_kv, 1,
                                 v->nb[1], v->nb[2], v->nb[3], st*v->nb[3]);
 
-                        // block scores: the indexer keys are gathered through the pos -> cell map first 
+                        // block scores: the indexer keys are gathered through the pos -> cell map first
                         // scores are unscaled, only the top-k ordering matters
                         ggml_tensor * ikp = ggml_get_rows(ctx0, ik_s, psl_s);   // [n_idx_dim, n_ps]
                         ggml_tensor * sc = ggml_mul_mat(ctx0, ikp,
