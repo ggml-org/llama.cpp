@@ -5075,7 +5075,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_profile  = getenv("GGML_HEXAGON_PROFILE");
     const char * str_etm      = getenv("GGML_HEXAGON_ETM");
     const char * str_nhvx     = getenv("GGML_HEXAGON_NHVX");
-    const char * str_use_hmx  = getenv("GGML_HEXAGON_USE_HMX");
     const char * str_nhmx     = getenv("GGML_HEXAGON_NHMX");
     const char * str_mm_select = getenv("GGML_HEXAGON_MM_SELECT");
     const char * str_fa_select = getenv("GGML_HEXAGON_FA_SELECT");
@@ -5125,7 +5124,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_profile   = str_profile  ? atoi(str_profile)                      : 0;
     opt_etm       = str_etm      ? atoi(str_etm)                          : 0;
     opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
-    opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : (str_use_hmx ? atoi(str_use_hmx) : opt_nhmx);
+    opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : opt_nhmx;
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
