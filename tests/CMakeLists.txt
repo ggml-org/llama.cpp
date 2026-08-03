@@ -270,6 +270,7 @@ llama_build_and_test(test-backend-ops.cpp)
 if (GGML_HIP)
     llama_build(test-mmvq-rdna2.cpp)
     llama_build(test-mmid-rdna2.cpp)
+    llama_build(test-hc-mixes-rdna2.cpp)
 endif()
 
 llama_build_and_test(test-tensor-split.cpp)

@@ -114,6 +114,30 @@ GGML_HIP_RDNA2_MMQ_J=16 build/bin/test-mmid-rdna2 \
   --experts 256 --top-k 6 --routing uniform --compare-output /tmp/mmid.bin
 ```
 
+## RDNA2 DSV4 hidden-channel mixer screening
+
+`GGML_HIP_RDNA2_HC_MIXES=1` opts the exact contiguous F32
+M=24,N=256,K=16384 DSV4 hidden-channel mixer shape into a 12x16x256 LDS-tiled
+kernel on wave32 RDNA2. Unset/`0`, other devices, other types/layouts/shapes,
+and all non-HIP backends keep the existing dispatcher and rocBLAS/generic
+fallbacks. Values other than `0` or `1` fail closed.
+
+The setting is still a screening control, not a general F32 GEMM default. Run
+the focused benchmark through the normal GGML backend graph before whole-model
+A/B:
+
+```bash
+unset GGML_HIP_RDNA2_HC_MIXES
+build/bin/test-hc-mixes-rdna2 --iterations 100 --dump-output /tmp/hc-mixes.bin
+GGML_HIP_RDNA2_HC_MIXES=1 \
+build/bin/test-hc-mixes-rdna2 --iterations 100 \
+  --compare-output /tmp/hc-mixes.bin
+```
+
+The benchmark also checks a double-accumulation CPU reference. Hold
+`GGML_HIP_RDNA2_MMQ_J=16` constant in every arm of whole-model tests so only
+the hidden-channel path changes.
+
 ## Natural-text proxy validation
 
 `scripts/dsv4-rocm/corpus/technical-proxy.txt` is a fixed 2,527-token

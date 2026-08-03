@@ -1,9 +1,121 @@
 #include "common.cuh"
 #include "dsv4-hc.cuh"
 
+#include <cstdlib>
+#include <cstring>
+
 
 static constexpr int DSV4_HC = 4;
 
+
+static bool dsv4_hc_mixes_override_enabled() {
+#if defined(GGML_USE_HIP)
+    static const bool value = []() {
+        const char * env = std::getenv("GGML_HIP_RDNA2_HC_MIXES");
+        if (!env || !env[0] || std::strcmp(env, "0") == 0) {
+            return false;
+        }
+        if (std::strcmp(env, "1") == 0) {
+            return true;
+        }
+
+        fprintf(stderr, "GGML_HIP_RDNA2_HC_MIXES must be 0 or 1 (got '%s')\n", env);
+        GGML_ABORT("invalid RDNA2 DSV4 hc_mixes override");
+    }();
+    return value;
+#else
+    return false;
+#endif
+}
+
+// Specialized opt-in kernel for the DSV4 hidden-channel mixer:
+// C[M,N] = A[K,M]^T * B[K,N], with M=24, N=256, K=16384.
+// Each thread owns one output and the block cooperatively stages A/B in LDS.
+template <int tile_m, int tile_n, int tile_k>
+static __global__ void dsv4_hc_mixes_f32(
+        const float * __restrict__ src0,
+        const float * __restrict__ src1,
+        float * __restrict__ dst) {
+    constexpr int k = 16384;
+    constexpr int m = 24;
+    constexpr int n = 256;
+    constexpr int nthreads = tile_m * tile_n;
+
+    static_assert(k % tile_k == 0, "tile_k must divide K");
+    static_assert(nthreads <= 256, "hc_mixes block is too large");
+
+    __shared__ float tile_a[tile_m][tile_k + 1];
+    __shared__ float tile_b[tile_n][tile_k + 1];
+
+    ggml_cuda_pdl_lc();
+    ggml_cuda_pdl_sync();
+
+    const int tid = threadIdx.x;
+    const int local_row = tid / tile_n;
+    const int local_col = tid % tile_n;
+    const int row = blockIdx.y * tile_m + local_row;
+    const int col = blockIdx.x * tile_n + local_col;
+    float sum = 0.0f;
+
+#pragma unroll 1
+    for (int k0 = 0; k0 < k; k0 += tile_k) {
+        for (int i = tid; i < tile_m * tile_k; i += nthreads) {
+            const int load_row = i / tile_k;
+            const int load_k = i % tile_k;
+            const int global_row = blockIdx.y * tile_m + load_row;
+            tile_a[load_row][load_k] = global_row < m ? src0[global_row * k + k0 + load_k] : 0.0f;
+        }
+        for (int i = tid; i < tile_n * tile_k; i += nthreads) {
+            const int load_col = i / tile_k;
+            const int load_k = i % tile_k;
+            const int global_col = blockIdx.x * tile_n + load_col;
+            tile_b[load_col][load_k] = global_col < n ? src1[global_col * k + k0 + load_k] : 0.0f;
+        }
+        __syncthreads();
+
+        if (row < m && col < n) {
+#pragma unroll
+            for (int ik = 0; ik < tile_k; ++ik) {
+                sum = fmaf(tile_a[local_row][ik], tile_b[local_col][ik], sum);
+            }
+        }
+        __syncthreads();
+    }
+
+    if (row < m && col < n) {
+        dst[col * m + row] = sum;
+    }
+}
+
+bool ggml_cuda_op_dsv4_hc_mixes(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst,
+        int cc,
+        int warp_size) {
+    if (!dsv4_hc_mixes_override_enabled() || !GGML_CUDA_CC_IS_RDNA2(cc) || warp_size != 32) {
+        return false;
+    }
+
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        src0->ne[0] != 16384 || src0->ne[1] != 24 || src0->ne[2] != 1 || src0->ne[3] != 1 ||
+        src1->ne[0] != 16384 || src1->ne[1] != 256 || src1->ne[2] != 1 || src1->ne[3] != 1 ||
+        dst->ne[0] != 24 || dst->ne[1] != 256 || dst->ne[2] != 1 || dst->ne[3] != 1 ||
+        !ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    constexpr int tile_m = 12;
+    constexpr int tile_n = 16;
+    constexpr int tile_k = 256;
+    const dim3 blocks(256 / tile_n, 24 / tile_m, 1);
+    const dim3 threads(tile_m * tile_n, 1, 1);
+    ggml_cuda_kernel_launch(dsv4_hc_mixes_f32<tile_m, tile_n, tile_k>,
+            ggml_cuda_kernel_launch_params(blocks, threads, 0, ctx.stream()),
+            (const float *) src0->data, (const float *) src1->data, (float *) dst->data);
+    return true;
+}
 
 static __device__ void dsv4_hc_comb_norm_cols(float * comb, float eps) {
     for (int idst = 0; idst < DSV4_HC; ++idst) {
