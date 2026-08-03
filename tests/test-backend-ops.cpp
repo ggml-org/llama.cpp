@@ -9732,6 +9732,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_falcon(2));
 #endif
 
+    // DSV4 production physical-batch shape; keep one focused correctness case.
+    test_cases.emplace_back(new test_lightning_indexer(128, 64, 256, 256, 1, 1, GGML_TYPE_F16));
+
     // lightning_indexer
     for (int kv : { 256 }) {
         for (int bs : { 1, 512 }) {
@@ -10093,7 +10096,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // lightning_indexer
     for (int kv : { 256, 4096, 65536 }) {
-        for (int bs : { 1, 512, 2048 }) {
+        for (int bs : { 1, 256, 512, 2048 }) {
             for (int nh : { 32, 64 }) {
                 for (int ns : { 1, 4 }) {
                     for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
