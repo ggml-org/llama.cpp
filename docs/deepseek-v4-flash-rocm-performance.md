@@ -265,13 +265,35 @@ calls per 256-token microbatch. DeepSeek-V4 has 43 blocks and calls
 `ggml_mul_mat(hc_fn, flat_norm)`, named `hc_mixes`. Its selected Tensile macro
 tile is 128x256, wasting most output rows for M=24. At 16K there are 22,016
 calls (`344*64` microbatches), again exactly matching the model structure.
-Implement and microbenchmark a narrow shape/backend guard with generic
-fallback before considering a broader GEMM heuristic.
 
-Mapping artifacts:
+Commit `560635e3b` implements an explicit `GGML_HIP_RDNA2_HC_MIXES=1` screen
+for only contiguous F32 M=24,N=256,K=16384 on wave32 RDNA2. The 12x16x256
+LDS-tiled kernel launches 32 workgroups instead of using Tensile's single
+128x256 macro-tile; unset/`0`, all other shapes/layouts/types/devices, and
+non-HIP backends retain the existing dispatcher. Invalid values fail closed.
+The focused graph benchmark brackets rocBLAS at 2052.95/2047.29 us around a
+535.95 us candidate: 3.83x faster, with bit-identical output and max absolute
+error 9.54e-6 versus a double-accumulation CPU reference. Graph-off measured
+542.30 us. Near-shape N=1/128/255/257, M=23/25, and K=16383 all remained on
+generic paths and passed the CPU reference; rocBLAS profile logging proves the
+exact candidate emits no SGEMM while N=255 does. Independent review reported
+PASS with no blocker/high/medium finding; its low nonfinite-reference test
+finding was fixed before commit.
+
+With `GGML_HIP_RDNA2_MMQ_J=16` fixed in all arms, bracketed whole-model PP
+improved from control midpoints 414.468/409.075/325.116 t/s to
+501.063/494.149/389.632 t/s at 512/2K/8K: +20.9%/+20.8%/+19.8% from the
+second optimization alone. The combined gain over the earlier no-J16 default
+control midpoint is approximately +36%/+35%/+33%. A new natural-text
+base/candidate gate with J16 in both arms remains required before this second
+control is accepted for deployment.
+
+Mapping and screening artifacts:
 
 - `$HOME/edwin/llama-jobs/dsv4-rocm-rocblas/20260803T175331Z-ec1b7e64c-map-cijk/` (three-line aggregate rocBLAS profile)
 - `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T175022.376406151Z-trace-map-cijk-256-ec1b7e64c2cc-24970/` (single-microbatch trace)
+- `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T181014Z-1d6a42983-prototype/` (tile sweep, correctness, fallback, graph, and dispatch proof)
+- `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T182030Z-560635e3b-whole-model/` (J16-held-constant whole-model A/B)
 
 Screening artifacts:
 
@@ -349,13 +371,14 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Trace whole process but apply attribution thresholds only after filtering to recorded measured-run timestamps. | Independent review found model load would bias whole-process totals. | final |
 | 2026-08-03 | Select routed MMQ as M1 rather than CSA/LID/communication. | Measured-region trace assigns about 40% of summed kernel time to `mul_mat_q`; RCCL is 8%, LID 6.3%, explicit flash attention 5.6%, and measured H2D only 47 ms. | final |
 | 2026-08-03 | Keep J=16 explicit for the known DSV4 IQ2_M service; do not make it a generic RDNA2 default. | Bracketed synthetic PP gains 10.0-11.7% and the attested 2,527-token natural proxy gains 5.26% in tensor mode, but hot-routing microbench regresses with J=16. | final |
-| 2026-08-03 | Select the M=24,N=256,K=16384 F32 `hc_mixes` GEMM as optimization two. | Exact rocBLAS dimensions/call count map the 26.43-28.44% Cijk kernel to two `build_hc_pre` calls in each of 43 layers on four GPUs; explicit CSA is 7.06% and LID is 11.11% at 16K. | selected |
+| 2026-08-03 | Select the M=24,N=256,K=16384 F32 `hc_mixes` GEMM as optimization two. | Exact rocBLAS dimensions/call count map the 26.43-28.44% Cijk kernel to two `build_hc_pre` calls in each of 43 layers on four GPUs; explicit CSA is 7.06% and LID is 11.11% at 16K. | implemented, corpus gate pending |
+| 2026-08-03 | Keep the skinny hc-mixer path explicit and exact-shape while screening. | Custom 12x16x256 kernel is bit-identical and 3.83x faster locally; J16-held-constant PP gains 19.8-20.9%, while all near-shapes retain rocBLAS/generic fallback. | provisional |
 
 ## 9. Open questions
 
 1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. How much can a narrow M=24,N<=256,K=16384 `hc_mixes` kernel beat rocBLAS's 128x256 macro-tile, and does RCCL become the limiter?
+3. After the 3.83x local `hc_mixes` and ~20% PP win, does a fresh measured-region trace show RCCL or routed MMQ as the next limiter?
 4. Does HIP flash attention perform any arbitrary-mask tile pruning? Source and counters must answer before a later CSA patch.
 5. How are LID scores and global top-k distributed across the four meta devices at runtime?
 6. Are peer copies direct and what bandwidth does GPU3's x8 path achieve?
