@@ -415,16 +415,16 @@ static std::pair<long, std::vector<char>> gguf_http_get(
         const httplib::Headers & headers = {},
         int timeout_sec = 60) {
     try {
-        auto [cli, parts] = common_http_client_init(url);
+        auto [cli, parts] = common_http_client(url);
 
         if (timeout_sec > 0) {
-            cli->set_read_timeout(timeout_sec, 0);
-            cli->set_write_timeout(timeout_sec, 0);
+            cli.set_read_timeout(timeout_sec, 0);
+            cli.set_write_timeout(timeout_sec, 0);
         }
-        cli->set_connection_timeout(30, 0);
+        cli.set_connection_timeout(30, 0);
 
         std::vector<char> body;
-        auto res = cli->Get(parts.path, headers,
+        auto res = cli.Get(parts.path, headers,
             [&](const char * data, size_t len) {
                 body.insert(body.end(), data, data + len);
                 return true;

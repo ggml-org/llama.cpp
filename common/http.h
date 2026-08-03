@@ -2,8 +2,6 @@
 
 #include <cpp-httplib/httplib.h>
 
-#include <memory>
-
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
@@ -99,34 +97,7 @@ static common_http_url common_http_parse_url(const std::string & url) {
     return parts;
 }
 
-class common_http_client {
-    httplib::Client cli;
-public:
-    common_http_client(const std::string & url) : cli(url) {
-        cli.set_follow_location(true);
-    }
-    virtual ~common_http_client() = default;
-
-    virtual httplib::Result Head(const std::string & path) { return cli.Head(path); }
-    virtual httplib::Result Get (const std::string & path) { return cli.Get(path); }
-    virtual httplib::Result Get (const std::string & path, const httplib::Headers & headers) { return cli.Get(path, headers); }
-    virtual httplib::Result Get (const std::string & path, const httplib::Headers & headers, httplib::ContentReceiver receiver, httplib::DownloadProgress progress = nullptr) { return cli.Get(path, headers, std::move(receiver), std::move(progress)); }
-    virtual httplib::Result Post(const std::string & path, const std::string & body, const std::string & content_type) { return cli.Post(path, body, content_type); }
-    virtual httplib::Result Post(const std::string & path, const httplib::Headers & headers, const std::string & body, const std::string & content_type, httplib::ContentReceiver receiver) { return cli.Post(path, headers, body, content_type, std::move(receiver)); }
-
-    void set_default_headers   (httplib::Headers headers) { cli.set_default_headers(std::move(headers)); }
-    void set_basic_auth        (const std::string & username, const std::string & password) { cli.set_basic_auth(username, password); }
-    void set_read_timeout      (time_t sec, time_t usec) { cli.set_read_timeout(sec, usec); }
-    void set_write_timeout     (time_t sec, time_t usec) { cli.set_write_timeout(sec, usec); }
-    void set_connection_timeout(time_t sec, time_t usec) { cli.set_connection_timeout(sec, usec); }
-
-    // the ranged pull path uses the underlying client directly
-    httplib::Client & raw() { return cli; }
-};
-
-using common_http_client_ptr = std::unique_ptr<common_http_client>;
-
-static std::pair<common_http_client_ptr, common_http_url> common_http_client_init(const std::string & url) {
+static std::pair<httplib::Client, common_http_url> common_http_client(const std::string & url) {
     common_http_url parts = common_http_parse_url(url);
 
     if (parts.host.empty()) {
@@ -144,11 +115,13 @@ static std::pair<common_http_client_ptr, common_http_url> common_http_client_ini
     }
 #endif
 
-    auto cli = std::make_unique<common_http_client>(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
+    httplib::Client cli(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
 
     if (!parts.user.empty()) {
-        cli->set_basic_auth(parts.user, parts.password);
+        cli.set_basic_auth(parts.user, parts.password);
     }
+
+    cli.set_follow_location(true);
 
     return { std::move(cli), std::move(parts) };
 }

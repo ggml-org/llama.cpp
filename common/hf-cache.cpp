@@ -197,7 +197,7 @@ static void safe_write_file(const fs::path & path, const std::string & data) {
 
 static nl::json api_get(const std::string & url,
                         const std::string & token) {
-    auto [cli, parts] = common_http_client_init(url);
+    auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers = {
         {"User-Agent", "llama-cpp/" + std::string(llama_build_info())},
@@ -210,7 +210,7 @@ static nl::json api_get(const std::string & url,
         LOG_WRN("%s: invalid token, authentication disabled\n", __func__);
     }
 
-    if (auto res = cli->Get(parts.path, headers)) {
+    if (auto res = cli.Get(parts.path, headers)) {
         auto body = res->body;
 
         if (res->status == 200) {

@@ -297,7 +297,7 @@ static int common_download_file_single_online(const std::string & url,
         return 304; // 304 Not Modified - fake cached response
     }
 
-    auto [cli, parts] = common_http_client_init(url);
+    auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers;
     for (const auto & h : opts.headers) {
@@ -309,7 +309,7 @@ static int common_download_file_single_online(const std::string & url,
     if (!opts.bearer_token.empty()) {
         headers.emplace("Authorization", "Bearer " + opts.bearer_token);
     }
-    cli->set_default_headers(headers);
+    cli.set_default_headers(headers);
 
     std::string last_etag;
     if (file_exists) {
@@ -318,7 +318,7 @@ static int common_download_file_single_online(const std::string & url,
         LOG_DBG("%s: no previous model file found %s\n", __func__, path.c_str());
     }
 
-    auto head = cli->Head(parts.path);
+    auto head = cli.Head(parts.path);
     if (!head || head->status < 200 || head->status >= 300) {
         LOG_TRC("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
         if (file_exists) {
@@ -404,7 +404,7 @@ static int common_download_file_single_online(const std::string & url,
                 __func__, common_http_show_masked_url(parts).c_str(),
                 path_temporary.c_str(), etag.c_str());
 
-        if (common_pull_file(cli->raw(), parts.path, path_temporary, supports_ranges, p, opts.callback)) {
+        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, p, opts.callback)) {
             if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
                 LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
                 break;
@@ -436,7 +436,7 @@ static int common_download_file_single_online(const std::string & url,
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = common_http_client_init(url);
+    auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers;
     for (const auto & h : params.headers) {
@@ -447,12 +447,12 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
     }
 
     if (params.timeout > 0) {
-        cli->set_read_timeout(params.timeout, 0);
-        cli->set_write_timeout(params.timeout, 0);
+        cli.set_read_timeout(params.timeout, 0);
+        cli.set_write_timeout(params.timeout, 0);
     }
 
     std::vector<char> buf;
-    auto res = cli->Get(parts.path, headers,
+    auto res = cli.Get(parts.path, headers,
         [&](const char *data, size_t len) {
             buf.insert(buf.end(), data, data + len);
             return params.max_size == 0 ||
