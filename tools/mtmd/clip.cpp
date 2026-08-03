@@ -253,7 +253,7 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         n_embd(hparams.n_embd),
         n_head(hparams.n_head),
         n_head_kv(hparams.n_head_kv),
-        d_head(n_head > 0 ? n_embd / n_head : 0),
+        d_head(hparams.n_embd_head > 0 ? hparams.n_embd_head : (n_head > 0 ? n_embd / n_head : 0)),
         n_layer(hparams.n_layer),
         n_mmproj_embd(clip_n_mmproj_embd(ctx)),
         eps(hparams.eps),
@@ -372,13 +372,13 @@ ggml_tensor * clip_graph::build_vit(
                 /* nb1    */ ggml_row_size(cur->type, d_head),
                 /* nb2    */ cur->nb[1],
                 /* nb3    */ cur->nb[1] * n_pos,
-                /* offset */ ggml_row_size(cur->type, n_embd));
+                /* offset */ ggml_row_size(cur->type, n_head * d_head));
 
                 Vcur = ggml_view_4d(ctx0, cur, d_head, n_head, n_pos, B,
                 /* nb1    */ ggml_row_size(cur->type, d_head),
                 /* nb2    */ cur->nb[1],
                 /* nb3    */ cur->nb[1] * n_pos,
-                /* offset */ ggml_row_size(cur->type, 2 * n_embd));
+                /* offset */ ggml_row_size(cur->type, 2 * n_head * d_head));
 
                 if (layer.q_norm) {
                     GGML_ASSERT(layer.q_norm->ne[0] == Qcur->ne[0]);
@@ -1190,6 +1190,7 @@ struct clip_model_loader {
             const char * prefix = is_vision ? "vision" : "audio";
             get_u32(string_format(KEY_N_EMBD,         prefix), hparams.n_embd);
             get_u32(string_format(KEY_N_HEAD,         prefix), hparams.n_head);
+            get_u32(string_format(KEY_N_EMBD_HEAD,    prefix), hparams.n_embd_head, false);
             get_u32(string_format(KEY_N_FF,           prefix), hparams.n_ff);
             get_u32(string_format(KEY_N_BLOCK,        prefix), hparams.n_layer);
             get_u32(string_format(KEY_PROJ_DIM,       prefix), hparams.projection_dim);
@@ -1336,6 +1337,7 @@ struct clip_model_loader {
                         // ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension
                         hparams.n_merge = 4;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        GGML_ASSERT(hparams.n_merge == 2 || hparams.n_merge == 4);
 
                         // borrow wa_layer_indexes for vit_merger insertion point
                         std::vector<int> wa_layer_indexes_vec;
@@ -2142,24 +2144,29 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
                 {
+                    const bool merger_required = hparams.n_merge == 4;
+                    auto get_merger_tensor = [&](const std::string & name, bool required = true) {
+                        return get_tensor(name, merger_required && required);
+                    };
+
                     // ViT merger: window self-attention
-                    model.vit_merger_ln1_w     = get_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
-                    model.vit_merger_ln1_b     = get_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
-                    model.vit_merger_attn_q_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
-                    model.vit_merger_attn_q_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
-                    model.vit_merger_attn_k_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
-                    model.vit_merger_attn_k_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
-                    model.vit_merger_attn_v_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
-                    model.vit_merger_attn_v_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
-                    model.vit_merger_attn_o_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
-                    model.vit_merger_attn_o_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
+                    model.vit_merger_ln1_w     = get_merger_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
+                    model.vit_merger_ln1_b     = get_merger_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
+                    model.vit_merger_attn_q_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
+                    model.vit_merger_attn_q_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
+                    model.vit_merger_attn_k_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
+                    model.vit_merger_attn_k_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
+                    model.vit_merger_attn_v_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
+                    model.vit_merger_attn_v_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
+                    model.vit_merger_attn_o_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
+                    model.vit_merger_attn_o_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
                     // ViT merger: MLP downsample
-                    model.vit_merger_ds_ln_w   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
-                    model.vit_merger_ds_ln_b   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
-                    model.vit_merger_ds_up_w   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
-                    model.vit_merger_ds_up_b   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
-                    model.vit_merger_ds_down_w = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
-                    model.vit_merger_ds_down_b = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
+                    model.vit_merger_ds_ln_w   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
+                    model.vit_merger_ds_ln_b   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
+                    model.vit_merger_ds_up_w   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
+                    model.vit_merger_ds_up_b   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
+                    model.vit_merger_ds_down_w = get_merger_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
+                    model.vit_merger_ds_down_b = get_merger_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
                     // Final Merger (DownsampleMLP)
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
@@ -3590,8 +3597,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             } break;
         case PROJECTOR_TYPE_MINICPMV4_6:
             {
-                // ViT merger 4x + final merger 4x = 16x total spatial downsample
-                n_patches = n_patches / 16;
+                n_patches /= params.n_merge * params.n_merge;
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
@@ -3973,6 +3979,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_MINICPMV4_6:
             {
+                const bool is_4x = hparams.n_merge == 2;
+
                 // SigLIP position buckets (same as resampler path)
                 std::vector<int32_t> positions(pos_h * pos_w);
                 int bucket_coords_h[1024];
@@ -3993,40 +4001,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 const int half_h = pos_h / 2;
                 const int half_w = pos_w / 2;
 
-                // window reorder indices for 2x2 windows
-                std::vector<int32_t> window_idx(n_pos);
-                std::vector<int32_t> inv_window_idx(n_pos);
-                {
-                    int k = 0;
-                    for (int wi = 0; wi < half_h; wi++) {
-                        for (int wj = 0; wj < half_w; wj++) {
-                            window_idx[k++] = (2*wi    ) * pos_w + (2*wj    );
-                            window_idx[k++] = (2*wi    ) * pos_w + (2*wj + 1);
-                            window_idx[k++] = (2*wi + 1) * pos_w + (2*wj    );
-                            window_idx[k++] = (2*wi + 1) * pos_w + (2*wj + 1);
-                        }
-                    }
-                    for (int i = 0; i < n_pos; i++) {
-                        inv_window_idx[window_idx[i]] = i;
-                    }
-                }
-                set_input_i32("vit_merger_window_idx",     window_idx);
-                set_input_i32("vit_merger_inv_window_idx", inv_window_idx);
-
-                // block-diagonal attention mask: tokens in the same 4-token
-                // window attend to each other (mask = 0), all other positions
-                // are masked out (-inf). matches the window-major reorder above.
-                std::vector<float> window_mask_data(n_pos * n_pos, std::numeric_limits<float>::lowest());
-                for (int wi = 0; wi < n_pos / 4; wi++) {
-                    for (int i = 0; i < 4; i++) {
-                        for (int j = 0; j < 4; j++) {
-                            window_mask_data[(wi*4 + i) * n_pos + (wi*4 + j)] = 0.0f;
-                        }
-                    }
-                }
-                set_input_f32("vit_merger_window_mask", window_mask_data);
-
-                // ViT merger 2x2 downsample indices
                 auto make_ds_idx = [](int off_r, int off_c, int ds_h, int ds_w, int stride_w) {
                     std::vector<int32_t> idx(ds_h * ds_w);
                     for (int i = 0; i < ds_h; i++) {
@@ -4036,22 +4010,58 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                     }
                     return idx;
                 };
-                auto vit_merger_ds_0 = make_ds_idx(0, 0, half_h, half_w, pos_w);
-                auto vit_merger_ds_1 = make_ds_idx(0, 1, half_h, half_w, pos_w);
-                auto vit_merger_ds_2 = make_ds_idx(1, 0, half_h, half_w, pos_w);
-                auto vit_merger_ds_3 = make_ds_idx(1, 1, half_h, half_w, pos_w);
-                set_input_i32("vit_merger_ds_idx_0", vit_merger_ds_0);
-                set_input_i32("vit_merger_ds_idx_1", vit_merger_ds_1);
-                set_input_i32("vit_merger_ds_idx_2", vit_merger_ds_2);
-                set_input_i32("vit_merger_ds_idx_3", vit_merger_ds_3);
 
-                // final merger 2x2 downsample indices (operates on half_h x half_w grid)
-                const int qh = half_h / 2;
-                const int qw = half_w / 2;
-                auto m_ds_0 = make_ds_idx(0, 0, qh, qw, half_w);
-                auto m_ds_1 = make_ds_idx(0, 1, qh, qw, half_w);
-                auto m_ds_2 = make_ds_idx(1, 0, qh, qw, half_w);
-                auto m_ds_3 = make_ds_idx(1, 1, qh, qw, half_w);
+                if (!is_4x) {
+                    // window reorder indices for 2x2 windows
+                    std::vector<int32_t> window_idx(n_pos);
+                    std::vector<int32_t> inv_window_idx(n_pos);
+                    {
+                        int k = 0;
+                        for (int wi = 0; wi < half_h; wi++) {
+                            for (int wj = 0; wj < half_w; wj++) {
+                                window_idx[k++] = (2*wi    ) * pos_w + (2*wj    );
+                                window_idx[k++] = (2*wi    ) * pos_w + (2*wj + 1);
+                                window_idx[k++] = (2*wi + 1) * pos_w + (2*wj    );
+                                window_idx[k++] = (2*wi + 1) * pos_w + (2*wj + 1);
+                            }
+                        }
+                        for (int i = 0; i < n_pos; i++) {
+                            inv_window_idx[window_idx[i]] = i;
+                        }
+                    }
+                    set_input_i32("vit_merger_window_idx",     window_idx);
+                    set_input_i32("vit_merger_inv_window_idx", inv_window_idx);
+
+                    // block-diagonal attention mask: tokens in the same 4-token
+                    // window attend to each other (mask = 0), all other positions
+                    // are masked out (-inf). matches the window-major reorder above.
+                    std::vector<float> window_mask_data(n_pos * n_pos, std::numeric_limits<float>::lowest());
+                    for (int wi = 0; wi < n_pos / 4; wi++) {
+                        for (int i = 0; i < 4; i++) {
+                            for (int j = 0; j < 4; j++) {
+                                window_mask_data[(wi*4 + i) * n_pos + (wi*4 + j)] = 0.0f;
+                            }
+                        }
+                    }
+                    set_input_f32("vit_merger_window_mask", window_mask_data);
+
+                    // ViT merger 2x2 downsample indices
+                    auto vit_merger_ds_0 = make_ds_idx(0, 0, half_h, half_w, pos_w);
+                    auto vit_merger_ds_1 = make_ds_idx(0, 1, half_h, half_w, pos_w);
+                    auto vit_merger_ds_2 = make_ds_idx(1, 0, half_h, half_w, pos_w);
+                    auto vit_merger_ds_3 = make_ds_idx(1, 1, half_h, half_w, pos_w);
+                    set_input_i32("vit_merger_ds_idx_0", vit_merger_ds_0);
+                    set_input_i32("vit_merger_ds_idx_1", vit_merger_ds_1);
+                    set_input_i32("vit_merger_ds_idx_2", vit_merger_ds_2);
+                    set_input_i32("vit_merger_ds_idx_3", vit_merger_ds_3);
+                }
+
+                const int merger_h = is_4x ? pos_h : half_h;
+                const int merger_w = is_4x ? pos_w : half_w;
+                auto m_ds_0 = make_ds_idx(0, 0, merger_h / 2, merger_w / 2, merger_w);
+                auto m_ds_1 = make_ds_idx(0, 1, merger_h / 2, merger_w / 2, merger_w);
+                auto m_ds_2 = make_ds_idx(1, 0, merger_h / 2, merger_w / 2, merger_w);
+                auto m_ds_3 = make_ds_idx(1, 1, merger_h / 2, merger_w / 2, merger_w);
                 set_input_i32("merger_ds_idx_0", m_ds_0);
                 set_input_i32("merger_ds_idx_1", m_ds_1);
                 set_input_i32("merger_ds_idx_2", m_ds_2);

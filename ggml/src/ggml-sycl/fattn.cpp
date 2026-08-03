@@ -99,7 +99,9 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_ONEDNN   = 150, // added enum for onednn==150
     BEST_FATTN_KERNEL_TILE     = 200,
+    BEST_FATTN_KERNEL_MKL      = 300,
 };
+
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
     GGML_UNUSED(device);
@@ -115,6 +117,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
 
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -122,7 +125,49 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
 
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+
     bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+
+    // MKL path: XMX-accelerated GEMM for prompt processing (all KV cache types).
+    // The MKL kernel converts non-F16 K/V to F16 via to_fp16_sycl before GEMM,
+    // so quantized, F16, BF16, and F32 caches all benefit from XMX acceleration.
+    // Activates automatically when flash-attn is enabled (--flash-attn on or -fa)
+    // and n_kv >= 1024. Falls through to TILE/VEC for ALiBi, logit softcap,
+    // and mismatched batch dimensions (unsupported by the MKL kernel).
+    // Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B testing.
+    // Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
+    // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
+    static int mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
+    // MKL is validated for the mainstream GQA envelope: grouped-query
+    // (gqa_ratio >= 2), head_dim a multiple of 64 in [64,512] with matching
+    // K/V head size, mask, no sinks/ALiBi/softcap. Gemma's global layers use
+    // head_dim 512, so the cap must include it. Head sizes not a multiple of
+    // 64 (72/80/96), MHA (gqa_ratio == 1), and MLA (DKQ != DV, e.g. 576/512)
+    // fall through to TILE/VEC; see follow-up work.
+    if (mkl_enable == 1 && mask && !sinks && gqa_ratio >= 2 &&
+        Q->ne[0] >= 64 && Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 &&
+        Q->ne[0] == V->ne[0] &&
+        Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
+        max_bias == 0.0f && logit_softcap == 0.0f &&
+        (Q->ne[3] == K->ne[3] || K->ne[3] == 1)) {
+        // F16 K/V strides must be a multiple of ne[0]*2 (the natural row size
+        // in bytes). This passes both dense (nb1 == ne0*2) and interleaved
+        // (nb1 == H * ne0*2). Only pathological test strides like nb1=32 or
+        // nb1=75 for ne0=40 fall through to TILE.
+        bool kv_strides_ok = true;
+        for (const ggml_tensor * t : {K, V}) {
+            if (t->type == GGML_TYPE_F16 && t->nb[1] % (t->ne[0] * 2) != 0) {
+                kv_strides_ok = false;
+                break;
+            }
+        }
+        if (kv_strides_ok) {
+            return BEST_FATTN_KERNEL_MKL;
+        }
+    }
+
     for (const ggml_tensor * t : {Q, K, V, mask}) {
         if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
@@ -216,6 +261,37 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
+
+    // n_kv watchdog: log when n_kv differs from the last FA call with
+    // the same D — helps detect cache-truncation issues.
+    static int nkv_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
+    if (nkv_debug == 1) {
+        const ggml_tensor * K_dbg = dst->src[1];
+        const ggml_tensor * V_dbg = dst->src[2];
+        static int64_t last_nkv_d256 = 0, last_nkv_d512 = 0;
+        static int fa_call_seq = 0;
+        fa_call_seq++;
+        int64_t cur_nkv = K_dbg->ne[1];
+        int Dk = (int)K_dbg->ne[0];
+        const char * kname = "TILE";
+        best_fattn_kernel k = ggml_sycl_get_best_fattn_kernel(ctx.device, dst);
+        if (k == BEST_FATTN_KERNEL_MKL)  kname = "MKL";
+        if (k == BEST_FATTN_KERNEL_VEC)  kname = "VEC";
+        int64_t delta = 0;
+        if (Dk == 256) {
+            delta = cur_nkv - last_nkv_d256;
+            last_nkv_d256 = cur_nkv;
+        } else if (Dk == 512) {
+            delta = cur_nkv - last_nkv_d512;
+            last_nkv_d512 = cur_nkv;
+        }
+        GGML_LOG_INFO("[FA-DISP] #%d %s D=%d n_kv=%lld delta=%lld "
+                "V_ne1=%lld\n",
+                fa_call_seq, kname, Dk,
+                (long long)cur_nkv, (long long)delta,
+                (long long)V_dbg->ne[1]);
+    }
+
     switch (ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("Not support Flash-Attention");
@@ -232,6 +308,51 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         case BEST_FATTN_KERNEL_VEC:
             ggml_sycl_flash_attn_ext_vec(ctx, dst);
             break;
+        case BEST_FATTN_KERNEL_MKL:
+            ggml_sycl_flash_attn_ext_mkl(ctx, dst);
+            break;
+    }
+
+    // --- Output fingerprint (GGML_SYCL_MKL_FA_DIAG=1) ---
+    // Copy first 64 float output values to host for fingerprinting.
+    // Compare MKL vs TILE (GGML_SYCL_ENABLE_MKL_FA=0) to detect divergence.
+    // Only fingerprints the first 6 FA calls with n_kv >= 1024.
+    static int fa_diag = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DIAG", 0);
+    static int fa_diag_count = 0;
+    if (fa_diag == 1 && fa_diag_count < 6) {
+        const ggml_tensor * K_diag = dst->src[1];
+        const ggml_tensor * V_diag = dst->src[2];
+        const ggml_tensor * Q_diag = dst->src[0];
+        if (K_diag->ne[1] >= 1024) {
+            fa_diag_count++;
+            float diag_buf[64];
+            dpct::queue_ptr q = ctx.stream();
+            q->memcpy(diag_buf, dst->data, 64 * sizeof(float));
+            q->wait();
+            const char * kname = "???";
+            best_fattn_kernel kb = ggml_sycl_get_best_fattn_kernel(ctx.device, dst);
+            if (kb == BEST_FATTN_KERNEL_MKL) kname = "MKL";
+            if (kb == BEST_FATTN_KERNEL_TILE) kname = "TILE";
+            if (kb == BEST_FATTN_KERNEL_VEC) kname = "VEC";
+            GGML_LOG_INFO("[FA-DIAG] #%d %s D=%d n_kv=%lld n_q=%lld "
+                    "n_qh=%lld n_kvh=%lld K=%s V=%s "
+                    "nb1=%zu nb2=%zu first 64 floats:\n",
+                    fa_diag_count, kname,
+                    (int)K_diag->ne[0], (long long)K_diag->ne[1],
+                    (long long)Q_diag->ne[1],
+                    (long long)Q_diag->ne[2], (long long)K_diag->ne[2],
+                    ggml_type_name(K_diag->type),
+                    ggml_type_name(V_diag->type),
+                    K_diag->nb[1], K_diag->nb[2]);
+            for (int i = 0; i < 64; i += 8) {
+                GGML_LOG_INFO("  [%2d] %08x %08x %08x %08x %08x %08x %08x %08x\n",
+                        i,
+                        *(unsigned *)&diag_buf[i+0], *(unsigned *)&diag_buf[i+1],
+                        *(unsigned *)&diag_buf[i+2], *(unsigned *)&diag_buf[i+3],
+                        *(unsigned *)&diag_buf[i+4], *(unsigned *)&diag_buf[i+5],
+                        *(unsigned *)&diag_buf[i+6], *(unsigned *)&diag_buf[i+7]);
+            }
+        }
     }
 }
 
