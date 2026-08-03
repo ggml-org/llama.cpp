@@ -612,6 +612,13 @@ struct common_params {
     bool    verbose_loss           = false; // print one structured loss line per SFT window
     bool    train_on_prompt        = false; // include prompt tokens in training loss (default: response tokens only)
     bool    shuffle_dataset        = false; // shuffle dataset windows at the start of each epoch
+    std::string critical_token_mode = "none"; // none, spans, confidence, hybrid
+    float   critical_token_weight = 3.0f;
+    float   critical_confidence_threshold = 0.25f;
+    std::string critical_weight_shape = "constant"; // constant, linear
+    int32_t critical_warmup_steps = 0;
+    float   critical_max_fraction = 1.0f;
+    int32_t critical_stats_every = 10;
 
     // grpo training
     bool    grpo_mode              = false; // enable GRPO IPC training loop

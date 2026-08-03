@@ -213,6 +213,7 @@ struct llama_context {
             ggml_opt_result_t                result,
             const std::vector<llama_token> & tokens,
             const std::vector<llama_token> & labels_sparse,
+            const std::vector<llama_opt_critical_token_metadata> * critical_metadata,
             llama_batch                    & batch,
             float                            reward_scale,
             ggml_opt_epoch_callback          callback,

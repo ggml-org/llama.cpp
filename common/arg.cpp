@@ -4448,6 +4448,79 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) { params.shuffle_dataset = true; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--critical-token-mode"}, "MODE",
+        "Critical-Token SFT mode: none, spans, confidence, or hybrid (default: none)",
+        [](common_params & params, const std::string & value) {
+            if (value != "none" && value != "spans" && value != "confidence" && value != "hybrid") {
+                throw std::invalid_argument("--critical-token-mode must be none, spans, confidence, or hybrid");
+            }
+            params.critical_token_mode = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--critical-token-weight"}, "F",
+        "weight W for selected tokens; weighted loss is sum(w*nll)/sum(w) (default: 3.0)",
+        [](common_params & params, const std::string & value) {
+            const float weight = std::stof(value);
+            if (!std::isfinite(weight) || weight < 1.0f) {
+                throw std::invalid_argument("--critical-token-weight must be finite and at least 1.0");
+            }
+            params.critical_token_weight = weight;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--critical-confidence-threshold"}, "F",
+        "select supervised targets with correct-token probability below F (default: 0.25)",
+        [](common_params & params, const std::string & value) {
+            const float threshold = std::stof(value);
+            if (!std::isfinite(threshold) || !(threshold > 0.0f && threshold < 1.0f)) {
+                throw std::invalid_argument("--critical-confidence-threshold must be finite and between 0 and 1");
+            }
+            params.critical_confidence_threshold = threshold;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--critical-weight-shape"}, "SHAPE",
+        "confidence weighting: constant or linear from 1 at threshold to W at zero (default: constant)",
+        [](common_params & params, const std::string & value) {
+            if (value != "constant" && value != "linear") {
+                throw std::invalid_argument("--critical-weight-shape must be constant or linear");
+            }
+            params.critical_weight_shape = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--critical-warmup-steps"}, "N",
+        "optimizer steps over which extra critical weight increases linearly (default: 0)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("--critical-warmup-steps must be non-negative");
+            }
+            params.critical_warmup_steps = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--critical-max-fraction"}, "F",
+        "maximum automatically selected fraction of supervised tokens per microbatch (default: 1.0)",
+        [](common_params & params, const std::string & value) {
+            const float fraction = std::stof(value);
+            if (!std::isfinite(fraction) || !(fraction > 0.0f && fraction <= 1.0f)) {
+                throw std::invalid_argument("--critical-max-fraction must be finite, greater than 0, and at most 1");
+            }
+            params.critical_max_fraction = fraction;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--critical-stats-every"}, "N",
+        "print Critical-Token SFT diagnostics every N optimizer steps (default: 10)",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("--critical-stats-every must be positive");
+            }
+            params.critical_stats_every = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--grpo-mode"},
         "enable GRPO IPC training loop (prompts and rewards supplied via stdin/stdout)",
         [](common_params & params) { params.grpo_mode = true; }

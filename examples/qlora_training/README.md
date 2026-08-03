@@ -104,7 +104,14 @@ Trains LoRA adapters on a quantized GGUF model.
 | `--grad-checkpoint` | `0` | Mark every Nth forward node persistent to reduce activation VRAM; good values: 32–64 |
 | `--train-on-prompt` | off | Compute loss on prompt tokens too (default: response-only loss) |
 | `--shuffle-dataset` | off | Shuffle dataset windows at the start of each epoch |
-| `--val-split` | `0.0` | Fraction of data to hold out for validation (e.g. `0.1` = 10%); val loss logged per epoch |
+| `--critical-token-mode` | `none` | Critical-Token SFT mode: `none`, `spans`, `confidence`, or `hybrid` |
+| `--critical-token-weight` | `3.0` | Weight assigned to automatically selected tokens and spans without an explicit weight |
+| `--critical-confidence-threshold` | `0.25` | Select supervised targets whose correct-token probability is below this value |
+| `--critical-weight-shape` | `constant` | Confidence weight shape: `constant` or `linear` |
+| `--critical-warmup-steps` | `0` | Optimizer steps used to linearly warm up the extra critical weight |
+| `--critical-max-fraction` | `1.0` | Maximum automatically selected fraction of supervised tokens per microbatch |
+| `--critical-stats-every` | `10` | Print Critical-Token SFT diagnostics every N optimizer steps |
+| `--val-split` | `0.05` | Fraction of data to hold out for validation (e.g. `0.1` = 10%); val loss logged per epoch |
 | `-epochs` / `--epochs` | `3` | Training epochs |
 | `-c` / `--ctx-size` | `512` | Training context window (tokens) |
 | `-b` / `--batch-size` | `2048` | Tokens per `llama_decode` call; set equal to `-c` |
@@ -210,6 +217,38 @@ llama.cpp uses **internal GGUF tensor names**, not HuggingFace names:
 ```
 
 Rewards are normalized per epoch: clipped to `[-1, 1]`, then min-max scaled to `[0, 1]`. Reward 0 = sample ignored; reward 1 = full gradient.
+
+### Critical-Token SFT
+
+Critical-Token SFT increases the contribution of selected response tokens while keeping the overall loss normalized:
+
+```text
+loss = sum(active * effective_weight * token_nll) / sum(active * effective_weight)
+```
+
+Normalizing by the sum of active weights prevents a batch with more critical tokens from scaling the entire gradient. Prompt, padding, and ignored labels have zero effective weight. The `none` mode uses the original loss graph and does not parse or allocate critical-token metadata.
+
+Explicit annotations use half-open UTF-8 byte offsets into the raw `response` value. A token is selected when its reconstructed response-side byte range has any nonempty overlap with a span. Template-only special tokens cannot overlap a raw response span. Overlapping spans use their maximum weight.
+
+```json
+{"prompt":"대한민국의 수도는 어디인가?","response":"대한민국의 수도는 서울입니다.","critical_spans":[{"start":26,"end":32,"weight":4.0}]}
+```
+
+`spans` uses only annotations. `confidence` selects supervised targets with `p(correct token) < threshold`. `hybrid` uses the maximum of the span and confidence weights. Constant confidence weighting uses `W`; linear weighting interpolates from 1 at the threshold to `W` at probability zero. When the confidence cap is active, the graph deterministically retains the lowest-confidence targets in each microbatch. Explicit spans are exempt from the cap. Cap selection reuses the target probabilities and the existing backend argsort plus row-scatter operations; its sort cost is `O(n log n)` on CPU and `O(n log^2 n)` for bitonic backend implementations, where `n` is the microbatch token count.
+
+Critical warmup applies only to the extra critical component: `warmed = 1 + scale * (critical - 1)`. The scale uses the resumed global optimizer step, so it does not restart after a checkpoint resume. For reward-weighted data, the single effective weight is `reward_weight * warmed`; the loss is normalized once by the sum of these effective weights.
+
+```bash
+./build/bin/llama-finetune-qlora \
+  --model model.gguf \
+  --train-file train.jsonl \
+  --critical-token-mode hybrid \
+  --critical-token-weight 3.0 \
+  --critical-confidence-threshold 0.25 \
+  --critical-weight-shape linear \
+  --critical-warmup-steps 100 \
+  --critical-max-fraction 0.25
+```
 
 ### Verify and use the adapter
 

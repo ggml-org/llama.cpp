@@ -46,6 +46,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "critical-token-sft.h"
 
 // Internal adapter struct — included directly to avoid the temp-GGUF roundtrip
 // for wiring trainable LoRA tensors into the compute graph.
@@ -64,6 +65,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <random>
 #include <set>
 #include <sstream>
@@ -216,12 +218,15 @@ static bool tensor_matches_targets(const char * name, const std::vector<std::str
 struct training_sample {
     std::vector<llama_token> tokens;   // full token sequence
     std::vector<bool>        is_label; // true for tokens that contribute to loss
+    std::vector<float>       critical_weights;
     float                    reward;   // reward/score weight (1.0 = neutral, 0.0 = ignore)
 };
 
 struct tokenization_request {
     std::string prompt;
     std::string response;
+    std::string annotated_response;
+    std::vector<critical_span> critical_spans;
     float reward = 1.0f;
 };
 
@@ -285,6 +290,66 @@ static size_t dataset_worker_count(int32_t requested, size_t n_lines) {
     return std::min(n_lines, n_workers);
 }
 
+static bool critical_mode_uses_spans(const std::string & mode) {
+    return mode == "spans" || mode == "hybrid";
+}
+
+static bool response_token_ranges(
+        const llama_vocab                   * vocab,
+        const std::vector<llama_token>      & tokens,
+        const std::string                   & formatted_response,
+        const std::string                   & annotated_response,
+        std::vector<critical_token_range>   & ranges,
+        std::string                         & error) {
+    std::vector<critical_token_range> decoded_ranges;
+    decoded_ranges.reserve(tokens.size());
+
+    std::string decoded;
+    for (llama_token token : tokens) {
+        const size_t start = decoded.size();
+        decoded += common_token_to_piece(vocab, token, true);
+        decoded_ranges.push_back({ start, decoded.size() });
+    }
+
+    const std::string detokenized = common_detokenize(vocab, tokens, true);
+    if (decoded != detokenized) {
+        decoded.clear();
+        decoded_ranges.clear();
+        std::vector<llama_token> prefix;
+        prefix.reserve(tokens.size());
+        for (llama_token token : tokens) {
+            const size_t start = decoded.size();
+            prefix.push_back(token);
+            const std::string current = common_detokenize(vocab, prefix, true);
+            if (current.rfind(decoded, 0) != 0) {
+                error = "token pieces cannot reconstruct response byte ranges";
+                return false;
+            }
+            decoded = current;
+            decoded_ranges.push_back({ start, decoded.size() });
+        }
+    }
+
+    const size_t decoded_offset = decoded.rfind(annotated_response);
+    if (formatted_response.rfind(annotated_response) == std::string::npos || decoded_offset == std::string::npos) {
+        error = "annotated response text was not preserved by formatting/tokenization";
+        return false;
+    }
+
+    const size_t annotated_end = decoded_offset + annotated_response.size();
+    ranges.resize(decoded_ranges.size());
+    for (size_t i = 0; i < decoded_ranges.size(); ++i) {
+        const size_t start = std::max(decoded_ranges[i].start, decoded_offset);
+        const size_t end = std::min(decoded_ranges[i].end, annotated_end);
+        if (start < end) {
+            ranges[i] = { start - decoded_offset, end - decoded_offset };
+        } else {
+            ranges[i] = { 0, 0 };
+        }
+    }
+    return true;
+}
+
 // Apply a very simple ChatML fallback template when the model has no template.
 static std::string apply_chatml(const std::vector<common_chat_msg> & msgs) {
     std::string out;
@@ -306,7 +371,9 @@ static std::vector<training_sample> load_jsonl(
         const std::string & path,
         const llama_vocab  * vocab,
         common_chat_templates * tmpls,
-        int32_t              n_threads) {
+        int32_t              n_threads,
+        const std::string  & critical_mode,
+        float                critical_default_weight) {
 
     std::ifstream f(path);
     if (!f.is_open()) {
@@ -355,6 +422,7 @@ static std::vector<training_sample> load_jsonl(
 
                 std::string prompt_text;
                 std::string response_text;
+                std::string annotated_response;
 
                 if (j.contains("messages")) {
             // chat format — apply template
@@ -389,6 +457,7 @@ static std::vector<training_sample> load_jsonl(
             }
             last_assistant_content = msgs[last_asst_idx].content_parts.empty()
                 ? "" : msgs[last_asst_idx].content_parts[0].text;
+            annotated_response = last_assistant_content;
             for (int mi = 0; mi < last_asst_idx; ++mi) prompt_msgs.push_back(msgs[mi]);
 
             if (tmpls) {
@@ -458,15 +527,27 @@ static std::vector<training_sample> load_jsonl(
                 } else if (j.contains("prompt") && j.contains("response")) {
             response_text = j["response"].get<std::string>();
             prompt_text = j["prompt"].get<std::string>();
+            annotated_response = response_text;
                 } else if (j.contains("text")) {
             response_text = j["text"].get<std::string>();
+            annotated_response = response_text;
                 } else {
                     LOG_WRN("%s: unknown format on line %d, skipping\n", __func__, input.lineno);
                     continue;
                 }
 
+                std::vector<critical_span> spans;
+                if (critical_mode_uses_spans(critical_mode)) {
+                    std::string span_error;
+                    if (!critical_token_parse_spans(j, annotated_response, critical_default_weight, spans, span_error)) {
+                        LOG_WRN("%s: invalid critical_spans on line %d: %s; expected [{\"start\":BYTE,\"end\":BYTE,\"weight\":FLOAT?}]\n",
+                                __func__, input.lineno, span_error.c_str());
+                        continue;
+                    }
+                }
+
                 result.parsed = true;
-                result.request = {std::move(prompt_text), std::move(response_text), reward};
+                result.request = {std::move(prompt_text), std::move(response_text), std::move(annotated_response), std::move(spans), reward};
 
                 const tokenization_request & request = result.request;
                 auto tok_prompt = common_tokenize(vocab, request.prompt, /*add_special=*/true, /*parse_special=*/true);
@@ -478,8 +559,23 @@ static std::vector<training_sample> load_jsonl(
                 sample.tokens.insert(sample.tokens.end(), tok_prompt.begin(), tok_prompt.end());
                 sample.tokens.insert(sample.tokens.end(), tok_response.begin(), tok_response.end());
                 sample.is_label.resize(sample.tokens.size(), false);
+                if (critical_mode != "none") {
+                    sample.critical_weights.resize(sample.tokens.size(), 1.0f);
+                }
                 for (size_t j = tok_prompt.size(); j < sample.tokens.size(); ++j) {
                     sample.is_label[j] = true;
+                }
+                if (critical_mode_uses_spans(critical_mode) && !request.critical_spans.empty()) {
+                    std::vector<critical_token_range> ranges;
+                    std::vector<float> response_weights;
+                    std::string alignment_error;
+                    if (!response_token_ranges(vocab, tok_response, request.response, request.annotated_response, ranges, alignment_error) ||
+                        !critical_token_apply_spans(request.annotated_response.size(), request.critical_spans, ranges, response_weights, alignment_error)) {
+                        LOG_WRN("%s: invalid critical_spans alignment on line %d: %s\n",
+                                __func__, input.lineno, alignment_error.c_str());
+                        continue;
+                    }
+                    std::copy(response_weights.begin(), response_weights.end(), sample.critical_weights.begin() + tok_prompt.size());
                 }
                 result.valid = true;
             }
@@ -520,12 +616,15 @@ static ggml_opt_dataset_t build_dataset(
         int32_t                              n_ctx,
         std::vector<float>                 & window_rewards,
         bool                                 train_on_prompt = false,
-        llama_token                          bos_token = -1) {
+        llama_token                          bos_token = -1,
+        bool                                 critical_enabled = false,
+        std::vector<llama_opt_critical_token_metadata> * critical_metadata_out = nullptr) {
 
     // Flatten samples into token/label/reward streams
     std::vector<llama_token> flat_tokens;
     std::vector<int32_t>     flat_labels;  // -1 = no loss, token_id = loss target
     std::vector<float>       flat_rewards; // per-token reward from the source sample
+    std::vector<float>       flat_span_weights;
 
     for (size_t si = 0; si < samples.size(); ++si) {
         const auto & s = samples[si];
@@ -536,21 +635,30 @@ static ggml_opt_dataset_t build_dataset(
             flat_tokens .push_back(bos_token);
             flat_labels .push_back(-1);  // no loss on separator
             flat_rewards.push_back(s.reward);
+            if (critical_enabled) flat_span_weights.push_back(0.0f);
         }
 
         for (size_t i = 0; i + 1 < s.tokens.size(); ++i) {
             flat_tokens .push_back(s.tokens[i]);
+            bool active = false;
             if (train_on_prompt) {
                 // All positions get correct next-token label (prompt + response)
                 flat_labels.push_back((int32_t)s.tokens[i + 1]);
+                active = true;
             } else {
                 // Only response positions get loss; prompt positions get -1 (sentinel).
                 // The sentinel is passed through to labels_sparse; opt_epoch_iter skips
                 // writing to the label tensor for those positions, leaving them zeroed →
                 // zero cross-entropy contribution.  No gradient flows from prompt tokens.
                 flat_labels.push_back(s.is_label[i + 1] ? (int32_t)s.tokens[i + 1] : -1);
+                active = s.is_label[i + 1];
             }
             flat_rewards.push_back(s.reward);
+            if (critical_enabled) {
+                GGML_ASSERT(s.critical_weights.size() == s.tokens.size());
+                const float span_weight = s.is_label[i + 1] ? s.critical_weights[i + 1] : 1.0f;
+                flat_span_weights.push_back(active ? span_weight : 0.0f);
+            }
         }
     }
 
@@ -575,6 +683,10 @@ static ggml_opt_dataset_t build_dataset(
     int32_t * labels = (int32_t *) ggml_opt_dataset_labels(dataset)->data;
     int64_t n_labels = 0;
     int64_t n_padded = 0;
+    std::vector<llama_opt_critical_token_metadata> critical_metadata;
+    if (critical_enabled) {
+        critical_metadata.resize(ndata * n_ctx);
+    }
 
     for (int64_t i = 0; i < ndata; ++i) {
         const int64_t off = i * stride;
@@ -585,6 +697,7 @@ static ggml_opt_dataset_t build_dataset(
                 data  [i * n_ctx + j] = bos_token >= 0 ? bos_token : flat_tokens.back();
                 labels[i * n_ctx + j] = -1;
                 reward_sum += 1.0f;
+                if (critical_enabled) critical_metadata[i * n_ctx + j] = { 0.0f, 0.0f };
                 ++n_padded;
                 continue;
             }
@@ -598,6 +711,13 @@ static ggml_opt_dataset_t build_dataset(
             labels[i * n_ctx + j] = flat_labels[idx];
             if (flat_labels[idx] >= 0) {
                 ++n_labels;
+                reward_sum += flat_rewards[idx];
+                ++reward_count;
+                if (critical_enabled) {
+                    critical_metadata[i * n_ctx + j] = { flat_span_weights[idx], flat_rewards[idx] };
+                }
+            } else if (critical_enabled) {
+                critical_metadata[i * n_ctx + j] = { 0.0f, 0.0f };
             }
             reward_sum += flat_rewards[idx];
         }
@@ -626,6 +746,29 @@ static ggml_opt_dataset_t build_dataset(
         LOG_INF("%s: reward range [%.4f, %.4f] (after clip to [-1,1]) → normalized to [0, 1]\n", __func__, rmin, rmax);
     } else {
         std::fill(window_rewards.begin(), window_rewards.end(), 1.0f);
+    }
+
+    if (critical_enabled) {
+        float token_reward_min = 1.0f;
+        float token_reward_max = -1.0f;
+        for (llama_opt_critical_token_metadata & metadata : critical_metadata) {
+            if (metadata.span_weight == 0.0f) continue;
+            metadata.reward_weight = std::max(-1.0f, std::min(1.0f, metadata.reward_weight));
+            token_reward_min = std::min(token_reward_min, metadata.reward_weight);
+            token_reward_max = std::max(token_reward_max, metadata.reward_weight);
+        }
+        const float token_reward_range = token_reward_max - token_reward_min;
+        for (llama_opt_critical_token_metadata & metadata : critical_metadata) {
+            if (metadata.span_weight == 0.0f) continue;
+            metadata.reward_weight = token_reward_range > 1e-6f
+                ? (metadata.reward_weight - token_reward_min) / token_reward_range
+                : 1.0f;
+        }
+        ggml_opt_dataset_set_aux(dataset, critical_metadata.data(), n_ctx * sizeof(critical_metadata[0]));
+        GGML_ASSERT(ggml_opt_dataset_aux_size(dataset) == n_ctx * sizeof(critical_metadata[0]));
+        if (critical_metadata_out) {
+            *critical_metadata_out = std::move(critical_metadata);
+        }
     }
 
     return dataset;
@@ -752,6 +895,17 @@ static enum llama_lora_qat_type lora_qat_type_from_string(const std::string & ty
     if (type == "q6_k") return  LLAMA_LORA_QAT_TYPE_Q6_K;
     if (type == "q8_0") return  LLAMA_LORA_QAT_TYPE_Q8_0;
     return LLAMA_LORA_QAT_TYPE_NONE;
+}
+
+static enum llama_opt_critical_token_mode critical_token_mode_from_string(const std::string & mode) {
+    if (mode == "spans") return LLAMA_OPT_CRITICAL_TOKEN_MODE_SPANS;
+    if (mode == "confidence") return LLAMA_OPT_CRITICAL_TOKEN_MODE_CONFIDENCE;
+    if (mode == "hybrid") return LLAMA_OPT_CRITICAL_TOKEN_MODE_HYBRID;
+    return LLAMA_OPT_CRITICAL_TOKEN_MODE_NONE;
+}
+
+static enum llama_opt_critical_weight_shape critical_weight_shape_from_string(const std::string & shape) {
+    return shape == "linear" ? LLAMA_OPT_CRITICAL_WEIGHT_SHAPE_LINEAR : LLAMA_OPT_CRITICAL_WEIGHT_SHAPE_CONSTANT;
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,6 +1467,14 @@ static int run_grpo_mode(
         /*.optimizer_type           =*/params.optimizer,
         /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
+        /*.critical_token_mode      =*/LLAMA_OPT_CRITICAL_TOKEN_MODE_NONE,
+        /*.critical_token_weight    =*/1.0f,
+        /*.critical_confidence_threshold =*/0.25f,
+        /*.critical_weight_shape    =*/LLAMA_OPT_CRITICAL_WEIGHT_SHAPE_CONSTANT,
+        /*.critical_warmup_steps    =*/0,
+        /*.critical_max_fraction    =*/1.0f,
+        /*.critical_step            =*/nullptr,
+        /*.critical_stats_every     =*/0,
     };
     llama_opt_init(ctx, model, lopt_params);
 
@@ -1663,7 +1825,8 @@ int main(int argc, char ** argv) {
         return rc;
     }
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    auto samples = load_jsonl(params.train_file, vocab, tmpls.get(), params.dataset_threads);
+    auto samples = load_jsonl(params.train_file, vocab, tmpls.get(), params.dataset_threads,
+                              params.critical_token_mode, params.critical_token_weight);
     if (samples.empty()) {
         LOG_ERR("%s: no training samples loaded\n", __func__);
         return 1;
@@ -1672,8 +1835,17 @@ int main(int argc, char ** argv) {
     const int32_t n_ctx = llama_n_ctx(ctx);
     std::vector<float> window_rewards;
     const llama_token bos = llama_vocab_bos(llama_model_get_vocab(model));
-    auto dataset = build_dataset(samples, n_ctx, window_rewards, params.train_on_prompt, bos);
+    const bool critical_enabled = params.critical_token_mode != "none";
+    std::vector<llama_opt_critical_token_metadata> critical_metadata;
+    auto dataset = build_dataset(samples, n_ctx, window_rewards, params.train_on_prompt, bos, critical_enabled, &critical_metadata);
     if (!dataset) return 1;
+
+    if (critical_enabled) {
+        LOG_INF("critical_sft: mode=%s token_weight=%.6f confidence_threshold=%.6f weight_shape=%s warmup_steps=%d max_fraction=%.6f stats_every=%d\n",
+                params.critical_token_mode.c_str(), (double) params.critical_token_weight,
+                (double) params.critical_confidence_threshold, params.critical_weight_shape.c_str(),
+                params.critical_warmup_steps, (double) params.critical_max_fraction, params.critical_stats_every);
+    }
 
     qlora_lr_schedule schedule {
         &params.lr, params.lr_scheduler, params.warmup_steps, params.warmup_init_ratio, 0, 0
@@ -1689,6 +1861,14 @@ int main(int argc, char ** argv) {
         /*.optimizer_type           =*/params.optimizer,
         /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
+        /*.critical_token_mode      =*/critical_token_mode_from_string(params.critical_token_mode),
+        /*.critical_token_weight    =*/params.critical_token_weight,
+        /*.critical_confidence_threshold =*/params.critical_confidence_threshold,
+        /*.critical_weight_shape    =*/critical_weight_shape_from_string(params.critical_weight_shape),
+        /*.critical_warmup_steps    =*/params.critical_warmup_steps,
+        /*.critical_max_fraction    =*/params.critical_max_fraction,
+        /*.critical_step            =*/&schedule.step,
+        /*.critical_stats_every     =*/params.critical_stats_every,
     };
     llama_opt_init(ctx, model, lopt_params);
 
@@ -1726,13 +1906,26 @@ int main(int argc, char ** argv) {
             window_rewards.begin(), train_reward_end, [](float r) { return std::abs(r) <= 1e-6f; });
     if (all_train_rewards_zero) {
         std::fill(window_rewards.begin(), train_reward_end, 1.0f);
+        if (critical_enabled) {
+            for (int64_t i = 0; i < idata_split; ++i) {
+                for (int32_t j = 0; j < n_ctx; ++j) {
+                    llama_opt_critical_token_metadata & metadata = critical_metadata[i * n_ctx + j];
+                    if (metadata.span_weight > 0.0f) {
+                        metadata.reward_weight = 1.0f;
+                    }
+                }
+            }
+            ggml_opt_dataset_set_aux(dataset, critical_metadata.data(), n_ctx * sizeof(critical_metadata[0]));
+        }
         LOG_WRN("%s: all training window rewards normalized to zero; using weight 1.0 for the small training split\n",
                 __func__);
     }
+    critical_metadata.clear();
+    critical_metadata.shrink_to_fit();
 
     const bool has_rewards = std::any_of(window_rewards.begin(), window_rewards.end(),
                                          [](float r){ return std::abs(r - 1.0f) > 1e-4f; });
-    if (has_rewards) {
+    if (has_rewards && !critical_enabled) {
         LOG_INF("%s: reward-weighted SFT enabled (found non-uniform rewards in dataset)\n", __func__);
         llama_opt_set_reward_weights(window_rewards.data(), (int64_t)window_rewards.size());
     }
