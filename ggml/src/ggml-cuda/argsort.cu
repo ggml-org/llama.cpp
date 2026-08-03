@@ -165,41 +165,41 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
 
 template<ggml_sort_order order>
 static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad) {
-    // bitonic sort
-    int col = threadIdx.x;
-    int row = blockIdx.x;
-
-    if (col >= ncols_pad) {
-        return;
-    }
+    // each thread handles multiple elements now instead of just one while still supporting a LDS of 64KB
+    const int tid = threadIdx.x;
+    const int row = blockIdx.x;
 
     const float * x_row = x + row * ncols;
     extern __shared__ int dst_row[];
 
-    // initialize indices
-    dst_row[col] = col;
+    for (int i = tid; i < ncols_pad; i += blockDim.x) {
+        dst_row[i] = i;
+    }
 
     __syncthreads();
 
     for (int k = 2; k <= ncols_pad; k *= 2) {
         for (int j = k / 2; j > 0; j /= 2) {
-            int ixj = col ^ j;
-            if (ixj > col) {
-                if ((col & k) == 0) {
-                    if (dst_row[col] >= ncols ||
-                        (dst_row[ixj] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]]))
-                    ) {
-                        ggml_cuda_swap(dst_row[col], dst_row[ixj]);
-                    }
-                } else {
-                    if (dst_row[ixj] >= ncols ||
-                        (dst_row[col] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]]))
-                    ) {
-                        ggml_cuda_swap(dst_row[col], dst_row[ixj]);
+            for (int i = tid; i < ncols_pad; i += blockDim.x) {
+                const int ixj = i ^ j;
+                // note: the sort direction depends on the element index, not on the thread index
+                if (ixj > i) {
+                    if ((i & k) == 0) {
+                        if (dst_row[i] >= ncols ||
+                            (dst_row[ixj] < ncols && (order == GGML_SORT_ORDER_ASC ?
+                                x_row[dst_row[i]] > x_row[dst_row[ixj]] :
+                                x_row[dst_row[i]] < x_row[dst_row[ixj]]))
+                        ) {
+                            ggml_cuda_swap(dst_row[i], dst_row[ixj]);
+                        }
+                    } else {
+                        if (dst_row[ixj] >= ncols ||
+                            (dst_row[i] < ncols && (order == GGML_SORT_ORDER_ASC ?
+                                x_row[dst_row[i]] < x_row[dst_row[ixj]] :
+                                x_row[dst_row[i]] > x_row[dst_row[ixj]]))
+                        ) {
+                            ggml_cuda_swap(dst_row[i], dst_row[ixj]);
+                        }
                     }
                 }
             }
@@ -207,9 +207,8 @@ static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int n
         }
     }
 
-    // copy the result to dst without the padding
-    if (col < ncols) {
-        dst[row * ncols + col] = dst_row[col];
+    for (int i = tid; i < ncols; i += blockDim.x) {
+        dst[row * ncols + i] = dst_row[i];
     }
 }
 
@@ -230,10 +229,15 @@ void argsort_f32_i32_cuda_bitonic(const float *   x,
     // bitonic sort requires ncols to be power of 2
     const int ncols_pad = next_power_of_2(ncols);
 
-    const dim3 block_dims(ncols_pad, 1, 1);
+    // each thread sorts ncols_pad/nthreads elements, so ncols_pad is not limited by the block size
+    const int nthreads = std::min(ncols_pad, ARGSORT_BITONIC_MAX_BLOCK_SIZE);
+
+    const dim3 block_dims(nthreads, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
 
+    // the shared memory budget is the limit on ncols_pad - keep this in sync with the check in
+    // ggml_backend_cuda_device_supports_op() so that larger rows fall back instead of aborting
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
     GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
 
