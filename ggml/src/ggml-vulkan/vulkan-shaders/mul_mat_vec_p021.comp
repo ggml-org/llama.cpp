@@ -25,6 +25,7 @@ layout (push_constant) uniform parameter
     uint b_offset;
     uint d_offset;
     uint fusion_flags;
+    uint row_base;
 } p;
 
 #if !USE_SUBGROUP_ADD
@@ -33,7 +34,9 @@ shared FLOAT_TYPE tmp[8][BLOCK_SIZE];
 
 void main() {
     const uint tid = gl_LocalInvocationID.x;
-    const uint row_x = gl_GlobalInvocationID.y;
+    // row_base supports dispatches chunked over rows when the row count
+    // exceeds the device's max workgroup count in y (large n_kv).
+    const uint row_x = p.row_base + gl_GlobalInvocationID.y;
 
     uint channel, channel_x;
 
