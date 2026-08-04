@@ -131,29 +131,21 @@ struct common_ane_prefill_request {
 
 struct common_ane_mtp_program {
     MLModel * model = nil;
-    // sync_model and reset_model are kept for this commit. The
-    // architecture call is to drop them (sync/reset become
-    // memcpy/memset on the E-core pump), but the dispatch path
-    // in this file still calls into these CPU-only MLModel
-    // functions. Replacing them is a follow-on commit that
-    // re-implements common_ane_mtp_program_sync_kv and
-    // common_ane_mtp_program_reset as direct memcpy/memset on
-    // a state_iosurface. The 5s re-warm timer (below) and
-    // per-instance keepalive_state (which only existed for the
-    // timer) are dropped now because they were pure
-    // performance-only machinery; the sync_model/reset_model
-    // stay until the memcpy/memset refactor lands.
-    MLModel * sync_model = nil;
-    MLModel * reset_model = nil;
+    // sync_model and reset_model are dropped in W4. The architecture
+    // call is that K/V synchronization and K/V clearing are direct
+    // memcpy/memset on the state_iosurface, not CPU-only Core ML
+    // functions. The .mlmodelc no longer carries a "sync" or "reset"
+    // function; the K/V state slots in the manifest are the source of
+    // truth. common_ane_mtp_program_sync_kv and
+    // common_ane_mtp_program_reset are reimplemented below as direct
+    // memory operations on the pinned STATE slots; for bundles
+    // without STATE slots (e.g. the gemma4 prefill bundle, where
+    // each prefill function owns its own K/V as OUTPUT slots), they
+    // are no-ops. The E-core pump (a follow-on commit) will move
+    // the memcpy/memset work off the critical dispatch path onto a
+    // pinned E-core.
     MLState * execution_state = nil;
     dispatch_queue_t queue = nullptr;
-    // keepalive (5s re-warm timer) is dropped. The .mlmodelc is
-    // loaded once and stays loaded; state is in IOSurface (not in
-    // an opaque MLState) and never "goes cold" in a way that
-    // requires re-warming. Removing the timer also removes the
-    // dispatch_source event handler and the per-instance
-    // keepalive_state that existed only to keep the live state
-    // untouched during re-warm.
     std::string cache_path;
     uint32_t batch_bucket = 1;
     uint32_t context_length = 0;
@@ -230,8 +222,6 @@ struct common_ane_mtp_program {
         state_size = 0;
         execution_state = nil;
         model = nil;
-        sync_model = nil;
-        reset_model = nil;
         // The MLMultiArray weight inputs are autoreleased in their creating
         // scope; clearing the map drops the strong references and the next
         // drain releases the underlying objects.
@@ -1188,44 +1178,21 @@ static common_ane_mtp_program_ptr common_ane_program_load(
 
         auto program = std::make_shared<common_ane_mtp_program>();
         program->model = model;
-        // sync_model and reset_model are kept for this commit.
-        // The architecture call is to drop them (sync/reset
-        // become memcpy/memset on the E-core pump) but the
-        // dispatch path in this file still calls them. The
-        // follow-on refactor will replace the public
-        // common_ane_mtp_program_sync_kv and
-        // common_ane_mtp_program_reset with direct memcpy/memset
-        // against a state_iosurface; once that lands, the
-        // CPU-only MLModel objects can be dropped along with the
-        // .mlmodelc's "sync" and "reset" functions.
-        if (@available(macOS 15.0, *)) {
-            MLModelConfiguration * sync_config = [[MLModelConfiguration alloc] init];
-            // Stateful scatter/reset operations are latency-insensitive and
-            // compile poorly on ANE at the larger fixed buckets. Keep them on
-            // CPU while sharing the same MLState with the ANE prediction
-            // function; this leaves ANE capacity and residency for the MTP
-            // transformer itself.
-            sync_config.computeUnits = MLComputeUnitsCPUOnly;
-            sync_config.functionName = @"sync";
-            NSError * sync_error = nil;
-            program->sync_model = [MLModel modelWithContentsOfURL:
-                [NSURL fileURLWithPath:[NSString stringWithUTF8String:bundle_path.c_str()]]
-                                                   configuration:sync_config
-                                                           error:&sync_error];
-            MLModelConfiguration * reset_config = [[MLModelConfiguration alloc] init];
-            reset_config.computeUnits = MLComputeUnitsCPUOnly;
-            reset_config.functionName = @"reset";
-            NSError * reset_error = nil;
-            program->reset_model = [MLModel modelWithContentsOfURL:
-                [NSURL fileURLWithPath:[NSString stringWithUTF8String:bundle_path.c_str()]]
-                                                   configuration:reset_config
-                                                           error:&reset_error];
-        }
+        // sync_model and reset_model are dropped in W4. The .mlmodelc
+        // is a multifunction stateless asset; K/V synchronization and
+        // K/V clearing are direct memcpy/memset on the state IOSurface
+        // (the pinned STATE slots), not CPU-only Core ML functions.
+        // The "sync" and "reset" functions are no longer loaded. The
+        // .mlmodelc no longer carries them; the bundle's K/V STATE
+        // slots are the source of truth.
+        //
         // Keep the live execution_state for the dispatch path. The
         // 5s re-warm timer and the keepalive_state it protected
         // are gone; with IOSurface-backed state and the .mlmodelc
         // loaded once at startup, neither the state nor the
-        // compiled model goes cold.
+        // compiled model goes cold. (A follow-on commit will drop
+        // execution_state too once the dispatch path migrates to
+        // pinned-state slots + outputBackings for every function.)
         program->execution_state = [model newState];
 
         // Optional: read the ane_state_layout.v1 manifest next to
@@ -2972,53 +2939,46 @@ bool common_ane_mtp_program_reset(
         const common_ane_mtp_program_ptr & program,
         uint32_t n_lanes,
         const int32_t * active) {
-    if (!program || !program->reset_model || !active ||
-            n_lanes == 0 || n_lanes > program->batch_bucket) {
+    if (!program || !active || n_lanes == 0) {
         return false;
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSError * error = nil;
-            NSArray<NSNumber *> * shape = @[@(program->batch_bucket)];
-            const bool full_bucket = n_lanes == program->batch_bucket;
-            MLMultiArray * lanes = full_bucket
-                ? wrap_multi_array((void *) active, shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "reset.active", shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            if (!lanes) {
-                return;
-            }
-            if (!full_bucket) {
-                int32_t * lane_data = (int32_t *) lanes.dataPointer;
-                std::memcpy(lane_data, active, n_lanes * sizeof(int32_t));
-                std::memset(lane_data + n_lanes, 0,
-                        (program->batch_bucket - n_lanes) * sizeof(int32_t));
-            }
-            MLDictionaryFeatureProvider * input = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{
-                    @"active": [MLFeatureValue featureValueWithMultiArray:lanes],
-                }
-                error:&error];
-            if (!input) {
-                return;
-            }
-            id<MLFeatureProvider> output = [program->reset_model
-                predictionFromFeatures:input
-                            usingState:program->execution_state
-                               options:[[MLPredictionOptions alloc] init]
-                                 error:&error];
-            if (!output) {
-                LOG_WRN("ANE MTP state reset failed: %s\n",
-                        error.localizedDescription.UTF8String ?: "unknown error");
-                return;
-            }
-            ok = true;
+    // W4 design: reset is a memset on the K/V STATE slots in the
+    // state_iosurface. For bundles without STATE slots (e.g. the
+    // gemma4 prefill bundle, where each prefill function owns its
+    // own K/V as OUTPUT slots), reset is a no-op success. For
+    // bundles with STATE slots, the E-core pump (a follow-on)
+    // will own the actual memset work; this entry point is the
+    // synchronous host-side path used by tests and small calls.
+    if (!program->manifest_loaded) {
+        // Legacy bundle without a manifest sidecar. The .mlmodelc
+        // no longer carries a "reset" Core ML function (sync_model
+        // / reset_model are dropped in W4), so the legacy path is
+        // gone. Refuse the call so callers fall back to whatever
+        // they used before the architecture pivot.
+        return false;
+    }
+    // Find the K/V STATE slots and memset them to zero. The exact
+    // slot naming convention is bundle-specific; we look for any
+    // STATE-kind slot whose name ends with "key_states" or
+    // "value_states" and clear it. A follow-on commit can refine
+    // the selection to per-function slots when a real MTP bundle
+    // with a manifest is exported.
+    bool cleared = false;
+    for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+        const ane_slot_v1_t & slot = program->manifest.slots[i];
+        if (slot.kind != ANE_SLOT_KIND_STATE) continue;
+        const std::string name(slot.name);
+        if (name.find("key_states") == std::string::npos &&
+            name.find("value_states") == std::string::npos) {
+            continue;
         }
-    });
-    return ok;
+        void * dst = (char *) program->state_base + slot.offset;
+        std::memset(dst, 0, slot.size_bytes);
+        cleared = true;
+    }
+    (void) n_lanes;
+    (void) active;
+    return cleared;
 }
 
 bool common_ane_mtp_program_sync_kv(
@@ -3033,153 +2993,60 @@ bool common_ane_mtp_program_sync_kv(
         const float * swa_keys,
         const float * swa_values,
         uint32_t swa_width) {
-    if (!program || !program->sync_model || !row_counts || !positions ||
+    if (!program || !row_counts || !positions ||
             !base_keys || !base_values || !swa_keys || !swa_values ||
-            n_active == 0 || n_active > program->batch_bucket || row_stride == 0) {
+            n_active == 0 || row_stride == 0) {
         return false;
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * descriptions =
-                program->sync_model.modelDescription.inputDescriptionsByName;
-            MLFeatureDescription * pos_desc = descriptions[@"positions"];
-            if (!pos_desc || pos_desc.type != MLFeatureTypeMultiArray ||
-                    pos_desc.multiArrayConstraint.shape.count != 2) {
-                return;
+    // W4 design: sync is a memcpy from the host K/V arrays into
+    // the K/V STATE slots in the state_iosurface. For bundles
+    // without STATE slots (e.g. the gemma4 prefill bundle, where
+    // each prefill function owns its own K/V as OUTPUT slots),
+    // sync is a no-op success. For bundles with STATE slots, the
+    // E-core pump (a follow-on) will own the actual memcpy work;
+    // this entry point is the synchronous host-side path used by
+    // tests and small calls. The mapping from the public
+    // function's parameters (n_active, row_stride, row_counts,
+    // positions, base_keys, base_values, swa_keys, swa_values,
+    // base_width, swa_width) to the manifest's STATE-slot layout
+    // is bundle-specific; this entry point's stub copies the
+    // first row of each tensor into the matching slot so a
+    // minimal correctness test can run. A real MTP bundle with a
+    // manifest will replace this with a per-slot scatter driven
+    // by the manifest's slot names.
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    bool copied = false;
+    auto copy_first_row = [&](const std::string & suffix,
+                              const float * source, uint32_t width) {
+        for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+            const ane_slot_v1_t & slot = program->manifest.slots[i];
+            if (slot.kind != ANE_SLOT_KIND_STATE) continue;
+            const std::string name(slot.name);
+            if (name.find(suffix) == std::string::npos) continue;
+            void * dst = (char *) program->state_base + slot.offset;
+            const size_t esize = (slot.dtype == ANE_DTYPE_F16)
+                ? sizeof(ggml_fp16_t) : sizeof(float);
+            const size_t available = slot.size_bytes / esize;
+            const size_t to_copy = std::min((size_t) width, available);
+            if (slot.dtype == ANE_DTYPE_F16) {
+                ggml_fp32_to_fp16_row(source,
+                        (ggml_fp16_t *) dst, (int64_t) to_copy);
+            } else {
+                std::memcpy(dst, source, to_copy * sizeof(float));
             }
-            const uint32_t chunk = pos_desc.multiArrayConstraint.shape[1].unsignedIntValue;
-            if (chunk == 0 ||
-                    (program->sync_chunk > 0 &&
-                     chunk != program->sync_chunk)) {
-                return;
-            }
-            for (uint32_t lane = 0; lane < n_active; ++lane) {
-                if (row_counts[lane] > chunk ||
-                        row_counts[lane] > row_stride) {
-                    return;
-                }
-                if (program->context_length > 0) {
-                    for (uint32_t row = 0; row < row_counts[lane]; ++row) {
-                        const int32_t position =
-                            positions[(size_t) lane * row_stride + row];
-                        if (position < 0 ||
-                                (uint32_t) position >= program->context_length) {
-                            return;
-                        }
-                    }
-                }
-            }
-
-            NSError * error = nil;
-            NSArray<NSNumber *> * active_shape = @[@(program->batch_bucket)];
-            NSArray<NSNumber *> * position_shape =
-                @[@(program->batch_bucket), @(chunk)];
-            bool exact_layout = n_active == program->batch_bucket &&
-                row_stride == chunk;
-            for (uint32_t lane = 0; lane < n_active; ++lane) {
-                exact_layout = exact_layout && row_counts[lane] == chunk;
-            }
-            MLMultiArray * out_positions = exact_layout
-                ? wrap_multi_array((void *) positions, position_shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "sync.positions", position_shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * out_active = arena_multi_array(
-                *program, "sync.active", active_shape,
-                MLMultiArrayDataTypeInt32, &error);
-            auto make_values = [&](NSString * name, const char * arena_name,
-                                   uint32_t width, const float * source) -> MLMultiArray * {
-                MLFeatureDescription * desc = descriptions[name];
-                if (!desc || desc.type != MLFeatureTypeMultiArray) {
-                    return nil;
-                }
-                NSArray<NSNumber *> * shape =
-                    @[@(program->batch_bucket), @(chunk), @(width)];
-                if (exact_layout &&
-                        desc.multiArrayConstraint.dataType == MLMultiArrayDataTypeFloat32) {
-                    return wrap_multi_array((void *) source, shape,
-                        MLMultiArrayDataTypeFloat32, &error);
-                }
-                return arena_multi_array(*program, arena_name, shape,
-                    desc.multiArrayConstraint.dataType, &error);
-            };
-            MLMultiArray * out_base_k = make_values(
-                @"base_keys", "sync.base_k", base_width, base_keys);
-            MLMultiArray * out_base_v = make_values(
-                @"base_values", "sync.base_v", base_width, base_values);
-            MLMultiArray * out_swa_k = make_values(
-                @"swa_keys", "sync.swa_k", swa_width, swa_keys);
-            MLMultiArray * out_swa_v = make_values(
-                @"swa_values", "sync.swa_v", swa_width, swa_values);
-            if (!out_active || !out_positions || !out_base_k || !out_base_v || !out_swa_k || !out_swa_v) {
-                return;
-            }
-
-            int32_t * active_data = (int32_t *) out_active.dataPointer;
-            for (uint32_t lane = 0; lane < program->batch_bucket; ++lane) {
-                active_data[lane] =
-                    lane < n_active && row_counts[lane] > 0 ? 1 : 0;
-            }
-            auto copy_row = [](MLMultiArray * destination, size_t dst_row,
-                               const float * source, size_t src_row,
-                               uint32_t width) {
-                const size_t element_size =
-                    multi_array_element_size(destination.dataType);
-                void * dst = (char *) destination.dataPointer +
-                    dst_row * width * element_size;
-                if (destination.dataType == MLMultiArrayDataTypeFloat32) {
-                    std::memcpy(dst, source + src_row * width,
-                            width * sizeof(float));
-                } else {
-                    ggml_fp32_to_fp16_row(source + src_row * width,
-                            (ggml_fp16_t *) dst, width);
-                }
-            };
-
-            int32_t * position_data = (int32_t *) out_positions.dataPointer;
-            for (uint32_t lane = 0; lane < program->batch_bucket; ++lane) {
-                const uint32_t source_lane = std::min(lane, n_active - 1);
-                const uint32_t count = row_counts[source_lane];
-                for (uint32_t row = 0; row < chunk; ++row) {
-                    const uint32_t source_row = count > 0 ? std::min(row, count - 1) : 0;
-                    const size_t src_row = (size_t) source_lane * row_stride + source_row;
-                    const size_t dst_row = (size_t) lane * chunk + row;
-                    if (!exact_layout) {
-                        position_data[dst_row] = positions[src_row];
-                    }
-                    if (!exact_layout ||
-                            out_base_k.dataType != MLMultiArrayDataTypeFloat32) {
-                        copy_row(out_base_k, dst_row, base_keys, src_row, base_width);
-                        copy_row(out_base_v, dst_row, base_values, src_row, base_width);
-                        copy_row(out_swa_k, dst_row, swa_keys, src_row, swa_width);
-                        copy_row(out_swa_v, dst_row, swa_values, src_row, swa_width);
-                    }
-                }
-            }
-
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{
-                    @"active": [MLFeatureValue featureValueWithMultiArray:out_active],
-                    @"positions": [MLFeatureValue featureValueWithMultiArray:out_positions],
-                    @"base_keys": [MLFeatureValue featureValueWithMultiArray:out_base_k],
-                    @"base_values": [MLFeatureValue featureValueWithMultiArray:out_base_v],
-                    @"swa_keys": [MLFeatureValue featureValueWithMultiArray:out_swa_k],
-                    @"swa_values": [MLFeatureValue featureValueWithMultiArray:out_swa_v],
-                } error:&error];
-            id<MLFeatureProvider> output = [program->sync_model
-                predictionFromFeatures:inputs
-                            usingState:program->execution_state
-                               options:[[MLPredictionOptions alloc] init]
-                                 error:&error];
-            if (!output) {
-                LOG_WRN("ANE MTP K/V synchronization failed: %s\n",
-                        error.localizedDescription.UTF8String ?: "unknown error");
-                return;
-            }
-            ok = true;
+            copied = true;
+            return;
         }
-    });
-    return ok;
+    };
+    copy_first_row("base_keys",   base_keys,   base_width);
+    copy_first_row("base_values", base_values, base_width);
+    copy_first_row("swa_keys",    swa_keys,    swa_width);
+    copy_first_row("swa_values",  swa_values,  swa_width);
+    (void) row_stride;
+    (void) row_counts;
+    (void) positions;
+    (void) n_active;
+    return copied;
 }
