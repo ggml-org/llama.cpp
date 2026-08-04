@@ -357,7 +357,12 @@ static void test_cli_overrides_config(void) {
         "-m", "/tmp/dummy.gguf",
     });
     common_params params;
-    bool ok = common_params_parse((int) argv.ptrs.size(), argv.ptrs.data(), params, LLAMA_EXAMPLE_COMMON);
+    // --tessera-mode was migrated to LLAMA_EXAMPLE_TESSERA scope by the
+    // Tier 1 collapse-parse-paths refactor, so it is no longer visible
+    // when parsing with LLAMA_EXAMPLE_COMMON. Use the TESSERA scope here;
+    // --tessera-config is in COMMON scope and is still visible because
+    // TESSERA inherits COMMON (see common/arg.cpp:1473).
+    bool ok = common_params_parse((int) argv.ptrs.size(), argv.ptrs.data(), params, LLAMA_EXAMPLE_TESSERA);
     if (!ok) {
         fprintf(stderr, "test-tessera-config: common_params_parse returned false; path was %s\n", path.c_str());
     }
