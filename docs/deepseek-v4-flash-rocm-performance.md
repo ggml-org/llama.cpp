@@ -167,9 +167,9 @@ successful 32K measured-region profile exists. The 64K job exited 137 during
 no 64K throughput, no measured elapsed time, and no additional scaling point.
 
 Artifacts:
-- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T025141.681162476Z-csa-scaling-16k-16384-d032b943d185-13070/`
-- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T025414.444077827Z-csa-scaling-32k-32768-d032b943d185-7005/`
-- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T030440.549424222Z-csa-scaling-64k-65536-d032b943d185-6545/` (incomplete warmup; no result)
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260804T025141.681162476Z-csa-scaling-16k-16384-d032b943d185-13070/`
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260804T025414.444077827Z-csa-scaling-32k-32768-d032b943d185-7005/`
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260804T030440.549424222Z-csa-scaling-64k-65536-d032b943d185-6545/` (incomplete warmup; no result)
 
 ### HCA and raw attention
 
@@ -549,26 +549,26 @@ remain deferred.
 
 Mapping and screening artifacts:
 
-- `$HOME/edwin/llama-jobs/dsv4-rocm-rocblas/20260803T175331Z-ec1b7e64c-map-cijk/` (three-line aggregate rocBLAS profile)
-- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T175022.376406151Z-trace-map-cijk-256-ec1b7e64c2cc-24970/` (single-microbatch trace)
-- `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T181014Z-1d6a42983-prototype/` (tile sweep, correctness, fallback, graph, and dispatch proof)
-- `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T182030Z-560635e3b-whole-model/` (J16-held-constant whole-model A/B)
-- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/` (combined-stack 16K compact trace, aggregate and per-agent measured-region summaries)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/` (launch scaling, exact fixture correctness/performance, hardware counters, raw DBs, counter command, and screen contract)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T201000Z-k4-217f2a271-prototype/` (discarded K4 source, correctness/fallback/invalid-env screen, A/B/A, trace resources, occupancy counters)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T202000Z-h32-217f2a271-prototype/` (discarded H32 source, retained KV=256 reference test, A/B/A, trace resources)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T204500Z-subwave4-087813f76-prototype/` (excluded: host-side `RDNA2` preprocessor condition removed the candidate; invalid env did not fail)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T205000Z-subwave4-087813f76-prototype/` (corrected temporary source, CPU-reference/fallback fast screen, distinct trace dispatch/resources, restoration proof)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T211000Z-subwave4-validation-3276edc81/` (excluded first deterministic attempt: detected 1-ULP reassociation drift at KV=1)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T212000Z-subwave4-validation-3276edc81/` (authoritative bitwise/path/counter/repeated-process/fallback artifact; final source patch and binary hashes)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T220000Z-subwave4-whole-model-9f4808637/` (J16+HC-held-constant 512/2K/8K/16K A/B/A; stable 16K +10.18%)
-- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/` (fully hashed LID-off/on corpus acceptance; all six responses equal)
-- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T215054.700650714Z-kernel-trace-j16-hc-lid-16k-fdde31252a63-8573/` (fresh post-LID 16K compact trace; aggregate/per-agent summaries)
-- `$HOME/edwin/llama-jobs/20260803-221516-mmq-config-screen-6af98d65b/` (excluded strict-zero-tolerance first screen; correctly stops on I64 low-order drift)
-- `$HOME/edwin/llama-jobs/20260803-221906-mmq-config-screen-tolerant-6af98d65b/` (I64 16.0-21.6% regressions and I256 fail-closed unsupported evidence; source restored)
-- `$HOME/edwin/llama-jobs/20260803-222442-mmq-config-screen-core-6af98d65b/` (authoritative T128/occupancy screen; exact focused outputs, three process timings per type/route)
-- `$HOME/edwin/llama-jobs/20260803-223310-iq3-t128-whole-model-6af98d65b/` (J16+HC+LID-held-constant 512/2K/8K/16K A/B/A; initial 512 single-observation excluded)
-- `$HOME/edwin/llama-jobs/20260803-224633-iq3-t128-short-repeat-6af98d65b/` (dedicated three-repetition 512 A/B/A; stable-median +2.11%)
+- `$HOME/llama-jobs/dsv4-rocm-rocblas/20260803T175331Z-ec1b7e64c-map-cijk/` (three-line aggregate rocBLAS profile)
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260803T175022.376406151Z-trace-map-cijk-256-ec1b7e64c2cc-24970/` (single-microbatch trace)
+- `$HOME/llama-jobs/dsv4-hc-mixes-sweep/20260803T181014Z-1d6a42983-prototype/` (tile sweep, correctness, fallback, graph, and dispatch proof)
+- `$HOME/llama-jobs/dsv4-hc-mixes-sweep/20260803T182030Z-560635e3b-whole-model/` (J16-held-constant whole-model A/B)
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/` (combined-stack 16K compact trace, aggregate and per-agent measured-region summaries)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/` (launch scaling, exact fixture correctness/performance, hardware counters, raw DBs, counter command, and screen contract)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T201000Z-k4-217f2a271-prototype/` (discarded K4 source, correctness/fallback/invalid-env screen, A/B/A, trace resources, occupancy counters)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T202000Z-h32-217f2a271-prototype/` (discarded H32 source, retained KV=256 reference test, A/B/A, trace resources)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T204500Z-subwave4-087813f76-prototype/` (excluded: host-side `RDNA2` preprocessor condition removed the candidate; invalid env did not fail)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T205000Z-subwave4-087813f76-prototype/` (corrected temporary source, CPU-reference/fallback fast screen, distinct trace dispatch/resources, restoration proof)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T211000Z-subwave4-validation-3276edc81/` (excluded first deterministic attempt: detected 1-ULP reassociation drift at KV=1)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T212000Z-subwave4-validation-3276edc81/` (authoritative bitwise/path/counter/repeated-process/fallback artifact; final source patch and binary hashes)
+- `$HOME/llama-jobs/dsv4-lid-study/20260803T220000Z-subwave4-whole-model-9f4808637/` (J16+HC-held-constant 512/2K/8K/16K A/B/A; stable 16K +10.18%)
+- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/` (fully hashed LID-off/on corpus acceptance; all six responses equal)
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260803T215054.700650714Z-kernel-trace-j16-hc-lid-16k-fdde31252a63-8573/` (fresh post-LID 16K compact trace; aggregate/per-agent summaries)
+- `$HOME/llama-jobs/20260803-221516-mmq-config-screen-6af98d65b/` (excluded strict-zero-tolerance first screen; correctly stops on I64 low-order drift)
+- `$HOME/llama-jobs/20260803-221906-mmq-config-screen-tolerant-6af98d65b/` (I64 16.0-21.6% regressions and I256 fail-closed unsupported evidence; source restored)
+- `$HOME/llama-jobs/20260803-222442-mmq-config-screen-core-6af98d65b/` (authoritative T128/occupancy screen; exact focused outputs, three process timings per type/route)
+- `$HOME/llama-jobs/20260803-223310-iq3-t128-whole-model-6af98d65b/` (J16+HC+LID-held-constant 512/2K/8K/16K A/B/A; initial 512 single-observation excluded)
+- `$HOME/llama-jobs/20260803-224633-iq3-t128-short-repeat-6af98d65b/` (dedicated three-repetition 512 A/B/A; stable-median +2.11%)
 
 Screening artifacts:
 
@@ -605,9 +605,9 @@ llama-bench runs remain the throughput evidence.
 Artifacts:
 
 - `$HOME/llama-jobs/dsv4-corpus-validation/20260803T173909.127798287Z-attested-ec1b7e64c2cc-6101/` (J-width acceptance artifact)
-- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/` (J16-only versus J16+HC acceptance artifact; full hashes, batch/ubatch 512/256, `complete=1`)
-- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/` (J16+HC+LID-off versus LID-on acceptance; six exact response matches; +0.21% layer/+1.70% tensor single observations)
-- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T184944.079084014Z-attested-56dd4177e501-25863/` (excluded interrupted attempt: all responses exist and match, but no final status/comparison artifact and `candidate.rc=120`)
+- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/` (J16-only versus J16+HC acceptance artifact; full hashes, batch/ubatch 512/256, `complete=1`)
+- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/` (J16+HC+LID-off versus LID-on acceptance; six exact response matches; +0.21% layer/+1.70% tensor single observations)
+- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T184944.079084014Z-attested-56dd4177e501-25863/` (excluded interrupted attempt: all responses exist and match, but no final status/comparison artifact and `candidate.rc=120`)
 - `$HOME/llama-jobs/dsv4-corpus-validation/20260803T165136Z-88c415d91/` (superseded pre-normalization artifact)
 
 ### Production server and MTP gate
@@ -633,7 +633,7 @@ main J16+HC PP stack itself remains accepted by the non-draft gates above.
 Failed diagnostic artifact (fully hashed source/server/DSOs/main shards/draft
 model/corpus and exact commands):
 
-- `$HOME/edwin/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`
+- `$HOME/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`
 
 Commit `3fc2c17f6` parameterizes n-max, quick/full hashes, and the actual runtime
 graph-disable variable. A four-cell, 64-token bounded matrix confirms that
@@ -651,8 +651,8 @@ remain unusable as a speed claim.
 
 Matrix summary (quick identities linked to the full-hash run above):
 
-- `$HOME/edwin/llama-jobs/dsv4-mtp-matrix-20260803T200941Z-3fc2c17f6/`
-- source runs `$HOME/edwin/llama-jobs/20260803-200941-mtp-matrix-{g1n3,g1n1,g0n3,g0n1}/`
+- `$HOME/llama-jobs/dsv4-mtp-matrix-20260803T200941Z-3fc2c17f6/`
+- source runs `$HOME/llama-jobs/20260803-200941-mtp-matrix-{g1n3,g1n1,g0n3,g0n1}/`
 
 Prefix replay now narrows this further. Slot erase is not implemented for this
 recurrent model (HTTP 501), and a two-token cap-1 replay made zero draft
@@ -669,7 +669,7 @@ history.
 
 Artifact:
 
-- `$HOME/edwin/llama-jobs/20260803-204032-mtp-prefix-replay8-fresh-087813f76/` (`diagnostic-evidence.json` is authoritative)
+- `$HOME/llama-jobs/20260803-204032-mtp-prefix-replay8-fresh-087813f76/` (`diagnostic-evidence.json` is authoritative)
 
 The stateful continuation diagnostic now isolates the mechanism. Three fresh
 servers generated the common first five tokens, then reused the resident slot;
@@ -686,7 +686,7 @@ not MTP acceptance or TG evidence.
 
 Artifact:
 
-- `$HOME/edwin/llama-jobs/20260803-210548-mtp-stateful-7a75d8a5a/` (`stateful-continuation/diagnostic-evidence.json`)
+- `$HOME/llama-jobs/20260803-210548-mtp-stateful-7a75d8a5a/` (`stateful-continuation/diagnostic-evidence.json`)
 
 Iteration-14 diagnostics narrow this again. A fresh cap-1-prefix→cap-0
 continuation still produces the forked trajectory
@@ -710,10 +710,10 @@ semantics, including an accepted draft processed in the same target batch.
 
 Artifacts:
 
-- `$HOME/edwin/llama-jobs/20260803-214024-mtp-prefix1-cont0-9f4808637/` (target-state isolation; continuation cap zero)
-- `$HOME/edwin/llama-jobs/20260803-212523-mtp-force-checkpoint-9f4808637/` (forced target+draft checkpoint path; partial state)
-- `$HOME/edwin/llama-jobs/20260803-214302-mtp-compressed-cache-fix-9f4808637/` (bounded compressed-cache removal experiment)
-- `$HOME/edwin/llama-jobs/20260803-214553-mtp-full-state-checkpoint-9f4808637/` (forced full-state checkpoint experiment)
+- `$HOME/llama-jobs/20260803-214024-mtp-prefix1-cont0-9f4808637/` (target-state isolation; continuation cap zero)
+- `$HOME/llama-jobs/20260803-212523-mtp-force-checkpoint-9f4808637/` (forced target+draft checkpoint path; partial state)
+- `$HOME/llama-jobs/20260803-214302-mtp-compressed-cache-fix-9f4808637/` (bounded compressed-cache removal experiment)
+- `$HOME/llama-jobs/20260803-214553-mtp-full-state-checkpoint-9f4808637/` (forced full-state checkpoint experiment)
 
 Iteration-15 sequential-replay experiments close the production decision
 without claiming a repair. A reviewed candidate forced checkpoints for every
@@ -737,10 +737,10 @@ these candidates is committed, and every wrapper restored/rebuilt clean HEAD.
 
 Artifacts:
 
-- `$HOME/edwin/llama-jobs/20260803-215521-mtp-sequential-replay-fdde31252/` (focused rejection-replay success)
-- `$HOME/edwin/llama-jobs/20260803-215800-mtp-seq-replay-matrix-fdde31252/` (four arms; only cap-1-prefix→cap-1 still fails)
-- `$HOME/edwin/llama-jobs/20260803-220554-mtp-target-single-verify-fdde31252/` (zero-accept target-single diagnostic; delayed fork)
-- `$HOME/edwin/llama-jobs/20260803-220904-mtp-fullstate-target-single-fdde31252/` (full-state variant; same delayed fork)
+- `$HOME/llama-jobs/20260803-215521-mtp-sequential-replay-fdde31252/` (focused rejection-replay success)
+- `$HOME/llama-jobs/20260803-215800-mtp-seq-replay-matrix-fdde31252/` (four arms; only cap-1-prefix→cap-1 still fails)
+- `$HOME/llama-jobs/20260803-220554-mtp-target-single-verify-fdde31252/` (zero-accept target-single diagnostic; delayed fork)
+- `$HOME/llama-jobs/20260803-220904-mtp-fullstate-target-single-fdde31252/` (full-state variant; same delayed fork)
 
 Production MTP is therefore explicitly rejected/deferred for this exact-greedy
 DSV4 stack. It has no accepted TG result and must remain disabled when token
@@ -816,15 +816,15 @@ Performance mode uses llama-bench `n_prompt=0`, `n_depth=<sweep>`, `n_gen=32`, a
 Residency mode is a separate non-performance run (`n_gen=1`, one repetition, `GGML_SCHED_DEBUG=2 --verbose`). `parse-sched-debug.py` changes phase only on llama-bench progress markers, ignores setup/prefill assignments, and records measured-decode LID/TOP_K backends, CPU/ROCm-meta split counts, and scheduled split-input copies. Separating it prevents verbose scheduler output from perturbing accepted TG. The tensor split is spelled `1/1/1/1` because llama-bench reserves commas for parameter variants; this is its exact four-device equivalent of `1,1,1,1`.
 
 The non-GPU monitor rerun passed for the code committed at `1e5519bf1`; its precommit source patch and file hashes are preserved at
-`$HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/`.
+`$HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/`.
 It preserved a reproduced/rejected FIFO notification deadlock: a fast child could exit before a later FIFO event had a reader. The accepted implementation uses an append-only phase log plus an atomically replaced latest-phase file. Expected/observed exits were 0/0 for stable performance and residency, 3/3 for missing depth and measured timeout, 4/4 for instability, and 124/124 for setup timeout. These are tooling results only.
 
 The model-dependent restore gate (`3d23fff4a`, controlled diagnostic `400c47cd6`, full-context extension `5d80b8662`) used deterministic fresh prefixes at 2K/3K/16K, four greedy target steps, every full-vocabulary logit, exact token IDs, and a fresh re-prefill control. The fresh repeat was bit-identical at all depths (state byte mismatches 0, logit tolerance violations 0, max absolute difference 0). Sequence-only `llama_state_seq_get/set_data` then failed at every depth: 516,983 / 516,900 / 516,930 logit tolerance violations, maximum absolute differences 4.118656 / 0.818019 / 0.736117, and a 2K final argmax divergence. Therefore the sequence API is rejected for DSV4 depth reuse.
 
 Full `llama_state_get/set_data` context state passed bit-identically at all three depths: state sizes 60,674,301 / 67,567,869 / 157,184,253 bytes; zero state-byte mismatch against fresh re-prefill; zero repeat/restore bitwise or tolerance/non-finite mismatches; identical four-token argmax paths. Accepted artifact:
-`$HOME/edwin/llama-jobs/dsv4-rocm-state-equivalence/20260804T044114.706244382Z-context-state-controlled-5d80b8662a95-16000/`.
+`$HOME/llama-jobs/dsv4-rocm-state-equivalence/20260804T044114.706244382Z-context-state-controlled-5d80b8662a95-16000/`.
 Rejected controlled sequence artifact:
-`$HOME/edwin/llama-jobs/dsv4-rocm-state-equivalence/20260804T043609.677826936Z-state-restore-controlled-400c47cd68ce-27056/`.
+`$HOME/llama-jobs/dsv4-rocm-state-equivalence/20260804T043609.677826936Z-state-restore-controlled-400c47cd68ce-27056/`.
 The fixed sweep has one generation/batch configuration and unique depths, so reuse occurs only for later repetitions inside the same context. Commit `f97f5cdb0` adds explicit llama-bench full-context depth state and makes `run-tg.sh` reject any sequence-mode override.
 
 **M5.0 accepted target-only baseline.** At clean source commit `1cd80107ee7659ede72b9487e3bd00f24527e93b`, the fully hashed resumed sweep ran tg32 at all eight required actual starting KV depths with 31 raw samples, the first predeclared graph-cold sample discarded, and 30 accepted samples per depth. It used no draft/MTP/DSpark/speculative path; full-context state restore; J16/HC1/LID-subwave4; F16 K/V; FA on; batch/ubatch 512/256; and exact tensor split `1/1/1/1`. The run completed without timeout or truncation. Its 7,680 accepted target decode calls are:
@@ -843,7 +843,7 @@ The fixed sweep has one generation/batch configuration and unique depths, so reu
 Every depth is below the predeclared 3% latency-MAD gate. Wide 32K/64K ranges retain isolated slow samples rather than post-hoc removal; 30-sample medians/MADs remain stable. Of 1,054 telemetry query starts, zero falls in an accepted measurement interval. The exact executable SHA-256 is `386adefc9aa74fd762c7aaafb64eed647176db94a29b5890f1f5fdc26010f7df`; all 46 resolved DSO hashes match the residency arm. Full GGUF hashes are shard 1 `057a3aacf912e079f22d07b94bc3b4ef46c6632476bc0bd1761347eb08edb2aa`, shard 2 `700405274473b58fa26be4f14e4a194c2e7554fa3a052f62a0c50c568e89fc1f`, and shard 3 `a69102ddfaf4a84426e11fdb66716654f4260dc3a1de3ade9fd50e006b8691d3`. All four GPUs recorded performance level `auto`, boot-default power profile, 140 W maximum package power, and no supported overdrive.
 
 Performance artifact:
-`$HOME/edwin/llama-jobs/dsv4-rocm-tg/20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396/`.
+`$HOME/llama-jobs/dsv4-rocm-tg/20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396/`.
 Its `pair-acceptance-validation.{py,json,txt}` is the exact rerunnable M5.0/M5.1 pair monitor and reports every check PASS.
 
 ### M5.1-M5.2 / P0-A - TOP_K residency, then fix only if reproduced
@@ -851,7 +851,7 @@ Its `pair-acceptance-validation.{py,json,txt}` is the exact rerunnable M5.0/M5.1
 **M5.1 accepted at composite-backend scope.** The separate fully hashed residency arm at source `1cd80107ee76` used `n_gen=1`, one repetition/depth, `GGML_SCHED_DEBUG=2 --verbose`, and no performance timing. At each depth it found exactly one ordered measured decode graph: split `#0 = CPU/0 inputs` and split `#1 = Meta(ROCm0,ROCm1,ROCm2,ROCm3)` with 22 inputs at depth 0 and 25 at 2K-64K. Depth 0 has no TOP_K/LIGHTNING_INDEXER operation. Every 2K-64K graph has exactly 21 real TOP_K plus 21 real LIGHTNING_INDEXER operations on the aggregate Meta backend, with zero CPU/unknown DSV4 assignment and no parser warning. The CPU split is token-embedding `GET_ROWS`; zero split inputs means no scheduler-introduced input enters it, not that no CPU computation/CPU-origin transfer exists. This top-level log does **not** attest per-GPU execution ownership, per-GPU copies, peer transfer, or selector correctness.
 
 Residency artifact:
-`$HOME/edwin/llama-jobs/dsv4-rocm-tg/20260804T131957.468937324Z-raw-tg-residency-hardened-full-residency-1cd80107ee76-22574/`.
+`$HOME/llama-jobs/dsv4-rocm-tg/20260804T131957.468937324Z-raw-tg-residency-hardened-full-residency-1cd80107ee76-22574/`.
 Offline parser commit `6f7115360e3c` fails closed on marker order/counters, exact two-split structure/backend/input counts, 2K selector presence, abbreviated-node-to-full-Meta correlation, extra/unknown splits, and any warning. Negative fixtures and a postcommit reparse of the preserved 529 MiB log pass. Therefore M5.0 observational and post-fix/deployment states are accepted; M5.2 implementation is **not triggered** because no LID/TOP_K fallback reproduced. M5.2 selector correctness remains a separate conditional gate.
 
 The premise that this branch lacks large HIP TOP_K is **not currently true**. Source audit at commit `925d93700` (implementation source unchanged by the subsequent documentation edits):
@@ -980,6 +980,7 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Use ROCTx selected regions for disk-safe target-only raw-decode profiling. | `35ee01b7e`: authoritative in-process monotonic boundaries surround accepted `test_gen` only; exact full-hash/stack/config contract; CSV kernel/copy/RCCL/HIP domains; fail-closed summarizer. Three independent reviews; selected-region smoke captured exactly 1 of 3 kernels. | accepted tooling |
 | 2026-08-04 | Stabilize profiles by increasing tg32 repetitions only; preserve attribution on unstable exit 4. | Default 5-profiled-rep 16K run missed at 6.385% MAD; 10-profiled-rep retry still missed at 6.511%. `667bc100a` keeps one discard and tg32; `09f575d10` emits scope-valid diagnostic attribution but marks throughput and CSA ineligible. | accepted policy/tooling |
 | 2026-08-04 | Do not select an M5.3 implementation branch from the first two 16K profiles. | Aggregate ranks disagree: quantized matmul 27.446% vs NCCL 23.020% in run A; NCCL 28.871% vs quantized matmul 26.842% in run B. All samples retained; per-repetition ranks are quantized 13/15 and NCCL 2/15. | unresolved; more evidence required |
+| 2026-08-04 | Correct every documented artifact prefix to `$HOME/llama-jobs`. | Final-monitor execution exposed the inherited impossible `$HOME/edwin/llama-jobs` expansion (`/home/edwin/edwin/...`). All 60 canonical occurrences now match the actual preserved directories. | accepted documentation fix |
 
 ## 10. Closed decisions and open questions
 
@@ -1039,12 +1040,12 @@ The accepted result is the `5d80b8662` artifact listed above; all original/fresh
 
 ```bash
 for d in \
-  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T145326.793240911Z-raw-tg-profile-16k-a-performance-35ee01b7edf9-6030 \
-  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436
+  $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T145326.793240911Z-raw-tg-profile-16k-a-performance-35ee01b7edf9-6030 \
+  $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436
 do
   "$d/profile-parser-command.sh"
 done
-P=$HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436
+P=$HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436
 python3 "$P/profile-comparison-monitor.py"
 ```
 
@@ -1077,7 +1078,7 @@ DSV4_REPS=1 DSV4_TIMEOUT=300 DSV4_LABEL=final-full-stack-4opt \
 scripts/dsv4-rocm/run-pp.sh
 ```
 
-The recorded run (`$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T003038.699935606Z-final-full-stack-4opt-c98197389511-25811/`) was complete with all four shapes and median 293.744 / 523.352 / 437.512 / 365.332 t/s at 512/2K/8K/16K. Correctness of the committed stack is attested by the natural-proxy gate `20260803-225603-iq3-t128-corpus-fb2a0c85d` (`complete=1`).
+The recorded run (`$HOME/llama-jobs/dsv4-rocm-pp/20260804T003038.699935606Z-final-full-stack-4opt-c98197389511-25811/`) was complete with all four shapes and median 293.744 / 523.352 / 437.512 / 365.332 t/s at 512/2K/8K/16K. Correctness of the committed stack is attested by the natural-proxy gate `20260803-225603-iq3-t128-corpus-fb2a0c85d` (`complete=1`).
 
 Current 8K control/candidate commands:
 
@@ -1126,13 +1127,13 @@ scripts/dsv4-rocm/analyze-trace-agents.py "$run_dir" \
 ```
 
 Accepted correctness artifacts are
-`$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/`
+`$HOME/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/`
 for HC and
-`$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/`
+`$HOME/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/`
 for LID. The accepted post-LID attribution trace is
-`$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T215054.700650714Z-kernel-trace-j16-hc-lid-16k-fdde31252a63-8573/`;
+`$HOME/llama-jobs/dsv4-rocm-pp/20260803T215054.700650714Z-kernel-trace-j16-hc-lid-16k-fdde31252a63-8573/`;
 the directly comparable pre-LID trace remains
-`$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/`.
+`$HOME/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/`.
 Optimization four is accepted (commits `803a41c37`/`fb2a0c85d`); production
 MTP remains explicitly deferred. These commands are a reproducible verification
 checkpoint, not a claim that every deferred roadmap item is complete: 32K/64K
@@ -1166,9 +1167,9 @@ done
 ```
 
 The counter commands and raw DBs are preserved under
-`$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/`.
+`$HOME/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/`.
 The production failure is under
-`$HOME/edwin/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`.
+`$HOME/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`.
 
 ### Artifact and loop index
 
@@ -1215,14 +1216,14 @@ Revised roadmap / loop-registration commits:
 M5.0 harness / corrected depth-state commits:
   1e5519bf1 / f97f5cdb0
 M5.0 static-validation artifacts:
-  $HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/
+  $HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/
 Accepted M5.0 performance artifact:
-  $HOME/edwin/llama-jobs/dsv4-rocm-tg/20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396/
+  $HOME/llama-jobs/dsv4-rocm-tg/20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396/
 Accepted M5.1 residency artifact:
-  $HOME/edwin/llama-jobs/dsv4-rocm-tg/20260804T131957.468937324Z-raw-tg-residency-hardened-full-residency-1cd80107ee76-22574/
+  $HOME/llama-jobs/dsv4-rocm-tg/20260804T131957.468937324Z-raw-tg-residency-hardened-full-residency-1cd80107ee76-22574/
 Diagnostic M5.3 16K profile artifacts (both exit 4 / unstable wall):
-  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T145326.793240911Z-raw-tg-profile-16k-a-performance-35ee01b7edf9-6030/
-  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436/
+  $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T145326.793240911Z-raw-tg-profile-16k-a-performance-35ee01b7edf9-6030/
+  $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436/
 Current next action:
   M5.3 remains unresolved: map `other_quantized_matmul` to exact shared-FFN vs
   projection shapes, isolate/reproduce the two NCCL stall repetitions, and
@@ -1257,7 +1258,7 @@ Purpose:
 - Rebuilt `llama-bench` and ran the exact fully hashed resumed command. Performance artifact `20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396` exits 0, complete/stable: tg32, 31 raw/30 accepted per depth, every MAD/median <=1.77%, 7,680 accepted target decode calls. No timeout/truncation; zero of 1,054 telemetry query starts is inside an accepted interval.
 - Ran the separate fully hashed tg1 residency audit at the same source/binary/model/46-DSO/power identity. Artifact `20260804T131957.468937324Z-raw-tg-residency-hardened-full-residency-1cd80107ee76-22574` exits 0 and confirms exact composite-Meta DSV4 residency through 64K.
 - Independent read-only review found no evidence blocker and recommended M5.0/M5.1 closure, but identified residual parser false-pass cases. Commit `6f7115360` closes them with exact marker, split, backend/input, 2K-node, no-extra, and warning-free requirements; negative fixtures and the 529 MiB real log reparse pass.
-- Preserved monitor: `pair-acceptance-validation.py` in the performance artifact checks source/config/status, 3 model hashes, 46 matching DSO hashes, binary, power policy, telemetry boundaries, summary contract, and strict residency JSON. Its rerun prints `M5.0/M5.1 PAIR ACCEPTANCE: PASS`.
+- Preserved monitor: `pair-acceptance-validation.py` in the performance artifact checks source/config/status, 3 model hashes, 46 matching DSO hashes, binary, power policy, telemetry boundaries, summary contract, and strict residency JSON. Its rerun prints `M5.0/M5.1 PAIR ACCEPTANCE: PASS`. A later exact monitor run exposed inherited `$HOME/edwin/llama-jobs` documentation paths; every canonical artifact prefix is corrected to the actual `$HOME/llama-jobs`.
 - Accepted: M5.0 observational + post-fix/deployment baseline and M5.1 composite scheduler residency. M5.2 is not triggered. Per-GPU copy/execution ownership and selector correctness are not claimed. Next: M5.3 fresh raw-decode profiling; indexed CSA remains held.
 
 ### Iteration 3 continued — M5.3 profiler and first diagnostics
@@ -1281,7 +1282,7 @@ DSV4_HASH_MODE=full DSV4_TG_MODE=residency \
 **Exact non-GPU pair monitor:**
 
 ```bash
-PERF=$HOME/edwin/llama-jobs/dsv4-rocm-tg/20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396
+PERF=$HOME/llama-jobs/dsv4-rocm-tg/20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396
 python3 "$PERF/pair-acceptance-validation.py"
 ```
 
