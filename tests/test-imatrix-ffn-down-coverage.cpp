@@ -107,13 +107,20 @@ static int test_api_surface() {
         bool is_ffn_down;
     };
     const case_t cases[] = {
-        // Positive: every flavor of ffn_down must be in scope.
+        // Positive: every flavor of ffn_down must be in scope for the
+        // imatrix collector (the "blk." prefix check) AND be recognized
+        // as a ffn_down weight by the model's name->tensor mapping.
         { "blk.0.ffn_down.weight",                 true,  true  },
         { "blk.7.ffn_down.weight",                 true,  true  },
         { "blk.42.ffn_down.weight",                true,  true  },
         { "blk.0.ffn_down_exps.weight",            true,  true  },
         { "blk.3.ffn_down_exps.weight",            true,  true  },
-        { "blk.0.ffn_down_shexp.weight",           true,  true  },
+        // ffn_down_shexp (shared-expert ffn_down) is in scope for the
+        // imatrix (it carries the "blk." prefix) but is recognized by
+        // a separate pattern in src/llama-model.cpp (pattern_ffn_down_shexp),
+        // not by pattern_ffn_down_weight.  This is expected: the imatrix
+        // is name-agnostic; the model loader is name-specific.
+        { "blk.0.ffn_down_shexp.weight",           true,  false },
         // Negative: tensors that are NOT ffn_down must not be mis-tagged.
         { "blk.0.ffn_gate.weight",                 true,  false },
         { "blk.0.ffn_up.weight",                   true,  false },
@@ -173,7 +180,20 @@ struct tensor_record {
 
 // Minimal GGUF reader: enough to enumerate tensor names and channel counts.
 // We do not depend on any internal llama header here because the imatrix
-// GGUF is a public-format file.
+// GGUF is a public-format file.  Only the KV types the imatrix actually
+// emits are implemented (UINT32, STRING, ARRAY of STRING); an unknown
+// type is a hard fail so a future format change surfaces as a test diff.
+//
+// GGUF types we care about (from ggml/include/gguf.h):
+//   GGUF_TYPE_UINT32   = 4  -> 4 bytes
+//   GGUF_TYPE_STRING   = 8  -> 8-byte length + payload
+//   GGUF_TYPE_ARRAY    = 9  -> 4-byte sub_type + 8-byte count + elements
+//
+// The imatrix writes (tools/imatrix/imatrix.cpp:save_imatrix):
+//   general.type           = STRING
+//   imatrix.datasets       = ARRAY of STRING
+//   imatrix.chunk_count    = UINT32
+//   imatrix.chunk_size     = UINT32
 static int read_imatrix_gguf(
         const std::string & path,
         std::vector<tensor_record> & tensors,
@@ -189,97 +209,154 @@ static int read_imatrix_gguf(
         fprintf(stderr, "FAIL: '%s' is not a GGUF (bad magic)\n", path.c_str());
         return 61;
     }
+    // Header (ggml/src/gguf.cpp:480-535):
+    //   magic (4) | version (4 uint32) | n_tensors (8 int64) | n_kv (8 int64)
     uint32_t version;
-    uint32_t n_tensors;
-    uint32_t n_kv;
-    ifs.read(reinterpret_cast<char *>(&version), 4);
-    ifs.read(reinterpret_cast<char *>(&n_tensors), 4);
-    ifs.read(reinterpret_cast<char *>(&n_kv), 4);
+    int64_t  n_tensors;
+    int64_t  n_kv;
+    {
+        const std::streampos before = ifs.tellg();
+        ifs.read(reinterpret_cast<char *>(&version),  4);
+        ifs.read(reinterpret_cast<char *>(&n_tensors), 8);
+        ifs.read(reinterpret_cast<char *>(&n_kv),      8);
+        if (ifs.gcount() != 8) {
+            fprintf(stderr, "FAIL: truncated reading GGUF header (got %td bytes after n_kv)\n",
+                ifs.gcount());
+            return 62;
+        }
+        // Sanity: the file has 20 bytes of header after the 4-byte magic.
+        if (static_cast<std::streamoff>(ifs.tellg() - before) != 20) {
+            fprintf(stderr,
+                "FAIL: GGUF header position wrong (expected 20 bytes, got %lld)\n",
+                static_cast<long long>(ifs.tellg() - before));
+            return 63;
+        }
+    }
     if (version != 3) {
         fprintf(stderr, "FAIL: imatrix GGUF version %u, expected 3\n", version);
-        return 62;
+        return 64;
     }
-    // Skip KV (we only need tensor names and the channel count for
-    // matching the 5 stat tensors per block layer).
-    for (uint32_t i = 0; i < n_kv; ++i) {
-        uint64_t klen;
-        ifs.read(reinterpret_cast<char *>(&klen), 8);
-        ifs.seekg(static_cast<std::streamoff>(klen), std::ios::cur);
-        uint32_t ktype;
+    // Skip the KV set. We do not need the values, only the structure.
+    auto skip_string = [&]() -> bool {
+        const std::streampos before = ifs.tellg();
+        uint64_t slen;
+        ifs.read(reinterpret_cast<char *>(&slen), 8);
+        if (ifs.gcount() != 8) {
+            fprintf(stderr, "FAIL: truncated reading string length (got %lld bytes)\n",
+                static_cast<long long>(ifs.gcount()));
+            return false;
+        }
+        ifs.seekg(static_cast<std::streamoff>(slen), std::ios::cur);
+        const long long delta = static_cast<long long>(ifs.tellg() - before);
+        const long long want  = static_cast<long long>(8 + slen);
+        if (delta != want) {
+            fprintf(stderr, "FAIL: truncated reading string payload (told=%lld expected=%lld)\n",
+                delta, want);
+            return false;
+        }
+        return true;
+    };
+    for (int64_t i = 0; i < n_kv; ++i) {
+        if (!skip_string()) return 64;  // key
+        // The KV type is serialized as int32 in ggml's gguf writer.
+        int32_t ktype;
         ifs.read(reinterpret_cast<char *>(&ktype), 4);
-        // Conservative skip: bound the read by an arbitrary large cap so
-        // a malformed file cannot hang us. The imatrix KV set is small
-        // (general.type, imatrix.datasets, imatrix.chunk_count,
-        // imatrix.chunk_size).
-        auto skip_value = [&](uint32_t t) -> bool {
-            switch (t) {
-                case 0: ifs.seekg(4,  std::ios::cur); return true;
-                case 1: ifs.seekg(8,  std::ios::cur); return true;
-                case 2:
-                case 3: ifs.seekg(4,  std::ios::cur); return true;
-                case 4: ifs.seekg(1,  std::ios::cur); return true;
-                case 5: ifs.seekg(2,  std::ios::cur); return true;
-                case 6: ifs.seekg(2,  std::ios::cur); return true;
-                case 7: {
-                    uint32_t arr_len, sub_type_len;
-                    ifs.read(reinterpret_cast<char *>(&arr_len), 4);
-                    ifs.read(reinterpret_cast<char *>(&sub_type_len), 4);
-                    ifs.seekg(sub_type_len, std::ios::cur);
-                    return true;
+        if (ifs.gcount() != 4) {
+            fprintf(stderr, "FAIL: truncated reading KV type\n");
+            return 65;
+        }
+        switch (ktype) {
+            case 0: ifs.seekg(1, std::ios::cur); break;       // UINT8
+            case 1: ifs.seekg(1, std::ios::cur); break;       // INT8
+            case 2: ifs.seekg(2, std::ios::cur); break;       // UINT16
+            case 3: ifs.seekg(2, std::ios::cur); break;       // INT16
+            case 4: ifs.seekg(4, std::ios::cur); break;       // UINT32
+            case 5: ifs.seekg(4, std::ios::cur); break;       // INT32
+            case 6: ifs.seekg(4, std::ios::cur); break;       // FLOAT32
+            case 7: ifs.seekg(1, std::ios::cur); break;       // BOOL
+            case 8:                                           // STRING
+                if (!skip_string()) return 66;
+                break;
+            case 9: {                                        // ARRAY
+                int32_t  sub_type;
+                uint64_t count;
+                const std::streampos before = ifs.tellg();
+                ifs.read(reinterpret_cast<char *>(&sub_type), 4);
+                ifs.read(reinterpret_cast<char *>(&count),    8);
+                const long long delta = static_cast<long long>(ifs.tellg() - before);
+                if (delta != 12) {
+                    fprintf(stderr, "FAIL: truncated reading ARRAY header (got %lld bytes)\n",
+                        delta);
+                    return 67;
                 }
-                case 8: {
-                    uint32_t sub_type_len, count;
-                    ifs.read(reinterpret_cast<char *>(&sub_type_len), 4);
-                    ifs.seekg(sub_type_len, std::ios::cur);
-                    ifs.read(reinterpret_cast<char *>(&count), 4);
-                    return true;
+                for (uint64_t j = 0; j < count; ++j) {
+                    if (sub_type == 8) {
+                        if (!skip_string()) return 68;
+                    } else {
+                        fprintf(stderr,
+                            "FAIL: unsupported ARRAY sub_type %d (only STRING supported)\n",
+                            sub_type);
+                        return 69;
+                    }
                 }
-                case 9: {
-                    uint32_t sub_type_len, count;
-                    ifs.read(reinterpret_cast<char *>(&sub_type_len), 4);
-                    ifs.seekg(sub_type_len, std::ios::cur);
-                    ifs.read(reinterpret_cast<char *>(&count), 4);
-                    return true;
-                }
-                case 10: ifs.seekg(4,  std::ios::cur); return true;
-                case 11: {
-                    uint64_t slen;
-                    ifs.read(reinterpret_cast<char *>(&slen), 8);
-                    ifs.seekg(static_cast<std::streamoff>(slen), std::ios::cur);
-                    return true;
-                }
-                case 12: {
-                    uint64_t slen;
-                    ifs.read(reinterpret_cast<char *>(&slen), 8);
-                    ifs.seekg(static_cast<std::streamoff>(slen), std::ios::cur);
-                    return true;
-                }
-                default:
-                    fprintf(stderr, "FAIL: unknown imatrix KV type %u\n", t);
-                    return false;
+                break;
             }
-        };
-        if (!skip_value(ktype)) {
-            return 63;
+            case 10: ifs.seekg(8, std::ios::cur); break;      // UINT64
+            case 11: ifs.seekg(8, std::ios::cur); break;      // INT64
+            case 12: ifs.seekg(8, std::ios::cur); break;      // FLOAT64
+            default:
+                fprintf(stderr, "FAIL: unknown imatrix KV type %d\n", ktype);
+                return 70;
         }
     }
     tensors.clear();
     tensors.reserve(n_tensors);
-    for (uint32_t i = 0; i < n_tensors; ++i) {
+    for (int64_t i = 0; i < n_tensors; ++i) {
         uint64_t nlen;
         ifs.read(reinterpret_cast<char *>(&nlen), 8);
+        if (ifs.gcount() != 8) {
+            fprintf(stderr, "FAIL: truncated reading tensor name length\n");
+            return 71;
+        }
         std::string name(nlen, '\0');
         ifs.read(name.data(), nlen);
+        if (ifs.gcount() != static_cast<std::streamsize>(nlen)) {
+            fprintf(stderr, "FAIL: truncated reading tensor name (got %lld expected %llu)\n",
+                static_cast<long long>(ifs.gcount()),
+                static_cast<unsigned long long>(nlen));
+            return 72;
+        }
+        // ggml/src/gguf.cpp:1509-1520: write_tensor_meta writes
+        //   n_dims (uint32) | dims (n_dims * int64) | type (int32) | offset (int64)
         uint32_t ndims;
         ifs.read(reinterpret_cast<char *>(&ndims), 4);
+        if (ifs.gcount() != 4) {
+            fprintf(stderr, "FAIL: truncated reading n_dims\n");
+            return 73;
+        }
         std::vector<int64_t> dims(ndims);
+        const std::streampos before_dims = ifs.tellg();
         for (uint32_t d = 0; d < ndims; ++d) {
             ifs.read(reinterpret_cast<char *>(&dims[d]), 8);
         }
-        uint32_t ttype;
-        uint64_t offset;
-        ifs.read(reinterpret_cast<char *>(&ttype), 4);
+        const long long delta_dims = static_cast<long long>(ifs.tellg() - before_dims);
+        const long long want_dims  = static_cast<long long>(8) * ndims;
+        if (delta_dims != want_dims) {
+            fprintf(stderr, "FAIL: truncated reading dims (got %lld bytes for n_dims=%u)\n",
+                delta_dims, ndims);
+            return 74;
+        }
+        const std::streampos before_to = ifs.tellg();
+        int32_t ttype;
+        int64_t offset;
+        ifs.read(reinterpret_cast<char *>(&ttype),  4);
         ifs.read(reinterpret_cast<char *>(&offset), 8);
+        const long long delta_to = static_cast<long long>(ifs.tellg() - before_to);
+        if (delta_to != 12) {
+            fprintf(stderr, "FAIL: truncated reading tensor type+offset (got %lld)\n",
+                delta_to);
+            return 75;
+        }
         // The imatrix emits 5 stat tensors per measured weight:
         // counts (1 I32 element), in_sum2 / in_sumabs / in_sum4 / in_maxabs
         // (F32, one entry per input channel). For matching, we only need
@@ -402,16 +479,30 @@ static int test_with_model(
 }
 
 int main(int argc, char ** argv) {
-    common_params params;
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY, nullptr)) {
-        return 1;
+    // Parse a minimal -m / -p pair ourselves. common_params_parse() is the
+    // right tool for the main binaries but it requires the example-specific
+    // validation hooks to be wired (e.g. --model is required for
+    // LLAMA_EXAMPLE_PERPLEXITY).  This test is its own binary and just
+    // needs -m / -p, so we keep arg parsing local.
+    std::string model_path;
+    std::string prompt;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if ((a == "-m" || a == "--model") && i + 1 < argc) {
+            model_path = argv[++i];
+        } else if ((a == "-p" || a == "--prompt") && i + 1 < argc) {
+            prompt = argv[++i];
+        } else if (a == "-h" || a == "--help") {
+            printf("Usage: %s [-m MODEL_GGUF] [-p PROMPT]\n", argv[0]);
+            return 0;
+        }
     }
 
     if (test_api_surface() != 0) {
         return 2;
     }
 
-    if (params.model.path.empty()) {
+    if (model_path.empty()) {
         LOG_INF("%s: no -m MODEL given, end-to-end skipped (API-only mode)\n", __func__);
         return 0;
     }
@@ -443,25 +534,48 @@ int main(int argc, char ** argv) {
     }
 
     // A long, repeatable prompt so the imatrix sees enough tokens to
-    // exercise every per-block weight at least once.  We avoid relying
-    // on a specific tokenization by using common words.
+    // exercise every per-block weight at least once.  llama-imatrix
+    // requires at least 2*n_ctx tokens of input (the n_ctx=128 fixture
+    // model needs 256+ tokens), so we repeat a stable word sequence
+    // ~30 times.  Avoiding a specific tokenization keeps the test
+    // hermetic across tokenizers.
     const std::string default_prompt =
         "the quick brown fox jumps over the lazy dog. "
+        "she sells sea shells by the sea shore. "
+        "how vexingly quick daft zebras jump. "
+        "the five boxing wizards jump quickly. "
+        "pack my box with five dozen liquor jugs. "
         "the quick brown fox jumps over the lazy dog. "
+        "she sells sea shells by the sea shore. "
+        "how vexingly quick daft zebras jump. "
+        "the five boxing wizards jump quickly. "
+        "pack my box with five dozen liquor jugs. "
         "the quick brown fox jumps over the lazy dog. "
+        "she sells sea shells by the sea shore. "
+        "how vexingly quick daft zebras jump. "
+        "the five boxing wizards jump quickly. "
+        "pack my box with five dozen liquor jugs. "
         "the quick brown fox jumps over the lazy dog. "
+        "she sells sea shells by the sea shore. "
+        "how vexingly quick daft zebras jump. "
+        "the five boxing wizards jump quickly. "
+        "pack my box with five dozen liquor jugs. "
         "the quick brown fox jumps over the lazy dog. "
+        "she sells sea shells by the sea shore. "
+        "how vexingly quick daft zebras jump. "
+        "the five boxing wizards jump quickly. "
+        "pack my box with five dozen liquor jugs. "
         "the quick brown fox jumps over the lazy dog. "
-        "the quick brown fox jumps over the lazy dog. "
-        "the quick brown fox jumps over the lazy dog. "
-        "the quick brown fox jumps over the lazy dog. "
-        "the quick brown fox jumps over the lazy dog. ";
+        "she sells sea shells by the sea shore. "
+        "how vexingly quick daft zebras jump. "
+        "the five boxing wizards jump quickly. "
+        "pack my box with five dozen liquor jugs. ";
 
-    const std::string prompt = params.prompt.empty() ? default_prompt : params.prompt;
+    const std::string actual_prompt = prompt.empty() ? default_prompt : prompt;
 
     // Output path. We use the model name plus ".ffn-down-cov.imatrix"
     // so concurrent test runs against different fixtures do not collide.
-    const std::string imatrix_out = params.model.path + ".ffn-down-cov.imatrix";
+    const std::string imatrix_out = model_path + ".ffn-down-cov.imatrix";
 
-    return test_with_model(params.model.path, prompt, imatrix_out, llama_imatrix_bin);
+    return test_with_model(model_path, actual_prompt, imatrix_out, llama_imatrix_bin);
 }
