@@ -193,6 +193,52 @@ static int test_compute_descriptor() {
     return 0;
 }
 
+static int test_modality_inference() {
+    // M0b: explicit v./a. role prefixes (real mmproj convention from
+    // clip.cpp:1831) take precedence over legacy fragment matching. mm.*
+    // projector tensors still fall through to the fragment check so
+    // hand-written fixtures like "mm.vision_embed.weight" keep working.
+    struct { const char * name; int want; } cases[] = {
+        // role-prefix pass: vision tower
+        { "v.patch_embd.weight",      1 },
+        { "v.blk.0.attn_q.weight",    1 },
+        { "v.blk.0.ffn_down.weight",  1 },
+        // role-prefix pass: audio tower
+        { "a.encoder.layers.0.weight", 2 },
+        { "a.position_embeddings",    2 },
+        // role-prefix pass: text-side projector (mm.* falls through to
+        // fragment check; these names have no vision/audio fragment)
+        { "mm.0.weight",              0 },
+        { "mm.1.bias",                0 },
+        // legacy fragment fallback: still classifies old-style names
+        { "vision_tower.layer.weight", 1 },
+        { "image_encoder.weight",      1 },
+        { "audio_encoder.weight",      2 },
+        { "speech_proj.weight",        2 },
+        // regression: no prefix, no fragment match -> text
+        { "attn_q.weight",             0 },
+        // guards
+        { "",                          0 },
+    };
+    int n_cases = (int)(sizeof(cases) / sizeof(cases[0]));
+    for (int i = 0; i < n_cases; i++) {
+        int got = ts_regime_infer_modality(cases[i].name);
+        if (got != cases[i].want) {
+            printf("FAIL modality: \"%s\" -> %d, expected %d\n",
+                   cases[i].name, got, cases[i].want);
+            return 1;
+        }
+    }
+    if (ts_regime_infer_modality(nullptr) != 0) {
+        printf("FAIL modality: nullptr -> %d, expected 0\n",
+               ts_regime_infer_modality(nullptr));
+        return 1;
+    }
+    n_cases += 1; // nullptr guard
+    printf("PASS modality inference: %d cases\n", n_cases);
+    return 0;
+}
+
 int main() {
     int failures = 0;
     failures += test_family_inference();
@@ -201,6 +247,7 @@ int main() {
     failures += test_route_normal();
     failures += test_route_all_summary();
     failures += test_compute_descriptor();
+    failures += test_modality_inference();
 
     if (failures == 0) {
         printf("\nAll tests passed.\n");

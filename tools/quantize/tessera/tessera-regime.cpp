@@ -41,6 +41,33 @@ int ts_regime_infer_modality(const char * tensor_name) {
     if (!tensor_name) {
         return 0;
     }
+    // Empty string has no role prefix and matches no fragment -> text.
+    if (tensor_name[0] == '\0') {
+        return 0;
+    }
+
+    // ---- First pass: explicit role prefixes (M0b) ----
+    // Real mmproj GGUFs (clip.cpp:1831) use "v." for vision tower, "a." for
+    // audio tower, and "mm." for the text-side projector. The old fragment
+    // matcher below misses most of these (e.g. "v.blk.0.attn_q.weight" has
+    // no vision/image/vit/patch/pixel/img substring), so the FLRQ/LRQ
+    // modality branches in ts_regime_classify were inert for real mmproj
+    // tensors. The role prefix is authoritative for v./a.; mm.* tensors
+    // still fall through to the fragment check below because real projector
+    // names ("mm.up.weight", "mm.input_projection.weight", ...) never
+    // contain vision/audio substrings, and hand-written test fixtures
+    // (e.g. "mm.vision_embed.weight" in test_modality_routing.cpp) rely on
+    // the fragment path.
+    if (tensor_name[0] == 'v' && tensor_name[1] == '.') {
+        return 1;
+    }
+    if (tensor_name[0] == 'a' && tensor_name[1] == '.') {
+        return 2;
+    }
+
+    // ---- Second pass: legacy fragment-based detection ----
+    // For older mmproj GGUFs and hand-written test fixtures that don't use
+    // the v./a. role prefix. Precedence: role prefix first, fragment second.
     // image / vision embedder tensors
     static const char * image_fragments[] = {
         "vision", "image", "vit", "patch", "pixel", "img",
