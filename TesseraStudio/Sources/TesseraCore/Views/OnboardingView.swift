@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Three-page first-run onboarding. Shown once, gated by an @AppStorage
 /// flag. Layout adapts: wider on macOS, full screen on iOS (design doc 5.10).
@@ -65,7 +68,7 @@ public struct OnboardingView: View {
             Image(systemName: "cube.box")
                 .font(.system(size: 56))
                 .foregroundStyle(.blue)
-            Text("Set Up Your Models")
+            Text("Set Up Models")
                 .font(.largeTitle.bold())
             Text("Tessera scans a directory for .gguf and .mlmodelc models.")
                 .font(.title3)
@@ -75,19 +78,44 @@ public struct OnboardingView: View {
                 Text("Model directory")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("~/Models/tessera", text: $modelDirectory)
-                    .textFieldStyle(.roundedBorder)
+                HStack(spacing: 6) {
+                    TextField("~/Models/tessera", text: $modelDirectory)
+                        .textFieldStyle(.roundedBorder)
+                    #if canImport(AppKit)
+                    Button("Browse…") { browseModelDirectory() }
+                        .accessibilityLabel("Browse for the model directory")
+                    #endif
+                }
             }
             .frame(maxWidth: 420)
-            Button {
-                // Placeholder: starter model download is wired in a later milestone.
-            } label: {
-                Label("Download a Starter Model", systemImage: "arrow.down.circle")
-            }
-            .buttonStyle(.bordered)
-            .disabled(true)
         }
     }
+
+    #if canImport(AppKit)
+    /// Folder-picker companion for the model directory field, same
+    /// pattern as Settings' PathField.browse: free typing still works,
+    /// but HIG 2.13 also wants a real picker.
+    private func browseModelDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        // Start the panel where the current value points, when it
+        // names an existing path - saves re-navigating from $HOME.
+        if !modelDirectory.isEmpty {
+            let expanded = (modelDirectory as NSString).expandingTildeInPath
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir) {
+                panel.directoryURL = URL(fileURLWithPath: isDir.boolValue
+                    ? expanded
+                    : (expanded as NSString).deletingLastPathComponent)
+            }
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            modelDirectory = url.path
+        }
+    }
+    #endif
 
     private var agentPage: some View {
         VStack(spacing: 16) {
@@ -149,10 +177,13 @@ public struct OnboardingView: View {
                     .buttonStyle(.bordered)
             }
             Spacer()
+            // HIG 14.2: the tutorial is optional - Skip is visible on
+            // every page and completes onboarding immediately.
+            Button("Skip") { finish() }
+                .buttonStyle(.borderless)
             Button(page == pageCount - 1 ? "Get Started" : "Continue") {
                 if page == pageCount - 1 {
-                    onboardingComplete = true
-                    onComplete()
+                    finish()
                 } else {
                     withAnimation { page += 1 }
                 }
@@ -160,5 +191,10 @@ public struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: 420)
+    }
+
+    private func finish() {
+        onboardingComplete = true
+        onComplete()
     }
 }
