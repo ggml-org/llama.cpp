@@ -117,6 +117,11 @@ add_library(${TARGET}
     ../../common/tessera-debug/tessera-sidecar-v3.cpp
     # DuckDB-backed persistent store (no-op when --quantize-db is not passed)
     tessera/tessera-quantize-db.cpp
+    # Phase 16 unified GGUF writer for the Gemma4 12B + dspark + dflash +
+    # MTP arch (LLM_ARCH_GEMMA4_ASSISTANT). Reads 4+ per-component
+    # GGUFs + a calibration policy JSON, writes a single gemma4-assistant
+    # GGUF. See tessera-unified-writer.h.
+    tessera/tessera-unified-writer.cpp
     # Per-table write buffer: parallel producers -> single flusher -> DuckDB
     # bulk insert. Used for the unified tessera.duckdb schema (ga_evaluations,
     # tensor_stats, l3/l4/l5/ple summary tables).
