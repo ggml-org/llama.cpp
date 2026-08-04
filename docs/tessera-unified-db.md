@@ -1376,6 +1376,115 @@ wall-time.
   wall-time speedup.
 ||||||| 1a5d56ca2
 
+## Phase 16 (calibrate follow-ups): per-component model_role end-to-end
+
+The Phase 16 calibrate stack already plumbs `model_role`
+through `per_tensor_calibrate.py --model-role` and stamps
+it on every per-tensor entry in the calibration policy
+(this branch added that on the calibration side). The
+calibrate-model-role follow-up extends the same contract
+end-to-end so the cross-pipeline `tensor_stats` table is
+correctly tagged on every write site, and so the unified
+Calibrate driver picks the right `--fitness` per
+component.
+
+### 16.8: model_role plumb-through (Python + C++)
+
+Three call sites write to the cross-pipeline `tensor_stats`
+table from the calibration side. They all stamp
+`model_role` now:
+
+* **`awq-evolve.py`** (Python, the island-GA search
+  loop). New `--model-role {trunk,dflash,dspark,mtp_nextn,shared_embd}`
+  arg, choices mirror the calibration script. The role
+  is stamped on every per-family and per-override entry,
+  on the `norm` pseudo-entry, on the
+  `moe_residual_allocation` block, and at the top-level
+  `policy["model_role"]`. Default `trunk` preserves the
+  pre-Phase-16 single-component contract.
+* **`per_tensor_calibrate.py --fitness awq`**
+  (Python, the calibration driver). Forwards the
+  user-supplied `--model-role` to `awq-evolve.py` as
+  a subprocess flag. The subprocess is the
+  authoritative source; the wrapper's `setdefault`
+  is a belt-and-braces safety net for forward-compat.
+* **`ts_dispatch_run`** (C++, the dispatch's GA-prep
+  walk). `ts_dispatch_params` gains a
+  `model_role` field (default empty -> `trunk` in
+  the SQL). The walk stamps the value on every
+  `ts_tessera_db_upsert_tensor_stat` call. The
+  unified Calibrate driver sets
+  `params->model_role` per component when it
+  shells out to the dispatch.
+
+### 16.9: per-component --fitness policy
+
+`unified_calibrate.py` now picks the `--fitness`
+strategy per component rather than running one mode
+across all components. The per-role table:
+
+| Role         | Fitness | Why                                                       |
+|--------------|---------|-----------------------------------------------------------|
+| `trunk`      | `awq`   | Heavy hitter is the FFN; GA minimises layer-output error  |
+| `dflash`     | `lrq`   | Drafter is lossy; smaller low-rank footprint is enough     |
+| `dspark`     | `lrq`   | Same rationale                                            |
+| `mtp_nextn`  | `lrq`   | Smaller than trunk; low-rank is enough                    |
+| `shared_embd`| `flrq`  | Frozen at train; calibration-free FLRQ avoids wasted cost |
+
+The CLI:
+
+* `--fitness-default auto` (the recommended default)
+  consults the per-role table.
+* `--fitness-default X` (any non-auto value) overrides
+  the table; every component runs with `X`.
+* `--fitness` is forwarded to `per_tensor_calibrate.py`
+  when `--fitness-default` is not `auto`.
+
+The unified policy now carries a per-component
+`components` block recording the resolved strategy
+per role. The legacy single-fitness layout
+(one `policy["lrq"]` block) is kept when
+`--fitness-default` is not `auto`; the auto case
+segregates the per-fitness blocks (`lrq` / `flrq` /
+`dartquant` / `awq`) by the per-component strategy
+the table picked. `unified_calibrate._run_per_tensor_calibrate`
+forwards `--model-role` to `per_tensor_calibrate.py`
+so the per-component policy is tagged at the policy
+layer; the `calibration_to_tensor_stats.py` consumer
+stamps the same role on the `tensor_stats` row.
+
+### Tests
+
+* `tools/tessera/test_awq_evolve_model_role.py` (4
+  cases): `policy_entry` stamps role,
+  `build_policy` stamps role on every level,
+  end-to-end CLI `--model-role dflash` produces a
+  well-formed policy, default `--model-role` is
+  `trunk` (legacy single-model).
+* `tests/test-tessera-ga-model-role.cpp` (5 cases):
+  C++ GA-walk tensor_stats upsert stamps role
+  (`dflash` / `dspark` / `mtp_nextn` / `shared_embd`),
+  default empty -> `trunk` (legacy single-component),
+  re-write on the same `(model_hash, model_role, name)`
+  is idempotent with role preserved. Standalone (no
+  libgguf / libggml); wired into both
+  `tools/quantize/CMakeLists.txt` (target
+  `test-tessera-ga-model-role`) and
+  `tools/quantize/tessera/test_all.sh` (the standalone
+  runner).
+* `tools/tessera/test_unified_calibrate_fitness.py`
+  (7 cases): `resolve_fitness()` per-role table,
+  explicit override wins, unknown role falls back,
+  invalid `--fitness-default` / `--fitness` rejected,
+  end-to-end auto mode records per-component strategy,
+  end-to-end explicit override drives every component.
+* `tests/test_phase16_calibrate_e2e.py` (3 cases):
+  4-component smoke with `--fitness-default auto`,
+  per-component fitness is the right per-role strategy,
+  every tensor family carries `model_role`, per-fitness
+  blocks carry `model_role` on every record,
+  `model_roles` is the registration order.
+
 ## Phase 16: unified GGUF writer (C++ side)
 
 The unified Gemma4 12B + dspark + dflash + MTP pipeline
