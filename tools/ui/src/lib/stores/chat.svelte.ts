@@ -38,7 +38,6 @@ import {
 	formatCwdMessage,
 	isAbortError,
 	generateConversationTitle,
-	parseCwdMessage,
 	CWD_CLEARED_TEXT
 } from '$lib/utils';
 import { toolsStore } from '$lib/stores/tools.svelte';
@@ -924,7 +923,7 @@ class ChatStore {
 		// Reuse the trailing cwd row when it is already the last message, so
 		// repeated picks update it in place instead of stacking another row.
 		const last = conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
-		if (last && last.role === MessageRole.USER && parseCwdMessage(last.content)) {
+		if (last && last.role === MessageRole.USER && last.isSynthetic === true) {
 			await DatabaseService.updateMessage(last.id, { content, isSynthetic: true });
 			conversationsStore.updateMessageAtIndex(conversationsStore.activeMessages.length - 1, {
 				content,

@@ -12,9 +12,6 @@ import { UrlProtocol } from '$lib/enums';
 export const CWD_CHANGED_PREFIX = 'Set working directory to ';
 export const CWD_CLEARED_TEXT = 'Working directory cleared';
 
-export const CWD_CHANGED_PREFIX_LEGACY = 'CWD is changed to: ';
-export const CWD_CLEARED_TEXT_LEGACY = 'CWD is cleared';
-
 export const HOME_TILDE = '~';
 export const HOME_TILDE_PREFIX = '~/'; // tilde plus path separator
 
@@ -22,7 +19,4 @@ export const HOME_TILDE_PREFIX = '~/'; // tilde plus path separator
 export const FILE_URI_PREFIX = `${UrlProtocol.FILE}//`;
 
 /** Matches the leading `[file:///abs/path](display)` link; not anchored to the end so trailing guidance may follow. */
-export const CWD_LINK_REGEX = /^\[file:\/\/([\s\S]*)\]\(([\s\S]*)\)/;
-
-/** Matches the legacy link format with swapped parts: `[display](file:///abs/path)`. */
-export const CWD_LINK_LEGACY_REGEX = /^\[([\s\S]*)\]\(file:\/\/([\s\S]*)\)$/;
+export const CWD_LINK_REGEX = /^\[file:\/\/([\s\S]*?)\]\(([\s\S]*?)\)/;

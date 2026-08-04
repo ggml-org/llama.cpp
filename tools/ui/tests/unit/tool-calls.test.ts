@@ -103,26 +103,12 @@ describe('formatCwdMessage / parseCwdMessage', () => {
 		).toEqual({ path: '/a/b', display: '~/b' });
 	});
 
-	it('parses the cleared marker, current and legacy', () => {
+	it('parses the cleared marker', () => {
 		expect(parseCwdMessage('Working directory cleared')).toEqual({ path: null, display: '' });
-		expect(parseCwdMessage('CWD is cleared')).toEqual({ path: null, display: '' });
 	});
 
-	it('parses the legacy link format (swapped parts)', () => {
-		const info = parseCwdMessage('CWD is changed to: [~/Documents](file:///Users/al/Documents)');
-		expect(info?.path).toBe('/Users/al/Documents');
-		expect(info?.display).toBe('~/Documents');
-	});
-
-	it('parses the legacy plain-path format', () => {
-		const info = parseCwdMessage('CWD is changed to: /opt/project');
-		expect(info?.path).toBe('/opt/project');
-		expect(info?.display).toBe('/opt/project');
-	});
-
-	it('returns null for regular user messages', () => {
+	it('returns null for non-cwd content', () => {
 		expect(parseCwdMessage('hello there')).toBeNull();
-		expect(parseCwdMessage('CWD is changed to something')).toBeNull();
 	});
 });
 

@@ -16,7 +16,7 @@
 		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { deriveAgenticSections, parseCwdMessage } from '$lib/utils';
+	import { deriveAgenticSections } from '$lib/utils';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
 
@@ -58,12 +58,8 @@
 	);
 
 	// Synthetic cwd-change messages render with the folder-row UI instead
-	// of a user bubble. The persisted flag is the primary signal; the
-	// content parse keeps pre-flag rows rendering the same way.
-	let cwdMessageInfo = $derived(
-		message.role === MessageRole.USER ? parseCwdMessage(message.content) : null
-	);
-	let isSynthetic = $derived(Boolean(message.isSynthetic) || cwdMessageInfo !== null);
+	// of a user bubble. The persisted flag is the single source of truth.
+	let isSynthetic = $derived(Boolean(message.isSynthetic));
 
 	let rawEditContent = $derived.by(() => {
 		if (message.role !== MessageRole.ASSISTANT) return undefined;
@@ -445,6 +441,5 @@
 	 */
 	.chat-message--synthetic {
 		--chat-message-intrinsic-size: 40px;
-		contain-intrinsic-size: auto var(--chat-message-intrinsic-size);
 	}
 </style>

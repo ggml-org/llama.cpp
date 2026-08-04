@@ -2,10 +2,7 @@ import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
 import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
 import {
 	CWD_CHANGED_PREFIX,
-	CWD_CHANGED_PREFIX_LEGACY,
 	CWD_CLEARED_TEXT,
-	CWD_CLEARED_TEXT_LEGACY,
-	CWD_LINK_LEGACY_REGEX,
 	CWD_LINK_REGEX,
 	FILE_URI_PREFIX,
 	HOME_TILDE,
@@ -75,14 +72,14 @@ export function formatCwdMessage(cwd: string, home: string | null): string {
 }
 
 /**
- * Parse a synthetic cwd message back into its parts. Also accepts the
- * legacy formats (`CWD is changed to: ...`, with the link parts swapped)
- * and a plain path after the prefix. Returns null when `content` is not
- * a cwd message.
+ * Parse a synthetic cwd message back into its parts. The caller must already
+ * know the message is synthetic (via the persisted `isSynthetic` flag); this
+ * only extracts the path from the message text. Returns null when `content`
+ * is not a cwd message.
  */
 export function parseCwdMessage(content: string): CwdMessageInfo | null {
 	const trimmed = content.trim();
-	if (trimmed === CWD_CLEARED_TEXT || trimmed === CWD_CLEARED_TEXT_LEGACY) {
+	if (trimmed === CWD_CLEARED_TEXT) {
 		return { path: null, display: '' };
 	}
 	if (trimmed.startsWith(CWD_CHANGED_PREFIX)) {
@@ -90,12 +87,6 @@ export function parseCwdMessage(content: string): CwdMessageInfo | null {
 		// not anchored to the end: guidance may follow the link
 		const link = rest.match(CWD_LINK_REGEX);
 		if (link) return { path: link[1], display: link[2] };
-		return { path: rest, display: rest };
-	}
-	if (trimmed.startsWith(CWD_CHANGED_PREFIX_LEGACY)) {
-		const rest = trimmed.slice(CWD_CHANGED_PREFIX_LEGACY.length);
-		const link = rest.match(CWD_LINK_LEGACY_REGEX);
-		if (link) return { path: link[2], display: link[1] };
 		return { path: rest, display: rest };
 	}
 	return null;
