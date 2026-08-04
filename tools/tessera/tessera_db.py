@@ -59,10 +59,23 @@ L4_PROBE_COLS: tuple[str, ...] = (
     "current_qtype", "mse", "mse_minus_one", "perplexity",
     "top1_mismatch", "n_weights", "updated_at",
 )
+L4_PLAN_OUTCOME_COLS: tuple[str, ...] = (
+    "model_hash", "name", "layer", "iteration", "plan_id", "strategy",
+    "alpha_before", "alpha_after", "clip_before", "clip_after",
+    "outlier_thresh_before", "outlier_thresh_after",
+    "mse_before", "mse_after", "frob_before", "frob_after",
+    "family", "updated_at",
+)
 L5_PLAN_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer", "iteration", "plan_id",
     "sensitivity_score", "recommended_qtype", "recommended_alpha",
     "recommended_clip", "updated_at",
+)
+L5_OUTCOME_COLS: tuple[str, ...] = (
+    "model_hash", "name", "layer", "iteration", "plan_id",
+    "family", "sensitivity_score", "recommended_alpha", "recommended_clip",
+    "mse_before", "mse_after", "delta_mse", "delta_frob",
+    "plan_accepted", "accept_threshold", "residual", "updated_at",
 )
 PER_LAYER_ERROR_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer",
@@ -254,6 +267,93 @@ class TesseraDB:
                 r.get("recommended_qtype", ""),
                 r.get("recommended_alpha"),
                 r.get("recommended_clip"),
+                r.get("updated_at", now),
+            )
+            buf.append(row)
+        return len(rows)
+
+    def insert_l4_plan_outcome(
+        self,
+        model_hash: str,
+        rows: Sequence[dict],
+    ) -> int:
+        """Push rows into the ``l4_plan_outcome`` table. The C++
+        dispatch's adaptive_requantize loop also writes here (one
+        row per (tensor, gen)). ``rows`` is a list of dicts with
+        keys: name, layer, iteration, plan_id, strategy,
+        alpha_before, alpha_after, clip_before, clip_after,
+        outlier_thresh_before, outlier_thresh_after, mse_before,
+        mse_after, frob_before, frob_after, family.
+
+        Returns the number of rows accepted.
+        """
+        if not rows or self._read_only:
+            return 0
+        buf = self._buffer_for("l4_plan_outcome", L4_PLAN_OUTCOME_COLS)
+        now = _now_iso()
+        for r in rows:
+            row = (
+                model_hash,
+                r.get("name", ""),
+                r.get("layer"),
+                r.get("iteration"),
+                r.get("plan_id", ""),
+                r.get("strategy", ""),
+                r.get("alpha_before"),
+                r.get("alpha_after"),
+                r.get("clip_before"),
+                r.get("clip_after"),
+                r.get("outlier_thresh_before"),
+                r.get("outlier_thresh_after"),
+                r.get("mse_before"),
+                r.get("mse_after"),
+                r.get("frob_before"),
+                r.get("frob_after"),
+                r.get("family", ""),
+                r.get("updated_at", now),
+            )
+            buf.append(row)
+        return len(rows)
+
+    def insert_l5_outcome(
+        self,
+        model_hash: str,
+        rows: Sequence[dict],
+    ) -> int:
+        """Push rows into the ``l5_outcome`` table. Written by
+        ``tools/tessera/l5_outcome.py`` after joining
+        ``l5_plan_summary`` and ``l4_plan_outcome``.
+
+        ``rows`` is a list of dicts with keys: name, layer,
+        iteration, plan_id, family, sensitivity_score,
+        recommended_alpha, recommended_clip, mse_before,
+        mse_after, delta_mse, delta_frob, plan_accepted,
+        accept_threshold, residual.
+
+        Returns the number of rows accepted.
+        """
+        if not rows or self._read_only:
+            return 0
+        buf = self._buffer_for("l5_outcome", L5_OUTCOME_COLS)
+        now = _now_iso()
+        for r in rows:
+            row = (
+                model_hash,
+                r.get("name", ""),
+                r.get("layer"),
+                r.get("iteration"),
+                r.get("plan_id", ""),
+                r.get("family", ""),
+                r.get("sensitivity_score"),
+                r.get("recommended_alpha"),
+                r.get("recommended_clip"),
+                r.get("mse_before"),
+                r.get("mse_after"),
+                r.get("delta_mse"),
+                r.get("delta_frob"),
+                r.get("plan_accepted"),
+                r.get("accept_threshold"),
+                r.get("residual"),
                 r.get("updated_at", now),
             )
             buf.append(row)
