@@ -1,12 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// Chunked Gated Delta Net prefill: fwdsub intra -> Q@K^T precompute -> WMMA state+output.
-// All WMMA GEMMs use fp16 operands with fp32 accumulation; gating/state/accum stay fp32.
+// Chunked Gated Delta Net prefill: fwdsub intra -> Q@K^T precompute -> tensor-core state+output.
+// Tensor-core GEMMs use fp16 operands with fp32 accumulation; gating/state/accum stay fp32. The
 //
 #include "chunk_gated_delta_net.cuh"
-
 #include <cmath>
+
+// Tensor-core backend for the chunked-GDN GEMMs, Default nvcuda::wmma (fastest on NVIDIA).
+// And ggml_cuda_mma API is used on HIP/MUSA.
+#if defined(GGML_CUDA_GDN_FORCE_MMA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#define GDN_TC_MMA 1
+#else
+#define GDN_TC_MMA 0
+#endif
+
+// Check if tensor-core kernels are supported on this architecture; otherwise, fallback or no-op.
+#if GDN_TC_MMA
+#  if defined(TURING_MMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#    define GDN_TC_AVAILABLE 1
+#  endif
+#elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+#  define GDN_TC_AVAILABLE 1
+#endif
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #include <cuda_fp16.h>
@@ -14,7 +30,102 @@
 #include <mma.h>
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if defined(GDN_TC_MMA)
+#include "mma.cuh"
+#endif
+
+// Single warp computes C[0:16][c_col:c_col+16] = A[16 x BK] @ B[16 x BK]^T (fp16 inputs, fp32 accum), 
+// output row-major
+template <int BK>
+__device__ __forceinline__ void cgdr_gemm_ABt_16(const __half * s_a, const __half * s_b, float * s_c, int ldc, int c_col)
+{
+#if GDN_TC_MMA
+    ggml_cuda_mma::tile<16, 16, float> acc;
+    #pragma unroll
+    for (int kt = 0; kt < BK / 16; kt++) {
+        ggml_cuda_mma::tile<16, 8, half2> ta, tb;
+        ggml_cuda_mma::load_ldmatrix(ta, (const half2 *) s_a + kt * 8, BK / 2);
+        ggml_cuda_mma::load_ldmatrix(tb, (const half2 *) s_b + kt * 8, BK / 2);
+        ggml_cuda_mma::mma(acc, ta, tb);
+    }
+    #pragma unroll
+    for (int l = 0; l < acc.ne; l++) {
+        s_c[acc.get_i(l) * ldc + c_col + acc.get_j(l)] = acc.x[l];
+    }
+#else
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, float> acc;
+    nvcuda::wmma::fill_fragment(acc, 0.f);
+    #pragma unroll
+    for (int kt = 0; kt < BK / 16; kt++) {
+        nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, __half, nvcuda::wmma::row_major> fa;
+        nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, __half, nvcuda::wmma::col_major> fb;
+        nvcuda::wmma::load_matrix_sync(fa, s_a + kt * 16, BK);
+        nvcuda::wmma::load_matrix_sync(fb, s_b + kt * 16, BK);
+        nvcuda::wmma::mma_sync(acc, fa, fb, acc);
+    }
+    nvcuda::wmma::store_matrix_sync(s_c + c_col, acc, ldc, nvcuda::wmma::mem_row_major);
+#endif
+}
+
+// One warp, v-tile m_off: delta[v][0:BK] = sum_t Vnew[t][v] * Kch[t][k], stored V-major into s_hdelta[v*BK+k].
+template <int BK, int BV>
+__device__ __forceinline__ void cgdr_gemm_ktv(const __half * s_vnew, const __half * s_kch, float * s_hdelta, int m_off)
+{
+#if GDN_TC_MMA
+    // mma(D,X,Y)=X@Y^T contracts over the tile inner dim, so load both operands transposed (t inner).
+    ggml_cuda_mma::tile<16, 8, half2> x_vnew;
+    ggml_cuda_mma::load_ldmatrix_trans(x_vnew, (const half2 *) s_vnew + m_off / 2, BV / 2);
+    #pragma unroll
+    for (int nk = 0; nk < BK; nk += 16) {
+        ggml_cuda_mma::tile<16, 8, half2> y_kch;
+        ggml_cuda_mma::load_ldmatrix_trans(y_kch, (const half2 *) (s_kch + nk), BK / 2);
+        ggml_cuda_mma::tile<16, 16, float> acc;
+        ggml_cuda_mma::mma(acc, x_vnew, y_kch);
+        #pragma unroll
+        for (int l = 0; l < acc.ne; l++) {
+            s_hdelta[(m_off + acc.get_i(l)) * BK + nk + acc.get_j(l)] = acc.x[l];
+        }
+    }
+#else
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, __half, nvcuda::wmma::col_major> a_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, __half, nvcuda::wmma::row_major> b_frag;
+    nvcuda::wmma::load_matrix_sync(a_frag, s_vnew + m_off, BV);
+    #pragma unroll
+    for (int nk = 0; nk < BK; nk += 16) {
+        nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, float> acc;
+        nvcuda::wmma::fill_fragment(acc, 0.f);
+        nvcuda::wmma::load_matrix_sync(b_frag, s_kch + nk, BK);
+        nvcuda::wmma::mma_sync(acc, a_frag, b_frag, acc);
+        nvcuda::wmma::store_matrix_sync(s_hdelta + m_off * BK + nk, acc, BK, nvcuda::wmma::mem_row_major);
+    }
+#endif
+}
+
+// One warp, v-tile n_off: O[0:16][v] = sum_t' qk[t][t'] * Vnew[t'][v], stored row-major into s_hdelta[t*BV+v].
+template <int BV>
+__device__ __forceinline__ void cgdr_gemm_qkv(const __half * s_qk, const __half * s_vnew, float * s_hdelta, int n_off)
+{
+#if GDN_TC_MMA
+    ggml_cuda_mma::tile<16, 8, half2> x_qk, y_vnew;
+    ggml_cuda_mma::load_ldmatrix(x_qk, (const half2 *) s_qk, 16 / 2);
+    ggml_cuda_mma::load_ldmatrix_trans(y_vnew, (const half2 *) s_vnew + n_off / 2, BV / 2);
+    ggml_cuda_mma::tile<16, 16, float> acc;
+    ggml_cuda_mma::mma(acc, x_qk, y_vnew);
+    #pragma unroll
+    for (int l = 0; l < acc.ne; l++) {
+        s_hdelta[acc.get_i(l) * BV + n_off + acc.get_j(l)] = acc.x[l];
+    }
+#else
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, float> acc;
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, __half, nvcuda::wmma::row_major> a_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, __half, nvcuda::wmma::row_major> b_frag;
+    nvcuda::wmma::fill_fragment(acc, 0.f);
+    nvcuda::wmma::load_matrix_sync(a_frag, s_qk, 16);
+    nvcuda::wmma::load_matrix_sync(b_frag, s_vnew + n_off, BV);
+    nvcuda::wmma::mma_sync(acc, a_frag, b_frag, acc);
+    nvcuda::wmma::store_matrix_sync(s_hdelta + n_off, acc, BV, nvcuda::wmma::mem_row_major);
+#endif
+}
 
 // Intra-chunk forward substitution. Builds the strictly-lower coupling matrix
 //   L[t][s] = beta[t] * exp(g_cum[t]-g_cum[s]) * (K[t].K[s])   (s < t, else 0)
@@ -183,11 +294,9 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
                                                                         int   H,
                                                                         int   num_k_heads,
                                                                         int   seq_len) {
-#if __CUDA_ARCH__ >= 800
-    using namespace nvcuda;
-    static_assert(CS == 16, "WMMA preqk requires CS=16");
+#ifdef GDN_TC_AVAILABLE
+    static_assert(CS == 16, "preqk requires CS=16");
     static_assert(BK % 16 == 0, "BK must be a multiple of 16");
-    constexpr int KT = BK / 16;
 
     // SMEM layout (no padding needed: fp16 tiles at BK=128 have no bank conflicts)
     extern __shared__ char _smem[];
@@ -226,18 +335,8 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
     }
     __syncthreads();
 
-    // acc = Q @ K^T. Loading K col_major with ld=BK gives the transposed tile for free.
-    wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
-    wmma::fill_fragment(acc, 0.f);
-    #pragma unroll
-    for (int kt = 0; kt < KT; kt++) {
-        wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> fA;
-        wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> fB;
-        wmma::load_matrix_sync(fA, s_Q + kt * 16, BK);
-        wmma::load_matrix_sync(fB, s_K + kt * 16, BK);
-        wmma::mma_sync(acc, fA, fB, acc);
-    }
-    wmma::store_matrix_sync(s_acc, acc, CS, wmma::mem_row_major);
+    // acc = Q @ K^T -> s_acc[CS][CS] (A=Q, B=K, both row-major; see cgdr_gemm_ABt_16).
+    cgdr_gemm_ABt_16<BK>(s_Q, s_K, s_acc, CS, 0);
     __syncthreads();
 
     // Causal mask + cumulative-decay scaling, then write qk_buf.
@@ -251,7 +350,6 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
         O_base[flat]   = (col <= row) ? s_acc[flat] * __expf(s_gcum[row] - s_gcum[col]) : 0.f;
     }
 #else
-    // WMMA path is only dispatched on Ampere+ (dispatch guards cc>=Ampere); compiled out below.
     (void) Q_raw;
     (void) K_raw;
     (void) g_cum;
@@ -293,8 +391,7 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
     int   num_k_heads,
     int   V_dim,
     int   seq_len) {
-#if !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 800)
-    using namespace nvcuda;
+#if defined(GDN_TC_AVAILABLE) || !defined(__CUDA_ARCH__)
     static_assert(BK == 128, "fp16 state kernel requires BK=128");
     static_assert(CS == 16, "fp16 state kernel requires CS=16");
     static_assert(BV % 16 == 0, "BV must be a multiple of 16");
@@ -328,8 +425,15 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
     const int     pid_bh  = blockIdx.x;
     const int     tile_v  = blockIdx.y;
     const int     v_off   = tile_v * BV;
-    const int     tid     = threadIdx.x;
+
+#if GDN_TC_MMA
+    const int     W       = ggml_cuda_get_physical_warp_size();
+    const int     tid     = threadIdx.y * W + threadIdx.x;
+    const int     warp_id = threadIdx.y;
+#else
+    const int     tid     = threadIdx.x;  // flat 1D block
     const int     warp_id = tid / 32;
+#endif
     constexpr int EPT     = (CS * BV) / NT;
     constexpr int EPT_H   = (BK * BV) / NT;
     constexpr int N_TILES = BV / 16;
@@ -388,20 +492,10 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
 
         __syncthreads();
 
-        // Step 2b: s_result[CSxBV] = WMMA(s_kbuf @ s_hfp16)   (v_new = u - w*h)
+        // Step 2b: s_result[CSxBV] = K_cumdecay @ H  (v_new = u - w*h).
         if (warp_id < N_TILES) {
-            const int                                            n_off = warp_id * 16;
-            wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
-            wmma::fill_fragment(acc, 0.f);
-            wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a_frag;
-            wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> b_frag;
-            #pragma unroll
-            for (int k = 0; k < BK; k += 16) {
-                wmma::load_matrix_sync(a_frag, s_kbuf + k, BK);
-                wmma::load_matrix_sync(b_frag, s_hfp16 + n_off * BK + k, BK);
-                wmma::mma_sync(acc, a_frag, b_frag, acc);
-            }
-            wmma::store_matrix_sync(s_result + n_off, acc, BV, wmma::mem_row_major);
+            const int n_off = warp_id * 16;
+            cgdr_gemm_ABt_16<BK>(s_kbuf, s_hfp16 + n_off * BK, s_result, BV, n_off);
         }
 
         __syncthreads();
@@ -426,19 +520,10 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
 
         __syncthreads();
 
+        // Step 2.5b: s_result = (q*scale) @ H  (o_inter), same layout as step 2b.
         if (warp_id < N_TILES) {
-            const int                                            n_off = warp_id * 16;
-            wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
-            wmma::fill_fragment(acc, 0.f);
-            wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a_frag;
-            wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> b_frag;
-            #pragma unroll
-            for (int k = 0; k < BK; k += 16) {
-                wmma::load_matrix_sync(a_frag, s_kbuf + k, BK);
-                wmma::load_matrix_sync(b_frag, s_hfp16 + n_off * BK + k, BK);
-                wmma::mma_sync(acc, a_frag, b_frag, acc);
-            }
-            wmma::store_matrix_sync(s_result + n_off, acc, BV, wmma::mem_row_major);
+            const int n_off = warp_id * 16;
+            cgdr_gemm_ABt_16<BK>(s_kbuf, s_hfp16 + n_off * BK, s_result, BV, n_off);
         }
 
         __syncthreads();
@@ -469,22 +554,9 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
 
         __syncthreads();
 
-        // Step 5: delta[v][k] = sum_t Vnew[t][v] * Kch[t][k].
-        //   A = Vnew^T (col_major s_vnew, lda=BV), B = Kch (row_major s_kch, ldb=BK);
-        //   stored row_major into V-major s_hdelta[v*BK+k] so it matches h_regs indexing.
+        // Step 5: delta[v][k] = sum_t Vnew[t][v] * Kch[t][k], stored V-major
         if (warp_id < N_TILES) {
-            const int                                                           m_off = warp_id * 16;  // v-tile base
-            wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::col_major> a_frag;
-            wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> b_frag;
-            wmma::load_matrix_sync(a_frag, s_vnew + m_off, BV);
-            #pragma unroll
-            for (int nk = 0; nk < BK; nk += 16) {
-                wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
-                wmma::fill_fragment(acc, 0.f);
-                wmma::load_matrix_sync(b_frag, s_kch + nk, BK);
-                wmma::mma_sync(acc, a_frag, b_frag, acc);
-                wmma::store_matrix_sync(s_hdelta + m_off * BK + nk, acc, BK, wmma::mem_row_major);
-            }
+            cgdr_gemm_ktv<BK, BV>(s_vnew, s_kch, s_hdelta, warp_id * 16);
         }
         __syncthreads();
 
@@ -510,17 +582,9 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
             }
             __syncthreads();
 
-            // A = qk (row_major, lda=CS), B = Vnew (row_major s_vnew, ldb=BV).
+            // O_intra[t][v] = sum_t' qk[t][t'] * Vnew[t'][v]  (see cgdr_gemm_qkv).
             if (warp_id < N_TILES) {
-                const int                                            n_off = warp_id * 16;  // v-tile base
-                wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
-                wmma::fill_fragment(acc, 0.f);
-                wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a_frag;
-                wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> b_frag;
-                wmma::load_matrix_sync(a_frag, s_qkb, CS);
-                wmma::load_matrix_sync(b_frag, s_vnew + n_off, BV);
-                wmma::mma_sync(acc, a_frag, b_frag, acc);
-                wmma::store_matrix_sync(s_hdelta + n_off, acc, BV, wmma::mem_row_major);
+                cgdr_gemm_qkv<BV>(s_qkb, s_vnew, s_hdelta, warp_id * 16);
             }
             __syncthreads();
 
@@ -653,7 +717,14 @@ static void ggml_cuda_op_gated_delta_net_chunked_impl(ggml_backend_cuda_context 
         constexpr int BV = 32, NT = 256, OCC = 4;
         const size_t  st_smem = cgdr_smem_state_wmma(CS, 128, BV);
         const dim3    state_grid(B * H, V_dim / BV, 1);
-        cgdr_state_wmma_kernel<CS, 128, BV, NT, OCC><<<state_grid, NT, st_smem, stream>>>(
+        // mma needs threadIdx.x = warp lane -> (warp_size, nwarps)
+#if GDN_TC_MMA
+        const int  warp = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+        const dim3 state_block(warp, NT / warp);
+#else
+        const dim3 state_block(NT);
+#endif
+        cgdr_state_wmma_kernel<CS, 128, BV, NT, OCC><<<state_grid, state_block, st_smem, stream>>>(
             v_corr_buf.get(), k_cumdecay_buf.get(), k_in, q_in, g_cum_buf.get(), qk_buf.get(), (float *) dst->data,
             s_d, state_dst, scale, num_chunks, H, num_k_heads, V_dim, T);
     }
@@ -725,13 +796,3 @@ void ggml_cuda_op_gated_delta_net_chunked(ggml_backend_cuda_context & ctx, ggml_
     ggml_cuda_op_gated_delta_net_chunked_impl(ctx, dst, B, T, H, num_k_heads, K_dim, V_dim, num_chunks, q_in, k_in,
                                               v_in, g_in, b_in, s_d, scale, v_tok_stride, stream);
 }
-
-#else // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
-void ggml_cuda_op_gated_delta_net_chunked(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    GGML_UNUSED(ctx);
-    GGML_UNUSED(dst);
-    GGML_ABORT("chunked GDN is not supported on HIP/MUSA");
-}
-
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
