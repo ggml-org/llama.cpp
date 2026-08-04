@@ -32,7 +32,7 @@
 		"@eslint/js": "9.39.2",
 		"@internationalized/date": "3.12.2",
 		"@lucide/svelte": "1.25.0",
-		"@modelcontextprotocol/sdk": "1.26.0",
+		"@modelcontextprotocol/sdk": "1.30.0",
 		"@playwright/test": "1.56.1",
 		"@storybook/addon-a11y": "10.5.6",
 		"@storybook/addon-docs": "10.5.6",
