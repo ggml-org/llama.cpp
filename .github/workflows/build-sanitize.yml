@@ -34,14 +34,20 @@ env:
 
 jobs:
   ctest:
-    runs-on: [self-hosted, X64, Linux]
-
     continue-on-error: true
 
     strategy:
       matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        include:
+        - sanitizer: ADDRESS
+          runs-on: [self-hosted, X64, Linux]
+        - sanitizer: THREAD
+          # only certain machines can run the thread sanitizer without crashing, see #26593
+          machine: ${{ 'ggml-6-x86-vulkan-t4' || 'ggml-8-x86-nvidia-a10' }}
+        - sanitizer: UNDEFINED
+          machine: [self-hosted, X64, Linux]
 
+    runs-on: ${{ matrix.machine }}
     steps:
       - name: Clone
         id: checkout
