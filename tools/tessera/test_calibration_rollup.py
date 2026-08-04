@@ -134,10 +134,34 @@ class TestCalibrationRollup(unittest.TestCase):
         self._l4 = self._td / "l4.ndjson"
         self._l5 = self._td / "l5.ndjson"
         self._ple = self._td / "ple.ndjson"
+        self._imatrix = self._td / "imatrix.parquet"
         _write_ndjson(_sample_l3(), self._l3)
         _write_ndjson(_sample_l4(), self._l4)
         _write_ndjson(_sample_l5(), self._l5)
         _write_ndjson(_sample_ple(), self._ple)
+        # Synthetic imatrix observer parquet: 2 tensors x 4 channels.
+        # Per-tensor reduction target:
+        #   blk.0.attn_q.weight: rms=0.115, mean_abs=0.095,
+        #                         tail_ratio=6.0, kurtosis=5.0
+        #   blk.0.ffn_gate.weight: rms=0.05, mean_abs=0.04,
+        #                           tail_ratio=8.0, kurtosis=7.5
+        import polars as pl
+        imatrix_rows = []
+        for ch in range(4):
+            imatrix_rows.append({
+                "tensor": "blk.0.attn_q.weight", "expert": 0, "channel": ch,
+                "rms": 0.10 + ch * 0.01, "mean_abs": 0.08 + ch * 0.01,
+                "tail_ratio": 3.0 + ch, "kurtosis": 5.0,
+            })
+            imatrix_rows.append({
+                "tensor": "blk.0.ffn_gate.weight", "expert": 0, "channel": ch,
+                "rms": 0.05, "mean_abs": 0.04,
+                "tail_ratio": 8.0, "kurtosis": 7.5,
+            })
+        pl.DataFrame(imatrix_rows).write_parquet(
+            self._imatrix, compression="zstd", statistics=True,
+            row_group_size=65536,
+        )
 
     def tearDown(self) -> None:
         import shutil
@@ -286,6 +310,46 @@ class TestCalibrationRollup(unittest.TestCase):
         self.assertAlmostEqual(res[0][2], 0.012, places=6)
         self.assertAlmostEqual(res[0][3], 0.87, places=2)
         self.assertAlmostEqual(res[0][4], 0.0012, places=6)
+
+    def test_imatrix_tidy_joins_into_rollup(self) -> None:
+        """The --imatrix-tidy source reads a per-channel observer
+        parquet, reduces to a per-tensor summary, and joins into
+        the rollup on (tensor, layer). The reduced values are
+        mean-of-channels for rms / mean_abs / kurtosis and
+        max-of-channels for tail_ratio.
+
+        Synthetic data: 2 tensors x 4 channels each; the per-tensor
+        reduction produces known values that we assert on.
+        """
+        out_pq = self._td / "rollup_imatrix.parquet"
+        r = _run_rollup(self._td, [
+            ("l3_outlier", self._l3),
+            ("l4_probe", self._l4),
+            ("imatrix", self._imatrix),
+        ], "--out-parquet", str(out_pq))
+        self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
+        df = pl.read_parquet(out_pq)
+        # imatrix.* columns are present.
+        self.assertIn("imatrix.rms", df.columns)
+        self.assertIn("imatrix.mean_abs", df.columns)
+        self.assertIn("imatrix.tail_ratio", df.columns)
+        self.assertIn("imatrix.kurtosis", df.columns)
+        # The per-tensor reduction: attn_q rms = mean(0.10, 0.11,
+        # 0.12, 0.13) = 0.115, tail_ratio = max(3, 4, 5, 6) = 6.0.
+        attn = df.filter(pl.col("tensor") == "blk.0.attn_q.weight").row(0, named=True)
+        self.assertAlmostEqual(attn["imatrix.rms"], 0.115, places=4)
+        self.assertAlmostEqual(attn["imatrix.mean_abs"], 0.095, places=4)
+        self.assertAlmostEqual(attn["imatrix.tail_ratio"], 6.0, places=4)
+        self.assertAlmostEqual(attn["imatrix.kurtosis"], 5.0, places=4)
+        # layer is a join key (in _KEEP_RAW) so it is unprefixed in
+        # the rollup. The imatrix source's value matches the L3
+        # source's value (both "blk.0" for this tensor), so the
+        # join coalesced cleanly.
+        self.assertEqual(attn["layer"], "blk.0")
+        # ffn_gate: rms=0.05, mean_abs=0.04, tail_ratio=8.0, kurtosis=7.5.
+        ffn = df.filter(pl.col("tensor") == "blk.0.ffn_gate.weight").row(0, named=True)
+        self.assertAlmostEqual(ffn["imatrix.rms"], 0.05, places=4)
+        self.assertAlmostEqual(ffn["imatrix.tail_ratio"], 8.0, places=4)
 
 
 if __name__ == "__main__":

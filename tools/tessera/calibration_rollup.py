@@ -68,11 +68,17 @@ from _analytical_io import read_analytical  # noqa: E402
 # Map from the user-facing CLI arg name to the schema name in
 # common/schemas/. The polars_schema lookup in _analytical_io is
 # keyed by schema name; this map is the CLI -> schema bridge.
+# The imatrix source is special: it is a parquet file (the
+# per-channel observer written by evidence-store.py:ingest_imatrix),
+# not a typed-NDJSON. The schema "imatrix" is in this map for
+# the SCHEMA_BY_FLAG convention, but the reader is the
+# parquet reducer below (no read_analytical call).
 SCHEMA_BY_FLAG = {
     "l3_outlier":     "l3_outlier",
     "l4_probe":       "l4_probe",
     "l5_plan":        "l5_plan",
     "per_layer_error": "per_layer_error",
+    "imatrix":       "imatrix",
 }
 
 # Columns that participate in the join key. Every input has
@@ -81,6 +87,47 @@ SCHEMA_BY_FLAG = {
 # ``iteration`` (L5 only) and ``sidecar_label`` (L3 only) are
 # preserved as data columns, not join keys.
 JOIN_KEYS = ["tensor"]
+
+
+# imatrix (per-channel observer) -> per-tensor summary. The
+# reduction is mean-of-channels for rms / mean_abs / kurtosis
+# and max-of-channels for tail_ratio (the worst case drives
+# the L5 sensitivity scoring). The column list below is the
+# rollup-facing column set: tensor + the per-tensor summary +
+# a derived layer (extracted from the tensor name). It does
+# NOT include a schema in common/schemas/ — the C++ side does
+# not produce an imatrix; the schema is Python-side only.
+# ``tensor`` (not ``name``) is the join key so the imatrix
+# source joins on the same key as L3 / L4 / L5 / PLE.
+IMATRIX_TIDY_COLS: tuple[str, ...] = (
+    "tensor", "layer", "rms", "mean_abs", "tail_ratio", "kurtosis",
+)
+
+
+# Per-tensor layer extraction: same convention as
+# l5_orchestrator.py::_layer and per_layer_error_table.py.
+# Returns the integer block index for blk.N. / h.N. / blocks.N. /
+# layers.N. / model.layers.N. tensors, 0 for non-block tensors.
+def _layer_of(tensor_name: str) -> int:
+    base = tensor_name
+    for suf in (".weight", ".bias"):
+        if base.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    for prefix in ("blk.", "blocks.", "h.", "layers.", "model.layers."):
+        idx = base.find(prefix)
+        if idx < 0:
+            continue
+        start = idx + len(prefix)
+        end = start
+        while end < len(base) and base[end].isdigit():
+            end += 1
+        if end > start:
+            try:
+                return int(base[start:end])
+            except ValueError:
+                return 0
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -237,11 +284,77 @@ def _read_source(label: str, path: Path, schema: str) -> pl.DataFrame:
 
     Raises FileNotFoundError if the file is missing; ValueError
     if the schema name is unknown (re-raised from read_analytical).
+    The imatrix source is special: it's a parquet file (the
+    per-channel observer written by
+    ``evidence-store.py:ingest_imatrix``), reduced to a per-tensor
+    summary before prefixing. Other sources are typed-NDJSON.
     """
     if not path.is_file():
         raise FileNotFoundError(f"{label}: file not found: {path}")
-    df = read_analytical(path, schema)
+    if schema == "imatrix":
+        df = _read_imatrix_tidy(path)
+    else:
+        df = read_analytical(path, schema)
     return _prefix_columns(df, label)
+
+
+def _read_imatrix_tidy(path: Path) -> pl.DataFrame:
+    """Read a per-channel observer parquet (the artifact of
+    ``evidence-store.py:ingest_imatrix``) and reduce to a
+    per-tensor summary. Per-tensor reduction:
+      rms, mean_abs, kurtosis  -- mean across channels
+      tail_ratio              -- max across channels
+    The layer is derived from the tensor name (blk.N. / h.N. /
+    blocks.N. / layers.N. / model.layers.N.) so the result
+    joins cleanly with the L3 / L4 / L5 / PLE rollup on
+    (tensor, layer).
+
+    The output is a per-tensor tidy frame in the same shape as
+    a typed-NDJSON source: name + layer + numeric columns.
+    The column-prefix step in ``_rollup`` then writes the
+    imatrix.* columns in the rollup output.
+    """
+    raw = pl.read_parquet(path)
+    if raw.height == 0:
+        return pl.DataFrame(
+            {c: [] for c in IMATRIX_TIDY_COLS},
+            schema={c: pl.Float64 if c not in ("name",) else pl.String
+                    for c in IMATRIX_TIDY_COLS},
+        )
+    if "tensor" not in raw.columns:
+        raise ValueError(
+            f"imatrix parquet {path} has no 'tensor' column; "
+            f"got columns: {raw.columns}"
+        )
+    # Per-tensor reduction. Some columns may be missing if the
+    # imatrix observer was produced by a downstream tool that
+    # trimmed them; coerce to nullable Float64.
+    agg_cols: list[pl.Expr] = []
+    for src, dst, fn in (
+        ("rms",        "rms",        "mean"),
+        ("mean_abs",   "mean_abs",   "mean"),
+        ("tail_ratio", "tail_ratio", "max"),
+        ("kurtosis",   "kurtosis",   "mean"),
+    ):
+        if src in raw.columns:
+            agg_cols.append(getattr(pl.col(src), fn)().alias(dst))
+    if not agg_cols:
+        raise ValueError(
+            f"imatrix parquet {path} has none of rms / mean_abs / "
+            f"tail_ratio / kurtosis columns; got: {raw.columns}"
+        )
+    summary = raw.group_by("tensor").agg(agg_cols)
+    # layer: derive from tensor name. Use the same string format
+    # as the L3 / L4 / PLE / L5 producers ("blk.0", "blk.1", ...)
+    # so the outer join in _rollup can coalesce the layer column
+    # across sources. An integer block index would conflict
+    # with the L3 / L4 string layer at the polars layer.
+    def _row_layer(name: str) -> str:
+        idx = _layer_of(name)
+        return f"blk.{idx}"
+    layers: list[str] = [_row_layer(t) for t in summary["tensor"].to_list()]
+    summary = summary.with_columns(pl.Series("layer", layers, dtype=pl.Utf8))
+    return summary.select(IMATRIX_TIDY_COLS)
 
 
 def _rollup(sources: List[Tuple[str, Path, str]]) -> pl.DataFrame:
@@ -297,10 +410,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Tessera calibration rollup: outer-join the four analytical "
             "outputs (L3 outlier, L4 probe, L5 plan, per-layer error) "
-            "on tensor (+ layer when present) into a single tidy "
-            "parquet table. The output is the analytical force "
-            "multiplier for cross-pipeline queries (DuckDB, polars, "
-            "spreadsheet review)."
+            "and the per-tensor imatrix summary on tensor (+ layer "
+            "when present) into a single tidy parquet table. The output "
+            "is the analytical force multiplier for cross-pipeline "
+            "queries (DuckDB, polars, spreadsheet review)."
         ),
     )
     for flag, schema in SCHEMA_BY_FLAG.items():
@@ -363,7 +476,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write(
             "calibration_rollup: no source files provided; pass at "
             "least one of --l3-outlier / --l4-probe / --l5-plan / "
-            "--per-layer-error.\n")
+            "--per-layer-error / --imatrix-tidy.\n")
         return 2
     rollup = _rollup(sources)
     if args.print_summary:
