@@ -1361,3 +1361,65 @@ int64_t ts_tessera_db_debug_count(ts_tessera_db * db,
         return -1;
     }
 }
+
+// Test-only INSERT into l5_outcome. The l5_outcome table is
+// normally Python-written (tools/tessera/l5_outcome.py), but the
+// C++ converged-fast test in test_l5_dispatch.cpp needs a way to
+// populate it without round-tripping through Python. The schema
+// is the same one l5_outcome.py writes; the C++ side does not
+// normally touch it (production C++ writes go to l4_plan_outcome
+// via ts_db_buffer).
+//
+// The 3 per-tensor component columns (imatrix_magnitude,
+// gradient_proxy, layer_position_prior) are written as 0 -> NULL
+// for the test's convenience; the production contract is that
+// they are populated by the orchestrator's write_history path.
+// All other numeric columns default to 0 if the caller leaves
+// them uninitialized; the test only sets what matters.
+int ts_tessera_db_test_insert_l5_outcome(
+    ts_tessera_db * db,
+    const ts_tessera_db_l5_outcome_row & row) {
+    if (db == nullptr || db->conn == nullptr) return 1;
+    // The per-tensor component columns are nullable; the test
+    // passes 0 as the "leave NULL" sentinel (a real value of 0
+    // would be unusual in this domain, and the C++ test path is
+    // round-trip only).
+    const std::string im_str = (row.imatrix_magnitude == 0.0) ? std::string("NULL") : std::to_string(row.imatrix_magnitude);
+    const std::string gp_str = (row.gradient_proxy == 0.0)    ? std::string("NULL") : std::to_string(row.gradient_proxy);
+    const std::string lp_str = (row.layer_position_prior == 0.0) ? std::string("NULL") : std::to_string(row.layer_position_prior);
+    std::ostringstream q;
+    q << "INSERT INTO l5_outcome ("
+         "model_hash, name, layer, iteration, plan_id, family, "
+         "sensitivity_score, recommended_alpha, recommended_clip, "
+         "mse_before, mse_after, delta_mse, delta_frob, "
+         "plan_accepted, accept_threshold, residual, "
+         "imatrix_magnitude, gradient_proxy, layer_position_prior) "
+         "VALUES ("
+      << "'" << sql_escape(row.model_hash) << "', "
+      << "'" << sql_escape(row.name) << "', "
+      << row.layer << ", "
+      << row.iteration << ", "
+      << "'" << sql_escape(row.plan_id) << "', "
+      << "'" << sql_escape(row.family) << "', "
+      << row.sensitivity_score << ", "
+      << row.recommended_alpha << ", "
+      << row.recommended_clip << ", "
+      << row.mse_before << ", "
+      << row.mse_after << ", "
+      << row.delta_mse << ", "
+      << row.delta_frob << ", "
+      << (row.plan_accepted ? "TRUE" : "FALSE") << ", "
+      << row.accept_threshold << ", "
+      << row.residual << ", "
+      << im_str << ", "
+      << gp_str << ", "
+      << lp_str
+      << ")";
+    try {
+        auto res = db->conn->Query(q.str());
+        if (res->HasError()) return 1;
+    } catch (...) {
+        return 1;
+    }
+    return 0;
+}

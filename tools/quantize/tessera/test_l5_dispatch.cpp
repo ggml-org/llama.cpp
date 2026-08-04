@@ -282,12 +282,138 @@ int main() {
         }
     }
 
+    // ---- Phase 14: converged-fast end-to-end ----
+    // Re-run with a tessera.duckdb that has l5_outcome rows for the
+    // model with hit_rate > 0.95. The l5 loop's early-exit at the
+    // top of each gen (gen >= 1) should fire on the first re-loop
+    // and break before max_generations. The report JSON should
+    // carry a converged_fast=true marker.
+    //
+    // We use the test-only ts_tessera_db_test_insert_l5_outcome
+    // helper to populate l5_outcome (the table is normally
+    // Python-written, but the test scope is the C++ early-exit
+    // logic).
+    {
+        const char * db_path = "/tmp/test_l5_dispatch_fast.duckdb";
+        std::remove(db_path);
+        ts_tessera_db * db = ts_tessera_db_open(db_path, nullptr);
+        check("phase14-fast: open", db != nullptr);
+        if (db != nullptr) {
+            std::string err;
+            std::string model_hash = ts_tessera_db_hash_gguf(fixture_path);
+            // Begin a run so the l5_outcome rows have a model_hash
+            // that lines up with the dispatch's ts_tessera_db_hash_gguf.
+            std::string seed_run_id = ts_tessera_db_begin_run(
+                db, fixture_path, model_hash, "test-build",
+                "{\"phase\":14,\"fast\":true}", &err);
+            check("phase14-fast: begin_run", !seed_run_id.empty());
+
+            // Insert 10 l5_outcome rows for the model, all
+            // accepted, for both fixture families. hit_rate = 1.0
+            // (= 10/10) > 0.95 -> the early-exit should fire.
+            int n_inserted = 0;
+            for (int i = 0; i < 10; i++) {
+                ts_tessera_db_l5_outcome_row r;
+                r.model_hash     = model_hash;
+                r.name           = "blk.0.attn_q.weight";
+                r.layer          = 0;
+                r.iteration      = i;
+                r.plan_id        = "phase14_fast_p" + std::to_string(i);
+                r.family         = (i % 2 == 0) ? "attn_q" : "ffn_down";
+                r.sensitivity_score = 0.7;
+                r.recommended_alpha = 0.5;
+                r.recommended_clip  = 0.95;
+                r.mse_before        = 0.010;
+                r.mse_after         = 0.008;  // delta < 0 -> accepted
+                r.delta_mse         = -0.002;
+                r.plan_accepted     = true;
+                if (ts_tessera_db_test_insert_l5_outcome(db, r) == 0) {
+                    n_inserted++;
+                }
+            }
+            check("phase14-fast: 10 l5_outcome rows inserted",
+                  n_inserted == 10);
+
+            // Sanity: stats reflect hit_rate=1.0 across families.
+            ts_tessera_db_l5_outcome_stats s;
+            check("phase14-fast: l5_outcome_stats_for (populated)",
+                  ts_tessera_db_l5_outcome_stats_for(
+                      db, model_hash, "", &s) == 0);
+            check("phase14-fast: n_rows=10", s.n_rows == 10);
+            check("phase14-fast: n_accepted=10", s.n_accepted == 10);
+            check("phase14-fast: hit_rate=1.0", s.hit_rate > 0.99);
+
+            ts_tessera_db_complete_run(db, seed_run_id, "completed", &err);
+            delete db;
+        }
+
+        // Re-run the dispatch with --tessera-db pointing at the
+        // seeded DB. The dispatch's l5 loop's early-exit at the
+        // top of each gen (gen >= 1) should fire on the first
+        // re-loop and break before max_generations. The report
+        // JSON should carry a converged_fast=true marker.
+        //
+        // The fixture was cleaned up by the main test's cleanup
+        // block; rebuild it for this dispatch run.
+        if (!build_fixture_gguf(fixture_path, names, dims)) {
+            check("phase14-fast: rebuild fixture", false);
+        } else {
+            ts_dispatch_params params3 = params;
+            params3.tessera_db_path    = db_path;
+            params3.force_requantize   = true;
+            params3.l5_max_generations = 4;  // enough that early-exit
+                                              // is observable if it
+                                              // fires (it would skip
+                                              // gens 2 and 3)
+            params3.verbose            = false;
+            ts_dispatch_result result3;
+            std::string err3;
+            int rc3 = ts_dispatch_run(&params3, &result3, &err3);
+            check("phase14-fast: dispatch with seeded l5_outcome rc == 0",
+                  rc3 == 0);
+            if (rc3 == 0) {
+                check("phase14-fast: l5_ran", result3.l5_ran);
+                const std::string & rj = result3.l5_report_json;
+                // Debug: write the report next to the test so the
+                // failure mode is visible without re-running.
+                if (std::getenv("TESSERA_TEST_DEBUG")) {
+                    FILE * rf = std::fopen("/tmp/test_l5_dispatch_fast.report.json", "wb");
+                    if (rf) { std::fwrite(rj.data(), 1, rj.size(), rf); std::fclose(rf); }
+                    std::printf("  phase14-fast report size: %zu bytes\n", rj.size());
+                }
+                check("phase14-fast: report has converged_fast",
+                      rj.find("\"converged_fast\"") != std::string::npos);
+                check("phase14-fast: report has hit_rate",
+                      rj.find("\"hit_rate\"") != std::string::npos);
+                // Count "converged_fast" markers in the whole
+                // report. The early-exit fires once and breaks,
+                // so there should be exactly 1 marker. The marker
+                // appears once per generation entry where the
+                // fast-path fires; if the dispatch took 2 gens
+                // (1 normal + 1 fast-exit) the count is 1.
+                size_t pos = 0;
+                int count = 0;
+                while ((pos = rj.find("converged_fast", pos))
+                        != std::string::npos) {
+                    count++;
+                    pos += 14;
+                }
+                check("phase14-fast: exactly 1 converged_fast entry",
+                      count == 1);
+            } else {
+                std::printf("  phase14-fast dispatch err: %s\n", err3.c_str());
+            }
+        }
+    }
+
     // Cleanup.
     std::remove(fixture_path);
     std::remove(output_path);
     std::remove("/tmp/test_l5_dispatch.policy.json");
     std::remove("/tmp/test_l5_dispatch.l5-loop.json");
     std::remove("/tmp/test_l5_dispatch.duckdb");
+    std::remove("/tmp/test_l5_dispatch_fast.duckdb");
+    std::remove("/tmp/test_l5_dispatch_empty.duckdb");
 
     std::printf("\n%s (%d failures)\n", g_fail == 0 ? "PASS" : "FAIL", g_fail);
     return g_fail == 0 ? 0 : 1;

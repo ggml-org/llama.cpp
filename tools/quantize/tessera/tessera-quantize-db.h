@@ -386,6 +386,36 @@ bool ts_tessera_db_load_ga_result_for_model(ts_tessera_db * db,
 int64_t ts_tessera_db_debug_count(ts_tessera_db * db,
                                    const std::string & query);
 
+// Test-only: insert one synthetic l5_outcome row. The l5_outcome
+// table is normally Python-written (tools/tessera/l5_outcome.py),
+// but the C++ converged-fast test in test_l5_dispatch needs a way
+// to populate it. Returns 0 on success, non-zero on error. The
+// row is keyed on (model_hash, name, iteration, plan_id) so the
+// dispatch's ts_tessera_db_l5_outcome_stats_for query can find it.
+struct ts_tessera_db_l5_outcome_row {
+    std::string  model_hash;
+    std::string  name;
+    int32_t      layer          = 0;
+    int32_t      iteration      = 0;
+    std::string  plan_id;
+    std::string  family;
+    double       sensitivity_score = 0.0;
+    double       recommended_alpha = 0.0;
+    double       recommended_clip  = 0.0;
+    double       mse_before        = 0.0;
+    double       mse_after         = 0.0;
+    double       delta_mse         = 0.0;
+    double       delta_frob        = 0.0;
+    bool         plan_accepted     = false;
+    double       accept_threshold  = 0.0;
+    double       residual          = 0.0;
+    double       imatrix_magnitude = 0.0;   // nullable; 0 -> NULL
+    double       gradient_proxy    = 0.0;   // nullable; 0 -> NULL
+    double       layer_position_prior = 0.0; // nullable; 0 -> NULL
+};
+int ts_tessera_db_test_insert_l5_outcome(ts_tessera_db * db,
+                                          const ts_tessera_db_l5_outcome_row & row);
+
 // --- helpers used by the dispatch ---
 
 // Extract the block index from a tensor name like "blk.12.ffn_gate.weight"
