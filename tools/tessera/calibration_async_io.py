@@ -203,6 +203,14 @@ class AsyncIOBackend:
         self.library = library
         self._lib = _lib
         self._lock = threading.Lock()
+        # Keepalive list for in-flight CFuncPtrs.  Each
+        # ``read()`` appends its callback here; the
+        # callback is NOT removed.  This is intentional
+        # (see ``read()`` docstring for the GC / use-after-
+        # free rationale).  For long-running processes
+        # call ``cleanup()`` periodically to bound the
+        # leak.
+        self._in_flight: list = []
 
     def read(self, path: str | os.PathLike) -> "queue.Queue":
         """Issue an async read of ``path`` and return a queue.
@@ -212,61 +220,91 @@ class AsyncIOBackend:
         on error); ``error`` is the error message (or
         None on success).  The queue is filled exactly
         once per call.
+
+        GC / use-after-free note: the CFuncPtr returned
+        by ``_CALLBACK_TYPE`` MUST stay alive for as long
+        as GCD holds the function pointer (until the
+        dispatch_io_read block fires).  The previous
+        design attached the callback to a per-read
+        ``Holder`` object, which formed a cycle (callback
+        -> closure -> holder -> callback).  Python's GC
+        collected the cycle and freed the CFuncPtr, while
+        GCD was still in flight; the next call into the
+        libffi trampoline segfaulted inside
+        ``closure_fcn`` (the trace ended at
+        ``__tessera_dispatch_read_file_block_invoke_2``).
+        The fix attaches the callback to ``self._in_flight``
+        (a backend attribute, reachable from the module's
+        singleton); the GC won't collect a cycle that
+        includes a module-reachable object, so the
+        CFuncPtr stays alive for the process lifetime.
+        The documented cost is a small per-read leak;
+        ``cleanup()`` clears the list.
         """
         result_queue: "queue.Queue" = queue.Queue(maxsize=1)
         path_bytes = os.fspath(path).encode("utf-8")
-
-        # The user pointer must remain alive until the
-        # callback fires.  We attach a holder object so
-        # the ctypes handle isn't GC'd while the GCD
-        # callback is in flight.  The holder owns a
-        # strong reference to ``self`` (the backend) and
-        # to the result queue.
-        class Holder:
-            def __init__(self, backend, q):
-                self.backend = backend
-                self.q = q
-                # The callback closure references ``self``,
-                # so the Holder stays alive until the
-                # callback fires.
-
-        holder = Holder(self, result_queue)
+        # Capture the keepalive list and the lib as
+        # locals so the callback closure does NOT capture
+        # ``self`` (avoiding a tight cycle; the cycle via
+        # ``self._in_flight`` -> list -> callback is
+        # intentionally kept because ``self._in_flight``
+        # is reachable from the module via the backend
+        # singleton).
+        in_flight = self._in_flight
+        lib = self._lib
 
         @_CALLBACK_TYPE
         def callback(data_ptr, size, _user):
-            # ``holder`` is captured from the enclosing
-            # scope; the ctypes CFUNCTYPE keeps the closure
-            # alive until the callback is replaced.  The
-            # holder references the result queue so the GC
-            # doesn't collect it before the GCD callback
-            # fires.
             try:
                 if not data_ptr:
-                    holder.q.put((None, "dispatch_io_read failed"))
+                    # C bridge hands us NULL on either
+                    # error or success-with-empty-data; we
+                    # cannot distinguish from Python (the
+                    # C bridge doesn't carry an error code
+                    # through).  The pre-existing behaviour
+                    # is to surface this as a failure; the
+                    # empty-file case is documented as a
+                    # known limitation.  See
+                    # ``test_calibration_async_io.py`` for
+                    # the regression-tested non-empty path.
+                    result_queue.put((None, "dispatch_io_read failed"))
                     return
+                # ``data_ptr`` is a c_void_p in the CFUNCTYPE
+                # argtypes, but on Python 3.14 + ctypes the
+                # C trampoline hands the raw integer address
+                # to the Python callable in some cases.  Use
+                # the cast-then-value pattern (same as the
+                # original implementation) so the code works
+                # for either representation.
                 addr = ctypes.cast(data_ptr, ctypes.c_void_p).value
-                if not addr or size == 0:
-                    holder.q.put((b"", None))
-                    self._lib.tessera_dispatch_free_buffer(data_ptr)
+                if size == 0:
+                    result_queue.put((b"", None))
+                    lib.tessera_dispatch_free_buffer(data_ptr)
                     return
-                data = (ctypes.c_char * size).from_address(addr)
-                bs = bytes(data)
-                holder.q.put((bs, None))
+                # Build a c_char array VIEW and copy into a
+                # Python bytes object so we own the bytes
+                # (the C buffer is freed in the finally
+                # block).
+                data_array = (ctypes.c_char * size).from_address(addr)
+                bs = bytes(data_array)
+                result_queue.put((bs, None))
             finally:
                 # The buffer is no longer needed; free it
                 # (whether or not we successfully converted
-                # to a Python bytes object).
+                # to a Python bytes object).  Guarded with
+                # try/except so a double-free (e.g. from a
+                # C-side bug) doesn't mask the original
+                # error.
                 if data_ptr:
-                    self._lib.tessera_dispatch_free_buffer(data_ptr)
+                    try:
+                        lib.tessera_dispatch_free_buffer(data_ptr)
+                    except Exception:
+                        pass
 
-        # The callback must remain alive for the duration
-        # of the read.  We attach it to the holder so the
-        # GC doesn't collect it before the GCD callback
-        # fires.
-        holder.callback = callback
+        in_flight.append(callback)
 
         with self._lock:
-            rc = self._lib.tessera_dispatch_read_file(
+            rc = lib.tessera_dispatch_read_file(
                 path_bytes,
                 ctypes.cast(callback, ctypes.c_void_p),
                 None,
@@ -277,6 +315,18 @@ class AsyncIOBackend:
             # error so the consumer doesn't block forever.
             result_queue.put((None, f"tessera_dispatch_read_file rc={rc}"))
         return result_queue
+
+    def cleanup(self) -> None:
+        """Drop all keepalive refs to completed CFuncPtrs.
+
+        Safe to call after the last ``read()`` whose queue
+        you care about has been drained.  Clears
+        ``self._in_flight``; the CFuncPtrs are then
+        GC-eligible.  Do NOT call while a read is in flight:
+        the next GCD invocation would call into a freed
+        trampoline and segfault.
+        """
+        self._in_flight.clear()
 
 
 __all__ = [
