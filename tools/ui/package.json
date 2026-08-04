@@ -40,7 +40,7 @@
 		"@storybook/addon-vitest": "10.5.6",
 		"@storybook/sveltekit": "10.5.6",
 		"@sveltejs/adapter-static": "3.0.10",
-		"@sveltejs/kit": "2.60.1",
+		"@sveltejs/kit": "2.70.2",
 		"@sveltejs/vite-plugin-svelte": "6.2.1",
 		"@tailwindcss/forms": "0.5.10",
 		"@tailwindcss/typography": "0.5.16",
