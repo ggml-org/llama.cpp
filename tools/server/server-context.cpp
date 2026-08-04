@@ -921,6 +921,14 @@ public:
     mtmd_context * mctx = nullptr;
     const llama_vocab * vocab = nullptr;
 
+    bool has_cap_tts() const {
+        return mctx != nullptr && mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE;
+    }
+
+    bool has_cap_chat() const {
+        return mctx == nullptr || mtmd_helper_model_can_chat(ctx_tgt, mctx);
+    }
+
     server_queue    queue_tasks;
     server_response queue_results;
 
@@ -1359,9 +1367,6 @@ private:
             model_dft = nullptr;
         }
 
-        bool has_tts = mctx != nullptr
-                && mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE;
-
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot & slot = slots[i];
 
@@ -1375,7 +1380,7 @@ private:
             slot.mctx                   = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
-            if (has_tts) {
+            if (has_cap_tts()) {
                 slot.tts.ctx.init(ctx_tgt, mctx);
             }
 
@@ -1833,10 +1838,7 @@ private:
         SLT_DBG(slot, "launching slot : %s\n", safe_json_to_str(slot.to_json()).c_str());
 
         if (task.type == SERVER_TASK_TYPE_TTS) {
-            if (!slot.mctx || mtmd_gen_audio_get_info(slot.mctx).type == MTMD_GEN_AUDIO_TYPE_NONE) {
-                send_error(task, "this server does not support audio generation", ERROR_TYPE_NOT_SUPPORTED);
-                return false;
-            }
+            GGML_ASSERT(has_cap_tts()); // should already checked in route handler
             if (!slot.tts.is_supported()) {
                 slot.tts.ctx.init(ctx_tgt, slot.mctx);
             }
@@ -2889,7 +2891,7 @@ private:
             abort_all_slots("pre_decode() failed: " + std::string(e.what()));
         }
 
-        // TTS slots bypass the shared batch entirely and drive their own llama_decode() calls
+        // note: TTS slots bypass the shared batch entirely
         try {
             process_tts_slots();
         } catch (const std::exception & e) {
@@ -4162,6 +4164,8 @@ server_context_meta server_context::get_meta() const {
         /* has_inp_image          */ impl->chat_params.allow_image,
         /* has_inp_audio          */ impl->chat_params.allow_audio,
         /* has_inp_video          */ impl->chat_params.allow_video,
+        /* has_cap_chat           */ impl->has_cap_chat(),
+        /* has_cap_tts            */ impl->has_cap_tts(),
         /* json_ui_settings       */ impl->json_ui_settings,
         /* slot_n_ctx             */ impl->get_slot_n_ctx(),
         /* pooling_type           */ llama_pooling_type(impl->ctx_tgt),
@@ -4240,6 +4244,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     auto & params = this->params;
 
     res->set_req(&req); // will also set spipe if needed
+
+    if (!ctx_server.has_cap_chat()) {
+        res->error(format_error_response("this server does not support chat/completions", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
 
     int32_t sse_ping_interval = params.sse_ping_interval;
 
@@ -5200,7 +5209,7 @@ void server_routes::init_routes() {
         auto res = create_response();
         res->set_req(&req); // will also set spipe if needed
 
-        if (!ctx_server.mctx || mtmd_gen_audio_get_info(ctx_server.mctx).type == MTMD_GEN_AUDIO_TYPE_NONE) {
+        if (!ctx_server.has_cap_tts()) {
             res->error(format_error_response("this server does not support audio generation", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
@@ -5239,12 +5248,12 @@ void server_routes::init_routes() {
             task.params.sampling.top_p = task.tts_inp.data.top_p;
         }
 
-        std::string speaker_ref_b64 = json_value(body, "speaker_ref", std::string());
+        std::string speaker_ref_b64 = json_value(body, "speaker_ref_b64", std::string());
         if (!speaker_ref_b64.empty()) {
             std::string bytes = base64::decode(speaker_ref_b64);
             auto wrapper = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, (const unsigned char *) bytes.data(), bytes.size(), false);
             if (!wrapper.bitmap) {
-                res->error(format_error_response("failed to decode \"speaker_ref\"", ERROR_TYPE_INVALID_REQUEST));
+                res->error(format_error_response("failed to decode \"speaker_ref_b64\"", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
             task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
