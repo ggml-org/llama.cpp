@@ -1134,6 +1134,33 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         std::vector<int32_t> i_block_beg(n_seq, -1);
         std::vector<int32_t> n_block    (n_seq,  0);
 
+        int32_t dspark_n_draft_uniform = params.n_max;
+        bool dspark_n_draft_same = true;
+        bool dspark_n_draft_seen = false;
+
+        if (is_dspark) {
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                auto & dp = dparams[seq_id];
+                if (!dp.drafting) {
+                    continue;
+                }
+
+                if (dp.n_max <= 0) {
+                    dspark_n_draft_same = false;
+                    continue;
+                }
+
+                const int32_t n_draft_eff = std::min(params.n_max, dp.n_max);
+
+                if (!dspark_n_draft_seen) {
+                    dspark_n_draft_uniform = n_draft_eff;
+                    dspark_n_draft_seen = true;
+                } else if (dspark_n_draft_uniform != n_draft_eff) {
+                    dspark_n_draft_same = false;
+                }
+            }
+        }
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
             if (!dp.drafting) {
@@ -1144,7 +1171,16 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             const int32_t n = (int32_t) dp.n_past;
 
-            const int32_t n_draft = params.n_max;
+            // Respect the caller's remaining-context clamp before decoding whenever it is
+            // layout-safe to do so. For DSpark we must keep every active block the same
+            // size; if the active sequences disagree, fall back to the full block and let
+            // central truncation trim the sampled result afterwards.
+            const int32_t n_draft =
+                is_dspark
+                    ? (dspark_n_draft_seen && dspark_n_draft_same
+                        ? dspark_n_draft_uniform
+                        : params.n_max)
+                    : (dp.n_max > 0 ? std::min(params.n_max, dp.n_max) : params.n_max);
 
             const int32_t n_block_tokens = n_draft + (is_dspark ? 0 : 1);
             i_block_beg[seq_id] = batch.n_tokens;
