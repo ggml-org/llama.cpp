@@ -495,6 +495,17 @@ if (APPLE)
             )
         endif()
     endif()
+    # F4.5 follow-up: Phase 0 profile emit test. Validates the
+    # --tessera-ane-profile-out NDJSON writer end-to-end. The
+    # core test (set_output / get_output / lazy open / disabled
+    # flag) runs without a real bundle; the end-to-end emit
+    # line-shape check is gated on the gemma4 prefill bundle +
+    # TESSERA_ANE_STATE_LAYOUT_MANIFEST + TESSERA_ANE_PHASE_PROFILE_TEST_GGUF.
+    llama_build_and_test(test-ane-phase-profile-emit.cpp)
+    if (TARGET test-ane-phase-profile-emit)
+        target_link_libraries(test-ane-phase-profile-emit PRIVATE
+                              llama-common)
+    endif()
     # Drafter shape contract: synthetic validation of dflash /
     # hybrid / mtp_predict slot shape contract without a real
     # drafter bundle. The test builds a synthetic

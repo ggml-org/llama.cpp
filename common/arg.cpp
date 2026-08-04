@@ -4166,6 +4166,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
+        {"--tessera-ane-profile-out"}, "PATH",
+        "Tessera: write one NDJSON line per ANE dispatch phase "
+        "(input_prep / ane_dispatch / output_read) to PATH. "
+        "The default is empty (no profile written). The format "
+        "is {\"phase\":\"<name>\",\"us\":<microseconds>,\"n_tokens\":<n>,\"ts\":\"<iso8601>\"}. "
+        "Marked experimental until F4.5 lands the host-side "
+        "reader; see docs/tessera-ane-pump.md for the schema.",
+        [](common_params &, const std::string & value) {
+            tessera_params.ane_profile_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
+    add_opt(common_arg(
         {"--progress-file"}, "PATH",
         "Tessera: write NDJSON progress events to this path (one per tick, ~5/s)",
         [](common_params &, const std::string & value) {

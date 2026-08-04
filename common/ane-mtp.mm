@@ -16,9 +16,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -51,6 +52,145 @@ struct common_ane_phase_stats_internal {
     std::atomic<uint64_t> signal_us_max{0};
     std::atomic<uint64_t> count{0};
 };
+
+// Phase 0 profile streaming state. The path is process-global
+// (set once at startup from --tessera-ane-profile-out). The
+// output file is opened lazily on the first emit and held open
+// until the path is cleared; the lazy open keeps the production
+// dispatch path branch-free when profiling is off. The atomic
+// guards the lazy open so the first race between two dispatch
+// threads is well-defined (one opens, the other re-checks the
+// "opened" flag and writes through the same FILE*).
+static std::atomic<bool> g_phase_profile_emit_disabled{false};
+static std::string g_phase_profile_path;
+static std::atomic<FILE *> g_phase_profile_file{nullptr};
+static std::mutex g_phase_profile_open_mu;
+
+void common_ane_phase_profile_set_output(const char * path) {
+    std::lock_guard<std::mutex> lock(g_phase_profile_open_mu);
+    FILE * prev = g_phase_profile_file.load(std::memory_order_acquire);
+    if (prev != nullptr) {
+        std::fclose(prev);
+        g_phase_profile_file.store(nullptr, std::memory_order_release);
+    }
+    g_phase_profile_path = (path != nullptr) ? std::string(path) : std::string();
+    g_phase_profile_emit_disabled.store(g_phase_profile_path.empty(),
+        std::memory_order_release);
+}
+
+const char * common_ane_phase_profile_get_output() {
+    return g_phase_profile_path.c_str();
+}
+
+// Forward-declare the file-local phase_profile_emit so the
+// test-only hook below can wrap it. The forward decl avoids
+// moving the function above the public API; the .mm file's
+// translation-unit-private static helpers stay below the
+// public surface for readability.
+static void phase_profile_emit(const char * phase,
+                               uint64_t us,
+                               uint32_t n_tokens);
+
+void common_ane_phase_profile_emit_test_only(
+        const char * phase, uint64_t us, uint32_t n_tokens) {
+    phase_profile_emit(phase, us, n_tokens);
+}
+
+// Open the output file on the first emit. Returns the FILE* on
+// success, nullptr if the path is empty or the open failed. The
+// returned FILE* is owned by g_phase_profile_file and stays open
+// until common_ane_phase_profile_set_output is called again.
+static FILE * phase_profile_open() {
+    FILE * f = g_phase_profile_file.load(std::memory_order_acquire);
+    if (f != nullptr) {
+        return f;
+    }
+    std::lock_guard<std::mutex> lock(g_phase_profile_open_mu);
+    f = g_phase_profile_file.load(std::memory_order_acquire);
+    if (f != nullptr) {
+        return f;
+    }
+    if (g_phase_profile_path.empty()) {
+        g_phase_profile_emit_disabled.store(true, std::memory_order_release);
+        return nullptr;
+    }
+    f = std::fopen(g_phase_profile_path.c_str(), "a");
+    if (f == nullptr) {
+        // Disable further attempts for the rest of the process so
+        // we don't pay the fopen cost on every dispatch. The host
+        // can re-enable by calling set_output again with a valid
+        // path.
+        g_phase_profile_emit_disabled.store(true, std::memory_order_release);
+        return nullptr;
+    }
+    // Line-buffered: each emit is one line, flushed at newline.
+    std::setvbuf(f, nullptr, _IOLBF, 0);
+    g_phase_profile_file.store(f, std::memory_order_release);
+    return f;
+}
+
+// Emit one NDJSON line for a single phase. The line shape is
+// fixed: {"phase":"<phase>","us":<us>,"n_tokens":<n>,"ts":<iso8601>}.
+// n_tokens is the function's first non-batch input dim; 0 when
+// the shape can't be inferred (defensive default for functions
+// that don't have a token input). The ts is an ISO 8601 string
+// from std::chrono::system_clock::now(); the formatter uses
+// strftime for the date part and prints the fractional seconds
+// separately for sub-second precision.
+//
+// The emit is a no-op when the global path is empty. The check
+// is a single atomic load; the file write is held off the
+// critical dispatch path as much as possible (line-buffered
+// stdio, single write per phase).
+static void phase_profile_emit(const char * phase,
+                               uint64_t us,
+                               uint32_t n_tokens) {
+    if (g_phase_profile_emit_disabled.load(std::memory_order_acquire)) {
+        return;
+    }
+    FILE * f = phase_profile_open();
+    if (f == nullptr) {
+        return;
+    }
+    // ISO 8601 timestamp. strftime doesn't print fractional
+    // seconds, so we format the integer second and append the
+    // microsecond fraction manually. The "Z" suffix marks UTC;
+    // the host is free to interpret local time but the Studio
+    // UI prefers UTC for cross-machine log joins.
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    const auto us_part = std::chrono::duration_cast<std::chrono::microseconds>(
+        now.time_since_epoch()).count() % 1000000;
+    char date_buf[32];
+    std::tm tm_buf;
+    gmtime_r(&t, &tm_buf);
+    std::strftime(date_buf, sizeof(date_buf), "%Y-%m-%dT%H:%M:%S", &tm_buf);
+    std::fprintf(f,
+        "{\"phase\":\"%s\",\"us\":%llu,\"n_tokens\":%u,\"ts\":\"%s.%06lldZ\"}\n",
+        phase,
+        (unsigned long long) us,
+        (unsigned) n_tokens,
+        date_buf,
+        (long long) us_part);
+}
+
+// Phase 0 profile: infer the function's n_tokens (the lane-active
+// dim) from the first input slot's shape. For prefill functions
+// the first input is typically token_ids of shape [1, N] ->
+// n_tokens = N. For MTP/DFlash the first input is target_features
+// or token_ids with shape [1, N] -> n_tokens = N. For stateless
+// matmul (the W0 spike) the first input is x with shape [N] ->
+// n_tokens = N. We treat the first non-zero dim as n_tokens and
+// return 0 when the shape is empty or the function has no inputs.
+//
+// The heuristic is intentionally simple: the profile line is
+// a per-phase observation, not a precise lane count. The caller
+// can override via the program-specific path if a more accurate
+// value is required. Declared after the common_ane_mtp_program
+// struct so the program.manifest field is in scope.
+static uint32_t infer_n_tokens_from_function(
+        const common_ane_mtp_program & program,
+        const ane_function_v1_t & function);
 
 struct common_ane_compute_instance {
     MLModel * model = nil;
@@ -254,6 +394,30 @@ static size_t multi_array_element_size(MLMultiArrayDataType type) {
         case MLMultiArrayDataTypeInt32:   return sizeof(int32_t);
         default:                         return 0;
     }
+}
+
+static uint32_t infer_n_tokens_from_function(
+        const common_ane_mtp_program & program,
+        const ane_function_v1_t & function) {
+    if (function.n_inputs == 0) {
+        return 0;
+    }
+    const uint32_t slot_id = function.input_slot_ids[0];
+    if (slot_id >= program.manifest.n_slots) {
+        return 0;
+    }
+    const ane_slot_v1_t & slot = program.manifest.slots[slot_id];
+    // First non-zero dim wins. The prefill/MTP/DFlash shape is
+    // [1, N] so we pick N. The matmul shape is [N] so we pick N.
+    // Skip leading 1s and return the next positive dim.
+    for (uint32_t i = 0; i < slot.n_dim; ++i) {
+        if (slot.shape[i] > 1) {
+            return slot.shape[i];
+        }
+    }
+    // All dims were 0 or 1; treat the first dim as the n_tokens
+    // for completeness (caller can filter out zero results).
+    return slot.n_dim > 0 ? slot.shape[0] : 0;
 }
 
 static NSArray<NSNumber *> * contiguous_strides(NSArray<NSNumber *> * shape) {
@@ -699,6 +863,17 @@ static bool dispatch_pinned_function_locked(
         update_max(instance.phase_stats.output_read_us_max, dt_output);
         instance.phase_stats.count.fetch_add(
             1, std::memory_order_relaxed);
+        // Phase 0 profile: emit one NDJSON line per phase. The
+        // emit is opt-in via common_ane_phase_profile_set_output;
+        // the disabled check is a single atomic load so the
+        // branch is cheap when profiling is off. n_tokens is
+        // inferred from the function's first input slot shape
+        // (the lane-active dim for prefill, MTP, and DFlash).
+        const uint32_t n_tokens = infer_n_tokens_from_function(
+            program, *function);
+        phase_profile_emit("input_prep", dt_input, n_tokens);
+        phase_profile_emit("ane_dispatch", dt_ane, n_tokens);
+        phase_profile_emit("output_read", dt_output, n_tokens);
         return true;
     }
     return true;  // unreachable
@@ -1601,6 +1776,19 @@ static common_ane_mtp_program_ptr common_ane_program_load(
         LOG_INF("loaded and warmed embedded ANE program in namespace %s at %s (requested batch=%u, bucket=%u)\n",
                 root_prefix.c_str(),
                 program->cache_path.c_str(), batch_hint, selected_batch);
+        // Phase 0 profile: pick up the host's TESSERA_ANE_PROFILE_OUT
+        // env var (or any value set via the public set_output API)
+        // so the dispatch path can emit per-phase NDJSON lines
+        // without an extra CLI plumbing step. The env var is
+        // consulted here (once per program load) rather than per
+        // dispatch; the set_output helper is idempotent so a
+        // second call is cheap. Marked experimental: the env var
+        // name is unstable until the host-side reader lands.
+        if (const char * env = std::getenv("TESSERA_ANE_PROFILE_OUT")) {
+            if (env[0] != '\0') {
+                common_ane_phase_profile_set_output(env);
+            }
+        }
         return program;
     }
 }

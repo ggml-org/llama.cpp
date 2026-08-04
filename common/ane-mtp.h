@@ -155,6 +155,47 @@ std::vector<common_ane_compute_function> common_ane_compute_functions(
 std::vector<common_ane_program_phase_stats_row> common_ane_mtp_program_phase_stats(
         const common_ane_mtp_program_ptr & program);
 
+// Phase 0 profile streaming. When the host sets a non-empty path
+// via common_ane_phase_profile_set_output, the dispatch path
+// (dispatch_pinned_function_locked) appends one NDJSON line per
+// phase per dispatch to that path. Each line has the shape:
+//
+//   {"phase":"<phase>","us":<microseconds>,"n_tokens":<n>,"ts":<iso8601>}
+//
+// where <phase> is one of "input_prep", "ane_dispatch",
+// "output_read" (matching the C++ struct common_ane_phase_stats
+// field names) and <n> is the function's first non-batch input
+// dim (the lane-active dim for prefill, MTP, and DFlash). The
+// emit is opt-in: when the path is empty (the default) the
+// dispatch path makes a single empty-string check per phase
+// and returns. The file is opened lazily on the first emit
+// and held until common_ane_phase_profile_set_output is called
+// with a different path (or empty) or the process exits.
+//
+// The flag is read by both the host (synchronous dispatch) and
+// the E-core pump (the submit_fn runs on the E-core thread), so
+// the path is process-global. Multi-program dispatch paths
+// share the same output file; the ts field is the per-line
+// timestamp and the function name is implicit (the program is
+// the one whose dispatch_pinned_function_locked is running).
+//
+// The default-empty path keeps the production dispatch path
+// branch-free when profiling is off; the cost of the profile
+// flag is one branch + one file-write per dispatch phase.
+void common_ane_phase_profile_set_output(const char * path);
+const char * common_ane_phase_profile_get_output();
+
+// Test-only internal API. The dispatch path is the only legit
+// caller of phase_profile_emit; this declaration exists so
+// tests/test-ane-phase-profile-emit.cpp can drive a synthetic
+// emit without spinning up a real .mlmodelc. The function is
+// declared in the public header (rather than a private header)
+// because the .mm file's anonymous-namespace helpers aren't
+// visible to external translation units. Production code
+// should not call this directly.
+void common_ane_phase_profile_emit_test_only(
+        const char * phase, uint64_t us, uint32_t n_tokens);
+
 // Execute a fixed-sequence prefill function named prefill_sN. The function
 // consumes I32 token_ids and positions shaped [lane_bucket, N], and writes
 // hidden_states shaped [lane_bucket, N, hidden_size].

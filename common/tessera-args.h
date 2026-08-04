@@ -126,6 +126,15 @@ struct common_tessera_params {
     // the top of common_params_parse_ex, before env-var and CLI handling,
     // so env vars and explicit CLI flags naturally take precedence.
     std::string tessera_config_path;
+    // --tessera-ane-profile-out PATH: NDJSON file for per-phase ANE
+    // dispatch profiling. Empty = no profile. The host sets this
+    // before the first dispatch (typically from the --tessera-ane-profile-out
+    // add_opt handler in common/arg.cpp). The C++ side reads it via
+    // common_ane_phase_profile_set_output in common/ane-mtp.mm. Marked
+    // experimental until the consumer-side reader lands; see
+    // docs/tessera-ane-pump.md for the schema and the
+    // tests/test-ane-phase-profile-emit.cpp smoke test.
+    std::string ane_profile_out;
 };
 
 const common_tessera_params & common_get_tessera_params();
