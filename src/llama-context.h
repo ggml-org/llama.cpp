@@ -401,6 +401,16 @@ private:
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 
+    // Project B (auto-select) + Project C (residency tracker) wiring.
+    // The residency tracker records (backend, tensor, iter) per call to
+    // graph_compute and exposes stale entries via suggest_releases. The
+    // tracker is enabled unconditionally (it's just a record-keeping data
+    // structure with no side effects), but the auto-select pass that
+    // re-assigns nodes to backends is gated on TESSERA_AUTO_SELECT (opt-in
+    // env var) because it changes the existing per-node assignment.
+    ggml_backend_residency_t residency = nullptr;
+    int64_t                  residency_iter = 0;
+
     // training
     ggml_opt_context_t opt_ctx = nullptr;
     // loss selected at opt_init; decides whether opt_epoch_iter fills sparse

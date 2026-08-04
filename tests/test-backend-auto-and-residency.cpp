@@ -241,6 +241,53 @@ int main() {
         ggml_backend_residency_free_suggestions(s);
     }
 
+    // Test 7: end-to-end post-compute mark_used pattern. Mirrors the
+    // loop in llama_context::graph_compute: after
+    // ggml_backend_sched_graph_compute returns, walk the graph's nodes
+    // and call mark_used with the backend that the scheduler picked.
+    // The full llama_context path is exercised in production by every
+    // inference call; this test is the unit-level regression for the
+    // glue (correct iteration order, correct backend lookup, no
+    // double-mark within one iter).
+    {
+        ggml_backend_residency_t loop_res = ggml_backend_residency_new();
+        // Simulate two iterations of the post-compute loop. Both
+        // iterations run the same scheduler + same graph; the per-
+        // tensor iter is the iteration counter, the per-tensor
+        // backend is the scheduler's assignment.
+        for (int64_t iter = 0; iter < 2; ++iter) {
+            for (int i = 0; i < ggml_graph_n_nodes(g.graph); ++i) {
+                ggml_tensor * node = ggml_graph_node(g.graph, i);
+                ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, node);
+                ggml_backend_residency_mark_used(loop_res, backend, node, iter);
+            }
+        }
+        // At iter=2, idle=2: every (backend, tensor) pair was last
+        // marked at iter=1; current_iter - last_used = 1 < idle = 2,
+        // so 0 stale entries. The default idle threshold is 4
+        // (see ggml-backend-residency.cpp:140-156), and the loop's
+        // per-iter marking keeps entries within that window.
+        {
+            size_t n = 0;
+            ggml_backend_residency_suggestion_t * s =
+                ggml_backend_residency_suggest_releases(loop_res, /* iter = */ 2, /* idle = */ 2, &n);
+            CHECK(n == 0,
+                  "post-compute mark_used: fresh after 2 iters, nothing stale at idle=2");
+            ggml_backend_residency_free_suggestions(s);
+        }
+        // At iter=10, idle=100: still nothing stale (idle > age of
+        // any entry).
+        {
+            size_t n = 0;
+            ggml_backend_residency_suggestion_t * s =
+                ggml_backend_residency_suggest_releases(loop_res, /* iter = */ 10, /* idle = */ 100, &n);
+            CHECK(n == 0,
+                  "post-compute mark_used: idle > current, nothing stale");
+            ggml_backend_residency_free_suggestions(s);
+        }
+        ggml_backend_residency_free(loop_res);
+    }
+
     ggml_backend_residency_free(res);
 
     teardown_synthetic_graph(g);

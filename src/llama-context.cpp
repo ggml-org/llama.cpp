@@ -493,6 +493,7 @@ llama_context::~llama_context() {
         }
     }
     ggml_opt_free(opt_ctx);
+    ggml_backend_residency_free(residency);
 }
 
 void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs) {
@@ -641,6 +642,15 @@ void llama_context::sched_reserve() {
         n_splits_pp = ggml_backend_sched_get_n_splits(sched.get());
         n_nodes_pp  = ggml_graph_n_nodes(gf);
     }
+
+    // Project C: residency tracker. Records (backend, tensor, iter) per call
+    // to graph_compute so callers can query stale entries via
+    // ggml_backend_residency_suggest_releases. The tracker is enabled
+    // unconditionally; the recording loop in graph_compute is a tight
+    // O(n_nodes) pass with no allocation per node, so the overhead is
+    // negligible. Project B (auto-select) is gated on TESSERA_AUTO_SELECT
+    // because it changes per-node backend assignment.
+    residency = ggml_backend_residency_new();
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
     {
@@ -2593,9 +2603,51 @@ ggml_status llama_context::graph_compute(
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
 
+    // Project B: per-graph backend auto-select. Opt-in via
+    // TESSERA_AUTO_SELECT=1 because the heuristic re-assigns nodes to
+    // backends (CPU for layout, ACCEL for elementwise, MUL_MAT stays
+    // wherever the scheduler put it), which is a different assignment from
+    // the scheduler's static load-balancing default. Off by default to
+    // keep the existing behaviour; the opt-in switch is the safety hatch
+    // for A/B comparison.
+    static const bool auto_select_enabled = []() {
+        const char * v = getenv("TESSERA_AUTO_SELECT");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    if (auto_select_enabled && !backend_ptrs.empty()) {
+        const size_t n_assigned = ggml_backend_sched_auto_select(
+                sched.get(), gf, backend_ptrs.data(), backend_ptrs.size());
+        LLAMA_LOG_DEBUG("%s: auto_select assigned %zu / %d nodes\n",
+                        __func__, n_assigned, ggml_graph_n_nodes(gf));
+    }
+
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
+        return status;
+    }
+
+    // Project C: residency mark. After the compute lands, walk the graph's
+    // node list and record (backend, tensor, iter) for every node. The
+    // post-compute walk is intentional: ggml_backend_sched_get_tensor_backend
+    // returns the backend that actually ran the node, which is determined
+    // by the scheduler's assignment during graph_compute_async. Recording
+    // per-iter (not per-tensor) means we don't need the eval callback to
+    // carry the backend; the scheduler is the source of truth and we read
+    // its assignment back after the fact.
+    if (residency != nullptr) {
+        const int64_t iter = residency_iter++;
+        const int n_nodes = ggml_graph_n_nodes(gf);
+        for (int i = 0; i < n_nodes; ++i) {
+            ggml_tensor * node = ggml_graph_node(gf, i);
+            if (node == nullptr) {
+                continue;
+            }
+            ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), node);
+            if (backend != nullptr) {
+                ggml_backend_residency_mark_used(residency, backend, node, iter);
+            }
+        }
     }
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
