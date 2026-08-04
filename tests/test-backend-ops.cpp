@@ -9841,6 +9841,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {256, 256, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {64, 64, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {77, 64, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+    // T5 self-attention soft_max: f16 mask (flash-attn on), no ALiBi (rel-pos bias via kq_b),
+    // d_kv=64 -> scale 1/sqrt(64)=0.125, n_head=16. decode n_q=1; prefill n_q=512.
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, { 512,   1, 16, 1}, true, false, GGML_TYPE_F16, {1, 1}, 0.125f, 0.0f));
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, { 512, 512, 16, 1}, true, false, GGML_TYPE_F16, {1, 1}, 0.125f, 0.0f));
 
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32, 10, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {1024, 10, 1, 1}));
