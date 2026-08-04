@@ -2536,6 +2536,16 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_draft_dspark) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params));
         }
+        // TODO(adaptive-drafter, Workstream B):
+        //   The block above adds every enabled drafter to `configs` in
+        //   a fixed priority order.  The ADAPTIVE drafter (Workstream B)
+        //   will score the candidates at decode time (acceptance rate,
+        //   per-token latency, draft-length yield) and pick one
+        //   per-step.  The scoring hook plugs in *here* - between the
+        //   build of `configs` and the loop that instantiates
+        //   `impls` further down.  For Workstream A this block is
+        //   untouched; the embedded drafters land in `configs` exactly
+        //   as the standalone path has always done.
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
