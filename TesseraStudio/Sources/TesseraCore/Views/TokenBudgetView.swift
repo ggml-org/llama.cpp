@@ -31,6 +31,9 @@ public struct TokenBudgetView: View {
                 }
             }
             .frame(height: 6)
+            // The bar is visual-only; the used / limit / remaining
+            // texts around it carry the same information.
+            .accessibilityHidden(true)
 
             HStack {
                 Text("\(budget.remaining) remaining")

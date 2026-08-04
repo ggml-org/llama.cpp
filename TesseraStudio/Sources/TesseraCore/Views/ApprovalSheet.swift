@@ -44,6 +44,7 @@ public struct ApprovalSheet: View {
                                     .font(.system(.caption, design: .monospaced))
                                     .textSelection(.enabled)
                             }
+                            .accessibilityElement(children: .combine)
                         }
                     }
                     .padding()

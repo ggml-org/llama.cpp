@@ -66,7 +66,13 @@ struct WorkflowParameterPanelView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(propLabel(key))
                 .font(.subheadline.weight(.medium))
+            // The fields below render with .labelsHidden() for
+            // layout, which also strips the VoiceOver label.
+            // Re-attach it here, plus the schema description as
+            // the accessibility hint when one exists.
             field(key: key, prop: prop)
+                .accessibilityLabel(propLabel(key))
+                .accessibilityHint(prop.description ?? "")
             if let desc = prop.description {
                 Text(desc)
                     .font(.caption2)

@@ -76,11 +76,13 @@ public struct PlaygroundView: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .onSubmit { send() }
+                .accessibilityLabel("Message")
 
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
             }
+            .accessibilityLabel("Send")
             .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || agentLoop.isRunning)
 
             if agentLoop.isRunning {
@@ -88,6 +90,7 @@ public struct PlaygroundView: View {
                     agentLoop.cancel()
                 }
                 .font(.caption)
+                .accessibilityHint("Stops the current agent run")
             }
         }
         .padding()

@@ -58,6 +58,10 @@ public struct ChatBubbleView: View {
 
             if role != .user { Spacer(minLength: 60) }
         }
+        // VoiceOver reads the bubble as one element: the role
+        // label followed by the message content, instead of
+        // stopping on the caption-sized role text separately.
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder

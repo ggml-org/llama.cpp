@@ -101,12 +101,17 @@ public struct TelemetryDrawer: View {
                     .font(.caption2)
                     .rotationEffect(.degrees(isExpanded ? 0 : 180))
                     .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(isExpanded ? "Hide telemetry" : "Show telemetry")
+        .accessibilityValue(monitor.latest.map {
+            String(format: "%.0f tokens per second", $0.tokensPerSecond)
+        } ?? "")
     }
 
     private var sections: some View {
@@ -206,5 +211,8 @@ struct Sparkline: View {
         .chartYAxis(.hidden)
         .frame(height: 32)
         .frame(maxWidth: .infinity)
+        // The sparkline is visual-only; the current-value text
+        // next to it carries the number for VoiceOver.
+        .accessibilityHidden(true)
     }
 }
