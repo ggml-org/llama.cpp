@@ -823,6 +823,7 @@ enum class penalties_position {
 static void add_filter_and_penalties(
         llama_sampler * chain,
         const sampler_init_fn & init_filter,
+        int32_t n_vocab,
         int32_t penalty_last_n,
         float penalty_repeat,
         float penalty_freq,
@@ -830,7 +831,7 @@ static void add_filter_and_penalties(
         penalties_position position) {
     const auto add_penalties = [&]() {
         llama_sampler_chain_add(chain, llama_sampler_init_penalties(
-                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+                    n_vocab, penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
     };
 
     if (position == penalties_position::before_filter) {
@@ -1006,7 +1007,7 @@ static sampler_comparison_output run_penalties_comparison(
     const std::vector<float> raw_logits = decode_raw_logits(params, prompt);
     const auto add_samplers = [&](llama_sampler * chain) {
         llama_sampler_chain_add(chain, llama_sampler_init_penalties(
-                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+                    llama_vocab_n_tokens(vocab), penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
     };
     const auto accept_history = [&](llama_sampler * chain) {
         accept_prompt(chain, vocab, prompt);
@@ -1105,7 +1106,7 @@ static void compare_top_k_penalties_logits(
     GGML_ASSERT(excluded_history_token != LLAMA_TOKEN_NULL);
 
     const auto add_samplers = [&](llama_sampler * chain) {
-        add_filter_and_penalties(chain, init_top_k,
+        add_filter_and_penalties(chain, init_top_k, n_vocab,
                 penalty_last_n, penalty_repeat, penalty_freq, penalty_present, position);
     };
 
@@ -1190,7 +1191,7 @@ static void compare_masking_penalties_logits(
     GGML_ASSERT(masked_token != LLAMA_TOKEN_NULL);
 
     const auto add_samplers = [&](llama_sampler * chain) {
-        add_filter_and_penalties(chain, init_filter,
+        add_filter_and_penalties(chain, init_filter, n_vocab,
                 penalty_last_n, penalty_repeat, penalty_freq, penalty_present, position);
     };
     auto accept_history = [&](llama_sampler * smpl) {
@@ -1218,7 +1219,7 @@ static void compare_masking_penalties_logits(
             GGML_ASSERT(fabsf(expected_logits.at(penalized_token) - raw_logits[penalized_token]) > 1e-6f);
         } else {
             llama_sampler_ptr penalties(llama_sampler_init_penalties(
-                        penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+                        n_vocab, penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
             accept_history(penalties.get());
             const std::unordered_map<llama_token, float> penalized_logits =
                 map_logits(apply_cpu_sampler(raw_logits, penalties.get()));
