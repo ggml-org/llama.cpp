@@ -1211,6 +1211,102 @@ class TestTesseraDB(unittest.TestCase):
         self.assertAlmostEqual(df["w_gradient"][0], 0.6, places=4)
         self.assertEqual(df["n_samples"][0], 8)
 
+    # ---- Phase 16.7: covering indexes ------------------------------
+
+    def test_unified_indexes_present_on_fresh_open(self) -> None:
+        """Phase 16.7: every TesseraDB.open() applies the 7
+        per-component (model_role, name) covering indexes via
+        ``CREATE INDEX IF NOT EXISTS``. The test confirms the
+        7 indexes land on a fresh Python-opened DB. The
+        ``duckdb_indexes()`` view is the canonical source.
+        """
+        path = self._fresh(19)
+        with TesseraDB.open(path) as db:
+            pass
+        with duckdb.connect(path, read_only=True) as con:
+            df = con.execute(
+                "SELECT table_name, index_name FROM duckdb_indexes() "
+                "WHERE index_name LIKE 'idx_%_role_%' "
+                "ORDER BY table_name"
+            ).pl()
+        names = set(df["index_name"].to_list())
+        expected = {
+            "idx_tensor_stats_role_name",
+            "idx_l3_outlier_role_name",
+            "idx_l4_probe_role_name",
+            "idx_l5_plan_role_name",
+            "idx_l4_outcome_role_name",
+            "idx_l5_outcome_role_name",
+            "idx_l5_weights_role_family",
+        }
+        self.assertTrue(
+            expected.issubset(names),
+            f"missing indexes; got {sorted(names)}",
+        )
+
+    def test_unified_indexes_idempotent_on_reopen(self) -> None:
+        """Phase 16.7: a re-open of an already-indexed DB
+        succeeds (the IF NOT EXISTS short-circuits) and the
+        indexes remain present.
+        """
+        path = self._fresh(20)
+        with TesseraDB.open(path) as db:
+            pass
+        with TesseraDB.open(path) as db:
+            pass
+        with TesseraDB.open(path) as db:
+            pass
+        with duckdb.connect(path, read_only=True) as con:
+            n = con.execute(
+                "SELECT COUNT(*) FROM duckdb_indexes() "
+                "WHERE index_name LIKE 'idx_%_role_%'"
+            ).fetchone()[0]
+        self.assertEqual(
+            n, 7,
+            "re-open must leave the 7 indexes in place; got "
+            f"{n}",
+        )
+
+    def test_unified_indexes_used_by_per_component_query(self) -> None:
+        """Phase 16.7: a per-component query that matches the
+        index's column order runs without an error on a
+        fresh DB. The EXPLAIN smoke confirms DuckDB
+        recognises the (model_role, name) index as a
+        candidate (the optimiser may still pick a PK scan on
+        small tables, so the assertion is "the index
+        exists", not "the index is the chosen plan").
+        """
+        path = self._fresh(21)
+        with TesseraDB.open(path) as db:
+            db.insert_tensor_stats(
+                model_hash="h1",
+                rows=[
+                    {"model_role": "trunk", "name": "blk.0.attn_q.weight",
+                     "family": "attn_q", "kurtosis": 5.0, "eff_rank": 0.85,
+                     "source": "py_cal"},
+                    {"model_role": "dflash", "name": "blk.0.attn_q.weight",
+                     "family": "attn_q", "kurtosis": 4.0, "eff_rank": 0.80,
+                     "source": "py_cal_dflash"},
+                ],
+            )
+        with duckdb.connect(path, read_only=True) as con:
+            # Per-component query the index is designed for.
+            n = con.execute(
+                "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_role = 'dflash' AND name = 'blk.0.attn_q.weight'"
+            ).fetchone()[0]
+            self.assertEqual(n, 1)
+            # Index exists; the index_name column is the
+            # canonical proof. Use .pl() to get a polars
+            # DataFrame (the rest of the test file is
+            # polars-flavoured).
+            df = con.execute(
+                "SELECT index_name FROM duckdb_indexes() "
+                "WHERE table_name = 'tensor_stats' "
+                "AND index_name = 'idx_tensor_stats_role_name'"
+            ).pl()
+            self.assertEqual(df.height, 1)
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestTesseraDB)

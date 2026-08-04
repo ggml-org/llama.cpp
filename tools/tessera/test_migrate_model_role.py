@@ -13,6 +13,7 @@ failure.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -471,6 +472,115 @@ class TestMigrateModelRole(unittest.TestCase):
             )
         finally:
             con.close()
+
+    # ---- 5. Phase 16.7: audit sidecar ----------------------------
+
+    def test_migration_writes_audit_sidecar(self) -> None:
+        """Phase 16.7: when the migration actually rebuilds
+        at least one pre-Phase-16 table, it writes a
+        ``<stem>.model_role_migration.json`` sidecar next
+        to the duckdb file. The sidecar lists every
+        migrated table and its row count. A re-run on an
+        already-migrated DB is a no-op and the sidecar is
+        not re-written.
+        """
+        _seed_pre_phase_16_db(self.path)
+        sidecar = self._sidecar_path(self.path)
+        # Pre-condition: no sidecar before the migration.
+        self.assertFalse(
+            os.path.exists(sidecar),
+            f"sidecar must not exist before migration: {sidecar}",
+        )
+        n = migrate(self.path)
+        # The seed populates tensor_stats with 2 rows; the
+        # other 6 tables get 1 each. Total = 2 + 6 = 8.
+        self.assertEqual(n, 8)
+        self.assertTrue(
+            os.path.exists(sidecar),
+            f"sidecar missing after migration: {sidecar}",
+        )
+        with open(sidecar, "r", encoding="utf-8") as f:
+            body = json.load(f)
+        # Top-level fields.
+        self.assertEqual(body["db_path"], self.path)
+        self.assertEqual(body["model_role"], "trunk")
+        self.assertIn("ts", body)
+        self.assertIsInstance(body["tables"], list)
+        # Per-table entries: the sidecar has 7 entries
+        # (one per table that needed the migration; tensor_stats
+        # has 2 rows, the others have 1 each).
+        by_name = {e["name"]: e["n_rows_at_migration"] for e in body["tables"]}
+        expected_tables = {
+            "tensor_stats", "l3_outlier_summary", "l4_probe_summary",
+            "l5_plan_summary", "l4_plan_outcome", "l5_outcome",
+            "l5_weights",
+        }
+        self.assertEqual(set(by_name.keys()), expected_tables)
+        self.assertEqual(by_name["tensor_stats"], 2)
+        for t in expected_tables - {"tensor_stats"}:
+            self.assertEqual(by_name[t], 1, f"{t} expected 1 row")
+
+    def test_migration_sidecar_idempotent(self) -> None:
+        """Phase 16.7: a second migrate() call on an
+        already-migrated DB is a no-op; the sidecar is NOT
+        re-written. The function returns 0 and the existing
+        sidecar file is unchanged.
+        """
+        _seed_pre_phase_16_db(self.path)
+        migrate(self.path)
+        sidecar = self._sidecar_path(self.path)
+        self.assertTrue(os.path.exists(sidecar))
+        # Capture the mtime + content for a parity check.
+        with open(sidecar, "r", encoding="utf-8") as f:
+            first_body = f.read()
+        mtime_before = os.path.getmtime(sidecar)
+        # Bump the mtime by a second so a "the file was
+        # touched but the content is the same" race is
+        # visible if the second migrate() does write.
+        import time as _time
+        _time.sleep(1.1)
+        n = migrate(self.path)
+        self.assertEqual(n, 0)
+        # File still exists and content is unchanged.
+        self.assertTrue(os.path.exists(sidecar))
+        with open(sidecar, "r", encoding="utf-8") as f:
+            second_body = f.read()
+        self.assertEqual(first_body, second_body)
+        mtime_after = os.path.getmtime(sidecar)
+        self.assertEqual(
+            mtime_before, mtime_after,
+            "sidecar must not be re-written on idempotent re-run",
+        )
+
+    def test_migration_no_sidecar_on_fresh_db(self) -> None:
+        """Phase 16.7: a fresh DB (no tables yet) does not
+        write a sidecar; the migration applies the Phase 16
+        schema, but nothing was actually migrated (every
+        table was created from scratch by the migration
+        itself, not by a pre-Phase-16 user). The audit
+        trail is for the rebuild case, not the fresh case.
+        """
+        # Don't seed: the DB is brand new.
+        n = migrate(self.path)
+        self.assertEqual(n, 0)
+        sidecar = self._sidecar_path(self.path)
+        self.assertFalse(
+            os.path.exists(sidecar),
+            "sidecar must NOT be written for a fresh DB",
+        )
+
+    @staticmethod
+    def _sidecar_path(db_path: str) -> str:
+        """Mirror of migrate_model_role._sidecar_path for the
+        test. foo.duckdb -> foo.model_role_migration.json.
+        """
+        slash = max(db_path.rfind("/"), db_path.rfind("\\"))
+        dot = db_path.rfind(".")
+        if dot > slash and dot != -1:
+            stem = db_path[:dot]
+        else:
+            stem = db_path
+        return stem + ".model_role_migration.json"
 
 
 if __name__ == "__main__":
