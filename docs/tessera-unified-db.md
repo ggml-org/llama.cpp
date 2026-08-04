@@ -351,8 +351,8 @@ python3 tools/tessera/l5_orchestrator.py \
   `tensor_stats` and produces a conservative 0/1 outlier
   count tagged `source='tensor_stats_estimate'`. The
   dequant-sidecar path remains the default. 4 new tests.
-- **Phase 12 (this commit):** feedback loop closes. The
-  retune (`l5_retune.py`) writes per-(model, family)
+- **Phase 12 (commit `9e2778e01`):** feedback loop closes.
+  The retune (`l5_retune.py`) writes per-(model, family)
   retuned `(w_imatrix, w_gradient, w_layer)` to the new
   `l5_weights` table; the orchestrator's
   `--retune-from-db` reads it back. C++ side: schema
@@ -361,34 +361,110 @@ python3 tools/tessera/l5_orchestrator.py \
   (direct `INSERT ... ON CONFLICT DO UPDATE`, like
   `tensor_stats`). 15 Python tests + 1 new C++ test
   case.
+- **Phase 15 (this commit):** feedback loop extends. The
+  retune is now a **3-coefficient OLS** (per-tensor
+  `imatrix_magnitude`, `gradient_proxy`,
+  `layer_position_prior` components) instead of a
+  2-coefficient OLS on the combined `sensitivity_score`.
+  The orchestrator's `SensitivityScorer.score()` already
+  emits the per-tensor components on the
+  `l5_plan_summary` row; Phase 15 threads them through
+  to `l5_outcome` (additive, nullable; the producer
+  populates the columns from the scorer, the consumer
+  reads them to fit the 3-coefficient OLS). The
+  2-coefficient OLS on the combined `sensitivity_score`
+  is the **fallback** when the components are NULL
+  (pre-Phase-15 rows, the C++ side before the schema
+  migration). Schema additions (Python-side, additive via
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` so the
+  changes are forward-compatible with the C++ side's
+  pre-Phase-15 schema):
+  * `l5_plan_summary` gains `imatrix_magnitude`,
+    `gradient_proxy`, `layer_position_prior`. The
+    orchestrator's `write_history` (NDJSON) populates
+    them from `RequantAction.imatrix_magnitude` etc.
+  * `l5_outcome` gains the same three columns (populated
+    by `l5_outcome.py` at read time via the
+    `l5_plan_summary` join).
+  * `l5_weights` gains `top_fraction DOUBLE` (nullable).
+  New retune features:
+  * **3-coefficient OLS** via numpy `lstsq` on
+    `[1, im, grad, layer]` with sqrt-weighted rows. The
+    closed-form `(X^T W X)^-1 X^T W y` would be brittle
+    on near-singular inputs; lstsq is the standard tool
+    for small weighted least squares.
+  * **Sample weights** derived from
+    `1 / (1 + in_sample_loss * 100) * sqrt(n_samples /
+    max_n_samples)`. The in_sample_loss term damps rows
+    whose post-fit loss is high; the n_samples term
+    rewards rows with more data (sub-linear).
+  * **Per-family `top_fraction` recommendation**:
+    `top_fraction = base * (1 + tanh(2*slope) *
+    (1 - hit_rate))`. The orchestrator's
+    `RequantPlanner` consumes it via the
+    `--per-family-top-fraction` flag and overrides the
+    uniform `--top-fraction` for the families the retune
+    has flagged.
+  * **Cross-model retune** (`--retune-cross-model`):
+    writes a per-family aggregate row with
+    `model_hash = "*"` (n_samples-weighted mean across
+    all models). The orchestrator's
+    `--retune-from-db` falls back to the cross-model row
+    for any family the per-model lookup missed
+    (`--retune-cross-model-fallback`). The
+    `read_l5_weights(cross_model_fallback=True)` path
+    handles the union.
+  * **EMA-aware retune**: optional join with
+    `l5_plan_ema` (the per-iteration EMA of the
+    sensitivity score) replaces the per-iteration
+    `sensitivity_score` on the OLS. The EMA is stable
+    across iterations; the per-iteration score is noisy.
+    The retune fits on the EMA when the table is
+    present, falls back to the per-iteration score
+    otherwise. The join key is `(model_hash, name,
+    iteration, plan_id)`.
+  Algorithm tags written to `l5_weights.retune_source`:
+  * `ols_3coef_v1`: the 3-coefficient OLS path (the
+    production path when components are present).
+  * `ols_slope_v1`: the 2-coefficient OLS fallback (the
+    Phase 12 path; preserved for backward-compat).
+  * `ols_3coef_crossmodel_v1`: the cross-model
+    aggregate row.
+  32 retune tests + 7 outcome tests + 11 db tests + 8
+  buffer tests + 7 dataframe tests = 65 tests pass.
 
 ## Open follow-ups (after this commit)
 
 The unified-DB feedback loop is now feature-complete: the
 producer side (`l4_plan_outcome` + `l5_plan_summary`) is in
 production, the consumer side (`l5_outcome` + `l5_weights`) is
-in production, and the closed-loop wiring
-(`--retune-from-db`) is in production. The remaining items
-are about extending the loop, not about adding the next leg.
+in production, the closed-loop wiring (`--retune-from-db`)
+is in production, and the per-tensor component decomposition
+(Phase 15) is in production. The remaining items are
+**future extensions**, not on the critical path:
 
-- Per-tensor component storage in `l5_outcome`. Currently
-  the retune fits a 2-coefficient OLS (intercept + slope on
-  the combined `sensitivity_score`); if we stored
-  per-tensor `imatrix_magnitude`, `gradient_proxy`, and
-  `layer_position_prior` in `l5_outcome`, the retune could
-  fit a 3-coefficient model and isolate which component
-  drives the miscalibration per family. Schema change; the
-  orchestrator's `write_history` would need to start
-  populating the per-component columns (currently NaN).
-- Cross-model retune. `l5_weights` is keyed by
-  `(model_hash, family)`, so a new model starts from the
-  base weights. A second pass could add a global
-  `(family, w_im, w_grad, w_layer)` row that's the
-  across-model n_samples-weighted mean; the orchestrator
-  would warm-start new models from that.
-- GA-prep walk: read `l5_weights` to bias the GA's
+- **GA-prep walk**: read `l5_weights` to bias the GA's
   initialization for the families the retune flagged as
   miscalibrated. This is the C++ consumer side; the
   dispatch would call `ts_tessera_db_list_l5_weights` at
   `ts_dispatch_db_open` time and thread the per-family
-  weights into the GA's seed-generation.
+  weights into the GA's seed-generation. Phase 15's
+  per-family `top_fraction` is the natural input.
+- **Producer-side EMA write**: the
+  `l5_orchestrator.py:OrchestratorLoop` does not yet
+  write to `l5_plan_ema`. Phase 15's retune consumes the
+  EMA via a left-join; the producer side (the
+  orchestrator's run loop) is the missing leg. A small
+  follow-up commit adds the EMA write in
+  `OrchestratorLoop.run` so the EMA path is the
+  production default end-to-end.
+- **Per-tensor residual decomposition**: the
+  `l5_outcome.residual` column is the residual of the
+  per-(model, family) 2-coefficient fit of `delta_mse`
+  on `sensitivity_score`. Phase 15's 3-coefficient OLS
+  can replace this with a per-(model, family, component)
+  residual, surfaced as `residual_im`, `residual_grad`,
+  `residual_layer` columns on `l5_outcome`. The
+  diagnostics surface would change (one number per
+  component per family instead of one number per
+  family).
