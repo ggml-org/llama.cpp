@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,8 +23,8 @@ def write_csv(path: pathlib.Path, fields: list[str], rows: list[dict[str, object
         writer.writerows(rows)
 
 
-def make_fixture(root: pathlib.Path, outside: bool = False) -> pathlib.Path:
-    run = root / ("outside" if outside else "good")
+def make_fixture(root: pathlib.Path) -> pathlib.Path:
+    run = root / "good"
     rocprof = run / "rocprof"
     rocprof.mkdir(parents=True)
     (run / "contract.json").write_text(json.dumps({
@@ -63,6 +65,7 @@ def make_fixture(root: pathlib.Path, outside: bool = False) -> pathlib.Path:
         "=== model_files ===\nhash_mode=full\n" +
         "\n".join(f"{digest}  /model/part-{index}.gguf" for index, digest in enumerate(hashes, 1)) +
         "\n=== model_metadata ===\n"
+        "deepseek4.block_count=43\n"
     )
     (run / "result.jsonl").write_text(json.dumps({"samples_ns": [4000, 3200, 3210, 3190, 3205, 3195]}) + "\n")
     (run / "result-completed-at.ns").write_text("1000000850\n")
@@ -95,28 +98,44 @@ def make_fixture(root: pathlib.Path, outside: bool = False) -> pathlib.Path:
         "Workgroup_Size_X", "Workgroup_Size_Y", "Workgroup_Size_Z",
         "Grid_Size_X", "Grid_Size_Y", "Grid_Size_Z",
     ]
-    rows: list[dict[str, object]] = []
-    names = [
-        "void mul_mat_q<(ggml_type)16, 16, false>(...)",
-        "lightning_indexer_kernel_vec",
-        "flash_attn_tile_f32",
-        "ncclDevKernel_AllReduce",
+    signatures = [
+        ("void mul_mat_vec_q<(ggml_type)16, 1, false, false>(...)", 16384, 6, 84),
+        ("void mul_mat_vec_q<(ggml_type)22, 1, false, false>(...)", 16384, 6, 2),
+        ("void mul_mat_vec_q<(ggml_type)18, 1, false, false>(...)", 131072, 6, 41),
+        ("void mul_mat_vec_q<(ggml_type)39, 1, false, false>(...)", 131072, 6, 2),
+        ("void mul_mat_vec_q<(ggml_type)13, 1, false, false>(...)", 65536, 1, 84),
+        ("void mul_mat_vec_q<(ggml_type)14, 1, false, false>(...)", 65536, 1, 2),
+        ("void mul_mat_vec_q<(ggml_type)14, 1, true, false>(...)", 131072, 1, 42),
+        ("void mul_mat_vec_q<(ggml_type)8, 1, true, false>(...)", 131072, 1, 1),
     ]
-    durations = [100, 20, 30, 10]
-    for rep in range(2, 7):
-        start = (1000000100 + (rep - 1) * 120 + 10) - 1000000000 + 5
-        for index, (name, duration) in enumerate(zip(names, durations)):
-            event_start = start + index * 20
-            rows.append({
-                "Agent_Id": f"Agent {index + 1}", "Kernel_Name": name,
-                "Start_Timestamp": event_start, "End_Timestamp": event_start + duration,
-                "Workgroup_Size_X": 32, "Workgroup_Size_Y": 1, "Workgroup_Size_Z": 1,
-                "Grid_Size_X": 128, "Grid_Size_Y": 11, "Grid_Size_Z": 1,
-            })
-    if outside:
-        rows[0]["Start_Timestamp"] = 1
-        rows[0]["End_Timestamp"] = 2
-    write_csv(rocprof / "dsv4-tg_kernel_trace.csv", kernel_fields, rows)
+    kernel_path = rocprof / "dsv4-tg_kernel_trace.csv"
+    with kernel_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=kernel_fields)
+        writer.writeheader()
+        for rep in range(2, 7):
+            start = (1000000100 + (rep - 1) * 120 + 10) - 1000000000 + 5
+            for _token in range(32):
+                for agent_index in range(1, 5):
+                    for signature_index, (kernel_name, grid_x, grid_y, calls_per_token_agent) in enumerate(signatures):
+                        for _call in range(calls_per_token_agent):
+                            event_start = start + signature_index
+                            writer.writerow({
+                                "Agent_Id": f"Agent {agent_index}", "Kernel_Name": kernel_name,
+                                "Start_Timestamp": event_start, "End_Timestamp": event_start + 1,
+                                "Workgroup_Size_X": 32, "Workgroup_Size_Y": 1, "Workgroup_Size_Z": 1,
+                                "Grid_Size_X": grid_x, "Grid_Size_Y": grid_y, "Grid_Size_Z": 1,
+                            })
+            for index, (kernel_name, duration, grid_x, grid_y) in enumerate([
+                ("void mul_mat_vec_q<(ggml_type)8, 1, false, false>(...)", 60, 262144, 1),
+                ("ncclDevKernel_AllReduce", 10, 512, 1),
+            ]):
+                event_start = start + 20 + index * 20
+                writer.writerow({
+                    "Agent_Id": f"Agent {index + 1}", "Kernel_Name": kernel_name,
+                    "Start_Timestamp": event_start, "End_Timestamp": event_start + duration,
+                    "Workgroup_Size_X": 32, "Workgroup_Size_Y": 1, "Workgroup_Size_Z": 1,
+                    "Grid_Size_X": grid_x, "Grid_Size_Y": grid_y, "Grid_Size_Z": 1,
+                })
     api_fields = ["Function", "Start_Timestamp", "End_Timestamp"]
     write_csv(rocprof / "dsv4-tg_hip_api_trace.csv", api_fields, [{
         "Function": "hipGraphLaunch", "Start_Timestamp": 240, "End_Timestamp": 250,
@@ -129,6 +148,38 @@ def make_fixture(root: pathlib.Path, outside: bool = False) -> pathlib.Path:
         "Direction": "DEVICE_TO_DEVICE", "Start_Timestamp": 260, "End_Timestamp": 270,
     }])
     return run
+
+
+def clone_fixture(source: pathlib.Path, destination: pathlib.Path) -> pathlib.Path:
+    shutil.copytree(source, destination, copy_function=os.link)
+    return destination
+
+
+def replace_text(path: pathlib.Path, text: str) -> None:
+    path.unlink()
+    path.write_text(text)
+
+
+def replace_first(path: pathlib.Path, old: str, new: str) -> None:
+    text = path.read_text()
+    assert text.count(old) > 0
+    path.unlink()
+    path.write_text(text.replace(old, new, 1))
+
+
+def move_first_kernel_outside(path: pathlib.Path) -> None:
+    replacement = path.with_suffix(".replacement")
+    with path.open(newline="") as source, replacement.open("w", newline="") as destination:
+        reader = csv.DictReader(source)
+        writer = csv.DictWriter(destination, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        first = next(reader)
+        first["Start_Timestamp"] = "1"
+        first["End_Timestamp"] = "2"
+        writer.writerow(first)
+        writer.writerows(reader)
+    path.unlink()
+    replacement.rename(path)
 
 
 def expect_bad(run: pathlib.Path, needle: str) -> None:
@@ -155,23 +206,60 @@ def main() -> None:
         value = json.loads(out.read_text())
         assert value["complete"] and value["profiled_repetitions"] == 5
         assert value["evaluated_target_tokens"] == 160
-        assert value["kernel_dispatches"] == 20
+        assert value["kernel_dispatches"] == 165130
         assert value["outside_selected_interval_events"]["kernel"] == 0
-        assert value["families"][0]["family"] == "routed_expert_iq2_iq3_quant_matmul"
+        assert value["families"][0]["family"] == "routed_expert_quant_matmul"
+        assert {row["family"] for row in value["families"]} == {
+            "routed_expert_quant_matmul", "shared_expert_quant_matmul",
+            "non_moe_quantized_matmul", "communication_nccl",
+        }
+        assert value["moe_roles"]["routed_gate_up"]["calls"] == 55040
+        assert value["moe_roles"]["routed_down"]["calls"] == 27520
+        assert value["moe_roles"]["shared_gate_up"]["calls"] == 55040
+        assert value["moe_roles"]["shared_down"]["calls"] == 27520
+        assert value["moe_signatures"]["routed_gate_up_type22"]["calls"] == 1280
+        assert value["moe_signatures"]["routed_down_type39"]["calls"] == 1280
+        assert value["moe_signatures"]["shared_gate_up_type14"]["calls"] == 1280
+        assert value["moe_signatures"]["shared_down_type8"]["calls"] == 640
+        assert value["moe_dispatch_contract"] == {
+            "complete": True, "block_count": 43, "gpu_agents": 4, "target_tokens": 160,
+            "actual_role_calls": {"routed_gate_up": 55040, "routed_down": 27520, "shared_gate_up": 55040, "shared_down": 27520},
+            "expected_role_calls": {"routed_gate_up": 55040, "routed_down": 27520, "shared_gate_up": 55040, "shared_down": 27520},
+            "actual_signature_calls": {
+                "routed_gate_up_type16": 53760, "routed_gate_up_type22": 1280,
+                "routed_down_type18": 26240, "routed_down_type39": 1280,
+                "shared_gate_up_type13": 53760, "shared_gate_up_type14": 1280,
+                "shared_down_type14": 26880, "shared_down_type8": 640,
+            },
+            "expected_signature_calls": {
+                "routed_gate_up_type16": 53760, "routed_gate_up_type22": 1280,
+                "routed_down_type18": 26240, "routed_down_type39": 1280,
+                "shared_gate_up_type13": 53760, "shared_gate_up_type14": 1280,
+                "shared_down_type14": 26880, "shared_down_type8": 640,
+            },
+            "per_agent_exact": True, "per_repetition_exact": True,
+        }
         assert value["profiled_wall_stable"] is True and value["profiled_throughput_eligible"] is False
         assert len(value["per_repetition"]) == 5
+        assert value["per_repetition"][0]["trace_domains"]["rccl_api"] == {
+            "calls": 1, "duration_ns": 10,
+            "functions": {"ncclAllReduce": {"calls": 1, "duration_ns": 10}},
+        }
+        assert value["per_repetition"][1]["trace_domains"]["rccl_api"] == {
+            "calls": 0, "duration_ns": 0, "functions": {},
+        }
         assert value["trace_domain_status"] == {
             "kernel": "present_with_events", "memory_copy": "present_with_events",
             "rccl": "present_with_events", "hip": "present_with_events",
         }
         assert tsv.read_text().startswith("depth\tprofiled_repetitions\ttarget_tokens\tfamily")
 
-        unstable = make_fixture(root / "unstable")
+        unstable = clone_fixture(good, root / "unstable")
         unstable_summary = json.loads((unstable / "summary.json").read_text())
         unstable_summary["stable"] = False
         unstable_summary["records"][0].update({"stable": False, "mad_over_median": 0.06})
-        (unstable / "summary.json").write_text(json.dumps(unstable_summary))
-        unstable_out = unstable / "profile.json"
+        replace_text(unstable / "summary.json", json.dumps(unstable_summary))
+        unstable_out = unstable / "unstable-profile.json"
         result = subprocess.run(
             [sys.executable, str(TOOL), str(unstable), "--json", str(unstable_out)],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -182,54 +270,73 @@ def main() -> None:
         assert unstable_value["csa_decision_eligible"] is False
         assert unstable_value["family_attribution_complete"] is True
 
-        expect_bad(make_fixture(root / "outside", outside=True), "outside accepted generation intervals")
+        outside = clone_fixture(good, root / "outside")
+        move_first_kernel_outside(outside / "rocprof" / "dsv4-tg_kernel_trace.csv")
+        expect_bad(outside, "outside accepted generation intervals")
 
-        bad_contract = make_fixture(root / "contract")
+        bad_contract = clone_fixture(good, root / "contract")
         contract = json.loads((bad_contract / "contract.json").read_text())
         contract["n_gen"] = 64
-        (bad_contract / "contract.json").write_text(json.dumps(contract))
+        replace_text(bad_contract / "contract.json", json.dumps(contract))
         expect_bad(bad_contract, "requires tg32")
 
-        too_few = make_fixture(root / "too-few")
+        too_few = clone_fixture(good, root / "too-few")
         contract = json.loads((too_few / "contract.json").read_text())
         contract["raw_repetitions"] = 5
         contract["accepted_repetitions"] = 4
-        (too_few / "contract.json").write_text(json.dumps(contract))
+        replace_text(too_few / "contract.json", json.dumps(contract))
         expect_bad(too_few, "at least 6 raw")
 
-        bad_stack = make_fixture(root / "stack")
+        bad_stack = clone_fixture(good, root / "stack")
         contract = json.loads((bad_stack / "contract.json").read_text())
         contract["accepted_stack"]["mmq_j"] = 8
-        (bad_stack / "contract.json").write_text(json.dumps(contract))
+        replace_text(bad_stack / "contract.json", json.dumps(contract))
         expect_bad(bad_stack, "exact accepted J16")
 
-        bad_status = make_fixture(root / "status")
-        (bad_status / "status.txt").write_text(
-            "process_exit_code=0\ntruncated=0\ntimeout_phase=measurement\nfinished_at_ns=1000000900\n"
+        missing_block = clone_fixture(good, root / "missing-block")
+        replace_first(missing_block / "manifest.txt", "deepseek4.block_count=43\n", "")
+        expect_bad(missing_block, "expected exactly one")
+
+        wrong_block = clone_fixture(good, root / "wrong-block")
+        replace_first(wrong_block / "manifest.txt", "deepseek4.block_count=43", "deepseek4.block_count=42")
+        expect_bad(wrong_block, "expected exact profile model value 43")
+
+        bad_signature = clone_fixture(good, root / "signature")
+        replace_first(
+            bad_signature / "rocprof" / "dsv4-tg_kernel_trace.csv",
+            "mul_mat_vec_q<(ggml_type)16", "mul_mat_vec_q<(ggml_type)22",
+        )
+        expect_bad(bad_signature, "signature dispatch contract mismatch")
+
+        bad_status = clone_fixture(good, root / "status")
+        replace_text(
+            bad_status / "status.txt",
+            "process_exit_code=0\ntruncated=0\ntimeout_phase=measurement\nfinished_at_ns=1000000900\n",
         )
         expect_bad(bad_status, "status is not clean")
 
-        bad_boundary = make_fixture(root / "boundary")
-        boundary_text = (bad_boundary / "rocprof-selected-regions.tsv").read_text()
-        (bad_boundary / "rocprof-selected-regions.tsv").write_text(boundary_text.replace("pause_call", "resume_return", 1))
+        bad_boundary = clone_fixture(good, root / "boundary")
+        replace_first(bad_boundary / "rocprof-selected-regions.tsv", "pause_call", "resume_return")
         expect_bad(bad_boundary, "not an ordered resume/pause pair")
 
-        missing_hip = make_fixture(root / "missing-hip")
+        missing_hip = clone_fixture(good, root / "missing-hip")
         (missing_hip / "rocprof" / "dsv4-tg_hip_api_trace.csv").unlink()
         expect_bad(missing_hip, "expected one *_hip_api_trace.csv")
 
-        bad_api = make_fixture(root / "bad-api")
+        bad_api = clone_fixture(good, root / "bad-api")
         api_path = bad_api / "rocprof" / "dsv4-tg_hip_api_trace.csv"
+        api_path.unlink()
         write_csv(api_path, ["Function", "Start_Timestamp", "End_Timestamp"], [{
             "Function": "hipGraphLaunch", "Start_Timestamp": 250, "End_Timestamp": 240,
         }])
         expect_bad(bad_api, "ends before it starts")
 
-        bad_drift = make_fixture(root / "drift")
-        (bad_drift / "clock-domain.txt").write_text(
+        bad_drift = clone_fixture(good, root / "drift")
+        replace_text(
+            bad_drift / "clock-domain.txt",
             "start_realtime_minus_monotonic_ns=1000000000\n"
             "end_realtime_minus_monotonic_ns=1002000000\n"
-            "start_calibration_span_ns=100\nend_calibration_span_ns=100\n"
+            "start_calibration_span_ns=100\nend_calibration_span_ns=100\n",
         )
         expect_bad(bad_drift, "exceeds 1000000")
     print("dsv4 raw-TG profile fixtures: PASS")

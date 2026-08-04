@@ -174,12 +174,17 @@ The wrapper requires full GGUF hashing and writes under
 `profile-summary.{txt,json}` plus `profile-families.tsv`. The summarizer verifies
 that every trace event is wholly inside an authoritative accepted generation interval, then
 reports accepted wall time, target-token count, dispatches, summed device time,
-per-agent totals, HIP/RCCL/copy calls, exclusive name-matched families, and top
-kernel/grid/workgroup groups. Summed device time spans four devices/queues and
-is the branch-share denominator; it is not wall time. IQ2_XXS/IQ3_XXS routed MMQ/MMVQ
-classification remains an explicit model/name/shape inference and must be
-checked against call/grid evidence before selecting branch A. Unclassified
-`other` time is not silently assigned.
+per-agent and per-repetition totals, HIP/RCCL/copy calls, exclusive families,
+and top kernel/grid/workgroup groups. Summed device time spans four
+devices/queues and is the branch-share denominator; it is not wall time. For
+the fully hashed V4-Flash IQ2_M model, routed/shared MMVQ attribution requires
+exact type/fusion/workgroup/grid signatures plus exactly one
+`deepseek4.block_count=43` manifest record. Normal and anomalous tensor-type
+multiplicities must match `target tokens * layers * four GPU agents` globally,
+per agent, and per repetition; a partial signature match fails closed.
+`non_moe_quantized_matmul` combines attention/indexer/final-output projections.
+Unclassified `other` time is not silently assigned. RCCL/HIP API durations are
+reported separately, may overlap, and are never added to device-kernel time.
 
 ## Five-minute quick PP baseline
 

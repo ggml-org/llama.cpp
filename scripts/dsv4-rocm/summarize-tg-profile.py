@@ -110,37 +110,57 @@ def containing_repetition(intervals: list[tuple[int, int, int]], start: int, end
     return matches[0] if matches else None
 
 
-def classify_kernel(name: str) -> str:
+def classify_kernel(row: dict[str, str]) -> tuple[str, str | None, str | None]:
+    """Return an exclusive family and optional exact DSV4 MoE sub-role.
+
+    The MMVQ signatures below are tied to the fully hashed V4-Flash IQ2_M
+    tensor inventory. The dispatch-count contract later in the parser prevents
+    a partial or coincidental signature match from being accepted as MoE
+    attribution.
+    """
+    name = row["Kernel_Name"]
     lower = name.lower()
     if name.startswith("ncclDevKernel"):
-        return "communication_nccl"
+        return "communication_nccl", None, None
     if "lightning_indexer_kernel" in lower:
-        return "lightning_indexer"
+        return "lightning_indexer", None, None
     if ("top_k" in lower or "topk" in lower) and "topk_moe" not in lower:
-        return "lid_top_k"
+        return "lid_top_k", None, None
     if "flash_attn" in lower:
-        return "flash_attention"
+        return "flash_attention", None, None
     if "dsv4_hc_" in lower:
-        return "hc_mixes"
-    if ("mul_mat_q<" in name or "mul_mat_vec_q<" in name) and re.search(r"\(ggml_type\)(16|18),", name):
-        return "routed_expert_iq2_iq3_quant_matmul"
+        return "hc_mixes", None, None
+
+    mmvq = re.search(r"mul_mat_vec_q<\(ggml_type\)(\d+),\s*1,\s*(true|false),", name)
+    if mmvq and (row["Workgroup_Size_X"], row["Workgroup_Size_Y"], row["Workgroup_Size_Z"]) == ("32", "1", "1"):
+        quant_type = int(mmvq.group(1))
+        fused = mmvq.group(2) == "true"
+        grid = (row["Grid_Size_X"], row["Grid_Size_Y"], row["Grid_Size_Z"])
+        if grid == ("16384", "6", "1") and quant_type in {16, 22} and not fused:
+            return "routed_expert_quant_matmul", "routed_gate_up", f"routed_gate_up_type{quant_type}"
+        if grid == ("131072", "6", "1") and quant_type in {18, 39} and not fused:
+            return "routed_expert_quant_matmul", "routed_down", f"routed_down_type{quant_type}"
+        if grid == ("65536", "1", "1") and quant_type in {13, 14} and not fused:
+            return "shared_expert_quant_matmul", "shared_gate_up", f"shared_gate_up_type{quant_type}"
+        if grid == ("131072", "1", "1") and quant_type in {8, 14} and fused:
+            return "shared_expert_quant_matmul", "shared_down", f"shared_down_type{quant_type}"
     if "mul_mat_q<" in name or "mul_mat_vec_q<" in name:
-        return "other_quantized_matmul"
+        return "non_moe_quantized_matmul", None, None
     if "quantize" in lower and ("q8_1" in lower or "mmq" in lower):
-        return "activation_quantization"
+        return "activation_quantization", None, None
     if "build_mmq_active_tiles" in lower or "mm_ids" in lower or "topk_moe" in lower:
-        return "moe_routing_support"
+        return "moe_routing_support", None, None
     if name.startswith("Cijk_") or "rocblas" in lower or "gemm" in lower:
-        return "dense_gemm"
+        return "dense_gemm", None, None
     if "mask" in lower:
-        return "dense_mask"
+        return "dense_mask", None, None
     if "rope" in lower:
-        return "rope"
+        return "rope", None, None
     if "norm" in lower:
-        return "normalization"
+        return "normalization", None, None
     if "copybuffer" in lower or "fillbuffer" in lower or "memcpy" in lower:
-        return "device_copy_fill"
-    return "other"
+        return "device_copy_fill", None, None
+    return "other", None, None
 
 
 def shape_key(row: dict[str, str]) -> str:
@@ -247,6 +267,10 @@ def main() -> int:
 
     family_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     repetition_family_totals: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
+    moe_role_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    moe_signature_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    moe_signature_agent_calls: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    moe_signature_repetition_calls: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
     agent_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     kernel_totals: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
     outside_events = 0
@@ -273,9 +297,18 @@ def main() -> int:
             if agent not in agents:
                 raise ValueError(f"kernel row references unknown GPU agent {agent}")
             duration = end - start
-            family = classify_kernel(row["Kernel_Name"])
+            family, moe_role, moe_signature = classify_kernel(row)
             family_totals[family][0] += 1
             family_totals[family][1] += duration
+            if moe_role is not None:
+                assert moe_signature is not None
+                moe_role_totals[moe_role][0] += 1
+                moe_role_totals[moe_role][1] += duration
+                moe_signature_totals[moe_signature][0] += 1
+                moe_signature_totals[moe_signature][1] += duration
+                moe_signature_agent_calls[moe_signature][agent] += 1
+                if repetition is not None:
+                    moe_signature_repetition_calls[moe_signature][repetition] += 1
             if repetition is not None:
                 repetition_family_totals[repetition][family][0] += 1
                 repetition_family_totals[repetition][family][1] += duration
@@ -291,8 +324,70 @@ def main() -> int:
     if total_device_ns <= 0:
         raise ValueError("summed device time is zero")
 
-    def aggregate_api(path: Path, key: str) -> tuple[dict[str, dict[str, int]], int, str]:
+    block_counts = re.findall(r"(?m)^deepseek4\.block_count=(\d+)$", manifest)
+    if len(block_counts) != 1:
+        raise ValueError(f"manifest has {len(block_counts)} DeepSeek-V4 block-count records, expected exactly one")
+    block_count = int(block_counts[0])
+    if block_count != 43:
+        raise ValueError(f"DeepSeek-V4 block count is {block_count}, expected exact profile model value 43")
+
+    signature_layer_multiplicity = {
+        "routed_gate_up_type16": (42, 2),
+        "routed_gate_up_type22": (1, 2),
+        "routed_down_type18": (41, 1),
+        "routed_down_type39": (2, 1),
+        "shared_gate_up_type13": (42, 2),
+        "shared_gate_up_type14": (1, 2),
+        "shared_down_type14": (42, 1),
+        "shared_down_type8": (1, 1),
+    }
+    expected_signature_calls = {
+        signature: evaluated_tokens * len(agents) * layers * multiplicity
+        for signature, (layers, multiplicity) in signature_layer_multiplicity.items()
+    }
+    actual_signature_calls = {signature: moe_signature_totals[signature][0] for signature in signature_layer_multiplicity}
+    if set(moe_signature_totals) != set(signature_layer_multiplicity) or actual_signature_calls != expected_signature_calls:
+        raise ValueError(
+            f"exact DSV4 MoE signature dispatch contract mismatch: actual={actual_signature_calls} "
+            f"expected={expected_signature_calls} signatures={sorted(moe_signature_totals)}"
+        )
+    for signature, (layers, multiplicity) in signature_layer_multiplicity.items():
+        expected_agent_calls = evaluated_tokens * layers * multiplicity
+        actual_agents = dict(moe_signature_agent_calls[signature])
+        if set(actual_agents) != set(agents) or any(value != expected_agent_calls for value in actual_agents.values()):
+            raise ValueError(
+                f"exact DSV4 MoE per-agent dispatch mismatch for {signature}: "
+                f"actual={actual_agents} expected_each={expected_agent_calls}"
+            )
+        expected_repetition_calls = n_gen * len(agents) * layers * multiplicity
+        actual_repetitions = dict(moe_signature_repetition_calls[signature])
+        expected_repetitions = set(range(discard + 1, reps + 1))
+        if set(actual_repetitions) != expected_repetitions or any(
+                value != expected_repetition_calls for value in actual_repetitions.values()):
+            raise ValueError(
+                f"exact DSV4 MoE per-repetition dispatch mismatch for {signature}: "
+                f"actual={actual_repetitions} expected_each={expected_repetition_calls}"
+            )
+    expected_moe_calls = {
+        "routed_gate_up": evaluated_tokens * block_count * len(agents) * 2,
+        "routed_down": evaluated_tokens * block_count * len(agents),
+        "shared_gate_up": evaluated_tokens * block_count * len(agents) * 2,
+        "shared_down": evaluated_tokens * block_count * len(agents),
+    }
+    actual_moe_calls = {role: moe_role_totals[role][0] for role in expected_moe_calls}
+    if actual_moe_calls != expected_moe_calls:
+        raise ValueError(f"exact DSV4 MoE role dispatch contract mismatch: actual={actual_moe_calls} expected={expected_moe_calls}")
+    moe_dispatch_contract: dict[str, object] = {
+        "complete": True, "block_count": block_count, "gpu_agents": len(agents),
+        "target_tokens": evaluated_tokens, "actual_role_calls": actual_moe_calls,
+        "expected_role_calls": expected_moe_calls, "actual_signature_calls": actual_signature_calls,
+        "expected_signature_calls": expected_signature_calls, "per_agent_exact": True,
+        "per_repetition_exact": True,
+    }
+
+    def aggregate_api(path: Path, key: str) -> tuple[dict[str, dict[str, int]], int, str, dict[int, dict[str, dict[str, int]]]]:
         output: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        repetition_output: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
         outside = 0
         with path.open(newline="") as handle:
             reader = csv.DictReader(handle)
@@ -307,16 +402,24 @@ def main() -> int:
                 start, end = int(row["Start_Timestamp"]), int(row["End_Timestamp"])
                 if end < start:
                     raise ValueError(f"{path}:{reader.line_num} ends before it starts")
-                if containing_repetition(intervals, start, end) is None:
+                repetition = containing_repetition(intervals, start, end)
+                if repetition is None:
                     outside += 1
+                else:
+                    repetition_output[repetition][name][0] += 1
+                    repetition_output[repetition][name][1] += end - start
                 output[name][0] += 1
                 output[name][1] += end - start
         rendered = {name: {"calls": value[0], "duration_ns": value[1]} for name, value in output.items()}
-        return rendered, outside, "present_with_events" if rendered else "present_empty"
+        repetition_rendered = {
+            rep: {name: {"calls": value[0], "duration_ns": value[1]} for name, value in values.items()}
+            for rep, values in repetition_output.items()
+        }
+        return rendered, outside, "present_with_events" if rendered else "present_empty", repetition_rendered
 
-    copies, copy_outside, copy_status = aggregate_api(copy_path, "Direction")
-    rccl, rccl_outside, rccl_status = aggregate_api(rccl_path, "Function")
-    hip, hip_outside, hip_status = aggregate_api(hip_path, "Function")
+    copies, copy_outside, copy_status, repetition_copies = aggregate_api(copy_path, "Direction")
+    rccl, rccl_outside, rccl_status, repetition_rccl = aggregate_api(rccl_path, "Function")
+    hip, hip_outside, hip_status, repetition_hip = aggregate_api(hip_path, "Function")
     if hip_status != "present_with_events":
         raise ValueError("HIP runtime trace is present but empty for accepted GPU decode")
     if copy_outside or rccl_outside or hip_outside:
@@ -357,8 +460,17 @@ def main() -> int:
             raise ValueError(f"accepted repetition {rep} contains no kernel events")
         repetition_total = sum(item[1] for item in values.values())
         ranked = sorted(values.items(), key=lambda item: (-item[1][1], item[0]))
+        def domain_totals(source: dict[int, dict[str, dict[str, int]]]) -> dict[str, object]:
+            entries = source.get(rep, {})
+            return {
+                "calls": sum(item["calls"] for item in entries.values()),
+                "duration_ns": sum(item["duration_ns"] for item in entries.values()),
+                "functions": entries,
+            }
+
         per_repetition.append({
             "repetition": rep,
+            "wall_ns": accepted_samples[rep - discard - 1],
             "total_summed_device_ns": repetition_total,
             "kernel_dispatches": sum(item[0] for item in values.values()),
             "top_family": ranked[0][0],
@@ -369,6 +481,11 @@ def main() -> int:
                     "share_of_summed_device_time": item[1] / repetition_total,
                 }
                 for name, item in sorted(values.items())
+            },
+            "trace_domains": {
+                "memory_copy": domain_totals(repetition_copies),
+                "rccl_api": domain_totals(repetition_rccl),
+                "hip_api": domain_totals(repetition_hip),
             },
         })
     output = {
@@ -408,6 +525,15 @@ def main() -> int:
             "rccl": rccl_status, "hip": hip_status,
         },
         "families": families,
+        "moe_roles": {
+            role: {"calls": value[0], "duration_ns": value[1], "share_of_summed_device_time": value[1] / total_device_ns}
+            for role, value in sorted(moe_role_totals.items())
+        },
+        "moe_signatures": {
+            signature: {"calls": value[0], "duration_ns": value[1], "share_of_summed_device_time": value[1] / total_device_ns}
+            for signature, value in sorted(moe_signature_totals.items())
+        },
+        "moe_dispatch_contract": moe_dispatch_contract,
         "top_kernel_shapes": top_kernels,
         "per_agent": per_agent,
         "per_repetition": per_repetition,
@@ -415,9 +541,10 @@ def main() -> int:
         "rccl_api": rccl,
         "hip_api": hip,
         "classification_caveat": (
-            "Families are exclusive kernel-name matches. routed_expert_iq2_iq3_quant_matmul is inferred from the model's "
-            "IQ2_XXS/IQ3_XXS MMQ/MMVQ types and must be checked against grid/call evidence; other may contain unclassified "
-            "attention, mask, projection, elementwise, or selector support. Durations are summed across devices/queues."
+            "Families are exclusive. Routed/shared expert MMVQ signatures are tied to this fully hashed DSV4-Flash IQ2_M "
+            "tensor inventory and must satisfy exact block_count*four-GPU*target-token dispatch counts. non_moe_quantized_matmul "
+            "combines attention/indexer/final-output projections; other may contain unclassified attention, mask, elementwise, "
+            "or scheduler work. Kernel durations are summed across devices/queues; API durations may overlap and are diagnostic."
         ),
     }
 
