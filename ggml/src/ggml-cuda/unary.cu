@@ -172,18 +172,16 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
     GGML_ASSERT(src0->type == dst->type);
 
-    const int64_t n_total = ggml_nelements(src0);
-    if(ggml_is_contiguous(src0)){
-        
-        if (src0->type == GGML_TYPE_F16) {
-            unary_cuda<op>((const half *)src0_d, (half *)dst_d, n_total, stream);
-        } else {
-            unary_cuda<op>((const float *)src0_d, (float *)dst_d, n_total, stream);
-        }
+const int64_t n_total = ggml_nelements(src0);
+if (ggml_is_contiguous(src0) && n_total <= INT_MAX) {
+    if (src0->type == GGML_TYPE_F16) {
+        unary_cuda<op>((const half *) src0_d, (half *) dst_d, (int) n_total, stream);
+    } else {
+        unary_cuda<op>((const float *) src0_d, (float *) dst_d, (int) n_total, stream);
+    }
+} else {
 
-    }else {
-
-        const size_t type_size = ggml_type_size(src0->type);
+    const size_t type_size = ggml_type_size(src0->type);
 
         const int64_t ne0 = src0->ne[0];
         const int64_t ne1 = src0->ne[1] > 0 ? src0->ne[1] : 1;
