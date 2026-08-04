@@ -224,17 +224,27 @@ class TestTesseraDBBuffer(unittest.TestCase):
             for t in threads:
                 t.join()
             t1 = time.monotonic()
+            # Wait for both the table count AND the buffer's
+            # flushed_rows counter to reach the expected value. The
+            # counter is updated under the lock AFTER the SQL
+            # execute returns, so the count can briefly be ahead of
+            # the counter while the second big INSERT is committing
+            # (the test's poll would otherwise exit early on the
+            # count and assert on a stale counter). Polling both
+            # closes that window.
             for _ in range(400):
                 time.sleep(0.05)
-                if _count_rows(db_path, "tensor_stats") >= expected:
+                n_now = _count_rows(db_path, "tensor_stats")
+                s_now = buf.stats()
+                if n_now >= expected and s_now.flushed_rows >= expected:
                     break
             t2 = time.monotonic()
             n = _count_rows(db_path, "tensor_stats")
-            self.assertEqual(n, expected)
             s = buf.stats()
-            self.assertEqual(s.appended, expected)
-            self.assertEqual(s.flushed_rows, expected)
-            self.assertEqual(s.rows_dropped, 0)
+            self.assertEqual(n, expected, "all parallel rows landed")
+            self.assertEqual(s.appended, expected, "appended count")
+            self.assertEqual(s.flushed_rows, expected, "flushed_rows == appended")
+            self.assertEqual(s.rows_dropped, 0, "no rows dropped under contention")
             print(
                 f"    {expected} rows appended in "
                 f"{(t1 - t0) * 1000:.0f} ms, all flushed in "
