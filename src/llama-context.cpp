@@ -478,11 +478,24 @@ llama_context::llama_context(
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
             &model, hparams.n_layer(), hparams.n_expert,
             params.expert_hot_s, sync_period);
+        // the GPU hot store is only supported on CUDA. On CPU it buys nothing
+        // and on Vulkan it corrupts output (see manuallog section 12).
+        // LLAMA_EXPERT_HOT_FORCE=1 overrides the guard (testing/emergency only).
+        const bool force = getenv("LLAMA_EXPERT_HOT_FORCE") != nullptr;
         for (auto & backend : backends) {
-            if (ggml_backend_dev_type(ggml_backend_get_device(backend.get())) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-                expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                continue;
+            }
+            const char * name = ggml_backend_dev_name(dev);
+            const bool is_cuda = name != nullptr && strncmp(name, "CUDA", 4) == 0;
+            if (!force && !is_cuda) {
+                LLAMA_LOG_WARN("%s: expert hot store skipped: backend %s is not CUDA (only CUDA is supported)\n",
+                    __func__, name ? name : "?");
                 break;
             }
+            expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
+            break;
         }
         expert_hotstore->log();
     }
