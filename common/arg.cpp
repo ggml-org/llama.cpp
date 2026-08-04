@@ -2740,7 +2740,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_EXPERT_DWELL"));
     add_opt(common_arg(
-        {"-las", "--expert-hot-s"}, "N",
+        {"-ehs", "--expert-hot-s"}, "N",
         "-1 = autofit slots from free VRAM, 0 = disabled, N = manual top-N slots",
         [](common_params & params, int value) {
             params.expert_hot_s = value;
