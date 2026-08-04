@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -28,78 +29,6 @@
 #include <unistd.h>
 
 namespace fs = std::filesystem;
-
-struct common_ane_mtp_arena_buffer {
-    IOSurfaceRef surface = nullptr;
-    void * heap = nullptr;
-    void * data = nullptr;
-    size_t capacity = 0;
-
-    ~common_ane_mtp_arena_buffer() {
-        if (surface) {
-            IOSurfaceUnlock(surface, 0, nullptr);
-            CFRelease(surface);
-            surface = nullptr;
-        }
-        std::free(heap);
-        heap = nullptr;
-        data = nullptr;
-    }
-
-    bool reserve(size_t size, bool use_iosurface) {
-        if (capacity >= size) {
-            return true;
-        }
-        const size_t page = 16 * 1024;
-        const size_t rounded = ((size + page - 1) / page) * page;
-        if (!use_iosurface) {
-            void * replacement = nullptr;
-            if (posix_memalign(&replacement, page, rounded) != 0) {
-                return false;
-            }
-            if (surface) {
-                IOSurfaceUnlock(surface, 0, nullptr);
-                CFRelease(surface);
-                surface = nullptr;
-            }
-            std::free(heap);
-            heap = replacement;
-            data = heap;
-            capacity = rounded;
-            return true;
-        }
-        NSDictionary * properties = @{
-            (id) kIOSurfaceWidth: @(rounded),
-            (id) kIOSurfaceHeight: @1,
-            (id) kIOSurfaceBytesPerElement: @1,
-            (id) kIOSurfaceBytesPerRow: @(rounded),
-            (id) kIOSurfaceAllocSize: @(rounded),
-        };
-        IOSurfaceRef replacement = IOSurfaceCreate((CFDictionaryRef) properties);
-        if (!replacement || IOSurfaceLock(replacement, 0, nullptr) != kIOReturnSuccess) {
-            if (replacement) {
-                CFRelease(replacement);
-            }
-            return false;
-        }
-        void * replacement_data = IOSurfaceGetBaseAddress(replacement);
-        if (!replacement_data) {
-            IOSurfaceUnlock(replacement, 0, nullptr);
-            CFRelease(replacement);
-            return false;
-        }
-        if (surface) {
-            IOSurfaceUnlock(surface, 0, nullptr);
-            CFRelease(surface);
-        }
-        std::free(heap);
-        heap = nullptr;
-        surface = replacement;
-        data = replacement_data;
-        capacity = rounded;
-        return true;
-    }
-};
 
 struct common_ane_compute_instance {
     MLModel * model = nil;
@@ -163,7 +92,6 @@ struct common_ane_mtp_program {
     // Give every asynchronous call distinct arena slots so a later request
     // cannot overwrite Core ML input/output storage still owned by ANE.
     std::atomic<uint64_t> next_prefill_arena_epoch = 0;
-    std::unordered_map<std::string, std::unique_ptr<common_ane_mtp_arena_buffer>> arena;
     std::unordered_map<std::string, std::unique_ptr<common_ane_compute_instance>> functions;
     // A multifunction bundle whose layer weights live in the source GGUF (rather
     // than in a per-bundle weight file) holds one MLMultiArray per declared
@@ -273,34 +201,7 @@ static MLMultiArray * wrap_multi_array(
                       error:error];
 }
 
-static MLMultiArray * arena_multi_array(
-        common_ane_mtp_program & program,
-        const std::string & name,
-        NSArray<NSNumber *> * shape,
-        MLMultiArrayDataType type,
-        NSError ** error) {
-    const size_t element_size = multi_array_element_size(type);
-    if (element_size == 0) {
-        return nil;
-    }
-    auto & slot = program.arena[name];
-    if (!slot) {
-        slot = std::make_unique<common_ane_mtp_arena_buffer>();
-    }
-    // Core ML's CPU-only state mutation functions cannot reliably consume an
-    // IOSurface-backed MLMultiArray.  They are off the latency-critical path;
-    // use the aligned host fallback while stateless ANE functions retain the
-    // IOSurface arena contract.
-    const bool use_iosurface = name.rfind("sync.", 0) != 0 &&
-        name.rfind("reset.", 0) != 0;
-    if (!slot->reserve(shape_count(shape) * element_size, use_iosurface)) {
-        return nil;
-    }
-    if (use_iosurface) {
-        program.iosurface_arena_bytes += shape_count(shape) * element_size;
-    }
-    return wrap_multi_array(slot->data, shape, type, error);
-}
+
 
 static void write_float_data(MLMultiArray * array, const float * source, size_t count) {
     if (array.dataType == MLMultiArrayDataTypeFloat32) {
@@ -494,6 +395,25 @@ static bool set_pinned_input_i32(
     return true;
 }
 
+// Read a pinned output slot to host memory as i32. The slot must
+// be declared as i32 in the manifest. Returns true on success.
+static bool get_pinned_output_i32(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        int32_t * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr || slot->dtype != ANE_DTYPE_I32) {
+        return false;
+    }
+    if (slot->size_bytes / sizeof(int32_t) < count) {
+        return false;
+    }
+    void * src = (char *) program.state_base + slot->offset;
+    std::memcpy(host_data, src, count * sizeof(int32_t));
+    return true;
+}
+
 // Read a pinned output slot to host memory as fp32. The slot's
 // declared dtype is converted to fp32 (fp16 is the common case for
 // the gemma4 prefill bundle). Returns true on success.
@@ -531,39 +451,35 @@ static bool get_pinned_output(
     return true;
 }
 
-// Dispatch the bound function by name, using the pinned IOSurface
-// state. Inputs are already in the pinned state from prior
-// set_pinned_input calls; outputs land in the pinned state and
-// callers read them via get_pinned_output. `extra_inputs` is a
-// caller-provided input feature dict (e.g. weight MLMultiArrays
-// that aren't in the manifest's input_slots); it is merged into
-// the manifest's input feature dict. The dispatch is synchronous
-// on the program queue and uses MLPredictionOptions.outputBackings
-// so Core ML writes outputs directly into the pinned slots
-// (zero-copy, no result memcpy). Returns false on any failure
-// (manifest missing, function unknown, model not warm, Core ML
-// prediction nil, output not zero-copy).
-//
-// This is the canonical multifunction dispatch path. The W2 design
-// is locked: stateless at the Core ML level, stateful via the
-// IOSurface; the dispatch doesn't use MLState.
-static bool dispatch_pinned_function(
+// Strip the "<function_name>." prefix from a manifest slot name to
+// get the Core ML function's declared input/output name. Returns
+// the full name when the prefix is absent (defensive default).
+static std::string strip_manifest_prefix(
+        const std::string & full,
+        const std::string & prefix) {
+    if (full.size() > prefix.size() + 1 &&
+            full.compare(0, prefix.size(), prefix) == 0 &&
+            full[prefix.size()] == '.') {
+        return full.substr(prefix.size() + 1);
+    }
+    return full;
+}
+
+// The dispatch body, factored out so the sync path can wrap it in
+// dispatch_sync (the program queue serializes Core ML dispatches)
+// while the async path runs on the program queue already and
+// invokes this directly. The caller is responsible for queue
+// serialization; the body is the prediction + zero-copy proof.
+static bool dispatch_pinned_function_locked(
         common_ane_mtp_program & program,
         const std::string & function_name,
-        NSDictionary<NSString *, MLFeatureValue *> * extra_inputs = nil) {
-    if (!program.manifest_loaded) {
-        return false;
-    }
+        NSDictionary<NSString *, MLFeatureValue *> * extra_inputs,
+        const std::unordered_set<std::string> * output_names) {
     const ane_function_v1_t * function = find_manifest_function(
         program, function_name);
     if (function == nullptr) {
         return false;
     }
-    // Resolve the per-function model. The multifunction bundle loads
-    // one MLModel per declared function; the manifest's
-    // core_ml_function_name matches what we set on MLModelConfiguration
-    // at load time. We look the instance up by the function name
-    // (which the program->functions map is keyed by).
     auto it = program.functions.find(function_name);
     if (it == program.functions.end() || it->second == nullptr) {
         return false;
@@ -572,119 +488,117 @@ static bool dispatch_pinned_function(
     if (!instance.warm.load()) {
         return false;
     }
+    @autoreleasepool {
+        NSError * error = nil;
+        NSMutableDictionary<NSString *, MLFeatureValue *> * features =
+            [NSMutableDictionary dictionary];
+        for (uint32_t i = 0; i < function->n_inputs; ++i) {
+            const uint32_t slot_id = function->input_slot_ids[i];
+            if (slot_id >= ANE_STATE_SLOTS_MAX ||
+                    program.pinned_slots[slot_id] == nil) {
+                return false;
+            }
+            const std::string core_ml_name = strip_manifest_prefix(
+                program.manifest.slots[slot_id].name, function_name);
+            features[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
+                [MLFeatureValue featureValueWithMultiArray:
+                    program.pinned_slots[slot_id]];
+        }
+        if (extra_inputs != nil) {
+            [features addEntriesFromDictionary:extra_inputs];
+        }
+        MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
+            initWithDictionary:features error:&error];
+        if (inputs == nil) {
+            LOG_WRN("ANE pinned dispatch %s: input provider build failed: %s\n",
+                    function_name.c_str(),
+                    error.localizedDescription.UTF8String ?: "unknown");
+            return false;
+        }
+        MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
+        NSMutableDictionary<NSString *, MLMultiArray *> * backings =
+            [NSMutableDictionary dictionary];
+        for (uint32_t i = 0; i < function->n_outputs; ++i) {
+            const uint32_t slot_id = function->output_slot_ids[i];
+            if (slot_id >= ANE_STATE_SLOTS_MAX ||
+                    program.pinned_slots[slot_id] == nil) {
+                return false;
+            }
+            const std::string core_ml_name = strip_manifest_prefix(
+                program.manifest.slots[slot_id].name, function_name);
+            if (output_names != nullptr &&
+                    output_names->find(core_ml_name) == output_names->end()) {
+                continue;
+            }
+            backings[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
+                program.pinned_slots[slot_id];
+        }
+        options.outputBackings = backings;
+        id<MLFeatureProvider> output = [instance.model
+            predictionFromFeatures:inputs
+                           options:options
+                             error:&error];
+        if (output == nil) {
+            LOG_WRN("ANE pinned dispatch %s: prediction failed: %s\n",
+                    function_name.c_str(),
+                    error.localizedDescription.UTF8String ?: "unknown");
+            return false;
+        }
+        for (uint32_t i = 0; i < function->n_outputs; ++i) {
+            const uint32_t slot_id = function->output_slot_ids[i];
+            if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
+            const std::string core_ml_name = strip_manifest_prefix(
+                program.manifest.slots[slot_id].name, function_name);
+            if (output_names != nullptr &&
+                    output_names->find(core_ml_name) == output_names->end()) {
+                continue;
+            }
+            MLMultiArray * result = [[output featureValueForName:
+                [NSString stringWithUTF8String:core_ml_name.c_str()]]
+                multiArrayValue];
+            if (result == nil ||
+                    result.dataPointer != program.pinned_slots[slot_id].dataPointer) {
+                LOG_WRN("ANE pinned dispatch %s: output %s not zero-copy\n",
+                        function_name.c_str(), core_ml_name.c_str());
+                return false;
+            }
+        }
+        return true;
+    }
+    return true;  // unreachable
+}
 
+// Dispatch the bound function by name, using the pinned IOSurface
+// state. Inputs are already in the pinned state from prior
+// set_pinned_input calls; outputs land in the pinned state and
+// callers read them via get_pinned_output. `extra_inputs` is a
+// caller-provided input feature dict (e.g. weight MLMultiArrays
+// that aren't in the manifest's input_slots); it is merged into
+// the manifest's input feature dict. `output_names` is an optional
+// caller-provided set of Core ML output names to pin via
+// outputBackings; if null, every manifest output slot is pinned
+// (the canonical multifunction case). When the filter is non-null,
+// outputs not in the set go to Core ML's allocator (the simpler
+// prefill case, which doesn't need K/V in the IOSurface). The
+// dispatch is synchronous on the program queue. Returns false on
+// any failure (manifest missing, function unknown, model not warm,
+// Core ML prediction nil, output not zero-copy).
+//
+// This is the canonical multifunction dispatch path. The W2 design
+// is locked: stateless at the Core ML level, stateful via the
+// IOSurface; the dispatch doesn't use MLState.
+static bool dispatch_pinned_function(
+        common_ane_mtp_program & program,
+        const std::string & function_name,
+        NSDictionary<NSString *, MLFeatureValue *> * extra_inputs = nil,
+        const std::unordered_set<std::string> * output_names = nullptr) {
+    if (!program.manifest_loaded) {
+        return false;
+    }
     __block bool ok = false;
     dispatch_sync(program.queue, ^{
-        @autoreleasepool {
-            NSError * error = nil;
-            NSMutableDictionary<NSString *, MLFeatureValue *> * features =
-                [NSMutableDictionary dictionary];
-            // First, the manifest's input slots. The pinned MLMultiArrays
-            // are the IOSurface-backed views of the input state; writing
-            // to them is zero-copy (set_pinned_input*). MLDictionary
-            // feature provider keys are the Core ML function's declared
-            // input names (e.g., "token_ids"), not the manifest slot's
-            // full name ("prefill_s128.token_ids"); strip the prefix.
-            for (uint32_t i = 0; i < function->n_inputs; ++i) {
-                const uint32_t slot_id = function->input_slot_ids[i];
-                if (slot_id >= ANE_STATE_SLOTS_MAX ||
-                        program.pinned_slots[slot_id] == nil) {
-                    return;
-                }
-                const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
-                const std::string & full = program.manifest.slots[slot_id].name;
-                const std::string & prefix = function_name;
-                const std::string core_ml_name =
-                    (full.size() > prefix.size() + 1 &&
-                     full.compare(0, prefix.size(), prefix) == 0 &&
-                     full[prefix.size()] == '.')
-                        ? full.substr(prefix.size() + 1)
-                        : full;
-                features[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
-                    [MLFeatureValue featureValueWithMultiArray:
-                        program.pinned_slots[slot_id]];
-            }
-            // Then the caller's extra inputs (e.g. weight MLMultiArrays
-            // bound at load time from the source GGUF; these are not in
-            // the manifest's input_slots because they are static).
-            if (extra_inputs != nil) {
-                [features addEntriesFromDictionary:extra_inputs];
-            }
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:features error:&error];
-            if (inputs == nil) {
-                LOG_WRN("ANE pinned dispatch %s: input provider build failed: %s\n",
-                        function_name.c_str(),
-                        error.localizedDescription.UTF8String ?: "unknown");
-                return;
-            }
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            NSMutableDictionary<NSString *, MLMultiArray *> * backings =
-                [NSMutableDictionary dictionary];
-            for (uint32_t i = 0; i < function->n_outputs; ++i) {
-                const uint32_t slot_id = function->output_slot_ids[i];
-                if (slot_id >= ANE_STATE_SLOTS_MAX ||
-                        program.pinned_slots[slot_id] == nil) {
-                    return;
-                }
-                const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
-                // MLPredictionOptions.outputBackings is keyed by the
-                // Core ML function's declared output name (e.g.,
-                // "hidden_states"), not the manifest slot's full name
-                // (e.g., "prefill_s128.hidden_states"). Strip the
-                // "<function_name>." prefix.
-                const std::string & full = program.manifest.slots[slot_id].name;
-                const std::string & prefix = function_name;
-                const std::string core_ml_name =
-                    (full.size() > prefix.size() + 1 &&
-                     full.compare(0, prefix.size(), prefix) == 0 &&
-                     full[prefix.size()] == '.')
-                        ? full.substr(prefix.size() + 1)
-                        : full;
-                backings[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
-                    program.pinned_slots[slot_id];
-            }
-            options.outputBackings = backings;
-            // Stateless dispatch. No usingState: — the design is
-            // locked: state lives in our IOSurface, not in Core ML's
-            // opaque MLState.
-            id<MLFeatureProvider> output = [instance.model
-                predictionFromFeatures:inputs
-                               options:options
-                                 error:&error];
-            if (output == nil) {
-                LOG_WRN("ANE pinned dispatch %s: prediction failed: %s\n",
-                        function_name.c_str(),
-                        error.localizedDescription.UTF8String ?: "unknown");
-                return;
-            }
-            // Verify the result provider's MLMultiArrays are the same
-            // pointers as our pinned output slots (the outputBackings
-            // contract). This is the zero-copy proof. Use the same
-            // prefix-stripped Core ML name as the outputBackings key.
-            for (uint32_t i = 0; i < function->n_outputs; ++i) {
-                const uint32_t slot_id = function->output_slot_ids[i];
-                if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
-                const std::string & full = program.manifest.slots[slot_id].name;
-                const std::string & prefix = function_name;
-                const std::string core_ml_name =
-                    (full.size() > prefix.size() + 1 &&
-                     full.compare(0, prefix.size(), prefix) == 0 &&
-                     full[prefix.size()] == '.')
-                        ? full.substr(prefix.size() + 1)
-                        : full;
-                MLMultiArray * result = [[output featureValueForName:
-                    [NSString stringWithUTF8String:core_ml_name.c_str()]]
-                    multiArrayValue];
-                if (result == nil ||
-                        result.dataPointer != program.pinned_slots[slot_id].dataPointer) {
-                    LOG_WRN("ANE pinned dispatch %s: output %s not zero-copy\n",
-                            function_name.c_str(), full.c_str());
-                    return;
-                }
-            }
-            ok = true;
-        }
+        ok = dispatch_pinned_function_locked(program, function_name,
+                                              extra_inputs, output_names);
     });
     return ok;
 }
@@ -1554,59 +1468,6 @@ std::vector<common_ane_compute_function> common_ane_compute_functions(
     return result;
 }
 
-static common_ane_compute_instance * find_compute_function(
-        const common_ane_mtp_program_ptr & program,
-        const char * role,
-        uint32_t bucket) {
-    if (!program) {
-        return nullptr;
-    }
-    for (const auto & entry : program->functions) {
-        auto * instance = entry.second.get();
-        if (instance->role == role && instance->bucket == bucket &&
-                instance->warm.load()) {
-            return instance;
-        }
-    }
-    return nullptr;
-}
-
-static MLMultiArray * make_i32_input(
-        common_ane_mtp_program & program,
-        const std::string & arena_name,
-        NSArray<NSNumber *> * shape,
-        const int32_t * source,
-        size_t active_count,
-        bool direct,
-        NSError ** error) {
-    if (direct) {
-        return wrap_multi_array(
-            (void *) source, shape, MLMultiArrayDataTypeInt32, error);
-    }
-    MLMultiArray * result = arena_multi_array(
-        program, arena_name, shape, MLMultiArrayDataTypeInt32, error);
-    if (!result) {
-        return nil;
-    }
-    std::memcpy(result.dataPointer, source, active_count * sizeof(int32_t));
-    std::memset(
-        (int32_t *) result.dataPointer + active_count,
-        0,
-        (result.count - active_count) * sizeof(int32_t));
-    program.arena_input_bytes += result.count * sizeof(int32_t);
-    return result;
-}
-
-static bool valid_multi_array(
-        MLFeatureDescription * description,
-        MLMultiArrayDataType type,
-        size_t count) {
-    return description &&
-        description.type == MLFeatureTypeMultiArray &&
-        description.multiArrayConstraint.dataType == type &&
-        shape_count(description.multiArrayConstraint.shape) == count;
-}
-
 bool common_ane_compute_prefill(
         const common_ane_mtp_program_ptr & program,
         uint32_t sequence_length,
@@ -1615,11 +1476,19 @@ bool common_ane_compute_prefill(
         uint32_t n_active,
         uint32_t hidden_size,
         float * hidden_states) {
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "prefill", sequence_length);
-    if (!instance || !token_ids || !positions || !hidden_states ||
-            n_active == 0 || n_active > program->batch_bucket ||
-            hidden_size == 0) {
+    if (!program || !token_ids || !positions || !hidden_states ||
+            n_active == 0 || hidden_size == 0) {
+        return false;
+    }
+    // W3.5.2: the legacy arena + MLState path is retired. The
+    // dispatch contract requires the manifest. Refuse the call
+    // when the manifest is absent.
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_PREFILL, sequence_length);
+    if (function == nullptr) {
         return false;
     }
     if (program->context_length > 0) {
@@ -1631,110 +1500,24 @@ bool common_ane_compute_prefill(
             }
         }
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * outputs_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            const size_t bucket_tokens =
-                (size_t) program->batch_bucket * sequence_length;
-            MLFeatureDescription * token_desc = inputs_desc[@"token_ids"];
-            MLFeatureDescription * position_desc = inputs_desc[@"positions"];
-            MLFeatureDescription * hidden_desc = outputs_desc[@"hidden_states"];
-            if (!valid_multi_array(
-                    token_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !valid_multi_array(
-                        position_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !hidden_desc || hidden_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(hidden_desc.multiArrayConstraint.shape) !=
-                        bucket_tokens * hidden_size) {
-                return;
-            }
-            const MLMultiArrayDataType hidden_type =
-                hidden_desc.multiArrayConstraint.dataType;
-            if (hidden_type != MLMultiArrayDataTypeFloat16 &&
-                    hidden_type != MLMultiArrayDataTypeFloat32) {
-                return;
-            }
-
-            NSError * error = nil;
-            const bool direct = n_active == program->batch_bucket;
-            const size_t active_tokens = (size_t) n_active * sequence_length;
-            MLMultiArray * tokens = make_i32_input(
-                *program, instance->name + ".token_ids",
-                token_desc.multiArrayConstraint.shape,
-                token_ids, active_tokens, direct, &error);
-            MLMultiArray * positions_array = make_i32_input(
-                *program, instance->name + ".positions",
-                position_desc.multiArrayConstraint.shape,
-                positions, active_tokens, direct, &error);
-            if (!tokens || !positions_array) {
-                return;
-            }
-            if (direct) {
-                program->direct_input_views += 2;
-            }
-
-            const bool direct_output =
-                direct && hidden_type == MLMultiArrayDataTypeFloat32;
-            MLMultiArray * output_backing = direct_output
-                ? wrap_multi_array(
-                    hidden_states,
-                    hidden_desc.multiArrayConstraint.shape,
-                    hidden_type,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".hidden_states",
-                    hidden_desc.multiArrayConstraint.shape,
-                    hidden_type,
-                    &error);
-            if (!output_backing) {
-                return;
-            }
-            MLDictionaryFeatureProvider * inputs =
-                [[MLDictionaryFeatureProvider alloc]
-                    initWithDictionary:@{
-                        @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                        @"positions": [MLFeatureValue featureValueWithMultiArray:positions_array],
-                    }
-                    error:&error];
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{@"hidden_states": output_backing};
-            id<MLFeatureProvider> output = instance->execution_state
-                ? [instance->model predictionFromFeatures:inputs
-                                               usingState:instance->execution_state
-                                                  options:options
-                                                    error:&error]
-                : [instance->model predictionFromFeatures:inputs
-                                                  options:options
-                                                    error:&error];
-            MLMultiArray * result =
-                [output featureValueForName:@"hidden_states"].multiArrayValue;
-            if (!output || !result ||
-                    (size_t) result.count < active_tokens * hidden_size ||
-                    result.dataType != hidden_type) {
-                LOG_WRN("ANE prefill %s failed: %s\n",
-                        instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            if (result.dataPointer == output_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (!direct_output) {
-                read_float_data(
-                    result, hidden_states, active_tokens * hidden_size);
-                program->copied_output_bytes +=
-                    active_tokens * hidden_size * sizeof(float);
-            }
-            ok = true;
-        }
-    });
-    return ok;
+    const size_t active_tokens = (size_t) n_active * sequence_length;
+    const std::string func_name = function->name;
+    if (!set_pinned_input_i32(*program, func_name + ".token_ids",
+                              token_ids, active_tokens) ||
+            !set_pinned_input_i32(*program, func_name + ".positions",
+                                  positions, active_tokens)) {
+        return false;
+    }
+    // Pin only the hidden_states output; the K/V outputs (when the
+    // function declares them) go to Core ML's allocator since this
+    // entry point doesn't read K/V. The output_filter is the
+    // selector for outputBackings.
+    const std::unordered_set<std::string> output_names = { "hidden_states" };
+    if (!dispatch_pinned_function(*program, func_name, nullptr, &output_names)) {
+        return false;
+    }
+    return get_pinned_output(*program, func_name + ".hidden_states",
+                              hidden_states, active_tokens * hidden_size);
 }
 
 bool common_ane_compute_prefill_slab(
@@ -1754,228 +1537,78 @@ bool common_ane_compute_prefill_slab(
             hidden_size == 0 || kv_heads == 0 || head_dim == 0) {
         return false;
     }
-    // Pinned-slot path: when the manifest is loaded, the function
-    // dispatch goes through the state_iosurface. This is the W2/W3
-    // design — stateless at the Core ML level, stateful via the
-    // IOSurface. The pinned-slot path is mandatory for multifunction
-    // bundles whose dispatch contract requires the manifest.
-    if (program->manifest_loaded) {
-        const ane_function_v1_t * function = find_manifest_function_by_role(
-            *program, ANE_ROLE_PREFILL, sequence_length);
-        if (function == nullptr) {
-            return false;
-        }
-        const size_t active_tokens = (size_t) n_active * sequence_length;
-        const size_t kv_width = (size_t) kv_heads * head_dim;
-        // 1) Write the per-call input slots. For prefill_s128/s256/s512
-        //    the input slots are token_ids (i32) and positions (i32).
-        const std::string func_name = function->name;
-        const std::string token_slot_name = func_name + ".token_ids";
-        const std::string position_slot_name = func_name + ".positions";
-        if (!set_pinned_input_i32(*program, token_slot_name, token_ids, active_tokens) ||
-                !set_pinned_input_i32(*program, position_slot_name, positions, active_tokens)) {
-            return false;
-        }
-        // 2) Build the extra input feature dict: weight MLMultiArrays
-        //    from the source GGUF (not in the manifest because they
-        //    are static across calls) and the per-call embedded gather
-        //    (if the function expects an "embedded" input).
-        NSMutableDictionary<NSString *, MLFeatureValue *> * extra = nil;
-        if (!program->weight_inputs.empty() || !program->embedding.empty()) {
-            extra = [NSMutableDictionary dictionary];
-            for (auto & entry : program->weight_inputs) {
-                NSString * weight_name = [NSString stringWithUTF8String:entry.first.c_str()];
-                extra[weight_name] = [MLFeatureValue featureValueWithMultiArray:entry.second];
-            }
-            // The "embedded" gather is a per-call artifact: it pulls
-            // token rows from the cached embedding table. The function
-            // expects an MLMultiArray; the manifest's input slot for
-            // it (if declared) holds the destination, but for the
-            // current gemma4 prefill bundle the embedded is a separate
-            // input feature name not in the manifest (the model was
-            // exported without it in the slot table).
-            if (const ane_slot_v1_t * emb_slot = find_manifest_slot(*program, "embedded");
-                    emb_slot != nullptr) {
-                if (program->embedding.empty() || program->embedding_dim != hidden_size) {
-                    return false;
-                }
-                NSArray<NSNumber *> * emb_shape = nil;
-                {
-                    NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:emb_slot->n_dim];
-                    for (uint32_t i = 0; i < emb_slot->n_dim; ++i) {
-                        [shape addObject:@(emb_slot->shape[i])];
-                    }
-                    emb_shape = shape;
-                }
-                NSError * emb_error = nil;
-                MLMultiArray * embedded = [[MLMultiArray alloc]
-                    initWithShape:emb_shape
-                         dataType:MLMultiArrayDataTypeFloat16
-                            error:&emb_error];
-                if (embedded == nil) {
-                    return false;
-                }
-                uint16_t * dst = (uint16_t *) embedded.dataPointer;
-                const uint16_t * vocab = program->embedding.data();
-                const size_t emb_count = (size_t) embedded.count;
-                for (size_t i = 0; i < emb_count; ++i) {
-                    const int32_t tok = token_ids[i];
-                    if ((size_t) tok * hidden_size + hidden_size > program->embedding.size()) {
-                        return false;
-                    }
-                    std::memcpy(dst + i * hidden_size,
-                                vocab + (size_t) tok * hidden_size,
-                                hidden_size * sizeof(uint16_t));
-                }
-                extra[@"embedded"] = [MLFeatureValue featureValueWithMultiArray:embedded];
-            }
-        }
-        // 3) Dispatch through the pinned state.
-        if (!dispatch_pinned_function(*program, func_name, extra)) {
-            return false;
-        }
-        // 4) Read the output slots back to host fp32. The pinned
-        //    output slots ARE the Core ML result MLMultiArrays
-        //    (zero-copy contract verified inside dispatch_pinned_function);
-        //    we read from the IOSurface bytes through get_pinned_output,
-        //    which handles f16->f32 conversion.
-        const std::string hidden_slot = func_name + ".hidden_states";
-        const std::string key_slot = func_name + ".key_states";
-        const std::string value_slot = func_name + ".value_states";
-        return get_pinned_output(*program, hidden_slot, hidden_states, active_tokens * hidden_size) &&
-               get_pinned_output(*program, key_slot, key_states, active_tokens * kv_width) &&
-               get_pinned_output(*program, value_slot, value_states, active_tokens * kv_width);
-    }
-    // Legacy path: arena + MLState. Kept for bundles without a
-    // manifest sidecar (older fixtures, smoke tests, single-function
-    // W0-style bundles that have not been re-exported). Will be
-    // dropped once the converter emits manifests for all paths.
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "prefill", sequence_length);
-    if (!instance || n_active > program->batch_bucket) {
+    // W3.5.1: the legacy arena + MLState path is retired. The dispatch
+    // contract requires the manifest (the multifunction bundle is
+    // loaded stateless, the IOSurface is the canonical state). The
+    // gemma4 prefill bundle (and every future multifunction bundle)
+    // emits a manifest sidecar at convert time; without one, the
+    // bundle cannot be used. Refuse the call rather than silently
+    // fall back to a path that no longer exists in the runtime.
+    if (!program->manifest_loaded) {
         return false;
     }
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            const size_t bucket_tokens = (size_t) program->batch_bucket * sequence_length;
-            const size_t active_tokens = (size_t) n_active * sequence_length;
-            const size_t kv_width = (size_t) kv_heads * head_dim;
-            const auto & inputs_desc = instance->model.modelDescription.inputDescriptionsByName;
-            const auto & outputs_desc = instance->model.modelDescription.outputDescriptionsByName;
-            MLFeatureDescription * token_desc = inputs_desc[@"token_ids"];
-            MLFeatureDescription * pos_desc = inputs_desc[@"positions"];
-            MLFeatureDescription * hidden_desc = outputs_desc[@"hidden_states"];
-            MLFeatureDescription * key_desc = outputs_desc[@"key_states"];
-            MLFeatureDescription * value_desc = outputs_desc[@"value_states"];
-            if (!valid_multi_array(token_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !valid_multi_array(pos_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !hidden_desc || !key_desc || !value_desc ||
-                    hidden_desc.type != MLFeatureTypeMultiArray ||
-                    key_desc.type != MLFeatureTypeMultiArray ||
-                    value_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(hidden_desc.multiArrayConstraint.shape) != bucket_tokens * hidden_size ||
-                    shape_count(key_desc.multiArrayConstraint.shape) != bucket_tokens * kv_width ||
-                    shape_count(value_desc.multiArrayConstraint.shape) != bucket_tokens * kv_width) {
-                return;
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_PREFILL, sequence_length);
+    if (function == nullptr) {
+        return false;
+    }
+    const size_t active_tokens = (size_t) n_active * sequence_length;
+    const size_t kv_width = (size_t) kv_heads * head_dim;
+    const std::string func_name = function->name;
+    const std::string token_slot_name = func_name + ".token_ids";
+    const std::string position_slot_name = func_name + ".positions";
+    if (!set_pinned_input_i32(*program, token_slot_name, token_ids, active_tokens) ||
+            !set_pinned_input_i32(*program, position_slot_name, positions, active_tokens)) {
+        return false;
+    }
+    NSMutableDictionary<NSString *, MLFeatureValue *> * extra = nil;
+    if (!program->weight_inputs.empty() || !program->embedding.empty()) {
+        extra = [NSMutableDictionary dictionary];
+        for (auto & entry : program->weight_inputs) {
+            NSString * weight_name = [NSString stringWithUTF8String:entry.first.c_str()];
+            extra[weight_name] = [MLFeatureValue featureValueWithMultiArray:entry.second];
+        }
+        if (const ane_slot_v1_t * emb_slot = find_manifest_slot(*program, "embedded");
+                emb_slot != nullptr) {
+            if (program->embedding.empty() || program->embedding_dim != hidden_size) {
+                return false;
             }
-            const MLMultiArrayDataType hidden_type = hidden_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType key_type = key_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType value_type = value_desc.multiArrayConstraint.dataType;
-            if ((hidden_type != MLMultiArrayDataTypeFloat16 && hidden_type != MLMultiArrayDataTypeFloat32) ||
-                    (key_type != MLMultiArrayDataTypeFloat16 && key_type != MLMultiArrayDataTypeFloat32) ||
-                    (value_type != MLMultiArrayDataTypeFloat16 && value_type != MLMultiArrayDataTypeFloat32)) {
-                return;
+            NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:emb_slot->n_dim];
+            for (uint32_t i = 0; i < emb_slot->n_dim; ++i) {
+                [shape addObject:@(emb_slot->shape[i])];
             }
-            NSError * error = nil;
-            const std::string prefix = instance->name + ".slab";
-            MLMultiArray * tokens = make_i32_input(*program, prefix + ".token_ids",
-                    token_desc.multiArrayConstraint.shape, token_ids, active_tokens, false, &error);
-            MLMultiArray * pos = make_i32_input(*program, prefix + ".positions",
-                    pos_desc.multiArrayConstraint.shape, positions, active_tokens, false, &error);
-            if (!tokens || !pos) {
-                return;
+            NSError * emb_error = nil;
+            MLMultiArray * embedded = [[MLMultiArray alloc]
+                initWithShape:shape
+                     dataType:MLMultiArrayDataTypeFloat16
+                        error:&emb_error];
+            if (embedded == nil) {
+                return false;
             }
-            NSMutableDictionary<NSString *, MLFeatureValue *> * features =
-                [NSMutableDictionary dictionaryWithDictionary:@{
-                    @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                    @"positions": [MLFeatureValue featureValueWithMultiArray:pos],
-                }];
-
-            // Layer weights + per-token embedded values arrive as MLMultiArray
-            // inputs.  The weight arrays were created at bundle load time from
-            // the source GGUF.  The embedded array is a one-shot gather of
-            // token rows from the cached embedding table; it lives in the
-            // arena for the duration of this prediction.
-            MLMultiArray * embedded = nil;
-            if (inputs_desc[@"embedded"] != nil) {
-                if (program->embedding.empty() || program->embedding_dim != hidden_size) {
-                    return;
+            uint16_t * dst = (uint16_t *) embedded.dataPointer;
+            const uint16_t * vocab = program->embedding.data();
+            const size_t emb_count = (size_t) embedded.count;
+            for (size_t i = 0; i < emb_count; ++i) {
+                const int32_t tok = token_ids[i];
+                if ((size_t) tok * hidden_size + hidden_size > program->embedding.size()) {
+                    return false;
                 }
-                MLFeatureDescription * emb_desc = inputs_desc[@"embedded"];
-                if (emb_desc.type != MLFeatureTypeMultiArray ||
-                        emb_desc.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat16) {
-                    return;
-                }
-                NSArray<NSNumber *> * emb_shape = emb_desc.multiArrayConstraint.shape;
-                NSMutableArray<NSNumber *> * ns_emb_shape = [emb_shape mutableCopy];
-                const std::string emb_name = prefix + ".embedded";
-                embedded = arena_multi_array(*program, emb_name, ns_emb_shape,
-                        MLMultiArrayDataTypeFloat16, &error);
-                if (!embedded) {
-                    return;
-                }
-                uint16_t * dst = (uint16_t *) embedded.dataPointer;
-                const uint16_t * vocab = program->embedding.data();
-                for (size_t i = 0; i < active_tokens; ++i) {
-                    const int32_t tok = token_ids[i];
-                    if ((size_t) tok * hidden_size + hidden_size > program->embedding.size()) {
-                        return;
-                    }
-                    std::memcpy(dst + i * hidden_size,
+                std::memcpy(dst + i * hidden_size,
                             vocab + (size_t) tok * hidden_size,
                             hidden_size * sizeof(uint16_t));
-                }
-                features[@"embedded"] = [MLFeatureValue featureValueWithMultiArray:embedded];
             }
-            for (auto & entry : program->weight_inputs) {
-                NSString * weight_name = [NSString stringWithUTF8String:entry.first.c_str()];
-                features[weight_name] = [MLFeatureValue featureValueWithMultiArray:entry.second];
-            }
-
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:features error:&error];
-            if (!inputs) {
-                return;
-            }
-            // Core ML 15 accepts multi-output backings, but some ANE drivers
-            // return silently sparse data for rank-four output backings.  Use
-            // materialized outputs until the backing contract is qualified by
-            // the parity test; inputs remain in the IOSurface arena.
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            id<MLFeatureProvider> output = [instance->model predictionFromFeatures:inputs
-                                                                            options:options
-                                                                              error:&error];
-            MLMultiArray * out_hidden = [output featureValueForName:@"hidden_states"].multiArrayValue;
-            MLMultiArray * out_keys = [output featureValueForName:@"key_states"].multiArrayValue;
-            MLMultiArray * out_values = [output featureValueForName:@"value_states"].multiArrayValue;
-            if (!output || !out_hidden || !out_keys || !out_values ||
-                    (size_t) out_hidden.count < active_tokens * hidden_size ||
-                    (size_t) out_keys.count < active_tokens * kv_width ||
-                    (size_t) out_values.count < active_tokens * kv_width) {
-                LOG_WRN("ANE prefill slab %s failed: %s\n", instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            read_float_data(out_hidden, hidden_states, active_tokens * hidden_size);
-            read_float_data(out_keys, key_states, active_tokens * kv_width);
-            read_float_data(out_values, value_states, active_tokens * kv_width);
-            program->copied_output_bytes += active_tokens *
-                (hidden_size + 2 * kv_width) * sizeof(float);
-            ok = true;
+            extra[@"embedded"] = [MLFeatureValue featureValueWithMultiArray:embedded];
         }
-    });
-    return ok;
+    }
+    if (!dispatch_pinned_function(*program, func_name, extra)) {
+        return false;
+    }
+    const std::string hidden_slot = func_name + ".hidden_states";
+    const std::string key_slot = func_name + ".key_states";
+    const std::string value_slot = func_name + ".value_states";
+    return get_pinned_output(*program, hidden_slot, hidden_states, active_tokens * hidden_size) &&
+           get_pinned_output(*program, key_slot, key_states, active_tokens * kv_width) &&
+           get_pinned_output(*program, value_slot, value_states, active_tokens * kv_width);
 }
 
 bool common_ane_prefill_decode(
@@ -2178,18 +1811,47 @@ common_ane_prefill_request_ptr common_ane_compute_prefill_async(
             n_active == 0 || sequence_length == 0 || hidden_size == 0) {
         return nullptr;
     }
+    // W3.5.3: the legacy per-request arena path is retired. The
+    // async dispatch is now a direct dispatch_async to the pinned-
+    // slot path; the result lands in the pinned output slot and
+    // is read by the completion handler via get_pinned_output. The
+    // request lifecycle is the dispatch_semaphore signal.
+    if (!program->manifest_loaded) {
+        return nullptr;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_PREFILL, sequence_length);
+    if (function == nullptr) {
+        return nullptr;
+    }
+    if (program->context_length > 0) {
+        const size_t count = (size_t) n_active * sequence_length;
+        for (size_t i = 0; i < count; ++i) {
+            if (positions[i] < 0 ||
+                    (uint32_t) positions[i] >= program->context_length) {
+                return nullptr;
+            }
+        }
+    }
     auto request = std::make_shared<common_ane_prefill_request>();
     request->program = program;
     request->completion = dispatch_semaphore_create(0);
     request->arena_epoch = program->next_prefill_arena_epoch.fetch_add(1) + 1;
     ++program->async_prefill_submissions;
+    const size_t active_tokens = (size_t) n_active * sequence_length;
+    const std::string func_name = function->name;
+    const std::string token_slot = func_name + ".token_ids";
+    const std::string position_slot = func_name + ".positions";
+    const std::string hidden_slot = func_name + ".hidden_states";
+    // The async dispatch is serialized through the program queue
+    // (the same serial queue the sync path uses) so the host input
+    // write and the dispatch are atomically observed by the host
+    // and by Core ML. Per-request state is the request's local
+    // success flag; the pinned state is the program's, shared
+    // across requests (only one async prefill can be in flight per
+    // program, matching the sync-path contract).
     dispatch_async(program->queue, ^{
         @autoreleasepool {
-            common_ane_compute_instance * instance =
-                find_compute_function(request->program, "prefill", sequence_length);
-            const size_t active_tokens = (size_t) n_active * sequence_length;
-            const size_t bucket_tokens =
-                (size_t) request->program->batch_bucket * sequence_length;
             const auto finish = ^(bool success) {
                 ++request->program->async_prefill_completions;
                 if (!success) {
@@ -2199,94 +1861,28 @@ common_ane_prefill_request_ptr common_ane_compute_prefill_async(
                 request->complete.store(true);
                 dispatch_semaphore_signal(request->completion);
             };
-            if (!instance || request->program->context_length > 0) {
-                for (size_t i = 0; instance && i < active_tokens; ++i) {
-                    if (positions[i] < 0 ||
-                            (uint32_t) positions[i] >= request->program->context_length) {
-                        finish(false);
-                        return;
-                    }
-                }
-            }
-            if (!instance) {
+            // Copy host inputs into the pinned input slots on the
+            // dispatch thread. The host pointers are caller-owned;
+            // the copy is mandatory because the caller's buffers
+            // may be recycled before the async dispatch runs.
+            if (!set_pinned_input_i32(*request->program, token_slot,
+                                      token_ids, active_tokens) ||
+                    !set_pinned_input_i32(*request->program, position_slot,
+                                          positions, active_tokens)) {
                 finish(false);
                 return;
             }
-            NSDictionary<NSString *, MLFeatureDescription *> * input_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * output_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            MLFeatureDescription * token_desc = input_desc[@"token_ids"];
-            MLFeatureDescription * position_desc = input_desc[@"positions"];
-            MLFeatureDescription * hidden_desc = output_desc[@"hidden_states"];
-            if (!valid_multi_array(token_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !valid_multi_array(position_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !hidden_desc || hidden_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(hidden_desc.multiArrayConstraint.shape) !=
-                        bucket_tokens * hidden_size) {
+            const std::unordered_set<std::string> output_names = { "hidden_states" };
+            if (!dispatch_pinned_function_locked(*request->program, func_name,
+                                                  nullptr, &output_names)) {
                 finish(false);
                 return;
             }
-            const MLMultiArrayDataType hidden_type = hidden_desc.multiArrayConstraint.dataType;
-            if (hidden_type != MLMultiArrayDataTypeFloat16 &&
-                    hidden_type != MLMultiArrayDataTypeFloat32) {
-                finish(false);
-                return;
-            }
-            NSError * error = nil;
-            // Inputs are copied into per-request IOSurface slots.  This makes
-            // completion-handler execution safe even if the scheduler recycles
-            // its prompt buffers immediately after submitting the request.
-            const std::string epoch = ".async." + std::to_string(request->arena_epoch);
-            MLMultiArray * tokens = make_i32_input(
-                *request->program, instance->name + epoch + ".token_ids",
-                token_desc.multiArrayConstraint.shape, token_ids, active_tokens,
-                false, &error);
-            MLMultiArray * positions_array = make_i32_input(
-                *request->program, instance->name + epoch + ".positions",
-                position_desc.multiArrayConstraint.shape, positions, active_tokens,
-                false, &error);
-            MLMultiArray * output_backing = arena_multi_array(
-                *request->program, instance->name + epoch + ".hidden_states",
-                hidden_desc.multiArrayConstraint.shape, hidden_type, &error);
-            if (!tokens || !positions_array || !output_backing) {
-                finish(false);
-                return;
-            }
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{
-                    @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                    @"positions": [MLFeatureValue featureValueWithMultiArray:positions_array],
-                } error:&error];
-            if (!inputs) {
-                finish(false);
-                return;
-            }
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{@"hidden_states": output_backing};
-            [instance->model predictionFromFeatures:inputs
-                                            options:options
-                                  completionHandler:^(id<MLFeatureProvider> output, NSError * completion_error) {
-                @autoreleasepool {
-                    MLMultiArray * result =
-                        [output featureValueForName:@"hidden_states"].multiArrayValue;
-                    const bool valid = output && !completion_error && result &&
-                        result.dataType == hidden_type &&
-                        (size_t) result.count >= active_tokens * hidden_size;
-                    if (valid) {
-                        if (result.dataPointer == output_backing.dataPointer) {
-                            ++request->program->direct_output_backings;
-                        }
-                        read_float_data(result, hidden_states, active_tokens * hidden_size);
-                        request->program->copied_output_bytes +=
-                            active_tokens * hidden_size * sizeof(float);
-                    } else {
-                        LOG_WRN("ANE async prefill %s failed: %s\n", instance->name.c_str(),
-                                completion_error.localizedDescription.UTF8String ?: "invalid output");
-                    }
-                    finish(valid);
-                }
-            }];
+            // Read the result. The hidden_states output is in the
+            // pinned slot; copy to the caller's host buffer.
+            get_pinned_output(*request->program, hidden_slot,
+                              hidden_states, active_tokens * hidden_size);
+            finish(true);
         }
     });
     return request;
@@ -2318,11 +1914,17 @@ bool common_ane_compute_dflash(
         const int32_t * positions,
         int32_t * draft_tokens,
         float * confidence) {
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "dflash", block_size);
-    if (!instance || !target_features || !token_ids || !positions ||
+    if (!program || !target_features || !token_ids || !positions ||
             !draft_tokens || !confidence || n_active == 0 ||
-            n_active > program->batch_bucket || feature_width == 0) {
+            feature_width == 0) {
+        return false;
+    }
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_DFLASH, block_size);
+    if (function == nullptr) {
         return false;
     }
     if (program->context_length > 0) {
@@ -2333,179 +1935,38 @@ bool common_ane_compute_dflash(
             }
         }
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * outputs_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            const size_t lane_bucket = program->batch_bucket;
-            MLFeatureDescription * features_desc = inputs_desc[@"target_features"];
-            MLFeatureDescription * token_desc = inputs_desc[@"token_ids"];
-            MLFeatureDescription * position_desc = inputs_desc[@"positions"];
-            MLFeatureDescription * drafts_desc = outputs_desc[@"draft_tokens"];
-            MLFeatureDescription * confidence_desc = outputs_desc[@"confidence"];
-            if (!features_desc || features_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(features_desc.multiArrayConstraint.shape) !=
-                        lane_bucket * feature_width ||
-                    !valid_multi_array(
-                        token_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(
-                        position_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(
-                        drafts_desc, MLMultiArrayDataTypeInt32,
-                        lane_bucket * block_size) ||
-                    !confidence_desc ||
-                    confidence_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(confidence_desc.multiArrayConstraint.shape) !=
-                        lane_bucket * block_size) {
-                return;
-            }
-            const MLMultiArrayDataType features_type =
-                features_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType confidence_type =
-                confidence_desc.multiArrayConstraint.dataType;
-            if ((features_type != MLMultiArrayDataTypeFloat16 &&
-                        features_type != MLMultiArrayDataTypeFloat32) ||
-                    (confidence_type != MLMultiArrayDataTypeFloat16 &&
-                        confidence_type != MLMultiArrayDataTypeFloat32)) {
-                return;
-            }
-
-            NSError * error = nil;
-            const bool direct = n_active == lane_bucket;
-            MLMultiArray * features =
-                direct && features_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array(
-                    (void *) target_features,
-                    features_desc.multiArrayConstraint.shape,
-                    features_type,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".target_features",
-                    features_desc.multiArrayConstraint.shape,
-                    features_type,
-                    &error);
-            MLMultiArray * tokens = make_i32_input(
-                *program, instance->name + ".token_ids",
-                token_desc.multiArrayConstraint.shape,
-                token_ids, n_active, direct, &error);
-            MLMultiArray * positions_array = make_i32_input(
-                *program, instance->name + ".positions",
-                position_desc.multiArrayConstraint.shape,
-                positions, n_active, direct, &error);
-            if (!features || !tokens || !positions_array) {
-                return;
-            }
-            const size_t active_features = (size_t) n_active * feature_width;
-            if (!(direct && features_type == MLMultiArrayDataTypeFloat32)) {
-                write_float_data(features, target_features, active_features);
-                std::memset(
-                    (char *) features.dataPointer +
-                        active_features * multi_array_element_size(features_type),
-                    0,
-                    (lane_bucket * feature_width - active_features) *
-                        multi_array_element_size(features_type));
-                program->arena_input_bytes +=
-                    lane_bucket * feature_width *
-                    multi_array_element_size(features_type);
-            } else {
-                ++program->direct_input_views;
-            }
-            if (direct) {
-                program->direct_input_views += 2;
-            }
-
-            const bool direct_confidence =
-                direct && confidence_type == MLMultiArrayDataTypeFloat32;
-            MLMultiArray * draft_backing = direct
-                ? wrap_multi_array(
-                    draft_tokens,
-                    drafts_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".draft_tokens",
-                    drafts_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32,
-                    &error);
-            MLMultiArray * confidence_backing = direct_confidence
-                ? wrap_multi_array(
-                    confidence,
-                    confidence_desc.multiArrayConstraint.shape,
-                    confidence_type,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".confidence",
-                    confidence_desc.multiArrayConstraint.shape,
-                    confidence_type,
-                    &error);
-            if (!draft_backing || !confidence_backing) {
-                return;
-            }
-            MLDictionaryFeatureProvider * inputs =
-                [[MLDictionaryFeatureProvider alloc]
-                    initWithDictionary:@{
-                        @"target_features": [MLFeatureValue featureValueWithMultiArray:features],
-                        @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                        @"positions": [MLFeatureValue featureValueWithMultiArray:positions_array],
-                    }
-                    error:&error];
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{
-                @"draft_tokens": draft_backing,
-                @"confidence": confidence_backing,
-            };
-            id<MLFeatureProvider> output = instance->execution_state
-                ? [instance->model predictionFromFeatures:inputs
-                                               usingState:instance->execution_state
-                                                  options:options
-                                                    error:&error]
-                : [instance->model predictionFromFeatures:inputs
-                                                  options:options
-                                                    error:&error];
-            MLMultiArray * drafts =
-                [output featureValueForName:@"draft_tokens"].multiArrayValue;
-            MLMultiArray * probabilities =
-                [output featureValueForName:@"confidence"].multiArrayValue;
-            const size_t active_drafts = (size_t) n_active * block_size;
-            if (!output || !drafts || !probabilities ||
-                    drafts.dataType != MLMultiArrayDataTypeInt32 ||
-                    probabilities.dataType != confidence_type ||
-                    (size_t) drafts.count < active_drafts ||
-                    (size_t) probabilities.count < active_drafts) {
-                LOG_WRN("ANE DFlash %s failed: %s\n",
-                        instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            if (!direct) {
-                std::memcpy(
-                    draft_tokens, drafts.dataPointer,
-                    active_drafts * sizeof(int32_t));
-                program->copied_output_bytes +=
-                    active_drafts * sizeof(int32_t);
-            }
-            if (!direct_confidence) {
-                read_float_data(probabilities, confidence, active_drafts);
-                program->copied_output_bytes +=
-                    active_drafts * sizeof(float);
-            }
-            if (drafts.dataPointer == draft_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (probabilities.dataPointer == confidence_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            ok = true;
-        }
-    });
-    return ok;
+    const std::string func_name = function->name;
+    // The DFlash function's pinned input slots are target_features
+    // (fp32, [bucket, feature_width]), token_ids (i32, [bucket]),
+    // positions (i32, [bucket]). Outputs are draft_tokens (i32)
+    // and confidence (fp32). The pinned-slot path writes the host
+    // inputs into the IOSurface directly and pins the outputs as
+    // zero-copy MLMultiArray backings. The host output buffers are
+    // filled by get_pinned_output below.
+    if (!set_pinned_input(*program, func_name + ".target_features",
+                          target_features, (size_t) n_active * feature_width) ||
+            !set_pinned_input_i32(*program, func_name + ".token_ids",
+                                  token_ids, n_active) ||
+            !set_pinned_input_i32(*program, func_name + ".positions",
+                                  positions, n_active)) {
+        return false;
+    }
+    if (!dispatch_pinned_function(*program, func_name)) {
+        return false;
+    }
+    // Copy outputs to host. draft_tokens is i32 (no conversion);
+    // confidence is fp32 (or fp16 -> fp32 conversion via the helper).
+    if (!get_pinned_output_i32(*program, func_name + ".draft_tokens",
+                               draft_tokens, (size_t) n_active * block_size)) {
+        return false;
+    }
+    // For confidence, use the fp32 read path; get_pinned_output
+    // handles f16->f32 conversion when the slot is f16.
+    if (!get_pinned_output(*program, func_name + ".confidence",
+                           confidence, (size_t) n_active * block_size)) {
+        return false;
+    }
+    return true;
 }
 
 bool common_ane_compute_hybrid(
@@ -2521,204 +1982,55 @@ bool common_ane_compute_hybrid(
         float dflash_cutoff,
         int32_t * selected_source,
         int32_t * agreement) {
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "hybrid", block_size);
-    if (!instance || !dflash_tokens || !dflash_confidence || !dflash_counts ||
+    if (!program || !dflash_tokens || !dflash_confidence || !dflash_counts ||
             !mtp_tokens || !mtp_confidence || !mtp_counts ||
-            !selected_source || !agreement || n_active == 0 ||
-            n_active > program->batch_bucket) {
+            !selected_source || !agreement || n_active == 0) {
         return false;
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * outputs_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            const size_t lane_bucket = program->batch_bucket;
-            const size_t block_count = lane_bucket * block_size;
-
-            MLFeatureDescription * d_tokens_desc = inputs_desc[@"dflash_tokens"];
-            MLFeatureDescription * d_conf_desc = inputs_desc[@"dflash_confidence"];
-            MLFeatureDescription * d_counts_desc = inputs_desc[@"dflash_counts"];
-            MLFeatureDescription * m_tokens_desc = inputs_desc[@"mtp_tokens"];
-            MLFeatureDescription * m_conf_desc = inputs_desc[@"mtp_confidence"];
-            MLFeatureDescription * m_counts_desc = inputs_desc[@"mtp_counts"];
-            MLFeatureDescription * cutoff_desc = inputs_desc[@"dflash_cutoff"];
-            MLFeatureDescription * source_desc = outputs_desc[@"selected_source"];
-            MLFeatureDescription * agreement_desc = outputs_desc[@"agreement"];
-            if (!valid_multi_array(d_tokens_desc, MLMultiArrayDataTypeInt32, block_count) ||
-                    !valid_multi_array(d_counts_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(m_tokens_desc, MLMultiArrayDataTypeInt32, block_count) ||
-                    !valid_multi_array(m_counts_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(source_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(agreement_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !cutoff_desc || cutoff_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(cutoff_desc.multiArrayConstraint.shape) != lane_bucket ||
-                    !d_conf_desc || d_conf_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(d_conf_desc.multiArrayConstraint.shape) != block_count ||
-                    !m_conf_desc || m_conf_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(m_conf_desc.multiArrayConstraint.shape) != block_count) {
-                return;
-            }
-            const MLMultiArrayDataType d_conf_type =
-                d_conf_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType m_conf_type =
-                m_conf_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType cutoff_type =
-                cutoff_desc.multiArrayConstraint.dataType;
-            if ((d_conf_type != MLMultiArrayDataTypeFloat16 &&
-                        d_conf_type != MLMultiArrayDataTypeFloat32) ||
-                    (m_conf_type != MLMultiArrayDataTypeFloat16 &&
-                        m_conf_type != MLMultiArrayDataTypeFloat32) ||
-                    (cutoff_type != MLMultiArrayDataTypeFloat16 &&
-                        cutoff_type != MLMultiArrayDataTypeFloat32)) {
-                return;
-            }
-
-            NSError * error = nil;
-            const bool direct = n_active == lane_bucket;
-            const size_t active_blocks = (size_t) n_active * block_size;
-            MLMultiArray * d_tokens = make_i32_input(
-                *program, instance->name + ".dflash_tokens",
-                d_tokens_desc.multiArrayConstraint.shape,
-                dflash_tokens, active_blocks, direct, &error);
-            MLMultiArray * d_counts = make_i32_input(
-                *program, instance->name + ".dflash_counts",
-                d_counts_desc.multiArrayConstraint.shape,
-                dflash_counts, n_active, direct, &error);
-            MLMultiArray * m_tokens = make_i32_input(
-                *program, instance->name + ".mtp_tokens",
-                m_tokens_desc.multiArrayConstraint.shape,
-                mtp_tokens, active_blocks, direct, &error);
-            MLMultiArray * m_counts = make_i32_input(
-                *program, instance->name + ".mtp_counts",
-                m_counts_desc.multiArrayConstraint.shape,
-                mtp_counts, n_active, direct, &error);
-            auto make_confidence = [&](const std::string & name,
-                                       MLFeatureDescription * desc,
-                                       MLMultiArrayDataType type,
-                                       const float * values) -> MLMultiArray * {
-                MLMultiArray * array = arena_multi_array(
-                    *program, name, desc.multiArrayConstraint.shape, type, &error);
-                if (array) {
-                    write_float_data(array, values, active_blocks);
-                    if (active_blocks < block_count) {
-                        std::memset(
-                            (char *) array.dataPointer +
-                                active_blocks * multi_array_element_size(type),
-                            0,
-                            (block_count - active_blocks) *
-                                multi_array_element_size(type));
-                    }
-                    program->arena_input_bytes +=
-                        block_count * multi_array_element_size(type);
-                }
-                return array;
-            };
-            MLMultiArray * d_conf = make_confidence(
-                instance->name + ".dflash_confidence",
-                d_conf_desc, d_conf_type, dflash_confidence);
-            MLMultiArray * m_conf = make_confidence(
-                instance->name + ".mtp_confidence",
-                m_conf_desc, m_conf_type, mtp_confidence);
-            MLMultiArray * cutoff = arena_multi_array(
-                *program, instance->name + ".dflash_cutoff",
-                cutoff_desc.multiArrayConstraint.shape,
-                cutoff_type, &error);
-            if (!d_tokens || !d_counts || !m_tokens || !m_counts ||
-                    !d_conf || !m_conf || !cutoff) {
-                return;
-            }
-            std::vector<float> cutoff_values(lane_bucket, dflash_cutoff);
-            write_float_data(cutoff, cutoff_values.data(), lane_bucket);
-            program->arena_input_bytes +=
-                lane_bucket * multi_array_element_size(cutoff_type);
-            if (direct) {
-                program->direct_input_views += 4;
-            }
-
-            MLMultiArray * source_backing = direct
-                ? wrap_multi_array(
-                    selected_source,
-                    source_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(
-                    *program, instance->name + ".selected_source",
-                    source_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * agreement_backing = direct
-                ? wrap_multi_array(
-                    agreement,
-                    agreement_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(
-                    *program, instance->name + ".agreement",
-                    agreement_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            if (!source_backing || !agreement_backing) {
-                return;
-            }
-
-            MLDictionaryFeatureProvider * inputs =
-                [[MLDictionaryFeatureProvider alloc]
-                    initWithDictionary:@{
-                        @"dflash_tokens": [MLFeatureValue featureValueWithMultiArray:d_tokens],
-                        @"dflash_confidence": [MLFeatureValue featureValueWithMultiArray:d_conf],
-                        @"dflash_counts": [MLFeatureValue featureValueWithMultiArray:d_counts],
-                        @"mtp_tokens": [MLFeatureValue featureValueWithMultiArray:m_tokens],
-                        @"mtp_confidence": [MLFeatureValue featureValueWithMultiArray:m_conf],
-                        @"mtp_counts": [MLFeatureValue featureValueWithMultiArray:m_counts],
-                        @"dflash_cutoff": [MLFeatureValue featureValueWithMultiArray:cutoff],
-                    }
-                    error:&error];
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{
-                @"selected_source": source_backing,
-                @"agreement": agreement_backing,
-            };
-            id<MLFeatureProvider> output = instance->execution_state
-                ? [instance->model predictionFromFeatures:inputs
-                                               usingState:instance->execution_state
-                                                  options:options
-                                                    error:&error]
-                : [instance->model predictionFromFeatures:inputs
-                                                  options:options
-                                                    error:&error];
-            MLMultiArray * source =
-                [output featureValueForName:@"selected_source"].multiArrayValue;
-            MLMultiArray * agreed =
-                [output featureValueForName:@"agreement"].multiArrayValue;
-            if (!output || !source || !agreed ||
-                    source.dataType != MLMultiArrayDataTypeInt32 ||
-                    agreed.dataType != MLMultiArrayDataTypeInt32 ||
-                    (size_t) source.count < n_active ||
-                    (size_t) agreed.count < n_active) {
-                LOG_WRN("ANE hybrid %s failed: %s\n",
-                        instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            if (!direct) {
-                std::memcpy(selected_source, source.dataPointer,
-                            n_active * sizeof(int32_t));
-                std::memcpy(agreement, agreed.dataPointer,
-                            n_active * sizeof(int32_t));
-                program->copied_output_bytes +=
-                    n_active * 2 * sizeof(int32_t);
-            }
-            if (source.dataPointer == source_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (agreed.dataPointer == agreement_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            ok = true;
-        }
-    });
-    return ok;
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_HYBRID, block_size);
+    if (function == nullptr) {
+        return false;
+    }
+    const std::string func_name = function->name;
+    // The hybrid function's inputs are dflash_tokens, dflash_confidence,
+    // dflash_counts, mtp_tokens, mtp_confidence, mtp_counts, dflash_cutoff.
+    // Outputs are selected_source, agreement (both i32, [bucket]).
+    const size_t active_blocks = (size_t) n_active * block_size;
+    if (!set_pinned_input_i32(*program, func_name + ".dflash_tokens",
+                              dflash_tokens, active_blocks) ||
+            !set_pinned_input(*program, func_name + ".dflash_confidence",
+                              dflash_confidence, active_blocks) ||
+            !set_pinned_input_i32(*program, func_name + ".dflash_counts",
+                                  dflash_counts, n_active) ||
+            !set_pinned_input_i32(*program, func_name + ".mtp_tokens",
+                                  mtp_tokens, active_blocks) ||
+            !set_pinned_input(*program, func_name + ".mtp_confidence",
+                              mtp_confidence, active_blocks) ||
+            !set_pinned_input_i32(*program, func_name + ".mtp_counts",
+                                  mtp_counts, n_active)) {
+        return false;
+    }
+    // dflash_cutoff is a per-lane constant, broadcast into [bucket].
+    const size_t cutoff_count = (size_t) program->batch_bucket;
+    std::vector<float> cutoff_broadcast(cutoff_count, dflash_cutoff);
+    if (!set_pinned_input(*program, func_name + ".dflash_cutoff",
+                          cutoff_broadcast.data(), cutoff_count)) {
+        return false;
+    }
+    if (!dispatch_pinned_function(*program, func_name)) {
+        return false;
+    }
+    if (!get_pinned_output_i32(*program, func_name + ".selected_source",
+                               selected_source, n_active) ||
+            !get_pinned_output_i32(*program, func_name + ".agreement",
+                                   agreement, n_active)) {
+        return false;
+    }
+    return true;
 }
 
 bool common_ane_mtp_program_predict(
@@ -2732,7 +2044,24 @@ bool common_ane_mtp_program_predict(
         float * confidence,
         float * next_hidden) {
     if (!program || !token_ids || !h_nextn || !top_token || !confidence || !next_hidden ||
-            n_active == 0 || n_active > program->batch_bucket) {
+            n_active == 0) {
+        return false;
+    }
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    // The MTP predict is a multifunction whose bucket is the
+    // batch_bucket (1 for the typical MTP, but a multifunction can
+    // declare a larger bucket). Match by role; bucket=0 is the
+    // MTP singleton case where the manifest function has bucket 0.
+    const ane_function_v1_t * function = nullptr;
+    for (uint32_t i = 0; i < program->manifest.n_functions; ++i) {
+        if (program->manifest.functions[i].role == ANE_ROLE_MTP) {
+            function = &program->manifest.functions[i];
+            break;
+        }
+    }
+    if (function == nullptr) {
         return false;
     }
     if (program->context_length > 0 && positions) {
@@ -2743,196 +2072,31 @@ bool common_ane_mtp_program_predict(
             }
         }
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSError * error = nil;
-            MLFeatureDescription * hidden_desc =
-                program->model.modelDescription.inputDescriptionsByName[@"h_nextn"];
-            const MLMultiArrayDataType hidden_type = hidden_desc.multiArrayConstraint.dataType;
-            NSArray<NSNumber *> * token_shape = @[@(program->batch_bucket)];
-            NSArray<NSNumber *> * hidden_shape =
-                @[@(program->batch_bucket), @(hidden_size)];
-            const bool full_bucket = n_active == program->batch_bucket;
-            MLMultiArray * tokens = full_bucket
-                ? wrap_multi_array((void *) token_ids, token_shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "predict.token_ids", token_shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * hidden =
-                full_bucket && hidden_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array((void *) h_nextn, hidden_shape, hidden_type, &error)
-                : arena_multi_array(*program, "predict.h_nextn", hidden_shape,
-                    hidden_type, &error);
-            if (!tokens || !hidden) {
-                return;
-            }
-
-            const size_t active_hidden = (size_t) n_active * hidden_size;
-            if (hidden_type != MLMultiArrayDataTypeFloat32 &&
-                    hidden_type != MLMultiArrayDataTypeFloat16) {
-                return;
-            }
-            if (!full_bucket) {
-                int32_t * token_data = (int32_t *) tokens.dataPointer;
-                std::memcpy(token_data, token_ids, n_active * sizeof(int32_t));
-                std::memset(token_data + n_active, 0,
-                        (program->batch_bucket - n_active) * sizeof(int32_t));
-                program->arena_input_bytes +=
-                    program->batch_bucket * sizeof(int32_t);
-            } else {
-                ++program->direct_input_views;
-            }
-            if (!(full_bucket && hidden_type == MLMultiArrayDataTypeFloat32)) {
-                write_float_data(hidden, h_nextn, active_hidden);
-                const size_t padded_hidden =
-                    (size_t) program->batch_bucket * hidden_size - active_hidden;
-                std::memset((char *) hidden.dataPointer +
-                            active_hidden * multi_array_element_size(hidden_type),
-                        0, padded_hidden * multi_array_element_size(hidden_type));
-                program->arena_input_bytes +=
-                    (size_t) program->batch_bucket * hidden_size *
-                    multi_array_element_size(hidden_type);
-            } else {
-                ++program->direct_input_views;
-            }
-
-            NSMutableDictionary<NSString *, MLFeatureValue *> * input_values =
-                [@{
-                    @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                    @"h_nextn": [MLFeatureValue featureValueWithMultiArray:hidden],
-                } mutableCopy];
-            if (program->model.modelDescription.inputDescriptionsByName[@"positions"]) {
-                if (!positions) {
-                    return;
-                }
-                MLMultiArray * position_values = full_bucket
-                    ? wrap_multi_array((void *) positions, token_shape,
-                        MLMultiArrayDataTypeInt32, &error)
-                    : arena_multi_array(*program, "predict.positions", token_shape,
-                        MLMultiArrayDataTypeInt32, &error);
-                if (!position_values) {
-                    return;
-                }
-                if (!full_bucket) {
-                    int32_t * position_data = (int32_t *) position_values.dataPointer;
-                    std::memcpy(position_data, positions, n_active * sizeof(int32_t));
-                    std::memset(position_data + n_active, 0,
-                            (program->batch_bucket - n_active) * sizeof(int32_t));
-                    program->arena_input_bytes +=
-                        program->batch_bucket * sizeof(int32_t);
-                } else {
-                    ++program->direct_input_views;
-                }
-                input_values[@"positions"] =
-                    [MLFeatureValue featureValueWithMultiArray:position_values];
-            }
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:input_values error:&error];
-            if (!inputs) {
-                return;
-            }
-
-            NSDictionary<NSString *, MLFeatureDescription *> * output_descriptions =
-                program->model.modelDescription.outputDescriptionsByName;
-            MLFeatureDescription * token_out_desc = output_descriptions[@"top_token"];
-            MLFeatureDescription * confidence_out_desc = output_descriptions[@"confidence"];
-            MLFeatureDescription * hidden_out_desc = output_descriptions[@"next_hidden"];
-            if (!token_out_desc || !confidence_out_desc || !hidden_out_desc) {
-                return;
-            }
-            const MLMultiArrayDataType confidence_type =
-                confidence_out_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType output_hidden_type =
-                hidden_out_desc.multiArrayConstraint.dataType;
-            MLMultiArray * token_backing = full_bucket
-                ? wrap_multi_array(top_token, token_out_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "predict.out_token",
-                    token_out_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * confidence_backing =
-                full_bucket && confidence_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array(confidence,
-                    confidence_out_desc.multiArrayConstraint.shape,
-                    confidence_type, &error)
-                : arena_multi_array(*program, "predict.out_confidence",
-                    confidence_out_desc.multiArrayConstraint.shape,
-                    confidence_type, &error);
-            MLMultiArray * hidden_backing =
-                full_bucket && output_hidden_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array(next_hidden,
-                    hidden_out_desc.multiArrayConstraint.shape,
-                    output_hidden_type, &error)
-                : arena_multi_array(*program, "predict.out_hidden",
-                    hidden_out_desc.multiArrayConstraint.shape,
-                    output_hidden_type, &error);
-            if (!token_backing || !confidence_backing || !hidden_backing) {
-                return;
-            }
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{
-                @"top_token": token_backing,
-                @"confidence": confidence_backing,
-                @"next_hidden": hidden_backing,
-            };
-            id<MLFeatureProvider> output = program->execution_state
-                ? [program->model predictionFromFeatures:inputs
-                                              usingState:program->execution_state
-                                                 options:options
-                                                   error:&error]
-                : [program->model predictionFromFeatures:inputs error:&error];
-            if (!output) {
-                LOG_WRN("ANE MTP prediction failed: %s\n",
-                        error.localizedDescription.UTF8String ?: "unknown error");
-                return;
-            }
-
-            MLMultiArray * out_token = [output featureValueForName:@"top_token"].multiArrayValue;
-            MLMultiArray * out_confidence = [output featureValueForName:@"confidence"].multiArrayValue;
-            MLMultiArray * out_hidden = [output featureValueForName:@"next_hidden"].multiArrayValue;
-            if (!out_token || !out_confidence || !out_hidden ||
-                    out_token.dataType != MLMultiArrayDataTypeInt32 ||
-                    out_token.count < n_active ||
-                    out_confidence.count < n_active ||
-                    (NSUInteger) out_hidden.count < (NSUInteger) n_active * hidden_size) {
-                return;
-            }
-
-            if ((out_confidence.dataType != MLMultiArrayDataTypeFloat32 &&
-                        out_confidence.dataType != MLMultiArrayDataTypeFloat16) ||
-                    (out_hidden.dataType != MLMultiArrayDataTypeFloat32 &&
-                        out_hidden.dataType != MLMultiArrayDataTypeFloat16)) {
-                return;
-            }
-            if (!full_bucket) {
-                std::memcpy(top_token, out_token.dataPointer,
-                        n_active * sizeof(int32_t));
-                program->copied_output_bytes +=
-                    n_active * sizeof(int32_t);
-            }
-            if (out_token.dataPointer == token_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (!(full_bucket && confidence_type == MLMultiArrayDataTypeFloat32)) {
-                read_float_data(out_confidence, confidence, n_active);
-                program->copied_output_bytes += n_active * sizeof(float);
-            }
-            if (out_confidence.dataPointer == confidence_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (!(full_bucket && output_hidden_type == MLMultiArrayDataTypeFloat32)) {
-                read_float_data(out_hidden, next_hidden, active_hidden);
-                program->copied_output_bytes += active_hidden * sizeof(float);
-            }
-            if (out_hidden.dataPointer == hidden_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            ok = true;
+    const std::string func_name = function->name;
+    const size_t active_hidden = (size_t) n_active * hidden_size;
+    if (!set_pinned_input_i32(*program, func_name + ".token_ids",
+                              token_ids, n_active) ||
+            !set_pinned_input(*program, func_name + ".h_nextn",
+                              h_nextn, active_hidden)) {
+        return false;
+    }
+    if (positions) {
+        if (!set_pinned_input_i32(*program, func_name + ".positions",
+                                  positions, n_active)) {
+            return false;
         }
-    });
-    return ok;
+    }
+    if (!dispatch_pinned_function(*program, func_name)) {
+        return false;
+    }
+    if (!get_pinned_output_i32(*program, func_name + ".top_token",
+                               top_token, n_active) ||
+            !get_pinned_output(*program, func_name + ".confidence",
+                               confidence, n_active)) {
+        return false;
+    }
+    return get_pinned_output(*program, func_name + ".next_hidden",
+                              next_hidden, active_hidden);
 }
 
 bool common_ane_mtp_program_reset(
