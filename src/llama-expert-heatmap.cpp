@@ -99,6 +99,13 @@ void llama_expert_heatmap::log() const {
     }
 }
 
+float llama_expert_heatmap::get_score(int layer_idx, int expert_id) const {
+    if (layer_idx < 0 || layer_idx >= n_layers || expert_id < 0 || expert_id >= n_experts) {
+        return 0.0f;
+    }
+    return heat[layer_idx * n_experts + expert_id];
+}
+
 std::vector<int> llama_expert_heatmap::get_top_s(int layer_idx, int s) const {
     std::vector<int> result;
     if (layer_idx < 0 || layer_idx >= n_layers || s <= 0) {

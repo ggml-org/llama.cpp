@@ -16,12 +16,15 @@
 static const std::regex g_re_exps_weight("blk\\.(\\d+)\\.ffn_(up|down|gate|gate_up)_(ch|)exps\\.weight");
 
 llama_expert_hotstore::llama_expert_hotstore(
-        const llama_model * model, int n_layers, int n_experts, int hot_s, int sync_period) :
+        const llama_model * model, int n_layers, int n_experts, int hot_s, int sync_period,
+        float hyst, int dwell) :
     n_layers(n_layers),
     n_experts(n_experts),
     hot_s(hot_s),
     bytes_per_slot(n_layers, 0),
-    sync_period(sync_period) {
+    sync_period(sync_period),
+    hyst(hyst),
+    dwell(dwell) {
     if (n_layers <= 0) {
         return;
     }
@@ -47,6 +50,7 @@ llama_expert_hotstore::llama_expert_hotstore(
 
     if (hot_s > 0) {
         slot_to_expert.assign(n_layers, std::vector<int>(hot_s, -1));
+        dwell_count.assign(n_layers, std::vector<int>(hot_s, 0));
     }
 }
 
@@ -141,8 +145,10 @@ void llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
     for (int il = 0; il < n_layers; il++) {
         const std::vector<int> top = heatmap.get_top_s(il, hot_s);
         auto & ste = slot_to_expert[il];
+        auto & dc  = dwell_count[il];
         for (int p = 0; p < (int) top.size() && p < hot_s; p++) {
             ste[p] = top[p];
+            dc[p]  = dwell; // initial fill is eligible to be corrected next sync
         }
 
         for (entry * e : entries_by_layer[il]) {
@@ -198,51 +204,71 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
         return;
     }
 
+    // tokens elapsed since the previous sync, used to age dwell counters
+    const int64_t elapsed = heatmap.tokens_total - last_sync_tokens;
     int swapped = 0;
     for (int il = 0; il < n_layers; il++) {
         const std::vector<int> top = heatmap.get_top_s(il, hot_s);
         auto & ste = slot_to_expert[il];
+        auto & dc  = dwell_count[il];
 
-        // which experts are in the new ranking
-        std::vector<char> in_new(n_experts, 0);
-        for (int e : top) {
-            if (e >= 0 && e < n_experts) {
-                in_new[e] = 1;
+        // find a free slot index (guard: any resident displacement must
+        // clear the hysteresis gate, unless the gate is off)
+        auto find_slot = [&](int e_cold) -> int {
+            // fill empty slots first (no gate on fill)
+            for (int p = 0; p < hot_s; p++) {
+                if (ste[p] < 0) {
+                    return p;
+                }
             }
-        }
-
-        // evict: free slots whose resident expert fell out of the new top-S
-        for (int p = 0; p < hot_s; p++) {
-            if (ste[p] >= 0 && !in_new[ste[p]]) {
-                ste[p] = -1;
+            if (hyst <= 0.0f) {
+                // gate off: displace the weakest resident
+                int p_worst = -1;
+                for (int p = 0; p < hot_s; p++) {
+                    if (ste[p] >= 0 && (p_worst < 0 ||
+                        heatmap.get_score(il, ste[p]) < heatmap.get_score(il, ste[p_worst]))) {
+                        p_worst = p;
+                    }
+                }
+                return p_worst;
             }
-        }
+            // gate on: coldest resident that has dwelled enough AND is beaten
+            // by hyst * this cold expert
+            const float s_cold = heatmap.get_score(il, e_cold);
+            int p_worst = -1;
+            float worst_score = 1e9f;
+            for (int p = 0; p < hot_s; p++) {
+                if (ste[p] < 0) {
+                    continue;
+                }
+                if (dc[p] < dwell) {
+                    continue; // incumbent must keep its slot (Trick 6)
+                }
+                if (s_cold >= hyst * heatmap.get_score(il, ste[p])) {
+                    const float s_inc = heatmap.get_score(il, ste[p]);
+                    if (s_inc < worst_score) {
+                        worst_score = s_inc;
+                        p_worst     = p;
+                    }
+                }
+            }
+            return p_worst;
+        };
 
-        // collect new experts that are not currently resident
+        // resident experts -> candidate cold experts, most significant first
         std::vector<char> resident_set(n_experts, 0);
         for (int p = 0; p < hot_s; p++) {
             if (ste[p] >= 0) {
                 resident_set[ste[p]] = 1;
             }
         }
-        std::vector<int> to_place;
-        for (int e : top) {
-            if (e >= 0 && e < n_experts && !resident_set[e]) {
-                to_place.push_back(e);
+        for (int e_cold : top) {
+            if (e_cold < 0 || e_cold >= n_experts || resident_set[e_cold]) {
+                continue;
             }
-        }
-
-        // place each new expert into the first free slot, copy its weights
-        for (int e : to_place) {
-            int p = -1;
-            for (int q = 0; q < hot_s; q++) {
-                if (ste[q] < 0) {
-                    p = q;
-                    break;
-                }
-            }
+            const int p = find_slot(e_cold);
             if (p < 0) {
-                break; // no free slot (should not happen: evictions == new)
+                break; // no slot free or displaceable under the gate
             }
             for (entry * ent : entries_by_layer[il]) {
                 const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
@@ -250,10 +276,17 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                 if (!src) {
                     continue;
                 }
-                ggml_backend_tensor_set(ent->dst, src + (size_t) e * slot, (size_t) p * slot, slot);
+                ggml_backend_tensor_set(ent->dst, src + (size_t) e_cold * slot, (size_t) p * slot, slot);
             }
-            ste[p] = e;
+            ste[p] = e_cold;
+            dc[p]  = -elapsed; // fresh dwell: aging below brings it to 0
             swapped++;
+        }
+
+        for (int p = 0; p < hot_s; p++) {
+            if (ste[p] >= 0) {
+                dc[p] += (int) std::max<int64_t>(elapsed, 0);
+            }
         }
     }
 

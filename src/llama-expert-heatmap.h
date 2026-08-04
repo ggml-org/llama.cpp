@@ -26,5 +26,6 @@ struct llama_expert_heatmap {
     void decay_all();
     void log() const;
 
+    float get_score(int layer_idx, int expert_id) const;
     std::vector<int> get_top_s(int layer_idx, int s) const;
 };

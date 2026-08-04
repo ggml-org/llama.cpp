@@ -61,8 +61,16 @@ struct llama_expert_hotstore {
     // tokens_total at the last sync (fill or re-sync) for boundary-cross check
     int64_t last_sync_tokens = 0;
 
+    // hysteresis gate (Trick 6): a resident slot is only swapped when a cold
+    // expert scores >= hyst * the incumbent AND the slot has dwelled long enough
+    float hyst  = 0.0f; // 0 = gate off (swap freely)
+    int   dwell = 0;    // minimum syncs a resident must keep; 0 = off
+    // dwell_count[il][p] = syncs since slot p last changed (0 = fresh/empty)
+    std::vector<std::vector<int>> dwell_count;
+
 llama_expert_hotstore(const llama_model * model, int n_layers,
-                      int n_experts, int hot_s, int sync_period = 0);
+                      int n_experts, int hot_s, int sync_period = 0,
+                      float hyst = 0.0f, int dwell = 0);
 
     ~llama_expert_hotstore();
 

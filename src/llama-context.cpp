@@ -477,7 +477,8 @@ llama_context::llama_context(
         const int sync_period = params.expert_heat_log_period > 0 ? params.expert_heat_log_period : 100;
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
             &model, hparams.n_layer(), hparams.n_expert,
-            params.expert_hot_s, sync_period);
+            params.expert_hot_s, sync_period,
+            params.expert_hyst, params.expert_dwell);
         // the GPU hot store is only supported on CUDA. On CPU it buys nothing
         // and on Vulkan it corrupts output (see manuallog section 12).
         // LLAMA_EXPERT_HOT_FORCE=1 overrides the guard (testing/emergency only).
@@ -3569,9 +3570,11 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
-        /*.expert_heat_decay           =*/ 0.99f,
+        /*.expert_heat_decay           =*/ 0.999f,
         /*.expert_heat_log_period      =*/ 0,
         /*.expert_hot_s                =*/ 0,
+        /*.expert_hyst                 =*/ 1.3f,
+        /*.expert_dwell                =*/ 0,
         /*.ctx_other                   =*/ nullptr,
     };
 

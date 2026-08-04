@@ -2720,11 +2720,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_EXPERT_HEAT_DECAY"));
     add_opt(common_arg(
         {"--expert-heat-log-period"}, "N",
-        "expert heatmap log interval in updates (default: 100)",
+        "expert heatmap log interval in updates (default: 100, 0 = off)",
         [](common_params & params, int value) {
             params.expert_heat_log_period = value;
         }
     ).set_env("LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD"));
+    add_opt(common_arg(
+        {"--expert-hyst"}, "F",
+        "expert hot store hysteresis ratio (default: 1.3, 0 = off)",
+        [](common_params & params, const std::string & value) {
+            params.expert_hyst = std::stof(value);
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HYST"));
+    add_opt(common_arg(
+        {"--expert-dwell"}, "N",
+        "expert hot store minimum dwell updates before swap (default: 0 = off)",
+        [](common_params & params, int value) {
+            params.expert_dwell = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_DWELL"));
     add_opt(common_arg(
         {"-las", "--expert-hot-s"}, "N",
         "number of top expert slots for GPU hot store (default: 0 = disabled)",
