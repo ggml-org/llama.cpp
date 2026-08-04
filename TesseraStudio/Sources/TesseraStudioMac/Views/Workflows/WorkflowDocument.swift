@@ -18,15 +18,22 @@ import TesseraCore
 ///
 /// New fields are additive (default values); the executor +
 /// editor both read the standard ``Workflow`` block.
+///
+/// The on-disk file is registered as the custom `com.tessera.workflow`
+/// UTI (declared in `Support/Mac/Info.plist`; Swift constant
+/// ``UTType.tesseraWorkflow``). The bytes are still JSON, so the
+/// UTI conforms to `public.json` — Launch Services treats the
+/// `.tessera-workflow` extension as a first-class Tessera file
+/// type and SwiftUI's file pickers filter to it automatically.
 struct WorkflowDocument: FileDocument {
     static let currentSchema = "tessera.workflow.document.v1"
 
     static var readableContentTypes: [UTType] {
-        [.json]
+        [.tesseraWorkflow]
     }
 
     static var writableContentTypes: [UTType] {
-        [.json]
+        [.tesseraWorkflow]
     }
 
     var workflow: Workflow

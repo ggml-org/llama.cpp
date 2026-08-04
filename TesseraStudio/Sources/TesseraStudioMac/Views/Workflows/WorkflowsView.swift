@@ -17,7 +17,7 @@ struct WorkflowsView: View {
         workflow: WorkflowsView.exampleWorkflow,
         positions: WorkflowsView.examplePositions
     )
-    @State private var documentName: String = "calibrate-and-quantize.tessera-workflow"
+    @State private var documentName: String = "calibrate-and-quantize"
     @State private var isExporting = false
     @State private var isImporting = false
     @State private var isRunning = false
@@ -61,7 +61,7 @@ struct WorkflowsView: View {
         .fileExporter(
             isPresented: $isExporting,
             document: document,
-            contentType: .json,
+            contentType: .tesseraWorkflow,
             defaultFilename: documentName
         ) { result in
             if case .failure(let err) = result {
@@ -70,7 +70,7 @@ struct WorkflowsView: View {
         }
         .fileImporter(
             isPresented: $isImporting,
-            allowedContentTypes: [.json],
+            allowedContentTypes: [.tesseraWorkflow],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -373,7 +373,7 @@ struct WorkflowsView: View {
         positions = [:]
         selectedNodeId = nil
         pendingConnection = nil
-        documentName = "untitled.tessera-workflow"
+        documentName = "untitled"
         document = WorkflowDocument(workflow: workflow, positions: positions)
         // A "New" can't be undone; clear the stack.
         undoManager?.removeAllActions()
@@ -394,7 +394,11 @@ struct WorkflowsView: View {
             positions = envelope.positions ?? [:]
             selectedNodeId = nil
             document = WorkflowDocument(workflow: workflow, positions: positions)
-            documentName = url.lastPathComponent
+            // fileExporter appends the extension itself (driven
+            // by contentType), so the suggested filename must be
+            // the bare base name without the `.tessera-workflow`
+            // suffix.
+            documentName = url.deletingPathExtension().lastPathComponent
             // Loading a new file replaces the undo stack.
             undoManager?.removeAllActions()
         } catch {

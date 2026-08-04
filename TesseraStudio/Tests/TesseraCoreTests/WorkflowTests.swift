@@ -1,4 +1,5 @@
 import XCTest
+import UniformTypeIdentifiers
 @testable import TesseraCore
 
 // MARK: - Stub nodes for tests
@@ -407,5 +408,36 @@ final class WorkflowPositionMathTests: XCTestCase {
         XCTAssertEqual(WorkflowGeometry.nodeHeight(portCount: 0), 56, accuracy: 0.5)
         XCTAssertEqual(WorkflowGeometry.nodeHeight(portCount: 1), 76, accuracy: 0.5)
         XCTAssertEqual(WorkflowGeometry.nodeHeight(portCount: 5), 156, accuracy: 0.5)
+    }
+}
+
+// MARK: - Custom UTI contract (HIG 1.4 / 2.1)
+
+/// The `com.tessera.workflow` UTI is the contract between
+/// `WorkflowDocument` (Mac), `fileExporter` / `fileImporter`
+/// modifiers in `WorkflowsView`, the Info.plist's
+/// `UTExportedTypeDeclarations`, and Launch Services. These
+/// tests pin the Swift-side declaration so the constant can't
+/// drift from the Info.plist entry (`com.tessera.workflow`,
+/// extension `tessera-workflow`).
+///
+/// Conformance queries (`conforms(to: .json)`) resolve through
+/// Launch Services, which only knows the type once the app
+/// bundle is registered — SwiftPM tests run without the bundle,
+/// so conformance is declared in the Info.plist and covered by
+/// a launch-time / manual Finder check instead of unit tests.
+final class TesseraWorkflowUTTypeTests: XCTestCase {
+    func testIdentifierMatchesInfoPlistDeclaration() {
+        // Must match UTTypeIdentifier in
+        // Support/Mac/Info.plist UTExportedTypeDeclarations.
+        XCTAssertEqual(UTType.tesseraWorkflow.identifier, "com.tessera.workflow")
+    }
+
+    func testIsNotJSONItself() {
+        // Sanity: the custom type must NOT be the same as
+        // plain public.json — that would mean the declaration
+        // collapsed to no UTI at all and file pickers would
+        // show every JSON file as a workflow.
+        XCTAssertNotEqual(UTType.tesseraWorkflow.identifier, UTType.json.identifier)
     }
 }

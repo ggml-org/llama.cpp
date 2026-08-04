@@ -26,5 +26,45 @@
 	<string>Copyright (c) 2026 Tessera. All rights reserved.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Tessera Studio Workflow</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.tessera.workflow</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.tessera.workflow</string>
+			<key>UTTypeDescription</key>
+			<string>Tessera Studio Workflow</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>tessera-workflow</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.tessera.workflow+json</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
