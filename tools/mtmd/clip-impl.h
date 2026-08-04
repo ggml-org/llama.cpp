@@ -92,7 +92,6 @@
 #define KEY_AUDIO_SUBSAMPLING_FACTOR "clip.audio.subsampling_factor"
 
 #define KEY_ONYX_PATCH_TEMPORAL "clip.vision.onyx.patch_temporal"
-#define KEY_ONYX_DOWNSAMPLE     "clip.vision.onyx.downsample_factor"
 #define KEY_ONYX_SPARSE_FACTOR  "clip.vision.onyx.sparse_attention_factor"
 #define KEY_ONYX_POS_GRID       "clip.vision.onyx.pos_emb_grid"
 #define KEY_ONYX_ROPE_THETA     "clip.vision.onyx.rope_theta"

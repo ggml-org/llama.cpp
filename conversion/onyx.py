@@ -87,10 +87,10 @@ class OnyxVisionModel(MmprojModel):
 
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ONYX)
         self.gguf_writer.add_vision_attention_layernorm_eps(float(c["layer_norm_eps"]))
+        self.gguf_writer.add_vision_spatial_merge_size(int(c["merge_size"]))
 
         rope_theta = float(c.get("rope_parameters", {}).get("rope_theta", self.ROPE_THETA))
         self.gguf_writer.add_uint32 ("clip.vision.onyx.patch_temporal",          int(c["patch_temporal"]))
-        self.gguf_writer.add_uint32 ("clip.vision.onyx.downsample_factor",       int(c["merge_size"]))
         self.gguf_writer.add_uint32 ("clip.vision.onyx.sparse_attention_factor", int(c["sparse_attention_factor"]))
         self.gguf_writer.add_uint32 ("clip.vision.onyx.pos_emb_grid",            int(c["pos_emb_height"]))
         self.gguf_writer.add_float32("clip.vision.onyx.rope_theta",              rope_theta)

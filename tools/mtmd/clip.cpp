@@ -1525,7 +1525,7 @@ struct clip_model_loader {
                         hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
                         hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
                         hparams.rope_theta = 10000.0f;
-                        get_u32(KEY_ONYX_DOWNSAMPLE,     hparams.n_merge,             false);
+                        get_u32(KEY_SPATIAL_MERGE_SIZE,  hparams.n_merge,             false);
                         get_f32(KEY_ONYX_ROPE_THETA,     hparams.rope_theta,          false);
                         get_u32(KEY_ONYX_PATCH_TEMPORAL, hparams.onyx_patch_temporal, false);
                         get_u32(KEY_ONYX_SPARSE_FACTOR,  hparams.onyx_sparse_factor,  false);
