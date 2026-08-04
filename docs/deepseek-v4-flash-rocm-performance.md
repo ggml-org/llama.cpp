@@ -96,6 +96,49 @@ Current graph behavior:
 
 Therefore source inspection proves dense score materialization and dense attention operands. Runtime counters still must establish the fraction of wall time and whether HIP flash attention performs any useful mask pruning.
 
+#### CSA / DSA external fact-check (research note, 2026-08)
+
+Independent sources confirm the architecture in both directions: our source
+facts are correct, and the dense-masked HIP path is a genuine departure from
+DeepSeek's intended index/sparse design.
+
+1. **The intended design is indexed-sparse, not dense-masked.** The
+   DeepSeek-V4 paper and HuggingFace `DeepSeekV4` docs describe CSA as: a
+   lightning indexer scores queries against the low-compression pool, then
+   `gather`s the top `index_topk` blocks per query *before they reach core
+   attention*, and "a sparse attention kernel reads only those keys." The CSA
+   mask is `-inf` everywhere except the `k` indexer picks per query. Our HIP
+   `build_csa_lid_attention` instead concatenates `raw_k` with **all** `T =
+   ctx/4` compressed CSA keys and calls generic flash attention with a dense
+   `-INF` mask scattering zeros only at the selected indices (`deepseek4.cpp`
+   732-789). So core attention reads every compressed key, not just the
+   selected 512.
+2. **Ratios/top-k match.** `DSV4_CSA_RATIO=4` (overlap), `DSV4_HCA_RATIO=128`
+   (non-overlap), `indexer_top_k<=512` per query, and 64 indexer heads all
+   match the paper and the Transformers implementation are correct in our
+   graph.
+3. **Full-score materialization is itself the long-context ceiling.** With
+   V4-Flash dims (`H_I=64`, `m=4`), the materialize-then-top-k FP32 score
+   tensor is `[B, S, H_I, T]` = **256 GB at S=65,536**, exceeding any single
+   GPU's HBM; the public reference materialize path OOMs above 32K. A chunked
+   streaming-top-k/Triton path runs the same indexer to 1M at ~6.2 GB
+   (StreamIndex, arXiv 2605.02568). Our vector indexer writes a full F32 score
+   for every compressed entry, which reproduces this scaling wall.
+4. **Attention cost consequence at the production 262,144 context.**
+   Dense-masked flash cost grows with `T = ctx/4` (65,536 compressed entries at
+   256K) instead of the intended ~512-selected constant-position cost. The
+   16K trace measured flash 10.29% and indexer 9.12%; at 256K these scale
+   roughly with context and become the dominant long-context cost, consistent
+   with DeepSeek's claim of 27% single-token FLOPs at 1M vs V3.2.
+
+Verdict: our recorded source facts for the *current* graph are accurate, but
+the "deferred/not-dominant" framing was a 16K-measurement-limit decision, not
+evidence *against* indexed CSA. External architecture and scaling evidence
+makes indexed (gather-only-selected) CSA + streaming top-k the strongest
+candidate for the remaining long-context gains at 256K-1M. Confirming it
+locally still requires raising the five-minute measured cap to reach the
+>=64K crossover, per the existing H1 test.
+
 ### HCA and raw attention
 
 HCA concatenates raw SWA entries with all visible 128:1 compressed entries and calls generic MHA. At practical context this is far smaller than CSA. Initial layers use raw 128-token SWA.
@@ -126,7 +169,7 @@ Test: profile 512 and 2048 tokens, attribute time and bytes to routed/shared MoE
 
 ### H1 - dense masked CSA dominates as context grows
 
-Above the 512-compressed-entry crossover (roughly above 2K native positions), generic attention is passed every compressed entry. Long-context CSA attention work should scale with context/4 rather than selected 512 + local 128.
+Above the 512-compressed-entry crossover (roughly above 2K native positions), generic attention is passed every compressed entry. Long-context CSA attention work should scale with context/4 rather than selected 512 + local 128. (Status after the external fact-check: **supported.** The paper/Transformers design is indexed-sparse, and StreamIndex shows full-score materialization OOMs at 64K, so the dense-masked HIP path and its O(ctx/4) attention cost are expected to dominate at production 256K-1M. The 16K shares understate this because the cap blocks >=32K measurement; raise the cap to close the crossover measurement.)
 
 Test: fixed ubatch, sweep 2K/8K/32K/64K. Compare flash-attention kernel duration and memory traffic against compressed length.
 
@@ -711,6 +754,7 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Promote same-tree LID subwave-4 as guarded optimization three for the known stack. | Focused exact/path/fallback/counter gates pass; J16+HC-held-constant whole model is +10.18% at 16K with 0.14% control drift and has no >2% short midpoint regression; fully hashed LID-off/on proxy outputs match in all six layer/tensor cases. | accepted guarded |
 | 2026-08-03 | Promote RDNA2 IQ3_XXS J16 128-thread blocks as optimization four. | Exact focused outputs; IQ3 uniform/hot -16.08/-16.38%; whole-model +2.11/+2.37/+1.70/+1.69% at 512/2K/8K/16K; natural-proxy gate `complete=1` (all six equal); compact rocprof dispatch shows IQ3 wavefronts 11,264→5,632. I64 regresses, I256 unsupported, occupancy 1/3 neutral. | accepted |
 | 2026-08-03 | Reject/defer production MTP for the exact-greedy DSV4 stack. | Production and n-max matrix diverge; rejection-only sequential replay fixes target-only continuation but not continued speculation; even zero-accept target-single advancement with full-state checkpoints later forks. No exact output or TG acceptance exists. | final deferred |
+| 2026-08-03 | Reframe indexed CSA as the strongest remaining long-context candidate after an external fact-check. | Source facts confirmed (dense-masked, ratios 4/128, top-k<=512, full-score write). Paper/Transformers confirm the intended design is indexed-sparse; StreamIndex shows score materialization OOMs at 64K and a viable streaming top-k to 1M; dense flash cost scales with ctx/4 vs ~512 selected. The earlier deferral was a 16K measurement-limit decision, not evidence against CSA. | provisional (measure >=64K to close) |
 
 ## 9. Open questions
 
