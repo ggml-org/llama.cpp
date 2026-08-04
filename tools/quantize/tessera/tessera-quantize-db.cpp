@@ -12,6 +12,7 @@
 //
 
 #include "tessera-quantize-db.h"
+#include "tessera-db-buffer.h"
 
 // duckdb.hpp pulls in windows.h on Windows; the MIN/MAX macros there clash
 // with std::min/std::max. NOMINMAX keeps the standard library usable.
@@ -690,6 +691,49 @@ int ts_quantize_db_insert_l5_fixup(ts_quantize_db * db,
         if (err) *err = "insert_l5_fixup failed: unknown exception";
         return 1;
     }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// L4 plan outcome: thin shim over ts_db_buffer for the feedback loop
+// ---------------------------------------------------------------------------
+
+int ts_quantize_db_append_l4_outcome(
+    struct ts_db_buffer * buffer,
+    const ts_quantize_db_l4_outcome & row) {
+    if (buffer == nullptr) return 0;
+    // Column order must match the l4_plan_outcome CREATE TABLE
+    // (see TS_QDB_SCHEMA_SQL above):
+    //   model_hash, name, layer, iteration, plan_id, strategy,
+    //   alpha_before, alpha_after, clip_before, clip_after,
+    //   outlier_thresh_before, outlier_thresh_after, mse_before,
+    //   mse_after, frob_before, frob_after, family, updated_at
+    // updated_at is the special NULL token; the buffer's
+    // looks_like_int / looks_like_float pass-through skips the
+    // quote path for numerics, and the literal string "NULL"
+    // bypasses the quote path entirely.
+    std::vector<std::string> values = {
+        sql_escape(row.model_hash),
+        sql_escape(row.name),
+        std::to_string(row.layer),
+        std::to_string(row.iteration),
+        sql_escape(row.plan_id),
+        sql_escape(row.strategy),
+        std::to_string(row.alpha_before),
+        std::to_string(row.alpha_after),
+        std::to_string(row.clip_before),
+        std::to_string(row.clip_after),
+        std::to_string(row.outlier_thresh_before),
+        std::to_string(row.outlier_thresh_after),
+        std::to_string(row.mse_before),
+        std::to_string(row.mse_after),
+        std::to_string(row.frob_before),
+        std::to_string(row.frob_after),
+        sql_escape(row.family),
+        "NULL",   // updated_at: stamped at flush time would be nicer, but the
+                  // appender path uses NULL per the ga_evaluations pattern
+    };
+    ts_db_buffer_append(buffer, values);
     return 0;
 }
 

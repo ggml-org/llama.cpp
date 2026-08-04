@@ -17,6 +17,7 @@
 //
 
 #include "tessera-quantize-db.h"
+#include "tessera-db-buffer.h"
 
 #include <cassert>
 #include <cstdio>
@@ -197,6 +198,73 @@ int main(int argc, char ** argv) {
     // Mark run2 failed (exercises the failed status path)
     CHECK(ts_quantize_db_complete_run(db, run_id2, "failed", &err) == 0,
           "complete_run(failed) failed");
+
+    // l4_plan_outcome: the feedback-loop audit trail. Verifies the
+    // ts_quantize_db_append_l4_outcome helper writes one row per
+    // (tensor, iteration, plan_id), with before/after fields intact
+    // and the buffer's MPSC flusher landing them.
+    {
+        std::vector<std::string> cols = {
+            "model_hash", "name", "layer", "iteration", "plan_id",
+            "strategy", "alpha_before", "alpha_after", "clip_before",
+            "clip_after", "outlier_thresh_before", "outlier_thresh_after",
+            "mse_before", "mse_after", "frob_before", "frob_after",
+            "family", "updated_at",
+        };
+        ts_db_buffer * buf = ts_db_buffer_open(
+            db, "l4_plan_outcome", cols,
+            /*flush_threshold=*/16, std::chrono::milliseconds(50));
+        CHECK(buf != nullptr, "l4 buffer open");
+        if (buf != nullptr) {
+            // Write 3 rows: tensor A at iter 0/1/2, strategy A.
+            for (int it = 0; it < 3; it++) {
+                ts_quantize_db_l4_outcome row;
+                row.model_hash   = "hash_l4";
+                row.name         = "blk.5.attn_q.weight";
+                row.layer        = 5;
+                row.iteration    = it;
+                row.plan_id      = "cpp_quant_gen" + std::to_string(it) + "_stageA";
+                row.strategy     = "A";
+                row.alpha_before = 0.5f;
+                row.alpha_after  = 0.25f;
+                row.clip_before  = 1.0f;
+                row.clip_after   = 0.5f;
+                row.outlier_thresh_before = 0.05f;
+                row.outlier_thresh_after  = 0.05f;
+                row.mse_before   = 0.012f;
+                row.mse_after    = 0.012f - 0.001f * (it + 1);
+                row.frob_before  = 0.020f;
+                row.frob_after   = 0.020f - 0.002f * (it + 1);
+                row.family       = "attn_q";
+                CHECK(ts_quantize_db_append_l4_outcome(buf, row) == 0,
+                      "append_l4_outcome failed");
+            }
+            // One row at iter 0, strategy B, different tensor.
+            {
+                ts_quantize_db_l4_outcome row;
+                row.model_hash   = "hash_l4";
+                row.name         = "blk.5.ffn_gate.weight";
+                row.layer        = 5;
+                row.iteration    = 0;
+                row.plan_id      = "cpp_quant_gen0_stageB";
+                row.strategy     = "B";
+                row.mse_before   = 0.025f;
+                row.mse_after    = 0.022f;
+                row.frob_before  = 0.040f;
+                row.frob_after   = 0.035f;
+                row.family       = "ffn_gate";
+                CHECK(ts_quantize_db_append_l4_outcome(buf, row) == 0, "append B");
+            }
+            ts_db_buffer_close(&buf);
+            CHECK(buf == nullptr, "l4 close nulled the handle");
+        }
+        int64_t n = ts_quantize_db_debug_count(
+            db, "SELECT COUNT(*) FROM l4_plan_outcome WHERE model_hash = 'hash_l4'");
+        CHECK(n == 4, "4 outcome rows landed");
+        int64_t stage_b = ts_quantize_db_debug_count(
+            db, "SELECT COUNT(*) FROM l4_plan_outcome WHERE plan_id = 'cpp_quant_gen0_stageB'");
+        CHECK(stage_b == 1, "stage B row findable by plan_id");
+    }
 
     if (failures == 0) {
         printf("OK: all tessera-quantize-db tests passed (db=%s)\n", path);

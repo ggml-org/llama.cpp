@@ -127,6 +127,52 @@ int ts_quantize_db_insert_l5_fixup(ts_quantize_db * db,
                                    const ts_quantize_db_l5_fixup & f,
                                    std::string * err);
 
+// --- L4 plan outcome (the feedback loop audit trail) ---
+//
+// One row per (model_hash, name, iteration, plan_id) recording the
+// L4 forward-pass measurement AFTER a requant plan was applied.
+// The C++ adaptive_requantize loop writes one row per (tensor, gen)
+// with strategy = "A" (alpha/clip multiplier) or "B" (outlier_thresh
+// bump). The Python l5_orchestrator's per-iteration runs also land
+// here when the apply step re-quantizes and re-probes.
+//
+// The C++ side writes through a ts_db_buffer (parallel workers
+// funnel into one flusher thread). The buffer is opened in
+// ts_dispatch_db_open alongside the ga_evaluations buffer; the
+// helper below is a thin shim that the dispatch's L5 loop calls
+// per (tensor, iteration).
+struct ts_quantize_db_l4_outcome {
+    std::string model_hash;        // empty when hashing failed
+    std::string  name;             // tensor name
+    int32_t      layer             = 0;
+    int32_t      iteration         = 0;
+    std::string  plan_id;          // "cpp_quant_gen{N}_stage{S}" or "py_orch_..."
+    std::string  strategy;         // "A" (alpha/clip) or "B" (outlier_thresh)
+    double       alpha_before      = 0.0;
+    double       alpha_after       = 0.0;
+    double       clip_before       = 0.0;
+    double       clip_after        = 0.0;
+    double       outlier_thresh_before = 0.0;
+    double       outlier_thresh_after  = 0.0;
+    double       mse_before        = 0.0;   // rel_frob before the requant
+    double       mse_after         = 0.0;   // rel_frob after the requant
+    double       frob_before       = 0.0;   // absolute ||w - w_hat||^2 / ||w||^2
+    double       frob_after        = 0.0;
+    std::string  family;
+};
+
+// Push one row into the per-table write buffer. Thread-safe; the
+// buffer's MPSC queue + flusher thread serializes the actual SQL.
+// Returns 0 on success, non-zero on format / argument failure
+// (the buffer's stats are bumped for rows that fail to flush at
+// SQL time, but argument failures are returned synchronously).
+//
+// `buffer` is the ts_db_buffer* for the l4_plan_outcome table;
+// typically obtained via ts_db_buffer_open() in ts_dispatch_db_open.
+int ts_quantize_db_append_l4_outcome(
+    struct ts_db_buffer * buffer,
+    const ts_quantize_db_l4_outcome & row);
+
 // --- Appender: bulk GA evaluation logging (the hot path) ---
 //
 // The GA evaluates 64+ candidates per generation x 100 generations x 254

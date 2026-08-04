@@ -316,7 +316,8 @@ if(LLAMA_BUILD_TESTS)
     # plus the DB module (does not need the rest of the dispatch).
     set(TARGET test-tessera-quantize-db)
     add_executable(${TARGET} tessera/test_quantize_db.cpp
-                                  tessera/tessera-quantize-db.cpp)
+                                  tessera/tessera-quantize-db.cpp
+                                  tessera/tessera-db-buffer.cpp)
     target_link_libraries(${TARGET} PRIVATE
         llama-common ${CMAKE_THREAD_LIBS_INIT})
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
