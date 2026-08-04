@@ -544,19 +544,23 @@ static bool get_pinned_output(
 // Dispatch the bound function by name, using the pinned IOSurface
 // state. Inputs are already in the pinned state from prior
 // set_pinned_input calls; outputs land in the pinned state and
-// callers read them via get_pinned_output. The dispatch is
-// synchronous on the program queue and uses MLPredictionOptions.
-// outputBackings so Core ML writes outputs directly into the
-// pinned slots (zero-copy, no result memcpy). Returns false on
-// any failure (manifest missing, function unknown, model not warm,
-// Core ML prediction nil).
+// callers read them via get_pinned_output. `extra_inputs` is a
+// caller-provided input feature dict (e.g. weight MLMultiArrays
+// that aren't in the manifest's input_slots); it is merged into
+// the manifest's input feature dict. The dispatch is synchronous
+// on the program queue and uses MLPredictionOptions.outputBackings
+// so Core ML writes outputs directly into the pinned slots
+// (zero-copy, no result memcpy). Returns false on any failure
+// (manifest missing, function unknown, model not warm, Core ML
+// prediction nil, output not zero-copy).
 //
 // This is the canonical multifunction dispatch path. The W2 design
 // is locked: stateless at the Core ML level, stateful via the
 // IOSurface; the dispatch doesn't use MLState.
 static bool dispatch_pinned_function(
         common_ane_mtp_program & program,
-        const std::string & function_name) {
+        const std::string & function_name,
+        NSDictionary<NSString *, MLFeatureValue *> * extra_inputs = nil) {
     if (!program.manifest_loaded) {
         return false;
     }
@@ -585,6 +589,12 @@ static bool dispatch_pinned_function(
             NSError * error = nil;
             NSMutableDictionary<NSString *, MLFeatureValue *> * features =
                 [NSMutableDictionary dictionary];
+            // First, the manifest's input slots. The pinned MLMultiArrays
+            // are the IOSurface-backed views of the input state; writing
+            // to them is zero-copy (set_pinned_input*). MLDictionary
+            // feature provider keys are the Core ML function's declared
+            // input names (e.g., "token_ids"), not the manifest slot's
+            // full name ("prefill_s128.token_ids"); strip the prefix.
             for (uint32_t i = 0; i < function->n_inputs; ++i) {
                 const uint32_t slot_id = function->input_slot_ids[i];
                 if (slot_id >= ANE_STATE_SLOTS_MAX ||
@@ -592,9 +602,23 @@ static bool dispatch_pinned_function(
                     return;
                 }
                 const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
-                features[[NSString stringWithUTF8String:slot->name]] =
+                const std::string & full = program.manifest.slots[slot_id].name;
+                const std::string & prefix = function_name;
+                const std::string core_ml_name =
+                    (full.size() > prefix.size() + 1 &&
+                     full.compare(0, prefix.size(), prefix) == 0 &&
+                     full[prefix.size()] == '.')
+                        ? full.substr(prefix.size() + 1)
+                        : full;
+                features[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
                     [MLFeatureValue featureValueWithMultiArray:
                         program.pinned_slots[slot_id]];
+            }
+            // Then the caller's extra inputs (e.g. weight MLMultiArrays
+            // bound at load time from the source GGUF; these are not in
+            // the manifest's input_slots because they are static).
+            if (extra_inputs != nil) {
+                [features addEntriesFromDictionary:extra_inputs];
             }
             MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
                 initWithDictionary:features error:&error];
@@ -614,7 +638,20 @@ static bool dispatch_pinned_function(
                     return;
                 }
                 const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
-                backings[[NSString stringWithUTF8String:slot->name]] =
+                // MLPredictionOptions.outputBackings is keyed by the
+                // Core ML function's declared output name (e.g.,
+                // "hidden_states"), not the manifest slot's full name
+                // (e.g., "prefill_s128.hidden_states"). Strip the
+                // "<function_name>." prefix.
+                const std::string & full = program.manifest.slots[slot_id].name;
+                const std::string & prefix = function_name;
+                const std::string core_ml_name =
+                    (full.size() > prefix.size() + 1 &&
+                     full.compare(0, prefix.size(), prefix) == 0 &&
+                     full[prefix.size()] == '.')
+                        ? full.substr(prefix.size() + 1)
+                        : full;
+                backings[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
                     program.pinned_slots[slot_id];
             }
             options.outputBackings = backings;
@@ -633,18 +670,26 @@ static bool dispatch_pinned_function(
             }
             // Verify the result provider's MLMultiArrays are the same
             // pointers as our pinned output slots (the outputBackings
-            // contract). This is the zero-copy proof.
+            // contract). This is the zero-copy proof. Use the same
+            // prefix-stripped Core ML name as the outputBackings key.
             for (uint32_t i = 0; i < function->n_outputs; ++i) {
                 const uint32_t slot_id = function->output_slot_ids[i];
                 if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
-                const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
+                const std::string & full = program.manifest.slots[slot_id].name;
+                const std::string & prefix = function_name;
+                const std::string core_ml_name =
+                    (full.size() > prefix.size() + 1 &&
+                     full.compare(0, prefix.size(), prefix) == 0 &&
+                     full[prefix.size()] == '.')
+                        ? full.substr(prefix.size() + 1)
+                        : full;
                 MLMultiArray * result = [[output featureValueForName:
-                    [NSString stringWithUTF8String:slot->name]]
+                    [NSString stringWithUTF8String:core_ml_name.c_str()]]
                     multiArrayValue];
                 if (result == nil ||
                         result.dataPointer != program.pinned_slots[slot_id].dataPointer) {
                     LOG_WRN("ANE pinned dispatch %s: output %s not zero-copy\n",
-                            function_name.c_str(), slot->name);
+                            function_name.c_str(), full.c_str());
                     return;
                 }
             }
@@ -1195,21 +1240,37 @@ static common_ane_mtp_program_ptr common_ane_program_load(
         // present, the multifunction refactor has the layout it
         // needs; when absent, the legacy GGUF-metadata path
         // keeps working.
+        //
+        // The env var TESSERA_ANE_STATE_LAYOUT_MANIFEST, when set,
+        // overrides the sidecar lookup so the load can find a manifest
+        // that lives next to a source .mlmodelc (e.g. the gemma4
+        // prefill bundle's prefill-bundle.ane_state.v1.json) when the
+        // materialized .mlmodelc is in the per-process cache. The
+        // canonical load path (sidecar next to the materialized
+        // .mlmodelc) takes over once the converter embeds the manifest
+        // as a GGUF tensor (a follow-on).
         {
-            const std::string manifest_path_str =
-                ane_layout::manifest_path_for_mlmodelc_dir(
+            std::string manifest_path_str;
+            if (const char * override_path = std::getenv(
+                    "TESSERA_ANE_STATE_LAYOUT_MANIFEST");
+                    override_path != nullptr && override_path[0] != '\0') {
+                manifest_path_str = override_path;
+            } else {
+                manifest_path_str = ane_layout::manifest_path_for_mlmodelc_dir(
                     bundle_path.c_str());
+            }
             if (!manifest_path_str.empty()) {
                 std::string merror;
                 if (ane_layout::read_state_layout(manifest_path_str.c_str(),
                                                   &program->manifest, &merror)) {
                     program->manifest_loaded = true;
                     LOG_INF("loaded ane_state_layout.v1 manifest for %s: "
-                            "%u slots, %u functions, %u deps\n",
+                            "%u slots, %u functions, %u deps (path=%s)\n",
                             program->manifest.bundle_name,
                             program->manifest.n_slots,
                             program->manifest.n_functions,
-                            program->manifest.n_deps);
+                            program->manifest.n_deps,
+                            manifest_path_str.c_str());
                 } else if (fs::exists(manifest_path_str)) {
                     // Manifest exists but is malformed. The load
                     // is still allowed (the legacy path covers it)
@@ -1721,11 +1782,110 @@ bool common_ane_compute_prefill_slab(
         float * hidden_states,
         float * key_states,
         float * value_states) {
+    if (!program || !token_ids || !positions || !hidden_states || !key_states ||
+            !value_states || n_active == 0 ||
+            hidden_size == 0 || kv_heads == 0 || head_dim == 0) {
+        return false;
+    }
+    // Pinned-slot path: when the manifest is loaded, the function
+    // dispatch goes through the state_iosurface. This is the W2/W3
+    // design — stateless at the Core ML level, stateful via the
+    // IOSurface. The pinned-slot path is mandatory for multifunction
+    // bundles whose dispatch contract requires the manifest.
+    if (program->manifest_loaded) {
+        const ane_function_v1_t * function = find_manifest_function_by_role(
+            *program, ANE_ROLE_PREFILL, sequence_length);
+        if (function == nullptr) {
+            return false;
+        }
+        const size_t active_tokens = (size_t) n_active * sequence_length;
+        const size_t kv_width = (size_t) kv_heads * head_dim;
+        // 1) Write the per-call input slots. For prefill_s128/s256/s512
+        //    the input slots are token_ids (i32) and positions (i32).
+        const std::string func_name = function->name;
+        const std::string token_slot_name = func_name + ".token_ids";
+        const std::string position_slot_name = func_name + ".positions";
+        if (!set_pinned_input_i32(*program, token_slot_name, token_ids, active_tokens) ||
+                !set_pinned_input_i32(*program, position_slot_name, positions, active_tokens)) {
+            return false;
+        }
+        // 2) Build the extra input feature dict: weight MLMultiArrays
+        //    from the source GGUF (not in the manifest because they
+        //    are static across calls) and the per-call embedded gather
+        //    (if the function expects an "embedded" input).
+        NSMutableDictionary<NSString *, MLFeatureValue *> * extra = nil;
+        if (!program->weight_inputs.empty() || !program->embedding.empty()) {
+            extra = [NSMutableDictionary dictionary];
+            for (auto & entry : program->weight_inputs) {
+                NSString * weight_name = [NSString stringWithUTF8String:entry.first.c_str()];
+                extra[weight_name] = [MLFeatureValue featureValueWithMultiArray:entry.second];
+            }
+            // The "embedded" gather is a per-call artifact: it pulls
+            // token rows from the cached embedding table. The function
+            // expects an MLMultiArray; the manifest's input slot for
+            // it (if declared) holds the destination, but for the
+            // current gemma4 prefill bundle the embedded is a separate
+            // input feature name not in the manifest (the model was
+            // exported without it in the slot table).
+            if (const ane_slot_v1_t * emb_slot = find_manifest_slot(*program, "embedded");
+                    emb_slot != nullptr) {
+                if (program->embedding.empty() || program->embedding_dim != hidden_size) {
+                    return false;
+                }
+                NSArray<NSNumber *> * emb_shape = nil;
+                {
+                    NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:emb_slot->n_dim];
+                    for (uint32_t i = 0; i < emb_slot->n_dim; ++i) {
+                        [shape addObject:@(emb_slot->shape[i])];
+                    }
+                    emb_shape = shape;
+                }
+                NSError * emb_error = nil;
+                MLMultiArray * embedded = [[MLMultiArray alloc]
+                    initWithShape:emb_shape
+                         dataType:MLMultiArrayDataTypeFloat16
+                            error:&emb_error];
+                if (embedded == nil) {
+                    return false;
+                }
+                uint16_t * dst = (uint16_t *) embedded.dataPointer;
+                const uint16_t * vocab = program->embedding.data();
+                const size_t emb_count = (size_t) embedded.count;
+                for (size_t i = 0; i < emb_count; ++i) {
+                    const int32_t tok = token_ids[i];
+                    if ((size_t) tok * hidden_size + hidden_size > program->embedding.size()) {
+                        return false;
+                    }
+                    std::memcpy(dst + i * hidden_size,
+                                vocab + (size_t) tok * hidden_size,
+                                hidden_size * sizeof(uint16_t));
+                }
+                extra[@"embedded"] = [MLFeatureValue featureValueWithMultiArray:embedded];
+            }
+        }
+        // 3) Dispatch through the pinned state.
+        if (!dispatch_pinned_function(*program, func_name, extra)) {
+            return false;
+        }
+        // 4) Read the output slots back to host fp32. The pinned
+        //    output slots ARE the Core ML result MLMultiArrays
+        //    (zero-copy contract verified inside dispatch_pinned_function);
+        //    we read from the IOSurface bytes through get_pinned_output,
+        //    which handles f16->f32 conversion.
+        const std::string hidden_slot = func_name + ".hidden_states";
+        const std::string key_slot = func_name + ".key_states";
+        const std::string value_slot = func_name + ".value_states";
+        return get_pinned_output(*program, hidden_slot, hidden_states, active_tokens * hidden_size) &&
+               get_pinned_output(*program, key_slot, key_states, active_tokens * kv_width) &&
+               get_pinned_output(*program, value_slot, value_states, active_tokens * kv_width);
+    }
+    // Legacy path: arena + MLState. Kept for bundles without a
+    // manifest sidecar (older fixtures, smoke tests, single-function
+    // W0-style bundles that have not been re-exported). Will be
+    // dropped once the converter emits manifests for all paths.
     common_ane_compute_instance * instance =
         find_compute_function(program, "prefill", sequence_length);
-    if (!instance || !token_ids || !positions || !hidden_states || !key_states ||
-            !value_states || n_active == 0 || n_active > program->batch_bucket ||
-            hidden_size == 0 || kv_heads == 0 || head_dim == 0) {
+    if (!instance || n_active > program->batch_bucket) {
         return false;
     }
     __block bool ok = false;
