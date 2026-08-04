@@ -5,7 +5,7 @@ Owner branch: `perf/dsv4-rocm-pp-20260803`
 Base: `b88a59fbc6ac255e6bf5e2dd790f559c89ce911c` in Edwin's llama.cpp fork  
 Target host: `edwin@192.168.1.161` (`webhie`)  
 Last updated: 2026-08-04
-Current phase: four-optimization PP stack plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selects communication for 16K investigation while 64K/global attribution remains unresolved; indexed CSA is held pending repeated long-context component evidence.
+Current phase: four-optimization PP stack plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selects communication at 16K and the first 64K profile meets its numerical rule, pending independent 64K replication and critical-path evidence; indexed CSA is held.
 
 ## 1. Objective and success criteria
 
@@ -883,31 +883,36 @@ Use target-only decode measured regions and disk-safe profiling (targeted counte
 
 Branch selection rule: use at least two independent targeted profiles at the decision context(s). Select a family only when it is the largest reproducible measured-region elapsed-device-time family, contributes at least 15%, and leads the runner-up by at least 3 percentage points. If ranks disagree or the lead is smaller, collect more evidence or keep both candidates open; do not select by elegance. Communication requires the existing 20% threshold. Any candidate must later show >=3% median whole-model TG gain at its target depth with <=2% median regression at required shorter depths, unless a different threshold is declared before measurement.
 
-**M5.3 checkpoint — 16K communication selected for investigation; 64K remains unresolved.** Commit `35ee01b7e` adds a disk-safe ROCm-only llama-bench hook and profile harness. For accepted repetitions only, llama-bench calls `roctxProfilerResume(0)` immediately before target-only `test_gen`, records authoritative `CLOCK_MONOTONIC` `resume_return`/`pause_call` boundaries, and pauses after synchronized generation. `rocprofv3 --selected-regions` writes CSV kernel, memory-copy, RCCL, and HIP-runtime domains; load, depth setup, context restore, and the first discarded sample are absent. Three independent read-only reviews closed exact-contract, boundary, trace-domain, command-reproduction, and non-HIP portability defects. Commits `667bc100a` and `09f575d10` enforce repetition-only stabilization and preserve scope-valid attribution when profiler-perturbed wall timing fails, without making that throughput or CSA-decision eligible.
+**M5.3 checkpoint — 16K communication selected; 64K communication candidate requires replication.** Commit `35ee01b7e` adds the disk-safe ROCm-only selected-region hook/harness. For accepted repetitions only, llama-bench calls `roctxProfilerResume(0)` immediately before target-only synchronized `test_gen`, records authoritative monotonic boundaries, and pauses after generation. Kernel, memory-copy, RCCL, and HIP-runtime CSV domains exclude load, depth setup, context restore, and the first discarded sample. Commits `667bc100a` and `09f575d10` preserve only scope-valid attribution when profiler wall timing fails, while forcing throughput and CSA eligibility false.
 
-The first coarse classifier incorrectly combined shared-expert and non-MoE projections, creating an apparent 16K rank disagreement. Commit `27f432de9` inventories the fully hashed V4-Flash IQ2_M tensor signatures and fails closed on exactly one `deepseek4.block_count=43`: routed gate/up = 42 type-16 layers + one type-22 layer; routed down = 41 type-18 + two type-39; shared gate/up = 42 type-13 + one type-14; shared down = 42 type-14 + one type-8. Exact type/fusion/workgroup/grid signatures must match target-tokens x layer multiplicity x four GPUs globally, per GPU, and per repetition. Normal and anomalous counts match exactly in both preserved traces; two read-only reviews approved the corrected parser and negative fixtures.
+The first coarse classifier mixed shared experts, projections, and context work. Commit `27f432de9` fails closed on the fully hashed 43-layer V4-Flash IQ2_M routed/shared normal and anomalous type/fusion/workgroup/grid signatures, globally, per GPU, and per repetition. Commit `a789f138c` then maps the exact F16 `concat_cont` signatures to source-proven roles: axis 2 is CSA/HCA K materialization (`csa_k_all`/`hca_k_all`), axis 0 is their final mask concatenation; state restore uses another axis/type. CSA/HCA require exactly 21/20 layers x target tokens x four GPUs, globally/per GPU/per repetition at 16K and 64K. Unknown names, near-grids, missing calls, or redistribution fail closed. Two review rounds closed unanchored-name and missing 64K/secondary-grid/generic-depth/per-agent/per-repetition fixture gaps; all three real traces satisfy the exact contract.
 
-Both fully hashed clean-source 16K runs remain **wall-unstable exit-4 diagnostics**, so neither establishes TG or permits a CSA decision. Their exact-role device-time attribution now agrees:
+Both fully hashed 16K runs remain **wall-unstable exit-4 diagnostics**, so neither establishes TG or permits a CSA decision. Exact attribution agrees:
 
 | 16K artifact | Profiled reps / tokens | Wall MAD/median | Aggregate top | Runner-up | Lead | Per-repetition top |
 |---|---:|---:|---:|---:|---:|---|
-| `...T145326...-16k-a-...-35ee01b7edf9-6030` | 5 / 160 | 6.385% | NCCL 23.020% | non-MoE quantized matmul 19.749% | 3.271 pt | NCCL 5/5 |
-| `...T150438...-16k-b11-...-667bc100a5cc-32436` | 10 / 320 | 6.511% | NCCL 28.871% | non-MoE quantized matmul 20.086% | 8.785 pt | NCCL 10/10 |
+| `...T145326...-16k-a-...-35ee01b7edf9-6030` | 5 / 160 | 6.385% | NCCL 23.020% | non-MoE quantized 19.749% | 3.271 pt | NCCL 5/5 |
+| `...T150438...-16k-b11-...-667bc100a5cc-32436` | 10 / 320 | 6.511% | NCCL 28.871% | non-MoE quantized 20.086% | 8.785 pt | NCCL 10/10 |
 
-NCCL therefore satisfies the locked 16K branch rule in both independent profiles: reproducibly largest, >=20% communication share, and >=3-point lead. This selects **communication for investigation only**; it does not accept an implementation or a throughput gain. Routed experts are 9.392% / 8.499% and shared experts 7.446% / 6.539%, so neither MoE family wins. RCCL API time remains separate from `ncclDevKernel` device time and is never added to it. Run B repetition 8's retained stall has 3.992 s NCCL device time; API duration itself is not the source metric.
+NCCL satisfies the locked 16K rule in two independent profiles and is selected **for investigation only**. Routed experts are 9.392% / 8.499% and shared experts 7.446% / 6.539%; neither wins. No implementation or throughput gain is accepted.
 
-A third fully hashed selected-region profile at 64K (`...T161130...-raw-tg-profile-64k-a-...-27f432de97fc-17771`, five profiled tg32 repetitions, 1.3 GiB) is scope-complete with zero outside-boundary events and exact MoE dispatches, but also wall-unstable (5.356% MAD, exit 4). Its 20.682 s summed device time ranks NCCL 20.173% over unclassified `other` 19.722%, only a 0.451-point lead; NCCL is first in 3/5 repetitions and `other` in 2/5. Thus no 64K/global branch is selected.
+The first 64K profile remains wall-unstable (5.356% MAD, exit 4), but exact concat attribution removes the former `other` runner-up. NCCL 20.173% now leads non-MoE quantized matmul 17.080% by 3.092 points and is first in 5/5 repetitions. It therefore meets the numerical rule **within this single profile**, but one 64K artifact is not independent replication: 64K/global branch selection remains false until a second 64K profile reproduces it.
 
-| Component | 16K device ms/token | 64K device ms/token | 64K/16K |
-|---|---:|---:|---:|
-| NCCL kernels | 25.484 | 26.075 | 1.023x |
-| lightning indexer | 3.149 | 11.051 | 3.509x |
-| TOP_K | 2.123 | 2.419 | 1.140x |
-| flash attention | 4.218 | 8.942 | 2.120x |
-| unclassified `other` | 21.108 | 25.493 | 1.208x |
-| context-scaling `concat_cont<u16,2>` (role not yet proven) | 1.565 | 5.404 | 3.452x |
+| Exact component | 16K device ms/token | 64K device ms/token | 64K/16K | 64K share |
+|---|---:|---:|---:|---:|
+| NCCL kernels | 25.484 | 26.075 | 1.023x | 20.173% |
+| lightning indexer | 3.149 | 11.051 | 3.509x | 8.550% |
+| TOP_K | 2.123 | 2.419 | 1.140x | 1.871% |
+| flash attention | 4.218 | 8.942 | 2.120x | 6.918% |
+| CSA K materialization | 1.722 | 5.958 | 3.459x | 4.609% |
+| CSA final-mask concat | 0.142 | 0.164 | 1.155x | 0.127% |
+| unclassified `other` | 18.793 | 18.837 | 1.002x | 14.573% |
 
-Named LID + TOP_K + flash reaches 17.339% at 64K, but combining components does not by itself select indexed CSA. Flash is only 6.918% and a projected removable whole-model share has not been established. Keep 16K communication and long-context attention/indexer evidence open; obtain another long-context profile and map the context-scaling concat/`other` work before any implementation selection. Indexed CSA remains held.
+The exact named CSA path (LID + TOP_K + flash + CSA K/mask concat) sums to 22.075% at 64K, but this is **not a removable-share projection**: components have different remedies and combining them cannot select indexed CSA. Flash alone is 6.918%, CSA K materialization 4.609%, and no indexed implementation is selected.
+
+Commit `fa1e98ba2` adds a fail-closed read-only communication forensic analyzer. `ncclAllReduce` is the only traced collective API function. Every repetition has exactly 86 traced AllReduce groups/token, 344 rank calls/token (86/GPU/token), and 2,752 groups plus 11,008 rank calls/device kernels per tg32 repetition; cadence is invariant at 16K/64K. NCCL kernel median/p95/p99 is 58.281/121.842/346.284 us in 16K-A, 58.840/122.281/331.286 us in 16K-B, and 57.681/137.762/362.404 us at 64K. Run B repetition 8 retains three ~1.0618 s long device-kernel intervals on Agents 2/3/4 and 3.992 s summed NCCL time; these are **long intervals / stall candidates**, not a proven stall or cause. The 64K maximum is only 2.009 ms. Each GPU uses one RCCL stream (14/15/16/17), and same-agent non-NCCL timestamp overlap is at most 0.160% at 16K / 0.024% at 64K, but timestamps do not prove dependencies, resource overlap, rank causality, or critical-path membership.
+
+The exact supported RCCL CSV has no count/datatype/buffer/communicator/rank/stream/message-byte fields, and RCCL API/device-kernel correlation-ID sets are disjoint. Message size, algorithm/protocol, direct API-to-kernel mapping, and the critical path therefore remain unproven. API durations remain separate and are never added to device time. Next: reproduce the 64K numerical communication win in a second independent profile, then add predeclared RCCL argument/dependency evidence before implementation. Indexed CSA remains held.
 
 Decision branches:
 
@@ -915,6 +920,7 @@ Decision branches:
 - **B: LID/TOP_K dominant.** Keep TOP_K GPU-resident, optimize the actual GPU selector, reduce score-buffer traffic, then consider fused indexer + hierarchical selection (`tile -> wave/workgroup candidates -> global merge -> final 512`). Exact selection still scans all candidates; streaming bounds intermediate traffic, not asymptotic scan time.
 - **C: attention meets the predeclared M5.6 gate at long context.** Then consider indexed CSA. CUDA draft PR #25917 is design/correctness reference only (open draft, CUDA MMA, author measurements); its tiling and crossover are not ROCm evidence.
 - **D: elementwise/launch work meets the branch threshold.** Only then pursue decode-chain fusion (compression/norm/RoPE/cache conversion/insertion or inverse-RoPE/packing/projection preparation).
+- **E: communication reproduces at long context.** First capture RCCL arguments or another payload-size source plus graph/dependency evidence; then optimize only the proven collective/message/serialization path. Generic kernel duration and PCIe topology alone do not select an algorithm.
 
 ### M5.6 / P2 - mandatory 32K and 64K raw TG
 
@@ -997,8 +1003,11 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Do not select an M5.3 implementation branch from the first coarse 16K classification. | Initial type-only grouping mixed shared FFN and projections, producing apparent aggregate rank disagreement. All samples were retained. | superseded by exact-role parser `27f432de9` |
 | 2026-08-04 | Correct every documented artifact prefix to `$HOME/llama-jobs`. | Final-monitor execution exposed the inherited impossible `$HOME/edwin/llama-jobs` expansion (`/home/edwin/edwin/...`). All 60 canonical occurrences now match the actual preserved directories. | accepted documentation fix `2c8bab656` |
 | 2026-08-04 | Select communication as the 16K M5.3 investigation branch, not an accepted optimization. | Exact 43-layer normal/anomalous MoE signatures and counts leave NCCL first in both independent profiles: 23.020% vs 19.749% (3.271-point lead) and 28.871% vs 20.086% (8.785-point lead), NCCL first in all 15 repetitions. | selected at 16K `27f432de9` |
-| 2026-08-04 | Keep the 64K/global M5.3 branch unresolved. | First disk-safe 64K profile: NCCL 20.173%, `other` 19.722%, only 0.451-point lead and split 3/5 vs 2/5 repetition ranks. LID/flash scale 3.509x/2.120x in device ms/token. Wall MAD 5.356%; no throughput/CSA eligibility. | more long-context evidence required |
-| 2026-08-04 | Preserve and pin exact profile parser provenance in every new artifact. | `7355f8bcc` records parser provenance/command; `85833a12d` records the last commit touching the parser and makes reruns reject a mutable-checkout mismatch. Fixtures/dry-run pass. | accepted tooling fix |
+| 2026-08-04 | Keep the 64K/global M5.3 branch unresolved under the coarse concat classification. | First 64K profile originally ranked NCCL 20.173% vs mixed `other` 19.722%, only 0.451-point lead and split 3/5 vs 2/5. | superseded by exact concat attribution `a789f138c` |
+| 2026-08-04 | Preserve and pin exact profile parser provenance in every new artifact. | `7355f8bcc` records parser provenance/command; `85833a12d` pins reruns to the last parser-changing commit. Current artifacts pin exact concat parser `a789f138c`. | accepted tooling fix |
+| 2026-08-04 | Attribute 16K/64K CSA/HCA K and final-mask concat exactly. | Source-unique axis/type plus exact depth grids and 21/20-layer x token x four-GPU counts globally/per GPU/per repetition. Real traces and expanded negative fixtures pass after two review rounds. `other` is flat 1.002x, while CSA K concat scales 3.459x. | accepted diagnostic tooling `a789f138c` |
+| 2026-08-04 | Treat communication as a provisional 64K candidate, not a global selection. | Reclassified first 64K profile: NCCL 20.173% vs non-MoE quantized 17.080%, 3.092-point lead, NCCL first 5/5. Only one independent 64K artifact exists; wall timing remains ineligible. | second 64K profile required |
+| 2026-08-04 | Bound communication evidence without inventing payload or critical-path claims. | Exact cadence is 86 AllReduce groups/token and 11,008 rank calls/device kernels per tg32 rep. RCCL schema lacks message arguments; API/kernel correlation IDs are disjoint. Long intervals and near-zero same-agent compute overlap do not prove cause/dependencies. | accepted forensics `fa1e98ba2`; critical path open |
 
 ## 10. Closed decisions and open questions
 
@@ -1008,8 +1017,8 @@ Open questions:
 
 1. Does J16 hold on a future user-supplied production corpus? The committed technical proxy is positive, but no user corpus exists.
 2. Can a later expert-concentration signal select J16/J32/J64 without host synchronization? The accepted patch intentionally stays explicit.
-3. Which NCCL collective/message/timeline dependency is on the 16K critical path, and what exact graph role accounts for the context-scaling 64K `concat_cont<u16,2>` plus remaining `other` work? Communication wins the exact 16K device-time rule but not the 64K lead gate.
-4. Does HIP flash attention perform partial arbitrary-mask tile pruning, and does its 2.120x 16K-to-64K device-ms/token growth project a >=3% removable whole-model share after another long-context profile?
+3. What are the AllReduce count/datatype/message bytes, algorithm/protocol, and graph dependencies; do they place communication on the critical path, and does a second 64K profile reproduce its provisional 20.173% / 3.092-point win?
+4. Does HIP flash attention perform partial arbitrary-mask tile pruning, and can its 2.120x growth or the source-proven 3.459x CSA K materialization support a predeclared >=3% removable whole-model projection after replication?
 5. How are LID scores and top-k indices assigned across the four meta devices at runtime?
 6. If MTP is reopened separately, which recurrent state/logit component changes after verification/checkpoint round trips with zero accepted drafts?
 7. Which fixed corpus best represents production once the user supplies one?
@@ -1024,12 +1033,13 @@ measurement are missing; the prior 64K PP attempt terminated in warmup. No
 user-supplied production corpus has been accepted. Raw TG now has 30 accepted
 tg32 samples at every required depth and a separate strict tg1 scheduler audit.
 Sequence-only restore remains rejected and fails closed. Selected-region M5.3
-tooling and exact-role attribution are accepted. The first two unstable 16K
-profiles select communication for investigation, not throughput acceptance; the
-first unstable 64K profile misses the lead/repetition-consistency gate while
-LID/flash/context-concat work scales strongly. The next blocking evidence is a
-second long-context profile plus NCCL critical-path and context-concat mapping,
-not another raw-TG baseline sweep.
+tooling, exact MoE/concat attribution, and bounded communication forensics are
+accepted. The first two unstable 16K profiles select communication for
+investigation, not throughput acceptance. Exact concat roles make communication
+meet the numerical rule in all five repetitions of the first 64K profile, but
+one artifact is not independent replication. The next blocking evidence is a
+second 64K profile plus explicit RCCL message/dependency evidence, not another
+raw-TG baseline sweep.
 
 **Current non-GPU raw-TG tooling monitors:**
 
@@ -1037,7 +1047,8 @@ not another raw-TG baseline sweep.
 cd /home/edwin/llama.cpp-rdna2
 scripts/dsv4-rocm/test-tg-tools.py
 scripts/dsv4-rocm/test-tg-profile.py
-DSV4_TG_DEPTHS=16384 DSV4_TG_REPS=11 scripts/dsv4-rocm/profile-tg.sh --dry-run
+scripts/dsv4-rocm/test-tg-communication.py
+DSV4_TG_DEPTHS=65536 DSV4_TG_REPS=6 scripts/dsv4-rocm/profile-tg.sh --dry-run
 ```
 
 These launch no GPU/model work. The old static-validation artifact remains
@@ -1065,15 +1076,18 @@ L=$HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T161130.092022210Z-raw-tg-profil
 for d in "$A" "$B" "$L"; do "$d/profile-parser-command.sh"; done
 python3 "$B/profile-comparison-monitor.py"
 python3 "$L/profile-scaling-monitor.py"
+"$L/communication-forensics-command.sh"
 ```
 
 Expected results are `M5.3 16K COMMUNICATION BRANCH: SELECTED
 (INVESTIGATION ONLY)` with `branch_selected=1 selected_branch=communication
-optimization_accepted=0`, followed by `M5.3 16K->64K CONTEXT PROFILE:
-LONG-CONTEXT BRANCH UNRESOLVED` with `global_branch_selected=0` and
-`csa_decision_eligible=0`. The monitor retains every unstable wall sample;
-only exact selected-region device-time attribution participates in branch
-selection. Exact GPU commands were:
+optimization_accepted=0`, followed by `M5.3 64K COMMUNICATION CANDIDATE:
+REPLICATION REQUIRED` with `single_64k_branch_rule_met=1`,
+`independent_64k_profiles=1`, `global_branch_selected=0`, then `M5.3 DSV4 NCCL
+FORENSICS: COMPLETE (CRITICAL PATH NOT PROVEN)` with
+`cross_run_cadence_invariant=1 critical_path_proven=0`. Every unstable wall
+sample remains; only exact selected-region device attribution participates in
+branch selection. Exact GPU commands were:
 
 ```bash
 cd /home/edwin/llama.cpp-rdna2
@@ -1232,14 +1246,17 @@ Repository implementation/evidence chain:
   43427c6cf (first M5.3 diagnostic checkpoint) ->
   27f432de9 (exact DSV4 MoE/non-MoE profile attribution) ->
   7355f8bcc (automatic profile-parser provenance) ->
-  85833a12d (pin parser reruns to recorded implementation commit)
+  85833a12d (pin parser reruns to recorded implementation commit) ->
+  ba3bf23a3 (16K selected / first-64K unresolved checkpoint) ->
+  a789f138c (exact CSA/HCA concat profile attribution) ->
+  fa1e98ba2 (fail-closed decode communication forensics)
 
 Raw-decode Ralph log:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
 Raw-decode Ralph state:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.state.json
 Raw-decode Ralph status:
-  active, iteration 3/50; M5.0/M5.1 accepted, 16K M5.3 communication selected for investigation, 64K/global branch unresolved; started 2026-08-04T03:47:49Z
+  active, iteration 3/50; M5.0/M5.1 accepted, 16K communication selected, first 64K communication candidate pending independent replication; started 2026-08-04T03:47:49Z
 Revised roadmap / loop-registration commits:
   5df30a53e / 0376a55aa
 M5.0 harness / corrected depth-state commits:
@@ -1255,12 +1272,12 @@ Diagnostic M5.3 profile artifacts (all exit 4 / unstable wall):
   $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436/
   $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T161130.092022210Z-raw-tg-profile-64k-a-performance-27f432de97fc-17771/
 Current next action:
-  Communication is selected for 16K investigation only. M5.3 global/64K
-  selection remains unresolved: map NCCL collective/message critical-path work,
-  prove the context-scaling `concat_cont<u16,2>` graph role, and capture another
-  64K selected-region profile without changing tg32/discard policy. Apply the
-  lead/repetition gate again before implementing communication or attention/LID
-  work. M5.2 is not triggered; indexed CSA remains held pending M5.6.
+  Communication is selected at 16K and meets the numerical rule in the first
+  64K profile, but global selection requires a second independent 64K artifact.
+  Capture it without changing tg32/one-discard policy, then re-apply the exact
+  concat-aware gate. In parallel, add a predeclared way to capture RCCL count,
+  datatype/message bytes and graph dependencies; the current trace cannot prove
+  them or the critical path. M5.2 is not triggered; indexed CSA remains held.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
@@ -1308,6 +1325,14 @@ Purpose:
 - 64K artifact `20260804T161130.092022210Z-raw-tg-profile-64k-a-performance-27f432de97fc-17771`: process clean, zero outside-boundary events, exact per-agent/per-repetition MoE counts, but wall MAD 5.356% -> exit 4 diagnostic. NCCL 20.173% leads `other` 19.722% by only 0.451 point; NCCL is first 3/5 reps, `other` 2/5. No 64K/global branch selection.
 - Scaling: NCCL device ms/token is nearly flat (1.023x 16K->64K), while LID is 3.509x, flash 2.120x, TOP_K 1.140x, and unclassified context concat 3.452x. Named LID+TOP_K+flash is 17.339% at 64K, but flash alone is 6.918% and no >=3% removable whole-model projection exists; indexed CSA remains held.
 - Preserved `profile-scaling-monitor.py` and exact parser command in the 64K artifact. End state after tooling pin: clean `85833a12d`, no KFD PID, GPU lock free, 106 GiB free.
+
+### Iteration 3 continued — exact attention roles and communication bounds
+
+- `a789f138c` maps source-unique CSA/HCA K axis-2 and final-mask axis-0 concat signatures at 16K/64K with exact 21/20-layer x token x four-GPU contracts. Initial reviewer NO-GO (near-name and coverage gaps) was repaired with exact demangled names and 64K/secondary-grid/generic-depth/per-agent/per-repetition negatives; follow-up GO. All three real traces reparse exactly.
+- CSA K concat is 1.722 -> 5.958 device ms/token (3.459x); CSA final-mask concat is 0.142 -> 0.164 (1.155x); remaining `other` is 18.793 -> 18.837 (1.002x). This proves the context-scaling concat is K materialization, not restore, but selects no indexed implementation.
+- Reclassification changes the first 64K rank to NCCL 20.173% vs non-MoE quantized 17.080%, 3.092-point lead, NCCL first 5/5. Marked `single_64k_branch_rule_met=1` but `independent_64k_profiles=1 replication_required=1 global_branch_selected=0`.
+- `fa1e98ba2` adds exact-schema communication forensics. Initial review NO-GO (schema/claim/test gaps) was repaired; follow-up GO. Three real artifacts prove invariant 86 AllReduce groups/token and 11,008 rank calls/device kernels per tg32 repetition. The RCCL schema has no message arguments and API/kernel correlation IDs are disjoint; critical-path proof remains false.
+- Preserved exact reparses/monitors plus `communication-forensics.{json,txt}`, its pinned command/commit, and `.pre-a789f138c` summaries/monitors. All unstable samples remain; no throughput, optimization, or CSA acceptance.
 
 **Exact accepted GPU commands:**
 
