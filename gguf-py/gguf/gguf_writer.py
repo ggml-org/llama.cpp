@@ -1271,6 +1271,9 @@ class GGUFWriter:
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)
 
+    def add_vision_rope_theta(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.ROPE_THETA, value)
+
     def add_vision_use_gelu(self, value: bool) -> None:
         self.add_bool(Keys.ClipVision.USE_GELU, value)
 

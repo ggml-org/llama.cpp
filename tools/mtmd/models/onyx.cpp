@@ -109,11 +109,11 @@ ggml_cgraph * clip_graph_onyx::build() {
     cb(x, "encoder_out", -1);
 
     // adapter (6144->4096->4096, exact GELU each) + LLM vision_projection (4096->6656)
-    x = build_mm(model.mm_adapter_fc, x);
+    x = build_mm(model.mm_0_w, x);
     x = ggml_gelu_erf(ctx0, x);
-    x = build_mm(model.mm_adapter_proj, x);
+    x = build_mm(model.mm_1_w, x);
     x = ggml_gelu_erf(ctx0, x);
-    x = build_mm(model.mm_vision_proj, x);               // [6656, n_out]
+    x = build_mm(model.mm_2_w, x);                       // [6656, n_out]
     cb(x, "projected", -1);
 
     ggml_build_forward_expand(gf, x);

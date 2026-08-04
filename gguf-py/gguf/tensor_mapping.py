@@ -1869,18 +1869,6 @@ class TensorNameMap:
             "patch_merge_mlp.linear_2", # minimax-m3
         ),
 
-        MODEL_TENSOR.V_MM_ADAPTER_FC: (
-            "model.vision_adapter.fc1", # onyx
-        ),
-
-        MODEL_TENSOR.V_MM_ADAPTER_PROJ: (
-            "model.vision_adapter.fc2", # onyx
-        ),
-
-        MODEL_TENSOR.V_MM_VISION_PROJ: (
-            "model.vision_projection", # onyx
-        ),
-
         MODEL_TENSOR.V_DS_NORM: (
             "model.visual.deepstack_merger_list.{bid}.norm", # deepstack in qwen3vl
         ),

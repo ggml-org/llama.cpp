@@ -61,6 +61,7 @@
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
 #define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
 #define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
+#define KEY_V_ROPE_THETA            "clip.vision.rope_theta"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
@@ -93,8 +94,8 @@
 
 #define KEY_ONYX_PATCH_TEMPORAL "clip.vision.onyx.patch_temporal"
 #define KEY_ONYX_SPARSE_FACTOR  "clip.vision.onyx.sparse_attention_factor"
-#define KEY_ONYX_POS_GRID       "clip.vision.onyx.pos_emb_grid"
-#define KEY_ONYX_ROPE_THETA     "clip.vision.onyx.rope_theta"
+#define KEY_ONYX_POS_EMB_H      "clip.vision.onyx.pos_emb_height"
+#define KEY_ONYX_POS_EMB_W      "clip.vision.onyx.pos_emb_width"
 
 //
 // tensor name constants
@@ -133,9 +134,6 @@
 #define TN_MM_GATE         "mm.gate.%s"
 #define TN_MM_DOWN         "mm.down.%s"
 #define TN_MM_POST_NORM    "mm.post_norm.%s"
-#define TN_MM_ADAPTER_FC   "mm.adapter_fc.%s"   // onyx
-#define TN_MM_ADAPTER_PROJ "mm.adapter_proj.%s" // onyx
-#define TN_MM_VISION_PROJ  "mm.vision_proj.%s"  // onyx
 #define TN_MVLM_PROJ_MLP   "mm.model.mlp.%d.%s"
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"

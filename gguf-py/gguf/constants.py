@@ -341,6 +341,7 @@ class Keys:
         IMAGE_MEAN            = "clip.vision.image_mean"
         IMAGE_STD             = "clip.vision.image_std"
         SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
+        ROPE_THETA            = "clip.vision.rope_theta"
         USE_GELU              = "clip.use_gelu"
         USE_SILU              = "clip.use_silu"
         N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
@@ -873,9 +874,6 @@ class MODEL_TENSOR(IntEnum):
     V_MM_GATE            = auto() # cogvlm
     V_MM_MERGER_FC1      = auto() # minimax-m3 (patch-merge MLP)
     V_MM_MERGER_FC2      = auto() # minimax-m3 (patch-merge MLP)
-    V_MM_ADAPTER_FC      = auto() # onyx
-    V_MM_ADAPTER_PROJ    = auto() # onyx
-    V_MM_VISION_PROJ     = auto() # onyx
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
     V_TOK_IMG_BEGIN      = auto() # hunyuanvl
@@ -1486,9 +1484,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
     MODEL_TENSOR.V_MM_MERGER_FC1:           "mm.merger.fc1",
     MODEL_TENSOR.V_MM_MERGER_FC2:           "mm.merger.fc2",
-    MODEL_TENSOR.V_MM_ADAPTER_FC:           "mm.adapter_fc",   # onyx
-    MODEL_TENSOR.V_MM_ADAPTER_PROJ:         "mm.adapter_proj", # onyx
-    MODEL_TENSOR.V_MM_VISION_PROJ:          "mm.vision_proj",  # onyx
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
     MODEL_TENSOR.V_MM_PRE_NORM:             "mm.pre_norm",
@@ -1723,9 +1718,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MM_UP,
         MODEL_TENSOR.V_MM_DOWN,
         MODEL_TENSOR.V_MM_GATE,
-        MODEL_TENSOR.V_MM_ADAPTER_FC,
-        MODEL_TENSOR.V_MM_ADAPTER_PROJ,
-        MODEL_TENSOR.V_MM_VISION_PROJ,
         MODEL_TENSOR.V_TOK_BOI,
         MODEL_TENSOR.V_TOK_EOI,
         MODEL_TENSOR.V_MM_PRE_NORM,

@@ -1526,10 +1526,11 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_SPATIAL_MERGE_SIZE,  hparams.n_merge,             false);
-                        get_f32(KEY_ONYX_ROPE_THETA,     hparams.rope_theta,          false);
+                        get_f32(KEY_V_ROPE_THETA,        hparams.rope_theta,          false);
                         get_u32(KEY_ONYX_PATCH_TEMPORAL, hparams.onyx_patch_temporal, false);
                         get_u32(KEY_ONYX_SPARSE_FACTOR,  hparams.onyx_sparse_factor,  false);
-                        get_u32(KEY_ONYX_POS_GRID,       hparams.onyx_pos_grid,       false);
+                        get_u32(KEY_ONYX_POS_EMB_H,      hparams.onyx_pos_emb_h,      false);
+                        get_u32(KEY_ONYX_POS_EMB_W,      hparams.onyx_pos_emb_w,      false);
                         hparams.set_limit_image_tokens(1, 4096);
                         hparams.set_warmup_n_tokens(32*32);
                     } break;
@@ -2238,9 +2239,9 @@ struct clip_model_loader {
             case PROJECTOR_TYPE_ONYX:
                 {
                     // 3-linear MLP: fc -> erf-GELU -> proj -> erf-GELU -> vision_proj (into LLM residual dim)
-                    model.mm_adapter_fc   = get_tensor(string_format(TN_MM_ADAPTER_FC,   "weight"));
-                    model.mm_adapter_proj = get_tensor(string_format(TN_MM_ADAPTER_PROJ, "weight"));
-                    model.mm_vision_proj  = get_tensor(string_format(TN_MM_VISION_PROJ,  "weight"));
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_STEP3VL:
                 {
@@ -3966,7 +3967,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 const int ps     = patch_size;
                 const int nx     = image_size_width;
                 const int pt     = hparams.onyx_patch_temporal;
-                const int pgrid  = hparams.onyx_pos_grid;   // 32
+                const int pos_h  = hparams.onyx_pos_emb_h;  // 32
+                const int pos_w  = hparams.onyx_pos_emb_w;  // 32
                 const int nemb   = hparams.n_embd;          // 1536
                 const int f      = hparams.n_merge;         // downsample 2
                 const int patch_dim = pt * 3 * ps * ps;
@@ -4000,9 +4002,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 set_input_f32("onyx_patches", patches);
 
                 // --- learned pos-emb bilinear interpolation (grid_sample align_corners=False,
-                //     zeros padding) from pgrid x pgrid to grid_h x grid_w ---
-                ggml_tensor * pe = ctx->model.position_embeddings; // [nemb, pgrid*pgrid]
-                std::vector<float> pe_host((size_t) nemb * pgrid * pgrid);
+                //     zeros padding) from pos_h x pos_w to grid_h x grid_w ---
+                ggml_tensor * pe = ctx->model.position_embeddings; // [nemb, pos_h*pos_w]
+                std::vector<float> pe_host((size_t) nemb * pos_h * pos_w);
                 {
                     std::vector<char> raw(ggml_nbytes(pe));
                     ggml_backend_tensor_get(pe, raw.data(), 0, ggml_nbytes(pe));
@@ -4010,7 +4012,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                         std::memcpy(pe_host.data(), raw.data(), ggml_nbytes(pe));
                     } else {
                         const auto * tt = ggml_get_type_traits(pe->type);
-                        tt->to_float(raw.data(), pe_host.data(), (int64_t) nemb * pgrid * pgrid);
+                        tt->to_float(raw.data(), pe_host.data(), (int64_t) nemb * pos_h * pos_w);
                     }
                 }
                 // NOTE: the reference uses meshgrid(ys, xs, indexing="xy") which yields a
@@ -4022,39 +4024,40 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 for (int t = 0; t < n_tok; t++) {
                     const int   i = t / grid_h;   // width index  (0..grid_w-1)
                     const int   j = t % grid_h;   // height index (0..grid_h-1)
-                    const float af = (i + 0.5f) * pgrid / grid_w - 0.5f; // row / H axis
-                    const float bf = (j + 0.5f) * pgrid / grid_h - 0.5f; // col / W axis
+                    const float af = (i + 0.5f) * pos_h / grid_w - 0.5f; // row axis (pos_h)
+                    const float bf = (j + 0.5f) * pos_w / grid_h - 0.5f; // col axis (pos_w)
                     const int   a0 = (int) std::floor(af); const float wa = af - a0;
                     const int   b0 = (int) std::floor(bf); const float wb = bf - b0;
                     const int   as[2] = { a0, a0 + 1 }; const float was[2] = { 1.0f - wa, wa };
                     const int   bs[2] = { b0, b0 + 1 }; const float wbs[2] = { 1.0f - wb, wb };
                     float * dst = pos_emb.data() + (size_t) t * nemb;
                     for (int ka = 0; ka < 2; ka++) {
-                        if (as[ka] < 0 || as[ka] >= pgrid) continue;
+                        if (as[ka] < 0 || as[ka] >= pos_h) continue;
                         for (int kb = 0; kb < 2; kb++) {
-                            if (bs[kb] < 0 || bs[kb] >= pgrid) continue;
+                            if (bs[kb] < 0 || bs[kb] >= pos_w) continue;
                             const float w = was[ka] * wbs[kb];
                             if (w == 0.0f) continue;
-                            const float * src = pe_host.data() + (size_t) (as[ka] * pgrid + bs[kb]) * nemb;
+                            const float * src = pe_host.data() + (size_t) (as[ka] * pos_w + bs[kb]) * nemb;
                             for (int c = 0; c < nemb; c++) dst[c] += w * src[c];
                         }
                     }
                 }
                 set_input_f32("onyx_pos_emb", pos_emb);
 
-                // --- sparse window grouping (pgrid x pgrid windows) ---
-                const int win = pgrid;
-                const int nwin_h = (grid_h + win - 1) / win;
-                const int nwin_w = (grid_w + win - 1) / win;
+                // --- sparse window grouping (pos_h x pos_w windows; square in the trained model) ---
+                const int win_h = pos_h;
+                const int win_w = pos_w;
+                const int nwin_h = (grid_h + win_h - 1) / win_h;
+                const int nwin_w = (grid_w + win_w - 1) / win_w;
                 std::vector<int32_t> sp_perm; sp_perm.reserve(n_tok);
                 std::vector<int>     sp_slens;
                 for (int wy = 0; wy < nwin_h; wy++) {
                     for (int wx = 0; wx < nwin_w; wx++) {
                         int cnt = 0;
-                        for (int hh = 0; hh < win; hh++) {
-                            for (int ww = 0; ww < win; ww++) {
-                                const int gy = wy * win + hh;
-                                const int gx = wx * win + ww;
+                        for (int hh = 0; hh < win_h; hh++) {
+                            for (int ww = 0; ww < win_w; ww++) {
+                                const int gy = wy * win_h + hh;
+                                const int gx = wx * win_w + ww;
                                 if (gy < grid_h && gx < grid_w) { sp_perm.push_back(gy * grid_w + gx); cnt++; }
                             }
                         }
@@ -5144,7 +5147,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_MINIMAX_M3:
             return ctx->model.mm_merger_fc2_b->ne[0];
         case PROJECTOR_TYPE_ONYX:
-            return ctx->model.mm_vision_proj->ne[1];
+            return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_EXAONE4_5:
