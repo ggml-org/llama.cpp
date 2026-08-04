@@ -346,7 +346,10 @@ struct WorkflowsView: View {
                 if Task.isCancelled { return }
                 if let outcome = WorkflowRunOutcome(finishedEvent: event) {
                     await MainActor.run {
-                        self.finishRun(outcome: outcome, appending: event)
+                        self.finishRun(
+                            outcome: outcome, appending: event,
+                            workflowName: workflow.name
+                        )
                     }
                     return
                 }
@@ -371,10 +374,18 @@ struct WorkflowsView: View {
         runPhase = .running(task: task, events: events)
     }
 
-    private func finishRun(outcome: WorkflowRunOutcome, appending event: WorkflowEvent) {
+    private func finishRun(
+        outcome: WorkflowRunOutcome,
+        appending event: WorkflowEvent,
+        workflowName: String
+    ) {
         var events = runPhase.events
         events.append(event)
         runPhase = .finished(outcome: outcome, events: events)
+        // Pull the user back only if they wandered off mid-run
+        // (the notifier no-ops while the app is frontmost and
+        // for cancellations).
+        WorkflowRunNotifier.post(outcome: outcome, workflowName: workflowName)
     }
 
     /// The right-hand parameter panel. Hidden visually but kept

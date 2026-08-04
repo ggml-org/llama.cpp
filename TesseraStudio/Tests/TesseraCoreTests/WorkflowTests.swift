@@ -492,3 +492,38 @@ final class WorkflowRunOutcomeTests: XCTestCase {
         XCTAssertEqual(WorkflowRunOutcome.cancelled(events: []), .cancelled(completedNodes: 0))
     }
 }
+
+/// Notification copy is a pure function of the outcome, so the
+/// notifier cannot drift from what the run sheet reports.
+final class WorkflowRunNotificationContentTests: XCTestCase {
+    func testSucceededCopy() {
+        let content = WorkflowRunNotificationContent(
+            outcome: .succeeded(summary: nil), workflowName: "calibrate-and-quantize"
+        )
+        XCTAssertEqual(content.title, "Workflow finished")
+        XCTAssertEqual(content.body, "\"calibrate-and-quantize\" completed successfully.")
+    }
+
+    func testFailedCopyCarriesMessage() {
+        let content = WorkflowRunNotificationContent(
+            outcome: .failed(message: "node q failed: out of disk"), workflowName: "w"
+        )
+        XCTAssertEqual(content.title, "Workflow failed")
+        XCTAssertEqual(content.body, "\"w\": node q failed: out of disk")
+    }
+
+    func testFailedCopyWithoutMessage() {
+        let content = WorkflowRunNotificationContent(
+            outcome: .failed(message: nil), workflowName: "w"
+        )
+        XCTAssertEqual(content.body, "\"w\" did not complete.")
+    }
+
+    func testCancelledCopyReportsProgress() {
+        let content = WorkflowRunNotificationContent(
+            outcome: .cancelled(completedNodes: 2), workflowName: "w"
+        )
+        XCTAssertEqual(content.title, "Workflow cancelled")
+        XCTAssertEqual(content.body, "\"w\" stopped after 2 node(s).")
+    }
+}

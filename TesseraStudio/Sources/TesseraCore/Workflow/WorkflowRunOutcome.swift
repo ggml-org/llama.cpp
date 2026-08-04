@@ -40,3 +40,30 @@ public enum WorkflowRunOutcome: Sendable, Equatable {
         return false
     }
 }
+
+/// Notification text for a terminal workflow run. A pure
+/// function of the outcome + workflow name, so the notifier
+/// and any future surface (banner, telemetry) cannot disagree
+/// about what a run's result says.
+public struct WorkflowRunNotificationContent: Sendable, Equatable {
+    public let title: String
+    public let body: String
+
+    public init(outcome: WorkflowRunOutcome, workflowName: String) {
+        switch outcome {
+        case .succeeded:
+            self.title = "Workflow finished"
+            self.body = "\"\(workflowName)\" completed successfully."
+        case .failed(let message):
+            self.title = "Workflow failed"
+            if let message {
+                self.body = "\"\(workflowName)\": \(message)"
+            } else {
+                self.body = "\"\(workflowName)\" did not complete."
+            }
+        case .cancelled(let completedNodes):
+            self.title = "Workflow cancelled"
+            self.body = "\"\(workflowName)\" stopped after \(completedNodes) node(s)."
+        }
+    }
+}
