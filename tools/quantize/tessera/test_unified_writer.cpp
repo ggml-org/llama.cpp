@@ -449,7 +449,7 @@ int main(int argc, char ** argv) {
             check(s.n_tensors_dspark == 3,      "stats: 3 dspark tensors");
             check(s.n_tensors_mtp_nextn == 4,   "stats: 4 mtp_nextn tensors");
             check(s.n_tensors_shared_embd == 1, "stats: 1 shared_embd tensor");
-            check(s.n_qtype_overrides == 2,     "stats: 2 qtype overrides (trunk.attn_q + dflash.fc)");
+            check(s.n_qtype_overrides == 3,     "stats: 3 qtype overrides (trunk.attn_q + dflash.fc + dflash.blk.0.attn_q inherited from trunk)");
         } else {
             std::printf("FAIL writer construct: %s\n", err.c_str());
             g_fail++;
@@ -611,6 +611,163 @@ int main(int argc, char ** argv) {
               "hparams f_norm_rms_eps round-trip");
         check(j2["is_swa_impl"].size() == hparams.is_swa_impl.size(),
               "hparams is_swa_impl size round-trip");
+    }
+
+    // ---- Test 7: Phase 16.6 worst-of-trunk-and-dflash end-to-end ----
+    //
+    // The unified Gemma4 12B + dspark + dflash + MTP arch has
+    // shared token_embd / output tensors between the trunk and
+    // the dflash drafter (the drafter borrows them via
+    // ctx_other, frozen at train time; see
+    // tessera-train-dflash.cpp:72). When the per-component
+    // calibration runs, the trunk's and dflash's verdicts can
+    // disagree on the same shared tensor. The writer must pick
+    // ONE qtype per tensor. The architect's call: take the
+    // MORE CONSERVATIVE option (the qtype with more bits = less
+    // precision loss).
+    //
+    // The 5 cases below exercise the worst_of helper at the
+    // per-tensor write site. The test setup is minimal: a
+    // single shared_embd source with just a token_embd.weight
+    // (F16), and a policy with various entries for the same
+    // tensor name from different roles. The writer should
+    // resolve the qtype by name (worst-of across all matching
+    // entries) and write the destination tensor with the
+    // resolved qtype.
+    {
+        // Build a tiny shared_embd source GGUF with just the
+        // shared token_embd.weight (F16, 2D 256x4). The same
+        // shape works for the trunk / dflash / dspark / mtp
+        // source slots when we want a per-component qtype to
+        // also drive the worst-of lookup.
+        const std::string worst_of_src = std::string(tmpdir) + "/test_unified_writer_worst_of_src.gguf";
+        const std::string worst_of_dst = std::string(tmpdir) + "/test_unified_writer_worst_of_dst.gguf";
+        std::remove(worst_of_src.c_str());
+        std::remove(worst_of_dst.c_str());
+        {
+            std::vector<synth_tensor> ts;
+            std::vector<int64_t> ne = {256, 4};
+            size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+            std::vector<uint8_t> data(n);
+            for (size_t i = 0; i < n; i++) data[i] = (uint8_t)(0xF0 + (i & 0x0F));
+            ts.push_back({"token_embd.weight", GGML_TYPE_F16, ne, data});
+            std::string err;
+            check(write_synth_gguf(worst_of_src, "gemma4", {}, ts, &err) == 0,
+                  ("write worst-of source: " + err).c_str());
+        }
+        // Hparams for the worst-of tests. 1 layer, 256 hidden,
+        // 4 vocab (small enough to keep the writer's scratch
+        // buffer happy).
+        ts_unified_hparams wo_hp = hparams;
+        wo_hp.n_layer = 1;
+        ts_unified_dflash_hparams wo_dh{};
+        wo_dh.n_layer = 1; wo_dh.n_embd = 256; wo_dh.n_vocab = 4;
+        ts_unified_dspark_hparams wo_ds{};
+        wo_ds.markov_rank = 4;
+        ts_unified_meta wo_meta{"tessera-unified-writer worst-of test", "test_tip"};
+
+        // Helper: build a writer with the given policy, write
+        // the unified GGUF, reopen it, and return the
+        // token_embd.weight qtype (-1 if not found / write
+        // failed).
+        auto run_worst_of_case = [&](const std::string & tag,
+                                     const ts_unified_policy & pol,
+                                     int expected_qtype) {
+            std::remove(worst_of_dst.c_str());
+            std::vector<ts_unified_component> wo_comps = {
+                {worst_of_src, "shared_embd"},
+            };
+            std::string err;
+            ts_unified_writer w(worst_of_dst, wo_comps, pol, wo_hp, wo_dh, wo_ds, wo_meta, &err);
+            int rc = w.write_all(&err);
+            check(rc == 0, ("worst-of write_all " + tag + (err.empty() ? "" : ": " + err)).c_str());
+            if (rc != 0) {
+                std::printf("  writer err: %s\n", err.c_str());
+                return;
+            }
+            const auto & s = w.get_stats();
+            check(s.n_tensors_shared_embd == 1,
+                  ("worst-of stats shared_embd==1 " + tag).c_str());
+            // Reopen and read back the qtype.
+            ggml_context * rin_ctx = nullptr;
+            gguf_init_params ip = { /*no_alloc=*/ false, /*ctx=*/ &rin_ctx };
+            gguf_context * rin = gguf_init_from_file(worst_of_dst.c_str(), ip);
+            check(rin != nullptr, ("worst-of reopen " + tag).c_str());
+            if (rin != nullptr) {
+                int64_t tid = gguf_find_tensor(rin, "token_embd.weight");
+                check(tid >= 0, ("worst-of token_embd.weight found " + tag).c_str());
+                if (tid >= 0) {
+                    int qtype = (int)gguf_get_tensor_type(rin, tid);
+                    check(qtype == expected_qtype,
+                          ("worst-of qtype resolved to " +
+                           std::string(ts_unified_qtype_to_string(expected_qtype)) +
+                           " (got " + ts_unified_qtype_to_string(qtype) + ") " + tag).c_str());
+                }
+                gguf_free(rin);
+            }
+        };
+
+        // Case 1: trunk=Q4_K + dflash=Q6_K -> Q6_K (the
+        // architect's primary case: trunk is fine with 4-bit,
+        // dflash needs 6-bit; the drafter's accuracy is more
+        // sensitive to the embedding).
+        {
+            ts_unified_policy p;
+            p.entries.push_back({"trunk",  "token_embd.weight", "Q4_K"});
+            p.entries.push_back({"dflash", "token_embd.weight", "Q6_K"});
+            run_worst_of_case("trunk=Q4_K + dflash=Q6_K -> Q6_K", p, GGML_TYPE_Q6_K);
+        }
+        // Case 2: trunk only Q4_K -> Q4_K (single entry; the
+        // rule degenerates to a no-op worst-of).
+        {
+            ts_unified_policy p;
+            p.entries.push_back({"trunk",  "token_embd.weight", "Q4_K"});
+            run_worst_of_case("trunk only Q4_K -> Q4_K", p, GGML_TYPE_Q4_K);
+        }
+        // Case 3: dflash=F16 + dspark=Q4_K -> F16 (extreme
+        // case: one side unquantized; F16 has 16 bits, Q4_K
+        // has 4; F16 wins).
+        {
+            ts_unified_policy p;
+            p.entries.push_back({"dflash", "token_embd.weight", "F16"});
+            p.entries.push_back({"dspark", "token_embd.weight", "Q4_K"});
+            run_worst_of_case("dflash=F16 + dspark=Q4_K -> F16", p, GGML_TYPE_F16);
+        }
+        // Case 4: trunk=Q5_K + dflash=Q5_K -> Q5_K (both
+        // agree; no change).
+        {
+            ts_unified_policy p;
+            p.entries.push_back({"trunk",  "token_embd.weight", "Q5_K"});
+            p.entries.push_back({"dflash", "token_embd.weight", "Q5_K"});
+            run_worst_of_case("trunk=Q5_K + dflash=Q5_K -> Q5_K", p, GGML_TYPE_Q5_K);
+        }
+        // Case 5: trunk=F32 + dflash=F32 -> F32 (both
+        // unquantized; F32 is the no-quantization anchor at 0
+        // bits, so the worst-of is also F32).
+        {
+            ts_unified_policy p;
+            p.entries.push_back({"trunk",  "token_embd.weight", "F32"});
+            p.entries.push_back({"dflash", "token_embd.weight", "F32"});
+            run_worst_of_case("trunk=F32 + dflash=F32 -> F32", p, GGML_TYPE_F32);
+        }
+        // Bonus case: unknown dtype in one entry is skipped
+        // (does not error); worst-of falls back to the known
+        // partner.
+        {
+            ts_unified_policy p;
+            p.entries.push_back({"trunk",  "token_embd.weight", "Q4_K"});
+            p.entries.push_back({"dflash", "token_embd.weight", "BOGUS_QTYPE_X"});
+            run_worst_of_case("unknown dtype skipped, worst-of=Q4_K", p, GGML_TYPE_Q4_K);
+        }
+        // Bonus case: empty dtype in one entry is skipped
+        // (does not error); worst-of falls back to the known
+        // partner.
+        {
+            ts_unified_policy p;
+            p.entries.push_back({"trunk",  "token_embd.weight", "Q4_K"});
+            p.entries.push_back({"dflash", "token_embd.weight", ""});
+            run_worst_of_case("empty dtype skipped, worst-of=Q4_K", p, GGML_TYPE_Q4_K);
+        }
     }
 
     std::printf("\n%s (%d passed, %d failed)\n", g_fail == 0 ? "PASS" : "FAIL", g_pass, g_fail);

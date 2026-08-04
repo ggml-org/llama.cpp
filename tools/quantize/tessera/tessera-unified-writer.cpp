@@ -636,20 +636,62 @@ static std::string route_destination_name(const std::string & component_role,
     return src_name;
 }
 
+// --- Phase 16.6 worst-of qtype resolution ------------------------------------
+//
+// Per-tensor qtype resolution (Phase 16.6 worst-of). The policy's
+// tensor_families can have multiple entries for the same tensor
+// name (e.g. one from the trunk calibration, one from the dflash
+// drafter calibration, one from the shared_embd calibration --
+// all targeting `token_embd.weight`).
+//
+// The worst-of rule: pick the more conservative qtype
+// (max(bits)) across all matching entries. The drafter is more
+// sensitive to the embedding than the trunk, so when in doubt,
+// use more bits.
+//
+// For the trunk / dflash / dspark / mtp_nextn components, this is
+// a no-op in practice (each per-block tensor's name is owned by
+// exactly one component, so the policy has at most one matching
+// entry per name). The rule only matters for shared_embd
+// (token_embd / output), where the trunk's and dflash's
+// verdicts can disagree.
+//
+// Lookup is by tensor NAME (not by (role, name)) because the
+// shared tensor's qtype must reconcile across all components'
+// calibration verdicts. The dflash prefix on the destination
+// side keeps the destination tensors distinct even when the
+// source names collide.
+//
+// Returns GGML_TYPE_COUNT (== 45) when no entry matches; the
+// caller treats that as "no override" and copies the source's
+// qtype as-is.
+static int qtype_for_tensor(
+    const std::string & name,
+    const std::vector<ts_unified_policy_entry> & entries) {
+    int result = GGML_TYPE_COUNT;
+    for (const auto & e : entries) {
+        if (e.name != name) continue;
+        if (e.dtype.empty()) continue;
+        int q = ts_unified_qtype_from_string(e.dtype);
+        if (q == GGML_TYPE_COUNT) continue;   // unknown dtype, skip
+        if (result == GGML_TYPE_COUNT) {
+            result = q;
+        } else {
+            result = ts_unified_writer_worst_of(result, q);
+        }
+    }
+    return result;
+}
+
 int ts_unified_writer::write_all(std::string * err) {
     if (p_->dst == nullptr) {
         if (err) *err = "ts_unified_writer: not initialized";
         return 1;
     }
-    // Build a (model_role, name) -> dtype lookup table from the policy.
-    std::map<std::pair<std::string, std::string>, int> qtype_map;
-    for (const auto & e : p_->policy.entries) {
-        if (e.dtype.empty()) continue;
-        int q = ts_unified_qtype_from_string(e.dtype);
-        if (q == GGML_TYPE_COUNT) continue;
-        qtype_map[{e.model_role, e.name}] = q;
-    }
-
+    // Phase 16.6: per-tensor qtype is resolved by name (not
+    // (role, name)) with worst-of across all matching entries.
+    // The old (role, name) map is gone; the qtype_for_tensor
+    // helper does the lookup on demand for each source tensor.
     int64_t total_bytes = 0;
     int n_copied = 0;
     int n_skipped = 0;
@@ -715,16 +757,18 @@ int ts_unified_writer::write_all(std::string * err) {
             // classifier and the copy path).
             ggml_type src_type = gguf_get_tensor_type(src.ctx, ti);
 
-            int override_qtype = -1;
-            auto it = qtype_map.find({comp.model_role, src_name});
-            if (it != qtype_map.end()) {
-                override_qtype = it->second;
+            int override_qtype = qtype_for_tensor(src_name, p_->policy.entries);
+            if (override_qtype != GGML_TYPE_COUNT) {
                 // Only count as an override when the policy's
-                // dtype actually differs from the source's type.
-                // A policy entry that matches the source's qtype
-                // is a no-op and should not bump the override
-                // counter (the brief's spec is "per-tensor qtype
-                // override", which implies a change).
+                // resolved qtype actually differs from the
+                // source's type. A policy entry that matches
+                // the source's qtype is a no-op and should not
+                // bump the override counter (the brief's spec is
+                // "per-tensor qtype override", which implies a
+                // change). With the worst-of rule, the resolved
+                // qtype is the more conservative partner; the
+                // override applies when the conservative
+                // partner differs from the source's qtype.
                 if (override_qtype != (int)src_type) {
                     n_overrides++;
                 }
@@ -776,15 +820,26 @@ int ts_unified_writer::write_all(std::string * err) {
                 }
                 ggml_format_name(d, "%s", dst_name.c_str());
                 d->data = s->data;
-                if (override_qtype >= 0 && override_qtype != (int)src_type) {
-                    d = ggml_new_tensor_2d(p_->dst_gctx, (ggml_type)override_qtype,
-                                            sne[0], sne[1]);
-                    if (d == nullptr) {
+                if (override_qtype != GGML_TYPE_COUNT &&
+                    override_qtype != (int)src_type) {
+                    // Phase 16.6: the resolved qtype is the
+                    // worst-of across all matching entries. The
+                    // new tensor's ndims must match the source
+                    // (qtype_blocks and qtype_size can vary
+                    // between qtypes, so we allocate with the
+                    // same dimensionality as the source).
+                    ggml_tensor * od = nullptr;
+                    if (n_dims == 1)      od = ggml_new_tensor_1d(p_->dst_gctx, (ggml_type)override_qtype, sne[0]);
+                    else if (n_dims == 2) od = ggml_new_tensor_2d(p_->dst_gctx, (ggml_type)override_qtype, sne[0], sne[1]);
+                    else if (n_dims == 3) od = ggml_new_tensor_3d(p_->dst_gctx, (ggml_type)override_qtype, sne[0], sne[1], sne[2]);
+                    else                  od = ggml_new_tensor_4d(p_->dst_gctx, (ggml_type)override_qtype, sne[0], sne[1], sne[2], sne[3]);
+                    if (od == nullptr) {
                         if (err) *err = "ggml_new_tensor (override) failed for " + dst_name;
                         return 1;
                     }
-                    ggml_format_name(d, "%s", dst_name.c_str());
-                    d->data = s->data;
+                    ggml_format_name(od, "%s", dst_name.c_str());
+                    od->data = s->data;
+                    d = od;
                 }
                 gguf_add_tensor(p_->dst, d);
                 total_bytes += (int64_t)ggml_nbytes(d);
