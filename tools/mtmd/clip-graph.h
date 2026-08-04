@@ -54,6 +54,9 @@ struct clip_graph {
 
     clip_graph(clip_ctx * ctx, const clip_image_f32 & img);
 
+    // build sub-graph, reuse buf from parent
+    clip_graph(const clip_graph & parent);
+
     virtual ~clip_graph() = default;
     virtual ggml_cgraph * build() = 0;
 
