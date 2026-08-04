@@ -73,7 +73,7 @@ const common_tessera_params & common_get_tessera_params() {
 
 // Forward declaration for the add_opt-backed dispatch path used by
 // common_arg_dispatch_tessera. Defined further down in this file.
-static const std::vector<common_arg> & get_common_arg_defs();
+static const std::vector<common_arg> & get_common_arg_defs(llama_example ex);
 
 // Dispatch a single Tessera-flavored arg (--tessera-*, --calib-*,
 // --progress-file, --quantize-db) at argv[i] to the handler registered
@@ -99,7 +99,7 @@ int common_arg_dispatch_tessera(int argc, char ** argv, int i, std::string & err
         return 0;
     }
 
-    const auto & defs = get_common_arg_defs();
+    const auto & defs = get_common_arg_defs(LLAMA_EXAMPLE_TESSERA);
     for (const auto & opt : defs) {
         bool is_pos = false;
         bool is_neg = false;
@@ -156,13 +156,30 @@ static std::string read_file(const std::string & fname) {
     return content;
 }
 
-static const std::vector<common_arg> & get_common_arg_defs() {
+static const std::vector<common_arg> & get_common_arg_defs(llama_example ex) {
     static const std::vector<common_arg> options = [] {
         common_params params;
         auto ctx = common_params_parser_init(params, LLAMA_EXAMPLE_SERVER, nullptr);
         return ctx.options;
     }();
-    return options;
+    if (ex == LLAMA_EXAMPLE_SERVER) {
+        return options;
+    }
+    // Lazy-build caches for non-SERVER scopes. The dispatch path only needs
+    // LLAMA_EXAMPLE_TESSERA today, but the cache is general so other future
+    // callers can opt in without touching this function.
+    static const std::vector<common_arg> options_tessera = [] {
+        common_params params;
+        auto ctx = common_params_parser_init(params, LLAMA_EXAMPLE_TESSERA, nullptr);
+        return ctx.options;
+    }();
+    switch (ex) {
+        case LLAMA_EXAMPLE_TESSERA: return options_tessera;
+        default:
+            // Fall back to the SERVER cache for any scope we have not cached
+            // explicitly; the dispatch path filters the result by name.
+            return options;
+    }
 }
 
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
@@ -3975,7 +3992,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_debug::set_dequant_dir(value);
         }
-    ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_DIR"));
+    ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_DIR").set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dequant-stride"}, "N",
         "Tessera: capture only every Nth row in dequant sidecar output "
@@ -3983,7 +4000,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_debug::set_dequant_stride((int64_t) std::stoll(value));
         }
-    ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_STRIDE"));
+    ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_STRIDE").set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-matmul-output-dir"}, "PATH",
         "Tessera: dump per-tensor matmul output (F32) to PATH as .matmul-output.f32 sidecar files. "
@@ -3992,7 +4009,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_matmul_output::set_matmul_output_dir(value);
         }
-    ).set_env("LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_DIR"));
+    ).set_env("LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_DIR").set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-matmul-output-stride"}, "N",
         "Tessera: capture only every Nth row in matmul-output sidecar output "
@@ -4000,7 +4017,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_matmul_output::set_matmul_output_stride((int64_t) std::stoll(value));
         }
-    ).set_env("LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_STRIDE"));
+    ).set_env("LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_STRIDE").set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l15-dtype"}, "DTYPE",
         "Tessera: dtype of the L1.5 reference sidecar. 'f16' (default) "
@@ -4013,7 +4030,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_debug::set_l15_dtype(value);
         }
-    ).set_env("LLAMA_TESSERA_L15_DTYPE"));
+    ).set_env("LLAMA_TESSERA_L15_DTYPE").set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-mode"}, "MODE",
         "Tessera mode: off, default, calibrate-only, evolve-only (default: default)",
@@ -4024,63 +4041,63 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.mode = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-imatrix"}, "PATH",
         "Tessera: imatrix path (.npz/.gguf); skips calibration when provided",
         [](common_params &, const std::string & value) {
             tessera_params.imatrix = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-policy"}, "PATH",
         "Tessera: calibration policy JSON path",
         [](common_params &, const std::string & value) {
             tessera_params.policy = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-policy-out"}, "PATH",
         "Tessera: output path for the generated policy JSON",
         [](common_params &, const std::string & value) {
             tessera_params.policy_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-ga-checkpoint"}, "PATH",
         "Tessera: GA checkpoint path for resume",
         [](common_params &, const std::string & value) {
             tessera_params.ga_checkpoint = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--calib-corpus"}, "PATH",
         "Tessera: directory of calibration activations (.npy/.npz)",
         [](common_params &, const std::string & value) {
             tessera_params.calib_corpus = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--progress-file"}, "PATH",
         "Tessera: write NDJSON progress events to this path (one per tick, ~5/s)",
         [](common_params &, const std::string & value) {
             tessera_params.progress_file = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--quantize-db"}, "PATH",
         "Tessera: DuckDB file for persistent GA results, family warm-start, and crash-resumable runs",
         [](common_params &, const std::string & value) {
             tessera_params.quantize_db = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-force-requantize"},
         "Tessera: with --quantize-db, re-run the GA for every tensor even if a converged result exists",
         [](common_params &) {
             tessera_params.force_requantize = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-runtime-probe"}, "PATH",
         "Tessera: write L2 forward-pass differential report here (used by tools/tessera/runtime_probe.py). "
@@ -4089,7 +4106,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.runtime_probe = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-runtime-probe-bf16"}, "PATH",
         "Tessera: path to the BF16 source model used by the L2 forward-pass differential "
@@ -4097,7 +4114,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.runtime_probe_bf16 = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l2-out"}, "PATH",
         "Tessera: output JSONL path for the L2 forward-pass differential report "
@@ -4108,21 +4125,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.runtime_probe_l2_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--calib-corpus-out"}, "PATH",
         "Tessera: write resolved mini-corpus to this path",
         [](common_params &, const std::string & value) {
             tessera_params.calib_corpus_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-evolve-seed"}, "N",
         "Tessera: GA random seed for bit-identical policies (default: 0)",
         [](common_params &, const std::string & value) {
             tessera_params.evolve_seed = std::stoull(value);
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-evolve-iters"}, "N",
         "Tessera: GA generations (default: 8)",
@@ -4133,7 +4150,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.evolve_iters = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-evolve-islands"}, "N",
         "Tessera: GA islands (default: 4)",
@@ -4144,7 +4161,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.evolve_islands = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-evolve-population"}, "N",
         "Tessera: GA population per island (default: 16)",
@@ -4155,21 +4172,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.evolve_population = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-evolve-only"},
         "Tessera: only run the GA; do not quantize",
         [](common_params &) {
             tessera_params.evolve_only = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-calibrate-only"},
         "Tessera: only run calibration; do not run GA or quantize",
         [](common_params &) {
             tessera_params.calibrate_only = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-outlier-frac"}, "F",
         "Tessera: outlier fraction (default: 0.005)",
@@ -4181,14 +4198,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.outlier_frac = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-awq-alpha"}, "F|auto",
         "Tessera: per-tensor AWQ alpha; 'auto' = per-tensor search (default: auto)",
         [](common_params &, const std::string & value) {
             tessera_params.awq_alpha = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-awq-clip"}, "F",
         "Tessera: per-row AWQ clip (default: 1.0)",
@@ -4200,14 +4217,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.awq_clip = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-ternary-threshold"}, "F|auto",
         "Tessera: per-row mean(|W|) multiplier; 'auto' = automatic (default: auto)",
         [](common_params &, const std::string & value) {
             tessera_params.ternary_threshold = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-range-selection"}, "MODE",
         "Tessera: range selection: legacy, imatrix-mse, septq (default: legacy)",
@@ -4218,14 +4235,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.range_selection = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-champq"},
         "Tessera: enable CHAMP-Q permutation",
         [](common_params &) {
             tessera_params.champq = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-kernel-fitness"},
         "Tessera: score GA candidates against the kernel's real dequant output "
@@ -4233,7 +4250,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             tessera_params.kernel_fitness = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-kernel-fitness-dir"}, "PATH",
         "Tessera: directory of L1 dequant sidecar files for kernel-direct fitness "
@@ -4241,7 +4258,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.kernel_fitness_dir = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-kernel-fitness-blend"}, "F",
         "Tessera: kernel-direct fitness blend in [0, 1]; 0 = offline proxy, "
@@ -4254,7 +4271,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.kernel_fitness_blend = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-w4a4"},
         "Tessera: enable W4A4 activation quantization (4-bit weights + 4-bit "
@@ -4262,7 +4279,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             tessera_params.w4a4 = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-w4a4-outlier-thresh"}, "F",
         "Tessera: W4A4 LLM.int8 outlier threshold; activation channels with "
@@ -4275,42 +4292,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.w4a4_outlier_thresh = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-acceptance"},
         "Tessera: force-enable the G6 acceptance gate (on by default)",
         [](common_params &) {
             tessera_params.acceptance = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--no-tessera-acceptance"},
         "Tessera: skip the G6 acceptance gate (faster iteration runs)",
         [](common_params &) {
             tessera_params.acceptance = false;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-acceptance-out"}, "PATH",
         "Tessera: write the G6 acceptance gate JSON report to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.acceptance_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-adaptive-requantize"},
         "Tessera: force-enable the L5 adaptive requantization loop (on by default)",
         [](common_params &) {
             tessera_params.adaptive_requantize = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--no-tessera-adaptive-requantize"},
         "Tessera: skip the L5 adaptive requantization loop (faster iteration runs)",
         [](common_params &) {
             tessera_params.adaptive_requantize = false;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l5-out"}, "PATH",
         "Tessera: write the L5 loop report JSON (schema llama.tessera.l5-loop.v1) "
@@ -4318,7 +4335,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.l5_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l5-generations"}, "N",
         "Tessera: maximum L5 adaptive requantize generations (default: 3)",
@@ -4329,7 +4346,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.l5_max_generations = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l5-flag-multiplier"}, "F",
         "Tessera: L2 flag threshold = F * type baseline (default: 1.5)",
@@ -4341,7 +4358,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.l5_flag_multiplier = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l5-alpha-min"}, "F",
         "Tessera: floor for the Stage A alpha multiplier (default: 0.1)",
@@ -4353,7 +4370,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.l5_alpha_min = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l5-clip-min"}, "F",
         "Tessera: floor for the Stage A clip multiplier (default: 0.1)",
@@ -4365,7 +4382,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.l5_clip_min = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l5-outlier-overshoot-scale"}, "F",
         "Tessera: Stage B raises outlier_fraction by F * overshoot (default: 0.5)",
@@ -4377,7 +4394,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.l5_outlier_overshoot_scale = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-l5-outlier-frac-cap"}, "F",
         "Tessera: ceiling for Stage B outlier_fraction (default: 0.25)",
@@ -4389,7 +4406,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.l5_outlier_frac_cap = f;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-nthreads"}, "N",
         "Tessera: threads for calibration/GA/quantize (default: 0 = use positional nthreads)",
@@ -4400,7 +4417,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.nthreads = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-capability-eval"}, "PATH",
         "Tessera: reduce per-axis capability instances JSON to a score, print it "
@@ -4408,14 +4425,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.capability_eval = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-capability-out"}, "PATH",
         "Tessera: also write the capability-eval score JSON to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.capability_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-adapt"}, "PATH",
         "Tessera: run one guarded adaptation step over a capability-eval JSON, "
@@ -4423,21 +4440,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.adapt_eval = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-adapt-out"}, "PATH",
         "Tessera: adaptation receipt output path (default: tessera-adapt-receipt.json)",
         [](common_params &, const std::string & value) {
             tessera_params.adapt_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-adapt-dry-run"},
         "Tessera: record adaptation intent only (receipt still written)",
         [](common_params &) {
             tessera_params.adapt_dry_run = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-adapt-epsilon"}, "F",
         "Tessera: general-competence regression tolerance for the adapt guard (default: 0.02)",
@@ -4449,7 +4466,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.adapt_epsilon = d;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-anonymize"}, "PATH",
         "Tessera: anonymize the text payload at PATH (tier-2 escalation scrub), "
@@ -4457,14 +4474,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.anonymize_in = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-anonymize-out"}, "PATH",
         "Tessera: also write the anonymized text to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.anonymize_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-anonymize-level"}, "light|balanced|aggressive",
         "Tessera: anonymizer aggressiveness dial (default: balanced)",
@@ -4475,14 +4492,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             tessera_params.anonymize_level = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-anonymize-map"}, "PATH",
         "Tessera: write the local de-anonymization map (pseudonym -> original) as JSON to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.anonymize_map = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-throughput"}, "PATH",
         "Tessera: run the north-star batched-throughput workload harness over the\n"
@@ -4490,14 +4507,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.throughput_workload = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-throughput-out"}, "PATH",
         "Tessera: also write the throughput receipt JSON to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.throughput_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dataset"}, "PATH",
         "Tessera: prepare drafter training data from llama.tessera.spec.v1 JSONL\n"
@@ -4505,14 +4522,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.dataset_in = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dataset-out"}, "PATH",
         "Tessera: dataset output path (default: tessera-dataset-out.txt)",
         [](common_params &, const std::string & value) {
             tessera_params.dataset_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dataset-mode"}, "text|pairs|lk|dflash",
         "Tessera: dataset output mode (default: text)\n"
@@ -4523,7 +4540,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.dataset_mode = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dpace"}, "PATH",
         "Tessera: compute D-PACE adaptive position weights from DFlash\n"
@@ -4531,28 +4548,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             tessera_params.dpace_in = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dpace-out"}, "PATH",
         "Tessera: write D-PACE weight summary JSON to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.dpace_out = value;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dpace-alpha"}, "FLOAT",
         "Tessera: D-PACE asymmetric smoothing alpha (default: 0.1)",
         [](common_params &, const std::string & value) {
             tessera_params.dpace_alpha = std::stof(value);
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--tessera-dpace-gamma"}, "FLOAT",
         "Tessera: DFlash exponential decay gamma for A/B comparison (default: 3.0)",
         [](common_params &, const std::string & value) {
             tessera_params.dpace_gamma = std::stof(value);
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
