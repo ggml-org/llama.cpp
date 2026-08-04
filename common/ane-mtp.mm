@@ -157,6 +157,16 @@ struct common_ane_mtp_program {
     ggml_mtl_shared_event_t slot_events[ANE_STATE_SLOTS_MAX] = {};
 
     ~common_ane_mtp_program() {
+        // Tear down the per-function E-core pumps before the
+        // rest of the program is freed (the pumps reference the
+        // program via the submit_fn / signal_fn closures). The
+        // free() drains any in-flight block and releases the
+        // per-pump E-core queue.
+        for (auto & entry : functions) {
+            if (entry.second != nullptr && entry.second->pump_ready) {
+                ane_pump::free(entry.second->pump);
+            }
+        }
         // Drop the pinned MLMultiArray strong references first; they
         // wrap the IOSurface so the order matters (the IOSurface
         // unlock + release below must come after). Under ARC the

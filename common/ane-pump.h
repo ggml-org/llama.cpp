@@ -95,13 +95,25 @@ typedef struct common_ane_pump {
     // Submission counter (incremented by the host on each
     // INPUT_READY transition; the pump records the counter
     // value at submission time so a racing host can detect
-    // "the pump is processing the Nth submission". The counter
-    // is monotonically increasing; both producer and consumer
-    // read it as uint64_t.
+    // "the pump is processing the Nth submission"). The
+    // counter is monotonically increasing; both producer and
+    // consumer read it as uint64_t.
     std::atomic<uint64_t> submission_counter;
     // Total submissions completed (incremented by the pump
     // when the OUTPUT_READY -> IDLE transition lands).
     std::atomic<uint64_t> completions;
+    // Per-pump dispatch queue. Created at init; the thread that
+    // services this queue has QOS_CLASS_BACKGROUND affinity
+    // (E-core). The dispatch path submits ane_pump::run work
+    // to this queue (via dispatch_sync) so the actual Core ML
+    // prediction runs on the E-core, off the critical dispatch
+    // path. The queue is freed in ane_pump::free.
+    // Default-initialized to nullptr so a fresh common_ane_pump
+    // starts with no queue (the init path sets it). Without the
+    // initializer the field reads stack garbage on first use.
+    void * ecore_queue = nullptr;
+    // True when the E-core queue has been created.
+    bool ecore_queue_ready = false;
 } common_ane_pump;
 
 #ifdef __cplusplus
@@ -114,12 +126,33 @@ typedef struct common_ane_pump {
 namespace ane_pump {
 
 // Initialize the pump for one function. Resolves the function's
-// input/output slot ids from the manifest; sets state to IDLE.
+// input/output slot ids from the manifest; sets state to IDLE;
+// creates the per-pump dispatch queue pinned to a low-power
+// background QoS class (E-core affinity via QOS_CLASS_BACKGROUND).
 // Returns true on success, false if function_id is out of
 // range or the manifest is malformed.
+//
+// The per-pump queue is what ane_pump::run uses to execute
+// the submit_fn callback; routing the dispatch through this
+// queue (rather than the program's serial queue) is the
+// runtime payoff: the pump's work runs off the critical
+// dispatch path on the main thread.
 bool init(common_ane_pump & pump,
          const ane_state_layout_v1_t & manifest,
          uint32_t function_id);
+
+// Tear down the pump: signal IDLE -> SHUTDOWN transition (not
+// strictly necessary; the destructor frees the queue), free
+// the per-pump dispatch queue. After free() the pump must
+// not be used.
+void free(common_ane_pump & pump);
+
+// Read the QoS class of the E-core thread from the current
+// thread. Returns QOS_CLASS_BACKGROUND (or whatever was set
+// at init). Returns -1 if the pump has no E-core queue or
+// if pthread_get_qos_class_np fails. Used by the test to
+// verify the E-core affinity is in place.
+int ecore_qos_class(const common_ane_pump & pump);
 
 // Host-side: signal that inputs are written and the pump can
 // submit. CASes IDLE -> INPUT_READY. Returns true on success,

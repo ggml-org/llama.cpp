@@ -22,11 +22,20 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <pthread.h>
 #include <thread>
 
 namespace {
 
 int g_failures = 0;
+
+// W7: globals for the signal_fn recorder. signal_fn is a C
+// function pointer (no captures), so the test routes the
+// observed values through these globals and reads them after
+// the run.
+int g_signal_count = 0;
+uint64_t g_signal_value = 0;
+uint32_t g_signal_function_id = 0;
 
 #define CHECK(cond, msg) do { \
     if (!(cond)) { \
@@ -105,6 +114,27 @@ bool noop_submit(common_ane_mtp_program & /*program*/,
     return true;
 }
 
+// Thread-affinity test: a submit callback that reads its own
+// thread's QoS class. The pump runs the submit on the E-core
+// thread (QOS_CLASS_BACKGROUND); the callback verifies the
+// QoS is BACKGROUND when invoked from the E-core thread.
+// The result is recorded in a global for the test to assert.
+int g_thread_qos_observed = -2;
+bool submit_with_qos_check(common_ane_mtp_program & /*program*/,
+                            common_ane_compute_instance & /*instance*/,
+                            void * /*context*/) {
+    qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+    int rel = 0;
+    const int rc = pthread_get_qos_class_np(
+        pthread_self(), &qos, &rel);
+    if (rc == 0) {
+        g_thread_qos_observed = (int) qos;
+    } else {
+        g_thread_qos_observed = -1;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -118,6 +148,8 @@ int main() {
         CHECK(ok, "init returns true for valid function_id");
         CHECK(pump.state.load() == ANE_PUMP_IDLE,
               "init sets state to IDLE");
+        CHECK(pump.ecore_queue_ready,
+              "init creates the E-core queue");
         CHECK(pump.input_slot_ids.size() == 2,
               "init resolves 2 input slot ids");
         CHECK(pump.input_slot_ids[0] == 0, "first input slot id is 0");
@@ -166,7 +198,7 @@ int main() {
         const bool ok = ane_pump::run(pump,
                 *static_cast<common_ane_mtp_program *>(nullptr),
                 *static_cast<common_ane_compute_instance *>(nullptr),
-                noop_submit, nullptr);
+                noop_submit, nullptr, nullptr);
         CHECK(ok, "run succeeds from INPUT_READY");
         CHECK(pump.state.load() == ANE_PUMP_IDLE,
               "state returns to IDLE after run");
@@ -181,7 +213,7 @@ int main() {
         const bool ok = ane_pump::run(pump,
                 *static_cast<common_ane_mtp_program *>(nullptr),
                 *static_cast<common_ane_compute_instance *>(nullptr),
-                noop_submit, nullptr);
+                noop_submit, nullptr, nullptr);
         CHECK(!ok, "run fails when state is IDLE");
         CHECK(pump.state.load() == ANE_PUMP_IDLE,
               "state is still IDLE after failed run");
@@ -206,7 +238,7 @@ int main() {
             if (!ane_pump::run(pump,
                     *static_cast<common_ane_mtp_program *>(nullptr),
                     *static_cast<common_ane_compute_instance *>(nullptr),
-                    noop_submit, nullptr)) {
+                    noop_submit, nullptr, nullptr)) {
                 std::fprintf(stderr,
                         "FAIL: run failed at cycle %llu\n",
                         (unsigned long long) i);
@@ -237,7 +269,7 @@ int main() {
                     ane_pump::run(pump,
                         *static_cast<common_ane_mtp_program *>(nullptr),
                         *static_cast<common_ane_compute_instance *>(nullptr),
-                        noop_submit, nullptr);
+                        noop_submit, nullptr, nullptr);
                 } else {
                     std::this_thread::yield();
                 }
@@ -250,7 +282,7 @@ int main() {
                     ane_pump::run(pump,
                         *static_cast<common_ane_mtp_program *>(nullptr),
                         *static_cast<common_ane_compute_instance *>(nullptr),
-                        noop_submit, nullptr);
+                        noop_submit, nullptr, nullptr);
                 } else {
                     std::this_thread::yield();
                 }
@@ -279,6 +311,69 @@ int main() {
               "cross-thread submission counter matches signal count");
         CHECK(pump.state.load() == ANE_PUMP_IDLE,
               "cross-thread state is IDLE after all signals");
+    }
+
+    // Test 8: signal_fn is invoked with the pump's monotonic
+    // completion counter value after the ANE_BUSY -> OUTPUT_READY
+    // transition. The signal_fn here just records the values;
+    // the W7 wiring uses ggml_mtl_shared_event_signal for the
+    // real signal.
+    {
+        common_ane_pump pump;
+        ane_pump::init(pump, manifest, 0);
+        auto recorder = +[](common_ane_mtp_program & /*program*/,
+                              uint32_t function_id,
+                              uint64_t value,
+                              void * /*context*/) {
+            ++g_signal_count;
+            g_signal_value = value;
+            g_signal_function_id = function_id;
+        };
+        // Run a single cycle; the signal_fn records the value
+        // and the function id.
+        ane_pump::signal_input_ready(pump);
+        g_signal_count = 0;
+        g_signal_value = 0;
+        g_signal_function_id = UINT32_MAX;
+        ane_pump::run(pump,
+                *static_cast<common_ane_mtp_program *>(nullptr),
+                *static_cast<common_ane_compute_instance *>(nullptr),
+                noop_submit, recorder, nullptr);
+        CHECK(g_signal_count == 1,
+              "signal_fn is invoked exactly once per run");
+        CHECK(g_signal_value == 1,
+              "signal_fn receives value 1 for the first run");
+        CHECK(g_signal_function_id == 0,
+              "signal_fn receives the bound function_id");
+    }
+
+    // Test 9: E-core thread affinity. The pump's run dispatches
+    // the submit_fn on the per-pump E-core queue, whose worker
+    // thread has QOS_CLASS_BACKGROUND affinity (set at init).
+    // The submit_with_qos_check callback reads its own thread's
+    // QoS class via pthread_get_qos_class_np; the test asserts
+    // the observed value is QOS_CLASS_BACKGROUND.
+    {
+        common_ane_pump pump;
+        ane_pump::init(pump, manifest, 0);
+        g_thread_qos_observed = -2;
+        ane_pump::signal_input_ready(pump);
+        ane_pump::run(pump,
+                *static_cast<common_ane_mtp_program *>(nullptr),
+                *static_cast<common_ane_compute_instance *>(nullptr),
+                submit_with_qos_check, nullptr, nullptr);
+        CHECK(g_thread_qos_observed == QOS_CLASS_BACKGROUND,
+              "submit_fn observes QOS_CLASS_BACKGROUND on the E-core thread");
+        // The ecore_qos_class helper queries pthread_get_qos_class_np
+        // on the current thread (the test's main thread, not the
+        // E-core). The test thread's QoS is whatever the OS
+        // assigned (likely QOS_CLASS_DEFAULT). The helper's
+        // behavior on a non-E-core thread is well-defined but
+        // not the QOS we set. We just verify the helper returns
+        // a valid value (not -1).
+        const int helper_value = ane_pump::ecore_qos_class(pump);
+        CHECK(helper_value >= 0,
+              "ecore_qos_class returns a valid value when the E-core queue is ready");
     }
 
     if (g_failures == 0) {

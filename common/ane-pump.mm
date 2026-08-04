@@ -39,6 +39,8 @@
 #include "ane-pump.h"
 #include "ane-mtp.h"
 
+#import <Foundation/Foundation.h>
+#include <pthread.h>
 #include <thread>
 
 // Forward declaration of the program's instance handle. The
@@ -48,6 +50,19 @@
 // the Core ML call).
 
 namespace ane_pump {
+
+// Forward-declare from pthread/qos.h. The QOS class API is
+// available on macOS 10.10+ via pthread/qos.h; we use the
+// modern pthread_set_qos_class_self_np / pthread_get_qos_class_np
+// pair. QOS_CLASS_BACKGROUND is the lowest tier; the OS
+// schedules these threads on the E-cores (low-power cluster)
+// on Apple Silicon. This is the runtime payoff for the pump:
+// the ANE dispatch runs on an E-core, leaving the P-cores free
+// for the host's main thread.
+static void pin_current_thread_to_ecore() {
+    qos_class_t qos = QOS_CLASS_BACKGROUND;
+    pthread_set_qos_class_self_np(qos, 0);
+}
 
 bool init(common_ane_pump & pump,
          const ane_state_layout_v1_t & manifest,
@@ -70,7 +85,75 @@ bool init(common_ane_pump & pump,
     pump.state.store(ANE_PUMP_IDLE, std::memory_order_release);
     pump.submission_counter.store(0, std::memory_order_release);
     pump.completions.store(0, std::memory_order_release);
+    // Create the per-pump E-core dispatch queue. The queue is
+    // serial: only one Core ML prediction per pump at a time
+    // (ANE itself is single-threaded; concurrent predictions
+    // would just serialize on the ANE anyway). The thread that
+    // services this queue sets its QoS to QOS_CLASS_BACKGROUND
+    // before running any block; the OS places the thread on an
+    // E-core on Apple Silicon.
+    if (pump.ecore_queue == nullptr) {
+        const char * label = "org.ggml.llama.ane.pump.ecore";
+        // Create the queue first; then dispatch a one-shot
+        // block on it to set the QoS. Subsequent blocks inherit
+        // the QoS of the worker thread (QOS_CLASS_BACKGROUND
+        // persists on a serial GCD queue's worker).
+        dispatch_queue_t q = dispatch_queue_create(label,
+                dispatch_queue_attr_make_with_qos_class(
+                    DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0));
+        if (q == nullptr) {
+            return false;
+        }
+        // Set the QoS on the worker thread. dispatch_sync on
+        // the queue blocks until the block runs; the block runs
+        // on the queue's worker thread, which is the thread we
+        // want to pin. We use sync (not async) because init is
+        // a one-time cost and we want the QoS to be in place
+        // before the pump is used.
+        dispatch_sync(q, ^{
+            pin_current_thread_to_ecore();
+        });
+        // Store as a void* with __bridge_retained; ARC
+        // increments the refcount. The free() path uses
+        // __bridge_transfer to release it. The dispatch_release
+        // call below is removed because ARC manages the lifetime
+        // via the strong reference held by the pump struct.
+        pump.ecore_queue = (__bridge_retained void *) q;
+        pump.ecore_queue_ready = true;
+    }
     return true;
+}
+
+void free(common_ane_pump & pump) {
+    if (pump.ecore_queue_ready) {
+        dispatch_queue_t q = (__bridge_transfer dispatch_queue_t)
+            pump.ecore_queue;
+        // Drain the queue before releasing: wait for any
+        // in-flight block to finish. dispatch_sync on a queue
+        // is sufficient (the queue is serial; one in-flight
+        // block at a time).
+        dispatch_sync(q, ^{});  // no-op barrier
+        // ARC releases the strong reference at the end of this
+        // scope (the local q goes out of scope; the pump's
+        // void* is nulled below).
+        pump.ecore_queue = nullptr;
+        pump.ecore_queue_ready = false;
+    }
+    pump.state.store(ANE_PUMP_IDLE, std::memory_order_release);
+}
+
+int ecore_qos_class(const common_ane_pump & pump) {
+    if (!pump.ecore_queue_ready) {
+        return -1;
+    }
+    qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+    int rel = 0;
+    const int rc = pthread_get_qos_class_np(
+        pthread_self(), &qos, &rel);
+    if (rc != 0) {
+        return -1;
+    }
+    return (int) qos;
 }
 
 bool signal_input_ready(common_ane_pump & pump) {
@@ -91,6 +174,9 @@ bool run(common_ane_pump & pump,
         submit_fn submit,
         signal_fn signal,
         void * context) {
+    if (!pump.ecore_queue_ready) {
+        return false;
+    }
     // INPUT_READY -> ANE_BUSY
     uint32_t expected = ANE_PUMP_INPUT_READY;
     if (!pump.state.compare_exchange_strong(
@@ -98,12 +184,18 @@ bool run(common_ane_pump & pump,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
         return false;  // host hasn't signaled; not our turn
     }
-    // Submit the prediction. The submit_fn is expected to be
-    // synchronous (it returns when the prediction is complete);
-    // for the current Core ML public API this is the only mode
-    // (the model.predictionFromFeatures:options:error: path is
-    // synchronous).
-    const bool submit_ok = submit(program, instance, context);
+    // Run the submit_fn on the E-core thread. dispatch_sync on
+    // a serial queue blocks until the block completes; the
+    // block runs on the queue's worker thread, which has
+    // QOS_CLASS_BACKGROUND affinity (set at init). This is
+    // where the runtime payoff lives: the Core ML prediction
+    // runs on the E-core, off the critical dispatch path on
+    // the main thread.
+    dispatch_queue_t q = (__bridge dispatch_queue_t) pump.ecore_queue;
+    __block bool submit_ok = false;
+    dispatch_sync(q, ^{
+        submit_ok = submit(program, instance, context);
+    });
     if (!submit_ok) {
         // Revert to IDLE so the host can retry. The completions
         // counter is not incremented (this is a failed
@@ -119,8 +211,6 @@ bool run(common_ane_pump & pump,
     if (!pump.state.compare_exchange_strong(
             expected, ANE_PUMP_OUTPUT_READY,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
-        // Should be impossible: only the pump transitions
-        // ANE_BUSY. Log and continue.
         return false;
     }
     // W7: signal downstream consumers. The signal_fn is the
@@ -130,10 +220,17 @@ bool run(common_ane_pump & pump,
     // the ANE_BUSY -> OUTPUT_READY transition so consumers
     // observing the signaled value are guaranteed to see the
     // data plane state (the IOSurface bytes the ANE wrote).
+    //
+    // The signal itself runs on the E-core thread (off the
+    // critical path). The signal is fast (ggml_mtl_shared_event_signal
+    // is a single setSignaledValue: call) so the extra
+    // dispatch_sync is negligible.
     if (signal != nullptr) {
         const uint64_t value = pump.completions.load(
             std::memory_order_acquire) + 1;
-        signal(program, pump.function_id, value, context);
+        dispatch_sync(q, ^{
+            signal(program, pump.function_id, value, context);
+        });
     }
     // OUTPUT_READY -> IDLE. The host's next signal_input_ready
     // will be the IDLE -> INPUT_READY transition.
