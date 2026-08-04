@@ -65,9 +65,7 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
             layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {attn_hidden}, 0);
 
             // Attention weights (input is 4096-dim concat)
-            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {attn_hidden, attn_hidden}, 0);
-            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {attn_hidden, attn_hidden}, 0);
-            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {attn_hidden, attn_hidden}, 0);
+            create_tensor_qkv(layer, i, attn_hidden, attn_hidden, attn_hidden, attn_hidden, 0);
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), {attn_hidden, n_embd}, 0);
 
             // FFN (fused gate+up, split internally by GEGLU)
