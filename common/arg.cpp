@@ -101,13 +101,13 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
 }
 
 // Dispatch a single Tessera-flavored arg (--tessera-*, --calib-*,
-// --progress-file, --quantize-db, --force-requantize) through the
-// common_arg registered via the add_opt path in common_params_parse_ex.
-// Returns 1 for a switch, 2 for a valued flag, 0 if argv[i] is not a
-// Tessera flag, or -1 on a validation error. This is the single source
-// of truth: the registered common_arg's handler owns the side effect, the
-// type coercion, and the validation message; we only translate the throw
-// into the (err, return) contract common_tessera_parse_one advertises.
+// --progress-file, --quantize-db) through the common_arg registered via
+// the add_opt path in common_params_parse_ex. Returns 1 for a switch,
+// 2 for a valued flag, 0 if argv[i] is not a Tessera flag, or -1 on a
+// validation error. This is the single source of truth: the registered
+// common_arg's handler owns the side effect, the type coercion, and the
+// validation message; we only translate the throw into the (err, return)
+// contract common_tessera_parse_one advertises.
 static int common_arg_dispatch_one(int argc, char ** argv, int i, std::string & err) {
     const std::string arg = argv[i];
 
@@ -119,8 +119,7 @@ static int common_arg_dispatch_one(int argc, char ** argv, int i, std::string & 
         arg == "--calib-corpus" ||
         arg == "--calib-corpus-out" ||
         arg == "--progress-file" ||
-        arg == "--quantize-db" ||
-        arg == "--force-requantize";
+        arg == "--quantize-db";
     if (!tessera_named) {
         return 0;
     }
@@ -4101,7 +4100,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--force-requantize"},
+        {"--tessera-force-requantize"},
         "Tessera: with --quantize-db, re-run the GA for every tensor even if a converged result exists",
         [](common_params &) {
             tessera_params.force_requantize = true;
