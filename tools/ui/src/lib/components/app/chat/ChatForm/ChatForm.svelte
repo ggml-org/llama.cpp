@@ -6,6 +6,7 @@
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
 		ChatFormTextarea,
+		ChatFormWorkingDirectory,
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
@@ -31,7 +32,13 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
-	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
+	import {
+		conversationsStore,
+		activeMessages,
+		activeConversation,
+		pendingCwd
+	} from '$lib/stores/conversations.svelte';
 	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
 	import {
@@ -107,6 +114,15 @@
 	let isInlineResourcePickerOpen = $state(false);
 	let resourceSearchQuery = $state('');
 
+	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
+
+	async function handleWorkingDirectoryChange(value: string | null) {
+		await conversationsStore.setCwd(value);
+		if (conversationsStore.activeConversation) {
+			await chatStore.recordCwdChange(value?.trim() || null);
+		}
+	}
+
 	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
@@ -154,6 +170,12 @@
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
 	});
+
+	// Defer so the closing popover's focus scope tears down first - bits-ui
+	// yanks a synchronous focus() back into the still-mounted popover.
+	function refocusInput() {
+		queueMicrotask(() => textareaRef?.focus());
+	}
 
 	export function focus() {
 		textareaRef?.focus();
@@ -470,7 +492,7 @@
 <ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
-	class="relative {className}"
+	class="relative grid {className}"
 	onsubmit={(event) => {
 		event.preventDefault();
 
@@ -559,6 +581,15 @@
 	</div>
 
 	<ContextGaugePopup />
+
+	{#if toolsStore.builtinTools.length > 0}
+		<ChatFormWorkingDirectory
+			directory={cwd}
+			onChange={handleWorkingDirectoryChange}
+			onClose={refocusInput}
+			{disabled}
+		/>
+	{/if}
 </form>
 
 <DialogMcpResourcesBrowser
