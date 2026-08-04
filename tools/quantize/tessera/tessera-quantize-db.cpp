@@ -302,6 +302,70 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    updated_at        TIMESTAMP,\n"
     "    PRIMARY KEY (model_hash, name)\n"
     ");\n"
+    // ---- l4_plan_outcome: the per-iteration audit trail (additive) ----
+    // Captures the L4 forward-pass measurement AFTER a requant plan was
+    // applied. One row per (model_hash, name, iteration, plan_id). The
+    // C++ adaptive_requantize loop writes one row per (tensor, gen)
+    // with strategy = "A" (alpha/clip) or "B" (outlier_thresh bump).
+    // The Python l5_orchestrator's per-iteration runs also land here
+    // (via the C++ apply step that re-quantizes and re-probes).
+    //
+    // mse_before / frob_before are the pre-requant measurements;
+    // mse_after / frob_after are the post-requant measurements. The
+    // delta is computed in l5_outcome.py at read time (delta_mse =
+    // mse_after - mse_before) so the schema stays narrow.
+    "CREATE TABLE IF NOT EXISTS l4_plan_outcome (\n"
+    "    model_hash           TEXT NOT NULL,\n"
+    "    name                 TEXT NOT NULL,\n"
+    "    layer                INTEGER,\n"
+    "    iteration            INTEGER NOT NULL,\n"
+    "    plan_id              TEXT NOT NULL,\n"
+    "    strategy             TEXT,\n"
+    "    alpha_before         DOUBLE,\n"
+    "    alpha_after          DOUBLE,\n"
+    "    clip_before          DOUBLE,\n"
+    "    clip_after           DOUBLE,\n"
+    "    outlier_thresh_before DOUBLE,\n"
+    "    outlier_thresh_after  DOUBLE,\n"
+    "    mse_before           DOUBLE,\n"
+    "    mse_after            DOUBLE,\n"
+    "    frob_before          DOUBLE,\n"
+    "    frob_after           DOUBLE,\n"
+    "    family               TEXT,\n"
+    "    updated_at           TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
+    ");\n"
+    // ---- l5_outcome: the verdict (Python-written, additive) ----
+    // The "did this requant plan reduce error?" verdict, computed by
+    // l5_outcome.py from a join of l5_plan_summary and l4_plan_outcome.
+    // One row per (model_hash, name, iteration, plan_id). plan_accepted
+    // is True if delta_mse < 0 (the plan actually reduced error);
+    // the threshold for "accepted" is configurable in l5_outcome.py
+    // and is recorded as accept_threshold for reproducibility.
+    // sensitivity_calibration_error is the residual of a linear fit
+    // of delta_mse on sensitivity_score per (model, family) — a
+    // running measure of how well the orchestrator's sensitivity
+    // scoring predicts the actual error delta.
+    "CREATE TABLE IF NOT EXISTS l5_outcome (\n"
+    "    model_hash            TEXT NOT NULL,\n"
+    "    name                  TEXT NOT NULL,\n"
+    "    layer                 INTEGER,\n"
+    "    iteration             INTEGER NOT NULL,\n"
+    "    plan_id               TEXT NOT NULL,\n"
+    "    family                TEXT,\n"
+    "    sensitivity_score     DOUBLE,\n"
+    "    recommended_alpha     DOUBLE,\n"
+    "    recommended_clip      DOUBLE,\n"
+    "    mse_before            DOUBLE,\n"
+    "    mse_after             DOUBLE,\n"
+    "    delta_mse             DOUBLE,\n"
+    "    delta_frob            DOUBLE,\n"
+    "    plan_accepted         BOOLEAN,\n"
+    "    accept_threshold      DOUBLE,\n"
+    "    residual              DOUBLE,\n"
+    "    updated_at            TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
+    ");\n"
     "CREATE INDEX IF NOT EXISTS idx_ga_results_family\n"
     "    ON ga_results(family, best_composite DESC);\n"
     "CREATE INDEX IF NOT EXISTS idx_ga_eval_tensor\n"
@@ -317,7 +381,11 @@ static const char * TS_QDB_SCHEMA_SQL =
     "CREATE INDEX IF NOT EXISTS idx_l5_plan_model\n"
     "    ON l5_plan_summary(model_hash, layer);\n"
     "CREATE INDEX IF NOT EXISTS idx_per_layer_error_model\n"
-    "    ON per_layer_error_summary(model_hash, layer);\n";
+    "    ON per_layer_error_summary(model_hash, layer);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l4_outcome_model\n"
+    "    ON l4_plan_outcome(model_hash, layer);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l5_outcome_model\n"
+    "    ON l5_outcome(model_hash, family, plan_accepted);\n";
 
 // DuckDB escapes single quotes by doubling them. Sufficient for run_id,
 // model_path, family, etc. (no LIKE / backslash semantics in DuckDB strings).
