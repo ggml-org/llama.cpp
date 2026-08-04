@@ -385,8 +385,20 @@ private:
             // the throwing increment would escape the tool on a directory that
             // goes away mid walk, so step the iterator explicitly
             fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+            // a directory that cannot be opened or read is a subtree the caller
+            // never sees: a path over the platform limit (260 on Windows unless
+            // long paths are enabled), a volume going away, a name the
+            // filesystem rejects. skip_permission_denied never lands here, so
+            // this is an incomplete answer rather than a deliberate omission
+            if (ec) {
+                truncated = true;
+                continue;
+            }
             for (const fs::directory_iterator end; it != end; it.increment(ec)) {
-                if (ec) break;
+                if (ec) {
+                    truncated = true;
+                    break;
+                }
                 if (std::chrono::steady_clock::now() >= deadline) {
                     truncated = true;
                     return result;
@@ -630,7 +642,7 @@ struct server_tool_file_glob_search : server_tool {
                 shown, total);
         }
         if (truncated) {
-            output_text << "[search timed out, results truncated]\n";
+            output_text << "[results truncated: time budget or unreadable directory]\n";
         }
 
         // `base` is always absolute (resolve falls back to the server cwd), so
