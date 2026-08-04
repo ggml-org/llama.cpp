@@ -48,7 +48,10 @@ export function buildCaseInsensitiveGlob(query: string): string {
 		const lo = c.toLowerCase();
 		const up = c.toUpperCase();
 		if (lo !== up) out += GLOB_RANGE_OPEN + lo + up + GLOB_RANGE_CLOSE;
-		else if (!GLOB_SPECIAL_CHARS.includes(c)) out += c;
+		// glob metacharacters are escaped into a literal character class so a
+		// query like "a*b" matches a literal '*' instead of becoming "ab"
+		else if (GLOB_SPECIAL_CHARS.includes(c)) out += GLOB_RANGE_OPEN + c + GLOB_RANGE_CLOSE;
+		else out += c;
 	}
 	return out + GLOB_WILDCARD;
 }

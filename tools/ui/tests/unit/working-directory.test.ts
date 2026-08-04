@@ -42,8 +42,8 @@ describe('buildCaseInsensitiveGlob', () => {
 		expect(buildCaseInsensitiveGlob('ab')).toBe('*[aA][bB]*');
 	});
 
-	it('passes through glob metacharacters', () => {
-		expect(buildCaseInsensitiveGlob('a*b')).toContain('*');
+	it('escapes glob metacharacters into literal fragments', () => {
+		expect(buildCaseInsensitiveGlob('a*b')).toBe('*[aA][*][bB]*');
 	});
 });
 
