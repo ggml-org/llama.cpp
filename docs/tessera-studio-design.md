@@ -3796,16 +3796,15 @@ already owns.
   guided first-run flow that requests each only when the capability that
   needs it is first used, not all up front.
 
-## 16. Workflows (data model + workflow-as-code execution)
+## 16. Workflows (data model + workflow-as-code execution + SwiftUI editor)
 
-The first shipped slice of the workflow system. This section
-covers the Phase-1 deliverable: the data model, the executor,
-and the wrapped Tessera tools. The SwiftUI graph editor
-(Phase 2) is deferred — see "Phasing" below. The custom
-node-pack plugin model that was once Phase 3 has been
-removed from scope (architect decision 2026-08-04): Tessera
-Studio is a single-shipped Mac app, no third-party node
-system, no plugin discovery.
+The workflow system. This section covers the data model
+(Phase 1), the SwiftUI graph editor (Phase 2), and the
+wrapped Tessera tools that ship in the default registry.
+The custom node-pack plugin model that was once Phase 3
+has been removed from scope (architect decision 2026-08-04):
+Tessera Studio is a single-shipped Mac app, no third-party
+node system, no plugin discovery.
 
 ### 16.1 What a workflow is
 
@@ -3922,30 +3921,33 @@ A `run` that fails validation produces a single
 `.finished(success: false)` event with the error string in
 `message`; no nodes are executed.
 
-### 16.6 Phasing
+### 16.6 Phasing (COMPLETE)
 
-The workflow system is shipped in two phases. The phases
-have strict gates; the gates are not soft deadlines.
+The workflow system shipped in two phases. Both have merged
+to main.
 
 1. **Phase 1 — Data model + workflow-as-code execution
-   (this section, target: merged before Phase 2 starts).**
-   The five data model files, the wrapped tools, the
-   executor, and the round-trip / validation / executor
-   tests. Ships as soon as `swift test` is green and a
-   hand-built 3-node `calibrate -> quantize -> save` workflow
-   executes end-to-end against a stub tool.
-2. **Phase 2 — SwiftUI graph editor (deferred, designer-led).**
-   `WorkflowCanvasView` (SwiftUI `Canvas` for the bezier
-   connections + node rectangles), `WorkflowNodeView`
-   (drag-to-move, port hit-testing, parameter side panel
-   bound to the JSONSchema from `WorkflowNodePaletteEntry`),
-   `WorkflowPaletteView`, `WorkflowToolbarView`,
-   `WorkflowDocument` (file-based persistence), wire to the
-   existing `TesseraStudioMac` `NavigationSplitView` as a
-   new "Workflows" tab. UX work without an installable
-   `.app` from main is wasted; this phase does not start
-   until Phase 1 is merged AND TesseraStudioMac is
-   installable.
+   (merged `3ef20e120`).** The five data model files, the
+   wrapped tools, the executor, and the round-trip /
+   validation / executor tests. Hand-built 3-node
+   `calibrate -> quantize -> save` workflow executes
+   end-to-end against a stub tool.
+2. **Phase 2 — SwiftUI graph editor (merged `292bef1a2`).**
+   `WorkflowCanvasView` (SwiftUI `Canvas` for bezier
+   connections + node rectangles + in-flight wire preview),
+   `WorkflowNodeView` (drag-to-move via the header bar,
+   port-hit-testing on the port dot), `WorkflowPaletteView`
+   (List bound to `WorkflowNodePaletteEntry`),
+   `WorkflowToolbarView` (New / Open / Save / Run),
+   `WorkflowParameterPanelView` (form bound to the selected
+   node's `JSONSchema`), `WorkflowDocument` (FileDocument
+   envelope with optional positions, schema
+   `tessera.workflow.document.v1`), `WorkflowsView`
+   (container with the new "Workflows" tab in
+   `TesseraStudioMac` `NavigationSplitView`),
+   `WorkflowGeometry` (shared port-center / node-height
+   math in `TesseraCore` so the canvas renderer and the
+   drop-test validator can't drift).
 
 A third phase (custom node-pack plugin system) was
 originally planned here and is now removed from scope:
@@ -3958,11 +3960,34 @@ is just the tessera studio mac app".
 
 ### 16.7 Why this order
 
-Phase 1 is load-bearing: the editor (Phase 2) is just a
-pretty picture without a clean protocol + Codable + executor.
-The palette-entry shape shipped in 1.1 is exactly the API a
-SwiftUI `List` will consume in Phase 2. There is no third
-phase to justify; the workflow system ends at the editor.
+Phase 1 was load-bearing: the editor (Phase 2) is just a
+pretty picture without a clean protocol + Codable +
+executor. The palette-entry shape shipped in 1.1 is exactly
+the API the SwiftUI `List` in `WorkflowPaletteView` ended
+up consuming. There is no third phase to justify; the
+workflow system ends at the editor.
+
+### 16.7a What the user can do today
+
+After Phase 1 + Phase 2 are merged, the user can:
+- Open the "Workflows" tab in Tessera Studio (macOS).
+- See the palette of wrapped TesseraTools on the left.
+- See a hard-coded `calibrate -> quantize` example
+  workflow on the canvas.
+- Drag any node to move it.
+- Drag from a node's output port to another node's
+  input port to wire them (validated: type-compatible,
+  no self-loops, no parallel edges).
+- Click a node to select it; the right pane shows its
+  parameters (form bound to the JSONSchema); edits flow
+  back into the workflow.
+- Save the workflow to a `.json` file (the
+  `tessera.workflow.document.v1` envelope) and re-open
+  it later.
+- Hit "Run" to execute the workflow through
+  `WorkflowExecutor.run`; the progress sheet shows the
+  live `AsyncStream<WorkflowEvent>` as nodes start, finish,
+  log, and the workflow reports success or failure.
 
 ### 16.8 License analysis (binding)
 
