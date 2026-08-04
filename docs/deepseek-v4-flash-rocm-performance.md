@@ -725,10 +725,30 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 
 ## 10. Reproduction record
 
-The first controlled window and fixed natural-text proxy are complete. These
-are not yet the final acceptance command; 32K+ and any user-supplied production
-corpus remain deferred. All harness runs cap measured time at five minutes
-while excluding model load.
+The controlled baseline, fixed natural-text proxy, and four accepted PP
+optimizations are complete. This section records the externally
+monitor-rerunnable final verification command. Complete 32K/64K matched A/B
+and any user-supplied production corpus remain explicitly deferred (32K cannot
+finish under the fixed five-minute measured cap, and no user corpus exists).
+All harness runs cap measured time at five minutes while excluding model load.
+
+**Final externally rerunnable verification command** (head `c4c0737a4`; source
+unchanged since the `c98197389` code commit, later commits are documentation
+only):
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+cmake --build build --target llama-bench -j 12
+export HSA_OVERRIDE_GFX_VERSION=10.3.0 HSA_NO_SCRATCH_RECLAIM=1 \
+  GGML_HIP_GRAPHS=1 GGML_CUDA_ALLREDUCE=nccl GGML_CUDA_P2P=1 \
+  GGML_HIP_RDNA2_MMQ_J=16 GGML_HIP_RDNA2_HC_MIXES=1 \
+  GGML_HIP_RDNA2_LID_SUBWAVE=4
+DSV4_PROMPTS=512,2048,8192,16384 DSV4_UBATCHES=256 DSV4_BATCH=512 \
+DSV4_REPS=1 DSV4_TIMEOUT=300 DSV4_LABEL=final-full-stack-4opt \
+scripts/dsv4-rocm/run-pp.sh
+```
+
+The recorded run (`$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T003038.699935606Z-final-full-stack-4opt-c98197389511-25811/`) was complete with all four shapes and median 293.744 / 523.352 / 437.512 / 365.332 t/s at 512/2K/8K/16K. Correctness of the committed stack is attested by the natural-proxy gate `20260803-225603-iq3-t128-corpus-fb2a0c85d` (`complete=1`).
 
 Current 8K control/candidate commands:
 
