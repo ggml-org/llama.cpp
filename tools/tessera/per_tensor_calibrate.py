@@ -1957,6 +1957,161 @@ def _run_lrq_with_residency(
     return results
 
 
+def compute_spatial_order(
+    components: dict[str, list[Path]],
+    spatial_occupancy: str = "interleaved",
+) -> list[tuple[str, Path]]:
+    """Return the per-tensor iteration order for a multi-component run.
+
+    Phase 16 (calibration memopt) Cat 4.  The per-component
+    shell-out (``unified_calibrate.py`` on Worker 2's branch,
+    or the in-process shell-out below) needs a single
+    iteration order over the union of the components' tensor
+    lists.  This function is the one place where that order
+    is decided, so the CLI flag and the policy live next to
+    each other.
+
+    Parameters
+    ----------
+    components : dict
+        Maps ``model_role`` (``"trunk"``, ``"dflash"``,
+        ``"dspark"``, ``"mtp_nextn"``, ``"shared_embd"``) to
+        a list of per-tensor ``.npz`` paths.  The per-role
+        order is the per-component shell-out's own layer
+        ordering; this function only re-orders across
+        components.
+    spatial_occupancy : str
+        ``"interleaved"`` (default): round-robin per-component
+        tensors at the layer level.  ``"sequential"``: process
+        all of one role's tensors before moving to the next
+        (legacy component-major order).
+
+    Returns
+    -------
+    list of (model_role, Path)
+        The per-tensor iteration order.  The per-tensor
+        training reads the path, runs the calibration mode,
+        and emits a policy entry tagged with the model_role.
+    """
+    if spatial_occupancy == "sequential":
+        # Legacy component-major order: all of the trunk's
+        # tensors, then all of the dflash's, etc.  The
+        # per-role order in ``components`` is preserved.
+        out: list[tuple[str, Path]] = []
+        for role in SPATIAL_ROLES:
+            for path in components.get(role, []):
+                out.append((role, path))
+        # Append any roles not in SPATIAL_ROLES at the end
+        # so the default order covers all components.
+        for role, paths in components.items():
+            if role in SPATIAL_ROLES:
+                continue
+            for path in paths:
+                out.append((role, path))
+        return out
+    if spatial_occupancy == "interleaved":
+        # Round-robin per-component tensors at the layer
+        # level.  The per-role layer order is preserved;
+        # the cross-role order is interleaved so the cache
+        # footprint stays small.
+        names_by_role = {
+            role: [str(p) for p in paths]
+            for role, paths in components.items()
+        }
+        paths_by_name: dict[str, Path] = {}
+        for role, paths in components.items():
+            for p in paths:
+                paths_by_name[str(p)] = p
+        out = []
+        for role, name in interleave_components(names_by_role):
+            out.append((role, paths_by_name[name]))
+        return out
+    raise ValueError(
+        f"unknown spatial_occupancy {spatial_occupancy!r}; "
+        "expected one of ('sequential', 'interleaved')"
+    )
+
+
+def run_components_lrq(
+    components: dict[str, list[Path]],
+    *,
+    args: argparse.Namespace,
+    tracker: ResidencyTracker,
+) -> tuple[list[tuple[Layer, LRQResult, str]], dict[str, int]]:
+    """In-process per-component shell-out for the LRQ mode.
+
+    Phase 16 (calibration memopt) Cat 4.  The shell-out
+    iterates the per-tensor order produced by
+    ``compute_spatial_order`` (which respects
+    ``--spatial-occupancy``) and runs the LRQ per-tensor
+    training on each.  The output policy entries are
+    tagged with the model_role so the unified policy can
+    be assembled downstream.
+
+    The shell-out is in-process (no subprocess), which is
+    faster than the per-component subprocess for the
+    ``--fitness lrq`` mode.  The ``--fitness awq`` mode
+    still uses ``run_awq_subprocess`` (the GA is
+    heavyweight enough that the subprocess overhead is
+    negligible compared to the search).
+
+    Parameters
+    ----------
+    components : dict
+        Maps ``model_role`` to a list of per-tensor paths.
+    args : argparse.Namespace
+        The CLI args (chunked, peak-rss-budget-gb, etc).
+    tracker : ResidencyTracker
+        The peak-RSS budget tracker.
+
+    Returns
+    -------
+    results : list of (Layer, LRQResult, model_role)
+        Per-tensor results tagged with the model_role.
+    counts : dict of model_role -> int
+        The number of tensors per role.  Used by the
+        unified policy builder to stamp the
+        ``components.<role>.tensor_count`` field.
+    """
+    counts: dict[str, int] = {role: len(paths) for role, paths in components.items()}
+    order = compute_spatial_order(components, getattr(args, "spatial_occupancy", "interleaved"))
+    chunked_train = getattr(args, "chunk_rows", 0) > 0
+    out: list[tuple[Layer, LRQResult, str]] = []
+    for role, path in order:
+        tracker.check(str(path))
+        layer = load_layer(path, max_tokens=args.max_tokens)
+        use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
+        if use_chunked:
+            result = train_lrq_chunked(
+                layer,
+                rank=args.lrq_rank,
+                iterations=args.lrq_iterations,
+                lr=args.lr,
+                seed=args.seed,
+                aggregation=args.lrq_agg,
+                chunk_rows=args.chunk_rows,
+                verbose=args.verbose,
+            )
+        else:
+            result = train_lrq(
+                layer,
+                rank=args.lrq_rank,
+                iterations=args.lrq_iterations,
+                lr=args.lr,
+                seed=args.seed,
+                aggregation=args.lrq_agg,
+                verbose=args.verbose,
+            )
+        out.append((layer, result, role))
+        if args.verbose:
+            print(
+                f"lrq[{role}:{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                file=sys.stderr,
+            )
+    return out, counts
+
+
 # ---------------------------------------------------------------------------
 # Compare mode
 # ---------------------------------------------------------------------------
@@ -2290,8 +2445,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--layers",
-        required=True,
-        help="Directory of layer .npz bundles or a single .npz file",
+        required=False,
+        default="",
+        help=(
+            "Directory of layer .npz bundles or a single .npz file. "
+            "Optional when the per-component flags "
+            "(--trunk-npz / --dflash-npz / --dspark-npz / "
+            "--mtp-nextn-npz / --shared-embd-npz) are set; "
+            "required otherwise."
+        ),
     )
     parser.add_argument("--output", required=True, help="Output calibration policy JSON")
     parser.add_argument(
@@ -2439,7 +2601,145 @@ def _build_parser() -> argparse.ArgumentParser:
             f"(default {default_budget_gb()}, 0 to disable)"
         ),
     )
+    # Phase 16 (calibration memopt) Cat 4: spatial occupancy.
+    # ``interleaved`` (the default) round-robins the
+    # per-component tensors at the layer level so the
+    # cache footprint stays small.  ``sequential`` is the
+    # legacy path: process all of the trunk's tensors
+    # first, then all of the dflash's, etc.  The
+    # per-tensor result is the same; the wall-time and
+    # cache-hit rate differ.
+    parser.add_argument(
+        "--spatial-occupancy",
+        choices=("sequential", "interleaved"),
+        default="interleaved",
+        help=(
+            "Phase 16 spatial occupancy: 'interleaved' "
+            "(default) round-robins per-component tensors at "
+            "the layer level; 'sequential' is the legacy "
+            "component-major order."
+        ),
+    )
+    # Phase 16 (calibration memopt) Cat 4: per-component
+    # input.  Each flag takes a comma-separated list of
+    # ``.npz`` bundle paths for that role.  When at least
+    # one role is set, the in-process per-component
+    # shell-out (``run_components_lrq``) is used instead
+    # of the single-component driver; the output policy is
+    # tagged with ``model_role`` per tensor.  This is the
+    # in-process alternative to ``unified_calibrate.py``;
+    # Worker 2's branch exposes a separate driver with
+    # subprocess isolation.
+    for role in SPATIAL_ROLES:
+        flag = f"--{role.replace('_', '-')}-npz"
+        parser.add_argument(
+            flag,
+            type=str,
+            default="",
+            help=(
+                f"Comma-separated .npz paths for the {role!r} "
+                f"component (Phase 16 multi-component shell-out)."
+            ),
+        )
     return parser
+
+
+def _main_components(
+    args: argparse.Namespace,
+    tracker: ResidencyTracker,
+    component_args: dict[str, str],
+) -> int:
+    """In-process multi-component driver for the LRQ / compare modes.
+
+    Phase 16 (calibration memopt) Cat 4.  Reads the
+    ``--<role>-npz`` flags, builds the per-component
+    tensor list, and runs ``run_components_lrq`` with the
+    ``--spatial-occupancy`` iteration order.  The output
+    policy is the LRQ policy assembled per tensor with the
+    model_role tag; the per-component counts are stamped
+    under ``policy["components"][<role>]["tensor_count"]``
+    so the unified policy can be assembled downstream.
+    """
+    components: dict[str, list[Path]] = {}
+    for role, raw in component_args.items():
+        if not raw.strip():
+            continue
+        components[role] = [Path(p.strip()) for p in raw.split(",") if p.strip()]
+    if not components:
+        raise ValueError(
+            "no per-component paths supplied: at least one of "
+            + ", ".join(f"--{r.replace('_', '-')}-npz" for r in SPATIAL_ROLES)
+            + " must be set"
+        )
+    if args.fitness == "lrq":
+        results, counts = run_components_lrq(components, args=args, tracker=tracker)
+        # Strip the model_role for the LRQ policy builder;
+        # the unified policy builder re-attaches it.
+        lrq_results = [(layer, result) for layer, result, _ in results]
+        provenance = {
+            "tool": "per_tensor_calibrate.py",
+            "mode": "lrq-multi",
+            "seed": args.seed,
+            "lrq_rank": args.lrq_rank,
+            "lrq_iterations": args.lrq_iterations,
+            "lrq_lr": args.lr,
+            "lrq_aggregation": args.lrq_agg,
+            "spatial_occupancy": getattr(args, "spatial_occupancy", "interleaved"),
+            "per_role_tensor_count": counts,
+            "timestamp": time.time(),
+        }
+        policy = build_lrq_policy(lrq_results, provenance)
+        # Stamp the per-role tensor_count on the policy so
+        # the unified driver can recover the partition
+        # without re-reading the components dict.
+        policy["per_role_tensor_count"] = counts
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+        print(
+            f"wrote {output} with {len(lrq_results)} LRQ tensor entries "
+            f"({sum(counts.values())} across {len(counts)} roles)",
+            file=sys.stderr,
+        )
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return 0
+    if args.fitness == "compare":
+        # Compare mode + multi-component is a thin extension
+        # of the LRQ path; the AWQ leg is best-effort
+        # (delegate to awq-evolve.py per component) so we
+        # skip the AWQ leg here.  The per-component
+        # comparison is a future Worker 2 / unified driver
+        # extension.
+        results, counts = run_components_lrq(components, args=args, tracker=tracker)
+        lrq_results = [(layer, result) for layer, result, _ in results]
+        provenance = {
+            "tool": "per_tensor_calibrate.py",
+            "mode": "compare-multi",
+            "seed": args.seed,
+            "lrq_rank": args.lrq_rank,
+            "lrq_iterations": args.lrq_iterations,
+            "lrq_lr": args.lr,
+            "lrq_aggregation": args.lrq_agg,
+            "spatial_occupancy": getattr(args, "spatial_occupancy", "interleaved"),
+            "per_role_tensor_count": counts,
+            "timestamp": time.time(),
+        }
+        policy = build_lrq_policy(lrq_results, provenance)
+        policy["per_role_tensor_count"] = counts
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+        print(
+            f"wrote {output} with {len(lrq_results)} LRQ tensor entries "
+            f"(multi-component compare)",
+            file=sys.stderr,
+        )
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return 0
+    raise ValueError(
+        f"multi-component shell-out does not support --fitness {args.fitness!r}; "
+        "expected one of ('lrq', 'compare')"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2453,6 +2753,20 @@ def main(argv: list[str] | None = None) -> int:
         budget_bytes=int(getattr(args, "peak_rss_budget_gb", 0) or 0) * 1024**3,
         abort_on_exceed=True,
     )
+    # Phase 16 Cat 4: multi-component dispatch.  If any of
+    # the ``--<role>-npz`` flags is set, use the in-process
+    # per-component shell-out (in ``run_components_lrq``)
+    # instead of the single-component driver.  The output
+    # policy is tagged with the model_role per tensor; the
+    # ``--spatial-occupancy`` flag controls the iteration
+    # order.
+    component_args = {role: getattr(args, f"{role.replace('-', '_')}_npz", "")
+                      for role in SPATIAL_ROLES}
+    has_any_component = any(p.strip() for p in component_args.values())
+    if has_any_component and args.fitness in ("lrq", "compare"):
+        return _main_components(args, tracker, component_args)
+    if has_any_component and args.fitness in ("lrq", "compare"):
+        return _main_components(args, tracker, component_args)
     if args.fitness == "lrq":
         layers = iter_layer_paths(args.layers)
         if not layers:

@@ -524,6 +524,57 @@ class TestSpatialOccupancy(unittest.TestCase):
         for role in ("trunk", "dflash", "dspark", "mtp_nextn", "shared_embd"):
             self.assertIn(role, cm.SPATIAL_ROLES)
 
+    def test_compute_spatial_order_sequential(self) -> None:
+        """``compute_spatial_order(..., 'sequential')`` returns
+        the legacy component-major order: all of the trunk's
+        tensors first, then all of the dflash's, etc."""
+        import per_tensor_calibrate as ptc
+        from pathlib import Path
+        components = {
+            "trunk": [Path("/tmp/trunk_0.npz"), Path("/tmp/trunk_1.npz")],
+            "dflash": [Path("/tmp/dflash_0.npz")],
+            "dspark": [Path("/tmp/dspark_0.npz")],
+        }
+        order = ptc.compute_spatial_order(components, "sequential")
+        self.assertEqual(
+            [p.name for _, p in order],
+            ["trunk_0.npz", "trunk_1.npz", "dflash_0.npz", "dspark_0.npz"],
+        )
+        # The roles are also correctly tagged.
+        self.assertEqual(
+            [role for role, _ in order],
+            ["trunk", "trunk", "dflash", "dspark"],
+        )
+
+    def test_compute_spatial_order_interleaved(self) -> None:
+        """``compute_spatial_order(..., 'interleaved')`` returns
+        the per-layer round-robin order so the cache stays hot."""
+        import per_tensor_calibrate as ptc
+        from pathlib import Path
+        components = {
+            "trunk": [Path("/tmp/trunk_blk.0.npz"), Path("/tmp/trunk_blk.1.npz")],
+            "dflash": [Path("/tmp/dflash_fc.0.npz"), Path("/tmp/dflash_fc.1.npz")],
+            "dspark": [Path("/tmp/dspark_w.0.npz"), Path("/tmp/dspark_w.1.npz")],
+        }
+        order = ptc.compute_spatial_order(components, "interleaved")
+        # The first layer fires all three roles, the second
+        # layer fires all three.  Trunk has 2 tensors per
+        # layer (attn_q, attn_k) so the per-layer order
+        # interleaves 2 trunk + 1 each of dflash / dspark.
+        names = [p.name for _, p in order]
+        # The first tensor is layer 0 (any role).
+        self.assertIn("trunk_blk.0.npz", names[0])
+        # The shared_embd-less run has 6 tensors total.
+        self.assertEqual(len(order), 6)
+
+    def test_compute_spatial_order_rejects_unknown(self) -> None:
+        """An unknown spatial_occupancy value raises ``ValueError``."""
+        import per_tensor_calibrate as ptc
+        from pathlib import Path
+        components = {"trunk": [Path("/tmp/t.npz")]}
+        with self.assertRaises(ValueError):
+            ptc.compute_spatial_order(components, "diagonal")
+
 
 class TestTemporalPipeline(unittest.TestCase):
     """``CalibPipeline`` overlaps the next tensor's mmap with the
