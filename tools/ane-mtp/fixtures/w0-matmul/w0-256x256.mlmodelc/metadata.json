@@ -1,0 +1,61 @@
+[
+  {
+    "shortDescription" : "W0 ANE matmul spike",
+    "metadataOutputVersion" : "3.0",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 256)",
+        "shortDescription" : "",
+        "shape" : "[256]",
+        "name" : "y",
+        "type" : "MultiArray"
+      }
+    ],
+    "version" : "1",
+    "modelParameters" : [
+
+    ],
+    "author" : "Tessera",
+    "specificationVersion" : 4,
+    "storagePrecision" : "Float16",
+    "computePrecision" : "Float16",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "10.15",
+      "tvOS" : "13.0",
+      "visionOS" : "1.0",
+      "watchOS" : "6.0",
+      "iOS" : "13.0",
+      "macCatalyst" : "13.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_neuralNetwork"
+    },
+    "inputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 256)",
+        "shortDescription" : "",
+        "shape" : "[256]",
+        "name" : "x",
+        "type" : "MultiArray"
+      }
+    ],
+    "userDefinedMetadata" : {
+
+    },
+    "generatedClassName" : "w0_256x256",
+    "neuralNetworkLayerTypeHistogram" : {
+      "InnerProduct" : 1
+    },
+    "method" : "predict"
+  }
+]

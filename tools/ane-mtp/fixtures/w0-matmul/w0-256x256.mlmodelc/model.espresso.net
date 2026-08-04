@@ -1,0 +1,35 @@
+{
+  "storage" : "model.espresso.weights",
+  "analyses" : {
+
+  },
+  "properties" : {
+
+  },
+  "format_version" : 200,
+  "metadata_in_weights" : [
+
+  ],
+  "layers" : [
+    {
+      "has_prelu" : 0,
+      "top" : "y",
+      "has_biases" : 0,
+      "blob_weights_f16" : 1,
+      "nC" : 256,
+      "weights" : {
+
+      },
+      "type" : "inner_product",
+      "has_relu" : 0,
+      "attributes" : {
+        "is_output" : 1
+      },
+      "bottom" : "x",
+      "debug_info" : "matmul",
+      "has_tanh" : 0,
+      "name" : "matmul",
+      "nB" : 256
+    }
+  ]
+}

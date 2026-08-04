@@ -346,6 +346,23 @@ if (APPLE)
     llama_build(test-ane-prefill-slab.cpp)
     llama_build(test-ane-prefill-buckets.cpp)
     llama_build(test-ane-prefill-chunked.cpp)
+    # W0 ANE matmul spike: standalone Objective-C++ test that uses Core ML
+    # directly to validate the ANE fp16 matmul end-to-end path. The
+    # ggml-ane backend is not currently wired into the default build
+    # (ggml/src/CMakeLists.txt does not call `ggml_add_backend(ANE)`),
+    # so this spike bypasses that backend and validates the ANE
+    # integration through the canonical Core ML public API. We add the
+    # Core ML / Foundation / IOSurface frameworks explicitly because
+    # `llama_build` only links `llama` and `llama-common`, which do not
+    # transitively expose the CoreML framework to a standalone .mm
+    # binary that does not call into the existing C wrappers.
+    llama_build(test-ane-matmul-w0-spike.mm)
+    if (TARGET test-ane-matmul-w0-spike)
+        target_link_libraries(test-ane-matmul-w0-spike PRIVATE
+                              "-framework Foundation"
+                              "-framework CoreML"
+                              "-framework IOSurface")
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
