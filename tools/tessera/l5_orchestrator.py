@@ -61,6 +61,17 @@ except ImportError:  # pragma: no cover - script-mode fallback
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import l5_metrics as metrics  # type: ignore[no-redef]
 
+# Phase 16: the per-(model, model_role, family) lookup's
+# empty DataFrame is built with the l5_weights schema
+# (model_role + family + ...). The schema is defined in
+# tessera_db.py; the orchestrator imports it so the 3-tier
+# lookup's "no result yet" placeholder has the right
+# columns.
+try:
+    from .tessera_db import L5_WEIGHTS_COLS  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - script-mode fallback
+    from tessera_db import L5_WEIGHTS_COLS  # type: ignore[no-redef]
+
 
 SCHEMA = "llama.tessera.l5-orchestrator.v1"
 PLAN_SCHEMA = "llama.tessera.l5-requant-plan.v1"
@@ -231,6 +242,15 @@ class RequantAction:
     layer_position_prior: float | None = None
     reason: str = ""
     storage_delta_bits: int = 0
+    # Phase 16: the architectural role the action belongs to.
+    # The orchestrator's ``--model-role`` flag sets the
+    # scorer's ``model_role``; the scorer passes the role
+    # through to every ``RequantAction`` so the per-tensor
+    # ``l5_plan_summary`` row (and the retune's
+    # per-(model, model_role, family) groupby) can find
+    # the right group. Defaults to ``"trunk"`` for
+    # backward compat with pre-Phase-16 callers.
+    model_role: str = "trunk"
 
     def to_dict(self) -> dict:
         return {
@@ -244,6 +264,10 @@ class RequantAction:
             "layer_position_prior": self.layer_position_prior,
             "reason": self.reason,
             "storage_delta_bits": self.storage_delta_bits,
+            # Phase 16: model_role in the per-tensor action
+            # dict so the l5_plan_summary writer can tag
+            # the row with the role.
+            "model_role": self.model_role,
         }
 
 
@@ -330,6 +354,15 @@ class SensitivityScorer:
     the new values are stored back into ``prev_scores`` for the next
     iteration. This is the polars-native version of the previous
     ``MomentumEMA`` dict-of-floats pattern; the public API is unchanged.
+
+    Phase 16: the scorer carries a ``model_role`` (the
+    architectural role the scored tensors belong to). The role
+    is recorded on the per-tensor ``RequantAction`` /
+    ``l5_plan_summary`` rows so the retune's per-(model,
+    model_role, family) partition can find the right group.
+    The role is plumbed through ``metrics.combine`` and
+    ``metrics.decompose`` (those helpers accept the role as
+    a pass-through parameter; the math is unchanged).
     """
 
     def __init__(
@@ -338,6 +371,7 @@ class SensitivityScorer:
         decay: float = 0.9,
         weights: tuple[float, float, float] = metrics.DEFAULT_WEIGHTS,
         total_layers: int = 0,
+        model_role: str = "trunk",
     ) -> None:
         self.weights = tuple(float(w) for w in weights)
         if not math.isclose(sum(self.weights), 1.0, abs_tol=1e-6):
@@ -346,6 +380,15 @@ class SensitivityScorer:
             )
         self.total_layers = int(total_layers)
         self.decay = float(decay)
+        # Phase 16: the architectural role the scored
+        # tensors belong to. The orchestrator's
+        # ``--model-role`` flag sets this; the role is
+        # recorded on every per-tensor ``RequantAction`` /
+        # ``l5_plan_summary`` row so the retune can do the
+        # per-(model, model_role, family) groupby. Defaults
+        # to ``"trunk"`` for backward compat with the
+        # pre-Phase-16 callers.
+        self.model_role = str(model_role) if model_role else "trunk"
         # EMA state: per-tensor previous score. The dict is the
         # ``polars-native`` form of the old MomentumEMA; the
         # DataFrame column is rebuilt each iteration from this dict
@@ -528,6 +571,7 @@ class RequantPlanner:
         budget_bits: int | None = None,
         divergence_threshold: float | None = None,
         per_family_top_fraction: dict[str, float] | None = None,
+        model_role: str = "trunk",
     ) -> None:
         if not 0.0 <= top_fraction <= 1.0:
             raise ValueError(f"top_fraction must be in [0, 1], got {top_fraction}")
@@ -553,6 +597,16 @@ class RequantPlanner:
             if per_family_top_fraction is not None
             else {}
         )
+        # Phase 16: the architectural role the planned
+        # tensors belong to. The orchestrator's
+        # ``--model-role`` flag sets this; the planner
+        # passes the role to every ``RequantAction`` it
+        # emits so the per-tensor ``l5_plan_summary`` row
+        # (and the retune's per-(model, model_role, family)
+        # groupby) can find the right group. Defaults to
+        # ``"trunk"`` for backward compat with pre-Phase-16
+        # callers.
+        self.model_role = str(model_role) if model_role else "trunk"
         # Per-family lookup. The cohort selection uses
         # ``top_fraction_for(tensor)`` which checks the tensor's
         # family in the override map. The default is the
@@ -813,6 +867,11 @@ class RequantPlanner:
                     ),
                     reason="top-fraction",
                     storage_delta_bits=bits_after - bits_before,
+                    # Phase 16: the role is on the
+                    # planner; the action carries the
+                    # role so the l5_plan_summary
+                    # writer can tag the row.
+                    model_role=self.model_role,
                 )
             )
 
@@ -877,6 +936,8 @@ class RequantPlanner:
                     ),
                     reason="bottom-fraction",
                     storage_delta_bits=bits_after - bits_before,
+                    # Phase 16: role carried through.
+                    model_role=self.model_role,
                 )
             )
 
@@ -1514,6 +1575,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--model-role",
+        default=None,
+        choices=[
+            "trunk", "dflash", "dspark", "mtp_nextn", "shared_embd",
+        ],
+        help=(
+            "model_role for the --retune-from-db lookup (Phase 16). "
+            "Default None = the role dimension is ignored; the "
+            "lookup uses only (model_hash, family). When set, the "
+            "lookup is (model_hash, model_role, family); the same "
+            "family in different architectural roles (e.g. the "
+            "trunk's attn_q vs the dflash encoder's attn_q) gets "
+            "independent (w_imatrix, w_gradient, w_layer) tuples. "
+            "Requires --model-hash; a bare model_role filter "
+            "would silently mix roles across models."
+        ),
+    )
+    parser.add_argument(
         "--retune-cross-model-fallback",
         action="store_true",
         help=(
@@ -1525,7 +1604,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "fallback lets new models warm-start from the "
             "cross-model mean. Off by default; the consumer-side "
             "default is to leave families without per-model rows "
-            "at the --w-* flag values."
+            "at the --w-* flag values. Phase 16: the cross-model "
+            "fallback is also role-aware: the (model_hash='*', "
+            "model_role, family) row fills in for the missing "
+            "per-model row, not the role-agnostic cross-model row."
         ),
     )
     parser.add_argument(
@@ -1574,6 +1656,20 @@ def main(argv: list[str] | None = None) -> int:
                 "rows are keyed by model_hash, and a model-less lookup "
                 "would silently mix recommendations across models."
             )
+        if args.model_role is not None and args.model_hash is None:
+            # Belt and braces (the argparse --model-hash default
+            # is None, so this branch is reachable when
+            # --model-role is set but --model-hash is not).
+            # The argparse doesn't enforce a dependency between
+            # --model-role and --model-hash because the legacy
+            # --retune-from-db path doesn't need --model-hash
+            # (the l5_retune is what enforces it). We enforce
+            # it here for the role-aware path.
+            raise ValueError(
+                "--model-role requires --model-hash; a bare "
+                "model_role filter would silently mix roles "
+                "across models."
+            )
         # Local import to keep the top of this module light; the
         # l5_retune module pulls polars + duckdb at import time.
         from l5_retune import (
@@ -1581,16 +1677,71 @@ def main(argv: list[str] | None = None) -> int:
             read_l5_weights,
             read_per_family_top_fraction,
         )
-        weights_df = read_l5_weights(
-            args.retune_from_db,
-            model_hash=args.model_hash,
-            cross_model_fallback=args.retune_cross_model_fallback,
-        )
+        # Phase 16: 3-tier lookup. The retune is per-(model,
+        # model_role, family) so the same family in different
+        # roles gets independent (w_imatrix, w_gradient,
+        # w_layer) tuples. The tiers are:
+        #   1. (model_hash, model_role, family) per-model,
+        #      per-role, per-family (the production path).
+        #   2. ("*", model_role, family) cross-model,
+        #      per-role, per-family (when
+        #      --retune-cross-model-fallback is set; warms
+        #      new models from the cross-model mean).
+        #   3. (model_hash, "*", family) per-model, no role
+        #      (the legacy pre-Phase-16 path; warm-start
+        #      a model that has trunk-only retune rows
+        #      but the consumer asked for the dflash role).
+        #   4. base weights (the --w-* flag values).
+        # The first tier with a non-empty result wins; the
+        # remaining tiers are not consulted.
+        weights_df = pl.DataFrame(schema=L5_WEIGHTS_COLS)
+        if args.model_role is not None:
+            # Tier 1: per-model + per-role.
+            weights_df = read_l5_weights(
+                args.retune_from_db,
+                model_hash=args.model_hash,
+                model_role=args.model_role,
+                cross_model_fallback=False,
+            )
+            # Tier 2: cross-model + per-role (only when
+            # --retune-cross-model-fallback is set).
+            if (
+                weights_df.height == 0
+                and args.retune_cross_model_fallback
+            ):
+                weights_df = read_l5_weights(
+                    args.retune_from_db,
+                    model_hash="*",
+                    model_role=args.model_role,
+                    cross_model_fallback=False,
+                )
+        if weights_df.height == 0:
+            # Tier 3: per-model, no role (legacy pre-Phase-16
+            # path). This branch handles two cases:
+            #   (a) --model-role is None: the legacy
+            #       (model_hash, family) lookup.
+            #   (b) --model-role is set but the role has no
+            #       per-model rows: fall back to the
+            #       role-agnostic per-model rows. The orchestrator
+            #       can warm-start a new role from the trunk's
+            #       recommendation; the (w_imatrix, w_gradient,
+            #       w_layer) tuple is not role-perfect but is
+            #       a reasonable starting point.
+            weights_df = read_l5_weights(
+                args.retune_from_db,
+                model_hash=args.model_hash,
+                model_role=None,
+                cross_model_fallback=args.retune_cross_model_fallback,
+            )
         if weights_df.height == 0:
             print(
                 f"WARN: --retune-from-db {args.retune_from_db} has no "
-                f"l5_weights for model_hash={args.model_hash!r}; using "
-                f"the --w-* flag values",
+                f"l5_weights for model_hash={args.model_hash!r}"
+                + (
+                    f", model_role={args.model_role!r}"
+                    if args.model_role is not None else ""
+                )
+                + "; using the --w-* flag values",
                 file=sys.stderr,
             )
         else:
@@ -1599,8 +1750,12 @@ def main(argv: list[str] | None = None) -> int:
                 base_weights=(args.w_imatrix, args.w_gradient, args.w_layer),
             )
             retune_source = str(args.retune_from_db)
+            role_label = (
+                f" (role={args.model_role})" if args.model_role is not None else ""
+            )
             print(
-                f"[l5] retune-from-db: {weights_df.height} family row(s) "
+                f"[l5] retune-from-db: {weights_df.height} family row(s)"
+                f"{role_label} "
                 f"-> w=({w_im:.3f}, {w_grad:.3f}, {w_layer:.3f})",
                 file=sys.stderr,
             )
@@ -1612,6 +1767,18 @@ def main(argv: list[str] | None = None) -> int:
     # value overrides the uniform --top-fraction for the
     # families the retune has flagged. Families without a
     # per-family row use the --top-fraction flag value.
+    #
+    # Phase 16: the per-family lookup is role-aware. The
+    # retune writes per-(model, model_role, family)
+    # top_fraction recommendations; the orchestrator
+    # looks up dflash-specific recommendations when
+    # --model-role=dflash, etc. When --model-role is set,
+    # the cross-model fallback is also role-aware
+    # (the dflash cross-model aggregate fills in for
+    # dflash per-model families, not the trunk
+    # cross-model aggregate). When --model-role is None,
+    # the legacy pre-Phase-16 path is taken (no role
+    # filter on the lookup).
     top_fraction_db = args.per_family_top_fraction
     if top_fraction_db is None and args.retune_from_db is not None:
         top_fraction_db = args.retune_from_db
@@ -1620,12 +1787,17 @@ def main(argv: list[str] | None = None) -> int:
         per_family_top_fraction = read_per_family_top_fraction(
             top_fraction_db,
             model_hash=args.model_hash,
+            model_role=args.model_role,
             cross_model_fallback=args.retune_cross_model_fallback,
         )
         if per_family_top_fraction:
+            role_label = (
+                f" (role={args.model_role})" if args.model_role is not None else ""
+            )
             print(
                 f"[l5] per-family-top-fraction: "
-                f"{len(per_family_top_fraction)} family recommendation(s) "
+                f"{len(per_family_top_fraction)} family recommendation(s)"
+                f"{role_label} "
                 f"from {top_fraction_db}",
                 file=sys.stderr,
             )
@@ -1634,6 +1806,10 @@ def main(argv: list[str] | None = None) -> int:
         decay=args.ema_decay,
         weights=(w_im, w_grad, w_layer),
         total_layers=args.total_layers,
+        # Phase 16: role is plumbed through the scorer;
+        # every per-tensor RequantAction gets the role
+        # so the l5_plan_summary writer tags the row.
+        model_role=args.model_role or "trunk",
     )
     planner = RequantPlanner(
         top_fraction=args.top_fraction,
@@ -1641,6 +1817,9 @@ def main(argv: list[str] | None = None) -> int:
         budget_bits=args.budget_bits,
         divergence_threshold=args.divergence_threshold,
         per_family_top_fraction=per_family_top_fraction,
+        # Phase 16: role on the planner too; the
+        # actions emitted by plan() carry the role.
+        model_role=args.model_role or "trunk",
     )
 
     apply_fn: ApplyFn | None = None
