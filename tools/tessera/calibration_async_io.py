@@ -61,6 +61,7 @@ _CALLBACK_TYPE = ctypes.CFUNCTYPE(
     None,
     ctypes.c_void_p,    # data pointer (heap buffer; bridge owns it until callback returns)
     ctypes.c_size_t,    # size in bytes
+    ctypes.c_int,       # error code (0 = success including empty; non-zero = error)
     ctypes.c_void_p,    # user pointer (Python object via ctypes)
 )
 
@@ -254,20 +255,27 @@ class AsyncIOBackend:
         lib = self._lib
 
         @_CALLBACK_TYPE
-        def callback(data_ptr, size, _user):
+        def callback(data_ptr, size, error, _user):
             try:
-                if not data_ptr:
-                    # C bridge hands us NULL on either
-                    # error or success-with-empty-data; we
-                    # cannot distinguish from Python (the
-                    # C bridge doesn't carry an error code
-                    # through).  The pre-existing behaviour
-                    # is to surface this as a failure; the
-                    # empty-file case is documented as a
-                    # known limitation.  See
-                    # ``test_calibration_async_io.py`` for
-                    # the regression-tested non-empty path.
-                    result_queue.put((None, "dispatch_io_read failed"))
+                if error != 0:
+                    # Real I/O error (the C bridge now
+                    # carries the dispatch_io error code
+                    # through, so a NULL data pointer with
+                    # error==0 is success-with-empty, not
+                    # an error).
+                    result_queue.put((
+                        None,
+                        f"dispatch_io_read failed: errno={error}",
+                    ))
+                    return
+                if not data_ptr or size == 0:
+                    # Success-with-empty (data is NULL, size
+                    # is 0, error is 0).  This is now
+                    # unambiguous because the C bridge
+                    # passes error=0 for success and the
+                    # check above already filtered the
+                    # error!=0 case.
+                    result_queue.put((b"", None))
                     return
                 # ``data_ptr`` is a c_void_p in the CFUNCTYPE
                 # argtypes, but on Python 3.14 + ctypes the
@@ -277,10 +285,6 @@ class AsyncIOBackend:
                 # original implementation) so the code works
                 # for either representation.
                 addr = ctypes.cast(data_ptr, ctypes.c_void_p).value
-                if size == 0:
-                    result_queue.put((b"", None))
-                    lib.tessera_dispatch_free_buffer(data_ptr)
-                    return
                 # Build a c_char array VIEW and copy into a
                 # Python bytes object so we own the bytes
                 # (the C buffer is freed in the finally
@@ -294,7 +298,9 @@ class AsyncIOBackend:
                 # to a Python bytes object).  Guarded with
                 # try/except so a double-free (e.g. from a
                 # C-side bug) doesn't mask the original
-                # error.
+                # error.  On error the C bridge did not
+                # allocate a buffer, so data_ptr is NULL
+                # and the free is a no-op.
                 if data_ptr:
                     try:
                         lib.tessera_dispatch_free_buffer(data_ptr)

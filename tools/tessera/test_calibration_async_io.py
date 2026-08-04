@@ -73,13 +73,11 @@ def test_dispatch_io_many_concurrent_reads_no_segfault(tmp_path) -> None:
 
 @pytest.mark.skipif(not _is_macos(), reason="dispatch_io bridge is macOS-only")
 def test_dispatch_io_zero_size_read(tmp_path) -> None:
-    """An empty file currently surfaces as a failure (NULL data
-    pointer indistinguishable from an error in the C bridge).
-
-    This documents the pre-existing limitation.  The fix is in
-    the C bridge (carry an error code through to Python).  The
-    Python side must not segfault on the empty-file path; that
-    is what this test pins.
+    """An empty file should now return (b"", None) (success),
+    not surface as a failure.  The C bridge carries the
+    dispatch_io error code through to Python, so a NULL data
+    pointer with error=0 is success-with-empty-data, not a
+    real I/O error.
     """
     from calibration_async_io import create_async_io_backend
 
@@ -92,19 +90,19 @@ def test_dispatch_io_zero_size_read(tmp_path) -> None:
 
     q = backend.read(test_file)
     data, error = q.get(timeout=10)
-    # Pre-existing behaviour: NULL pointer, no error code,
-    # Python returns "dispatch_io_read failed".  This is
-    # not ideal but it is the contract today.  What matters
-    # is that the callback does not segfault.
-    assert data is None
-    assert error is not None
+    assert error is None, error
+    assert data == b""
 
     backend.cleanup()
 
 
 @pytest.mark.skipif(not _is_macos(), reason="dispatch_io bridge is macOS-only")
-def test_dispatch_io_missing_file(tmp_path) -> None:
-    """A missing file path should deliver an error tuple, not segfault."""
+def test_dispatch_io_error_carries_through(tmp_path) -> None:
+    """A read failure (file does not exist) should deliver an
+    error tuple with error != None.  Verifies the C bridge
+    actually carries the dispatch_io error code to Python
+    (the fix from the prior commit).
+    """
     from calibration_async_io import create_async_io_backend
 
     backend = create_async_io_backend()
@@ -115,5 +113,8 @@ def test_dispatch_io_missing_file(tmp_path) -> None:
     data, error = q.get(timeout=10)
     assert data is None
     assert error is not None
+    # The error message should mention the errno (proves the
+    # error code was carried through from the C bridge).
+    assert "errno=" in error, error
 
     backend.cleanup()

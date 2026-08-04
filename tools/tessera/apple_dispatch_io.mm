@@ -40,10 +40,20 @@
 // The callback signature.  ``data`` is a heap-allocated
 // buffer; the callback owns it after the bridge returns
 // and is responsible for freeing via
-// ``tessera_dispatch_free_buffer``.
+// ``tessera_dispatch_free_buffer``.  ``error`` is the
+// dispatch_io error code (0 for success, non-zero for
+// failure); on error ``data`` is NULL and ``size`` is 0
+// (the caller does NOT free a NULL buffer).  On success
+// with empty data ``data`` is NULL, ``size`` is 0, and
+// ``error`` is 0; the caller treats that as an empty file
+// (success, not error).  The empty-file case used to be
+// indistinguishable from a real error (the C bridge passed
+// (NULL, 0) for both); carrying the error code through
+// is the fix.
 typedef void (*tessera_dispatch_read_callback_t)(
         const char * data,
         std::size_t size,
+        int error,
         void * user);
 
 // Forward declaration of the free function.
@@ -113,7 +123,8 @@ static int tessera_dispatch_append(
 
 // The per-chunk completion handler.  We accumulate the
 // chunks; when ``done`` is true we hand the buffer to the
-// callback.
+// callback.  The ``error`` parameter is the GCD error code
+// (0 for success including empty data, non-zero for failure).
 static void tessera_dispatch_read_handler(
         bool done,
         dispatch_data_t data,
@@ -121,14 +132,17 @@ static void tessera_dispatch_read_handler(
         tessera_dispatch_state_t * st) {
     if (error != 0) {
         // I/O error.  Free the state and notify the
-        // callback with NULL/0 so the Python wrapper can
-        // surface the error.
+        // callback with NULL/0/error so the Python wrapper
+        // can surface the error.  Pass the error code
+        // through so the wrapper can distinguish a real
+        // error from success-with-empty (which is also
+        // (NULL, 0)).
         if (st->buf) {
             std::free(st->buf);
             st->buf = NULL;
         }
         st->size = 0;
-        st->callback(NULL, 0, st->user);
+        st->callback(NULL, 0, error, st->user);
         tessera_dispatch_state_free(st);
         return;
     }
@@ -140,13 +154,17 @@ static void tessera_dispatch_read_handler(
         if (mapped) {
             if (tessera_dispatch_append(
                     st, bytes, bytes_size) != 0) {
-                // Allocation failure: report as error.
+                // Allocation failure: report as error
+                // (use a synthetic non-zero error code that
+                // the Python side does not need to
+                // interpret; the existence of a non-zero
+                // value is what matters).
                 if (st->buf) {
                     std::free(st->buf);
                     st->buf = NULL;
                 }
                 st->size = 0;
-                st->callback(NULL, 0, st->user);
+                st->callback(NULL, 0, ENOMEM, st->user);
                 tessera_dispatch_state_free(st);
                 return;
             }
@@ -154,12 +172,14 @@ static void tessera_dispatch_read_handler(
     }
     if (done) {
         // Hand the buffer to the callback.  The callback
-        // owns the buffer after this point.
+        // owns the buffer after this point.  Pass
+        // error=0 (success) so the wrapper can distinguish
+        // success-with-empty from a real error.
         char * result_buf = st->buf;
         std::size_t result_size = st->size;
         st->buf = NULL;
         st->size = 0;
-        st->callback(result_buf, result_size, st->user);
+        st->callback(result_buf, result_size, 0, st->user);
         tessera_dispatch_state_free(st);
     }
 }
