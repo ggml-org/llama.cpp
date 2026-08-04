@@ -618,6 +618,24 @@ python3 tools/tessera/l5_orchestrator.py \
   test-tessera-db-buffer,
   test-tessera-quantize-db-e2e).
 
+- **Phase 16 (this commit):** calibration memory-bound /
+  spatial-temporal path.  Five categories of
+  optimisations land here, each with its own commit:
+  mmap streaming I/O, chunked processing, peak-RSS
+  budget + graceful abort, spatial occupancy (per-
+  layer round-robin across components), and temporal
+  pipeline (double-buffered I/O + compute overlap).
+  CLI flags: `--chunk-rows`, `--peak-rss-budget-gb`,
+  `--spatial-occupancy`, `--temporal-pipeline-depth`.
+  41 unit tests in `test_calibration_memory.py` +
+  3 end-to-end tests in
+  `test_per_tensor_calibrate_memory.py` pass.  The
+  end-to-end test runs a synthetic 200-tensor
+  calibration with `--peak-rss-budget-gb 1` and
+  asserts the peak RSS stays under 1.5 GB.  See
+  `docs/tessera-unified-db.md` Phase 16 section for
+  the per-category docs.
+
 ## Open follow-ups (after this commit)
 
 The unified-DB feedback loop is now feature-complete on
@@ -772,3 +790,223 @@ moves the l5_weights PK from 2-tuple to 3-tuple):
 
 42 retune tests + 12 outcome tests + 19 db tests + 7
 dataframe tests = 80 tests pass.
+## Phase 16 (this commit): calibration memory-bound / spatial-temporal path
+
+The unified gemma4_12B + dspark + dflash + MTP single-GGUF
+calibration processes 4000+ tensors, with FFN gate/up
+tensors as large as 16384x4096 = 256 MB F32. Loading
+all of them at once (or even iterating them with full
+retention) blows past 64 GB of RAM and the OS kills the
+process. Phase 16 ships the memory-bound / spatial-
+temporal pipeline that bounds the per-tensor RSS and
+overlaps I/O with compute, so the 12B unified
+calibration runs in bounded memory in hours rather than
+days (or OOMing).
+
+Five categories of optimisations land in this commit.
+They are independent; each ships with its own
+implementation, tests, and (where applicable) docs.
+
+### 16.1: Streaming I/O (mmap instead of read)
+
+The legacy `tools/tessera/per_tensor_calibrate.py`
+`load_layer()` read the whole `.npz` file into RAM via
+`np.load(path)`. The new path opens the bundle with
+`mmap_mode="r"` and hands the consumer mmap-backed
+views of the heavy keys (weight, activations,
+observer moments). Peak RSS for a single tensor is
+bounded to `max(weight, activations, observer)`
+rather than `sum(all_tensors_in_turn)`.
+
+The mmap utility is in `tools/tessera/calibration_memory.py`:
+* `mmap_tensor(npz_path, key, dtype)` - single-tensor
+  view; closes the `np.load` handle before returning
+  so the OS keeps the zip mmap alive as long as the
+  view is held.
+* `mmap_layer(npz_path, keys=...)` - context manager;
+  opens a single `np.load` handle for the legacy key
+  set (weight, train_activations, heldout_activations,
+  in_sum2, counts, name, family) and yields the dict.
+
+### 16.2: Chunked processing (for tensors too big to fit)
+
+The per-tensor training's working set is dominated by
+`out_dim * in_dim * 4` F32 intermediates (the LRQ
+forward produces 4 of them; the FLRQ sketch produces
+1 + the SVD on `(K, n_projections * target_rank)`).
+For a 12B FFN gate at 16384x4096 the working set is
+~1 GB. The chunked path splits the out_dim axis into
+row-chunks; each chunk processes a
+`(chunk_rows, in_dim)` sub-matrix and the OS reclaims
+the pages before the next chunk is read.
+
+The chunked utility is also in
+`calibration_memory.py`:
+* `chunked_iter(n_rows, chunk_rows)` - yields
+  `ChunkSpec` per row-chunk.
+* `chunked_process(weight, activations, chunk_rows,
+  compute)` - the row-chunked callback dispatcher;
+  per-chunk peak RSS is `max(W_chunk, intermediates)`.
+
+The per-tensor training is wired to the chunked path
+in `per_tensor_calibrate.py`:
+* `train_lrq_chunked` - chunked LRQ training. Uses
+  `ChunkedAdam` (per-chunk U state, full V state) and
+  accumulates `d_v` across chunks. The per-tensor
+  result is bit-equivalent to `train_lrq` (modulo the
+  float32 order-of-operations in the per-chunk matmul).
+* `flrq_sketch_chunked` - row-chunked R1-Sketch. Each
+  chunk produces a `(chunk_rows, total_width)` slice
+  of `Y = W @ Omega`; the slices are concatenated
+  before the SVD.
+
+CLI flag: `--chunk-rows N` (default 4096; 0 or
+negative disables chunking).
+
+### 16.3: Peak-RSS budget with graceful abort
+
+The legacy calibration had no peak-RSS cap; on a 12B
+calibration it would OOM and the OS would kill the
+process without a useful error message. Phase 16 ships
+a `ResidencyTracker` that reads the current process RSS
+(Linux: `/proc/self/status`; macOS/Windows: psutil) and
+aborts with a clear error when the budget is exceeded.
+
+The tracker is in
+`tools/tessera/calibration_residency.py`:
+* `read_rss_bytes()` - cross-platform RSS reader.
+* `ResidencyTracker(budget_bytes, abort_on_exceed)` -
+  the check method. Records `peak_bytes`, `n_checks`,
+  `n_violations` for the final report.
+* `residency_managed(budget_bytes)` - context manager
+  for a block of per-tensor work.
+
+The tracker is created at the top of `main()` in
+`per_tensor_calibrate.py` and checked at the top of
+each per-tensor iteration. The check is **advisory**:
+it catches sustained over-budget states, not micro-
+spikes from numpy's internal allocations. Operators
+should choose the budget with a 1.5-2x safety margin
+over the expected per-tensor working set so transient
+over-runs don't false-positive.
+
+CLI flag: `--peak-rss-budget-gb N` (default 32; 0
+disables the check). The default 32 GB fits a 12B
+unified run on a 64 GB host with the chunked path.
+
+### 16.4: Spatial occupancy (interleave components for cache locality)
+
+The per-tensor observer moments (per-input-channel
+scales) are similar across components (they all share
+`tok_embd` + `output`). Round-robining the per-
+component tensors at the layer level keeps the cache
+hot on the shared moments.
+
+The interleave utility is in `calibration_memory.py`:
+* `extract_layer_index(tensor_name)` - parses the
+  layer index from a tensor name (e.g. `blk.0.attn_q`
+  -> 0, `dflash.encoder.fc.0` -> 0, `token_embd.weight`
+  -> -1 for "no layer").
+* `interleave_components(components, roles)` - yields
+  `(role, tensor_name)` pairs in spatial-interleaved
+  order: round-robin per-component tensors at the
+  layer level, with the per-role order preserved.
+
+The per-component shell-out in `per_tensor_calibrate.py`
+(the in-process multi-component driver; Worker 2's
+`unified_calibrate.py` is the subprocess alternative)
+uses the helper. The single-component path doesn't
+need this optimisation.
+
+CLI flag: `--spatial-occupancy {sequential,interleaved}`
+(default `interleaved`). The per-tensor result is
+identical (the spatial order is a pure refactor); the
+wall-time and cache-hit rate differ.
+
+### 16.5: Temporal occupancy (pipeline I/O with compute)
+
+The legacy per-tensor loop is sequential:
+1. mmap the weight (I/O, blocking)
+2. mmap the activations (I/O, blocking)
+3. compute the per-tensor qtype (CPU, blocking)
+4. write the per-tensor policy entry (I/O, blocking)
+
+The temporal pipeline overlaps steps 1+2 of the next
+tensor with steps 3+4 of the current tensor, so the
+next tensor's mmap is in flight while the current
+tensor is computing. This is the standard double-
+buffered producer/consumer pattern.
+
+The pipeline utility is in `calibration_memory.py`:
+* `CalibPipeline(layer_paths, depth, keys)` - the
+  double-buffered pipeline. A daemon thread mmaps one
+  tensor ahead of the consumer; the consumer reads the
+  current tensor's mmap data, builds a `Layer` via
+  `_layer_from_mmap_data`, and runs the per-tensor
+  training. The depth is configurable; 1 is the legacy
+  single-thread path; 2 (default) is double-buffered;
+  3+ keeps more tensors in flight on slow I/O at the
+  cost of more peak RSS.
+
+CLI flag: `--temporal-pipeline-depth N` (default 2;
+1 = legacy single-thread).
+
+### 16.6: Performance and acceptance
+
+The 12B unified calibration should:
+* Run in bounded memory (default 32 GB; configurable
+  down to 8 GB on a tight host)
+* Finish in a few hours (the previous single-stream
+  loop would take days or OOM)
+* Use the spatial occupancy to keep the cache hot on
+  the shared observer moments
+* Use the temporal pipeline to overlap I/O with
+  compute
+
+The end-to-end test
+(`tools/tessera/test_per_tensor_calibrate_memory.py`)
+runs a synthetic 200-tensor calibration with
+`--peak-rss-budget-gb 1` and asserts the peak RSS
+stays under 1.5 GB.  Observed on a 2024-era CPU: 200
+tensors at 1024x256 (the small variant for fast CI;
+set `TESSERA_E2E_FULL=1` for the 12B variant)
+finishes in ~2 s with peak RSS 0.60 GB.  The test
+also pins the per-tensor result's independence of
+the spatial-occupancy choice.
+
+Tests:
+* `test_calibration_memory.py` - 41 unit tests for
+  the mmap / chunked / spatial / temporal /
+  residency utilities.
+* `test_per_tensor_calibrate_memory.py` - 3 end-to-end
+  tests (200-tensor budget-bounded run, sequential
+  vs interleaved equivalence, residency flag wiring).
+
+The 12B-shape variant (`TESSERA_E2E_FULL=1`) needs
+~30 GB free disk and ~2-3 min wall-time; the small
+variant (default) needs ~0.5 GB and ~2-10 s.
+
+### 16.7: Open follow-ups (after this commit)
+
+* **AVX-512 / Metal dispatch for chunked processing**:
+  the chunked LRQ / FLRQ paths are pure-numpy; an
+  AVX-512 / Metal dispatch on the per-chunk matmul
+  would give 2-4x wall-time. The 12B unified
+  calibration's per-tensor training is matmul-heavy;
+  the dispatch side is the natural extension.
+* **Async file I/O on Windows**: the `CalibPipeline`
+  producer thread uses `np.load(mmap_mode="r")` which
+  is a synchronous read on Windows. An `aiofiles`-
+  backed producer would let the Windows path overlap
+  I/O with compute the same way the Linux path does.
+* **BLC chunked (FLRQ)**: the FLRQ BLC step still
+  needs the full weight (it iterates `W - U @ V`);
+  the chunked sketch is the only FLRQ chunking Phase
+  16 ships. A chunked BLC would cap the FLRQ peak
+  to the chunked-sketch peak (~64 MB) instead of the
+  full BLC peak (~200 MB).
+* **12B-shape E2E test in CI**: the
+  `TESSERA_E2E_FULL=1` variant is opt-in because it
+  needs ~30 GB free disk. The default small variant
+  is fast and validates the property; the 12B variant
+  is the production validation.

@@ -51,6 +51,49 @@ from typing import Iterable
 
 import numpy as np
 
+# Memory-bound / spatial-temporal utilities.  These were added in
+# Phase 16 (calibration memopt); see ``calibration_memory.py`` for
+# the per-category docs.  ``calibration_residency.py`` is the
+# peak-RSS budgeting side; it is imported lazily in ``main()`` so
+# the import is only paid when the budget knob is used.
+try:
+    from .calibration_memory import (
+        SPATIAL_ROLES,
+        CalibPipeline,
+        ChunkSpec,
+        chunked_iter,
+        chunked_process,
+        extract_layer_index,
+        interleave_components,
+        mmap_layer,
+        mmap_tensor,
+    )
+    from .calibration_residency import (
+        ResidencyTracker,
+        default_budget_gb,
+        read_rss_bytes,
+    )
+except ImportError:  # pragma: no cover - script-mode import
+    _REPO_ROOT = Path(__file__).resolve().parents[2]
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from tools.tessera.calibration_memory import (  # type: ignore[no-redef]
+        SPATIAL_ROLES,
+        CalibPipeline,
+        ChunkSpec,
+        chunked_iter,
+        chunked_process,
+        extract_layer_index,
+        interleave_components,
+        mmap_layer,
+        mmap_tensor,
+    )
+    from tools.tessera.calibration_residency import (  # type: ignore[no-redef]
+        ResidencyTracker,
+        default_budget_gb,
+        read_rss_bytes,
+    )
+
 
 SCHEMA = "llama.speculative.calibration-policy.v1"
 LRQ_SCHEMA = "llama.tessera.lrq-policy.v1"
@@ -59,6 +102,13 @@ DEFAULT_RANK = 16
 DEFAULT_ITERATIONS = 50
 DEFAULT_LR = 1.0e-3
 DEFAULT_OUTLIER_FRAC = 0.005
+# Phase 16 (calibration memopt).  Default chunk size for the
+# row-chunked processing path.  For a 12B FFN gate tensor at
+# 16384x4096 = 256 MB F32, ``chunk_rows=4096`` gives 4 chunks
+# of 4096x4096 = 64 MB each, which is the largest single-shot
+# intermediate that still fits a 256 GB host.  The legacy
+# single-shot path is ``chunk_rows <= 0``.
+DEFAULT_CHUNK_ROWS = 4096
 
 # Aggregation method for reducing a rank-r S matrix to a per-input-channel scale
 # that the existing AWQ path can consume without runtime changes.
@@ -145,39 +195,63 @@ def _scalar_string(value: object, default: str) -> str:
 
 
 def load_layer(path: Path, max_tokens: int = 256) -> Layer:
-    with np.load(path, allow_pickle=False) as data:
-        weight = np.asarray(data["weight"], dtype=np.float32)
+    """Load a layer bundle as a ``Layer`` of mmap-backed views.
+
+    Phase 16 (calibration memopt): the bundle is opened with
+    ``mmap_mode="r"`` so the OS pages in each tensor on demand
+    rather than reading the whole file into RAM.  Peak RSS for
+    a single tensor is bounded to ``max(weight, activations,
+    observer)`` instead of ``sum(all_tensors_in_turn)``.
+
+    The mmap views share memory with the zip mmap, not with the
+    python process.  When the caller drops the ``Layer``, the
+    OS reclaims the pages lazily.  Downstream training code
+    (LRQ, DartQuant) calls ``.astype(np.float32)`` on the
+    weight, which materialises a single owning copy; that is
+    the intended pattern: the mmap view is the read-only
+    intermediate, the F32 copy is the working set.
+    """
+    with mmap_layer(path) as data:
+        if "weight" not in data:
+            raise ValueError(f"{path}: missing required 'weight' key")
+        weight = data["weight"]
         if weight.ndim != 2:
             raise ValueError(f"{path}: weight must be two-dimensional")
-        train = (
-            np.asarray(data["train_activations"], dtype=np.float32)
-            if "train_activations" in data
-            else None
-        )
-        heldout = (
-            np.asarray(data["heldout_activations"], dtype=np.float32)
-            if "heldout_activations" in data
-            else None
-        )
-        in_sum2 = (
-            np.asarray(data["in_sum2"], dtype=np.float32).reshape(-1)
-            if "in_sum2" in data
-            else None
-        )
+        train_raw = data.get("train_activations")
+        heldout_raw = data.get("heldout_activations")
+        in_sum2_raw = data.get("in_sum2")
         in_count = int(np.asarray(data["counts"]).reshape(()).item()) if "counts" in data else 0
-        name = _scalar_string(data["name"] if "name" in data else None, path.stem)
-        family = _scalar_string(data["family"] if "family" in data else None, "ffn")
-        for label, acts in (("train", train), ("heldout", heldout)):
+        name = _scalar_string(data.get("name"), path.stem)
+        family = _scalar_string(data.get("family"), "ffn")
+        # Apply the max_tokens sub-sample.  Subsampling requires
+        # materialising the activation rows; once subsampled, the
+        # result is an owning F32 array and the mmap is no longer
+        # needed for the activations.
+        train: np.ndarray | None = None
+        heldout: np.ndarray | None = None
+        for label, acts, sink in (
+            ("train", train_raw, "train"),
+            ("heldout", heldout_raw, "heldout"),
+        ):
             if acts is None:
                 continue
             if acts.ndim != 2 or acts.shape[1] != weight.shape[1]:
-                raise ValueError(f"{path}: {label} activation shape {acts.shape} does not match weight {weight.shape}")
+                raise ValueError(
+                    f"{path}: {label} activation shape {acts.shape} "
+                    f"does not match weight {weight.shape}"
+                )
             if max_tokens > 0 and acts.shape[0] > max_tokens:
                 idx = np.linspace(0, acts.shape[0] - 1, max_tokens, dtype=np.int64)
-                if label == "train":
-                    train = acts[idx]
-                else:
-                    heldout = acts[idx]
+                sub = np.asarray(acts[idx], dtype=np.float32)
+            else:
+                sub = np.asarray(acts, dtype=np.float32)
+            if sink == "train":
+                train = sub
+            else:
+                heldout = sub
+        in_sum2: np.ndarray | None = None
+        if in_sum2_raw is not None:
+            in_sum2 = np.asarray(in_sum2_raw, dtype=np.float32).reshape(-1)
     if train is None and in_sum2 is None:
         raise ValueError(f"{path}: requires train_activations or in_sum2")
     return Layer(
@@ -293,6 +367,107 @@ class Adam:
             m_hat = self.m[i] / b1c
             v_hat = self.v[i] / b2c
             param -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+
+
+class ChunkedAdam:
+    """Adam with per-chunk U state and full V state.
+
+    Phase 16 (calibration memopt): the per-tensor LRQ training
+    is split into row-chunks; each chunk's U slice has its own
+    Adam ``m`` and ``v`` buffers, while V's Adam state is
+    shared across chunks (the ``d_v`` gradient is accumulated
+    across chunks before stepping).
+
+    The split mirrors the gradient flow::
+
+        d_u_slice = d_s_chunk @ v.T                 # (chunk_rows, rank)
+        d_v       = sum_chunks u_chunk.T @ d_s_chunk # (rank, in_dim)
+
+    so each chunk's d_u is local to the chunk (no cross-chunk
+    coupling) and d_v is a sum across chunks.  Splitting U's
+    Adam state per-chunk keeps the per-chunk peak RSS bounded
+    to ``max(W_chunk, intermediates)`` rather than
+    ``max(W_full, intermediates_full)``.
+
+    Parameters
+    ----------
+    u : (out_dim, rank) ndarray
+        The U factor to be optimised.  Updated in place.
+    v : (rank, in_dim) ndarray
+        The V factor to be optimised.  Updated in place.
+    chunk_rows : int
+        The number of rows per U slice.  ``<= 0`` or
+        ``>= out_dim`` is the legacy single-chunk path; the
+        ChunkedAdam collapses to the standard ``Adam`` in that
+        case.
+    lr : float
+        Adam learning rate.
+    betas, eps, weight_decay
+        Standard Adam hyperparameters.
+    """
+
+    def __init__(
+        self,
+        u: np.ndarray,
+        v: np.ndarray,
+        chunk_rows: int,
+        lr: float = DEFAULT_LR,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ) -> None:
+        self.u = u
+        self.v = v
+        self.chunk_rows = int(chunk_rows)
+        self.lr = float(lr)
+        self.b1, self.b2 = betas
+        self.eps = float(eps)
+        self.weight_decay = float(weight_decay)
+        self.t = 0
+        # Per-chunk U state.  Each entry is one row-chunk; the
+        # ``specs`` list carries the (start, end) row range for
+        # in-place updates.
+        self.u_specs: list[tuple[int, int]] = []
+        n_rows = u.shape[0]
+        if self.chunk_rows <= 0 or self.chunk_rows >= n_rows:
+            self.u_specs.append((0, n_rows))
+        else:
+            for start in range(0, n_rows, self.chunk_rows):
+                end = min(start + self.chunk_rows, n_rows)
+                self.u_specs.append((start, end))
+        self.u_m = [np.zeros((end - start, u.shape[1]), dtype=u.dtype)
+                    for start, end in self.u_specs]
+        self.u_v = [np.zeros((end - start, u.shape[1]), dtype=u.dtype)
+                    for start, end in self.u_specs]
+        # Full V state.
+        self.v_m = np.zeros_like(v)
+        self.v_v = np.zeros_like(v)
+
+    def step(self, d_u_per_chunk: list[np.ndarray], d_v: np.ndarray) -> None:
+        """Apply one Adam step using per-chunk U gradients and
+        a single accumulated V gradient."""
+        self.t += 1
+        b1c = 1.0 - self.b1 ** self.t
+        b2c = 1.0 - self.b2 ** self.t
+        for i, ((start, end), m_buf, v_buf, grad) in enumerate(
+            zip(self.u_specs, self.u_m, self.u_v, d_u_per_chunk)
+        ):
+            g = grad
+            if self.weight_decay > 0.0:
+                g = g + self.weight_decay * self.u[start:end]
+            self.u_m[i] = self.b1 * m_buf + (1.0 - self.b1) * g
+            self.u_v[i] = self.b2 * v_buf + (1.0 - self.b2) * (g * g)
+            m_hat = self.u_m[i] / b1c
+            v_hat = self.u_v[i] / b2c
+            self.u[start:end] -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+        g = d_v
+        if self.weight_decay > 0.0:
+            g = g + self.weight_decay * self.v
+        self.v_m = self.b1 * self.v_m + (1.0 - self.b1) * g
+        self.v_v = self.b2 * self.v_v + (1.0 - self.b2) * (g * g)
+        m_hat = self.v_m / b1c
+        v_hat = self.v_v / b2c
+        self.v -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +645,187 @@ def train_lrq(
 
     final_mse = history[-1]
     s_aggregate = _aggregate_scale(s, aggregation)
+    return LRQResult(
+        rank=rank,
+        u=u,
+        v=v,
+        initial_mse=initial_mse,
+        final_mse=final_mse,
+        iterations=iterations,
+        history=history,
+        input_scale_agg=aggregation,
+        scale_aggregate=s_aggregate.astype(np.float32),
+        baseline_scale=layer.input_scale(),
+        bundle_name=layer.name,
+    )
+
+
+def _lrq_chunked_initial_mse(
+    u: np.ndarray,
+    v: np.ndarray,
+    weight: np.ndarray,
+    x: np.ndarray,
+    chunk_rows: int,
+) -> float:
+    """Compute the initial MSE of the LRQ training in a chunked way.
+
+    The full forward pass would materialise ``U @ V`` (size
+    ``out_dim * in_dim``) and a per-row residual of the same
+    size.  For a 12B FFN gate that's 256 MB of intermediates.
+    The chunked version processes row-chunks; per-chunk peak
+    RSS is ``max(W_chunk, intermediates)`` = ``chunk_rows *
+    in_dim * 4`` bytes = 64 MB at the default chunk size.
+    """
+    n_rows, in_dim = weight.shape
+    err_sq_sum = 0.0
+    err_count = 0
+    for spec in chunked_iter(n_rows, chunk_rows):
+        u_chunk = u[spec.start:spec.end]   # (chunk_rows, rank)
+        s_chunk = u_chunk @ v              # (chunk_rows, in_dim)
+        w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
+        scaled_chunk = w_chunk * s_chunk
+        w_q_chunk = _ternary_recon(scaled_chunk)
+        residual_chunk = w_q_chunk - w_chunk
+        err_chunk = residual_chunk @ x.T    # (chunk_rows, n_tokens)
+        err_sq_sum += float(np.sum(err_chunk * err_chunk))
+        err_count += err_chunk.size
+    if err_count == 0:
+        return 0.0
+    return err_sq_sum / float(err_count)
+
+
+def _lrq_chunked_aggregate_scale(
+    u: np.ndarray,
+    v: np.ndarray,
+    aggregation: str,
+    chunk_rows: int,
+) -> np.ndarray:
+    """Compute the per-input-channel aggregate of ``S = U @ V``
+    incrementally (per-chunk) to avoid materialising the full
+    ``(out_dim, in_dim)`` S.
+
+    The aggregate is along axis 0 (out_dim) so per-chunk
+    contributions stack cleanly.  ``mean`` is the simple
+    chunk-mean average; ``rms`` is the per-chunk
+    ``sum(s^2)/out_dim`` accumulator.
+    """
+    n_rows, in_dim = u.shape[0], v.shape[1]
+    if aggregation == "mean":
+        acc = np.zeros(in_dim, dtype=np.float64)
+        n_seen = 0
+        for spec in chunked_iter(n_rows, chunk_rows):
+            u_chunk = u[spec.start:spec.end]
+            s_chunk = u_chunk @ v
+            acc += s_chunk.sum(axis=0).astype(np.float64)
+            n_seen += (spec.end - spec.start)
+        if n_seen == 0:
+            return np.zeros(in_dim, dtype=np.float32)
+        return (acc / float(n_seen)).astype(np.float32)
+    if aggregation == "rms":
+        acc = np.zeros(in_dim, dtype=np.float64)
+        n_seen = 0
+        for spec in chunked_iter(n_rows, chunk_rows):
+            u_chunk = u[spec.start:spec.end]
+            s_chunk = u_chunk @ v
+            acc += (s_chunk.astype(np.float64) ** 2).sum(axis=0)
+            n_seen += (spec.end - spec.start)
+        if n_seen == 0:
+            return np.zeros(in_dim, dtype=np.float32)
+        return np.sqrt(acc / float(n_seen) + 1e-12).astype(np.float32)
+    raise ValueError(
+        f"unknown aggregation {aggregation!r}; expected one of {LRQ_AGGREGATIONS}"
+    )
+
+
+def train_lrq_chunked(
+    layer: Layer,
+    rank: int = DEFAULT_RANK,
+    iterations: int = DEFAULT_ITERATIONS,
+    lr: float = DEFAULT_LR,
+    seed: int = 0,
+    aggregation: str = "mean",
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
+    verbose: bool = False,
+) -> LRQResult:
+    """LRQ training with row-chunked forward/backward passes.
+
+    Phase 16 (calibration memopt).  For a 12B FFN gate tensor
+    at 16384x4096 = 256 MB F32, the per-iter peak RSS of the
+    legacy ``train_lrq`` is ~1 GB (four 256 MB intermediates).
+    This chunked path keeps each chunk's intermediates to
+    ``chunk_rows * in_dim * 4`` bytes = 64 MB at the default
+    chunk size, so the per-iter peak RSS is ~256 MB.
+
+    The numerical answer is bit-equivalent to ``train_lrq`` (up
+    to the Adam float32 order-of-operations).  The legacy
+    single-shot path is recovered by passing ``chunk_rows <=
+    0`` or ``chunk_rows >= out_dim``; the function dispatches
+    to ``train_lrq`` in that case to keep the public API
+    consistent.
+    """
+    weight = layer.weight
+    if layer.train_activations is None or not layer.train_activations.size:
+        raise ValueError("LRQ training requires train_activations in the bundle")
+    x = layer.train_activations.astype(np.float32)
+    out_dim, in_dim = weight.shape
+    if rank < 1 or rank > min(out_dim, in_dim):
+        raise ValueError(
+            f"rank must be in [1, {min(out_dim, in_dim)}], got {rank}"
+        )
+    if chunk_rows <= 0 or chunk_rows >= out_dim:
+        # Legacy single-shot path.
+        return train_lrq(
+            layer,
+            rank=rank,
+            iterations=iterations,
+            lr=lr,
+            seed=seed,
+            aggregation=aggregation,
+            verbose=verbose,
+        )
+    u, v = _initial_u_v(layer, rank, seed)
+    adam = ChunkedAdam(u, v, chunk_rows=chunk_rows, lr=lr)
+    history: list[float] = []
+    initial_mse = _lrq_chunked_initial_mse(u, v, weight, x, chunk_rows)
+    history.append(initial_mse)
+    n_tokens = x.shape[0]
+    err_total_size = float(out_dim * n_tokens)
+    for it in range(iterations):
+        d_v_accum = np.zeros_like(v)
+        err_sq_sum = 0.0
+        d_u_per_chunk: list[np.ndarray] = []
+        for spec in chunked_iter(out_dim, chunk_rows):
+            u_chunk = u[spec.start:spec.end]
+            # Forward
+            s_chunk = u_chunk @ v                       # (chunk_rows, in_dim)
+            w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
+            scaled_chunk = w_chunk * s_chunk
+            w_q_chunk = _ternary_recon(scaled_chunk)
+            residual_chunk = w_q_chunk - w_chunk
+            err_chunk = residual_chunk @ x.T             # (chunk_rows, n_tokens)
+            err_sq_sum += float(np.sum(err_chunk * err_chunk))
+            # Backward.  d_err normalisation uses the FULL
+            # err.size (out_dim * n_tokens), not the per-chunk
+            # size, so the chunked and single-shot gradients
+            # match exactly.
+            d_err = (2.0 / err_total_size) * err_chunk
+            d_residual = d_err @ x                       # (chunk_rows, in_dim)
+            d_scaled = d_residual                        # STE
+            d_s = d_scaled * w_chunk                     # (chunk_rows, in_dim)
+            d_u_slice = d_s @ v.T                        # (chunk_rows, rank)
+            d_u_per_chunk.append(d_u_slice)
+            d_v_accum += u_chunk.T @ d_s                 # accumulate across chunks
+        loss = err_sq_sum / err_total_size if err_total_size else 0.0
+        history.append(loss)
+        adam.step(d_u_per_chunk, d_v_accum)
+        if verbose and (it % max(1, iterations // 10) == 0 or it == iterations - 1):
+            print(
+                f"  lrq[chunked {layer.name}] iter {it:3d}/{iterations}  "
+                f"mse={loss:.6e}  delta={history[-2] - loss:+.3e}",
+                file=sys.stderr,
+            )
+    final_mse = history[-1]
+    s_aggregate = _lrq_chunked_aggregate_scale(u, v, aggregation, chunk_rows)
     return LRQResult(
         rank=rank,
         u=u,
@@ -1063,6 +1419,91 @@ def flrq_sketch(
     return Y, U_basis, sigma
 
 
+def flrq_sketch_chunked(
+    weight: np.ndarray,
+    n_projections: int,
+    seed: int,
+    target_rank: int | None = None,
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """R1-Sketch with row-chunked Gaussian projection.
+
+    Phase 16 (calibration memopt).  The legacy
+    ``flrq_sketch`` materialises the full ``Y = W @ Omega`` as
+    a single F32 matmul.  For a 12B FFN gate at 16384x4096
+    with ``n_projections=32, target_rank=64``, Y is (16384,
+    2048) = 128 MB; the matmul's input W is 256 MB; the
+    working peak is 384 MB.
+
+    The chunked path materialises Y **one chunk at a time**:
+    each chunk produces a (chunk_rows, total_width) slice
+    that is then ``np.concatenate``d at the end.  Per-chunk
+    peak is ``max(W_chunk, Y_chunk)`` = ``max(64 MB, 32 MB)``
+    at the default chunk size, so the working peak RSS is
+    bounded by the larger of W_chunk and Y_chunk (64 MB
+    here), plus the final Y (128 MB) at concatenate time.
+
+    The numerical result is bit-equivalent to ``flrq_sketch``:
+    the per-row ``Y[start:end] = W[start:end] @ Omega`` is
+    the same matmul, just split.
+
+    Parameters
+    ----------
+    weight : (K, N) ndarray
+        The 2-D weight matrix.  An mmap view is fine; the
+        per-chunk matmul pages in the rows it needs.
+    n_projections, seed, target_rank
+        As in ``flrq_sketch``.
+    chunk_rows : int
+        The number of rows per chunk.  ``<= 0`` or
+        ``>= K`` is the legacy single-shot path (a single
+        chunk covering the full weight).
+
+    Returns
+    -------
+    Y : (K, n_projections * target_rank) FP32 ndarray
+        The R1-Sketch of W.
+    U_basis : (K, target_rank) FP32 ndarray
+        The top ``target_rank`` left singular vectors of ``Y``.
+    sigma : (target_rank,) FP32 ndarray
+        The corresponding singular values, descending.
+    """
+    if weight.ndim != 2:
+        raise ValueError(f"flrq_sketch_chunked: weight must be 2-D, got {weight.ndim}-D")
+    K, N = weight.shape
+    if n_projections < 1:
+        raise ValueError(f"flrq_sketch_chunked: n_projections must be >= 1, got {n_projections}")
+    if target_rank is None:
+        target_rank = max(1, min(K, N, 16))
+    r = max(1, min(int(target_rank), K, N))
+    total_width = min(N, n_projections * r)
+    if chunk_rows <= 0 or chunk_rows >= K:
+        # Legacy single-shot path; the result is bit-equivalent
+        # to ``flrq_sketch`` (modulo the matmul float32
+        # order-of-operations, which is stable because Y is
+        # dense F32).
+        rng = np.random.default_rng(seed)
+        omega = rng.standard_normal((N, total_width), dtype=np.float32)
+        Y = np.asarray(weight, dtype=np.float32) @ omega
+        U_full, sigma, _ = np.linalg.svd(Y, full_matrices=False)
+        return Y, U_full[:, :r].astype(np.float32), sigma[:r].astype(np.float32)
+    rng = np.random.default_rng(seed)
+    omega = rng.standard_normal((N, total_width), dtype=np.float32)
+    # Compute Y row-chunk by row-chunk.  Each chunk's matmul
+    # pages in the relevant W rows from the mmap and produces
+    # a (chunk_rows, total_width) slice of Y.  The slices are
+    # concatenated at the end.
+    y_slices: list[np.ndarray] = []
+    for spec in chunked_iter(K, chunk_rows):
+        w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
+        y_slices.append(w_chunk @ omega)
+        del w_chunk
+    Y = np.concatenate(y_slices, axis=0)
+    del y_slices
+    U_full, sigma, _ = np.linalg.svd(Y, full_matrices=False)
+    return Y, U_full[:, :r].astype(np.float32), sigma[:r].astype(np.float32)
+
+
 def flrq_bcl(
     weight: np.ndarray,
     U_basis: np.ndarray,
@@ -1251,6 +1692,7 @@ def train_flrq(
     blc_iters: int = FLRQ_DEFAULT_BLC_ITERS,
     qbits: int = FLRQ_DEFAULT_QBITS,
     mse_threshold: float = FLRQ_DEFAULT_MSE_THRESHOLD,
+    chunk_rows: int = 0,
     verbose: bool = False,
 ) -> FLRQResult:
     """High-level FLRQ driver for one tensor bundle.
@@ -1261,6 +1703,17 @@ def train_flrq(
     baseline MSE is the MSE of a per-tensor symmetric quantiser at
     ``qbits`` bits with no low-rank correction; the reconstruction
     MSE is after the BLC step.
+
+    Phase 16 (calibration memopt): when ``chunk_rows > 0`` and
+    the weight is large enough to benefit (``n_rows > chunk_rows``),
+    the chosen-rank recompute's R1-Sketch step uses
+    ``flrq_sketch_chunked`` which keeps the per-chunk peak RSS
+    bounded.  The BLC step still needs the full weight (it
+    iterates ``W - U @ V``); that is a separate optimisation that
+    the FLRQ paper leaves to the runtime, so the chunked path
+    here is a partial win (sketch only) and the baseline / BLC
+    paths remain in the legacy single-shot shape.  Pass
+    ``chunk_rows <= 0`` to opt out (the legacy path).
     """
     W = layer.weight.astype(np.float32)
     K, N = W.shape
@@ -1288,12 +1741,16 @@ def train_flrq(
     # the recorded MSE.  ``flrq_select_rank`` already ran BLC for that
     # rank; we re-run it here so the caller has access to the full
     # U, V, residual, residual_q tensors (per_rank only keeps scalars).
-    _, U_basis, _ = flrq_sketch(
-        W,
+    use_chunked = chunk_rows > 0 and K > chunk_rows
+    sketch_fn = flrq_sketch_chunked if use_chunked else flrq_sketch
+    sketch_kwargs: dict = dict(
         n_projections=n_projections,
         seed=seed + chosen_rank,
         target_rank=chosen_rank,
     )
+    if use_chunked:
+        sketch_kwargs["chunk_rows"] = chunk_rows
+    _, U_basis, _ = sketch_fn(W, **sketch_kwargs)
     U, V, scale, clip, residual, residual_q = flrq_bcl(
         W,
         U_basis,
@@ -1435,6 +1892,349 @@ def run_awq_subprocess(
     return json.loads(output_path.read_text(encoding="utf-8"))
 
 
+def _run_lrq_with_residency(
+    layers: list[Path],
+    *,
+    args: argparse.Namespace,
+    tracker: ResidencyTracker,
+) -> list[tuple[Layer, LRQResult]]:
+    """LRQ per-tensor loop with the peak-RSS tracker check at each
+    iteration.
+
+    Phase 16 (calibration memopt) Cat 3.  The per-tensor
+    training is the natural place to check the budget: the
+    RSS spikes during the per-iter matmuls, so a check at
+    the top of each iteration catches the over-budget state
+    before the OS kills the process.
+
+    Phase 16 (calibration memopt) Cat 5: when
+    ``--temporal-pipeline-depth > 1`` is set, the next
+    tensor's mmap is in flight on a producer thread while
+    the current tensor's compute runs on the consumer.  The
+    mmap overhead (one OS syscall per .npz file) is
+    overlapped with the per-tensor training's matmul-heavy
+    compute.
+
+    The loop dispatches to ``train_lrq_chunked`` when
+    ``args.chunk_rows > 0`` and the tensor's n_rows exceeds
+    ``args.chunk_rows``; the legacy ``train_lrq`` is used
+    otherwise.  The chunked path keeps the per-iter peak
+    RSS bounded; the residency check is a belt-and-braces
+    guard against unexpected allocations (numpy's internal
+    pool, gc, intermediate F32 copies from the consumer
+    side).
+    """
+    chunked_train = getattr(args, "chunk_rows", 0) > 0
+    depth = int(getattr(args, "temporal_pipeline_depth", 1) or 1)
+    results: list[tuple[Layer, LRQResult]] = []
+    if depth > 1:
+        # Phase 16 Cat 5: the per-tensor loop is driven by
+        # a ``CalibPipeline`` which overlaps the next
+        # tensor's mmap with the current tensor's compute.
+        # The mmap view comes back as a dict; we convert
+        # it to a ``Layer`` (the per-tensor training API
+        # takes a ``Layer``, not a raw mmap dict).
+        with CalibPipeline(layers, depth=depth) as pipe:
+            for path, data in pipe:
+                tracker.check(str(path))
+                layer = _layer_from_mmap_data(path, data, max_tokens=args.max_tokens)
+                results.append(
+                    (layer, _train_one_lrq(layer, args, chunked_train))
+                )
+                if args.verbose:
+                    result = results[-1][1]
+                    print(
+                        f"lrq[{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                        f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                        file=sys.stderr,
+                    )
+        return results
+    for path in layers:
+        # Phase 16 Cat 3: the budget check fires at the top
+        # of each per-tensor iteration, before load_layer.
+        # The check is the granular signal that catches the
+        # over-budget state before the OS kills the process.
+        tracker.check(str(path))
+        layer = load_layer(path, max_tokens=args.max_tokens)
+        results.append((layer, _train_one_lrq(layer, args, chunked_train)))
+        if args.verbose:
+            result = results[-1][1]
+            print(
+                f"lrq[{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                file=sys.stderr,
+            )
+    return results
+
+
+def _train_one_lrq(
+    layer: Layer,
+    args: argparse.Namespace,
+    chunked_train: bool,
+) -> LRQResult:
+    """Run a single LRQ training step (chunked or legacy).
+
+    Phase 16 (calibration memopt) Cat 2/5.  The chunked path
+    is used when ``chunk_rows > 0`` and the tensor's n_rows
+    exceeds ``args.chunk_rows``; the legacy single-shot
+    path is used otherwise.  This helper is the one place
+    where the dispatch lives, so ``_run_lrq_with_residency``
+    and ``run_components_lrq`` can share the same logic.
+    """
+    use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
+    if use_chunked:
+        return train_lrq_chunked(
+            layer,
+            rank=args.lrq_rank,
+            iterations=args.lrq_iterations,
+            lr=args.lr,
+            seed=args.seed,
+            aggregation=args.lrq_agg,
+            chunk_rows=args.chunk_rows,
+            verbose=args.verbose,
+        )
+    return train_lrq(
+        layer,
+        rank=args.lrq_rank,
+        iterations=args.lrq_iterations,
+        lr=args.lr,
+        seed=args.seed,
+        aggregation=args.lrq_agg,
+        verbose=args.verbose,
+    )
+
+
+def _layer_from_mmap_data(
+    path: Path,
+    data: dict,
+    max_tokens: int = 256,
+) -> Layer:
+    """Build a ``Layer`` from the dict returned by ``CalibPipeline``.
+
+    Phase 16 (calibration memopt) Cat 5.  The
+    ``CalibPipeline`` returns a dict of mmap-backed views
+    (the heavy keys: weight, train_activations, etc.).  The
+    per-tensor training API takes a ``Layer`` dataclass;
+    this helper bridges the two.
+
+    The subsampling step is the same as ``load_layer``'s:
+    if ``max_tokens > 0`` and the activations have more
+    rows than that, take a ``np.linspace``-spaced subset.
+    The subsample step materialises a small F32 array; the
+    mmap view of the unsubsampled activations is still
+    alive (the OS keeps the zip mmap) but is no longer
+    referenced from the ``Layer`` (Python releases the
+    reference).
+    """
+    if "weight" not in data:
+        raise ValueError(f"{path}: missing required 'weight' key")
+    weight = data["weight"]
+    if weight.ndim != 2:
+        raise ValueError(f"{path}: weight must be two-dimensional")
+    train_raw = data.get("train_activations")
+    heldout_raw = data.get("heldout_activations")
+    in_sum2_raw = data.get("in_sum2")
+    in_count = int(np.asarray(data["counts"]).reshape(()).item()) if "counts" in data else 0
+    name = _scalar_string(data.get("name"), path.stem)
+    family = _scalar_string(data.get("family"), "ffn")
+    train: np.ndarray | None = None
+    heldout: np.ndarray | None = None
+    for label, acts, sink in (
+        ("train", train_raw, "train"),
+        ("heldout", heldout_raw, "heldout"),
+    ):
+        if acts is None:
+            continue
+        if acts.ndim != 2 or acts.shape[1] != weight.shape[1]:
+            raise ValueError(
+                f"{path}: {label} activation shape {acts.shape} "
+                f"does not match weight {weight.shape}"
+            )
+        if max_tokens > 0 and acts.shape[0] > max_tokens:
+            idx = np.linspace(0, acts.shape[0] - 1, max_tokens, dtype=np.int64)
+            sub = np.asarray(acts[idx], dtype=np.float32)
+        else:
+            sub = np.asarray(acts, dtype=np.float32)
+        if sink == "train":
+            train = sub
+        else:
+            heldout = sub
+    in_sum2: np.ndarray | None = None
+    if in_sum2_raw is not None:
+        in_sum2 = np.asarray(in_sum2_raw, dtype=np.float32).reshape(-1)
+    if train is None and in_sum2 is None:
+        raise ValueError(f"{path}: requires train_activations or in_sum2")
+    return Layer(
+        name=name,
+        family=family,
+        weight=weight,
+        train_activations=train,
+        heldout_activations=heldout,
+        in_sum2=in_sum2,
+        in_count=in_count,
+    )
+
+
+def compute_spatial_order(
+    components: dict[str, list[Path]],
+    spatial_occupancy: str = "interleaved",
+) -> list[tuple[str, Path]]:
+    """Return the per-tensor iteration order for a multi-component run.
+
+    Phase 16 (calibration memopt) Cat 4.  The per-component
+    shell-out (``unified_calibrate.py`` on Worker 2's branch,
+    or the in-process shell-out below) needs a single
+    iteration order over the union of the components' tensor
+    lists.  This function is the one place where that order
+    is decided, so the CLI flag and the policy live next to
+    each other.
+
+    Parameters
+    ----------
+    components : dict
+        Maps ``model_role`` (``"trunk"``, ``"dflash"``,
+        ``"dspark"``, ``"mtp_nextn"``, ``"shared_embd"``) to
+        a list of per-tensor ``.npz`` paths.  The per-role
+        order is the per-component shell-out's own layer
+        ordering; this function only re-orders across
+        components.
+    spatial_occupancy : str
+        ``"interleaved"`` (default): round-robin per-component
+        tensors at the layer level.  ``"sequential"``: process
+        all of one role's tensors before moving to the next
+        (legacy component-major order).
+
+    Returns
+    -------
+    list of (model_role, Path)
+        The per-tensor iteration order.  The per-tensor
+        training reads the path, runs the calibration mode,
+        and emits a policy entry tagged with the model_role.
+    """
+    if spatial_occupancy == "sequential":
+        # Legacy component-major order: all of the trunk's
+        # tensors, then all of the dflash's, etc.  The
+        # per-role order in ``components`` is preserved.
+        out: list[tuple[str, Path]] = []
+        for role in SPATIAL_ROLES:
+            for path in components.get(role, []):
+                out.append((role, path))
+        # Append any roles not in SPATIAL_ROLES at the end
+        # so the default order covers all components.
+        for role, paths in components.items():
+            if role in SPATIAL_ROLES:
+                continue
+            for path in paths:
+                out.append((role, path))
+        return out
+    if spatial_occupancy == "interleaved":
+        # Round-robin per-component tensors at the layer
+        # level.  The per-role layer order is preserved;
+        # the cross-role order is interleaved so the cache
+        # footprint stays small.
+        names_by_role = {
+            role: [str(p) for p in paths]
+            for role, paths in components.items()
+        }
+        paths_by_name: dict[str, Path] = {}
+        for role, paths in components.items():
+            for p in paths:
+                paths_by_name[str(p)] = p
+        out = []
+        for role, name in interleave_components(names_by_role):
+            out.append((role, paths_by_name[name]))
+        return out
+    raise ValueError(
+        f"unknown spatial_occupancy {spatial_occupancy!r}; "
+        "expected one of ('sequential', 'interleaved')"
+    )
+
+
+def run_components_lrq(
+    components: dict[str, list[Path]],
+    *,
+    args: argparse.Namespace,
+    tracker: ResidencyTracker,
+) -> tuple[list[tuple[Layer, LRQResult, str]], dict[str, int]]:
+    """In-process per-component shell-out for the LRQ mode.
+
+    Phase 16 (calibration memopt) Cat 4.  The shell-out
+    iterates the per-tensor order produced by
+    ``compute_spatial_order`` (which respects
+    ``--spatial-occupancy``) and runs the LRQ per-tensor
+    training on each.  The output policy entries are
+    tagged with the model_role so the unified policy can
+    be assembled downstream.
+
+    Phase 16 (calibration memopt) Cat 5: when
+    ``--temporal-pipeline-depth > 1`` is set, the next
+    tensor's mmap is in flight on a producer thread while
+    the current tensor's compute runs on the consumer.  The
+    shell-out flattens the per-component order into a
+    single list and drives the pipeline; the model_role
+    tag is re-attached from the original components dict.
+
+    The shell-out is in-process (no subprocess), which is
+    faster than the per-component subprocess for the
+    ``--fitness lrq`` mode.  The ``--fitness awq`` mode
+    still uses ``run_awq_subprocess`` (the GA is
+    heavyweight enough that the subprocess overhead is
+    negligible compared to the search).
+
+    Parameters
+    ----------
+    components : dict
+        Maps ``model_role`` to a list of per-tensor paths.
+    args : argparse.Namespace
+        The CLI args (chunked, peak-rss-budget-gb, etc).
+    tracker : ResidencyTracker
+        The peak-RSS budget tracker.
+
+    Returns
+    -------
+    results : list of (Layer, LRQResult, model_role)
+        Per-tensor results tagged with the model_role.
+    counts : dict of model_role -> int
+        The number of tensors per role.  Used by the
+        unified policy builder to stamp the
+        ``components.<role>.tensor_count`` field.
+    """
+    counts: dict[str, int] = {role: len(paths) for role, paths in components.items()}
+    order = compute_spatial_order(components, getattr(args, "spatial_occupancy", "interleaved"))
+    chunked_train = getattr(args, "chunk_rows", 0) > 0
+    depth = int(getattr(args, "temporal_pipeline_depth", 1) or 1)
+    role_by_path: dict[Path, str] = {path: role for role, path in order}
+    paths = [path for _, path in order]
+    out: list[tuple[Layer, LRQResult, str]] = []
+    if depth > 1:
+        with CalibPipeline(paths, depth=depth) as pipe:
+            for path, data in pipe:
+                tracker.check(str(path))
+                layer = _layer_from_mmap_data(path, data, max_tokens=args.max_tokens)
+                result = _train_one_lrq(layer, args, chunked_train)
+                role = role_by_path.get(path, "trunk")
+                out.append((layer, result, role))
+                if args.verbose:
+                    print(
+                        f"lrq[{role}:{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                        f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                        file=sys.stderr,
+                    )
+        return out, counts
+    for role, path in order:
+        tracker.check(str(path))
+        layer = load_layer(path, max_tokens=args.max_tokens)
+        result = _train_one_lrq(layer, args, chunked_train)
+        out.append((layer, result, role))
+        if args.verbose:
+            print(
+                f"lrq[{role}:{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                file=sys.stderr,
+            )
+    return out, counts
+
+
 # ---------------------------------------------------------------------------
 # Compare mode
 # ---------------------------------------------------------------------------
@@ -1488,7 +2288,7 @@ def _format_comparison(
     return "\n".join(lines) + "\n"
 
 
-def run_compare(args: argparse.Namespace) -> int:
+def run_compare(args: argparse.Namespace, tracker: ResidencyTracker | None = None) -> int:
     layers = iter_layer_paths(args.layers)
     if not layers:
         raise ValueError(f"{args.layers}: no layer bundles")
@@ -1497,20 +2297,21 @@ def run_compare(args: argparse.Namespace) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     digests = {p.stem: bundle_digest(p) for p in layers}
 
-    # LRQ leg
-    lrq_results: list[tuple[Layer, LRQResult]] = []
-    for path in layers:
-        layer = load_layer(path, max_tokens=args.max_tokens)
-        result = train_lrq(
-            layer,
-            rank=args.lrq_rank,
-            iterations=args.lrq_iterations,
-            lr=args.lr,
-            seed=args.seed,
-            aggregation=args.lrq_agg,
-            verbose=args.verbose,
-        )
-        lrq_results.append((layer, result))
+    # LRQ leg.  Phase 16 (calibration memopt): the chunked
+    # path is used when ``--chunk-rows > 0`` and the tensor
+    # is large enough; the legacy single-shot path is the
+    # default and is bit-equivalent for matching chunk_rows.
+    # The peak-RSS check is wired in via the helper when a
+    # tracker is supplied (the main() path always supplies
+    # one; the test paths that call ``run_compare`` directly
+    # pass ``None`` to skip the check).
+    if tracker is not None:
+        lrq_results = _run_lrq_with_residency(layers, args=args, tracker=tracker)
+    else:
+        # Fallback: no tracker.  Use a no-op for the
+        # per-iteration check.
+        noop = ResidencyTracker(budget_bytes=0, abort_on_exceed=False)
+        lrq_results = _run_lrq_with_residency(layers, args=args, tracker=noop)
 
     provenance = {
         "tool": "per_tensor_calibrate.py",
@@ -1560,14 +2361,17 @@ def run_compare(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_dartquant(args: argparse.Namespace) -> int:
+def run_dartquant(args: argparse.Namespace, tracker: ResidencyTracker | None = None) -> int:
     """Run the DartQuant pre-rotation mode on every layer bundle."""
     layers = iter_layer_paths(args.layers)
     if not layers:
         raise ValueError(f"{args.layers}: no layer bundles")
     digests = {p.stem: bundle_digest(p) for p in layers}
+    if tracker is None:
+        tracker = ResidencyTracker(budget_bytes=0, abort_on_exceed=False)
     results: list[tuple[Layer, DartQuantResult]] = []
     for path in layers:
+        tracker.check(str(path))
         layer = load_layer(path, max_tokens=args.max_tokens)
         X = layer.train_activations
         if X is None or X.size == 0:
@@ -1623,7 +2427,7 @@ def run_dartquant(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def run_flrq(args: argparse.Namespace) -> int:
+def run_flrq(args: argparse.Namespace, tracker: ResidencyTracker | None = None) -> int:
     """Driver for the ``--fitness flrq`` mode.
 
     Iterates the layer bundles, runs ``train_flrq`` on each, and writes
@@ -1640,10 +2444,13 @@ def run_flrq(args: argparse.Namespace) -> int:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     digests = {p.stem: bundle_digest(p) for p in layers}
+    if tracker is None:
+        tracker = ResidencyTracker(budget_bytes=0, abort_on_exceed=False)
 
     flrq_results: list[tuple[Layer, FLRQResult]] = []
     per_rank: dict[str, dict[int, dict]] = {}
     for path in layers:
+        tracker.check(str(path))
         layer = load_layer(path, max_tokens=args.max_tokens)
         # We need the per-rank sweep data for the policy, so call
         # ``flrq_select_rank`` directly and build the result from it.
@@ -1658,12 +2465,16 @@ def run_flrq(args: argparse.Namespace) -> int:
             mse_threshold=args.flrq_mse_threshold,
         )
         per_rank[layer.name] = sweep
-        _, U_basis, _ = flrq_sketch(
-            W,
+        use_chunked = getattr(args, "chunk_rows", 0) > 0 and W.shape[0] > args.chunk_rows
+        sketch_fn = flrq_sketch_chunked if use_chunked else flrq_sketch
+        sketch_kwargs: dict = dict(
             n_projections=args.flrq_n_projections,
             seed=args.seed + chosen_rank,
             target_rank=chosen_rank,
         )
+        if use_chunked:
+            sketch_kwargs["chunk_rows"] = args.chunk_rows
+        _, U_basis, _ = sketch_fn(W, **sketch_kwargs)
         U, V, scale, clip, residual, residual_q = flrq_bcl(
             W,
             U_basis,
@@ -1757,8 +2568,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--layers",
-        required=True,
-        help="Directory of layer .npz bundles or a single .npz file",
+        required=False,
+        default="",
+        help=(
+            "Directory of layer .npz bundles or a single .npz file. "
+            "Optional when the per-component flags "
+            "(--trunk-npz / --dflash-npz / --dspark-npz / "
+            "--mtp-nextn-npz / --shared-embd-npz) are set; "
+            "required otherwise."
+        ),
     )
     parser.add_argument("--output", required=True, help="Output calibration policy JSON")
     parser.add_argument(
@@ -1873,35 +2691,233 @@ def _build_parser() -> argparse.ArgumentParser:
             f"INT3-INT4 is the recommended operating range (default {FLRQ_DEFAULT_QBITS})"
         ),
     )
+    # Phase 16 (calibration memopt): chunked processing.  For
+    # tensors with n_rows > chunk_rows, the per-tensor
+    # training iterates row-chunks so the per-chunk peak RSS
+    # is bounded to ``chunk_rows * in_dim * 4`` bytes rather
+    # than the full weight.  Default 4096 matches the
+    # ``DEFAULT_CHUNK_ROWS`` constant above (4 chunks for a
+    # 12B FFN gate at 16384 rows).  ``<= 0`` or
+    # ``>= n_rows`` is the legacy single-shot path.
+    parser.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=DEFAULT_CHUNK_ROWS,
+        help=(
+            f"Phase 16 chunked processing row count (default {DEFAULT_CHUNK_ROWS}). "
+            "Use 0 or a negative value to disable chunking."
+        ),
+    )
+    # Phase 16 (calibration memopt) Cat 3: peak-RSS budget.
+    # The calibration aborts with a clear error if the
+    # process RSS exceeds the budget.  Default 32 GB fits
+    # a 12B unified run on a 64 GB host with the chunked
+    # path.  Use 0 to disable the check (the tracker still
+    # records peak_bytes for the final report, but never
+    # raises).
+    parser.add_argument(
+        "--peak-rss-budget-gb",
+        type=int,
+        default=default_budget_gb(),
+        help=(
+            "Phase 16 peak-RSS budget in GiB "
+            f"(default {default_budget_gb()}, 0 to disable)"
+        ),
+    )
+    # Phase 16 (calibration memopt) Cat 4: spatial occupancy.
+    # ``interleaved`` (the default) round-robins the
+    # per-component tensors at the layer level so the
+    # cache footprint stays small.  ``sequential`` is the
+    # legacy path: process all of the trunk's tensors
+    # first, then all of the dflash's, etc.  The
+    # per-tensor result is the same; the wall-time and
+    # cache-hit rate differ.
+    parser.add_argument(
+        "--spatial-occupancy",
+        choices=("sequential", "interleaved"),
+        default="interleaved",
+        help=(
+            "Phase 16 spatial occupancy: 'interleaved' "
+            "(default) round-robins per-component tensors at "
+            "the layer level; 'sequential' is the legacy "
+            "component-major order."
+        ),
+    )
+    # Phase 16 (calibration memopt) Cat 4: per-component
+    # input.  Each flag takes a comma-separated list of
+    # ``.npz`` bundle paths for that role.  When at least
+    # one role is set, the in-process per-component
+    # shell-out (``run_components_lrq``) is used instead
+    # of the single-component driver; the output policy is
+    # tagged with ``model_role`` per tensor.  This is the
+    # in-process alternative to ``unified_calibrate.py``;
+    # Worker 2's branch exposes a separate driver with
+    # subprocess isolation.
+    for role in SPATIAL_ROLES:
+        flag = f"--{role.replace('_', '-')}-npz"
+        parser.add_argument(
+            flag,
+            type=str,
+            default="",
+            help=(
+                f"Comma-separated .npz paths for the {role!r} "
+                f"component (Phase 16 multi-component shell-out)."
+            ),
+        )
+    # Phase 16 (calibration memopt) Cat 5: temporal
+    # pipeline depth.  ``> 1`` enables the
+    # ``CalibPipeline`` double-buffer (or N-buffer) that
+    # overlaps the next tensor's mmap with the current
+    # tensor's compute.  ``1`` is the legacy single-thread
+    # path (no overlap).  Default 2 (double-buffered);
+    # 3+ keeps more tensors in flight on slow I/O at the
+    # cost of more peak RSS (working set is bounded by
+    # ``depth * max_tensor_bytes``).
+    parser.add_argument(
+        "--temporal-pipeline-depth",
+        type=int,
+        default=2,
+        help=(
+            "Phase 16 temporal pipeline depth "
+            "(default 2 = double-buffered; 1 = legacy single-thread)."
+        ),
+    )
     return parser
+
+
+def _main_components(
+    args: argparse.Namespace,
+    tracker: ResidencyTracker,
+    component_args: dict[str, str],
+) -> int:
+    """In-process multi-component driver for the LRQ / compare modes.
+
+    Phase 16 (calibration memopt) Cat 4.  Reads the
+    ``--<role>-npz`` flags, builds the per-component
+    tensor list, and runs ``run_components_lrq`` with the
+    ``--spatial-occupancy`` iteration order.  The output
+    policy is the LRQ policy assembled per tensor with the
+    model_role tag; the per-component counts are stamped
+    under ``policy["components"][<role>]["tensor_count"]``
+    so the unified policy can be assembled downstream.
+    """
+    components: dict[str, list[Path]] = {}
+    for role, raw in component_args.items():
+        if not raw.strip():
+            continue
+        components[role] = [Path(p.strip()) for p in raw.split(",") if p.strip()]
+    if not components:
+        raise ValueError(
+            "no per-component paths supplied: at least one of "
+            + ", ".join(f"--{r.replace('_', '-')}-npz" for r in SPATIAL_ROLES)
+            + " must be set"
+        )
+    if args.fitness == "lrq":
+        results, counts = run_components_lrq(components, args=args, tracker=tracker)
+        # Strip the model_role for the LRQ policy builder;
+        # the unified policy builder re-attaches it.
+        lrq_results = [(layer, result) for layer, result, _ in results]
+        provenance = {
+            "tool": "per_tensor_calibrate.py",
+            "mode": "lrq-multi",
+            "seed": args.seed,
+            "lrq_rank": args.lrq_rank,
+            "lrq_iterations": args.lrq_iterations,
+            "lrq_lr": args.lr,
+            "lrq_aggregation": args.lrq_agg,
+            "spatial_occupancy": getattr(args, "spatial_occupancy", "interleaved"),
+            "per_role_tensor_count": counts,
+            "timestamp": time.time(),
+        }
+        policy = build_lrq_policy(lrq_results, provenance)
+        # Stamp the per-role tensor_count on the policy so
+        # the unified driver can recover the partition
+        # without re-reading the components dict.
+        policy["per_role_tensor_count"] = counts
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+        print(
+            f"wrote {output} with {len(lrq_results)} LRQ tensor entries "
+            f"({sum(counts.values())} across {len(counts)} roles)",
+            file=sys.stderr,
+        )
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return 0
+    if args.fitness == "compare":
+        # Compare mode + multi-component is a thin extension
+        # of the LRQ path; the AWQ leg is best-effort
+        # (delegate to awq-evolve.py per component) so we
+        # skip the AWQ leg here.  The per-component
+        # comparison is a future Worker 2 / unified driver
+        # extension.
+        results, counts = run_components_lrq(components, args=args, tracker=tracker)
+        lrq_results = [(layer, result) for layer, result, _ in results]
+        provenance = {
+            "tool": "per_tensor_calibrate.py",
+            "mode": "compare-multi",
+            "seed": args.seed,
+            "lrq_rank": args.lrq_rank,
+            "lrq_iterations": args.lrq_iterations,
+            "lrq_lr": args.lr,
+            "lrq_aggregation": args.lrq_agg,
+            "spatial_occupancy": getattr(args, "spatial_occupancy", "interleaved"),
+            "per_role_tensor_count": counts,
+            "timestamp": time.time(),
+        }
+        policy = build_lrq_policy(lrq_results, provenance)
+        policy["per_role_tensor_count"] = counts
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+        print(
+            f"wrote {output} with {len(lrq_results)} LRQ tensor entries "
+            f"(multi-component compare)",
+            file=sys.stderr,
+        )
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return 0
+    raise ValueError(
+        f"multi-component shell-out does not support --fitness {args.fitness!r}; "
+        "expected one of ('lrq', 'compare')"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    # Phase 16 Cat 3: peak-RSS budget tracker.  Created at the
+    # top of main() so all fitness modes share the same
+    # tracker.  ``--peak-rss-budget-gb 0`` disables the check
+    # (the tracker still records peak_bytes for the final
+    # report, but never raises).
+    tracker = ResidencyTracker(
+        budget_bytes=int(getattr(args, "peak_rss_budget_gb", 0) or 0) * 1024**3,
+        abort_on_exceed=True,
+    )
+    # Phase 16 Cat 4: multi-component dispatch.  If any of
+    # the ``--<role>-npz`` flags is set, use the in-process
+    # per-component shell-out (in ``run_components_lrq``)
+    # instead of the single-component driver.  The output
+    # policy is tagged with the model_role per tensor; the
+    # ``--spatial-occupancy`` flag controls the iteration
+    # order.
+    component_args = {role: getattr(args, f"{role.replace('-', '_')}_npz", "")
+                      for role in SPATIAL_ROLES}
+    has_any_component = any(p.strip() for p in component_args.values())
+    if has_any_component and args.fitness in ("lrq", "compare"):
+        return _main_components(args, tracker, component_args)
+    if has_any_component and args.fitness in ("lrq", "compare"):
+        return _main_components(args, tracker, component_args)
     if args.fitness == "lrq":
         layers = iter_layer_paths(args.layers)
         if not layers:
             raise ValueError(f"{args.layers}: no layer bundles")
         digests = {p.stem: bundle_digest(p) for p in layers}
-        lrq_results: list[tuple[Layer, LRQResult]] = []
-        for path in layers:
-            layer = load_layer(path, max_tokens=args.max_tokens)
-            result = train_lrq(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                verbose=args.verbose,
-            )
-            lrq_results.append((layer, result))
-            if args.verbose:
-                print(
-                    f"lrq[{layer.name}]: initial_mse={result.initial_mse:.4e} "
-                    f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
-                    file=sys.stderr,
-                )
+        # Phase 16 Cat 3: the per-tensor check is inside the
+        # helper (``_run_lrq_with_residency``).  The helper
+        # also dispatches to the chunked path when
+        # ``--chunk-rows > 0`` and the tensor is large enough.
+        lrq_results = _run_lrq_with_residency(layers, args=args, tracker=tracker)
         provenance = {
             "tool": "per_tensor_calibrate.py",
             "mode": "lrq",
@@ -1918,6 +2934,7 @@ def main(argv: list[str] | None = None) -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {output} with {len(lrq_results)} LRQ tensor entries", file=sys.stderr)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
         return 0
     if args.fitness == "awq":
         output = Path(args.output)
@@ -1930,13 +2947,20 @@ def main(argv: list[str] | None = None) -> int:
             population=args.awq_population,
         )
         print(f"wrote {output} via awq-evolve.py", file=sys.stderr)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
         return 0
     if args.fitness == "flrq":
-        return run_flrq(args)
+        rc = run_flrq(args, tracker=tracker)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return rc
     if args.fitness == "compare":
-        return run_compare(args)
+        rc = run_compare(args, tracker=tracker)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return rc
     if args.fitness == "dartquant":
-        return run_dartquant(args)
+        rc = run_dartquant(args, tracker=tracker)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return rc
     raise ValueError(f"unknown --fitness {args.fitness!r}")
 
 
