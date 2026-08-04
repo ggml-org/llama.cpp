@@ -265,11 +265,13 @@ struct ts_tessera_db_l5_weight {
     // requant_budget_bits is the dispatch-side budget the orchestrator's
     // l5_retune recommends for this family in the next requant pass.
     // Computed by l5_retune.py as
-    //   budget = total_storage * (1 - hit_rate) * base_budget_fraction
-    // and NULL when the family has too few samples to project a budget.
-    // The dispatch currently reads it for forward-compatibility (the
-    // contract is additive) but does not act on the value; the column
-    // is here so the producer/consumer agree on the schema.
+    //   budget = family_storage_bits * (1 - hit_rate) * base_budget_fraction
+    // and NULL when the family has too few samples to project a budget
+    // (or the family has no tensor_stats storage rows). The dispatch's
+    // L5 loop consumes it: budgeted families pick their A/B winner on
+    // the Lagrangian score frob + lambda * violation (measured storage
+    // bits), with subgradient ascent on lambda while the family stays
+    // over budget. See tessera-dispatch.cpp (ts_dispatch_run_l5_loop).
     int64_t      requant_budget_bits = -1;   // -1 = NULL (sentinel for C++)
     std::string  retune_source;
 };

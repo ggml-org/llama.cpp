@@ -961,6 +961,11 @@ static int ts_cli_unified_writer(const common_tessera_params & tp) {
            s.n_tensors_mtp_nextn, s.n_tensors_shared_embd);
     printf("  qtype overrides: %d (per-tensor calibration policy)\n",
            s.n_qtype_overrides);
+    if (s.n_budget_relaxed > 0 || s.n_budget_enforced > 0) {
+        printf("  budget cross-role: %d relaxed, %d enforced "
+               "(see tessera.unified.budget_events)\n",
+               s.n_budget_relaxed, s.n_budget_enforced);
+    }
     printf("  total bytes: %lld\n", (long long)s.total_bytes);
     return 0;
 }

@@ -2131,3 +2131,101 @@ surface, not the test-of-the-runner itself.
 | `conftest.py` | Repo-root pytest config: registers the `slow` marker; excludes `tools/tessera/test_l2_forward.py` (script-runner that collides with pytest fixture injection) and `tests/test_test_all_sh.py` (self-reference) from auto-discovery. |
 | `tests/test_phase16_e2e.py` | The Phase 16 round-trip smoke. `@pytest.mark.slow`. |
 | `tests/test_test_all_sh.py` | Black-box self-test for the runner. 15 cases. |
+
+## Phase 16.8: requant_budget_bits actuation + cross-role writer relaxation
+
+Phase 14 added `l5_weights.requant_budget_bits` as a
+contract-complete but unactuated column (no producer, no
+consumer). Phase 16.8 closes both ends. The deployment
+target is a single M1 MacBook Pro, so the size axis is
+load-bearing, not speculative.
+
+### The producer (Python)
+
+`l5_retune.py` computes the documented formula per
+(model, model_role, family):
+
+```
+budget = family_storage_bits * (1 - hit_rate) * base_budget_fraction
+```
+
+* `family_storage_bits` is the family's source footprint from
+  `tensor_stats` (`SUM(n_elements * dtype_bits)`).
+* `--budget-fraction` (default 1.0) is the deployment size-envelope
+  knob; non-positive disables the budget.
+* NULL budget (the C++ `-1` sentinel) means unconstrained and is
+  emitted when the family has no `tensor_stats` storage rows, the
+  retune has fewer than `min_samples`, or the fraction is
+  non-positive. Zero is a valid budget, not NULL.
+* `insert_l5_weights()` upserts the column; the schema adds it
+  idempotently (`_ensure_l5_weights_columns`).
+
+### The consumer (C++ dispatch)
+
+`ts_dispatch_run_l5_loop` (tools/quantize/tessera/tessera-dispatch.cpp)
+consumes the budget via a Lagrangian penalty, not a hard gate:
+
+* Budgeted families measure REAL storage bits: the A/B winner is
+  picked on `score = rel_frob + lambda * violation`, where the
+  per-strategy footprint comes from full scratch quantizations of
+  the representative tensor (`ts_dispatch_result_bits` counts every
+  GGUF component the format writes), and `violation` is the
+  projected post-requant family footprint over the budget.
+* `lambda` starts at 0 and rises by subgradient ascent
+  (`lambda += lr * measured_violation`, lr=0.5, capped at 10) each
+  generation the applied winner leaves the family over budget. It is
+  per-run optimization state, not persisted.
+* Ties keep Stage A (the no-bit-growth strategy), matching the
+  conservative bias of the budget contract.
+* Unconstrained families (NULL budget) keep the legacy
+  streaming-MSE fast path; the winner JSON evidence carries
+  `budget` / `lambda` / `proj_bits_A` / `proj_bits_B` for budgeted
+  families.
+
+### Cross-role writer relaxation (the unified writer)
+
+The unified writer reconciles shared tensors (token_embd / output)
+across roles via worst-of (the more conservative qtype = max bits).
+Phase 16.8 makes that reconciliation budget-aware:
+
+* The policy sidecar carries optional `role_budgets`
+  (`[{model_role, budget_bits, weight}]`, additive key). `budget_bits`
+  is BITS PER ELEMENT (the same unit as `ts_unified_writer_qtype_bits`)
+  so it compares directly against a qtype's bit cost; `-1` =
+  unconstrained. `weight` is the role's dynamic weighting, computed by
+  the producer from n_samples / hit_rate / coupling_score - the writer
+  only COMPARES weights.
+* `ts_unified_writer_resolve_shared` (pure, unit-tested): worst-of is
+  the default; when a role's budget is violated by the worst-of qtype,
+  the CONSTRAINT is relaxed (the conservative qtype is kept) if
+  enforcing it would compromise a needier role whose weight is >= the
+  constrained role's weight (ties protect the conservative verdict).
+  The constrained role only pulls bits down when it outweighs every
+  role it would compromise; enforcement caps to the largest verdict
+  that fits the budget.
+* Evidence: `stats.n_budget_relaxed` / `n_budget_enforced`,
+  `get_budget_events()`, and the `tessera.unified.budget_events` GGUF
+  metadata key (JSON array: tensor / action / role / other_role /
+  qtype / reason) so the audit trail travels with the artifact.
+* No `role_budgets` -> byte-identical pre-16.8 worst-of behavior.
+
+### Why the budget rides the sidecar, not the DB, at the writer
+
+`ts_regime_infer_family` returns `"unknown"` for token_embd / output:
+the shared embeddings never pass through the L5 requant loop (the
+family table covers attn_*/ffn_* only), so `l5_weights` has no
+embedding budget rows to derive from. The production transport for
+writer budgets is therefore the policy sidecar's `role_budgets`,
+emitted by whichever orchestrator stage owns the embedding size
+decision. The DB path (`ts_tessera_db_read_unified_policy`) still
+merges per-tensor qtypes; it has no budget surface.
+
+### Open producer gap (deliberate deferral)
+
+No producer currently computes budgets for the shared embeddings
+themselves (they are outside the requant loop that feeds
+`requant_budget_bits`). The writer mechanism + transport are in place
+and tested; emitting embedding `role_budgets` from the orchestrator is
+a producer-side design decision (it needs its own size-envelope
+formula - the L5 `(1 - hit_rate) * fraction` shape does not transfer
+to tensors that are never requantized).
