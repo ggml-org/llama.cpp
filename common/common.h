@@ -175,6 +175,8 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
     COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID,  // DFlash and MTP arbitration
+    COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE, // Workstream B: run all 4 embedded drafters (MTP/DFlash/DSPark/Eagle3)
+                                            // in parallel and let the verifier arbitrate the longest accepted prefix.
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -404,7 +406,8 @@ struct common_params_speculative {
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK ||
-                   t == COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID;
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
