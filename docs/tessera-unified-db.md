@@ -33,7 +33,7 @@ USING (model_hash, name)` instead of three hand-written parsers.
 | `ga_results` | 1 per converged tensor | C++ (`ts_quantize_db_insert_ga_result`) | Best (alpha, clip) per tensor. Warm-start seed source. |
 | `acceptance` | 1 per tensor | C++ (`ts_quantize_db_insert_acceptance`) | Acceptance-gate verdict. |
 | `l5_fixups` | 1 per requant fixup | C++ (`ts_quantize_db_insert_l5_fixup`) | L5 adaptive requantize fixup rows. |
-| **`tensor_stats`** | 1 per tensor per model | C++ (GA-prep) + Python (cal) | **The cross-pipeline feature table.** PRIMARY KEY (model_hash, name) + ON CONFLICT DO UPDATE = upsert target. C++ writes kurtosis / eff_rank / dtype; Python writes rms / mean_abs / tail_ratio. `source` records which pipeline last wrote the row. |
+| **`tensor_stats`** | 1 per tensor per model | C++ (GA-prep) + Python (cal) | **The cross-pipeline feature table.** PRIMARY KEY (model_hash, name) + ON CONFLICT DO UPDATE = upsert target. C++ writes kurtosis / eff_rank / dtype; Python writes rms / mean_abs / tail_ratio / `recommended_action`. `source` records which pipeline last wrote the row. `recommended_action` is the per-tensor verdict the calibration pipeline derives from `l5_weights` via the `l5_action` rules (one of `protect` / `requant_up` / `requant_down` / `monitor` / `noop`); the C++ side just carries the column through the upsert with no logic. |
 | **`l3_outlier_summary`** | 1 per tensor per sidecar label | Python (analytics) | L3 outlier rate per tensor. model_hash + name joins to tensor_stats. |
 | **`l4_probe_summary`** | 1 per tensor | Python (analytics) | L4 E2E probe (mse, perplexity, top1_mismatch). |
 | **`l4_plan_outcome`** | 1 per (tensor, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
@@ -201,9 +201,11 @@ last one wins (CLI ordering convention).
 | Python unified | `tools/tessera/tessera_db.py` | High-level API (`TesseraDB` class) that owns the DuckDB connection + per-table buffers. Typed helpers per summary table. |
 | Python l5_outcome | `tools/tessera/l5_outcome.py` | The feedback-loop consumer. Joins `l5_plan_summary` and `l4_plan_outcome`, computes `delta_mse` + `plan_accepted` + per-(model, family) `residual`, writes `l5_outcome`. |
 | Python l5_retune | `tools/tessera/l5_retune.py` | The retune (closed-loop) consumer. Per-(model, family) closed-form OLS of `delta_mse` on `sensitivity_score`, projects to the (w_imatrix, w_gradient, w_layer) simplex, writes `l5_weights`. The orchestrator's `--retune-from-db` reads this table. |
-| Python cal | `tools/tessera/calibration_to_tensor_stats.py` | Reads the per-channel observer parquet, reduces to per-tensor summary, upserts into `tensor_stats` (source = `py_cal`). |
+| Python cal | `tools/tessera/calibration_to_tensor_stats.py` | Reads the per-channel observer parquet, reduces to per-tensor summary, upserts into `tensor_stats` (source = `py_cal`). Phase 13 also reads `l5_weights` + `l5_outcome` and writes `recommended_action` per tensor via the `l5_action` rules. |
+| Python l5_action | `tools/tessera/l5_action.py` | The `recommended_action` derivation rules (Phase 13). Single source of truth: per-tensor `(slope, hit_rate, delta_mse, plan_accepted)` -> one of `protect` / `requant_up` / `requant_down` / `monitor` / `noop`. 8 unit tests. |
 | Python l3_outlier | `tools/tessera/l3_outlier_report.py` | The L3 outlier report. `--tessera-db` is the fast path: reads per-tensor summary from `tensor_stats` and produces a conservative 0/1 outlier count tagged `source='tensor_stats_estimate'`. The dequant-sidecar path remains the default. |
-| Python tests | `tools/tessera/test_tessera_db_buffer.py`, `tools/tessera/test_tessera_db.py`, `tools/tessera/test_l5_outcome.py`, `tools/tessera/test_calibration_to_tensor_stats.py`, `tools/tessera/test_l3_outlier_fast_path.py`, `tools/tessera/test_l5_retune.py` | 8 + 7 + 5 + 3 + 4 + 15 cases. |
+| Python tests | `tools/tessera/test_tessera_db_buffer.py`, `tools/tessera/test_tessera_db.py`, `tools/tessera/test_l5_outcome.py`, `tools/tessera/test_calibration_to_tensor_stats.py`, `tools/tessera/test_l3_outlier_fast_path.py`, `tools/tessera/test_l5_retune.py`, `tools/tessera/test_l5_action.py` | 8 + 10 + 5 + 8 + 4 + 15 + 8 cases. |
+| C++ tests | `tools/quantize/tessera/test_db_buffer.cpp`, `tools/quantize/tessera/test_quantize_db.cpp`, `tools/quantize/tessera/test_quantize_db_e2e.cpp` | 8 + 7 + n cases (Phase 13 adds a recommended_action round-trip). |
 
 ## Usage
 
@@ -361,15 +363,56 @@ python3 tools/tessera/l5_orchestrator.py \
   (direct `INSERT ... ON CONFLICT DO UPDATE`, like
   `tensor_stats`). 15 Python tests + 1 new C++ test
   case.
+- **Phase 13 (this commit):** calibration side consumes
+  the orchestrator's feedback. Three pieces:
+  1. `tensor_stats` gains `recommended_action TEXT`
+     (additive; C++ struct + CREATE TABLE + the
+     `ts_tessera_db_upsert_tensor_stat` upsert all carry
+     the column through). The C++ side does not derive
+     the value; it just persists whatever the Python
+     calibration side wrote.
+  2. New `tools/tessera/l5_action.py` module is the
+     single source of truth for the rules:
+     `(miscalibration_score, hit_rate, delta_mse,
+     plan_accepted)` -> one of `protect` / `requant_up` /
+     `requant_down` / `monitor` / `noop`. The thresholds
+     (0.5, -0.2, 0.001, 0.9) are KNOBs documented at the
+     top of the module. 8 unit tests cover each branch
+     + the priority order + the noop default.
+  3. `calibration_to_tensor_stats.py` reads
+     `l5_weights` + `l5_outcome` (the most recent per
+     `(model_hash, name)`, picked by `ROW_NUMBER() OVER
+     (PARTITION BY name ORDER BY iteration DESC,
+     plan_id DESC)`) and upserts `recommended_action`
+     into `tensor_stats` per tensor. 5 new test cases
+     cover the protect / no-l5-weights / most-recent-wins
+     / requant_up / re-upsert-stability contracts.
+  4. `calibration_rollup.py` gains `--l5-outcome
+     LABEL=PATH` (a `tessera.duckdb` path; the prefix is
+     always `l5.*` regardless of the user-supplied label)
+     + `--model-hash HASH` (required when `--l5-outcome`
+     is set). The rollup joins `l5_outcome` (most-recent
+     per name) + `l5_weights` (per family) and adds the
+     `l5.*` columns + the derived `recommended_action` to
+     the per-tensor rollup table. 4 new test cases
+     cover the join, the most-recent-wins contract, the
+     model-hash requirement, and the empty-DB fallback.
+  Schema changes are additive: `CREATE TABLE IF NOT
+  EXISTS` keeps existing DBs compatible; the new column
+  is NULL for rows written before this commit. The
+  C++ `ts_tessera_db_upsert_tensor_stat` upsert uses
+  straight overwrite (not COALESCE) for the new column;
+  the Python side is the authoritative writer.
 
 ## Open follow-ups (after this commit)
 
-The unified-DB feedback loop is now feature-complete: the
-producer side (`l4_plan_outcome` + `l5_plan_summary`) is in
-production, the consumer side (`l5_outcome` + `l5_weights`) is
-in production, and the closed-loop wiring
-(`--retune-from-db`) is in production. The remaining items
-are about extending the loop, not about adding the next leg.
+The unified-DB feedback loop is now feature-complete on
+both sides: the orchestrator side (producer + retune) is
+in production, the calibration side (consumer + rollup +
+`recommended_action` on `tensor_stats`) is in production,
+and the closed-loop wiring (`--retune-from-db`) is in
+production. The remaining items are about extending the
+loop, not about adding the next leg.
 
 - Per-tensor component storage in `l5_outcome`. Currently
   the retune fits a 2-coefficient OLS (intercept + slope on
@@ -392,3 +435,18 @@ are about extending the loop, not about adding the next leg.
   dispatch would call `ts_tessera_db_list_l5_weights` at
   `ts_dispatch_db_open` time and thread the per-family
   weights into the GA's seed-generation.
+- C++ GA-prep walk consumes `recommended_action`. The
+  column is now on `tensor_stats` (Phase 13); the C++
+  GA-prep walk could read it to bias the GA's
+  initialization for the families the calibration side
+  flagged as `protect` (skip aggressive requant) or
+  `requant_down` (try a lower qtype first). Mirrors the
+  orchestrator side's read of `l5_weights`; the GA-prep
+  walk is the only C++ reader of `recommended_action`.
+- Calibration `l5_outcome` -> `tensor_stats` audit trail.
+  The calibration side overwrites `recommended_action` on
+  each retune; an audit trail (a `tensor_stats_history`
+  table with one row per write) would let the
+  cross-pipeline consumer see when a tensor's verdict
+  changed and why. Out of scope for Phase 13; an
+  `evolve/cal-audit` follow-up.
