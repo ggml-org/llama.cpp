@@ -3058,28 +3058,39 @@ struct test_cpy : public test_case {
 };
 
 // GGML_OP_CONT
+// permute = {0, 0, 0, 0} means no permutation: the source is transposed (or
+// view-sliced). A non-identity permute exercises ggml_cont of an arbitrary
+// ggml_permute -- e.g. the 0<->2 swap DeepSeek-V4's lightning indexer performs
+// on a [n_kv, n_tokens, n_head] tensor -- which takes a different backend path
+// than the 0<->1 transpose and was previously uncovered.
 struct test_cont : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     bool use_view_slice;
+    const std::array<int64_t, 4> permute;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, use_view_slice);
+        return VARS_TO_STR4(type, ne, use_view_slice, permute);
     }
 
     test_cont(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 10, 1},
-            bool use_view_slice = false)
-        : type(type), ne(ne), use_view_slice(use_view_slice) {}
+            bool use_view_slice = false,
+            std::array<int64_t, 4> permute = {0, 0, 0, 0})
+        : type(type), ne(ne), use_view_slice(use_view_slice), permute(permute) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(src);
         ggml_set_name(src, "src");
 
+        const bool permuted = permute[0] != 0 || permute[1] != 0 || permute[2] != 0 || permute[3] != 0;
 
         ggml_tensor * dst;
-        if (use_view_slice) {
+        if (permuted) {
+            dst = ggml_permute(ctx, src, permute[0], permute[1], permute[2], permute[3]);
+            ggml_set_name(dst, "src_permuted");
+        } else if (use_view_slice) {
             dst = ggml_view_4d(ctx, src, src->ne[0], 1, src->ne[2], src->ne[3],
                 src->nb[1], src->nb[2], src->nb[3], src->nb[0] * (src->ne[1] - 1));
             ggml_set_name(dst, "src_view_slice");
@@ -3089,41 +3100,6 @@ struct test_cont : public test_case {
         }
 
         ggml_tensor * out = ggml_cont(ctx, dst);
-        ggml_set_name(out, "out");
-
-        return out;
-    }
-};
-
-// GGML_OP_CONT of an arbitrary permutation.
-// test_cont above only exercises ggml_transpose (a 0<->1 swap), which the Vulkan
-// backend routes to its tiled shared-memory transpose shader. A 0<->2 swap --
-// e.g. ggml_cont(ggml_permute(x, 2, 1, 0, 3)), which DeepSeek-V4's lightning
-// indexer performs on a [n_kv, n_tokens, n_head] tensor -- takes a different
-// path entirely and was previously uncovered.
-struct test_cont_permute : public test_case {
-    const ggml_type type;
-    const std::array<int64_t, 4> ne;
-    const std::array<int, 4> perm;
-
-    std::string vars() override {
-        return VARS_TO_STR3(type, ne, perm);
-    }
-
-    test_cont_permute(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 10, 10, 1},
-            std::array<int, 4> perm = {2, 1, 0, 3})
-        : type(type), ne(ne), perm(perm) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(src);
-        ggml_set_name(src, "src");
-
-        ggml_tensor * permuted = ggml_permute(ctx, src, perm[0], perm[1], perm[2], perm[3]);
-        ggml_set_name(permuted, "src_permuted");
-
-        ggml_tensor * out = ggml_cont(ctx, permuted);
         ggml_set_name(out, "out");
 
         return out;
@@ -8679,11 +8655,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 // perf cases use. Perf mode does NOT verify results, so without
                 // these the fast path would only ever be checked on tiny tensors.
                 {1024, 64, 64, 1}, {2304, 64, 64, 1}, {1000, 33, 65, 1} }) {
-            for (std::array<int, 4> perm : std::initializer_list<std::array<int, 4>>{
+            for (std::array<int64_t, 4> perm : std::initializer_list<std::array<int64_t, 4>>{
                     {2, 1, 0, 3},   // 0<->2 swap (the DeepSeek-V4 indexer pattern)
                     {1, 2, 0, 3},   // 3-cycle
                     {0, 2, 1, 3} }) {
-                test_cases.emplace_back(new test_cont_permute(type_dst, ne, perm));
+                test_cases.emplace_back(new test_cont(type_dst, ne, false, perm));
             }
         }
     }
@@ -9803,14 +9779,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // Measured on Vulkan/gfx1151 this ran at ~1 GB/s of a ~200 GB/s box and was
     // 43% of DeepSeek-V4 prefill. n_kv values include power-of-two and
     // non-power-of-two neighbours because the two differed by ~2.4x.
-    // NOTE: n_tokens is 64 here, not the production 512. At 512 a single
-    // dispatch takes ~273 ms on the slow path, and perf mode loops it -- which
-    // trips the amdgpu watchdog and forces a GPU hard recovery (observed
-    // 2026-08-02; it can take other contexts on the box down with it). 64 keeps
-    // one dispatch in the tens of ms while preserving the access pattern.
+    // NOTE: the n_tokens=64 shapes keep a single slow-path dispatch in the
+    // tens of ms; at 512 the OLD path took ~273 ms per dispatch and perf
+    // mode's looping tripped the amdgpu watchdog (observed 2026-08-02).
+    // The n_tokens=512 shapes are ~270-300 MB so they exceed GPU L2 on
+    // large parts, where the 64-token shapes fit in cache and read above
+    // memory bandwidth.
     for (int64_t n_kv : { 1024, 1280, 2048, 2304 }) {
-        test_cases.emplace_back(new test_cont_permute(
-            GGML_TYPE_F32, {n_kv, 64, 64, 1}, {2, 1, 0, 3}));
+        test_cases.emplace_back(new test_cont(
+            GGML_TYPE_F32, {n_kv, 64, 64, 1}, false, {2, 1, 0, 3}));
+    }
+    for (int64_t n_kv : { 2048, 2304 }) {
+        test_cases.emplace_back(new test_cont(
+            GGML_TYPE_F32, {n_kv, 512, 64, 1}, false, {2, 1, 0, 3}));
     }
 
     // Conv2d: K=CRS=NPQ=4096 matmul performance
