@@ -173,6 +173,7 @@
 		<span class="exec-wd" title={cwd}>{wdDisplay}</span>
 		<span class="exec-prompt">$</span>
 	{/if}
+
 	{#if highlightedCommandHtml}
 		<span class="font-mono">{@html highlightedCommandHtml}</span>
 	{:else}
@@ -246,8 +247,11 @@
 </ToolCallBlock>
 
 <style>
+	:root {
+    	--exec-wd-margin: 0.4rem;
+	}
+
 	.exec-wd {
-		--exec-wd-margin: 0.4rem;
 		font-family: var(--font-mono);
 		color: var(--muted-foreground);
 		margin-right: var(--exec-wd-margin);

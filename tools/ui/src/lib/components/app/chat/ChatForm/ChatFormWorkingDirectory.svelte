@@ -399,7 +399,7 @@
 			side="top"
 			align="start"
 			sideOffset={4}
-			class="w-3xl min-w-md max-w-none rounded-xl border-border/50 p-0 shadow-xl -translate-2!"
+			class="md:max-w-3xl w-[calc(100vw-1rem)] rounded-xl border-border/50 p-0 shadow-xl md:-translate-2!"
 			onkeydown={handleKeydown}
 			onOpenAutoFocus={(event) => event.preventDefault()}
 		>
