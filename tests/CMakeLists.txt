@@ -291,6 +291,10 @@ set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED 
 llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+# Manual model-dependent gate for benchmark prefix-state reuse. This is not a
+# CTest because representative DSV4 depths require the external production GGUF.
+llama_build(test-state-restore-equivalence.cpp)
+
 if (APPLE)
     llama_build(test-rset-release.cpp)
 endif()

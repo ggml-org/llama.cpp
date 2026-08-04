@@ -51,7 +51,34 @@ scripts/dsv4-rocm/run-tg.sh --dry-run
 DSV4_TG_MODE=residency scripts/dsv4-rocm/run-tg.sh --dry-run
 ```
 
-After a GPU window is confirmed:
+Before performance mode may reuse llama-bench's saved sequence state, run the
+model-dependent equivalence gate:
+
+```bash
+cmake --build build --target test-state-restore-equivalence -j 12
+scripts/dsv4-rocm/run-state-restore-equivalence.sh --dry-run
+DSV4_LABEL=state-restore-equivalence \
+  scripts/dsv4-rocm/run-state-restore-equivalence.sh
+```
+
+The gate computes a deterministic fresh prefix at 2K, 3K, and 16K by default,
+saves sequence 0 with `llama_state_seq_get_data`, runs four greedy target
+steps while retaining every full-vocabulary logit, clears memory with the same
+`llama_memory_clear(..., false)` call as llama-bench, restores with
+`llama_state_seq_set_data`, and replays the exact inputs. It requires identical
+argmax tokens, identical non-finite classifications, and every finite logit to
+satisfy `abs_diff <= 1e-5 + 1e-5*max(abs(a),abs(b))`. Exact prefix/input/argmax
+token IDs, state/logit hashes, byte counts, manifests, DSOs, and telemetry are
+preserved under `$HOME/llama-jobs/dsv4-rocm-state-equivalence/`.
+
+This is deliberately a same-context/same-benchmark-instance gate. The fixed
+`run-tg.sh` command has one generation/batch configuration and unique depths,
+so llama-bench restores the saved state only for repetitions 2-6 inside the
+same context; the next instance has a different depth and performs fresh setup.
+The greedy path is a semantic state-equivalence test, not a literal reproduction
+of llama-bench's random timing inputs.
+
+After a GPU window is confirmed and this gate passes:
 
 ```bash
 # Performance: tg32, six raw / five accepted samples at every depth.
