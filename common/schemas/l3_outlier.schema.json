@@ -1,0 +1,33 @@
+{
+    "schema": "tessera.l3-outlier-record.v1",
+    "description": "One row per tensor per sidecar in an L3 outlier report. Produced by tools/tessera/l3_outlier_report.py and any C++ producer that mirrors the same shape.",
+    "required": [
+        "sidecar_label",
+        "tensor",
+        "rows",
+        "cols",
+        "total_elements",
+        "outlier_count",
+        "outlier_fraction",
+        "threshold",
+        "kernel_version",
+        "created_at",
+        "tessera_main_tip"
+    ],
+    "polars_schema": {
+        "sidecar_label": "String",
+        "tensor": "String",
+        "layer": "String",
+        "rows": "Int64",
+        "cols": "Int64",
+        "total_elements": "Int64",
+        "outlier_count": "Int64",
+        "outlier_fraction": "Float64",
+        "threshold": "Float32",
+        "skipped": "Boolean",
+        "skip_reason": "String",
+        "kernel_version": "String",
+        "created_at": "String",
+        "tessera_main_tip": "String"
+    }
+}

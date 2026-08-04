@@ -1,0 +1,38 @@
+{
+    "description": "Catalog of all analytical-output schemas. The C++ helper (common/tessera-analytical-io.{h,cpp}) and the Python wrapper (tools/tessera/_analytical_io.py) both look up schema files by the `name` field below. Adding a new analytical output is: drop a new <name>.schema.json in this directory, add an entry here, then list it in the SCHEMA_NAMES array in common/tessera-analytical-io.cpp.",
+    "schemas": [
+        {
+            "name": "l3_outlier",
+            "file": "l3_outlier.schema.json",
+            "produces": "tools/tessera/l3_outlier_report.py",
+            "consumes": [
+                "tools/tessera/calibration_rollup.py"
+            ]
+        },
+        {
+            "name": "l4_probe",
+            "file": "l4_probe.schema.json",
+            "produces": "l4 e2e probe (synthetic: tools/tessera/l5_demo.py; real: C++ L4 probe, when landed)",
+            "consumes": [
+                "tools/tessera/l5_orchestrator.py",
+                "tools/tessera/calibration_rollup.py"
+            ]
+        },
+        {
+            "name": "l5_plan",
+            "file": "l5_plan.schema.json",
+            "produces": "tools/tessera/l5_orchestrator.py:write_history",
+            "consumes": [
+                "tools/tessera/calibration_rollup.py"
+            ]
+        },
+        {
+            "name": "per_layer_error",
+            "file": "per_layer_error.schema.json",
+            "produces": "tools/tessera/per_layer_error_table.py",
+            "consumes": [
+                "tools/tessera/calibration_rollup.py"
+            ]
+        }
+    ]
+}

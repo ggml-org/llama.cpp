@@ -1,0 +1,33 @@
+{
+    "schema": "tessera.l5-requant-plan-record.v1",
+    "description": "One row per tensor in an L5 IterQuant requant plan. Emitted by tools/tessera/l5_orchestrator.py via write_history. The delta_bits / delta_quality columns are the canonical signal for whether a requant actually helped; future polars joins against L4 follow-up probes can answer 'did this requant reduce error?'.",
+    "required": [
+        "tensor",
+        "current_qtype",
+        "new_qtype",
+        "sensitivity_score",
+        "bits",
+        "delta_bits",
+        "kernel_version",
+        "created_at",
+        "tessera_main_tip"
+    ],
+    "polars_schema": {
+        "tensor": "String",
+        "layer": "String",
+        "current_qtype": "String",
+        "new_qtype": "String",
+        "bits": "Float64",
+        "delta_bits": "Int64",
+        "sensitivity_score": "Float64",
+        "delta_quality": "Float64",
+        "imatrix_magnitude": "Float64",
+        "gradient_proxy": "Float64",
+        "layer_position_prior": "Float64",
+        "plan_id": "String",
+        "iteration": "Int32",
+        "kernel_version": "String",
+        "created_at": "String",
+        "tessera_main_tip": "String"
+    }
+}

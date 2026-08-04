@@ -1,0 +1,31 @@
+{
+    "schema": "tessera.l4-e2e-probe-record.v1",
+    "description": "One row per tensor in an L4 E2E probe report. Consumed by tools/tessera/l5_orchestrator.py. The per-tensor MSE / perplexity / top1_mismatch / n_weights are the L4 inputs to the L5 IterQuant sensitivity scorer.",
+    "required": [
+        "tensor",
+        "current_qtype",
+        "mse",
+        "perplexity",
+        "top1_mismatch",
+        "n_weights",
+        "kernel_version",
+        "created_at",
+        "tessera_main_tip"
+    ],
+    "polars_schema": {
+        "tensor": "String",
+        "layer": "String",
+        "current_qtype": "String",
+        "mse": "Float64",
+        "mse_minus_one": "Float64",
+        "perplexity": "Float64",
+        "top1_mismatch": "Float64",
+        "n_weights": "Int64",
+        "model": "String",
+        "calibration_corpus": "String",
+        "calibration_corpus_hash": "String",
+        "kernel_version": "String",
+        "created_at": "String",
+        "tessera_main_tip": "String"
+    }
+}

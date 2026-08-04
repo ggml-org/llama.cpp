@@ -1,0 +1,23 @@
+{
+    "schema": "tessera.per-layer-error-record.v1",
+    "description": "One row per tensor in a per-layer error table. Produced by tools/tessera/per_layer_error_table.py. The epsilon field is the relative Frobenius error ||L15 - L1||^2 / ||L15||^2 between the L1 (dequant) and L1.5 (FP16 reference) sidecars.",
+    "required": [
+        "tensor",
+        "layer",
+        "epsilon",
+        "kernel_version",
+        "created_at",
+        "tessera_main_tip"
+    ],
+    "polars_schema": {
+        "tensor": "String",
+        "layer": "String",
+        "epsilon": "Float64",
+        "epsilon_is_nan": "Boolean",
+        "note": "String",
+        "sidecar_dir": "String",
+        "kernel_version": "String",
+        "created_at": "String",
+        "tessera_main_tip": "String"
+    }
+}

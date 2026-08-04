@@ -100,6 +100,8 @@ add_library(${TARGET}
     speculative-calibration.h
     speculative.cpp
     speculative.h
+    tessera-analytical-io.cpp
+    tessera-analytical-io.h
     tessera-config.cpp
     tessera-config.h
     trie.cpp
@@ -134,6 +136,12 @@ set_target_properties(${TARGET} PROPERTIES
 
 target_include_directories(${TARGET} PUBLIC . ./tessera-debug ../vendor)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
+
+# Bake the in-repo schema path into the analytical-IO helper so it can
+# locate the schema files at runtime without an env-var set. Installed
+# builds override this via TESSERA_SCHEMA_DIR at runtime.
+target_compile_definitions(${TARGET} PRIVATE
+    TESSERA_SCHEMA_DIR="${CMAKE_SOURCE_DIR}/common/schemas")
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -198,3 +206,26 @@ if (NOT TARGET llama-tessera-debug)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC llama-tessera-debug)
+
+# Standalone smoke test for the analytical-IO helper
+# (tessera-analytical-io.{h,cpp}). Sibling of the tessera-debug
+# smoke test pattern: kept here (rather than in a subdir) because
+# the helper lives in the main common/ library, and a missing link
+# should not break the rest of common/. Run as
+# ./bin/test-tessera-analytical-io.
+if (LLAMA_BUILD_TESTS)
+    set(TS_ANALYTICAL_IO_TEST_TARGET test-tessera-analytical-io)
+    add_executable(${TS_ANALYTICAL_IO_TEST_TARGET} test_tessera_analytical_io.cpp)
+    target_link_libraries(${TS_ANALYTICAL_IO_TEST_TARGET} PRIVATE ${TARGET})
+    target_compile_features(${TS_ANALYTICAL_IO_TEST_TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TS_ANALYTICAL_IO_TEST_TARGET} COMMAND ${TS_ANALYTICAL_IO_TEST_TARGET})
+
+    # Companion emit binary: writes a sample L3-outlier NDJSON file
+    # via the helper. Used by the Python end-to-end test
+    # (tools/tessera/test_analytical_io.py) to verify the cross-
+    # language C++ writer -> polars reader contract.
+    set(TS_EMIT_L3_TARGET test-emit-l3-ndjson)
+    add_executable(${TS_EMIT_L3_TARGET} test_emit_l3_ndjson.cpp)
+    target_link_libraries(${TS_EMIT_L3_TARGET} PRIVATE ${TARGET})
+    target_compile_features(${TS_EMIT_L3_TARGET} PRIVATE cxx_std_17)
+endif()
