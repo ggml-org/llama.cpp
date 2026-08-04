@@ -95,17 +95,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         return true;
     };
 
-    // switches
-    if (arg == "--tessera-calibrate-only") { tessera_params.calibrate_only = true; return 1; }
-    if (arg == "--tessera-champq")         { tessera_params.champq         = true; return 1; }
-    if (arg == "--tessera-kernel-fitness") { tessera_params.kernel_fitness = true; return 1; }
-    if (arg == "--tessera-w4a4")           { tessera_params.w4a4           = true; return 1; }
-    if (arg == "--tessera-acceptance")     { tessera_params.acceptance     = true; return 1; }
-    if (arg == "--no-tessera-acceptance")  { tessera_params.acceptance     = false; return 1; }
-    if (arg == "--tessera-adaptive-requantize") { tessera_params.adaptive_requantize = true; return 1; }
-    if (arg == "--no-tessera-adaptive-requantize") { tessera_params.adaptive_requantize = false; return 1; }
-    if (arg == "--tessera-adapt-dry-run")  { tessera_params.adapt_dry_run  = true; return 1; }
-
     // enum-valued
     if (arg == "--tessera-mode") {
         if (!require_val("--tessera-mode")) return -1;
