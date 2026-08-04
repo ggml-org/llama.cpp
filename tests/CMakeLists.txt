@@ -375,6 +375,15 @@ if (APPLE)
                               "-framework IOSurface"
                               "-framework Metal")
     endif()
+    # Control plane test for the cross-backend MTLSharedEvent
+    # (ggml_mtl_shared_event_t). Lock-free dispatch foundation.
+    llama_build(test-ane-mtl-shared-event.mm)
+    if (TARGET test-ane-mtl-shared-event)
+        target_link_libraries(test-ane-mtl-shared-event PRIVATE
+                              ggml ggml-base
+                              "-framework Foundation"
+                              "-framework Metal")
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")

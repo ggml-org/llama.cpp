@@ -25,6 +25,7 @@
 #include "ggml-backend.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdbool.h>
 
 struct ggml_tensor;
@@ -55,6 +56,58 @@ GGML_BACKEND_API bool ggml_backend_metal_supports_family(ggml_backend_t backend,
 GGML_BACKEND_API void ggml_backend_metal_capture_next_compute(ggml_backend_t backend);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_metal_reg(void);
+
+//
+// lock-free control plane: cross-backend MTLSharedEvent
+//
+// A shared event is a counter that the CPU and Metal backends (and the
+// CPU-side ANE sequencer) can read, increment, and wait on. Per the
+// prism-engine SharedEventContract pattern: every event protects one
+// IOSurface slot (the data-plane handoff); the producer signals the
+// event after it publishes its output, the consumer waits for the
+// event before it reads the slot.
+//
+// On the CPU side: signal/wait/try_wait are blocking or non-blocking
+// host calls. On the Metal side: the underlying MTLSharedEvent can be
+// encoded into an MTLCommandBuffer (encodeWaitForEvent: /
+// encodeSignalEvent:) for fully on-GPU synchronization. The ANE leg
+// is sequenced through the CPU (ANE itself does not consume
+// MTLSharedEvent); the dispatch loop signals the event after ANE
+// returns and waits on it before dispatching the next ANE call.
+//
+typedef struct ggml_mtl_shared_event * ggml_mtl_shared_event_t;
+
+// Create a new shared event with an initial signaled value of 0.
+// Returns nullptr if MTLCreateSystemDefaultDevice fails (non-Apple
+// or no Metal-capable hardware).
+GGML_BACKEND_API ggml_mtl_shared_event_t ggml_mtl_shared_event_new(void);
+
+// Release the event. The underlying MTLSharedEvent is released; any
+// pending waits become invalid.
+GGML_BACKEND_API void ggml_mtl_shared_event_free(ggml_mtl_shared_event_t event);
+
+// Set the signaled value (any thread). Equivalent to
+// [event setSignaledValue:value] on the underlying MTLSharedEvent.
+GGML_BACKEND_API void ggml_mtl_shared_event_signal(ggml_mtl_shared_event_t event, uint64_t value);
+
+// Block until the event reaches at least `value`. Equivalent to
+// [event waitUntilSignaledValue:value] on the underlying MTLSharedEvent.
+GGML_BACKEND_API void ggml_mtl_shared_event_wait(ggml_mtl_shared_event_t event, uint64_t value);
+
+// Non-blocking check. Returns true if the event has reached `value`,
+// false otherwise.
+GGML_BACKEND_API bool ggml_mtl_shared_event_try_wait(ggml_mtl_shared_event_t event, uint64_t value);
+
+// Read the current signaled value (any thread).
+GGML_BACKEND_API uint64_t ggml_mtl_shared_event_get_value(ggml_mtl_shared_event_t event);
+
+// Get the underlying MTLSharedEvent* for use in a Metal command
+// buffer (encodeWaitForEvent:value: / encodeSignalEvent:value:).
+// The returned pointer is opaque to the caller; pass it back to
+// ggml_mtl_shared_event_encode_wait / _signal helpers. The pointer
+// is owned by the ggml_mtl_shared_event_t and is invalidated when
+// the event is freed.
+GGML_BACKEND_API void * ggml_mtl_shared_event_get_mtl_event(ggml_mtl_shared_event_t event);
 
 #ifdef __cplusplus
 }
