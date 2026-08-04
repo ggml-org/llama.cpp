@@ -12,7 +12,9 @@ Outputs:
 * The orchestrator's stdout summary (JSON, easy to grep).
 * ``l5_demo_policy.json`` - the sidecar policy consumable by
   ``tile640_quantize_v3.py``.
-* ``l5_demo_history.json`` - the per-iteration plan history.
+* ``l5_demo_history.ndjson`` - the per-iteration plan history
+  (one record per (plan, action) pair, conformant to
+  ``common/schemas/l5_plan.schema.json``).
 
 By default the demo writes the policy and history into a temporary
 directory so it does not pollute the working tree.  Pass ``--out-dir`` to
@@ -210,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = Path(args.out_dir) if args.out_dir else Path(tempfile.mkdtemp(prefix="l5_demo_"))
     output_dir.mkdir(parents=True, exist_ok=True)
     policy_path = output_dir / "l5_demo_policy.json"
-    history_path = output_dir / "l5_demo_history.json"
+    history_path = output_dir / "l5_demo_history.ndjson"
 
     scorer = orch.SensitivityScorer(
         decay=0.9,

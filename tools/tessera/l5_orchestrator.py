@@ -681,18 +681,101 @@ class OrchestratorLoop:
 
     @classmethod
     def write_history(cls, plans: Sequence[RequantPlan], path: Path) -> None:
-        """Write the iteration history as a JSON document.
+        """Write the iteration history as NDJSON, one record per
+        (plan, action) tuple, conformant to
+        ``common/schemas/l5_plan.schema.json``.
 
-        Used by the demo and by tests.  The document is a thin wrapper
-        around the per-iteration plans.
+        Used by the demo and by tests. The legacy JSON wrapper
+        (one document with a ``plans`` array of iteration-level
+        metadata) is gone: the per-tensor schema is the source of
+        truth, and the iteration-level metadata (storage_before_bits,
+        storage_after_bits, storage_budget_bits, termination_reason)
+        is derivable from the per-tensor ``delta_bits`` column plus
+        the orchestrator's input budget, which the consumer can
+        compute on demand. ``calibration_rollup.py`` will do this
+        rollup when needed.
+
+        Provenance (kernel_version, created_at, tessera_main_tip)
+        is stamped into every record; values are populated by
+        shelling out to ``git`` (the C++ provenance helper is not
+        yet wired into a CLI binary).
         """
-        payload = {
-            "schema": SCHEMA,
-            "iterations": len(plans),
-            "plans": [plan.to_dict() for plan in plans],
-        }
+        import polars as pl
+        from _analytical_io import polars_schema as _schema_polars_types
+        # Layer-name extraction: same convention as
+        # per_layer_error_table.py and l3_outlier_report.py so
+        # a cross-pipeline rollup on `layer` works without
+        # normalization.
+        import re as _re
+        _BLK_RE = _re.compile(r"^(blk\.\d+)\.")
+        def _layer(tensor_name: str) -> str:
+            base = tensor_name
+            for suf in (".weight", ".bias"):
+                if base.endswith(suf):
+                    base = base[: -len(suf)]
+                    break
+            m = _BLK_RE.match(base + ".")
+            if m is not None:
+                return m.group(1)
+            return base
+        def _bits_for(qtype: str) -> float:
+            return float(metrics.BITS_PER_WEIGHT.get(qtype, 0.0))
+        def _prov() -> tuple[str, str, str]:
+            kv, mt = "unknown", "unknown"
+            try:
+                r = subprocess.run(
+                    ["git", "describe", "--all", "--always"],
+                    capture_output=True, text=True, check=False,
+                    cwd=str(Path(__file__).resolve().parent.parent.parent))
+                if r.returncode == 0 and r.stdout.strip():
+                    kv = r.stdout.strip()
+                r = subprocess.run(
+                    ["git", "rev-parse", "--short", "main"],
+                    capture_output=True, text=True, check=False,
+                    cwd=str(Path(__file__).resolve().parent.parent.parent))
+                if r.returncode == 0 and r.stdout.strip():
+                    mt = r.stdout.strip()
+            except FileNotFoundError:
+                pass
+            from datetime import datetime, timezone
+            created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return kv, created, mt
+        kernel_version, created_at, main_tip = _prov()
+        rows: list[dict] = []
+        for plan in plans:
+            for action in plan.actions:
+                rows.append({
+                    "tensor":          action.name,
+                    "layer":           _layer(action.name),
+                    "current_qtype":   action.from_qtype,
+                    "new_qtype":       action.to_qtype,
+                    "bits":            _bits_for(action.to_qtype),
+                    "delta_bits":      int(action.storage_delta_bits),
+                    "sensitivity_score": float(action.sensitivity),
+                    "delta_quality":   float(action.expected_mse_delta),
+                    "imatrix_magnitude":  float("nan"),
+                    "gradient_proxy":     float("nan"),
+                    "layer_position_prior": float("nan"),
+                    "plan_id":         "",
+                    "iteration":       int(plan.iteration),
+                    "kernel_version":  kernel_version,
+                    "created_at":      created_at,
+                    "tessera_main_tip": main_tip,
+                })
+        schema_types = _schema_polars_types("l5_plan")
+        if rows:
+            df = pl.DataFrame(rows, infer_schema_length=max(len(rows), 1))
+        else:
+            df = pl.DataFrame(
+                {col: pl.Series(name=col, values=[], dtype=dtype)
+                 for col, dtype in schema_types.items()},
+                schema=schema_types,
+            )
+        for col, dtype in schema_types.items():
+            if col in df.columns and df.schema[col] != dtype:
+                df = df.with_columns(pl.col(col).cast(dtype, strict=False))
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        df.write_ndjson(path)
 
 
 # ---------------------------------------------------------------------------
