@@ -59,6 +59,15 @@ export interface SettingsFieldConfig {
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 }
 
+export interface CompletionServiceCallbacks {
+	// Callbacks
+	onChunk: (chunk: string) => void;
+	onModel?: (model: string) => void;
+	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
+	onComplete: (response: string, timings?: ChatMessageTimings) => void;
+	onError: (error: Error) => void;
+}
+
 /** Re-exported for backward compatibility. */
 export interface SettingsSection {
 	fields?: SettingsFieldConfig[];
