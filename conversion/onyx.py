@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Any, Iterable, TYPE_CHECKING
 
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import MmprojModel, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("OnyxForConditionalGeneration")
@@ -61,3 +61,61 @@ class OnyxModel(TextModel):
             )
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("OnyxForConditionalGeneration")
+class OnyxVisionModel(MmprojModel):
+    # fallback for rope_parameters.rope_theta
+    ROPE_THETA = 10000.0
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        c = self.global_config.get("vision_config")
+        if not c:
+            return None
+        # Onyx actually uses dynamic size, initialize with nominal size
+        image_size = c["pos_emb_height"] * c["patch_size"] * c["merge_size"]
+        # Derive sparse_attention_factor from layer_types
+        fulls = [i for i, t in enumerate(c["layer_types"]) if t == "full_attention"]
+        if not fulls:
+            raise ValueError("vision_config.layer_types has no full_attention layer")
+        sparse_factor = fulls[0] + 1
+        return {**c, "image_size": image_size, "sparse_attention_factor": sparse_factor}
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        c = self.hparams_vision  # enriched vision_config from get_vision_config()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ONYX)
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(c["layer_norm_eps"]))
+
+        rope_theta = float(c.get("rope_parameters", {}).get("rope_theta", self.ROPE_THETA))
+        self.gguf_writer.add_uint32 ("clip.vision.onyx.patch_temporal",          int(c["patch_temporal"]))
+        self.gguf_writer.add_uint32 ("clip.vision.onyx.downsample_factor",       int(c["merge_size"]))
+        self.gguf_writer.add_uint32 ("clip.vision.onyx.sparse_attention_factor", int(c["sparse_attention_factor"]))
+        self.gguf_writer.add_uint32 ("clip.vision.onyx.pos_emb_grid",            int(c["pos_emb_height"]))
+        self.gguf_writer.add_float32("clip.vision.onyx.rope_theta",              rope_theta)
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, gen = item
+        keep = ("model.vision_tower.", "model.vision_adapter.", "model.vision_projection.")
+        if not any(name.startswith(k) for k in keep):
+            return None
+        return super().filter_tensors((name, gen))
+
+    @staticmethod
+    def _unpermute_for_rope(tensor: "Tensor", n_heads: int) -> "Tensor":
+        """clip.cpp uses the interleaved convention, so we invert the permutation here."""
+        if tensor.ndim == 2:
+            dim1, dim2 = tensor.shape
+            return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+        if tensor.ndim == 1:
+            (dim1,) = tensor.shape
+            return tensor.view(n_heads, 2, dim1 // n_heads // 2).transpose(1, 2).reshape(dim1)
+        raise ValueError(f"_unpermute_for_rope: unexpected shape {tuple(tensor.shape)}")
+
+    def modify_tensors(self, data_torch, name, bid):
+        if ".attn.q_proj." in name or ".attn.k_proj." in name:
+            n_heads = int(self.hparams_vision["num_attention_heads"])
+            data_torch = self._unpermute_for_rope(data_torch, n_heads)
+        yield (self.map_tensor_name(name), data_torch)

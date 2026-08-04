@@ -295,6 +295,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "MiniCPMV4_6ForConditionalGeneration": "minicpm",
     "Mistral3ForConditionalGeneration": "llava",
     "NemotronH_Nano_VL_V2": "nemotron",
+    "OnyxForConditionalGeneration": "onyx",
     "PaddleOCRVisionModel": "ernie",
     "Phi4ForCausalLMV": "phi",
     "Qwen2AudioForConditionalGeneration": "ultravox",
