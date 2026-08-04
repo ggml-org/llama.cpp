@@ -1364,6 +1364,322 @@ class TestL5Retune(unittest.TestCase):
         # components are populated).
         self.assertEqual(attn.retune_algorithm, RETUNE_SOURCE_TAG_3COEF)
 
+    # ---- 14. Phase 16: model_role partition --------------------
+
+    def test_family_weights_default_role_is_trunk(self) -> None:
+        """The FamilyWeights dataclass defaults model_role to
+        ``"trunk"`` for backward compat with Phase 15 callers.
+        """
+        v = _retune_family(
+            model_hash="m", family="attn_q",
+            sensitivity=[0.2, 0.4, 0.6, 0.8],
+            delta_mse=[0.001, 0.002, 0.003, 0.004],
+            plan_accepted=[True, True, False, False],
+            base_weights=DEFAULT_BASE_WEIGHTS,
+            alpha=DEFAULT_ALPHA, min_samples=3,
+        )
+        self.assertEqual(v.model_role, "trunk")
+        # The to_dict path includes the role.
+        d = v.to_dict()
+        self.assertEqual(d["model_role"], "trunk")
+
+    def test_family_weights_explicit_role(self) -> None:
+        """An explicit model_role flows through to the verdict."""
+        v = _retune_family(
+            model_hash="m", family="attn_q",
+            model_role="dflash",
+            sensitivity=[0.2, 0.4, 0.6, 0.8],
+            delta_mse=[0.001, 0.002, 0.003, 0.004],
+            plan_accepted=[True, True, False, False],
+            base_weights=DEFAULT_BASE_WEIGHTS,
+            alpha=DEFAULT_ALPHA, min_samples=3,
+        )
+        self.assertEqual(v.model_role, "dflash")
+
+    def test_retune_family_writes_role_to_l5_weights(self) -> None:
+        """The retune writes a ``model_role`` column on
+        ``l5_weights`` and the upsert uses the new
+        (model_hash, model_role, family) PK."""
+        rows: list[dict] = []
+        for i, (s, d) in enumerate(zip(
+            [0.2, 0.4, 0.6, 0.8], [0.001, 0.002, 0.003, 0.004],
+        )):
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"p{i}", "family": "attn_q",
+                "model_role": "dflash",
+                "sensitivity_score": s,
+                "mse_before": 0.01, "mse_after": 0.01 + d,
+                "delta_mse": d, "plan_accepted": True,
+                "accept_threshold": 0.0,
+            })
+        _seed_l5_outcome(self.db_path, "mr1", rows)
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="mr1",
+            model_role="dflash", write_back=True,
+        )
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        self.assertEqual(attn.model_role, "dflash")
+        # The l5_weights table has the row with the role.
+        df = read_l5_weights(
+            self.db_path, model_hash="mr1", model_role="dflash",
+        )
+        self.assertEqual(df.height, 1)
+        self.assertEqual(df["model_role"][0], "dflash")
+        # And without the role filter, the same row is the
+        # only row for this model.
+        df_all = read_l5_weights(self.db_path, model_hash="mr1")
+        self.assertEqual(df_all.height, 1)
+        self.assertEqual(df_all["model_role"][0], "dflash")
+
+    def test_retune_independent_per_role_verdicts(self) -> None:
+        """Same (model, family) in different roles get
+        independent (w_imatrix, w_gradient, w_layer) tuples.
+        The trunk's attn_q and the dflash encoder's attn_q
+        are partitioned; the OLS for one is independent of
+        the OLS for the other.
+        """
+        rows: list[dict] = []
+        # 4 trunk rows: b_im = +1 (attn_q is well-explained
+        # by im). The per-row delta_mse = im; the 3-coef OLS
+        # recovers (b_im=1, b_grad=0, b_layer=0). Some plans
+        # are rejected so the gate (1 - hit_rate) is non-zero
+        # and the shift actually fires.
+        trunk_im = [0.1, 0.3, 0.5, 0.7]
+        trunk_acc = [True, False, True, False]
+        for i, im in enumerate(trunk_im):
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"tp{i}", "family": "attn_q",
+                "model_role": "trunk",
+                "sensitivity_score": im,
+                "imatrix_magnitude": im,
+                "gradient_proxy": 0.5,
+                "layer_position_prior": 0.3,
+                "mse_before": 0.01, "mse_after": 0.01 + im,
+                "delta_mse": im,
+                "plan_accepted": trunk_acc[i],
+            })
+        # 4 dflash rows: b_grad = +1 (the dflash encoder's
+        # attn_q is well-explained by gradient, not im).
+        dflash_grad = [0.1, 0.3, 0.5, 0.7]
+        dflash_acc = [False, True, False, True]
+        for i, gr in enumerate(dflash_grad):
+            rows.append({
+                "name": f"dflash.enc.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"dp{i}", "family": "attn_q",
+                "model_role": "dflash",
+                "sensitivity_score": gr,
+                "imatrix_magnitude": 0.5,
+                "gradient_proxy": gr,
+                "layer_position_prior": 0.3,
+                "mse_before": 0.01, "mse_after": 0.01 + gr,
+                "delta_mse": gr,
+                "plan_accepted": dflash_acc[i],
+            })
+        _seed_l5_outcome(self.db_path, "mr2", rows)
+
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="mr2", write_back=True,
+        )
+        # Two verdicts: trunk/attn_q and dflash/attn_q.
+        self.assertEqual(len(verdicts), 2)
+        roles = {v.model_role for v in verdicts}
+        self.assertEqual(roles, {"trunk", "dflash"})
+        # The l5_weights table has 2 rows for the same
+        # model_hash, different model_role, same family.
+        import duckdb as _dd
+        con = _dd.connect(self.db_path, read_only=True)
+        try:
+            n = con.execute(
+                "SELECT COUNT(*) FROM l5_weights "
+                "WHERE model_hash = 'mr2'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(n, 2)
+        # The trunk's b_im is positive; the dflash's
+        # b_grad is positive. The verdicts' slopes carry
+        # the difference.
+        trunk = next(v for v in verdicts if v.model_role == "trunk")
+        dflash = next(v for v in verdicts if v.model_role == "dflash")
+        self.assertGreater(trunk.slopes[0], 0.0)
+        self.assertGreater(dflash.slopes[1], 0.0)
+        # The trunk and dflash verdicts have different
+        # (w_imatrix, w_gradient, w_layer) tuples. The
+        # shift direction is different (b_im positive for
+        # the trunk raises w_im; b_grad positive for the
+        # dflash raises w_grad). With low hit_rate on
+        # both, the gate is non-zero and the per-role
+        # shifts are different.
+        self.assertFalse(
+            trunk.weights == dflash.weights,
+            f"per-role verdicts should differ; "
+            f"trunk={trunk.weights}, dflash={dflash.weights}",
+        )
+
+    def test_retune_role_filter_selects_one_role(self) -> None:
+        """A retune with model_role=R restricts the read to
+        the role-R rows; the role-R' rows are not consumed.
+        The write-back also only DELETEs the role-R rows
+        (other roles' l5_weights rows are preserved)."""
+        # Seed two roles' l5_outcome rows.
+        rows: list[dict] = []
+        for i, (s, d) in enumerate(zip(
+            [0.2, 0.4, 0.6, 0.8], [0.001, 0.002, 0.003, 0.004],
+        )):
+            for role in ("trunk", "dflash"):
+                rows.append({
+                    "name": f"blk.0.attn_q.{role}.{i}",
+                    "layer": 0, "iteration": 0,
+                    "plan_id": f"p{role}{i}", "family": "attn_q",
+                    "model_role": role,
+                    "sensitivity_score": s,
+                    "mse_before": 0.01, "mse_after": 0.01 + d,
+                    "delta_mse": d, "plan_accepted": True,
+                    "accept_threshold": 0.0,
+                })
+        _seed_l5_outcome(self.db_path, "mr3", rows)
+        # First retune: no model_role filter (all roles).
+        verdicts_all = compute_l5_weights(
+            self.db_path, model_hash="mr3", write_back=True,
+        )
+        self.assertEqual(len(verdicts_all), 2)
+        # The l5_weights has both rows.
+        df = read_l5_weights(self.db_path, model_hash="mr3")
+        self.assertEqual(df.height, 2)
+        # Now retune only the dflash role.
+        verdicts_dflash = compute_l5_weights(
+            self.db_path, model_hash="mr3", model_role="dflash",
+            write_back=True,
+        )
+        self.assertEqual(len(verdicts_dflash), 1)
+        self.assertEqual(verdicts_dflash[0].model_role, "dflash")
+        # The trunk's row is still in l5_weights (the
+        # write-back DELETE was only on model_role='dflash').
+        df_after = read_l5_weights(
+            self.db_path, model_hash="mr3", model_role="trunk",
+        )
+        self.assertEqual(df_after.height, 1)
+        self.assertEqual(df_after["model_role"][0], "trunk")
+
+    def test_read_l5_weights_model_role_filter(self) -> None:
+        """``read_l5_weights(model_role=...)`` filters the
+        SELECT to the given role; the consumer-side
+        per-family top_fraction is role-aware."""
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([
+                {"model_hash": "x", "model_role": "trunk",
+                 "family": "attn_q", "w_imatrix": 0.6,
+                 "w_gradient": 0.3, "w_layer": 0.1,
+                 "n_samples": 10, "top_fraction": 0.20},
+                {"model_hash": "x", "model_role": "dflash",
+                 "family": "attn_q", "w_imatrix": 0.4,
+                 "w_gradient": 0.5, "w_layer": 0.1,
+                 "n_samples": 10, "top_fraction": 0.30},
+            ])
+        # Role filter: trunk only.
+        df_trunk = read_l5_weights(
+            self.db_path, model_hash="x", model_role="trunk",
+        )
+        self.assertEqual(df_trunk.height, 1)
+        self.assertEqual(df_trunk["model_role"][0], "trunk")
+        # Role filter: dflash only.
+        df_dflash = read_l5_weights(
+            self.db_path, model_hash="x", model_role="dflash",
+        )
+        self.assertEqual(df_dflash.height, 1)
+        self.assertEqual(df_dflash["model_role"][0], "dflash")
+        # No role filter: both rows.
+        df_all = read_l5_weights(self.db_path, model_hash="x")
+        self.assertEqual(df_all.height, 2)
+
+    def test_read_per_family_top_fraction_role_filter(self) -> None:
+        """The per-family top_fraction consumer is role-aware:
+        a family with different per-role top_fraction
+        recommendations returns the role-specific value.
+        """
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([
+                {"model_hash": "x", "model_role": "trunk",
+                 "family": "attn_q", "w_imatrix": 0.5,
+                 "w_gradient": 0.3, "w_layer": 0.2,
+                 "n_samples": 10, "top_fraction": 0.20},
+                {"model_hash": "x", "model_role": "dflash",
+                 "family": "attn_q", "w_imatrix": 0.4,
+                 "w_gradient": 0.5, "w_layer": 0.1,
+                 "n_samples": 10, "top_fraction": 0.40},
+            ])
+        recs_trunk = read_per_family_top_fraction(
+            self.db_path, model_hash="x", model_role="trunk",
+        )
+        self.assertAlmostEqual(recs_trunk["attn_q"], 0.20, places=6)
+        recs_dflash = read_per_family_top_fraction(
+            self.db_path, model_hash="x", model_role="dflash",
+        )
+        self.assertAlmostEqual(recs_dflash["attn_q"], 0.40, places=6)
+        # No role filter: the per-model row with the
+        # larger n_samples wins (here both have n=10;
+        # the row encountered first in the SELECT wins;
+        # the test accepts either, but verifies both
+        # are in [0.20, 0.40]).
+        recs_all = read_per_family_top_fraction(
+            self.db_path, model_hash="x",
+        )
+        self.assertIn(recs_all["attn_q"], (0.20, 0.40))
+
+    def test_cross_model_aggregate_groups_by_role(self) -> None:
+        """The cross-model aggregate is per-(model_role,
+        family) not per-family: the trunk's attn_q and
+        the dflash's attn_q get independent cross-model
+        rows.
+        """
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([
+                {"model_hash": "m1", "model_role": "trunk",
+                 "family": "attn_q", "w_imatrix": 0.6,
+                 "w_gradient": 0.3, "w_layer": 0.1,
+                 "n_samples": 10, "top_fraction": 0.15},
+                {"model_hash": "m2", "model_role": "trunk",
+                 "family": "attn_q", "w_imatrix": 0.5,
+                 "w_gradient": 0.4, "w_layer": 0.1,
+                 "n_samples": 20, "top_fraction": 0.10},
+                {"model_hash": "m1", "model_role": "dflash",
+                 "family": "attn_q", "w_imatrix": 0.4,
+                 "w_gradient": 0.5, "w_layer": 0.1,
+                 "n_samples": 30, "top_fraction": 0.30},
+            ])
+        verdicts = write_cross_model_aggregate(self.db_path)
+        # 2 verdicts: (trunk, attn_q) and (dflash, attn_q).
+        self.assertEqual(len(verdicts), 2)
+        roles = {v.model_role for v in verdicts}
+        self.assertEqual(roles, {"trunk", "dflash"})
+        trunk = next(v for v in verdicts if v.model_role == "trunk")
+        dflash = next(v for v in verdicts if v.model_role == "dflash")
+        # trunk: n_samples=30, w_im = (0.6*10 + 0.5*20)/30 = 0.533
+        self.assertEqual(trunk.n_samples, 30)
+        self.assertAlmostEqual(trunk.weights[0], 16.0 / 30.0, places=6)
+        # dflash: n_samples=30, w_im = 0.4 (one model)
+        self.assertEqual(dflash.n_samples, 30)
+        self.assertAlmostEqual(dflash.weights[0], 0.4, places=6)
+        # The cross-model rows in l5_weights are per-role.
+        import duckdb as _dd
+        con = _dd.connect(self.db_path, read_only=True)
+        try:
+            cross = con.execute(
+                "SELECT model_role, family FROM l5_weights "
+                "WHERE model_hash = '*' ORDER BY model_role, family"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(
+            sorted(cross),
+            sorted([("dflash", "attn_q"), ("trunk", "attn_q")]),
+        )
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestL5Retune)
