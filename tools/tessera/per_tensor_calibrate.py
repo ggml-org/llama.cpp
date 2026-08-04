@@ -73,6 +73,16 @@ try:
         default_budget_gb,
         read_rss_bytes,
     )
+    # Phase 16.5 (memopt-metal-dispatch).  The per-chunk
+    # LRQ / FLRQ matmul is dispatched to the fastest
+    # available backend (Metal > Accelerate > numpy).  The
+    # import is fail-safe: on Linux/Windows the dispatch
+    # returns numpy without invoking the C bridge, so the
+    # import is a no-op.
+    from .calibration_metal import (
+        chunked_matmul,
+        get_matmul_backend_name,
+    )
 except ImportError:  # pragma: no cover - script-mode import
     _REPO_ROOT = Path(__file__).resolve().parents[2]
     if str(_REPO_ROOT) not in sys.path:
@@ -92,6 +102,10 @@ except ImportError:  # pragma: no cover - script-mode import
         ResidencyTracker,
         default_budget_gb,
         read_rss_bytes,
+    )
+    from tools.tessera.calibration_metal import (  # type: ignore[no-redef]
+        chunked_matmul,
+        get_matmul_backend_name,
     )
 
 
@@ -690,12 +704,23 @@ def _lrq_chunked_initial_mse(
     err_count = 0
     for spec in chunked_iter(n_rows, chunk_rows):
         u_chunk = u[spec.start:spec.end]   # (chunk_rows, rank)
-        s_chunk = u_chunk @ v              # (chunk_rows, in_dim)
+        # Phase 16.5: dispatched matmul.  On Apple Silicon /
+        # Intel Mac the per-chunk (chunk_rows, in_dim) GEMM
+        # is routed to Metal/Accelerate; on Linux/Windows
+        # the dispatch returns numpy.  The shape is always
+        # 2-D F32 so the dispatch is the hot path.
+        s_chunk = chunked_matmul(u_chunk, v)              # (chunk_rows, in_dim)
         w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
         scaled_chunk = w_chunk * s_chunk
         w_q_chunk = _ternary_recon(scaled_chunk)
         residual_chunk = w_q_chunk - w_chunk
-        err_chunk = residual_chunk @ x.T    # (chunk_rows, n_tokens)
+        # ``residual_chunk @ x.T`` is a transposed matmul;
+        # the dispatch falls back to numpy for the
+        # transposed case (the C bridge is non-transposed
+        # only).  This is the same numpy path the legacy
+        # code took; the rest of the per-chunk loop
+        # benefits from the dispatch.
+        err_chunk = chunked_matmul(residual_chunk, x.T)    # (chunk_rows, n_tokens)
         err_sq_sum += float(np.sum(err_chunk * err_chunk))
         err_count += err_chunk.size
     if err_count == 0:
@@ -724,7 +749,8 @@ def _lrq_chunked_aggregate_scale(
         n_seen = 0
         for spec in chunked_iter(n_rows, chunk_rows):
             u_chunk = u[spec.start:spec.end]
-            s_chunk = u_chunk @ v
+            # Phase 16.5: dispatched matmul.
+            s_chunk = chunked_matmul(u_chunk, v)
             acc += s_chunk.sum(axis=0).astype(np.float64)
             n_seen += (spec.end - spec.start)
         if n_seen == 0:
@@ -735,7 +761,8 @@ def _lrq_chunked_aggregate_scale(
         n_seen = 0
         for spec in chunked_iter(n_rows, chunk_rows):
             u_chunk = u[spec.start:spec.end]
-            s_chunk = u_chunk @ v
+            # Phase 16.5: dispatched matmul.
+            s_chunk = chunked_matmul(u_chunk, v)
             acc += (s_chunk.astype(np.float64) ** 2).sum(axis=0)
             n_seen += (spec.end - spec.start)
         if n_seen == 0:
@@ -805,25 +832,35 @@ def train_lrq_chunked(
         d_u_per_chunk: list[np.ndarray] = []
         for spec in chunked_iter(out_dim, chunk_rows):
             u_chunk = u[spec.start:spec.end]
-            # Forward
-            s_chunk = u_chunk @ v                       # (chunk_rows, in_dim)
+            # Forward.
+            # Phase 16.5: dispatched matmul.  On Apple Silicon /
+            # Intel Mac the per-chunk GEMM is routed to
+            # Metal/Accelerate; on Linux/Windows the dispatch
+            # returns numpy.  The shape is always 2-D F32
+            # so the dispatch is the hot path.
+            s_chunk = chunked_matmul(u_chunk, v)                       # (chunk_rows, in_dim)
             w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
             scaled_chunk = w_chunk * s_chunk
             w_q_chunk = _ternary_recon(scaled_chunk)
             residual_chunk = w_q_chunk - w_chunk
-            err_chunk = residual_chunk @ x.T             # (chunk_rows, n_tokens)
+            # ``residual_chunk @ x.T`` is transposed; the
+            # dispatch falls back to numpy for the transposed
+            # case.  Same comment for the other ``.T`` matmuls
+            # below.  The non-transposed matmuls in this loop
+            # (``s_chunk``, ``d_residual``) hit the dispatch.
+            err_chunk = chunked_matmul(residual_chunk, x.T)             # (chunk_rows, n_tokens)
             err_sq_sum += float(np.sum(err_chunk * err_chunk))
             # Backward.  d_err normalisation uses the FULL
             # err.size (out_dim * n_tokens), not the per-chunk
             # size, so the chunked and single-shot gradients
             # match exactly.
             d_err = (2.0 / err_total_size) * err_chunk
-            d_residual = d_err @ x                       # (chunk_rows, in_dim)
+            d_residual = chunked_matmul(d_err, x)                       # (chunk_rows, in_dim)
             d_scaled = d_residual                        # STE
             d_s = d_scaled * w_chunk                     # (chunk_rows, in_dim)
-            d_u_slice = d_s @ v.T                        # (chunk_rows, rank)
+            d_u_slice = chunked_matmul(d_s, v.T)                        # (chunk_rows, rank)
             d_u_per_chunk.append(d_u_slice)
-            d_v_accum += u_chunk.T @ d_s                 # accumulate across chunks
+            d_v_accum += chunked_matmul(u_chunk.T, d_s)                 # accumulate across chunks
         loss = err_sq_sum / err_total_size if err_total_size else 0.0
         history.append(loss)
         adam.step(d_u_per_chunk, d_v_accum)
@@ -1531,7 +1568,16 @@ def flrq_sketch_chunked(
     y_slices: list[np.ndarray] = []
     for spec in chunked_iter(K, chunk_rows):
         w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
-        y_slices.append(w_chunk @ omega)
+        # Phase 16.5: dispatched matmul.  The FLRQ R1-Sketch
+        # ``W @ Omega`` is the largest matmul in the FLRQ
+        # path (a 12B FFN gate at 16384x4096 with
+        # ``total_width=2048`` is 32M F32 elements per call).
+        # The per-chunk size is ``(chunk_rows, in_dim) @
+        # (in_dim, total_width)`` which is small enough to
+        # fit in L2 but large enough to be a real GPU call
+        # on Apple Silicon (>= 64 MB F32 at the default
+        # chunk size).
+        y_slices.append(chunked_matmul(w_chunk, omega))
         del w_chunk
     Y = np.concatenate(y_slices, axis=0)
     del y_slices
