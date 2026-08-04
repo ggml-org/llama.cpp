@@ -314,6 +314,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_linear(params);
         case LLM_ARCH_STEP35:
             return new llama_model_step35(params);
+        case LLM_ARCH_AXK2:
+            return new llama_model_axk2(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -833,6 +835,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_355B_A32B:     return "355B.A32B";
         case LLM_TYPE_397B_A17B:     return "397B.A17B";
         case LLM_TYPE_685B_A37B:     return "685B.A37B";
+        case LLM_TYPE_688B_A33B:     return "688B.A33B";
         case LLM_TYPE_744B_A40B:     return "744B.A40B";
         case LLM_TYPE_E2B:           return "E2B";
         case LLM_TYPE_E4B:           return "E4B";
@@ -1881,7 +1884,7 @@ void llama_model::print_info() const {
             LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
         }
 
-        if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_DEEPSEEK2OCR || arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4) {
+        if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_DEEPSEEK2OCR || arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_AXK2) {
             LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
             LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
             LLAMA_LOG_INFO("%s: n_lora_kv             = %d\n",     __func__, hparams.n_lora_kv);
@@ -2191,6 +2194,25 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr,
                             nullptr);
                 }
+            } break;
+        case LLM_ARCH_AXK2:
+            {
+                // every layer runs the indexer, so no filter for either cache
+                res = new llama_kv_cache_dsa(
+                        *this,
+                        params.type_k,
+                        params.type_v,
+                        !cparams.flash_attn,
+                        cparams.offload_kqv,
+                        cparams.kv_unified,
+                        cparams.n_ctx_seq,
+                        cparams.n_seq_max,
+                        1,
+                        hparams.n_swa,
+                        hparams.swa_type,
+                        nullptr,
+                        nullptr,
+                        nullptr);
             } break;
         case LLM_ARCH_DFLASH:
             {
@@ -2610,6 +2632,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_NANBEIGE:
+        case LLM_ARCH_AXK2:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2

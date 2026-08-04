@@ -145,6 +145,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MELLUM,           "mellum"           },
     { LLM_ARCH_NANBEIGE,         "nanbeige"         },
     { LLM_ARCH_QWEN3TTS,         "qwen3tts"         },
+    { LLM_ARCH_AXK2,             "axk2"             },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -273,6 +274,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_HYPER_CONNECTION_EPSILON,               "%s.hyper_connection.epsilon"               },
 
     { LLM_KV_HASH_LAYER_COUNT,                       "%s.hash_layer_count"                       },
+    { LLM_KV_GATED_NORM_RANK,                        "%s.gated_norm_rank"                        },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,           "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_COUNT_SWA,       "%s.rope.dimension_count_swa"             },
@@ -386,6 +388,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_OUTPUT,                                 "output" },
     { LLM_TENSOR_ROPE_FREQS,                             "rope_freqs" },
     { LLM_TENSOR_ATTN_NORM,                              "blk.%d.attn_norm" },
+    { LLM_TENSOR_ATTN_NORM_GATE_A,                       "blk.%d.attn_norm_gate_a" },
+    { LLM_TENSOR_ATTN_NORM_GATE_B,                       "blk.%d.attn_norm_gate_b" },
     { LLM_TENSOR_ATTN_Q,                                 "blk.%d.attn_q" },
     { LLM_TENSOR_ATTN_K,                                 "blk.%d.attn_k" },
     { LLM_TENSOR_ATTN_V,                                 "blk.%d.attn_v" },
@@ -393,6 +397,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ATTN_ROT_EMBD,                          "blk.%d.attn_rot_embd" },
     { LLM_TENSOR_FFN_GATE_INP,                           "blk.%d.ffn_gate_inp" },
     { LLM_TENSOR_FFN_NORM,                               "blk.%d.ffn_norm" },
+    { LLM_TENSOR_FFN_NORM_GATE_A,                        "blk.%d.ffn_norm_gate_a" },
+    { LLM_TENSOR_FFN_NORM_GATE_B,                        "blk.%d.ffn_norm_gate_b" },
     { LLM_TENSOR_FFN_GATE,                               "blk.%d.ffn_gate" },
     { LLM_TENSOR_FFN_DOWN,                               "blk.%d.ffn_down" },
     { LLM_TENSOR_FFN_UP,                                 "blk.%d.ffn_up" },
@@ -767,10 +773,14 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_TIME_MIX_V0,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
     {LLM_TENSOR_TIME_MIX_FIRST,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_RWKV_WKV6}},
     {LLM_TENSOR_ATTN_NORM,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_ATTN_NORM_GATE_A,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_ATTN_NORM_GATE_B,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ATTN_NORM_2,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_ATTN_OUT_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_ATTN_POST_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_NORM,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_FFN_NORM_GATE_A,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FFN_NORM_GATE_B,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_FFN_PRE_NORM_2,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_POST_NORM_1,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_POST_NORM_2,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1028,6 +1038,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_QWEN3TTS:
+        case LLM_ARCH_AXK2:
             return false;
         default:
             return true;

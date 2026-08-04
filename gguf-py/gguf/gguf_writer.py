@@ -722,6 +722,9 @@ class GGUFWriter:
     def add_hash_layer_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.HASH_LAYER_COUNT.format(arch=self.arch), count)
 
+    def add_gated_norm_rank(self, rank: int) -> None:
+        self.add_uint32(Keys.LLM.GATED_NORM_RANK.format(arch=self.arch), rank)
+
     def add_feed_forward_length(self, length: int | Sequence[int]) -> None:
         if isinstance(length, int):
             self.add_uint32(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
