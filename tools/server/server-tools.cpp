@@ -444,8 +444,10 @@ struct server_tool_file_glob_search : server_tool {
         std::string include   = json_value(params, "include", std::string("**"));
         std::string exclude   = json_value(params, "exclude", std::string(""));
         std::string type      = json_value(params, "type",    std::string("file"));
-        int         max_depth = json_value(params, "max_depth", 0);
-        size_t      limit     = (size_t) json_value(params, "limit", (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
+        int         max_depth = std::max(0, json_value(params, "max_depth", 0));
+        size_t      limit     = (size_t) std::min(
+            std::max(0, json_value(params, "limit", (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS)),
+            (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
 
         if (type != "file" && type != "dir" && type != "all") {
             return {{"error", "invalid type: " + type + " (expected \"file\", \"dir\" or \"all\")"}};
@@ -1154,6 +1156,9 @@ struct server_tool_get_datetime : server_tool {
 // get_info: returns runtime info (OS name/version and cwd)
 //
 
+static constexpr size_t SERVER_TOOL_GET_INFO_MAX_OUTPUT = 4096;
+static constexpr int    SERVER_TOOL_GET_INFO_TIMEOUT    = 5; // seconds
+
 struct server_tool_get_info : server_tool {
     server_tool_get_info() {
         name = "get_info";
@@ -1179,9 +1184,9 @@ struct server_tool_get_info : server_tool {
         auto io = make_tools_io(params);
 
 #ifdef _WIN32
-        auto res = io->run({"cmd", "/c", "ver"}, 4096, 5);
+        auto res = io->run({"cmd", "/c", "ver"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
 #else
-        auto res = io->run({"uname", "-a"}, 4096, 5);
+        auto res = io->run({"uname", "-a"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
 #endif
         // "ver" prints a blank line before the version, so the output is stripped on both ends;
         // a failed spawn or a timeout leaves a diagnostic in res.output, which is not an OS name
