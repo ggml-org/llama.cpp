@@ -2357,6 +2357,48 @@ common_speculative_init_result::common_speculative_init_result(
 
     std::string model_path;
     if (has_draft) {
+        // Embedded-drafter GGUF convention
+        // --------------------------------
+        // The 4 drafter types Tessera can embed in a target GGUF
+        // (Workstream A) are: MTP, DFlash, DSPark, Eagle3.  The chosen
+        // convention is tensor-name prefixes:
+        //
+        //   mtp.*     - MTP drafter tensors (next-n head + hidden state)
+        //   dflash.*  - DFlash block drafter (encoder + decoder tensors,
+        //               plus the existing dflash.block_size metadata key)
+        //   dspark.*  - DSPark Markov-head block drafter
+        //   eagle3.*  - Eagle3 next-n encoder + decoder tensors
+        //
+        // Rationale: this matches how llama.cpp already groups Eagle3
+        // tensors in a separate arch (LLM_ARCH_EAGLE3) - the prefix
+        // becomes the natural filter for the per-drafter tensor slice.
+        // The alternative conventions considered were (b) top-level
+        // metadata keys pointing to tensor offsets and (c) per-drafter
+        // header groups with a tessera.draft.<type>.n_layers / .tensor_offsets
+        // pair; both are more invasive on the reader side and would
+        // require a bespoke extractor in llama_model_load_from_file
+        // (option a reuses the existing name-based tensor iteration).
+        //
+        // The reader-side hook (the embedded ctor branch below) is
+        // in place; it currently loads the whole target GGUF as a
+        // placeholder and will be tightened to slice out tensors by
+        // prefix in a follow-up.  The writer side (tessera-quant that
+        // emits the embedded GGUF) is a separate workstream and will
+        // honor the same convention.
+        //
+        // TODO(embedded-drafter-writer, Workstream A):
+        //   Emit the embedded GGUF in tools/quantize (or wherever the
+        //   tessera-quant entry point lives) with the prefix convention
+        //   above.  Required per-drafter metadata keys to carry over
+        //   (so the drafter code can re-read them after slicing):
+        //     - mtp.n_next, mtp.head_dim
+        //     - dflash.block_size, dflash.target_layer_ids, ...
+        //     - dspark.block_size
+        //     - eagle3.n_extract, eagle3.n_layers
+        //   A full inventory lives in the architect's follow-up doc
+        //   (TBD; to be added in docs/embedded-drafters.md or similar
+        //   when the writer lands).
+
         // Two drafter-source cases, distinguished by which field is set
         // on params.speculative.draft (has_dft() returns true for either):
         //   1. mparams set, target_model_path empty -> standalone drafter
@@ -2367,7 +2409,7 @@ common_speculative_init_result::common_speculative_init_result(
         //      in the target GGUF.  The ctor loads the target GGUF as a
         //      llama_model (placeholder for the tensor-extractor that
         //      will slice out the per-drafter tensors in a follow-up;
-        //      see the GGUF convention comment in this file).
+        //      see the convention block above).
         const bool use_embedded = !params.speculative.draft.target_model_path.empty() &&
                                   params.speculative.draft.mparams.empty();
         if (use_embedded) {
