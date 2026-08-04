@@ -87,12 +87,14 @@ def scheduler_log(cpu_top_k: bool = False) -> str:
     top_backend = "CPU" if cpu_top_k else "Meta("
     return f"""llama-bench: benchmark 1/2: starting
 llama-bench: benchmark 1/2: generation run 1/1
-## SPLIT #0: Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 1 inputs
+## SPLIT #0: CPU # 0 inputs
+## SPLIT #1: Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 22 inputs
 node #  1 (   MUL_MAT): decode_out           ( 1KiB) [Meta(    2.sup] use=1,c=1:
 llama-bench: benchmark 2/2: starting
 llama-bench: benchmark 2/2: depth run 1/1
 llama-bench: benchmark 2/2: generation run 1/1
-## SPLIT #0: Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 2 inputs
+## SPLIT #0: CPU # 0 inputs
+## SPLIT #1: Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 25 inputs
 node # 10 (     TOP_K): lid_top_k-1          ( 2KiB) [{top_backend:<5}    2.sup] use=1,c=1:
 node # 11 (      CONT): lid_top_k-1          ( 2KiB) [Meta(    2.sup] use=1,c=1:
 node # 12 (  SET_ROWS): selected             ( 2KiB) [Meta(    2.sup] use=1,c=1: lid_top_k-1
@@ -101,11 +103,11 @@ node # 14 (      CONT): lid_score_copy        ( 4KiB) [Meta(    2.sup] use=1,c=1
 """
 
 
-def parse_scheduler(tmp: pathlib.Path, cpu_top_k: bool = False) -> dict[str, object]:
+def parse_scheduler(tmp: pathlib.Path, text: str) -> dict[str, object]:
     log = tmp / "bench.log"
     out = tmp / "scheduler.json"
     tsv = tmp / "scheduler.tsv"
-    log.write_text(scheduler_log(cpu_top_k))
+    log.write_text(text)
     run(
         sys.executable, str(PARSE), str(log), "--depths", "0,2048",
         "--json", str(out), "--tsv", str(tsv), "--expected-nodes", "1",
@@ -115,18 +117,42 @@ def parse_scheduler(tmp: pathlib.Path, cpu_top_k: bool = False) -> dict[str, obj
 
 
 def test_scheduler(tmp: pathlib.Path) -> None:
-    good = parse_scheduler(tmp)
+    text = scheduler_log()
+    good = parse_scheduler(tmp, text)
     assert good["complete"] is True and good["rocm_residency_ok"] is True
+    assert good["require_top_k_from"] == 2048 and good["parse_warnings"] == []
     depth_2048 = next(item for item in good["records"] if item["depth"] == 2048)
     assert depth_2048["top_k_total"] == 1 and depth_2048["lid_total"] == 1
-    assert depth_2048["cpu_splits"] == 0
-    assert depth_2048["total_split_input_copies"] == 2
-    assert depth_2048["gpu_meta_split_input_copies"] == 2
+    assert depth_2048["cpu_splits"] == 1 and depth_2048["cpu_split_input_copies"] == 0
+    assert depth_2048["total_split_input_copies"] == 25
+    assert depth_2048["gpu_meta_split_input_copies"] == 25
+    assert depth_2048["marker_structure_ok"] and depth_2048["split_structure_ok"]
+    assert depth_2048["op_backend_correlated_to_meta_split"]
 
-    bad = parse_scheduler(tmp, cpu_top_k=True)
-    assert bad["complete"] is True and bad["rocm_residency_ok"] is False
-    depth_2048 = next(item for item in bad["records"] if item["depth"] == 2048)
-    assert depth_2048["top_k_cpu"] == 1
+    cpu = parse_scheduler(tmp, scheduler_log(cpu_top_k=True))
+    assert cpu["complete"] is True and cpu["rocm_residency_ok"] is False
+    cpu_2048 = next(item for item in cpu["records"] if item["depth"] == 2048)
+    assert cpu_2048["top_k_cpu"] == 1
+    assert cpu_2048["op_backend_correlated_to_meta_split"] is False
+
+    missing_nodes = parse_scheduler(tmp, text.replace(
+        "node # 10 (     TOP_K): lid_top_k-1          ( 2KiB) [Meta(    2.sup] use=1,c=1:\n", ""))
+    assert missing_nodes["complete"] is False and missing_nodes["parse_warnings"]
+
+    bad_split = parse_scheduler(tmp, text.replace(
+        "Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 25 inputs",
+        "Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 24 inputs"))
+    assert bad_split["complete"] is False and bad_split["rocm_residency_ok"] is False
+
+    extra_split = parse_scheduler(tmp, text.replace(
+        "## SPLIT #1: Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 25 inputs\n",
+        "## SPLIT #1: Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 25 inputs\n## SPLIT #2: Other # 1 inputs\n"))
+    assert extra_split["complete"] is False
+
+    bad_marker = parse_scheduler(tmp, text.replace(
+        "llama-bench: benchmark 2/2: generation run 1/1",
+        "llama-bench: benchmark 2/2: generation run 1/2"))
+    assert bad_marker["complete"] is False
 
 
 def main() -> None:

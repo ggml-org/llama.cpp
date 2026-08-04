@@ -45,10 +45,14 @@ perturb accepted TG. Residency mode runs one target evaluation per depth with
 backend assignments plus CPU and ROCm/meta split counts and scheduled split-input
 copies. It counts only real operation lines (not `CONT`/`SET_ROWS` consumers)
 and requires exactly 21 TOP_K plus 21 LIGHTNING_INDEXER nodes per measured graph
-at applicable depths. A CPU/unknown DSV4 assignment or count mismatch exits
-nonzero as valid pre-fix/incomplete evidence, not as a deployment pass. The
-scheduler exposes the four devices as one `Meta(ROCm0,...,ROCm3)` backend, so
-its split/copy counts are aggregate Meta counts, not independent per-GPU counts.
+from 2K upward (none at depth 0). Attestation also requires one ordered
+benchmark/generation marker per depth, the expected nonzero depth marker, split
+`#0 = CPU/0 inputs`, and split `#1 = Meta(ROCm0,...,ROCm3)/22-or-25 inputs`,
+with no extra splits or parser warnings. A CPU/unknown DSV4 assignment or count,
+marker, split, or backend-correlation mismatch exits nonzero as valid pre-fix or
+incomplete evidence, not as a deployment pass. The scheduler exposes the four
+devices as one composite Meta backend, so its split/copy counts are aggregate
+Meta counts, not independent per-GPU counts.
 
 Dry-run and non-GPU fixture validation:
 
@@ -102,7 +106,7 @@ After a GPU window is confirmed and this gate passes:
 DSV4_HASH_MODE=full DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh
 
 # Separate scheduler-residency audit; timings are not baseline TG.
-DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency \
+DSV4_HASH_MODE=full DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency \
   scripts/dsv4-rocm/run-tg.sh
 ```
 
