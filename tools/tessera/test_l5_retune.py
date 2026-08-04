@@ -600,6 +600,122 @@ class TestL5Retune(unittest.TestCase):
         # retune_source is None (no DB contribution).
         self.assertIsNone(summary["retune_source"])
 
+    # ---- 6b. Phase 16: --model-role 3-tier lookup ------------
+
+    def test_orchestrator_retune_from_db_model_role_override(
+        self,
+    ) -> None:
+        """The orchestrator's ``--retune-from-db --model-role``
+        reads the per-(model, model_role, family) row. A
+        dflash-specific row overrides the --w-* flag values
+        independently of the trunk's row."""
+        with TesseraDB.open(self.db_path) as db:
+            # Two roles for the same model. The dflash
+            # row has a deliberate 0.4/0.5/0.1 split.
+            db.insert_l5_weights([
+                {"model_hash":    "mr", "model_role": "trunk",
+                 "family":        "attn_q",
+                 "w_imatrix":     0.6, "w_gradient":  0.3,
+                 "w_layer":       0.1,
+                 "bias":          0.0,
+                 "n_samples":     100, "in_sample_loss": 0.001,
+                 "hit_rate":      0.6, "retune_source": RETUNE_SOURCE_TAG},
+                {"model_hash":    "mr", "model_role": "dflash",
+                 "family":        "attn_q",
+                 "w_imatrix":     0.4, "w_gradient":  0.5,
+                 "w_layer":       0.1,
+                 "bias":          0.0,
+                 "n_samples":     100, "in_sample_loss": 0.001,
+                 "hit_rate":      0.6, "retune_source": RETUNE_SOURCE_TAG},
+            ])
+        l4_report = {
+            "tensors": {
+                f"blk.{i}.attn_q.weight": {
+                    "current_qtype": "Q4_K", "mse": 0.001,
+                    "mse_minus_one": 0.002, "n_weights": 4096,
+                } for i in range(4)
+            }
+        }
+        l4_path = self._td / "l4.json"
+        l4_path.write_text(json.dumps(l4_report))
+        result = subprocess.run(
+            [sys.executable, str(THIS_DIR / "l5_orchestrator.py"),
+             "--l4-report", str(l4_path),
+             "--retune-from-db", self.db_path,
+             "--model-hash", "mr",
+             "--model-role", "dflash",
+             "--max-iterations", "1",
+             "--top-fraction", "0.5"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+            f"orchestrator failed: {result.stderr}")
+        summary = _extract_top_level_json(result.stdout.strip())
+        weights = summary["weights"]
+        # The dflash row wins (0.4/0.5/0.1), not the
+        # trunk row (0.6/0.3/0.1).
+        self.assertAlmostEqual(weights[0], 0.4, places=6)
+        self.assertAlmostEqual(weights[1], 0.5, places=6)
+        self.assertAlmostEqual(weights[2], 0.1, places=6)
+
+    def test_orchestrator_retune_from_db_model_role_fallback(
+        self,
+    ) -> None:
+        """When ``--model-role`` is set but the per-(model,
+        model_role) row is missing, the orchestrator falls
+        back to the per-model, no-role row (the legacy
+        pre-Phase-16 path). The dflash's recommended
+        weights are the trunk's row (0.6/0.3/0.1) — not
+        role-perfect but a reasonable warm-start for a new
+        role.
+        """
+        # Per-model, per-role: trunk only.
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([
+                {"model_hash":    "fr", "model_role": "trunk",
+                 "family":        "attn_q",
+                 "w_imatrix":     0.6, "w_gradient":  0.3,
+                 "w_layer":       0.1,
+                 "n_samples":     100, "in_sample_loss": 0.001,
+                 "hit_rate":      0.6, "retune_source": RETUNE_SOURCE_TAG},
+            ])
+        l4_report = {
+            "tensors": {
+                f"blk.{i}.attn_q.weight": {
+                    "current_qtype": "Q4_K", "mse": 0.001,
+                    "mse_minus_one": 0.002, "n_weights": 4096,
+                } for i in range(4)
+            }
+        }
+        l4_path = self._td / "l4.json"
+        l4_path.write_text(json.dumps(l4_report))
+        # --model-role dflash on a DB that has no dflash
+        # rows for this model. The orchestrator falls
+        # back to the per-model, no-role trunk row.
+        result = subprocess.run(
+            [sys.executable, str(THIS_DIR / "l5_orchestrator.py"),
+             "--l4-report", str(l4_path),
+             "--retune-from-db", self.db_path,
+             "--model-hash", "fr",
+             "--model-role", "dflash",
+             "--max-iterations", "1",
+             "--top-fraction", "0.5"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+            f"orchestrator failed: {result.stderr}")
+        # The log shows the dflash-tagged lookup found a
+        # row (via the no-role fallback).
+        self.assertIn("role=dflash", result.stderr)
+        summary = _extract_top_level_json(result.stdout.strip())
+        # The trunk's row is used as the dflash warm-start
+        # (0.6/0.3/0.1). The aggregation n=100 dominates
+        # the --w-* flag values.
+        weights = summary["weights"]
+        self.assertAlmostEqual(weights[0], 0.6, places=6)
+        self.assertAlmostEqual(weights[1], 0.3, places=6)
+        self.assertAlmostEqual(weights[2], 0.1, places=6)
+
     # ---- 7. Phase 15: 3-coefficient OLS -----------------------
 
     def test_ols_3coef_recovers_exact_linear_signal(self) -> None:

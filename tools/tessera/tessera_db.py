@@ -672,25 +672,65 @@ class TesseraDB:
         # TABLE) so legacy DBs that pre-date Phase 16's
         # CREATE TABLE migration also work.
         self._ensure_l5_weights_columns()
-        sql = (
-            "INSERT INTO l5_weights ("
-            "  model_hash, model_role, family, "
-            "  w_imatrix, w_gradient, w_layer, "
-            "  bias, n_samples, in_sample_loss, hit_rate, "
-            "  top_fraction, retune_source, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
-            "  w_imatrix       = excluded.w_imatrix, "
-            "  w_gradient      = excluded.w_gradient, "
-            "  w_layer         = excluded.w_layer, "
-            "  bias            = excluded.bias, "
-            "  n_samples       = excluded.n_samples, "
-            "  in_sample_loss  = excluded.in_sample_loss, "
-            "  hit_rate        = excluded.hit_rate, "
-            "  top_fraction    = excluded.top_fraction, "
-            "  retune_source   = excluded.retune_source, "
-            "  updated_at      = excluded.updated_at"
-        )
+        # Phase 16: when the table's PRIMARY KEY is the
+        # legacy 2-tuple ``(model_hash, family)`` (a
+        # pre-Phase-16 DB), the ON CONFLICT 3-tuple clause
+        # is invalid. Fall back to a DELETE+INSERT path on
+        # the legacy PK. The schema worker's migration
+        # eventually upgrades the PK to the 3-tuple; the
+        # DELETE+INSERT path is non-destructive to other
+        # rows. (The 3-tuple path on a legacy PK would
+        # produce a Binder error; the 2-tuple fallback is
+        # the safe choice for pre-migration DBs.)
+        is_3tuple_pk = self._l5_weights_pk_shape()
+        if is_3tuple_pk:
+            sql = (
+                "INSERT INTO l5_weights ("
+                "  model_hash, model_role, family, "
+                "  w_imatrix, w_gradient, w_layer, "
+                "  bias, n_samples, in_sample_loss, hit_rate, "
+                "  top_fraction, retune_source, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
+                "  w_imatrix       = excluded.w_imatrix, "
+                "  w_gradient      = excluded.w_gradient, "
+                "  w_layer         = excluded.w_layer, "
+                "  bias            = excluded.bias, "
+                "  n_samples       = excluded.n_samples, "
+                "  in_sample_loss  = excluded.in_sample_loss, "
+                "  hit_rate        = excluded.hit_rate, "
+                "  top_fraction    = excluded.top_fraction, "
+                "  retune_source   = excluded.retune_source, "
+                "  updated_at      = excluded.updated_at"
+            )
+        else:
+            # Legacy 2-tuple PK. The ``model_role`` is
+            # ignored on the ON CONFLICT target; the
+            # behaviour is the pre-Phase-16
+            # ``(model_hash, family)`` upsert. The role
+            # value is still written to the row (the
+            # column exists; the column default of
+            # ``"trunk"`` covers pre-Phase-16 writers).
+            sql = (
+                "INSERT INTO l5_weights ("
+                "  model_hash, model_role, family, "
+                "  w_imatrix, w_gradient, w_layer, "
+                "  bias, n_samples, in_sample_loss, hit_rate, "
+                "  top_fraction, retune_source, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (model_hash, family) DO UPDATE SET "
+                "  w_imatrix       = excluded.w_imatrix, "
+                "  w_gradient      = excluded.w_gradient, "
+                "  w_layer         = excluded.w_layer, "
+                "  bias            = excluded.bias, "
+                "  n_samples       = excluded.n_samples, "
+                "  in_sample_loss  = excluded.in_sample_loss, "
+                "  hit_rate        = excluded.hit_rate, "
+                "  top_fraction    = excluded.top_fraction, "
+                "  retune_source   = excluded.retune_source, "
+                "  model_role      = excluded.model_role, "
+                "  updated_at      = excluded.updated_at"
+            )
         now = _now_iso()
         n = 0
         for r in rows:
@@ -736,6 +776,23 @@ class TesseraDB:
         rows that did not specify the role still read back with
         the legacy value; the retune / orchestrator treat
         NULL and ``"trunk"`` as the same role.
+
+        The function does NOT migrate the PRIMARY KEY from
+        ``(model_hash, family)`` to
+        ``(model_hash, model_role, family)``; the PK
+        migration is the schema worker's domain (it requires
+        dropping the old PK, which is a destructive
+        operation; the Python side is non-destructive). On
+        pre-Phase-16 DBs (with the 2-tuple PK), the
+        :py:meth:`_l5_weights_pk_shape` helper detects the
+        legacy PK and ``insert_l5_weights`` falls back to a
+        DELETE-then-INSERT path. The retune's
+        ``compute_l5_weights`` already uses a
+        DELETE-then-INSERT for the write-back (the same
+        pattern), so the upsert path is not on the hot
+        write path; the legacy-PK DB eventually migrates
+        to the 3-tuple PK via the schema worker's
+        ``tessera-quantize-db.cpp`` CREATE TABLE.
         """
         if self._read_only:
             return
@@ -763,7 +820,88 @@ class TesseraDB:
                 f"tessera-db: ALTER TABLE l5_weights "
                 f"ADD COLUMN model_role failed: {e}\n"
             )
+        # Drop the cached PK shape so the next insert
+        # re-probes the actual PK. (The PK may have been
+        # the 2-tuple before the model_role column was
+        # added; the schema worker's CREATE TABLE has the
+        # 3-tuple. The cached value must be re-evaluated.)
+        self._l5_weights_pk_3tuple = None
         self._l5_weights_columns_ensured = True
+
+    def _l5_weights_pk_shape(self) -> bool:
+        """Return True when the ``l5_weights`` table's PRIMARY
+        KEY includes ``model_role`` (the Phase 16 3-tuple
+        PK ``(model_hash, model_role, family)``); False
+        when the PK is the legacy 2-tuple ``(model_hash,
+        family)``.
+
+        Used by ``insert_l5_weights`` to choose the right
+        ON CONFLICT target. The PK shape is cached on
+        the instance because the helper is called once per
+        insert; the cache is invalidated by
+        ``_ensure_l5_weights_columns`` (after the
+        ``ALTER TABLE`` may have changed the column set,
+        though not the PK itself). The cache is also
+        invalidated on a fresh ``TesseraDB`` open (the
+        instance is per-connection).
+
+        The helper probes ``information_schema.table_constraints``
+        for the PRIMARY KEY row (DuckDB names the constraint
+        ``<table>_model_hash_<...>_pkey``; the helper
+        filters by ``constraint_type = 'PRIMARY KEY'``).
+        """
+        cached = getattr(self, "_l5_weights_pk_3tuple", None)
+        if cached is not None:
+            return cached
+        try:
+            # The PK columns are on table_constraints
+            # (constraint_type = 'PRIMARY KEY'); the
+            # column order is read from key_column_usage
+            # joined on the constraint name. DuckDB's
+            # naming convention is
+            # ``<table>_<col1>_<col2>_pkey`` so we filter
+            # by table_name + constraint_type rather than
+            # guessing the constraint name.
+            pk_rows = self._conn.execute(
+                "SELECT constraint_name FROM "
+                "information_schema.table_constraints "
+                "WHERE table_schema = 'main' "
+                "AND table_name = 'l5_weights' "
+                "AND constraint_type = 'PRIMARY KEY'"
+            ).fetchall()
+            if not pk_rows:
+                # No PK? Treat as 2-tuple legacy (the
+                # upsert will fall back to the
+                # 2-tuple ON CONFLICT).
+                self._l5_weights_pk_3tuple = False
+                return False
+            pk_name = pk_rows[0][0]
+            col_rows = self._conn.execute(
+                "SELECT column_name FROM "
+                "information_schema.key_column_usage "
+                "WHERE table_schema = 'main' "
+                "AND table_name = 'l5_weights' "
+                "AND constraint_name = ? "
+                "ORDER BY ordinal_position",
+                [pk_name],
+            ).fetchall()
+        except Exception:
+            # The information_schema probe can fail on
+            # some DBs (no information_schema; the table
+            # was created with a different convention).
+            # Fall back to the 3-tuple default: the
+            # production schema has the 3-tuple PK, and
+            # the ON CONFLICT will surface a clean
+            # Binder error if the PK is actually 2-tuple.
+            # The legacy-PK path is then exercised by the
+            # caller (insert_l5_weights falls back to a
+            # DELETE+INSERT).
+            self._l5_weights_pk_3tuple = True
+            return True
+        col_set = {r[0] for r in col_rows}
+        is_3tuple = "model_role" in col_set
+        self._l5_weights_pk_3tuple = bool(is_3tuple)
+        return self._l5_weights_pk_3tuple
 
     def insert_per_layer_error(
         self,

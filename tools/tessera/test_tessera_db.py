@@ -688,6 +688,213 @@ class TestTesseraDB(unittest.TestCase):
             )["n"][0])
         self.assertEqual(count, 2)
 
+    # ---- Phase 16: model_role on l5_weights / l5_outcome / l5_plan ---
+
+    def test_insert_l5_weights_with_model_role(self) -> None:
+        """Phase 16: insert_l5_weights writes the
+        model_role column; the (model_hash, model_role,
+        family) PK is enforced (two rows with the same
+        (model_hash, family) but different model_role
+        coexist).
+        """
+        path = self._fresh(12)
+        with TesseraDB.open(path) as db:
+            n = db.insert_l5_weights([
+                {
+                    "model_hash":   "x", "model_role": "trunk",
+                    "family":       "attn_q",
+                    "w_imatrix":    0.6, "w_gradient": 0.3,
+                    "w_layer":      0.1,
+                    "n_samples":    10, "top_fraction": 0.18,
+                },
+                {
+                    "model_hash":   "x", "model_role": "dflash",
+                    "family":       "attn_q",
+                    "w_imatrix":    0.4, "w_gradient": 0.5,
+                    "w_layer":      0.1,
+                    "n_samples":    10, "top_fraction": 0.30,
+                },
+            ])
+        self.assertEqual(n, 2)
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, family, top_fraction "
+                "FROM l5_weights WHERE model_hash = 'x' "
+                "ORDER BY model_role, family"
+            )
+        self.assertEqual(df.height, 2)
+        # Same family, different roles, different
+        # top_fraction. The 3-tuple PK is enforced.
+        self.assertEqual(df["model_role"][0], "dflash")
+        self.assertEqual(df["model_role"][1], "trunk")
+        self.assertAlmostEqual(df["top_fraction"][0], 0.30, places=6)
+        self.assertAlmostEqual(df["top_fraction"][1], 0.18, places=6)
+
+    def test_insert_l5_weights_default_model_role_trunk(self) -> None:
+        """When the row dict does not include model_role,
+        the insert defaults to 'trunk' (the legacy
+        pre-Phase-16 behaviour)."""
+        path = self._fresh(13)
+        with TesseraDB.open(path) as db:
+            db.insert_l5_weights([{
+                "model_hash":   "y", "family": "attn_q",
+                "w_imatrix":    0.5, "w_gradient": 0.3,
+                "w_layer":      0.2,
+                "n_samples":    10,
+            }])
+        with TesseraDB.open(path, read_only=True) as db:
+            role = db.query(
+                "SELECT model_role FROM l5_weights "
+                "WHERE model_hash = 'y'"
+            )["model_role"][0]
+        self.assertEqual(role, "trunk")
+
+    def test_insert_l5_weights_adds_model_role_idempotently(self) -> None:
+        """A pre-Phase-16 l5_weights (without the
+        model_role column) is upgraded in place on the
+        first insert_l5_weights call. The ALTER TABLE
+        ADD COLUMN IF NOT EXISTS is a no-op on subsequent
+        calls."""
+        path = self._fresh(14)
+        # Drop the model_role column to simulate a
+        # pre-Phase-16 DB. The PRIMARY KEY in the test
+        # schema is the post-Phase-16 3-tuple, but DuckDB
+        # does not let us DROP a column that is part of
+        # the PK, so we rebuild the table with the
+        # pre-Phase-16 (model_hash, family) PK first.
+        # The pre-Phase-16 table also lacks the
+        # model_role column.
+        import duckdb as _dd
+        con = _dd.connect(path)
+        try:
+            con.execute("ALTER TABLE l5_weights RENAME TO l5_weights_old")
+            con.execute(
+                "CREATE TABLE l5_weights ("
+                "  model_hash TEXT NOT NULL, family TEXT NOT NULL, "
+                "  w_imatrix DOUBLE NOT NULL, w_gradient DOUBLE NOT NULL, "
+                "  w_layer DOUBLE NOT NULL, bias DOUBLE, "
+                "  n_samples INTEGER, in_sample_loss DOUBLE, "
+                "  hit_rate DOUBLE, top_fraction DOUBLE, "
+                "  retune_source TEXT, updated_at TIMESTAMP, "
+                "  PRIMARY KEY (model_hash, family))"
+            )
+            # Copy only the pre-Phase-16 columns (the old
+            # table had model_role; the new table does not).
+            con.execute(
+                "INSERT INTO l5_weights "
+                "SELECT model_hash, family, w_imatrix, w_gradient, "
+                "w_layer, bias, n_samples, in_sample_loss, hit_rate, "
+                "top_fraction, retune_source, updated_at "
+                "FROM l5_weights_old"
+            )
+            con.execute("DROP TABLE l5_weights_old")
+        finally:
+            con.close()
+        with TesseraDB.open(path) as db:
+            db.insert_l5_weights([{
+                "model_hash":  "addrole", "model_role": "dflash",
+                "family":      "attn_q",
+                "w_imatrix":   0.5, "w_gradient": 0.3, "w_layer": 0.2,
+                "n_samples":   10,
+            }])
+        # The model_role column is back.
+        with TesseraDB.open(path, read_only=True) as db:
+            names = [c for c in db.query(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'l5_weights'"
+            )["column_name"].to_list()]
+        self.assertIn("model_role", names)
+        # The row was inserted.
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, family FROM l5_weights "
+                "WHERE model_hash = 'addrole' ORDER BY family"
+            )
+        self.assertEqual(df.height, 1)
+        self.assertEqual(df["model_role"][0], "dflash")
+        self.assertEqual(df["family"][0], "attn_q")
+        # Idempotent: a second insert does not fail.
+        with TesseraDB.open(path) as db:
+            db.insert_l5_weights([{
+                "model_hash":  "addrole", "model_role": "trunk",
+                "family":      "ffn_gate",
+                "w_imatrix":   0.4, "w_gradient": 0.4, "w_layer": 0.2,
+                "n_samples":   10,
+            }])
+
+    def test_insert_l5_plan_with_model_role(self) -> None:
+        """Phase 16: insert_l5_plan writes the model_role
+        column; rows default to 'trunk' when not given."""
+        path = self._fresh(15)
+        with TesseraDB.open(path) as db:
+            db.insert_l5_plan(
+                model_hash="p1", model_role="dflash",
+                rows=[{
+                    "name": "blk.0.attn_q.weight", "layer": 0,
+                    "iteration": 0, "plan_id": "p0",
+                    "sensitivity_score": 0.5,
+                    "recommended_qtype": "Q4_K",
+                }],
+            )
+            db.insert_l5_plan(
+                model_hash="p1",  # default role
+                rows=[{
+                    "name": "blk.0.ffn_gate.weight", "layer": 0,
+                    "iteration": 0, "plan_id": "p0",
+                    "sensitivity_score": 0.4,
+                    "recommended_qtype": "Q4_K",
+                }],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT name, model_role FROM l5_plan_summary "
+                "WHERE model_hash = 'p1' ORDER BY name"
+            )
+        self.assertEqual(df.height, 2)
+        # The dflash row.
+        attn = df.filter(df["name"] == "blk.0.attn_q.weight")
+        self.assertEqual(attn["model_role"][0], "dflash")
+        # The default trunk row.
+        ffn = df.filter(df["name"] == "blk.0.ffn_gate.weight")
+        self.assertEqual(ffn["model_role"][0], "trunk")
+
+    def test_insert_l5_outcome_with_model_role(self) -> None:
+        """Phase 16: insert_l5_outcome writes the
+        model_role column; rows default to 'trunk' when
+        not given."""
+        path = self._fresh(16)
+        with TesseraDB.open(path) as db:
+            db.insert_l5_outcome(
+                model_hash="o1", model_role="dflash",
+                rows=[{
+                    "name": "blk.0.attn_q.weight", "layer": 0,
+                    "iteration": 0, "plan_id": "p0",
+                    "family": "attn_q",
+                    "sensitivity_score": 0.5,
+                    "delta_mse": 0.001,
+                }],
+            )
+            db.insert_l5_outcome(
+                model_hash="o1",  # default role
+                rows=[{
+                    "name": "blk.0.ffn_gate.weight", "layer": 0,
+                    "iteration": 0, "plan_id": "p0",
+                    "family": "ffn_gate",
+                    "sensitivity_score": 0.4,
+                    "delta_mse": 0.001,
+                }],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT name, model_role FROM l5_outcome "
+                "WHERE model_hash = 'o1' ORDER BY name"
+            )
+        self.assertEqual(df.height, 2)
+        attn = df.filter(df["name"] == "blk.0.attn_q.weight")
+        self.assertEqual(attn["model_role"][0], "dflash")
+        ffn = df.filter(df["name"] == "blk.0.ffn_gate.weight")
+        self.assertEqual(ffn["model_role"][0], "trunk")
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestTesseraDB)
