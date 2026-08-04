@@ -76,7 +76,6 @@ SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS l5_outcome (
         model_hash            TEXT NOT NULL,
         model_role            TEXT NOT NULL DEFAULT 'trunk',
-        model_role            TEXT DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER NOT NULL,
@@ -102,7 +101,6 @@ SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS l5_weights (
         model_hash            TEXT NOT NULL,
         model_role            TEXT NOT NULL DEFAULT 'trunk',
-        model_role            TEXT DEFAULT 'trunk',
         family                TEXT NOT NULL,
         w_imatrix             DOUBLE NOT NULL,
         w_gradient            DOUBLE NOT NULL,

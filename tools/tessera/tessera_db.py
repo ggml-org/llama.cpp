@@ -404,7 +404,6 @@ class TesseraDB:
         for r in rows:
             row = (
                 model_hash,
-                r.get("model_role", "trunk"),
                 r.get("model_role", role),
                 r.get("name", ""),
                 r.get("layer"),
@@ -580,7 +579,6 @@ class TesseraDB:
         for r in rows:
             row = (
                 model_hash,
-                r.get("model_role", "trunk"),
                 r.get("model_role", role),
                 r.get("name", ""),
                 r.get("layer"),
@@ -815,7 +813,6 @@ class TesseraDB:
                 self._conn.execute(sql, [
                     r.get("model_hash", ""),
                     r.get("model_role", "trunk"),
-                    str(r.get("model_role", "trunk") or "trunk"),
                     r.get("family", ""),
                     float(r.get("w_imatrix", 0.0)),
                     float(r.get("w_gradient", 0.0)),

@@ -260,9 +260,8 @@ def compute_l5_outcome(
             db, model_hash, L5_PLAN_COLS, model_role=model_role,
         )
         # Phase 16: l4_plan_outcome does NOT carry a
-        # model_role column (the C++ side does not know
-        # about the role dimension; the role lives on the
-        # l5_plan_summary / l5_outcome side). The
+        # model_role column on the C++ side. The role lives
+        # on the l5_plan_summary / l5_outcome side. The
         # l4_plan_outcome SELECT is filtered by model_hash
         # only; the join with l5_plan_summary on
         # (model_hash, name, iteration, plan_id) preserves
@@ -279,10 +278,28 @@ def compute_l5_outcome(
             (" WHERE " + " AND ".join(outcome_where_clauses))
             if outcome_where_clauses else ""
         )
-        outcome = db.query(
-            f"SELECT {', '.join(L4_PLAN_OUTCOME_COLS)} FROM l4_plan_outcome"
-            + outcome_where
-        )
+        # Read l4_plan_outcome without the model_role
+        # column. The role comes from the l5_plan_summary
+        # side after the join; including model_role in the
+        # SELECT would require the column to exist on the
+        # l4_plan_outcome side (Phase 16 does not migrate
+        # this column on the C++ side; legacy pre-Phase-16
+        # l4_plan_outcome rows would fail).
+        outcome_cols = [c for c in L4_PLAN_OUTCOME_COLS if c != "model_role"]
+        try:
+            outcome = db.query(
+                f"SELECT {', '.join(outcome_cols)} FROM l4_plan_outcome"
+                + outcome_where
+            )
+        except Exception as e:
+            # Fallback for legacy DBs where the column list
+            # is the strict pre-Phase-16 subset.
+            sys.stderr.write(
+                f"l5_outcome: l4_plan_outcome read failed; "
+                f"falling back to pre-Phase-16 column list "
+                f"({e.__class__.__name__}: {str(e)[:200]})\n"
+            )
+            raise
 
     if plan.height == 0 and outcome.height == 0:
         # Nothing to do; return an empty table with the right schema.
