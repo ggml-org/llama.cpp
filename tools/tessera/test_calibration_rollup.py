@@ -351,6 +351,199 @@ class TestCalibrationRollup(unittest.TestCase):
         self.assertAlmostEqual(ffn["imatrix.rms"], 0.05, places=4)
         self.assertAlmostEqual(ffn["imatrix.tail_ratio"], 8.0, places=4)
 
+    # ---- --l5-outcome (the feedback-loop source) ------------------
+
+    def _seed_tessera_db(self, db_path: Path) -> None:
+        """Create a tessera.duckdb at db_path with the unified
+        schema and seed l5_outcome + l5_weights rows for the
+        synthetic 'm' model."""
+        import duckdb
+        con = duckdb.connect(str(db_path))
+        try:
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS l5_outcome ("
+                "  model_hash        TEXT NOT NULL,"
+                "  name              TEXT NOT NULL,"
+                "  layer             INTEGER,"
+                "  iteration         INTEGER NOT NULL,"
+                "  plan_id           TEXT NOT NULL,"
+                "  family            TEXT,"
+                "  sensitivity_score DOUBLE,"
+                "  recommended_alpha DOUBLE,"
+                "  recommended_clip  DOUBLE,"
+                "  mse_before        DOUBLE,"
+                "  mse_after         DOUBLE,"
+                "  delta_mse         DOUBLE,"
+                "  delta_frob        DOUBLE,"
+                "  plan_accepted     BOOLEAN,"
+                "  accept_threshold  DOUBLE,"
+                "  residual          DOUBLE,"
+                "  updated_at        TIMESTAMP,"
+                "  PRIMARY KEY (model_hash, name, iteration, plan_id)"
+                ")"
+            )
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS l5_weights ("
+                "  model_hash      TEXT NOT NULL,"
+                "  family          TEXT NOT NULL,"
+                "  w_imatrix       DOUBLE NOT NULL,"
+                "  w_gradient      DOUBLE NOT NULL,"
+                "  w_layer         DOUBLE NOT NULL,"
+                "  bias            DOUBLE,"
+                "  slope           DOUBLE,"
+                "  n_samples       INTEGER,"
+                "  in_sample_loss  DOUBLE,"
+                "  hit_rate        DOUBLE,"
+                "  retune_source   TEXT,"
+                "  updated_at      TIMESTAMP,"
+                "  PRIMARY KEY (model_hash, family)"
+                ")"
+            )
+            # l5_weights: protect on attn_q (slope > 0.5, hit < 0.5);
+            # ffn_gate has no row so the ffn_gate tensors in the
+            # rollup get the empty coverage.
+            con.execute(
+                "INSERT INTO l5_weights VALUES "
+                "('m', 'attn_q', 0.4, 0.4, 0.2, 0.0, 0.6, 30, "
+                "  0.001, 0.3, 'ols_slope_v1', '2026-08-04 00:00:00')"
+            )
+            # l5_outcome: 2 rows for blk.0.attn_q.weight (the older
+            # rejected, the newer accepted -> most-recent-wins);
+            # 1 row for blk.0.ffn_gate.weight (no weights row).
+            con.execute(
+                "INSERT INTO l5_outcome VALUES "
+                "('m', 'blk.0.attn_q.weight', 0, 0, 'old', 'attn_q',"
+                "  0.5, 0.5, 1.0, 0.012, 0.030, 0.018, 0.02, false,"
+                "  0.0, 0.005, '2026-08-04 00:00:00')"
+            )
+            con.execute(
+                "INSERT INTO l5_outcome VALUES "
+                "('m', 'blk.0.attn_q.weight', 0, 1, 'new', 'attn_q',"
+                "  0.7, 0.5, 1.0, 0.012, 0.011, -0.001, 0.005, true,"
+                "  0.0, -0.0008, '2026-08-04 00:00:00')"
+            )
+            con.execute(
+                "INSERT INTO l5_outcome VALUES "
+                "('m', 'blk.0.ffn_gate.weight', 0, 0, 'p0', 'ffn_gate',"
+                "  0.4, 0.5, 1.0, 0.020, 0.018, -0.002, 0.005, true,"
+                "  0.0, 0.0003, '2026-08-04 00:00:00')"
+            )
+        finally:
+            con.close()
+
+    def test_l5_outcome_joins_into_rollup(self) -> None:
+        """--l5-outcome reads l5_outcome + l5_weights from a
+        tessera.duckdb, joins them on (model_hash, family), and
+        joins the result onto the rollup on (tensor,). The
+        output rows carry the l5.* prefixed columns + the
+        derived recommended_action."""
+        db_path = self._td / "tessera.duckdb"
+        self._seed_tessera_db(db_path)
+        out_pq = self._td / "rollup_l5.parquet"
+        r = _run_rollup(self._td, [
+            ("l3_outlier", self._l3),
+            ("l5_outcome", db_path),
+        ], "--out-parquet", str(out_pq),
+           "--model-hash", "m")
+        self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
+        df = pl.read_parquet(out_pq)
+        # The l5.* columns are present and prefixed.
+        for col in (
+            "l5.miscalibration_score", "l5.hit_rate",
+            "l5.recommended_weight_im", "l5.recommended_weight_grad",
+            "l5.recommended_weight_layer", "l5.delta_mse",
+            "l5.plan_accepted", "l5.residual",
+            "l5.recommended_action",
+        ):
+            self.assertIn(col, df.columns, f"missing {col}")
+        # The attn_q tensor: most-recent outcome is iter=1, plan='new',
+        # plan_accepted=True, delta_mse=-0.001, residual=-0.0008.
+        attn = df.filter(pl.col("tensor") == "blk.0.attn_q.weight").row(0, named=True)
+        self.assertAlmostEqual(attn["l5.miscalibration_score"], 0.6, places=4)
+        self.assertAlmostEqual(attn["l5.hit_rate"], 0.3, places=4)
+        self.assertAlmostEqual(attn["l5.recommended_weight_im"], 0.4, places=4)
+        self.assertAlmostEqual(attn["l5.recommended_weight_grad"], 0.4, places=4)
+        self.assertAlmostEqual(attn["l5.recommended_weight_layer"], 0.2, places=4)
+        self.assertAlmostEqual(attn["l5.delta_mse"], -0.001, places=4)
+        self.assertEqual(attn["l5.plan_accepted"], True)
+        self.assertAlmostEqual(attn["l5.residual"], -0.0008, places=4)
+        # The rule: slope=0.6 > 0.5, hit_rate=0.3 < 0.5 -> 'protect'
+        # wins regardless of the (positive, accepted, low hit_rate)
+        # outcome.
+        self.assertEqual(attn["l5.recommended_action"], "protect")
+        # The ffn_gate tensor: outcome row exists, but no
+        # l5_weights row -> miscal / hit / weights are NULL and
+        # recommended_action is 'noop' (the l5_action default
+        # when no l5_weights row is present).
+        ffn = df.filter(pl.col("tensor") == "blk.0.ffn_gate.weight")
+        if ffn.height > 0:
+            ffn_row = ffn.row(0, named=True)
+            self.assertIsNone(ffn_row["l5.miscalibration_score"])
+            self.assertIsNone(ffn_row["l5.hit_rate"])
+            self.assertEqual(ffn_row["l5.recommended_action"], "noop")
+
+    def test_l5_outcome_uses_most_recent(self) -> None:
+        """When a tensor has multiple l5_outcome rows, the
+        ROW_NUMBER partition picks the most recent (highest
+        iteration, then highest plan_id). The older row is
+        ignored. This is the per-tensor 'most-recent-wins'
+        contract."""
+        db_path = self._td / "tessera.duckdb"
+        self._seed_tessera_db(db_path)
+        out_pq = self._td / "rollup_l5_recent.parquet"
+        r = _run_rollup(self._td, [
+            ("l5_outcome", db_path),
+        ], "--out-parquet", str(out_pq),
+           "--model-hash", "m")
+        self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
+        df = pl.read_parquet(out_pq)
+        attn = df.filter(pl.col("tensor") == "blk.0.attn_q.weight").row(0, named=True)
+        # The newer (iter=1, plan='new') row is the most recent;
+        # delta_mse = -0.001, plan_accepted = True.
+        self.assertAlmostEqual(attn["l5.delta_mse"], -0.001, places=4)
+        self.assertEqual(attn["l5.plan_accepted"], True)
+        # The older (iter=0, plan='old') row had delta_mse=0.018
+        # and plan_accepted=False; if it had been used, the
+        # delta_mse here would be 0.018.
+        self.assertNotAlmostEqual(attn["l5.delta_mse"], 0.018, places=4)
+
+    def test_l5_outcome_requires_model_hash(self) -> None:
+        """--l5-outcome without --model-hash exits 2 with a
+        clear stderr message."""
+        db_path = self._td / "tessera.duckdb"
+        self._seed_tessera_db(db_path)
+        r = _run_rollup(self._td, [
+            ("l5_outcome", db_path),
+        ], "--out-parquet", str(self._td / "rollup.parquet"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("model-hash", r.stderr)
+
+    def test_l5_outcome_empty_db_returns_empty(self) -> None:
+        """--l5-outcome pointing at a DB without l5_outcome /
+        l5_weights tables produces an empty l5.* coverage
+        (the rollup still works; the l5.* columns are just
+        all NULL on the existing rows)."""
+        # Create a duckdb file that has none of the l5 tables.
+        import duckdb
+        empty_db = self._td / "empty.duckdb"
+        con = duckdb.connect(str(empty_db))
+        con.close()
+        out_pq = self._td / "rollup_empty.parquet"
+        r = _run_rollup(self._td, [
+            ("l3_outlier", self._l3),
+            ("l5_outcome", empty_db),
+        ], "--out-parquet", str(out_pq),
+           "--model-hash", "m")
+        self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
+        df = pl.read_parquet(out_pq)
+        # l3.outlier_fraction still present; the l5.* columns
+        # are all NULL on the matched rows.
+        self.assertIn("l3.outlier_fraction", df.columns)
+        attn = df.filter(pl.col("tensor") == "blk.0.attn_q.weight").row(0, named=True)
+        self.assertAlmostEqual(attn["l3.outlier_fraction"], 0.001013, places=6)
+        self.assertIsNone(attn["l5.miscalibration_score"])
+        self.assertIsNone(attn["l5.recommended_action"])
+
 
 if __name__ == "__main__":
     import unittest as _u

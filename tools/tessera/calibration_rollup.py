@@ -73,12 +73,17 @@ from _analytical_io import read_analytical  # noqa: E402
 # not a typed-NDJSON. The schema "imatrix" is in this map for
 # the SCHEMA_BY_FLAG convention, but the reader is the
 # parquet reducer below (no read_analytical call).
+# The l5_outcome source is also special: it is a tessera.duckdb
+# path (the unified-DB feedback-loop tables l5_outcome +
+# l5_weights), not a typed-NDJSON; the reader is the SQL
+# reducer below (no read_analytical call).
 SCHEMA_BY_FLAG = {
     "l3_outlier":     "l3_outlier",
     "l4_probe":       "l4_probe",
     "l5_plan":        "l5_plan",
     "per_layer_error": "per_layer_error",
     "imatrix":       "imatrix",
+    "l5_outcome":    "l5_outcome_db",
 }
 
 # Columns that participate in the join key. Every input has
@@ -101,6 +106,30 @@ JOIN_KEYS = ["tensor"]
 # source joins on the same key as L3 / L4 / L5 / PLE.
 IMATRIX_TIDY_COLS: tuple[str, ...] = (
     "tensor", "layer", "rms", "mean_abs", "tail_ratio", "kurtosis",
+)
+
+
+# l5_outcome (tessera.duckdb unified-DB) -> per-tensor summary.
+# The rollup joins the DB on (model_hash, name) for the
+# ``l5_outcome`` table (per-iteration) and on (model_hash,
+# family) for the ``l5_weights`` table (per-family). The
+# reducer below picks the most-recent per (model_hash, name)
+# from l5_outcome (highest iteration, then plan_id), joins
+# l5_weights on (model_hash, family), and derives the
+# ``recommended_action`` per tensor via the l5_action rules.
+# The result uses ``tensor`` (not ``name``) as the join key so
+# this source joins on the same key as L3 / L4 / L5 / PLE.
+L5_OUTCOME_TIDY_COLS: tuple[str, ...] = (
+    "tensor",
+    "miscalibration_score",   # l5_weights.slope
+    "hit_rate",               # l5_weights.hit_rate
+    "recommended_weight_im",  # l5_weights.w_imatrix
+    "recommended_weight_grad", # l5_weights.w_gradient
+    "recommended_weight_layer", # l5_weights.w_layer
+    "delta_mse",              # most recent l5_outcome.delta_mse
+    "plan_accepted",          # most recent l5_outcome.plan_accepted
+    "residual",               # most recent l5_outcome.residual
+    "recommended_action",     # derived via l5_action rules
 )
 
 
@@ -235,8 +264,24 @@ def _add_labeled_arg(p: argparse.ArgumentParser, flag: str, dest: str, schema: s
 
     The schema name is held in the ``dest`` so the driver can
     look it up. ``schema`` is one of the four shipped schemas in
-    common/schemas/.
+    common/schemas/ (or the special ``imatrix`` / ``l5_outcome_db``
+    keys for the parquet + DuckDB read paths).
     """
+    if schema in ("imatrix", "l5_outcome_db"):
+        kind = "parquet" if schema == "imatrix" else "tessera.duckdb"
+        help_text = (
+            f"A {kind} file to roll up. May be repeated. "
+            f"LABEL becomes the per-source column prefix; without "
+            f"'=' the LABEL defaults to the file's stem. "
+            f"Required companion: --model-hash for l5_outcome."
+        )
+    else:
+        help_text = (
+            f"A {schema} NDJSON file to roll up. May be repeated. "
+            f"LABEL becomes the per-source column prefix; without "
+            f"'=' the LABEL defaults to the file's stem. Schema: "
+            f"common/schemas/{schema}.schema.json."
+        )
     p.add_argument(
         f"--{flag}",
         action="append",
@@ -244,12 +289,7 @@ def _add_labeled_arg(p: argparse.ArgumentParser, flag: str, dest: str, schema: s
         dest=dest,
         metavar="LABEL=PATH",
         default=[],
-        help=(
-            f"A {schema} NDJSON file to roll up. May be repeated. "
-            f"LABEL becomes the per-source column prefix; without "
-            f"'=' the LABEL defaults to the file's stem. Schema: "
-            f"common/schemas/{schema}.schema.json."
-        ),
+        help=help_text,
     )
 
 
@@ -279,7 +319,8 @@ def _tessera_provenance() -> tuple[str, str, str]:
     return kernel_version, created_at, main_tip
 
 
-def _read_source(label: str, path: Path, schema: str) -> pl.DataFrame:
+def _read_source(label: str, path: Path, schema: str,
+                 model_hash: Optional[str] = None) -> pl.DataFrame:
     """Read one source file, prefix non-join columns with ``label.``.
 
     Raises FileNotFoundError if the file is missing; ValueError
@@ -287,15 +328,34 @@ def _read_source(label: str, path: Path, schema: str) -> pl.DataFrame:
     The imatrix source is special: it's a parquet file (the
     per-channel observer written by
     ``evidence-store.py:ingest_imatrix``), reduced to a per-tensor
-    summary before prefixing. Other sources are typed-NDJSON.
+    summary before prefixing. The l5_outcome source is also
+    special: it's a tessera.duckdb path (the unified-DB
+    feedback-loop tables l5_outcome + l5_weights), reduced to a
+    per-tensor summary before prefixing. The prefix for the
+    l5_outcome source is forced to ``l5`` (the user-facing
+    contract is ``l5.*``; the file path doesn't carry useful
+    provenance). Other sources are typed-NDJSON.
+
+    The model_hash argument is required for ``l5_outcome_db`` and
+    unused for the other schemas.
     """
     if not path.is_file():
         raise FileNotFoundError(f"{label}: file not found: {path}")
     if schema == "imatrix":
         df = _read_imatrix_tidy(path)
+    elif schema == "l5_outcome_db":
+        if model_hash is None:
+            raise ValueError(
+                f"{label}: --l5-outcome requires --model-hash"
+            )
+        df = _read_l5_outcome_tidy(path, model_hash)
     else:
         df = read_analytical(path, schema)
-    return _prefix_columns(df, label)
+    # Force the l5_outcome prefix to ``l5`` regardless of the
+    # user-supplied label (the file path / stem is uninformative;
+    # the user-facing contract is ``l5.*``).
+    effective_label = "l5" if schema == "l5_outcome_db" else label
+    return _prefix_columns(df, effective_label)
 
 
 def _read_imatrix_tidy(path: Path) -> pl.DataFrame:
@@ -357,12 +417,179 @@ def _read_imatrix_tidy(path: Path) -> pl.DataFrame:
     return summary.select(IMATRIX_TIDY_COLS)
 
 
-def _rollup(sources: List[Tuple[str, Path, str]]) -> pl.DataFrame:
+def _read_l5_outcome_tidy(path: Path, model_hash: str) -> pl.DataFrame:
+    """Read the per-tensor feedback-loop summary from the
+    unified-DB ``l5_outcome`` + ``l5_weights`` tables.
+
+    Per-tensor reduction:
+      miscalibration_score, hit_rate, recommended_weight_*:
+        per-(model_hash, family) row from l5_weights, joined
+        onto the per-tensor l5_outcome rows by family.
+      delta_mse, plan_accepted, residual:
+        the most recent (model_hash, name) row from l5_outcome
+        (highest iteration, then plan_id).
+      recommended_action:
+        derived via the l5_action rules from
+        (miscalibration_score, hit_rate, delta_mse,
+        plan_accepted).
+
+    On a missing DB / missing tables / no rows, returns an
+    empty frame with the L5_OUTCOME_TIDY_COLS schema so the
+    outer join in _rollup produces no l5.* columns (the
+    coverage is empty). This is the safe default for the
+    cross-pipeline consumer: the rollup is robust to a
+    not-yet-retuned model.
+    """
+    empty = pl.DataFrame(
+        {c: [] for c in L5_OUTCOME_TIDY_COLS},
+        schema={
+            "tensor": pl.Utf8,
+            "miscalibration_score": pl.Float64,
+            "hit_rate": pl.Float64,
+            "recommended_weight_im": pl.Float64,
+            "recommended_weight_grad": pl.Float64,
+            "recommended_weight_layer": pl.Float64,
+            "delta_mse": pl.Float64,
+            "plan_accepted": pl.Boolean,
+            "residual": pl.Float64,
+            "recommended_action": pl.Utf8,
+        },
+    )
+    if not path.is_file():
+        return empty
+    import duckdb
+    try:
+        con = duckdb.connect(str(path), read_only=True)
+    except Exception:
+        return empty
+    try:
+        names = {r[0] for r in con.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()}
+        if "l5_outcome" not in names or "l5_weights" not in names:
+            return empty
+        # Most-recent per-(model_hash, name) from l5_outcome.
+        # The ROW_NUMBER window picks the highest iteration,
+        # then the lexicographically-largest plan_id as a
+        # stable tiebreaker (the consumer is a long-running
+        # retune; plan_id is opaque but stable per iteration).
+        outcome_recent_sql = (
+            "WITH ranked AS ("
+            "  SELECT name, family, delta_mse, plan_accepted, "
+            "         residual, "
+            "         ROW_NUMBER() OVER ("
+            "           PARTITION BY name "
+            "           ORDER BY iteration DESC, plan_id DESC"
+            "         ) AS rn "
+            "  FROM l5_outcome WHERE model_hash = ?"
+            ") "
+            "SELECT name, family, delta_mse, plan_accepted, "
+            "       residual FROM ranked WHERE rn = 1"
+        )
+        # l5_weights per (model_hash, family): the per-family
+        # retune verdict. slope is the OLS slope of delta_mse on
+        # sensitivity_score; the rollup surfaces it as
+        # miscalibration_score.
+        weights_sql = (
+            "SELECT family, slope, hit_rate, w_imatrix, "
+            "       w_gradient, w_layer "
+            "FROM l5_weights WHERE model_hash = ?"
+        )
+        outcome_rows = con.execute(
+            outcome_recent_sql, [model_hash]).fetchall()
+        weight_rows = con.execute(
+            weights_sql, [model_hash]).fetchall()
+    except Exception:
+        return empty
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    if not outcome_rows:
+        return empty
+    # Index l5_weights by family for the per-row join below.
+    weights_by_family: dict[str, tuple] = {
+        r[0]: r for r in weight_rows
+    }
+    # Late import: l5_action is a small pure-python module;
+    # importing it at module top would force the test fixtures
+    # to sys.path it on every import of calibration_rollup.
+    from l5_action import derive_recommended_action
+    tensors: list[str] = []
+    miscal: list[float | None] = []
+    hit: list[float | None] = []
+    w_im: list[float | None] = []
+    w_grad: list[float | None] = []
+    w_layer: list[float | None] = []
+    d_mse: list[float | None] = []
+    p_acc: list[bool | None] = []
+    resid: list[float | None] = []
+    actions: list[str] = []
+    for (name, family, delta_mse, plan_accepted, residual) in outcome_rows:
+        # The most recent outcome row's family determines which
+        # l5_weights row applies. l5_outcome.family is written
+        # by l5_orchestrator / l5_outcome.py and is the
+        # canonical family tag for the tensor.
+        weights = weights_by_family.get(family or "")
+        if weights is not None:
+            _, slope, hit_rate, wim, wgr, wly = weights
+        else:
+            slope, hit_rate = None, None
+            wim, wgr, wly = None, None, None
+        action = derive_recommended_action(
+            slope, hit_rate, delta_mse, plan_accepted)
+        tensors.append(name)
+        miscal.append(slope)
+        hit.append(hit_rate)
+        w_im.append(wim)
+        w_grad.append(wgr)
+        w_layer.append(wly)
+        d_mse.append(delta_mse)
+        p_acc.append(plan_accepted)
+        resid.append(residual)
+        actions.append(action)
+    return pl.DataFrame(
+        {
+            "tensor":                  tensors,
+            "miscalibration_score":    miscal,
+            "hit_rate":                hit,
+            "recommended_weight_im":   w_im,
+            "recommended_weight_grad": w_grad,
+            "recommended_weight_layer":w_layer,
+            "delta_mse":               d_mse,
+            "plan_accepted":           p_acc,
+            "residual":                resid,
+            "recommended_action":      actions,
+        },
+        schema={
+            "tensor": pl.Utf8,
+            "miscalibration_score": pl.Float64,
+            "hit_rate": pl.Float64,
+            "recommended_weight_im": pl.Float64,
+            "recommended_weight_grad": pl.Float64,
+            "recommended_weight_layer": pl.Float64,
+            "delta_mse": pl.Float64,
+            "plan_accepted": pl.Boolean,
+            "residual": pl.Float64,
+            "recommended_action": pl.Utf8,
+        },
+    )
+
+
+def _rollup(sources: List[Tuple[str, Path, str]],
+            model_hash: Optional[str] = None) -> pl.DataFrame:
     """Outer-join the sources on ``tensor``.
 
     ``sources`` is a list of ``(label, path, schema_name)`` tuples
     in CLI-arg order. The first source seeds the join; subsequent
     sources are outer-joined onto the accumulator.
+
+    ``model_hash`` is required when any source has the
+    ``l5_outcome_db`` schema (the unified-DB feedback-loop
+    tables are keyed by model_hash). It is unused for the
+    NDJSON and imatrix sources.
 
     The ``layer`` column is added to the join keys when present
     in the first source AND in every subsequent source; otherwise
@@ -377,7 +604,7 @@ def _rollup(sources: List[Tuple[str, Path, str]]) -> pl.DataFrame:
     use_layer = True
     frames: List[pl.DataFrame] = []
     for i, (label, path, schema) in enumerate(sources):
-        df = _read_source(label, path, schema)
+        df = _read_source(label, path, schema, model_hash=model_hash)
         if "layer" not in df.columns:
             use_layer = False
         frames.append(df)
@@ -440,6 +667,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a one-line-per-source coverage summary to stdout.",
     )
+    p.add_argument(
+        "--model-hash",
+        default=None,
+        help=(
+            "Model hash for the --l5-outcome source (the unified-DB "
+            "l5_outcome + l5_weights tables are keyed by model_hash). "
+            "Required when --l5-outcome is provided; ignored otherwise."
+        ),
+    )
     return p
 
 
@@ -452,11 +688,14 @@ def _coverage_summary(sources: List[Tuple[str, Path, str]],
     lines.append("=" * 72)
     lines.append(f"  sources:  {len(sources)}")
     for label, path, schema in sources:
+        # The l5_outcome_db source is force-prefixed to ``l5``;
+        # the user-supplied label is informational only.
+        effective = "l5" if schema == "l5_outcome_db" else label
         # The per-source column count is the number of columns
         # the source contributed to the rollup; we re-read the
         # source's schema to count its columns, but the rollup
         # has them prefixed with the source label.
-        prefix = f"{label}."
+        prefix = f"{effective}."
         contributed = sum(1 for c in rollup.columns if c.startswith(prefix))
         lines.append(
             f"    [{label}] schema={schema}  path={path}  "
@@ -469,16 +708,25 @@ def _coverage_summary(sources: List[Tuple[str, Path, str]],
 def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     sources: List[Tuple[str, Path, str]] = []
+    has_l5_outcome_db = False
     for flag, schema in SCHEMA_BY_FLAG.items():
         for label, path in getattr(args, flag):
             sources.append((label, path, schema))
+            if schema == "l5_outcome_db":
+                has_l5_outcome_db = True
     if not sources:
         sys.stderr.write(
             "calibration_rollup: no source files provided; pass at "
             "least one of --l3-outlier / --l4-probe / --l5-plan / "
-            "--per-layer-error / --imatrix-tidy.\n")
+            "--per-layer-error / --imatrix-tidy / --l5-outcome.\n")
         return 2
-    rollup = _rollup(sources)
+    if has_l5_outcome_db and not args.model_hash:
+        sys.stderr.write(
+            "calibration_rollup: --l5-outcome requires --model-hash; "
+            "the l5_outcome + l5_weights tables are keyed by model_hash.\n"
+        )
+        return 2
+    rollup = _rollup(sources, model_hash=args.model_hash)
     if args.print_summary:
         print(_coverage_summary(sources, rollup))
     if args.out_parquet is None and args.out_ndjson is None:
