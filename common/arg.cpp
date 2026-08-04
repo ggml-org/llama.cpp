@@ -95,39 +95,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         return true;
     };
 
-    // float-valued
-    if (arg == "--tessera-outlier-frac" || arg == "--tessera-awq-clip") {
-        if (!require_val(arg.c_str())) return -1;
-        float f;
-        try { f = std::stof(val); }
-        catch (...) { err = string_format("error: invalid value for %s: '%s'\n", arg.c_str(), val.c_str()); return -1; }
-        if (arg == "--tessera-outlier-frac") {
-            if (f < 0.0f || f > 1.0f) { err = string_format("error: --tessera-outlier-frac must be in [0, 1], got %f\n", f); return -1; }
-            tessera_params.outlier_frac = f;
-        } else {
-            if (f <= 0.0f) { err = string_format("error: --tessera-awq-clip must be > 0, got %f\n", f); return -1; }
-            tessera_params.awq_clip = f;
-        }
-        return 2;
-    }
-    if (arg == "--tessera-kernel-fitness-blend") {
-        if (!require_val("--tessera-kernel-fitness-blend")) return -1;
-        float f;
-        try { f = std::stof(val); }
-        catch (...) { err = string_format("error: invalid value for --tessera-kernel-fitness-blend: '%s'\n", val.c_str()); return -1; }
-        if (f < 0.0f || f > 1.0f) { err = string_format("error: --tessera-kernel-fitness-blend must be in [0, 1], got %f\n", f); return -1; }
-        tessera_params.kernel_fitness_blend = f;
-        return 2;
-    }
-    if (arg == "--tessera-w4a4-outlier-thresh") {
-        if (!require_val("--tessera-w4a4-outlier-thresh")) return -1;
-        float f;
-        try { f = std::stof(val); }
-        catch (...) { err = string_format("error: invalid value for --tessera-w4a4-outlier-thresh: '%s'\n", val.c_str()); return -1; }
-        if (f <= 0.0f) { err = string_format("error: --tessera-w4a4-outlier-thresh must be > 0, got %f\n", f); return -1; }
-        tessera_params.w4a4_outlier_thresh = f;
-        return 2;
-    }
     // --tessera-l5-* numeric knobs for the L5 adaptive requantize loop
     if (arg == "--tessera-l5-generations") {
         if (!require_val("--tessera-l5-generations")) return -1;
