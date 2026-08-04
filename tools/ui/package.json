@@ -103,6 +103,7 @@
 		"@storybook/addon-mcp": "^0.7.0"
 	},
 	"overrides": {
-		"cookie": "1.1.1"
+		"cookie": "1.1.1",
+		"sharp": "0.35.3"
 	}
 }
