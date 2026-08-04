@@ -346,7 +346,13 @@ static const char * TS_QDB_SCHEMA_SQL =
     // sensitivity_calibration_error is the residual of a linear fit
     // of delta_mse on sensitivity_score per (model, family) — a
     // running measure of how well the orchestrator's sensitivity
-    // scoring predicts the actual error delta.
+    // scoring predicts the actual error delta. The three per-tensor
+    // component columns (imatrix_magnitude, gradient_proxy,
+    // layer_position_prior) are populated by the orchestrator's
+    // write_history path so the retune can fit a 3-coefficient model
+    // and isolate which component drives the miscalibration per
+    // family. The C++ side reads them but does not write them; they
+    // are nullable so the pre-emptive schema change stays additive.
     "CREATE TABLE IF NOT EXISTS l5_outcome (\n"
     "    model_hash            TEXT NOT NULL,\n"
     "    name                  TEXT NOT NULL,\n"
@@ -364,6 +370,9 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    plan_accepted         BOOLEAN,\n"
     "    accept_threshold      DOUBLE,\n"
     "    residual              DOUBLE,\n"
+    "    imatrix_magnitude     DOUBLE,\n"
+    "    gradient_proxy        DOUBLE,\n"
+    "    layer_position_prior  DOUBLE,\n"
     "    updated_at            TIMESTAMP,\n"
     "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
     ");\n"
@@ -384,6 +393,13 @@ static const char * TS_QDB_SCHEMA_SQL =
     // of l5_outcome rows that fed the fit; updated_at is the wall
     // clock. retune_source records which retune algorithm produced
     // the row ("ols_slope_v1" is the current production algorithm).
+    // requant_budget_bits is the dispatch-side budget the orchestrator
+    // recommends for this family in the next requant pass; computed by
+    // l5_retune.py as total_storage * (1 - hit_rate) * base_budget_fraction
+    // and NULL when the family has too few samples to project a
+    // budget. The dispatch currently reads it for forward-compatibility
+    // (the contract is additive) but does not act on the value yet;
+    // the column is here so the producer/consumer agree on the schema.
     "CREATE TABLE IF NOT EXISTS l5_weights (\n"
     "    model_hash            TEXT NOT NULL,\n"
     "    family                TEXT NOT NULL,\n"
@@ -395,6 +411,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    in_sample_loss        DOUBLE,\n"
     "    hit_rate              DOUBLE,\n"
     "    retune_source         TEXT,\n"
+    "    requant_budget_bits   BIGINT,\n"
     "    updated_at            TIMESTAMP,\n"
     "    PRIMARY KEY (model_hash, family)\n"
     ");\n"
@@ -795,11 +812,18 @@ int ts_tessera_db_upsert_l5_weight(
     // PRIMARY KEY (model_hash, family). The ON CONFLICT DO UPDATE
     // clause overwrites every column on a re-write. retune_source
     // is updated to the current writer's tag so the consumer can
-    // tell which algorithm produced the row.
+    // tell which algorithm produced the row. requant_budget_bits
+    // uses the C++ -1 sentinel for NULL so a missing budget (the
+    // common case when l5_retune.py doesn't have enough samples
+    // to project one) round-trips without a separate has_value
+    // flag on the struct.
+    const std::string budget_str =
+        (row.requant_budget_bits >= 0) ? std::to_string(row.requant_budget_bits) : std::string("NULL");
     std::ostringstream q;
     q << "INSERT INTO l5_weights (model_hash, family, "
          "w_imatrix, w_gradient, w_layer, bias, n_samples, "
-         "in_sample_loss, hit_rate, retune_source, updated_at) VALUES ("
+         "in_sample_loss, hit_rate, retune_source, requant_budget_bits, "
+         "updated_at) VALUES ("
       << "'" << sql_escape(row.model_hash) << "', "
       << "'" << sql_escape(row.family) << "', "
       << row.w_imatrix << ", "
@@ -810,6 +834,7 @@ int ts_tessera_db_upsert_l5_weight(
       << row.in_sample_loss << ", "
       << row.hit_rate << ", "
       << "'" << sql_escape(row.retune_source) << "', "
+      << budget_str << ", "
       << ts_now_ts()
       << ") ON CONFLICT (model_hash, family) DO UPDATE SET "
          "w_imatrix=excluded.w_imatrix, "
@@ -820,6 +845,7 @@ int ts_tessera_db_upsert_l5_weight(
          "in_sample_loss=excluded.in_sample_loss, "
          "hit_rate=excluded.hit_rate, "
          "retune_source=excluded.retune_source, "
+         "requant_budget_bits=excluded.requant_budget_bits, "
          "updated_at=excluded.updated_at";
     try {
         auto res = db->conn->Query(q.str());
@@ -832,6 +858,119 @@ int ts_tessera_db_upsert_l5_weight(
         return 1;
     } catch (...) {
         if (err) *err = "upsert_l5_weight failed: unknown exception";
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// L5 weights list reader: per-(model, family) typed reader
+// ---------------------------------------------------------------------------
+//
+// Mirrors ts_tessera_db_list_converged_for_model. Used by the dispatch's
+// GA-prep walk warm-start to bias the GA's (alpha, clip) initial
+// population per family. Empty `family` means "all families for this
+// model_hash"; the dispatch passes empty when it wants the full list
+// at open time. Ordered by hit_rate DESC so the most-converged family
+// is the first entry the dispatch sees.
+
+int ts_tessera_db_list_l5_weights(ts_tessera_db * db,
+                                  const std::string & model_hash,
+                                  const std::string & family,
+                                  ts_tessera_db_l5_weight_list * out) {
+    if (out == nullptr) return 0;
+    out->entries.clear();
+    if (db == nullptr || db->conn == nullptr) return 0;
+    if (model_hash.empty()) return 0;
+    std::ostringstream q;
+    q << "SELECT model_hash, family, w_imatrix, w_gradient, w_layer, "
+         "bias, n_samples, in_sample_loss, hit_rate, requant_budget_bits, "
+         "retune_source FROM l5_weights WHERE model_hash = '"
+      << sql_escape(model_hash) << "'";
+    if (!family.empty()) {
+        q << " AND family = '" << sql_escape(family) << "'";
+    }
+    q << " ORDER BY hit_rate DESC";
+    try {
+        auto res = db->conn->Query(q.str());
+        if (res->HasError()) return 1;
+        const idx_t n = res->RowCount();
+        out->entries.reserve((size_t)n);
+        for (idx_t r = 0; r < n; r++) {
+            ts_tessera_db_l5_weight_list_entry e;
+            auto mh = res->GetValue(0, r);
+            e.model_hash = mh.IsNull() ? std::string() : mh.ToString();
+            auto fm = res->GetValue(1, r);
+            e.family     = fm.IsNull() ? std::string() : fm.ToString();
+            e.w_imatrix  = res->GetValue(2, r).GetValue<double>();
+            e.w_gradient = res->GetValue(3, r).GetValue<double>();
+            e.w_layer    = res->GetValue(4, r).GetValue<double>();
+            e.bias       = res->GetValue(5, r).GetValue<double>();
+            e.n_samples  = (int32_t) res->GetValue(6, r).GetValue<int64_t>();
+            e.in_sample_loss = res->GetValue(7, r).GetValue<double>();
+            e.hit_rate   = res->GetValue(8, r).GetValue<double>();
+            // requant_budget_bits: NULL when the family had too few samples
+            // to project a budget. Use -1 as the C++ NULL sentinel.
+            auto bv = res->GetValue(9, r);
+            e.requant_budget_bits = bv.IsNull() ? -1 : bv.GetValue<int64_t>();
+            auto rs = res->GetValue(10, r);
+            e.retune_source = rs.IsNull() ? std::string() : rs.ToString();
+            out->entries.push_back(std::move(e));
+        }
+    } catch (...) {
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// L5 outcome stats: per-(model, family) verdict aggregate
+// ---------------------------------------------------------------------------
+//
+// Used by the dispatch's converged-fast early-exit. Aggregates the
+// verdict (plan_accepted) over the (model, family) group; n_rows
+// counts all l5_outcome rows for the group, n_accepted counts those
+// with plan_accepted = TRUE, hit_rate is n_accepted / n_rows.
+// mean_delta_mse and mean_sensitivity are the per-row means over
+// the same set. Empty `family` means "all families"; the caller
+// picks the most-converged one to gate on.
+
+int ts_tessera_db_l5_outcome_stats_for(ts_tessera_db * db,
+                                       const std::string & model_hash,
+                                       const std::string & family,
+                                       ts_tessera_db_l5_outcome_stats * out) {
+    if (out == nullptr) return 0;
+    *out = ts_tessera_db_l5_outcome_stats{};
+    if (db == nullptr || db->conn == nullptr) return 0;
+    if (model_hash.empty()) return 0;
+    out->family = family;
+    std::ostringstream q;
+    q << "SELECT "
+         "COUNT(*) AS n_rows, "
+         "SUM(CASE WHEN plan_accepted THEN 1 ELSE 0 END) AS n_accepted, "
+         "AVG(CASE WHEN plan_accepted THEN 1.0 ELSE 0.0 END) AS hit_rate, "
+         "AVG(delta_mse) AS mean_delta_mse, "
+         "AVG(sensitivity_score) AS mean_sensitivity "
+         "FROM l5_outcome WHERE model_hash = '"
+      << sql_escape(model_hash) << "'";
+    if (!family.empty()) {
+        q << " AND family = '" << sql_escape(family) << "'";
+    }
+    try {
+        auto res = db->conn->Query(q.str());
+        if (res->HasError()) return 1;
+        if (res->RowCount() == 0) return 0;
+        out->n_rows = (int32_t) res->GetValue(0, 0).GetValue<int64_t>();
+        // SUM returns NULL when no rows; protect with IsNull check.
+        auto na = res->GetValue(1, 0);
+        out->n_accepted = na.IsNull() ? 0 : (int32_t) na.GetValue<int64_t>();
+        auto hr = res->GetValue(2, 0);
+        out->hit_rate = hr.IsNull() ? 0.0 : hr.GetValue<double>();
+        auto md = res->GetValue(3, 0);
+        out->mean_delta_mse = md.IsNull() ? 0.0 : md.GetValue<double>();
+        auto ms = res->GetValue(4, 0);
+        out->mean_sensitivity = ms.IsNull() ? 0.0 : ms.GetValue<double>();
+    } catch (...) {
         return 1;
     }
     return 0;
