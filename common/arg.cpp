@@ -95,31 +95,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         return true;
     };
 
-    // integer-valued
-    if (arg == "--tessera-evolve-seed") {
-        if (!require_val("--tessera-evolve-seed")) return -1;
-        try { tessera_params.evolve_seed = std::stoull(val); }
-        catch (...) { err = string_format("error: invalid value for --tessera-evolve-seed: '%s'\n", val.c_str()); return -1; }
-        return 2;
-    }
-    if (arg == "--tessera-evolve-iters" || arg == "--tessera-evolve-islands" ||
-        arg == "--tessera-evolve-population" || arg == "--tessera-nthreads") {
-        if (!require_val(arg.c_str())) return -1;
-        int v;
-        try { v = std::stoi(val); }
-        catch (...) { err = string_format("error: invalid value for %s: '%s'\n", arg.c_str(), val.c_str()); return -1; }
-        const int lo = (arg == "--tessera-nthreads") ? 0 : 1;
-        if (v < lo) {
-            err = string_format("error: %s must be >= %d, got %d\n", arg.c_str(), lo, v);
-            return -1;
-        }
-        if      (arg == "--tessera-evolve-iters")      { tessera_params.evolve_iters      = v; }
-        else if (arg == "--tessera-evolve-islands")    { tessera_params.evolve_islands    = v; }
-        else if (arg == "--tessera-evolve-population") { tessera_params.evolve_population = v; }
-        else                                           { tessera_params.nthreads          = v; }
-        return 2;
-    }
-
     // float-valued
     if (arg == "--tessera-outlier-frac" || arg == "--tessera-awq-clip") {
         if (!require_val(arg.c_str())) return -1;
