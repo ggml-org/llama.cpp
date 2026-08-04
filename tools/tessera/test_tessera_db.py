@@ -50,6 +50,7 @@ SCHEMA_SQL = """
     );
     CREATE TABLE IF NOT EXISTS tensor_stats (
         model_hash         TEXT NOT NULL,
+        model_role         TEXT NOT NULL DEFAULT 'trunk',
         name               TEXT NOT NULL,
         family             TEXT,
         layer_depth        INTEGER,
@@ -65,10 +66,11 @@ SCHEMA_SQL = """
         source             TEXT,
         recommended_action TEXT,
         updated_at         TIMESTAMP,
-        PRIMARY KEY (model_hash, name)
+        PRIMARY KEY (model_hash, model_role, name)
     );
     CREATE TABLE IF NOT EXISTS l3_outlier_summary (
         model_hash        TEXT NOT NULL,
+        model_role        TEXT NOT NULL DEFAULT 'trunk',
         name              TEXT NOT NULL,
         layer             INTEGER,
         sidecar_label     TEXT,
@@ -77,10 +79,11 @@ SCHEMA_SQL = """
         max_abs           DOUBLE,
         rms               DOUBLE,
         updated_at        TIMESTAMP,
-        PRIMARY KEY (model_hash, name, sidecar_label)
+        PRIMARY KEY (model_hash, model_role, name, sidecar_label)
     );
     CREATE TABLE IF NOT EXISTS l4_probe_summary (
         model_hash        TEXT NOT NULL,
+        model_role        TEXT NOT NULL DEFAULT 'trunk',
         name              TEXT NOT NULL,
         layer             INTEGER,
         current_qtype     TEXT,
@@ -90,10 +93,11 @@ SCHEMA_SQL = """
         top1_mismatch     DOUBLE,
         n_weights         BIGINT,
         updated_at        TIMESTAMP,
-        PRIMARY KEY (model_hash, name)
+        PRIMARY KEY (model_hash, model_role, name)
     );
     CREATE TABLE IF NOT EXISTS l5_plan_summary (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER,
@@ -106,10 +110,11 @@ SCHEMA_SQL = """
         gradient_proxy        DOUBLE,
         layer_position_prior  DOUBLE,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
     CREATE TABLE IF NOT EXISTS l5_outcome (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER NOT NULL,
@@ -130,10 +135,11 @@ SCHEMA_SQL = """
         residual              DOUBLE,
         in_sample_loss        DOUBLE,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
     CREATE TABLE IF NOT EXISTS l5_weights (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         family                TEXT NOT NULL,
         w_imatrix             DOUBLE NOT NULL,
         w_gradient            DOUBLE NOT NULL,
@@ -145,7 +151,7 @@ SCHEMA_SQL = """
         top_fraction          DOUBLE,
         retune_source         TEXT,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, family)
+        PRIMARY KEY (model_hash, model_role, family)
     );
     CREATE TABLE IF NOT EXISTS per_layer_error_summary (
         model_hash        TEXT NOT NULL,

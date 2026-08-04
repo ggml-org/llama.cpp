@@ -43,31 +43,40 @@ from tessera_db_buffer import TesseraDBBuffer, sql_escape
 # Column lists for the unified-schema tables. The order is the INSERT
 # order. Mirrored on the C++ side in tessera-quantize-db.cpp's CREATE
 # TABLE statements; keep them in sync.
+#
+# Phase 16: model_role was added to the 7 affected tables
+# (tensor_stats, l3_outlier_summary, l4_probe_summary, l5_plan_summary,
+# l4_plan_outcome, l5_outcome, l5_weights) to disambiguate tensors
+# with the same name in the unified Gemma4 12B + dspark + dflash +
+# MTP arch (e.g. blk.0.attn_q.weight exists in both the trunk and
+# the dflash encoder). The PKs now include model_role. The default
+# 'trunk' preserves the pre-Phase-16 contract when the caller omits
+# the column.
 TENSOR_STATS_COLS: tuple[str, ...] = (
-    "model_hash", "name", "family", "layer_depth",
+    "model_hash", "model_role", "name", "family", "layer_depth",
     "out_dim", "in_dim", "n_elements", "dtype",
     "kurtosis", "eff_rank", "rms", "mean_abs", "tail_ratio",
     "source", "recommended_action", "updated_at",
 )
 L3_OUTLIER_COLS: tuple[str, ...] = (
-    "model_hash", "name", "layer", "sidecar_label",
+    "model_hash", "model_role", "name", "layer", "sidecar_label",
     "outlier_count", "outlier_fraction", "max_abs", "rms",
     "updated_at",
 )
 L4_PROBE_COLS: tuple[str, ...] = (
-    "model_hash", "name", "layer",
+    "model_hash", "model_role", "name", "layer",
     "current_qtype", "mse", "mse_minus_one", "perplexity",
     "top1_mismatch", "n_weights", "updated_at",
 )
 L4_PLAN_OUTCOME_COLS: tuple[str, ...] = (
-    "model_hash", "name", "layer", "iteration", "plan_id", "strategy",
+    "model_hash", "model_role", "name", "layer", "iteration", "plan_id", "strategy",
     "alpha_before", "alpha_after", "clip_before", "clip_after",
     "outlier_thresh_before", "outlier_thresh_after",
     "mse_before", "mse_after", "frob_before", "frob_after",
     "family", "updated_at",
 )
 L5_PLAN_COLS: tuple[str, ...] = (
-    "model_hash", "name", "layer", "iteration", "plan_id",
+    "model_hash", "model_role", "name", "layer", "iteration", "plan_id",
     "sensitivity_score", "recommended_qtype", "recommended_alpha",
     "recommended_clip",
     # Phase 15: per-tensor sensitivity component columns (additive,
@@ -83,7 +92,7 @@ L5_PLAN_COLS: tuple[str, ...] = (
     "updated_at",
 )
 L5_OUTCOME_COLS: tuple[str, ...] = (
-    "model_hash", "name", "layer", "iteration", "plan_id",
+    "model_hash", "model_role", "name", "layer", "iteration", "plan_id",
     "family", "sensitivity_score",
     # Phase 15: per-tensor sensitivity components (additive,
     # nullable). Populated from the plan side (l5_plan_summary)
@@ -99,7 +108,7 @@ L5_OUTCOME_COLS: tuple[str, ...] = (
     "plan_accepted", "accept_threshold", "residual", "updated_at",
 )
 L5_WEIGHTS_COLS: tuple[str, ...] = (
-    "model_hash", "family",
+    "model_hash", "model_role", "family",
     "w_imatrix", "w_gradient", "w_layer",
     "bias", "n_samples", "in_sample_loss", "hit_rate",
     # Phase 15: per-family top_fraction retune. The orchestrator's
@@ -200,10 +209,16 @@ class TesseraDB:
 
         Bypasses the buffer and uses a direct INSERT ... ON CONFLICT
         DO UPDATE because the table has a primary key on
-        (model_hash, name); the buffer's plain INSERT would fail on
-        a duplicate. The C++ side has the same primary key and the
-        same upsert pattern (see ``tessera-quantize-db.cpp::
-        ts_quantize_db_upsert_tensor_stat``).
+        (model_hash, model_role, name); the buffer's plain INSERT
+        would fail on a duplicate. The C++ side has the same primary
+        key and the same upsert pattern (see
+        ``tessera-quantize-db.cpp::ts_quantize_db_upsert_tensor_stat``).
+
+        Phase 16: the row dict may carry ``model_role`` (one of
+        'trunk' / 'dflash' / 'dspark' / 'mtp_nextn' / 'shared_embd').
+        The default is 'trunk' for backward compatibility with
+        pre-Phase-16 callers. The bulk INSERT lists model_role as
+        the third column; the ON CONFLICT clause also references it.
 
         Per-side writes are non-destructive across columns: the
         C++ side writes kurtosis / eff_rank / dtype (source =
@@ -228,12 +243,12 @@ class TesseraDB:
             # GA-prep walk also does per-row writes.
             sql = (
                 "INSERT INTO tensor_stats ("
-                "  model_hash, name, family, layer_depth, "
+                "  model_hash, model_role, name, family, layer_depth, "
                 "  out_dim, in_dim, n_elements, dtype, "
                 "  kurtosis, eff_rank, rms, mean_abs, tail_ratio, "
                 "  source, recommended_action, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (model_hash, name) DO UPDATE SET "
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (model_hash, model_role, name) DO UPDATE SET "
                 "  family             = COALESCE(excluded.family,             tensor_stats.family), "
                 "  layer_depth        = COALESCE(excluded.layer_depth,        tensor_stats.layer_depth), "
                 "  out_dim            = COALESCE(excluded.out_dim,            tensor_stats.out_dim), "
@@ -260,6 +275,7 @@ class TesseraDB:
             try:
                 self._conn.execute(sql, [
                     model_hash,
+                    r.get("model_role", "trunk"),
                     r.get("name", ""),
                     r.get("family"),
                     r.get("layer_depth"),
@@ -279,7 +295,8 @@ class TesseraDB:
             except Exception as e:
                 sys.stderr.write(
                     f"tessera-db: insert_tensor_stats on "
-                    f"({model_hash}, {r.get('name', '')}) failed: {e}\n"
+                    f"({model_hash}, {r.get('model_role', 'trunk')}, "
+                    f"{r.get('name', '')}) failed: {e}\n"
                 )
         return len(rows)
 
@@ -297,6 +314,7 @@ class TesseraDB:
         for r in rows:
             row = (
                 model_hash,
+                r.get("model_role", "trunk"),
                 r.get("name", ""),
                 r.get("layer"),
                 r.get("sidecar_label", ""),
@@ -321,6 +339,7 @@ class TesseraDB:
         for r in rows:
             row = (
                 model_hash,
+                r.get("model_role", "trunk"),
                 r.get("name", ""),
                 r.get("layer"),
                 r.get("current_qtype", ""),
@@ -349,12 +368,24 @@ class TesseraDB:
         # column) does not fail on a missing column. ``ALTER TABLE
         # ... ADD COLUMN IF NOT EXISTS`` is a no-op when the
         # column already exists, so this is safe on every open.
+        #
+        # Phase 16: model_role is in the column list (col index 2
+        # in L5_PLAN_COLS). The CREATE TABLE on a fresh DB has
+        # it; on a pre-Phase-16 DB, the Python migration
+        # (tools/tessera/migrate_model_role.py) is the path that
+        # adds the column + rebuilds the PK. This helper does
+        # not run the migration (it's a separate script); the
+        # caller is expected to have run it before opening the
+        # DB for write. _ensure_l5_plan_columns is preserved for
+        # the Phase 15 columns; the model_role column is part of
+        # the canonical schema and not added lazily here.
         self._ensure_l5_plan_columns()
         buf = self._buffer_for("l5_plan_summary", L5_PLAN_COLS)
         now = _now_iso()
         for r in rows:
             row = (
                 model_hash,
+                r.get("model_role", "trunk"),
                 r.get("name", ""),
                 r.get("layer"),
                 r.get("iteration"),
@@ -417,10 +448,18 @@ class TesseraDB:
         """Push rows into the ``l4_plan_outcome`` table. The C++
         dispatch's adaptive_requantize loop also writes here (one
         row per (tensor, gen)). ``rows`` is a list of dicts with
-        keys: name, layer, iteration, plan_id, strategy,
-        alpha_before, alpha_after, clip_before, clip_after,
-        outlier_thresh_before, outlier_thresh_after, mse_before,
-        mse_after, frob_before, frob_after, family.
+        keys: name, model_role (Phase 16; default 'trunk'), layer,
+        iteration, plan_id, strategy, alpha_before, alpha_after,
+        clip_before, clip_after, outlier_thresh_before,
+        outlier_thresh_after, mse_before, mse_after, frob_before,
+        frob_after, family.
+
+        Phase 16: model_role disambiguates dflash / dspark /
+        mtp_nextn rows from the trunk's. The drafter-local
+        tensor name goes in ``name`` (e.g. the dflash encoder's
+        'blk.0.attn_q.weight', not the global 'dflash.blk.0...
+        name'); the consumer joins via
+        (model_hash, model_role, name).
 
         Returns the number of rows accepted.
         """
@@ -431,6 +470,7 @@ class TesseraDB:
         for r in rows:
             row = (
                 model_hash,
+                r.get("model_role", "trunk"),
                 r.get("name", ""),
                 r.get("layer"),
                 r.get("iteration"),
@@ -486,6 +526,7 @@ class TesseraDB:
         for r in rows:
             row = (
                 model_hash,
+                r.get("model_role", "trunk"),
                 r.get("name", ""),
                 r.get("layer"),
                 r.get("iteration"),
@@ -552,14 +593,15 @@ class TesseraDB:
         per-family retuned scoring weights).
 
         Bypasses the buffer and uses a direct ``INSERT ... ON
-        CONFLICT (model_hash, family) DO UPDATE`` because the table
-        has a primary key; the buffer's plain INSERT would fail on
-        a duplicate. The C++ side has the same primary key and the
-        same upsert pattern (see
+        CONFLICT (model_hash, model_role, family) DO UPDATE``
+        because the table has a primary key; the buffer's plain
+        INSERT would fail on a duplicate. The C++ side has the
+        same primary key and the same upsert pattern (see
         ``ts_tessera_db_upsert_l5_weight`` in
         ``tessera-quantize-db.cpp``).
 
-        ``rows`` is a list of dicts with keys: model_hash, family,
+        ``rows`` is a list of dicts with keys: model_hash,
+        model_role (Phase 16; default 'trunk'), family,
         w_imatrix, w_gradient, w_layer, bias, n_samples,
         in_sample_loss, hit_rate, top_fraction (nullable, Phase 15),
         retune_source. The retune is the consumer-side half of the
@@ -578,6 +620,13 @@ class TesseraDB:
         The column is added via ALTER TABLE IF NOT EXISTS so the
         upsert works on DBs created before Phase 15.
 
+        Phase 16: model_role is part of the canonical schema
+        (the l5_weights table is per-(model, role, family)). The
+        Python migration is the path that adds the column +
+        rebuilds the PK on a pre-Phase-16 DB. This helper does
+        not run the migration; the caller is expected to have
+        run migrate_model_role.py before opening the DB for write.
+
         Returns the number of rows upserted.
         """
         if not rows or self._read_only:
@@ -588,11 +637,11 @@ class TesseraDB:
         self._ensure_l5_weights_columns()
         sql = (
             "INSERT INTO l5_weights ("
-            "  model_hash, family, w_imatrix, w_gradient, w_layer, "
+            "  model_hash, model_role, family, w_imatrix, w_gradient, w_layer, "
             "  bias, n_samples, in_sample_loss, hit_rate, "
             "  top_fraction, retune_source, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (model_hash, family) DO UPDATE SET "
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
             "  w_imatrix       = excluded.w_imatrix, "
             "  w_gradient      = excluded.w_gradient, "
             "  w_layer         = excluded.w_layer, "
@@ -610,6 +659,7 @@ class TesseraDB:
             try:
                 self._conn.execute(sql, [
                     r.get("model_hash", ""),
+                    r.get("model_role", "trunk"),
                     r.get("family", ""),
                     float(r.get("w_imatrix", 0.0)),
                     float(r.get("w_gradient", 0.0)),
@@ -626,8 +676,9 @@ class TesseraDB:
             except Exception as e:
                 sys.stderr.write(
                     f"tessera-db: insert_l5_weights on "
-                    f"({r.get('model_hash', '')}, {r.get('family', '')}) "
-                    f"failed: {e}\n"
+                    f"({r.get('model_hash', '')}, "
+                    f"{r.get('model_role', 'trunk')}, "
+                    f"{r.get('family', '')}) failed: {e}\n"
                 )
         return n
 
