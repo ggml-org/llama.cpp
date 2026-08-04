@@ -200,6 +200,9 @@ option(GGML_CUDA                            "ggml: use CUDA"                    
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
 option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
 option(GGML_CUDA_FORCE_CUBLAS               "ggml: always use cuBLAS instead of mmq kernels"  OFF)
+option(GGML_CUDA_MOE_PROFILE                "ggml: add NVTX ranges for CUDA MoE profiling"    OFF)
+set   (GGML_CUDA_NVTX_INCLUDE_DIR "" CACHE PATH
+                                            "ggml: optional NVTX3 include root for CUDA MoE profiling")
 set   (GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
                                             "ggml: max. batch size for using peer access")
 option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copies"            OFF)

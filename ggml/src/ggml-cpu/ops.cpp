@@ -5827,7 +5827,7 @@ static float rope_yarn_ramp(const float low, const float high, const int i0) {
 // YaRN algorithm based on LlamaYaRNScaledRotaryEmbedding.py from https://github.com/jquesnelle/yarn
 // MIT licensed. Copyright (c) 2023 Jeffrey Quesnelle and Bowen Peng.
 static void rope_yarn(
-    float theta_extrap, float freq_scale, float corr_dims[2], int64_t i0, float ext_factor, float mscale,
+    float theta_extrap, float freq_scale, const float corr_dims[2], int64_t i0, float ext_factor, float mscale,
     float * cos_theta, float * sin_theta) {
     // Get n-d rotational scaling corrected for extrapolation
     float theta_interp = freq_scale * theta_extrap;
@@ -8465,6 +8465,67 @@ void ggml_compute_forward_top_k(
     }
 }
 
+struct ggml_flash_attn_ext_rope_cpu {
+    const int32_t * pos = nullptr;
+    const float * freq_factors = nullptr;
+    int n_dims = 0;
+    float freq_scale = 0.0f;
+    float ext_factor = 0.0f;
+    float attn_factor = 0.0f;
+    float corr_dims[2] = {};
+    float theta_scale = 0.0f;
+};
+
+static ggml_flash_attn_ext_rope_cpu ggml_flash_attn_ext_get_rope_cpu(const ggml_tensor * dst) {
+    ggml_flash_attn_ext_rope_cpu rope;
+    if (!ggml_flash_attn_ext_has_rope(dst)) {
+        return rope;
+    }
+
+    GGML_ASSERT(dst->src[5] != nullptr && dst->src[5]->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_get_op_params_i32(dst, 6) == GGML_ROPE_TYPE_NEOX);
+    float freq_base;
+    float beta_fast;
+    float beta_slow;
+    memcpy(&freq_base,       (const int32_t *) dst->op_params +  8, sizeof(float));
+    memcpy(&rope.freq_scale, (const int32_t *) dst->op_params +  9, sizeof(float));
+    memcpy(&rope.ext_factor, (const int32_t *) dst->op_params + 10, sizeof(float));
+    memcpy(&rope.attn_factor,(const int32_t *) dst->op_params + 11, sizeof(float));
+    memcpy(&beta_fast,       (const int32_t *) dst->op_params + 12, sizeof(float));
+    memcpy(&beta_slow,       (const int32_t *) dst->op_params + 13, sizeof(float));
+
+    rope.pos = (const int32_t *) dst->src[5]->data;
+    rope.freq_factors = dst->src[6] != nullptr ? (const float *) dst->src[6]->data : nullptr;
+    rope.n_dims = ggml_get_op_params_i32(dst, 5);
+    ggml_rope_yarn_corr_dims(
+        rope.n_dims, ggml_get_op_params_i32(dst, 7), freq_base, beta_fast, beta_slow, rope.corr_dims);
+    rope.theta_scale = powf(freq_base, -2.0f / rope.n_dims);
+    return rope;
+}
+
+static void ggml_flash_attn_ext_apply_rope_cpu(
+        const float * src, float * dst, int64_t n, int64_t token, const ggml_flash_attn_ext_rope_cpu & rope) {
+    memcpy(dst, src, n * sizeof(float));
+    if (rope.n_dims == 0) {
+        return;
+    }
+
+    const int position = rope.pos[token];
+    for (int d = 0; d < rope.n_dims/2; ++d) {
+        const int i0 = 2*d;
+        const float theta_base = position * powf(rope.theta_scale, float(d));
+        const float freq_factor = rope.freq_factors != nullptr ? rope.freq_factors[d] : 1.0f;
+        float cos_theta;
+        float sin_theta;
+        rope_yarn(theta_base/freq_factor, rope.freq_scale, rope.corr_dims, i0,
+                  rope.ext_factor, rope.attn_factor, &cos_theta, &sin_theta);
+        const float x0 = src[d];
+        const float x1 = src[d + rope.n_dims/2];
+        dst[d] = x0 * cos_theta - x1 * sin_theta;
+        dst[d + rope.n_dims/2] = x0 * sin_theta + x1 * cos_theta;
+    }
+}
+
 static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const ggml_compute_params * params,
         ggml_tensor * dst,
@@ -8478,6 +8539,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     const ggml_tensor * v     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
+    const int32_t causal_window = ggml_flash_attn_ext_get_causal_window(dst);
+    const ggml_flash_attn_ext_rope_cpu rope = ggml_flash_attn_ext_get_rope_cpu(dst);
 
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
@@ -8549,6 +8612,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
     int ith = params->ith;
 
+    std::vector<float> q_rope(rope.n_dims != 0 ? DK : 0);
     for (int ir = ir0; ir < ir1; ++ir) {
         // q indices
         const int iq3 = ir/(neq2*neq1);
@@ -8583,6 +8647,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const int iv2 = iq2 / rv2;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
+        if (rope.n_dims != 0) {
+            ggml_flash_attn_ext_apply_rope_cpu(pq, q_rope.data(), DK, iq1, rope);
+            pq = q_rope.data();
+        }
         q_to_vec_dot(pq, Q_q, DK);
 
         // online softmax / attention
@@ -8590,6 +8658,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         // ref: https://arxiv.org/pdf/2112.05682.pdf
 
         for (int64_t ic = ic_start; ic < ic_end; ++ic) {
+            if (causal_window >= 0 &&
+                    (ic > iq1 || (causal_window != 0 && ic + causal_window <= iq1))) {
+                continue;
+            }
             const float mv = mp ? slope*GGML_CPU_FP16_TO_FP32(mp[ic]) : 0.0f;
             if (mv == -INFINITY) {
                 continue;
@@ -8712,6 +8784,8 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
     const ggml_tensor * v     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
+    const int32_t causal_window = ggml_flash_attn_ext_get_causal_window(dst);
+    const ggml_flash_attn_ext_rope_cpu rope = ggml_flash_attn_ext_get_rope_cpu(dst);
 
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
@@ -8836,7 +8910,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             float * Q_f32 = (float *)Q_q;
             for (int tq = 0; tq < tile_rows; tq++) {
                 const float * pq = (const float *) ((char *) q->data + ((iq1 + tq)*nbq1 + iq2*nbq2 + iq3*nbq3));
-                memcpy(Q_f32 + tq * DK, pq, DK * sizeof(float));
+                ggml_flash_attn_ext_apply_rope_cpu(pq, Q_f32 + tq * DK, DK, iq1 + tq, rope);
             }
             for (int tq = tile_rows; tq < Q_TILE_SZ; tq++) {
                 memset(Q_f32 + tq * DK, 0, DK * sizeof(float));
@@ -8850,12 +8924,18 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             const int kv_tile = (int)std::min((int64_t)KV_TILE_SZ, nek1 - ic);
 
             // skip the tile entirely if all the masks are -inf
-            if (mask) {
+            if (mask || causal_window >= 0) {
                 bool can_skip = true;
                 for (int tq = 0; tq < tile_rows; tq++) {
-                    const ggml_fp16_t * mp_row = (const ggml_fp16_t *)((const char *) mask->data + (iq1 + tq)*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]);
+                    const ggml_fp16_t * mp_row = mask ? (const ggml_fp16_t *)((const char *) mask->data +
+                        (iq1 + tq)*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]) : nullptr;
                     for (int tk = 0; tk < kv_tile; tk++) {
-                        mask32[tq * KV_TILE_SZ + tk] = slope * GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]);
+                        const int64_t key = ic + tk;
+                        const int64_t query = iq1 + tq;
+                        const bool keep = causal_window < 0 ||
+                            (key <= query && (causal_window == 0 || key + causal_window > query));
+                        mask32[tq * KV_TILE_SZ + tk] = keep && mp_row != nullptr ?
+                            slope * GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]) : (keep ? 0.0f : -INFINITY);
                         if (mask32[tq * KV_TILE_SZ + tk] != -INFINITY) {
                             can_skip = false;
                         }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "common.cuh"
+#include "cp-async.cuh"
+#include "moe-mmq-repack.cuh"
 
 #include <climits>
 #include <cstdint>
@@ -864,9 +866,81 @@ static constexpr __device__ ggml_cuda_mmq_write_back_t ggml_cuda_mmq_get_write_b
 
 // ---------------------------------------------------------------------------------------------
 
-template <ggml_type type, int J, bool fallback, bool fixup>
+template <int J, int nthreads>
+static __device__ __forceinline__ void ggml_cuda_mmq_load_y_tile_async(const int * __restrict__ src,
+                                                                       int * __restrict__ dst) {
+    constexpr int nbytes = J * MMQ_TILE_Y_K * sizeof(int);
+    static_assert(nbytes % 16 == 0, "MMQ activation tile must be 16-byte aligned");
+
+    const int          tid        = threadIdx.y * blockDim.x + threadIdx.x;
+    const unsigned int dst_shared = ggml_cuda_cvta_generic_to_shared(dst);
+    for (int offset = tid * 16; offset < nbytes; offset += nthreads * 16) {
+        cp_async_cg_16<256>(dst_shared + offset, (const char *) src + offset);
+    }
+}
+
+template <ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void ggml_cuda_mmq_load_x_tile_split_async(const char * __restrict__ x,
+                                                                             const uint8_t * __restrict__ scales,
+                                                                             int scale_stride,
+                                                                             int * __restrict__ x_tile,
+                                                                             int kbx0,
+                                                                             int i_max,
+                                                                             int stride) {
+    constexpr int warp_size      = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps         = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
+    constexpr int I              = ggml_cuda_mmq_get_I(type, J, fallback);
+    constexpr int sram_stride    = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+    constexpr int iter_k         = ggml_cuda_mmq_get_K_vram(type, J, fallback);
+    constexpr int blocks_per_row = iter_k / QK_MXFP4;
+    constexpr int rows_per_warp  = warp_size / blocks_per_row;
+
+    int *      x_qs        = x_tile;
+    uint32_t * x_sc        = reinterpret_cast<uint32_t *>(x_qs + 2 * MMQ_TILE_NE_K);
+    const int  k_block     = threadIdx.x % blocks_per_row;
+    const int  row_in_warp = threadIdx.x / blocks_per_row;
+
+#pragma unroll
+    for (int i0 = 0; i0 < I; i0 += rows_per_warp * nwarps) {
+        int i = i0 + threadIdx.y * rows_per_warp + row_in_warp;
+        if constexpr (fallback) {
+            i = min(i, i_max);
+        }
+
+        const int64_t      block_index = (int64_t) kbx0 + (int64_t) i * stride + k_block;
+        const unsigned int dst_shared =
+            ggml_cuda_cvta_generic_to_shared(x_qs + i * sram_stride + k_block * (QK_MXFP4 / (2 * sizeof(int))));
+        cp_async_cg_16<256>(dst_shared, x + block_index * (QK_MXFP4 / 2));
+
+        if (k_block % 2 == 0) {
+            const int64_t  row                  = block_index / stride;
+            const int      block_in_row         = block_index - row * stride;
+            const uint32_t e0                   = scales[row * scale_stride + block_in_row];
+            const uint32_t e1                   = scales[row * scale_stride + block_in_row + 1];
+            x_sc[i * sram_stride + k_block / 2] = e0 | (e1 << 8);
+        }
+    }
+}
+
+template <int J, int nthreads, int warp_size>
+static __device__ __forceinline__ void ggml_cuda_mmq_load_y_tile_sync(const int * __restrict__ src,
+                                                                      int * __restrict__ dst) {
+#pragma unroll
+    for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nthreads) {
+        const int offset = l0 + threadIdx.y * warp_size + threadIdx.x;
+        dst[offset]      = src[offset];
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+
+template <ggml_type type, int J, bool fallback, bool fixup,
+          ggml_cuda_moe_weight_layout weight_layout       = ggml_cuda_moe_weight_layout::canonical,
+          bool                        use_cp_async        = false,
+          bool                        use_weight_pipeline = false>
 static __device__ __forceinline__ void mul_mat_q_process_tile(
-        const char * __restrict__ x, const int offset_x, const int * __restrict__ y,
+        const char * __restrict__ x, const uint8_t * __restrict__ x_scales,
+        const int scale_stride_x, const int offset_x, const int * __restrict__ y,
         const int * __restrict__ ids_dst, float * __restrict__ dst, float * __restrict__ tmp_fixup,
         const float * __restrict__ y_scale,
         const int stride_row_x, const int ncols_y, const int stride_col_dst,
@@ -876,13 +950,16 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     constexpr int              nwarps     = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
     constexpr int              qk         = ggml_cuda_type_traits<type>::qk;
     constexpr int              I          = ggml_cuda_mmq_get_I(type, J, fallback);
+    constexpr int              y_tile_size = GGML_PAD(J * MMQ_TILE_Y_K, nwarps * warp_size);
     constexpr ggml_cuda_mmq_load_tiles_t load_tiles = ggml_cuda_mmq_get_load_tiles<type, J, fallback>();
     constexpr ggml_cuda_mmq_vec_dot_t    vec_dot    = ggml_cuda_mmq_get_vec_dot<type, J, fallback>();
     constexpr ggml_cuda_mmq_write_back_t write_back = ggml_cuda_mmq_get_write_back<type, J, fallback>();
 
     extern __shared__ int data_mul_mat_q[];
-    int * tile_y = data_mul_mat_q + J;
-    int * tile_x = tile_y + GGML_PAD(J*MMQ_TILE_Y_K, nwarps*warp_size);
+    int * tile_y      = data_mul_mat_q + J;
+    int * tile_y_next = tile_y + y_tile_size;
+    int * tile_x      = tile_y + y_tile_size * (use_cp_async && !use_weight_pipeline ? 2 : 1);
+    int * tile_x_next = tile_x + I * ggml_cuda_mmq_get_sram_stride(type, J, fallback);
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
     // FP4 tile stores 8 blocks
@@ -898,39 +975,88 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
-    for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-        load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-        {
+    if constexpr (use_weight_pipeline) {
+        static_assert(use_cp_async, "weight pipeline requires asynchronous activation loads");
+        static_assert(weight_layout == ggml_cuda_moe_weight_layout::split,
+                      "weight pipeline requires split MXFP4 weights");
+
+        ggml_cuda_mmq_load_x_tile_split_async<type, J, fallback>(x, x_scales, scale_stride_x, tile_x,
+                                                                 offset_x + kb0_start, tile_x_max_i, stride_row_x);
+        const int * by0_first = y + ncols_y * (kb0_start * qk / ne_block) * sz;
+        ggml_cuda_mmq_load_y_tile_async<J, nwarps * warp_size>(by0_first, tile_y);
+        cp_async_wait_all();
+        __syncthreads();
+
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            const bool has_next = kb0 + blocks_per_iter < kb0_stop;
+            if (has_next) {
+                ggml_cuda_mmq_load_x_tile_split_async<type, J, fallback>(x, x_scales, scale_stride_x, tile_x_next,
+                                                                         offset_x + kb0 + blocks_per_iter, tile_x_max_i,
+                                                                         stride_row_x);
+            }
+
+            vec_dot(tile_x, tile_y, sum, 0);
+            cp_async_wait_all();
+            __syncthreads();
+
+            const int * by1 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
+            ggml_cuda_mmq_load_y_tile_async<J, nwarps * warp_size>(by1, tile_y);
+            cp_async_wait_all();
+            __syncthreads();
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+            __syncthreads();
+
+            if (has_next) {
+                const int   next_kb0 = kb0 + blocks_per_iter;
+                const int * by0_next = y + ncols_y * (next_kb0 * qk / ne_block) * sz;
+                ggml_cuda_mmq_load_y_tile_async<J, nwarps * warp_size>(by0_next, tile_y);
+                cp_async_wait_all();
+                __syncthreads();
+            }
+
+            int * tmp   = tile_x;
+            tile_x      = tile_x_next;
+            tile_x_next = tmp;
+        }
+    } else {
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            if constexpr (weight_layout == ggml_cuda_moe_weight_layout::canonical) {
+                load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+            } else {
+                ggml_cuda_mmq_load_tiles_mxfp4_repacked<weight_layout, type, J, fallback>(
+                    x, x_scales, scale_stride_x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+            }
             const int * by0 = y + ncols_y * (kb0 * qk / ne_block) * sz;
-#pragma unroll
-            for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+            const int * by1 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
+            if constexpr (use_cp_async) {
+                ggml_cuda_mmq_load_y_tile_async<J, nwarps * warp_size>(by0, tile_y);
+                cp_async_wait_all();
+                __syncthreads();
 
-                tile_y[l] = by0[l];
+                ggml_cuda_mmq_load_y_tile_async<J, nwarps * warp_size>(by1, tile_y_next);
+                vec_dot(tile_x, tile_y, sum, 0);
+                cp_async_wait_all();
+                __syncthreads();
+
+                vec_dot(tile_x, tile_y_next, sum, MMQ_TILE_NE_K);
+                __syncthreads();
+            } else {
+                ggml_cuda_mmq_load_y_tile_sync<J, nwarps * warp_size, warp_size>(by0, tile_y);
+                __syncthreads();
+
+                vec_dot(tile_x, tile_y, sum, 0);
+
+                __syncthreads();
+
+                ggml_cuda_mmq_load_y_tile_sync<J, nwarps * warp_size, warp_size>(by1, tile_y);
+                __syncthreads();
+
+                vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+                __syncthreads();
             }
         }
-
-        __syncthreads();
-
-        vec_dot(tile_x, tile_y, sum, 0);
-
-        __syncthreads();
-
-        {
-            const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
-#pragma unroll
-            for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
-
-                tile_y[l] = by0[l];
-            }
-        }
-
-        __syncthreads();
-
-        vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
-
-        __syncthreads();
     }
 
     if (fixup) {
@@ -1047,7 +1173,7 @@ static __global__ void mul_mat_q(
 
         constexpr bool fixup = false;
         mul_mat_q_process_tile<type, J, fallback, fixup>
-            (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
+            (x, nullptr, 0, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
              stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, 0, blocks_per_ne00.z);
         return;
@@ -1141,7 +1267,7 @@ static __global__ void mul_mat_q(
 
         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
         mul_mat_q_process_tile<type, J, fallback, fixup>
-            (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
+            (x, nullptr, 0, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
              stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 
@@ -1225,7 +1351,7 @@ static __global__ void mul_mat_q(
 
     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     mul_mat_q_process_tile<type, J, fallback, fixup>
-        (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
+        (x, nullptr, 0, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
          stride_row_x, ncols_y, stride_col_dst,
          tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 }
@@ -1375,6 +1501,9 @@ struct mmq_args {
     int64_t nchannels_x; int64_t nchannels_y; int64_t stride_channel_x; int64_t stride_channel_y; int64_t stride_channel_dst;
     int64_t nsamples_x; int64_t nsamples_y; int64_t stride_sample_x; int64_t stride_sample_y; int64_t stride_sample_dst;
     int64_t ncols_max;
+    const uint8_t *             x_scales;
+    int                         scale_stride_x;
+    ggml_cuda_moe_weight_layout weight_layout;
 };
 
 static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
@@ -1464,6 +1593,200 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
         (args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr, blocks_per_ne00_fd, args.nrows_x, args.ncols_dst,
          args.nrows_dst, nchannels_y_fd, args.stride_channel_dst, nsamples_y_fd, args.stride_sample_dst,
          ntx_fd);
+}
+
+template <int J>
+static __global__ void build_moe_mmq_tile_offsets(const int32_t * __restrict__ expert_bounds,
+                                                  int32_t * __restrict__ tile_offsets,
+                                                  int n_experts) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) {
+        return;
+    }
+
+    tile_offsets[0] = 0;
+    for (int expert = 0; expert < n_experts; ++expert) {
+        const int nrows          = expert_bounds[expert + 1] - expert_bounds[expert];
+        tile_offsets[expert + 1] = tile_offsets[expert] + (nrows + J - 1) / J;
+    }
+}
+
+template <int                         J,
+          bool                        fallback,
+          bool                        output_tile_major,
+          ggml_cuda_moe_weight_layout weight_layout       = ggml_cuda_moe_weight_layout::canonical,
+          bool                        use_cp_async        = false,
+          bool                        use_weight_pipeline = false>
+__launch_bounds__(ggml_cuda_mmq_get_nthreads(GGML_TYPE_MXFP4, J, fallback),
+                  ggml_cuda_mmq_get_occupancy(GGML_TYPE_MXFP4, J, fallback)) static __global__ void
+mul_mat_q_moe_persistent(const char * __restrict__ x,
+                         const uint8_t * __restrict__ x_scales,
+                         int scale_stride_x,
+                         const int * __restrict__ y,
+                         const int32_t * __restrict__ ids_dst,
+                         const int32_t * __restrict__ expert_bounds,
+                         const int32_t * __restrict__ tile_offsets,
+                         int32_t * __restrict__ work_counter,
+                         float * __restrict__ dst,
+                         int n_experts,
+                         int nrows_x,
+                         int ncols_x,
+                         int stride_row_x,
+                         int stride_channel_x,
+                         int ncols_y,
+                         int stride_col_dst) {
+    if (ggml_cuda_mmq_get_config(GGML_TYPE_MXFP4, J, fallback).type == GGML_TYPE_COUNT) {
+        NO_DEVICE_CODE;
+        return;
+    }
+
+    constexpr int warp_size      = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps         = ggml_cuda_mmq_get_nthreads(GGML_TYPE_MXFP4, J, fallback) / warp_size;
+    constexpr int I              = ggml_cuda_mmq_get_I(GGML_TYPE_MXFP4, J, fallback);
+    constexpr int qk             = ggml_cuda_type_traits<GGML_TYPE_MXFP4>::qk;
+    constexpr int y_block_stride = sizeof(block_q8_1_mmq) / sizeof(int);
+
+    extern __shared__ int ids_dst_shared[];
+    __shared__ int        work_idx;
+
+    const int nty           = (nrows_x + I - 1) / I;
+    const int n_token_tiles = tile_offsets[n_experts];
+    const int n_work        = n_token_tiles * nty;
+
+    while (true) {
+        if (threadIdx.x == 0 && threadIdx.y == 0) {
+            work_idx = atomicAdd(work_counter, 1);
+        }
+        __syncthreads();
+
+        if (work_idx >= n_work) {
+            return;
+        }
+
+        const int token_tile  = output_tile_major ? work_idx % n_token_tiles : work_idx / nty;
+        const int it          = output_tile_major ? work_idx / n_token_tiles : work_idx - token_tile * nty;
+        int       expert_low  = 0;
+        int       expert_high = n_experts;
+        while (expert_low < expert_high) {
+            const int expert_mid = (expert_low + expert_high) / 2;
+            if (tile_offsets[expert_mid + 1] <= token_tile) {
+                expert_low = expert_mid + 1;
+            } else {
+                expert_high = expert_mid;
+            }
+        }
+        const int expert       = expert_low;
+        const int jt           = token_tile - tile_offsets[expert];
+        const int col_low      = expert_bounds[expert];
+        const int col_high     = expert_bounds[expert + 1];
+        const int tile_y_max_j = col_high - col_low - jt * J - 1;
+
+        for (int j0 = 0; j0 < J; j0 += nwarps * warp_size) {
+            const int j = j0 + threadIdx.y * warp_size + threadIdx.x;
+            if (j < J) {
+                ids_dst_shared[j] = j <= tile_y_max_j ? ids_dst[col_low + jt * J + j] : 0;
+            }
+        }
+        __syncthreads();
+
+        const int offset_x        = expert * stride_channel_x + it * I * stride_row_x;
+        const int offset_y        = (col_low + jt * J) * y_block_stride;
+        const int offset_dst      = it * I;
+        const int tile_x_max_i    = nrows_x - it * I - 1;
+        const int blocks_per_ne00 = ncols_x / qk;
+
+        mul_mat_q_process_tile<GGML_TYPE_MXFP4, J, fallback, false, weight_layout, use_cp_async, use_weight_pipeline>(
+            x, x_scales, scale_stride_x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, nullptr, nullptr,
+            stride_row_x, ncols_y, stride_col_dst, tile_x_max_i, tile_y_max_j, 0, blocks_per_ne00);
+        __syncthreads();
+    }
+}
+
+template <int J, bool fallback, bool output_tile_major, bool use_cp_async, bool use_weight_pipeline>
+static void launch_mul_mat_q_moe_persistent_mode(const mmq_args & args,
+                                                 const int32_t *  tile_offsets,
+                                                 int32_t *        work_counter,
+                                                 int              grid_blocks,
+                                                 cudaStream_t     stream) {
+    const int                  id            = ggml_cuda_get_device();
+    const int                  cc            = ggml_cuda_info().devices[id].cc;
+    const int                  nsm           = ggml_cuda_info().devices[id].nsm;
+    const int                  warp_size     = ggml_cuda_info().devices[id].warp_size;
+    const ggml_cuda_mmq_config config        = ggml_cuda_mmq_get_config(GGML_TYPE_MXFP4, J, fallback, cc);
+    const int                  nwarps        = config.nthreads / warp_size;
+    const int                  nbytes_shared = mmq_get_nbytes_shared(config, cc) +
+                              (use_cp_async && !use_weight_pipeline ?
+                                   GGML_PAD(config.J * sizeof(block_q8_1_mmq), config.nthreads * sizeof(int)) :
+                                   0) +
+                              (use_weight_pipeline ? ggml_cuda_mmq_get_nbytes_shared_x(config, cc) : 0);
+
+    if constexpr (use_weight_pipeline) {
+        GGML_ASSERT(args.weight_layout == ggml_cuda_moe_weight_layout::split);
+        CUDA_SET_SHARED_MEMORY_LIMIT(
+            (mul_mat_q_moe_persistent<J, fallback, output_tile_major, ggml_cuda_moe_weight_layout::split, true, true>),
+            nbytes_shared);
+        CUDA_CHECK(cudaMemsetAsync(work_counter, 0, sizeof(int32_t), stream));
+        const int blocks = grid_blocks > 0 ? grid_blocks : nsm;
+        mul_mat_q_moe_persistent<J, fallback, output_tile_major, ggml_cuda_moe_weight_layout::split, true, true>
+            <<<blocks, dim3(warp_size, nwarps, 1), nbytes_shared, stream>>>(
+                args.x, args.x_scales, args.scale_stride_x, args.y, args.ids_dst, args.expert_bounds, tile_offsets,
+                work_counter, args.dst, args.nchannels_x, args.nrows_x, args.ncols_x, args.stride_row_x,
+                args.stride_channel_x, args.ncols_y, args.nrows_dst);
+        return;
+    }
+
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q_moe_persistent<J, fallback, output_tile_major,
+                                                           ggml_cuda_moe_weight_layout::canonical, use_cp_async>),
+                                 nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q_moe_persistent<J, fallback, output_tile_major,
+                                                           ggml_cuda_moe_weight_layout::interleaved, use_cp_async>),
+                                 nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT(
+        (mul_mat_q_moe_persistent<J, fallback, output_tile_major, ggml_cuda_moe_weight_layout::split, use_cp_async>),
+        nbytes_shared);
+    CUDA_CHECK(cudaMemsetAsync(work_counter, 0, sizeof(int32_t), stream));
+    const int blocks = grid_blocks > 0 ? grid_blocks : nsm;
+    if (args.weight_layout == ggml_cuda_moe_weight_layout::canonical) {
+        mul_mat_q_moe_persistent<J, fallback, output_tile_major, ggml_cuda_moe_weight_layout::canonical, use_cp_async>
+            <<<blocks, dim3(warp_size, nwarps, 1), nbytes_shared, stream>>>(
+                args.x, nullptr, 0, args.y, args.ids_dst, args.expert_bounds, tile_offsets, work_counter, args.dst,
+                args.nchannels_x, args.nrows_x, args.ncols_x, args.stride_row_x, args.stride_channel_x, args.ncols_y,
+                args.nrows_dst);
+    } else if (args.weight_layout == ggml_cuda_moe_weight_layout::interleaved) {
+        mul_mat_q_moe_persistent<J, fallback, output_tile_major, ggml_cuda_moe_weight_layout::interleaved, use_cp_async>
+            <<<blocks, dim3(warp_size, nwarps, 1), nbytes_shared, stream>>>(
+                args.x, nullptr, 0, args.y, args.ids_dst, args.expert_bounds, tile_offsets, work_counter, args.dst,
+                args.nchannels_x, args.nrows_x, args.ncols_x, args.stride_row_x, args.stride_channel_x, args.ncols_y,
+                args.nrows_dst);
+    } else {
+        GGML_ASSERT(args.weight_layout == ggml_cuda_moe_weight_layout::split);
+        mul_mat_q_moe_persistent<J, fallback, output_tile_major, ggml_cuda_moe_weight_layout::split, use_cp_async>
+            <<<blocks, dim3(warp_size, nwarps, 1), nbytes_shared, stream>>>(
+                args.x, args.x_scales, args.scale_stride_x, args.y, args.ids_dst, args.expert_bounds, tile_offsets,
+                work_counter, args.dst, args.nchannels_x, args.nrows_x, args.ncols_x, args.stride_row_x,
+                args.stride_channel_x, args.ncols_y, args.nrows_dst);
+    }
+}
+
+template <int J, bool fallback, bool output_tile_major>
+static void launch_mul_mat_q_moe_persistent(const mmq_args & args,
+                                            const int32_t *  tile_offsets,
+                                            int32_t *        work_counter,
+                                            int              grid_blocks,
+                                            bool             use_cp_async,
+                                            bool             use_weight_pipeline,
+                                            cudaStream_t     stream) {
+    if (use_weight_pipeline) {
+        launch_mul_mat_q_moe_persistent_mode<J, fallback, output_tile_major, true, true>(
+            args, tile_offsets, work_counter, grid_blocks, stream);
+        return;
+    }
+    if (use_cp_async) {
+        launch_mul_mat_q_moe_persistent_mode<J, fallback, output_tile_major, true, false>(
+            args, tile_offsets, work_counter, grid_blocks, stream);
+    } else {
+        launch_mul_mat_q_moe_persistent_mode<J, fallback, output_tile_major, false, false>(
+            args, tile_offsets, work_counter, grid_blocks, stream);
+    }
 }
 
 template <ggml_type type, bool fallback>
@@ -1591,7 +1914,49 @@ extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
 
 // -------------------------------------------------------------------------------------------------------------------------
 
+struct ggml_cuda_moe_mmq_state {
+    const int32_t *           ids_src1;
+    const int32_t *           ids_dst;
+    const int32_t *           expert_bounds;
+    int64_t                   n_experts;
+    int64_t                   n_tokens;
+    int64_t                   n_expert_used;
+    bool                      ids_src1_inverse;
+    const int32_t *           tile_offsets;
+    int                       tile_rows;
+    int                       grid_blocks;
+    bool                      output_tile_major;
+    bool                      use_cp_async;
+    bool                      use_weight_pipeline;
+    bool                      tma_warp_specialized;
+    const int *               src1_q;
+    ggml_cuda_moe_weight_view weight;
+    int                       epilogue          = 0;
+    const float *             bias              = nullptr;
+    const float *             route_weights     = nullptr;
+    float *                   epilogue_dst      = nullptr;
+    void *                    activation_q      = nullptr;
+    int64_t                   activation_q_ne0  = 0;
+    int64_t                   epilogue_width    = 0;
+    int                       activation_format = 0;
+    bool                      tma_tail_elide     = true;
+    int64_t                   logical_k          = 0;
+};
+
+enum ggml_cuda_moe_activation_format {
+    GGML_CUDA_MOE_ACTIVATION_MXFP4,
+    GGML_CUDA_MOE_ACTIVATION_MXFP8,
+};
+
+enum ggml_cuda_moe_mmq_epilogue {
+    GGML_CUDA_MOE_MMQ_EPILOGUE_NONE,
+    GGML_CUDA_MOE_MMQ_EPILOGUE_W13,
+    GGML_CUDA_MOE_MMQ_EPILOGUE_W2_WEIGHTED,
+    GGML_CUDA_MOE_MMQ_EPILOGUE_W2_ATOMIC,
+};
+
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst);
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids, ggml_tensor * dst, const ggml_cuda_moe_mmq_state * moe_state = nullptr);
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);

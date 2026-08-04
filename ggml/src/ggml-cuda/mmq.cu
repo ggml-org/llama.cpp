@@ -1,5 +1,9 @@
 #include "common.cuh"
 #include "mmq.cuh"
+#include "moe-mmq-tma.cuh"
+#ifdef GGML_CUDA_MOE_PROFILE
+#include "moe-profile.cuh"
+#endif
 #include "quantize.cuh"
 #include "mmid.cuh"
 
@@ -83,10 +87,16 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
 }
 
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids, ggml_tensor * dst, const ggml_cuda_moe_mmq_state * moe_state) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
+
+    if (ggml_cuda_moe_weight_is_inplace_repacked(ctx, src0) &&
+        (moe_state == nullptr || moe_state->weight.layout != ggml_cuda_moe_weight_layout::tma_inplace)) {
+        GGML_ABORT("in-place TMA MoE weights require the fused TMA path");
+    }
 
     GGML_TENSOR_BINARY_OP_LOCALS;
 
@@ -171,7 +181,8 @@ void ggml_cuda_mul_mat_q(
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
-            ne1};
+            ne1,
+            nullptr, 0, ggml_cuda_moe_weight_layout::canonical};
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -184,27 +195,64 @@ void ggml_cuda_mul_mat_q(
     const int64_t ne_get_rows = ne12 * n_expert_used;
     GGML_ASSERT(ne1 == n_expert_used);
 
-    ggml_cuda_pool_alloc<int32_t> ids_src1(ctx.pool(), ne_get_rows);
-    ggml_cuda_pool_alloc<int32_t> ids_dst(ctx.pool(), ne_get_rows);
-    ggml_cuda_pool_alloc<int32_t> expert_bounds(ctx.pool(), ne02 + 1);
+    ggml_cuda_pool_alloc<int32_t> ids_src1_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<int32_t> ids_dst_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<int32_t> expert_bounds_alloc(ctx.pool());
 
-    // gate/up activations are broadcast across experts (ne11 == 1): quantize each token once and
-    // scatter to its slots. ids_src1 then holds the inverse map (token slot -> compact row).
-    const bool dedup_bcast = ne11 == 1 && n_expert_used > 1;
+    const int32_t * ids_src1 = nullptr;
+    const int32_t * ids_dst = nullptr;
+    const int32_t * expert_bounds = nullptr;
 
-    {
+    if (moe_state) {
+        GGML_ASSERT(moe_state->n_experts == ne02);
+        GGML_ASSERT(moe_state->n_tokens == ne12);
+        GGML_ASSERT(moe_state->n_expert_used == n_expert_used);
+        ids_src1 = moe_state->ids_src1;
+        ids_dst = moe_state->ids_dst;
+        expert_bounds = moe_state->expert_bounds;
+    } else {
+        ids_src1 = ids_src1_alloc.alloc(ne_get_rows);
+        ids_dst = ids_dst_alloc.alloc(ne_get_rows);
+        expert_bounds = expert_bounds_alloc.alloc(ne02 + 1);
+    }
+
+    // Fused MoE gate/up activations are broadcast across experts (ne11 == 1): quantize each token
+    // once and scatter to its slots. The regular MMQ path keeps its original permutation.
+    const bool dedup_bcast = moe_state && moe_state->ids_src1_inverse && ne11 == 1 && n_expert_used > 1;
+
+    if (!moe_state) {
+#ifdef GGML_CUDA_MOE_PROFILE
+        const ggml_cuda_moe_profile_scope profile_scope("ffn_moe.ids_helper");
+#endif
         GGML_ASSERT(ids->nb[0] == ggml_element_size(ids));
         const int si1  = ids->nb[1] / ggml_element_size(ids);
         const int sis1 = nb12 / nb11;
 
-        ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+        ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1_alloc.get(), ids_dst_alloc.get(), expert_bounds_alloc.get(),
             ne02, ne12, n_expert_used, ne11, si1, sis1, /*write_inverse =*/ dedup_bcast, stream);
         CUDA_CHECK(cudaGetLastError());
     }
 
-    const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * y_block_size/y_values_per_block +
-        ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11) * sizeof(block_q8_1_mmq);
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
+    const int32_t * ids_src1_quant = ids_src1;
+    if (moe_state && moe_state->ids_src1_inverse && !dedup_bcast) {
+        GGML_ASSERT(ne11 == n_expert_used);
+        GGML_ASSERT(nb12 / nb11 == (size_t) n_expert_used);
+        ids_src1_quant = ids_dst;
+    }
+
+    const bool use_prequantized = moe_state && moe_state->src1_q;
+    if (use_prequantized) {
+        GGML_ASSERT(use_native_fp4 && src0->type == GGML_TYPE_MXFP4);
+        GGML_ASSERT(moe_state->ids_src1_inverse);
+    }
+
+    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool());
+    const int * src1_q = use_prequantized ? moe_state->src1_q : nullptr;
+    if (!use_prequantized) {
+        const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * y_block_size/y_values_per_block +
+            ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11) * sizeof(block_q8_1_mmq);
+        src1_q = (const int *) src1_q8_1.alloc(nbytes_src1_q8_1);
+    }
     ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
     if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
         src1_scale.alloc(ne12*n_expert_used);
@@ -214,7 +262,10 @@ void ggml_cuda_mul_mat_q(
     const int64_t ne12_flat = 1;
     const int64_t ne13_flat = 1;
 
-    {
+    if (!use_prequantized) {
+#ifdef GGML_CUDA_MOE_PROFILE
+        const ggml_cuda_moe_profile_scope profile_scope("ffn_moe.activation_quant");
+#endif
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
@@ -223,17 +274,19 @@ void ggml_cuda_mul_mat_q(
             static constexpr size_t align_float8 = 32;
             const bool use_aligned_float8 = ggml_cuda_is_aligned(src1, align_float8);
             if (dedup_bcast) {
-                quantize_scatter_mmq_fp4_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10,
+                GGML_ASSERT(!moe_state || moe_state->ids_src1_inverse);
+                quantize_scatter_mmq_fp4_cuda(src1_d, ids_src1_quant, src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10,
                                         /*stride_token=*/s12, ne10_padded, ne12, ne11_flat, n_expert_used, stream);
             } else {
-                quantize_mmq_fp4_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10, s11, s12, s13,
+                quantize_mmq_fp4_cuda(src1_d, ids_src1_quant, src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10, s11, s12, s13,
                                         ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
             }
         } else if (dedup_bcast) {
-            quantize_scatter_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10,
+            GGML_ASSERT(!moe_state || moe_state->ids_src1_inverse);
+            quantize_scatter_mmq_q8_1_cuda(src1_d, ids_src1_quant, src1_q8_1.get(), src0->type, ne10,
                                     /*stride_token=*/s12, ne10_padded, ne12, ne11_flat, n_expert_used, stream);
         } else {
-            quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
+            quantize_mmq_q8_1_cuda(src1_d, ids_src1_quant, src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
                                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         }
         CUDA_CHECK(cudaGetLastError());
@@ -245,14 +298,89 @@ void ggml_cuda_mul_mat_q(
     const int64_t s13 = ne12*s12;
 
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
-    const mmq_args args = {
-        src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), expert_bounds.get(), dst_d,
+    mmq_args args = {
+        moe_state ? moe_state->weight.data : src0_d,
+        src0->type, src1_q, ids_dst, expert_bounds, dst_d,
         src1_scale.ptr,
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
-        ne12};
+        ne12,
+        moe_state ? moe_state->weight.scales : nullptr,
+        moe_state ? moe_state->weight.scale_stride : 0,
+        moe_state ? moe_state->weight.layout : ggml_cuda_moe_weight_layout::canonical};
 
+    if (moe_state && moe_state->weight.layout != ggml_cuda_moe_weight_layout::canonical) {
+        args.ncols_x = moe_state->weight.ncols;
+        args.stride_row_x = moe_state->weight.stride_row;
+        args.stride_channel_x = moe_state->weight.stride_channel;
+    }
+
+#ifdef GGML_CUDA_MOE_PROFILE
+    const ggml_cuda_moe_profile_scope profile_scope("ffn_moe.grouped_gemm");
+#endif
+    if (moe_state && moe_state->tile_offsets) {
+        GGML_ASSERT(moe_state);
+        GGML_ASSERT(src0->type == GGML_TYPE_MXFP4);
+        GGML_ASSERT(blackwell_mma_available(cc));
+        GGML_ASSERT(moe_state->tile_offsets);
+        if (moe_state->weight.layout == ggml_cuda_moe_weight_layout::tma ||
+            moe_state->weight.layout == ggml_cuda_moe_weight_layout::tma_inplace) {
+            if (!ggml_cuda_moe_mmq_tma(ctx, args, *moe_state, stream)) {
+                GGML_ABORT("invalid TMA MoE MMQ configuration");
+            }
+            ggml_cuda_moe_weight_mark_used(moe_state->weight, stream);
+            return;
+        }
+        ggml_cuda_pool_alloc<int32_t> work_counter(ctx.pool(), 1);
+        const int tile_rows = moe_state->tile_rows;
+        const int grid_blocks = moe_state->grid_blocks;
+        const bool output_tile_major = moe_state->output_tile_major;
+        const bool use_cp_async = moe_state->use_cp_async;
+        const bool use_weight_pipeline = moe_state->use_weight_pipeline;
+        if (fallback && tile_rows == 32) {
+            if (output_tile_major) {
+                launch_mul_mat_q_moe_persistent<32, true, true>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            } else {
+                launch_mul_mat_q_moe_persistent<32, true, false>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            }
+        } else if (fallback && tile_rows == 64) {
+            if (output_tile_major) {
+                launch_mul_mat_q_moe_persistent<64, true, true>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            } else {
+                launch_mul_mat_q_moe_persistent<64, true, false>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            }
+        } else if (fallback) {
+            GGML_ASSERT(tile_rows == 128);
+            if (output_tile_major) {
+                launch_mul_mat_q_moe_persistent<128, true, true>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            } else {
+                launch_mul_mat_q_moe_persistent<128, true, false>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            }
+        } else if (tile_rows == 32) {
+            if (output_tile_major) {
+                launch_mul_mat_q_moe_persistent<32, false, true>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            } else {
+                launch_mul_mat_q_moe_persistent<32, false, false>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            }
+        } else if (tile_rows == 64) {
+            if (output_tile_major) {
+                launch_mul_mat_q_moe_persistent<64, false, true>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            } else {
+                launch_mul_mat_q_moe_persistent<64, false, false>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            }
+        } else {
+            GGML_ASSERT(tile_rows == 128);
+            if (output_tile_major) {
+                launch_mul_mat_q_moe_persistent<128, false, true>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            } else {
+                launch_mul_mat_q_moe_persistent<128, false, false>(args, moe_state->tile_offsets, work_counter.get(), grid_blocks, use_cp_async, use_weight_pipeline, stream);
+            }
+        }
+        CUDA_CHECK(cudaGetLastError());
+        ggml_cuda_moe_weight_mark_used(moe_state->weight, stream);
+        return;
+    }
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
 

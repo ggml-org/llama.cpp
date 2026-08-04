@@ -15,6 +15,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -40,6 +41,106 @@ static ggml_tensor * build_attn_inp_kq_mask(
     ggml_set_name(res, "attn_inp_kq_mask");
 
     return res;
+}
+
+static bool can_use_cuda_direct_causal(
+        const llama_kv_cache_context * mctx,
+        const llama_ubatch & ubatch,
+        const llama_hparams & hparams,
+        const llama_cparams & cparams,
+        uint32_t n_swa,
+        llama_swa_type swa_type) {
+    static const bool enabled = [] {
+        const char * value = std::getenv("LLAMA_CUDA_FATTN_DIRECT_CAUSAL");
+        return value != nullptr && std::atoi(value) != 0;
+    }();
+
+    if (!enabled || !cparams.flash_attn || !cparams.causal_attn || hparams.use_alibi ||
+            (swa_type != LLAMA_SWA_TYPE_NONE && swa_type != LLAMA_SWA_TYPE_STANDARD) ||
+            (swa_type == LLAMA_SWA_TYPE_STANDARD && n_swa == 0) || ubatch.is_pos_2d() ||
+            ubatch.n_tokens == 0 || ubatch.n_seq_tokens != ubatch.n_tokens ||
+            ubatch.n_seqs != 1 || ubatch.n_seqs_unq != 1 ||
+            mctx->get_n_kv() != ubatch.n_tokens || ubatch.pos[0] != 0 ||
+            ubatch.n_seq_id[0] != 1) {
+        return false;
+    }
+
+    const llama_seq_id seq_id = ubatch.seq_id[0][0];
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ) {
+        return false;
+    }
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq_id || ubatch.pos[i] != (llama_pos) i) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static ggml_tensor * build_cuda_direct_causal_marker(
+        ggml_context * ctx,
+        const llama_kv_cache_context * mctx,
+        const llama_ubatch & ubatch,
+        uint32_t n_swa,
+        llama_swa_type swa_type) {
+    const int64_t n_kv = mctx->get_n_kv();
+    ggml_tensor * marker = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, 1);
+
+    if (swa_type == LLAMA_SWA_TYPE_STANDARD) {
+        ggml_set_name(marker, "attn_inp_fattn_direct_causal_swa");
+    } else {
+        ggml_set_name(marker, "attn_inp_fattn_direct_causal");
+    }
+
+    static const bool log = [] {
+        const char * value = std::getenv("LLAMA_CUDA_FATTN_DIRECT_CAUSAL_LOG");
+        return value != nullptr && std::atoi(value) != 0;
+    }();
+    if (log) {
+        LLAMA_LOG_INFO("FlashAttention: direct-causal=1, swa=%d, n_swa=%u, n_tokens=%u, n_kv=%lld\n",
+            swa_type != LLAMA_SWA_TYPE_NONE, n_swa, ubatch.n_tokens, (long long) n_kv);
+    }
+    return marker;
+}
+
+static bool is_cuda_direct_causal_marker(const ggml_tensor * mask) {
+    return mask != nullptr &&
+        (std::strcmp(mask->name, "attn_inp_fattn_direct_causal") == 0 ||
+         std::strcmp(mask->name, "attn_inp_fattn_direct_causal_swa") == 0);
+}
+
+static bool is_cuda_direct_causal_swa_marker(const ggml_tensor * mask) {
+    return mask != nullptr && std::strcmp(mask->name, "attn_inp_fattn_direct_causal_swa") == 0;
+}
+
+static bool can_use_cuda_fattn_q_rope(const ggml_tensor * q, const ggml_tensor * kq_mask) {
+    static const bool enabled = [] {
+        const char * value = std::getenv("LLAMA_CUDA_FATTN_Q_ROPE");
+        return value != nullptr && std::atoi(value) != 0;
+    }();
+
+    if (!enabled || !is_cuda_direct_causal_marker(kq_mask) || q == nullptr || q->op != GGML_OP_ROPE ||
+            q->type != GGML_TYPE_F32 || q->src[0] == nullptr || q->src[0]->type != GGML_TYPE_F32 ||
+            q->src[1] == nullptr || q->src[1]->type != GGML_TYPE_I32 || q->src[2] != nullptr ||
+            q->ne[0] != 64 || !ggml_are_same_shape(q, q->src[0]) ||
+            q->op_params[1] != q->ne[0] ||
+            q->op_params[2] != GGML_ROPE_TYPE_NEOX) {
+        return false;
+    }
+
+    if (q->src[1]->ne[0] != q->ne[2]) {
+        return false;
+    }
+
+    static const bool logged = [] {
+        const char * value = std::getenv("LLAMA_CUDA_FATTN_DIRECT_CAUSAL_LOG");
+        if (value != nullptr && std::atoi(value) != 0) {
+            LLAMA_LOG_INFO("FlashAttention: q-rope=1\n");
+        }
+        return true;
+    }();
+    GGML_UNUSED(logged);
+    return true;
 }
 
 static bool can_reuse_kq_mask(
@@ -470,7 +571,7 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
 
     // the mask is left unallocated when the graph only stores K/V without attending
     // (e.g. DFlash's KV-injection pass)
-    if (self_kq_mask && self_kq_mask->buffer) {
+    if (self_kq_mask && self_kq_mask->buffer && !is_cuda_direct_causal_marker(self_kq_mask)) {
         mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
 
@@ -493,7 +594,12 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
   //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
-    res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    if (is_cuda_direct_causal_marker(self_kq_mask)) {
+        res &= can_use_cuda_direct_causal(
+            mctx, params.ubatch, hparams, params.cparams, 0, LLAMA_SWA_TYPE_NONE);
+    } else {
+        res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    }
 
     return res;
 }
@@ -501,7 +607,9 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
 
-    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    if (!is_cuda_direct_causal_marker(self_kq_mask)) {
+        mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    }
 }
 
 bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
@@ -513,7 +621,12 @@ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
 
-    res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    if (is_cuda_direct_causal_marker(self_kq_mask)) {
+        res &= can_use_cuda_direct_causal(
+            mctx, params.ubatch, hparams, params.cparams, 0, LLAMA_SWA_TYPE_NONE);
+    } else {
+        res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    }
 
     return res;
 }
@@ -556,7 +669,7 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     }
 
     // the kq mask guards on its own buffer: shared cells leave idxs unbacked while the mask stays live
-    if (self_kq_mask && self_kq_mask->buffer) {
+    if (self_kq_mask && self_kq_mask->buffer && !is_cuda_direct_causal_marker(self_kq_mask)) {
         mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
 
@@ -568,7 +681,7 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
         }
     }
 
-    if (self_kq_mask_swa && self_kq_mask_swa->buffer) {
+    if (self_kq_mask_swa && self_kq_mask_swa->buffer && !is_cuda_direct_causal_marker(self_kq_mask_swa)) {
         mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
     }
 
@@ -602,8 +715,13 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
       //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
     }
 
-    if (self_kq_mask && self_kq_mask->buffer) {
-        res &= can_reuse_kq_mask(self_kq_mask, mctx->get_base(), params.ubatch, params.cparams);
+    if (self_kq_mask && (self_kq_mask->buffer || is_cuda_direct_causal_marker(self_kq_mask))) {
+        if (is_cuda_direct_causal_marker(self_kq_mask)) {
+            res &= can_use_cuda_direct_causal(
+                mctx->get_base(), params.ubatch, hparams, params.cparams, 0, LLAMA_SWA_TYPE_NONE);
+        } else {
+            res &= can_reuse_kq_mask(self_kq_mask, mctx->get_base(), params.ubatch, params.cparams);
+        }
     }
 
     // swa tensors may not be allocated if there are no SWA attention layers
@@ -612,8 +730,13 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
       //res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
     }
 
-    if (self_kq_mask_swa && self_kq_mask_swa->buffer) {
-        res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(), params.ubatch, params.cparams);
+    if (self_kq_mask_swa && (self_kq_mask_swa->buffer || is_cuda_direct_causal_marker(self_kq_mask_swa))) {
+        if (is_cuda_direct_causal_swa_marker(self_kq_mask_swa)) {
+            res &= can_use_cuda_direct_causal(
+                mctx->get_swa(), params.ubatch, hparams, params.cparams, hparams.n_swa, hparams.swa_type);
+        } else {
+            res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(), params.ubatch, params.cparams);
+        }
     }
 
     return res;
@@ -626,7 +749,7 @@ void llm_graph_input_attn_k_iswa::set_input(const llama_ubatch * ubatch) {
     }
 
     // the kq mask guards on its own buffer: shared cells leave idxs unbacked while the mask stays live
-    if (self_kq_mask && self_kq_mask->buffer) {
+    if (self_kq_mask && self_kq_mask->buffer && !is_cuda_direct_causal_marker(self_kq_mask)) {
         mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
 
@@ -635,7 +758,7 @@ void llm_graph_input_attn_k_iswa::set_input(const llama_ubatch * ubatch) {
         mctx->get_swa()->set_input_k_idxs(self_k_idxs_swa, ubatch);
     }
 
-    if (self_kq_mask_swa && self_kq_mask_swa->buffer) {
+    if (self_kq_mask_swa && self_kq_mask_swa->buffer && !is_cuda_direct_causal_marker(self_kq_mask_swa)) {
         mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
     }
 
@@ -660,8 +783,13 @@ bool llm_graph_input_attn_k_iswa::can_reuse(const llm_graph_params & params) {
         res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
     }
 
-    if (self_kq_mask && self_kq_mask->buffer) {
-        res &= can_reuse_kq_mask(self_kq_mask, mctx->get_base(), params.ubatch, params.cparams);
+    if (self_kq_mask && (self_kq_mask->buffer || is_cuda_direct_causal_marker(self_kq_mask))) {
+        if (is_cuda_direct_causal_marker(self_kq_mask)) {
+            res &= can_use_cuda_direct_causal(
+                mctx->get_base(), params.ubatch, hparams, params.cparams, 0, LLAMA_SWA_TYPE_NONE);
+        } else {
+            res &= can_reuse_kq_mask(self_kq_mask, mctx->get_base(), params.ubatch, params.cparams);
+        }
     }
 
     // swa tensors may not be allocated if there are no SWA attention layers
@@ -669,8 +797,13 @@ bool llm_graph_input_attn_k_iswa::can_reuse(const llm_graph_params & params) {
         res &= self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
     }
 
-    if (self_kq_mask_swa && self_kq_mask_swa->buffer) {
-        res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(), params.ubatch, params.cparams);
+    if (self_kq_mask_swa && (self_kq_mask_swa->buffer || is_cuda_direct_causal_marker(self_kq_mask_swa))) {
+        if (is_cuda_direct_causal_swa_marker(self_kq_mask_swa)) {
+            res &= can_use_cuda_direct_causal(
+                mctx->get_swa(), params.ubatch, hparams, params.cparams, hparams.n_swa, hparams.swa_type);
+        } else {
+            res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(), params.ubatch, params.cparams);
+        }
     }
 
     return res;
@@ -2472,6 +2605,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                float   kq_scale,
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
+    const ggml_tensor * q_rope = can_use_cuda_fattn_q_rope(q, kq_mask) ? q : nullptr;
+    if (q_rope != nullptr) {
+        q = q->src[0];
+    }
 
     // split the batch into streams if needed
     const auto n_stream = k->ne[3];
@@ -2501,9 +2638,17 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+        const bool direct_causal = is_cuda_direct_causal_marker(kq_mask);
+        cur = ggml_flash_attn_ext(ctx0, q, k, v, direct_causal ? nullptr : kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
+
+        if (direct_causal) {
+            ggml_flash_attn_ext_set_causal(cur, is_cuda_direct_causal_swa_marker(kq_mask) ? hparams.n_swa : 0);
+        }
+        if (q_rope != nullptr) {
+            ggml_flash_attn_ext_set_rope(cur, q_rope);
+        }
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
@@ -2688,7 +2833,10 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
+        inp->self_kq_mask = can_use_cuda_direct_causal(
+                mctx_cur, ubatch, hparams, cparams, 0, LLAMA_SWA_TYPE_NONE) ?
+            build_cuda_direct_causal_marker(ctx0, mctx_cur, ubatch, 0, LLAMA_SWA_TYPE_NONE) :
+            build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
@@ -2795,7 +2943,10 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
 
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
+        inp->self_kq_mask = can_use_cuda_direct_causal(
+                mctx_cur, ubatch, hparams, cparams, 0, LLAMA_SWA_TYPE_NONE) ?
+            build_cuda_direct_causal_marker(ctx0, mctx_cur, ubatch, 0, LLAMA_SWA_TYPE_NONE) :
+            build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
@@ -2974,9 +3125,13 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
+    const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
-    ggml_build_forward_expand(gf, q_cur);
+    if (!can_use_cuda_fattn_q_rope(q_cur, kq_mask)) {
+        ggml_build_forward_expand(gf, q_cur);
+    }
 
     if (k_cur) {
         ggml_build_forward_expand(gf, k_cur);
@@ -3002,8 +3157,6 @@ ggml_tensor * llm_graph_context::build_attn(
 
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
-
-    const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
@@ -3199,7 +3352,10 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->get_base()->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
+        inp->self_kq_mask = can_use_cuda_direct_causal(
+                mctx_cur->get_base(), ubatch, hparams, cparams, 0, LLAMA_SWA_TYPE_NONE) ?
+            build_cuda_direct_causal_marker(ctx0, mctx_cur->get_base(), ubatch, 0, LLAMA_SWA_TYPE_NONE) :
+            build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
@@ -3209,7 +3365,10 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs_swa = mctx_cur->get_swa()->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask_swa = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
+        inp->self_kq_mask_swa = can_use_cuda_direct_causal(
+                mctx_cur->get_swa(), ubatch, hparams, cparams, hparams.n_swa, hparams.swa_type) ?
+            build_cuda_direct_causal_marker(ctx0, mctx_cur->get_swa(), ubatch, hparams.n_swa, hparams.swa_type) :
+            build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
         inp->self_kq_mask_swa_cnv = inp->self_kq_mask_swa;
     }
 
@@ -3230,7 +3389,10 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
     {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
+        inp->self_kq_mask = can_use_cuda_direct_causal(
+                mctx_cur->get_base(), ubatch, hparams, cparams, 0, LLAMA_SWA_TYPE_NONE) ?
+            build_cuda_direct_causal_marker(ctx0, mctx_cur->get_base(), ubatch, 0, LLAMA_SWA_TYPE_NONE) :
+            build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
@@ -3239,7 +3401,10 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
 
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask_swa = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
+        inp->self_kq_mask_swa = can_use_cuda_direct_causal(
+                mctx_cur->get_swa(), ubatch, hparams, cparams, hparams.n_swa, hparams.swa_type) ?
+            build_cuda_direct_causal_marker(ctx0, mctx_cur->get_swa(), ubatch, hparams.n_swa, hparams.swa_type) :
+            build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
         inp->self_kq_mask_swa_cnv = inp->self_kq_mask_swa;
     }
 

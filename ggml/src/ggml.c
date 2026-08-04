@@ -5463,6 +5463,46 @@ enum ggml_prec ggml_flash_attn_ext_get_prec(
     return (enum ggml_prec) prec_i32;
 }
 
+void ggml_flash_attn_ext_set_causal(
+        struct ggml_tensor * a,
+        int32_t              window) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(window >= 0);
+
+    ggml_set_op_params_i32(a, 4, window + 1);
+}
+
+int32_t ggml_flash_attn_ext_get_causal_window(
+        const struct ggml_tensor * a) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    return ggml_get_op_params_i32(a, 4) - 1;
+}
+
+void ggml_flash_attn_ext_set_rope(
+        struct ggml_tensor       * a,
+        const struct ggml_tensor * rope) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(rope->op == GGML_OP_ROPE);
+    GGML_ASSERT(rope->src[1] != NULL);
+    GGML_ASSERT(a->src[5] == NULL && a->src[6] == NULL);
+
+    ggml_set_op_params_i32(a, 5, ggml_get_op_params_i32(rope, 1));
+    ggml_set_op_params_i32(a, 6, ggml_get_op_params_i32(rope, 2));
+    ggml_set_op_params_i32(a, 7, ggml_get_op_params_i32(rope, 4));
+    memcpy((int32_t *) a->op_params + 8, (const int32_t *) rope->op_params + 5, 6 * sizeof(int32_t));
+
+    a->src[5] = rope->src[1];
+    a->src[6] = rope->src[2];
+}
+
+bool ggml_flash_attn_ext_has_rope(
+        const struct ggml_tensor * a) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    return ggml_get_op_params_i32(a, 5) > 0;
+}
+
 void ggml_flash_attn_ext_add_sinks(
         struct ggml_tensor * a,
         struct ggml_tensor * sinks) {

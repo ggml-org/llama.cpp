@@ -155,6 +155,51 @@ static __global__ void rms_norm_f32(const float * x,
 }
 
 template <int block_size>
+static __global__ void add_rms_norm_f32(const float * src0,
+                                        const float * src1,
+                                        float *       residual,
+                                        const float * weight,
+                                        float *       dst,
+                                        int           ncols,
+                                        int64_t       src0_stride_row,
+                                        int64_t       src0_stride_channel,
+                                        int64_t       src0_stride_sample,
+                                        int64_t       src1_stride_row,
+                                        int64_t       src1_stride_channel,
+                                        int64_t       src1_stride_sample,
+                                        float         eps) {
+    const int nrows = gridDim.x;
+    const int nchannels = gridDim.y;
+    const int row = blockIdx.x;
+    const int channel = blockIdx.y;
+    const int sample = blockIdx.z;
+    const int tid = threadIdx.x;
+
+    src0 += sample * src0_stride_sample + channel * src0_stride_channel + row * src0_stride_row;
+    src1 += sample * src1_stride_sample + channel * src1_stride_channel + row * src1_stride_row;
+    residual += ((sample * nchannels + channel) * nrows + row) * ncols;
+    dst += ((sample * nchannels + channel) * nrows + row) * ncols;
+
+    float sum = 0.0f;
+    ggml_cuda_pdl_sync();
+    for (int col = tid; col < ncols; col += block_size) {
+        const float value = __fadd_rn(src0[col], src1[col]);
+        residual[col] = value;
+        sum += value * value;
+    }
+
+    extern __shared__ float shared_sum[];
+    sum = block_reduce<block_reduce_method::SUM, block_size>(sum, shared_sum);
+    const float scale = rsqrtf(sum / ncols + eps);
+
+    for (int col = tid; col < ncols; col += block_size) {
+        const float value = residual[col];
+        dst[col] = __fmul_rn(__fmul_rn(scale, value), weight[col]);
+    }
+    ggml_cuda_pdl_lc();
+}
+
+template <int block_size>
 static __global__ void rms_norm_back_f32(
         const float * grad, const float * xf, float * dst, const int ncols, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
@@ -557,6 +602,62 @@ void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
                           /*add_s00*/ 0, 0, 0,
                           0, 0, 0, 0,
                           eps, stream);
+}
+
+void ggml_cuda_op_add_rms_norm_fused(ggml_backend_cuda_context & ctx,
+                                     ggml_tensor *               add_tensor,
+                                     ggml_tensor *               rms_norm_tensor,
+                                     ggml_tensor *               mul_tensor) {
+    static const bool logged = [] {
+        const char * value = getenv("GGML_CUDA_ADD_RMS_NORM_LOG");
+        if (value != nullptr && std::atoi(value) != 0) {
+            GGML_LOG_INFO("CUDA add RMS norm fusion: enabled\n");
+        }
+        return true;
+    }();
+    GGML_UNUSED(logged);
+
+    const ggml_tensor * weight = mul_tensor->src[0] == rms_norm_tensor ? mul_tensor->src[1] : mul_tensor->src[0];
+    float eps = 0.0f;
+    memcpy(&eps, rms_norm_tensor->op_params, sizeof(float));
+
+    const int ncols = add_tensor->ne[0];
+    const int nrows = add_tensor->ne[1];
+    const int nchannels = add_tensor->ne[2];
+    const int nsamples = add_tensor->ne[3];
+    const dim3 blocks_num(nrows, nchannels, nsamples);
+    const int threads = ncols < 1024 ? 256 : 1024;
+    const dim3 block_dims(threads, 1, 1);
+    const size_t shared_bytes = threads > WARP_SIZE ? 32 * sizeof(float) : 0;
+
+    GGML_ASSERT(add_tensor->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(add_tensor->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(add_tensor->type == GGML_TYPE_F32);
+    GGML_ASSERT(rms_norm_tensor->src[0] == add_tensor);
+    GGML_ASSERT(weight->type == GGML_TYPE_F32);
+    GGML_ASSERT(mul_tensor->type == GGML_TYPE_F32);
+
+    const int64_t src0_stride_row = add_tensor->src[0]->nb[1] / sizeof(float);
+    const int64_t src0_stride_channel = add_tensor->src[0]->nb[2] / sizeof(float);
+    const int64_t src0_stride_sample = add_tensor->src[0]->nb[3] / sizeof(float);
+    const int64_t src1_stride_row = add_tensor->src[1]->nb[1] / sizeof(float);
+    const int64_t src1_stride_channel = add_tensor->src[1]->nb[2] / sizeof(float);
+    const int64_t src1_stride_sample = add_tensor->src[1]->nb[3] / sizeof(float);
+
+    if (threads == 256) {
+        add_rms_norm_f32<256><<<blocks_num, block_dims, shared_bytes, ctx.stream()>>>(
+            (const float *) add_tensor->src[0]->data, (const float *) add_tensor->src[1]->data,
+            (float *) add_tensor->data, (const float *) weight->data, (float *) mul_tensor->data, ncols,
+            src0_stride_row, src0_stride_channel, src0_stride_sample, src1_stride_row, src1_stride_channel,
+            src1_stride_sample, eps);
+    } else {
+        add_rms_norm_f32<1024><<<blocks_num, block_dims, shared_bytes, ctx.stream()>>>(
+            (const float *) add_tensor->src[0]->data, (const float *) add_tensor->src[1]->data,
+            (float *) add_tensor->data, (const float *) weight->data, (float *) mul_tensor->data, ncols,
+            src0_stride_row, src0_stride_channel, src0_stride_sample, src1_stride_row, src1_stride_channel,
+            src1_stride_sample, eps);
+    }
+    CUDA_CHECK(cudaGetLastError());
 }
 
 void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,

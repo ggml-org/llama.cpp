@@ -1411,6 +1411,32 @@ struct ggml_cuda_stream_context {
     }
 };
 
+struct ggml_cuda_moe_weight_cache_entry {
+    const ggml_tensor * source = nullptr;
+    const void * source_data = nullptr;
+    int layout = 0;
+    int64_t ne[3] = {};
+    void * data = nullptr;
+    bool owns_data = false;
+    size_t allocation_size = 0;
+    size_t scales_offset = 0;
+    int64_t ncols = 0;
+    int64_t stride_row = 0;
+    int64_t stride_channel = 0;
+    int scale_stride = 0;
+    uint64_t last_used = 0;
+    cudaEvent_t ready = nullptr;
+    cudaEvent_t last_use = nullptr;
+    int rows_padded = 0;
+    int k_tiles = 0;
+    int tma_tiles = 0;
+    int tail_blocks = 0;
+    int64_t expert_stride = 0;
+    int64_t tail_offset = 0;
+    bool tma_valid[3] = {};
+    alignas(128) uint64_t tma_map[3][16] = {};
+};
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1479,6 +1505,10 @@ struct ggml_backend_cuda_context {
     }
 
     ggml_cuda_stream_context concurrent_stream_context;
+
+    std::vector<ggml_cuda_moe_weight_cache_entry> moe_weight_cache;
+    uint64_t moe_weight_cache_clock = 0;
+    cudaStream_t moe_weight_stream = nullptr;
 
     ~ggml_backend_cuda_context();
 
