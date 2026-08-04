@@ -520,7 +520,8 @@ Two pieces have landed in `tools/quantize/tessera/tessera-l5.{h,cpp}`:
 L5 is **on the dispatch path**. `ts_dispatch_run_l5_loop` in
 `tessera-dispatch.cpp` runs the full generational loop (L2 measure ->
 `ts_l5_adaptive_requant` plan -> re-quantize flagged tensors in place ->
-re-measure) when `--tessera-adaptive-requantize` is passed. The loop:
+re-measure) when the `l5` subcommand is active (the `--enabled` /
+`--no-enabled` flag on `l5`; on by default). The loop:
 
 - captures each 2D tensor into a `ts_dispatch_refine_entry` map during
   step 7, so flagged tensors can be re-targeted without re-walking the
@@ -534,8 +535,8 @@ re-measure) when `--tessera-adaptive-requantize` is passed. The loop:
 - re-quantizes flagged tensors in place into their existing deque
   elements (stable addresses) and refreshes the GGUF descriptors via
   `ts_gguf_repoint_tensor_cluster`,
-- emits the loop receipt at `--tessera-l5-out` (default: beside
-  `--tessera-policy-out` as `<stem>.l5-loop.json`), schema
+- emits the loop receipt at `l5 --out` (default: beside
+  `policy --out` as `<stem>.l5-loop.json`), schema
   `llama.tessera.l5-loop.v1`, recording per generation: n_flagged,
   n_requant, per-family winning stage + frob_A/frob_B, and per-tensor
   before/after `relative_frobenius`.
@@ -621,7 +622,7 @@ acceptable for offline use, comparable to the existing `direct` mode.
 
 ### Acceptance criteria
 
-- The C++ dispatch GA, with `--tessera-kernel-fitness` and a sidecar
+- The C++ dispatch GA, with `kernel-fitness --enabled` and a sidecar
   directory, consumes L1 sidecars and produces a per-tensor policy
   whose per-tensor fitness is the kernel-direct `t_l^2`.
 - The resulting policy, when applied, produces a model that beats the
@@ -639,9 +640,9 @@ L6 has landed in the C++ dispatch GA, not in `per_tensor_calibrate.py`.
 `ts_l1_compute_all_t2`. `tessera-dispatch.cpp` consumes them at lines
 263-294 (per-candidate kernel-direct `t_l^2`, blended with the offline
 proxy via `blend_factor`), 725-742 (enable from `params->kernel_fitness`),
-and 833-858 (A/B harness report). CLI flags in `common/arg.cpp`:
-`--tessera-kernel-fitness`, `--tessera-kernel-fitness-dir`,
-`--tessera-kernel-fitness-blend`. Test: `test_l1_fitness.cpp`.
+and 833-858 (A/B harness report). CLI subcommand: `kernel-fitness` with
+`--enabled`, `--dir`, `--blend` flags (in `common/arg.cpp`).
+Test: `test_l1_fitness.cpp`.
 
 Two caveats from the audit:
 

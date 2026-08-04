@@ -337,19 +337,19 @@ the L5 apply loop.
   Sensitivity scorers and L2-closing adaptive requant in
   `tessera-l5.{h,cpp}`. The full generational loop
   (`ts_dispatch_run_l5_loop` in `tessera-dispatch.cpp`) runs when
-  `--tessera-adaptive-requantize` is passed: L2 measure ->
+  the `l5` subcommand is active (the `--enabled` / `--no-enabled` flag
+  on `l5`; on by default): L2 measure ->
   `ts_l5_adaptive_requant` plan -> A/B per tensor family (Stage A
   tightens alpha/clip as multipliers, Stage B raises outlier_fraction)
   -> re-quantize flagged tensors in place -> re-measure, up to
-  `--tessera-l5-generations`. Emits an `llama.tessera.l5-loop.v1` report
-  at `--tessera-l5-out`.
+  `l5 --generations`. Emits an `llama.tessera.l5-loop.v1` report
+  at `l5 --out`.
 - **Layer 6: kernel-based GA fitness — SHIPPED.** The C++ dispatch GA
   consumes L1 sidecars as `t_l^2 = ||dequant_kernel(W_l) - W_l||_F^2 /
   ||W_l||_F^2`, blended with the offline proxy, via
   `tessera-l1-fitness.{h,cpp}` and `tessera-dispatch.cpp:263-294`. CLI:
-  `--tessera-kernel-fitness`, `--tessera-kernel-fitness-dir`,
-  `--tessera-kernel-fitness-blend`. This is what closes the loop; the
-  loop is closed at the GA-scoring level.
+  `kernel-fitness --enabled`, `--dir`, `--blend`. This is what closes
+  the loop; the loop is closed at the GA-scoring level.
 
 Remaining work, ranked:
 
@@ -360,8 +360,8 @@ Remaining work, ranked:
    user-visible behavior, not just per-tensor `t_l^2`.
 3. ~~Wire `tessera-l5` into the dispatch path and add the
    apply-plan-and-iterate loop.~~ (done 2026-08-01; the loop is live
-   behind `--tessera-adaptive-requantize`, gated on L2
-   `relative_frobenius` rather than L4).
+   behind the `l5` subcommand's `--enabled` / `--no-enabled` flag,
+   gated on L2 `relative_frobenius` rather than L4).
 4. Lift the L1.5 ground truth to actual FP16 (currently bit-identical
    to L1).
 
@@ -414,8 +414,8 @@ Two drivers share one plumbing (the self-improving flywheel's training step):
    test (this driver is the first consumer of that path).
 2. **Path B — DFlash/D-PACE block-drafter driver (next).** Reuses the arg
    pre-scan, the dataset-build pattern, and the epoch loop; its labels are
-   pre-weighted cross-entropy rows (baked D-PACE weights from `tessera-dataset
-   --tessera-dataset-mode dflash`), not dense LK columns. Plus the offline
+   pre-weighted cross-entropy rows (baked D-PACE weights from `tessera dataset
+   --mode dflash`), not dense LK columns. Plus the offline
    trunk-feature capture pipeline. Design: `docs/tessera-dflash-training-design.md`.
 
 Sanity target (carried over from the old plan): drafter acceptance on Q4_0 from
