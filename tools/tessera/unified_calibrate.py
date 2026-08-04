@@ -26,7 +26,14 @@ Layout:
   ``path`` is a directory of ``.npz`` bundles or a single ``.npz``
   file consumable by ``per_tensor_calibrate.py --layers``.
 * ``--fitness`` is forwarded to ``per_tensor_calibrate.py`` (the
-  same ``lrq`` / ``awq`` / ``flrq`` / ``dartquant`` modes).
+  same ``lrq`` / ``awq`` / ``flrq`` / ``dartquant`` modes) when
+  ``--fitness-default`` is not ``auto``.
+* ``--fitness-default {auto,lrq,awq,flrq,dartquant,compare}``
+  (default ``auto``) controls how the per-component ``--fitness``
+  is chosen. ``auto`` consults ``ROLE_DEFAULT_FITNESS``:
+  ``trunk->awq``, ``dflash/dspark/mtp_nextn->lrq``,
+  ``shared_embd->flrq``. Any other value overrides ``--fitness``
+  on every component.
 * ``--per-tensor-calibrate`` overrides the path to the inner driver
   (default: ``tools/tessera/per_tensor_calibrate.py`` alongside
   this file).
@@ -69,6 +76,51 @@ from typing import Iterable
 SCHEMA = "llama.speculative.calibration-policy.v1"
 UNIFIED_SCHEMA = "llama.tessera.unified-calibration-policy.v1"
 
+# Per-component fitness policy (Phase 16 calibrate-model-role
+# follow-up). Each model_role has a default --fitness strategy
+# because the calibration cost / accuracy tradeoff differs by
+# role:
+#
+#   trunk        -> awq   The heavy hitter is the FFN; the
+#                          GA-driven AWQ search with the family
+#                          warm-start minimises the trunk's
+#                          layer-output error the most. AWQ is
+#                          the legacy default for the trunk.
+#   dflash       -> lrq   The drafter is already lossy
+#                          (speculative decoding can absorb the
+#                          error); LRQ's smaller-footprint
+#                          low-rank scale fits the drafter's
+#                          tight memory budget. AWQ is
+#                          overkill here.
+#   dspark       -> lrq   Same rationale as dflash.
+#   mtp_nextn    -> lrq   The MTP nextn heads are smaller than
+#                          the trunk and benefit from the
+#                          low-rank compression. AWQ's GA
+#                          search budget is wasted on a small
+#                          tensor.
+#   shared_embd  -> flrq  The token_embd / output layers are
+#                          frozen at train; perturbing the
+#                          weight is wasted compute. FLRQ is
+#                          calibration-free (uses only W, not
+#                          the activations) so it's the
+#                          right tool for a frozen tensor.
+#
+# The --fitness flag (explicit) overrides this table on every
+# component. The --fitness-default flag controls whether the
+# table is consulted at all: "auto" uses the per-role default
+# (this table), anything else overrides on every component
+# the same way --fitness does. "auto" is the recommended
+# default for unified Calibrate because the per-role policy
+# is what the calibration roadmap says is correct.
+FITNESS_CHOICES = ("lrq", "awq", "flrq", "dartquant", "compare")
+ROLE_DEFAULT_FITNESS: dict[str, str] = {
+    "trunk":       "awq",
+    "dflash":      "lrq",
+    "dspark":      "lrq",
+    "mtp_nextn":   "lrq",
+    "shared_embd": "flrq",
+}
+
 
 def _parse_components(values: Iterable[str]) -> list[tuple[str, Path]]:
     """Parse --component ROLE=PATH entries. PATH must exist."""
@@ -90,16 +142,65 @@ def _parse_components(values: Iterable[str]) -> list[tuple[str, Path]]:
     return out
 
 
+def resolve_fitness(
+    role: str,
+    fitness_arg: str,
+    fitness_default: str,
+) -> str:
+    """Resolve the effective --fitness for one component.
+
+    The semantics:
+
+    * ``--fitness X`` (explicit) wins on every component
+      regardless of role. This is the legacy single-mode
+      behaviour: one fitness strategy drives every
+      component.
+    * ``--fitness-default auto`` (the recommended default)
+      picks the per-role fitness from ``ROLE_DEFAULT_FITNESS``.
+      Unknown roles fall back to ``awq`` (the legacy default).
+    * ``--fitness-default X`` (any non-auto value) treats
+      ``X`` as the override and ignores ``--fitness``.
+
+    The function is the single source of truth for "what
+    fitness should this component run?" so the test can
+    pin the per-role table independently of the CLI.
+    """
+    # --fitness wins when set. The CLI default is "lrq" for
+    # backward compat with the Phase 16 pre-followup default;
+    # the unified Calibrate wrapper rewires that to
+    # "auto" via --fitness-default so the per-role table is
+    # consulted by default.
+    if fitness_default != "auto":
+        if fitness_default not in FITNESS_CHOICES:
+            raise ValueError(
+                f"--fitness-default {fitness_default!r} not in "
+                f"{FITNESS_CHOICES!r}"
+            )
+        return fitness_default
+    # fitness_default == "auto": consult the per-role table.
+    if fitness_arg not in FITNESS_CHOICES:
+        raise ValueError(
+            f"--fitness {fitness_arg!r} not in {FITNESS_CHOICES!r}"
+        )
+    return ROLE_DEFAULT_FITNESS.get(role, fitness_arg)
+
+
 def _run_per_tensor_calibrate(
     per_tensor_script: Path,
     layers_path: Path,
     fitness: str,
     work_dir: Path,
     extra_args: list[str],
+    model_role: str = "trunk",
 ) -> Path:
     """Invoke per_tensor_calibrate.py on one component's layers and
     return the per-component policy JSON path. The work_dir holds the
     intermediate policy file (caller owns cleanup).
+
+    ``model_role`` (Phase 16) is forwarded to per_tensor_calibrate.py
+    via --model-role so the per-component policy is tagged with the
+    role at the policy layer; the calibration_to_tensor_stats.py
+    consumer then stamps the same role on the tensor_stats row.
     """
     out_path = work_dir / f"policy.{fitness}.json"
     cmd = [
@@ -108,6 +209,7 @@ def _run_per_tensor_calibrate(
         "--fitness", fitness,
         "--layers", str(layers_path),
         "--output", str(out_path),
+        "--model-role", model_role,
         *extra_args,
     ]
     subprocess.run(cmd, check=True)
@@ -183,7 +285,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--fitness",
         choices=("lrq", "awq", "flrq", "dartquant", "compare"),
         default="lrq",
-        help="Forwarded to per_tensor_calibrate.py (default lrq).",
+        help=(
+            "Forwarded to per_tensor_calibrate.py when --fitness-default "
+            "is not 'auto' (the recommended default). When "
+            "--fitness-default is 'auto', this flag is ignored: the "
+            "per-component fitness is picked from the ROLE_DEFAULT_FITNESS "
+            "table by model_role."
+        ),
+    )
+    p.add_argument(
+        "--fitness-default",
+        choices=("auto", "lrq", "awq", "flrq", "dartquant", "compare"),
+        default="auto",
+        help=(
+            "How to pick the per-component --fitness. 'auto' (the "
+            "recommended default) consults ROLE_DEFAULT_FITNESS: "
+            "trunk->awq, dflash/dspark/mtp_nextn->lrq, shared_embd->flrq. "
+            "Any other value (lrq, awq, ...) overrides --fitness on every "
+            "component (one strategy drives all components)."
+        ),
     )
     p.add_argument(
         "--per-tensor-calibrate",
@@ -251,6 +371,11 @@ def main(argv: list[str] | None = None) -> int:
         "flrq": [],
         "dartquant": [],
     }
+    # Per-component fitness resolution. Each role picks its own
+    # --fitness via resolve_fitness(); the resolved values are
+    # carried under unified["components"][<role>]["fitness"] so
+    # the consumer can audit which strategy drove which component.
+    components_meta: dict[str, dict] = {}
     for role, layers_path in components:
         if not args.per_tensor_calibrate.exists():
             print(
@@ -259,16 +384,26 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        component_fitness = resolve_fitness(
+            role, args.fitness, args.fitness_default)
         per_comp = _run_per_tensor_calibrate(
             args.per_tensor_calibrate,
             layers_path,
-            args.fitness,
+            component_fitness,
             work_dir_path,
             args.extra_arg,
+            model_role=role,
         )
         with per_comp.open() as f:
             policy = json.load(f)
         tagged = _tag_policy(policy, role, roles_in_order)
+        # Record the resolved fitness + intermediate path for
+        # this component. ``components_meta[role]["fitness"]``
+        # is the audit trail the test pins.
+        components_meta[role] = {
+            "fitness": component_fitness,
+            "intermediate": str(per_comp),
+        }
         # Merge tensor_families (per-tensor entries, keyed by
         # ``fitness:tensor_name``) into the unified map. Same
         # tensor name across components would collide; the
@@ -299,21 +434,69 @@ def main(argv: list[str] | None = None) -> int:
             unified["per_tensor_calibration"] = tagged["per_tensor_calibration"]
         # Carry the wrapper provenance. A future commit can fan
         # this out per-component.
+    # Carry the per-component fitness decisions (audit trail).
+    unified["components"] = dict(components_meta)
     # Stitch the aggregated per-fitness blocks back into the
     # unified policy. The wrapper ``schema`` stays at the
     # single-component value (the quantizer reads it); the
     # ``unified_schema`` marker tells the writer side to handle
     # the per-tensor model_role.
-    if per_fitness_tensors[args.fitness]:
-        # Use the first component's fitness block as a template
-        # (rank, iterations, etc.), then replace its tensors with
-        # the aggregated list and update totals.
-        first = components[0][0]
-        # Locate the per-component fitness block from the
-        # per-component intermediate policy (we already merged
-        # the families; reconstruct the header from any
-        # component's fitness block). Re-read the first
-        # component's intermediate.
+    #
+    # When --fitness-default=auto, components may have picked
+    # different fitness strategies (trunk->awq, dflash->lrq,
+    # etc.). The legacy single-fitness stitch (one block keyed
+    # by args.fitness) only makes sense when every component
+    # used the same strategy. In the auto case, the per-role
+    # decision is captured under unified["components"]; the
+    # per_fitness aggregation already segregated the tensors
+    # by their block key (lrq / flrq / dartquant / awq).
+    fitness_keys_with_data = [
+        key for key, tensors in per_fitness_tensors.items() if tensors
+    ]
+    # In auto mode, also include the awq block if any component
+    # used awq (the per_fitness_tensors dict above only tracks
+    # lrq / flrq / dartquant; awq's tensors live in the
+    # intermediate policy's top-level search_schema).
+    if args.fitness_default == "auto" and any(
+            meta["fitness"] == "awq" for meta in components_meta.values()):
+        # Locate the awq intermediate by its filename (any
+        # component with fitness=awq contributes here).
+        awq_inters = [
+            Path(meta["intermediate"])
+            for meta in components_meta.values()
+            if meta["fitness"] == "awq"
+        ]
+        awq_tensors: list[dict] = []
+        for inter in awq_inters:
+            if not inter.exists():
+                continue
+            with inter.open() as f:
+                inter_policy = json.load(f)
+            awq_tensors.extend(
+                entry for entry in inter_policy.get("tensor_families", {}).values()
+                if isinstance(entry, dict)
+            )
+        if awq_tensors:
+            # Use the first awq intermediate as the template.
+            with awq_inters[0].open() as f:
+                template = json.load(f)
+            block = {
+                "schema": "llama.tessera.awq-policy.v1",
+                "search_schema": "llama.tessera.awq-evolution.v1",
+                "fitness": "awq",
+                "tensor_count": len(awq_tensors),
+                "tensors": awq_tensors,
+                "model_role": "unified",
+            }
+            if "evolution" in template:
+                block["evolution"] = template["evolution"]
+            unified["awq"] = block
+    # Single-fitness stitch (legacy + the case where the user
+    # overrode --fitness-default to a specific mode). When
+    # args.fitness_default is a specific value (e.g. "lrq"),
+    # every component ran with that strategy, and we keep the
+    # legacy one-block layout.
+    if args.fitness_default != "auto" and per_fitness_tensors.get(args.fitness):
         per_comp_first = work_dir_path / f"policy.{args.fitness}.json"
         if per_comp_first.exists():
             with per_comp_first.open() as f:
@@ -329,6 +512,27 @@ def main(argv: list[str] | None = None) -> int:
             block["total_bytes"] = total_bytes
             block["model_role"] = "unified"
             unified[args.fitness] = block
+    elif args.fitness_default == "auto" and len(fitness_keys_with_data) == 1:
+        # Edge case: --fitness-default=auto, but every component
+        # happened to pick the same strategy (e.g. only the
+        # trunk + dspark where dspark falls back to the legacy
+        # default). Stitch the single block.
+        only = fitness_keys_with_data[0]
+        per_comp_first = work_dir_path / f"policy.{only}.json"
+        if per_comp_first.exists():
+            with per_comp_first.open() as f:
+                first_policy = json.load(f)
+            block = dict(first_policy.get(only, {}))
+            block["tensors"] = per_fitness_tensors[only]
+            block["tensor_count"] = len(per_fitness_tensors[only])
+            total_bytes = sum(
+                int(record.get("bytes", 0))
+                for record in per_fitness_tensors[only]
+                if isinstance(record, dict)
+            )
+            block["total_bytes"] = total_bytes
+            block["model_role"] = "unified"
+            unified[only] = block
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w") as f:
         json.dump(unified, f, indent=2, sort_keys=True)
@@ -336,11 +540,14 @@ def main(argv: list[str] | None = None) -> int:
     if cleanup_work:
         import shutil
         shutil.rmtree(work_dir_path, ignore_errors=True)
+    fitness_summary = ", ".join(
+        f"{role}={meta['fitness']}"
+        for role, meta in components_meta.items()
+    )
     print(
         f"wrote unified policy: {args.output} "
         f"({len(unified['tensor_families'])} tensor families, "
-        f"{len(roles_in_order)} components: "
-        f"{', '.join(roles_in_order)})"
+        f"{len(roles_in_order)} components: {fitness_summary})"
     )
     return 0
 
