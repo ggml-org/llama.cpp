@@ -84,7 +84,17 @@ L5_PLAN_COLS: tuple[str, ...] = (
 )
 L5_OUTCOME_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer", "iteration", "plan_id",
-    "family", "sensitivity_score", "recommended_alpha", "recommended_clip",
+    "family", "sensitivity_score",
+    # Phase 15: per-tensor sensitivity components (additive,
+    # nullable). Populated from the plan side (l5_plan_summary)
+    # by l5_outcome.py at read time. The retune reads these to
+    # fit a 3-coefficient OLS that decomposes which component is
+    # miscalibrated per (model, family). NULL means "no
+    # decomposition possible" (older rows or C++ side that has
+    # not yet populated the columns); the retune falls back to
+    # the 2-coefficient OLS on the combined sensitivity_score.
+    "imatrix_magnitude", "gradient_proxy", "layer_position_prior",
+    "recommended_alpha", "recommended_clip",
     "mse_before", "mse_after", "delta_mse", "delta_frob",
     "plan_accepted", "accept_threshold", "residual", "updated_at",
 )
@@ -449,14 +459,24 @@ class TesseraDB:
 
         ``rows`` is a list of dicts with keys: name, layer,
         iteration, plan_id, family, sensitivity_score,
-        recommended_alpha, recommended_clip, mse_before,
-        mse_after, delta_mse, delta_frob, plan_accepted,
-        accept_threshold, residual.
+        imatrix_magnitude, gradient_proxy, layer_position_prior
+        (Phase 15), recommended_alpha, recommended_clip,
+        mse_before, mse_after, delta_mse, delta_frob,
+        plan_accepted, accept_threshold, residual.
+
+        Phase 15: the per-tensor component columns are nullable.
+        Older C++ writers do not set them; the retune falls back
+        to the 2-coefficient OLS on the combined sensitivity_score
+        when the components are NULL.
 
         Returns the number of rows accepted.
         """
         if not rows or self._read_only:
             return 0
+        # Phase 15: ensure the per-tensor component columns exist
+        # before the first INSERT. Same idempotent ALTER TABLE
+        # pattern as _ensure_l5_plan_columns.
+        self._ensure_l5_outcome_columns()
         buf = self._buffer_for("l5_outcome", L5_OUTCOME_COLS)
         now = _now_iso()
         for r in rows:
@@ -468,6 +488,9 @@ class TesseraDB:
                 r.get("plan_id", ""),
                 r.get("family", ""),
                 r.get("sensitivity_score"),
+                r.get("imatrix_magnitude"),
+                r.get("gradient_proxy"),
+                r.get("layer_position_prior"),
                 r.get("recommended_alpha"),
                 r.get("recommended_clip"),
                 r.get("mse_before"),
@@ -481,6 +504,39 @@ class TesseraDB:
             )
             buf.append(row)
         return len(rows)
+
+    def _ensure_l5_outcome_columns(self) -> None:
+        """Add the Phase 15 per-tensor component columns to
+        ``l5_outcome`` if they are not already present.
+
+        The C++ side may or may not have picked up the column
+        addition (the docs claim the C++ side "pre-emptively
+        added" the columns; the current source has not). The
+        Python side adds them via ``ALTER TABLE ... ADD COLUMN
+        IF NOT EXISTS`` so the bulk INSERT (which lists every
+        L5_OUTCOME_COLS column) does not fail on a missing
+        column. Idempotent.
+        """
+        if self._read_only:
+            return
+        if getattr(self, "_l5_outcome_columns_ensured", False):
+            return
+        for col in (
+            "imatrix_magnitude",
+            "gradient_proxy",
+            "layer_position_prior",
+        ):
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE l5_outcome "
+                    f"ADD COLUMN IF NOT EXISTS {col} DOUBLE"
+                )
+            except Exception as e:
+                sys.stderr.write(
+                    f"tessera-db: ALTER TABLE l5_outcome "
+                    f"ADD COLUMN {col} failed: {e}\n"
+                )
+        self._l5_outcome_columns_ensured = True
 
     # ---- write API: l5_weights (PRIMARY KEY -> direct upsert) ----
 

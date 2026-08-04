@@ -105,6 +105,70 @@ class OutcomeSummary:
         return "\n".join(out)
 
 
+# Phase 15: the per-tensor component columns were added to
+# l5_plan_summary on the Python side via ALTER TABLE IF NOT EXISTS.
+# DBs created before Phase 15 (or by a C++ binary that has not
+# picked up the column addition yet) lack the columns. ``SELECT
+# col, col, col FROM l5_plan_summary`` fails on those DBs. The
+# helper below issues the full SELECT and falls back to a
+# column-free projection on the failure path, so the rest of the
+# pipeline can keep operating. The fallback projection is the
+# subset of L5_PLAN_COLS that existed before Phase 15; the
+# ``with_columns`` in compute_l5_outcome backfills the missing
+# component columns as NULL.
+
+# Pre-Phase-15 l5_plan_summary schema (no per-tensor component
+# columns). Used by the read fallback when the column projection
+# fails against a DB that was created before this commit.
+L5_PLAN_PRE_PHASE15_COLS: tuple[str, ...] = (
+    "model_hash", "name", "layer", "iteration", "plan_id",
+    "sensitivity_score", "recommended_qtype", "recommended_alpha",
+    "recommended_clip",
+)
+
+
+def _read_l5_plan_safe(
+    db: "TesseraDB",
+    model_hash: str | None,
+    full_cols: tuple[str, ...],
+) -> pl.DataFrame:
+    """Read l5_plan_summary with the Phase 15 column set; fall
+    back to the pre-Phase-15 column set when the DB has not been
+    migrated.
+
+    The ``full_cols`` argument is the new column set (with the
+    per-tensor component columns); on a successful read the
+    returned DataFrame has all those columns. On a failure (the
+    SELECT references a column that does not exist on the actual
+    table), the helper retries with ``L5_PLAN_PRE_PHASE15_COLS``
+    and the caller is responsible for backfilling the missing
+    columns as NULL.
+    """
+    where = (
+        f" WHERE model_hash = '{sql_escape(model_hash)}'"
+        if model_hash else ""
+    )
+    try:
+        return db.query(
+            f"SELECT {', '.join(full_cols)} FROM l5_plan_summary"
+            + where
+        )
+    except Exception as e:
+        # DuckDB error messages for a missing column start with
+        # "Binder Error: Referenced column ... not found in FROM
+        # clause". We fall back on any exception here; the
+        # narrower check would be brittle across DuckDB versions.
+        sys.stderr.write(
+            f"l5_outcome: l5_plan_summary lacks Phase 15 "
+            f"component columns; falling back to pre-Phase-15 "
+            f"read ({e.__class__.__name__}: {str(e)[:200]})\n"
+        )
+        return db.query(
+            "SELECT " + ", ".join(L5_PLAN_PRE_PHASE15_COLS)
+            + " FROM l5_plan_summary" + where
+        )
+
+
 def compute_l5_outcome(
     db_path: str | Path,
     *,
@@ -145,9 +209,17 @@ def compute_l5_outcome(
             )
 
         # Read the two source tables.
-        plan = db.query(
-            f"SELECT {', '.join(L5_PLAN_COLS)} FROM l5_plan_summary"
-            + (f" WHERE model_hash = '{sql_escape(model_hash)}'" if model_hash else "")
+        #
+        # Phase 15: l5_plan_summary gained the per-tensor component
+        # columns (imatrix_magnitude, gradient_proxy,
+        # layer_position_prior) on the Python side via ALTER TABLE
+        # IF NOT EXISTS. On DBs created before Phase 15 the columns
+        # are absent and the SELECT would fail; fall back to a
+        # column-free projection that returns the same row set with
+        # the components set to NULL downstream (see the
+        # with_columns below).
+        plan = _read_l5_plan_safe(
+            db, model_hash, L5_PLAN_COLS,
         )
         outcome = db.query(
             f"SELECT {', '.join(L4_PLAN_OUTCOME_COLS)} FROM l4_plan_outcome"
@@ -223,6 +295,16 @@ def compute_l5_outcome(
     # The plan side's `layer` and `updated_at` are dropped; the
     # outcome side wins (the post-apply state is the one we want
     # to keep in the audit trail).
+    #
+    # Phase 15: the three per-tensor sensitivity component columns
+    # live on l5_plan_summary (the plan side wins on the join).
+    # The retune reads them to fit a 3-coefficient OLS that
+    # decomposes which component is miscalibrated per (model,
+    # family). When the columns are NULL (older rows), the retune
+    # falls back to the 2-coefficient OLS on the combined
+    # sensitivity_score. The columns are surfaced on the
+    # l5_outcome projection so the consumer (l5_retune.py) does
+    # not need a second join.
     plan_drop = [c for c in ("layer", "updated_at") if c in verdict.columns]
     if plan_drop:
         verdict = verdict.drop(plan_drop)
@@ -231,11 +313,23 @@ def compute_l5_outcome(
         rename_map["layer_outcome"] = "layer"
     if "updated_at_outcome" in verdict.columns:
         rename_map["updated_at_outcome"] = "updated_at"
+    # Pull the per-tensor component columns from the plan side.
+    # They live on l5_plan_summary in Phase 15; the join's
+    # suffixing leaves them at the top level (no _plan suffix
+    # because the outcome side never has these column names).
+    for comp_col in ("imatrix_magnitude", "gradient_proxy",
+                     "layer_position_prior"):
+        if comp_col not in verdict.columns:
+            verdict = verdict.with_columns(
+                pl.lit(None, dtype=pl.Float64).alias(comp_col)
+            )
     if rename_map:
         verdict = verdict.rename(rename_map)
     out_cols = [
         "model_hash", "name", "layer", "iteration", "plan_id",
-        "family", "sensitivity_score", "recommended_alpha", "recommended_clip",
+        "family", "sensitivity_score",
+        "imatrix_magnitude", "gradient_proxy", "layer_position_prior",
+        "recommended_alpha", "recommended_clip",
         "mse_before", "mse_after", "delta_mse", "delta_frob",
         "plan_accepted", "accept_threshold", "residual", "updated_at",
     ]
