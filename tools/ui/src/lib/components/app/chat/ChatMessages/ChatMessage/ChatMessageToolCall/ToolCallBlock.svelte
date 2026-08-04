@@ -99,8 +99,8 @@
 	);
 
 	function subtitleFor(errorMessage?: string): string | undefined {
-		if (extraLiveStreaming) return 'streaming...';
-		if (showSpinner) return 'executing...';
+		if (extraLiveStreaming) return '';
+		if (showSpinner) return '';
 		if (errorMessage) return 'failed';
 		if (isStreamingCall && !isStreaming) return 'incomplete';
 		return undefined;
