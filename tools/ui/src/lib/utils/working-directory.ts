@@ -2,20 +2,27 @@
  * Pure helpers for the working-directory picker search.
  *
  * The picker is backed by the server's `file_glob_search` built-in tool.
- * Queries that start with `/` or `~` navigate the directory tree (search
- * the parent for the last segment); anything else glob-matches home-relative
- * entries. These helpers build the glob, normalize results and rank them
+ * Queries that start from a root (`/`, `C:\`, `\\host\share`) or from `~`
+ * navigate the directory tree (search the parent for the last segment);
+ * anything else glob-matches home-relative entries. Paths are carried with
+ * `/` separators, which is what the server returns and what Windows accepts.
+ * These helpers build the glob, normalize results and rank them
  * client-side; the component owns the network/state plumbing.
  */
 
 import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
 import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
 import {
+	DRIVE_PREFIX_REGEX,
+	DRIVE_ROOT_REGEX,
 	GLOB_RANGE_CLOSE,
 	GLOB_RANGE_OPEN,
 	GLOB_SPECIAL_CHARS,
 	GLOB_WILDCARD,
-	HOME_TILDE
+	HOME_TILDE,
+	LEADING_SLASHES_REGEX,
+	UNC_ROOT_REGEX,
+	WINDOWS_SEPARATOR
 } from '$lib/constants';
 import { lastPathSegment } from './path-display';
 
@@ -29,16 +36,52 @@ export interface PathQuery {
 	last: string;
 }
 
-/** A query starting with `/` or `~` is path navigation, not a home-relative glob. */
+/**
+ * Rewrite `\` into `/` when the query carries a Windows root. Elsewhere the
+ * backslash is left alone: it is a legal filename character on POSIX.
+ */
+function toPosixSeparators(query: string): string {
+	if (!DRIVE_PREFIX_REGEX.test(query) && !query.startsWith(WINDOWS_SEPARATOR)) return query;
+	return query.split(WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
+}
+
+/**
+ * Length of the root prefix of `path`, or 0 when it has none. Covers the
+ * POSIX root, a Windows drive (`C:/`) and a UNC share (`//host/share/`).
+ */
+export function rootPrefixLength(path: string): number {
+	const unc = path.match(UNC_ROOT_REGEX);
+	if (unc) return unc[0].length;
+	const drive = path.match(DRIVE_ROOT_REGEX);
+	if (drive) return drive[0].length;
+	return path.startsWith(PATH_SEPARATOR) ? PATH_SEPARATOR.length : 0;
+}
+
+/** A query starting from a root or from `~` is path navigation, not a home-relative glob. */
 export function splitPathQuery(query: string): PathQuery | null {
-	if (!query.startsWith(PATH_SEPARATOR) && !query.startsWith(HOME_TILDE)) return null;
-	const normalized = query.replace(TRAILING_SLASHES_REGEX, '');
-	if (!normalized || normalized === HOME_TILDE) {
-		return { parent: normalized === HOME_TILDE ? HOME_TILDE : PATH_SEPARATOR, last: '' };
-	}
-	const idx = normalized.lastIndexOf(PATH_SEPARATOR);
-	if (idx === 0) return { parent: PATH_SEPARATOR, last: normalized.slice(1) };
-	return { parent: normalized.slice(0, idx), last: normalized.slice(idx + 1) };
+	const normalized = toPosixSeparators(query);
+	const rootLength = rootPrefixLength(normalized);
+	if (rootLength === 0 && !normalized.startsWith(HOME_TILDE)) return null;
+
+	// a root keeps its trailing separator so it stays absolute on its own
+	const root =
+		rootLength > 0
+			? normalized.slice(0, rootLength).replace(TRAILING_SLASHES_REGEX, '') + PATH_SEPARATOR
+			: HOME_TILDE;
+
+	const rest = normalized
+		.slice(rootLength > 0 ? rootLength : HOME_TILDE.length)
+		.replace(LEADING_SLASHES_REGEX, '')
+		.replace(TRAILING_SLASHES_REGEX, '');
+
+	const parentOf = (dirs: string) =>
+		rootLength > 0 ? root + dirs : HOME_TILDE + PATH_SEPARATOR + dirs;
+
+	if (!rest) return { parent: root, last: '' };
+
+	const idx = rest.lastIndexOf(PATH_SEPARATOR);
+	if (idx === -1) return { parent: root, last: rest };
+	return { parent: parentOf(rest.slice(0, idx)), last: rest.slice(idx + 1) };
 }
 
 /** Build a case-insensitive glob that matches `query` anywhere within a name. */

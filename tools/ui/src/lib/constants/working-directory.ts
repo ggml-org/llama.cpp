@@ -15,6 +15,18 @@ export const GLOB_RANGE_CLOSE = ']';
 /** Query characters that carry glob meaning and are passed through literally. */
 export const GLOB_SPECIAL_CHARS = '*?[]';
 
+/** Separator Windows accepts alongside `/`, and a legal POSIX filename character. */
+export const WINDOWS_SEPARATOR = '\\';
+
+/** `C:`, the drive part of a Windows absolute path. */
+export const DRIVE_PREFIX_REGEX = /^[A-Za-z]:/;
+
+/** `C:` or `C:/`, the root of a Windows drive-absolute path. */
+export const DRIVE_ROOT_REGEX = /^[A-Za-z]:\/?/;
+
+/** `//host/share` or `//host/share/`, the root of a UNC path. */
+export const UNC_ROOT_REGEX = /^\/\/[^/]+\/[^/]+\/?/;
+
 // Search tuning for the picker's file_glob_search calls.
 export const SEARCH_DEBOUNCE_MS = 180;
 export const SEARCH_LIMIT = 100;

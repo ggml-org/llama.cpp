@@ -24,6 +24,33 @@ describe('splitPathQuery', () => {
 		expect(splitPathQuery('/Users/al/proj')).toEqual({ parent: '/Users/al', last: 'proj' });
 	});
 
+	it('navigates a Windows drive path written with backslashes', () => {
+		expect(splitPathQuery('C:\\repos\\llama.cpp')).toEqual({
+			parent: 'C:/repos',
+			last: 'llama.cpp'
+		});
+	});
+
+	it('navigates a Windows drive path written with forward slashes', () => {
+		expect(splitPathQuery('D:/repos')).toEqual({ parent: 'D:/', last: 'repos' });
+	});
+
+	it('treats a bare drive as its root', () => {
+		expect(splitPathQuery('D:')).toEqual({ parent: 'D:/', last: '' });
+		expect(splitPathQuery('D:\\')).toEqual({ parent: 'D:/', last: '' });
+	});
+
+	it('navigates a UNC share', () => {
+		expect(splitPathQuery('\\\\host\\share\\proj')).toEqual({
+			parent: '//host/share/',
+			last: 'proj'
+		});
+	});
+
+	it('keeps a backslash as a POSIX filename character', () => {
+		expect(splitPathQuery('/tmp/a\\b')).toEqual({ parent: '/tmp', last: 'a\\b' });
+	});
+
 	it('splits a home-relative path into parent and last segment', () => {
 		expect(splitPathQuery('~/Documents')).toEqual({ parent: '~', last: 'Documents' });
 	});
