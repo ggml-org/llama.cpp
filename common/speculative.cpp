@@ -61,6 +61,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
     {"draft-dspark",  COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
     {"draft-hybrid",  COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID},
+    {"draft-adaptive", COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -2218,6 +2219,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:  return "draft-dspark";
         case COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID:  return "draft-hybrid";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE: return "draft-adaptive";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
@@ -2272,6 +2274,12 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
+                n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+                break;
+            case COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE:
+                // ADAPTIVE forwards one candidate draft at a time to the
+                // verifier; n_max is the per-drafter cap (the user-facing
+                // knob, draft.n_max), not the worst-case across all 4.
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -2507,6 +2515,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP))    && params.draft.ctx_dft != nullptr;
         bool has_draft_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)) && params.draft.ctx_dft != nullptr;
         bool has_draft_dspark = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)) && params.draft.ctx_dft != nullptr;
+        bool has_draft_adaptive = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE));
 
 
 
@@ -2517,7 +2526,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 13);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
