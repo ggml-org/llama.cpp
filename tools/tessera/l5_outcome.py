@@ -140,6 +140,7 @@ def _read_l5_plan_safe(
     db: "TesseraDB",
     model_hash: str | None,
     full_cols: tuple[str, ...],
+    model_role: str | None = None,
 ) -> pl.DataFrame:
     """Read l5_plan_summary with the Phase 15 column set; fall
     back to the pre-Phase-15 column set when the DB has not been
@@ -152,10 +153,31 @@ def _read_l5_plan_safe(
     table), the helper retries with ``L5_PLAN_PRE_PHASE15_COLS``
     and the caller is responsible for backfilling the missing
     columns as NULL.
+
+    Phase 16: the ``model_role`` filter is applied on the
+    SELECT when the caller supplies one. A bare ``model_role``
+    filter is not allowed (it would match across models and
+    silently mix roles); the helper raises if ``model_role`` is
+    given without ``model_hash``. The legacy pre-Phase-16
+    callers pass ``model_role=None``; their SELECT is not
+    role-filtered.
     """
+    if model_role is not None and model_hash is None:
+        raise ValueError(
+            "l5_outcome: a model_role filter requires model_hash; "
+            "a bare model_role filter would silently mix roles "
+            "across models. Pass model_hash=... when model_role is set."
+        )
+    where_clauses: list[str] = []
+    if model_hash:
+        where_clauses.append(f"model_hash = '{sql_escape(model_hash)}'")
+    if model_role is not None:
+        where_clauses.append(
+            f"model_role = '{sql_escape(model_role)}'"
+        )
     where = (
-        f" WHERE model_hash = '{sql_escape(model_hash)}'"
-        if model_hash else ""
+        (" WHERE " + " AND ".join(where_clauses))
+        if where_clauses else ""
     )
     try:
         return db.query(
@@ -182,6 +204,7 @@ def compute_l5_outcome(
     db_path: str | Path,
     *,
     model_hash: str | None = None,
+    model_role: str | None = None,
     accept_threshold: float = DEFAULT_ACCEPT_THRESHOLD,
     write_back: bool = True,
 ) -> pl.DataFrame:
@@ -191,6 +214,12 @@ def compute_l5_outcome(
         db_path: path to the unified tessera.duckdb file.
         model_hash: if non-None, restrict the join to this model.
             Default None = all models in the DB.
+        model_role: if non-None (Phase 16), restrict the join
+            to this architectural role. Default None = no role
+            filter (the legacy pre-Phase-16 path; reads every
+            role for the model). The role propagates to the
+            l5_outcome rows; the per-(model, model_role, family)
+            residual fit uses the role as a groupby key.
         accept_threshold: delta_mse below this is "accepted".
             Default 0.0 (any reduction counts as accept).
         write_back: if True, write the result to the l5_outcome
@@ -228,11 +257,24 @@ def compute_l5_outcome(
         # the components set to NULL downstream (see the
         # with_columns below).
         plan = _read_l5_plan_safe(
-            db, model_hash, L5_PLAN_COLS,
+            db, model_hash, L5_PLAN_COLS, model_role=model_role,
+        )
+        outcome_where_clauses: list[str] = []
+        if model_hash:
+            outcome_where_clauses.append(
+                f"model_hash = '{sql_escape(model_hash)}'"
+            )
+        if model_role is not None:
+            outcome_where_clauses.append(
+                f"model_role = '{sql_escape(model_role)}'"
+            )
+        outcome_where = (
+            (" WHERE " + " AND ".join(outcome_where_clauses))
+            if outcome_where_clauses else ""
         )
         outcome = db.query(
             f"SELECT {', '.join(L4_PLAN_OUTCOME_COLS)} FROM l4_plan_outcome"
-            + (f" WHERE model_hash = '{sql_escape(model_hash)}'" if model_hash else "")
+            + outcome_where
         )
 
     if plan.height == 0 and outcome.height == 0:
@@ -266,13 +308,20 @@ def compute_l5_outcome(
         pl.lit(accept_threshold).alias("accept_threshold"),
     ])
 
-    # Per-(model, family) linear fit of delta_mse on sensitivity_score.
-    # residual_i = delta_mse_i - (a + b * sensitivity_score_i).
-    # Uses polars' .group_by().map_groups() with a numpy linear fit
-    # (2 points, so a closed-form is overkill; closed-form OLS for
-    # 2-coefficient regression is fine). If a (model, family) group
-    # has fewer than 2 points, the residual is left as 0 (a constant
-    # fit with no slope).
+    # Per-(model, model_role, family) linear fit of delta_mse on
+    # sensitivity_score. residual_i = delta_mse_i - (a + b *
+    # sensitivity_score_i). Uses polars'
+    # .group_by().map_groups() with a numpy linear fit (2 points,
+    # so a closed-form is overkill; closed-form OLS for
+    # 2-coefficient regression is fine). If a (model, model_role,
+    # family) group has fewer than 2 points, the residual is left
+    # as 0 (a constant fit with no slope).
+    #
+    # Phase 16: the groupby key is now (model_hash, model_role,
+    # family) so the trunk's residual fit and the dflash
+    # encoder's residual fit are independent (the data they
+    # fit is different; the OLS slope for one is not the
+    # OLS slope for the other).
     import numpy as np
 
     def _fit_residual(group: pl.DataFrame) -> pl.DataFrame:
@@ -293,9 +342,18 @@ def compute_l5_outcome(
             .alias("residual")
         )
 
-    verdict = verdict.group_by(["model_hash", "family"], maintain_order=True).map_groups(
-        _fit_residual
-    )
+    # Phase 16: model_role is part of the groupby key. When the
+    # pre-Phase-16 path is taken (model_role=None or the column
+    # is missing on the joined frame), the groupby falls back to
+    # (model_hash, family) so the residual is computed on the
+    # union of all roles for the model (the legacy behavior).
+    if "model_role" in verdict.columns:
+        group_keys = ["model_hash", "model_role", "family"]
+    else:
+        group_keys = ["model_hash", "family"]
+    verdict = verdict.group_by(
+        group_keys, maintain_order=True,
+    ).map_groups(_fit_residual)
 
     # Project down to the l5_outcome column set. The plan and
     # outcome tables share the join key columns (model_hash, name,
@@ -314,6 +372,15 @@ def compute_l5_outcome(
     # sensitivity_score. The columns are surfaced on the
     # l5_outcome projection so the consumer (l5_retune.py) does
     # not need a second join.
+    #
+    # Phase 16: the model_role column lives on l5_plan_summary
+    # (the plan side wins on the join, like the per-tensor
+    # component columns). It propagates through to the
+    # l5_outcome projection; the retune uses it as a groupby
+    # key for the 3-coefficient OLS. The legacy path
+    # (pre-Phase-16 DBs without the column) backfills a
+    # uniform "trunk" string so the projection has a
+    # consistent column set.
     plan_drop = [c for c in ("layer", "updated_at") if c in verdict.columns]
     if plan_drop:
         verdict = verdict.drop(plan_drop)
@@ -332,10 +399,21 @@ def compute_l5_outcome(
             verdict = verdict.with_columns(
                 pl.lit(None, dtype=pl.Float64).alias(comp_col)
             )
+    # Phase 16: model_role column backfill. The column lives
+    # on the plan side; the join's suffixing leaves it at
+    # the top level (no _plan suffix). Pre-Phase-16 rows
+    # have no model_role column; substitute a uniform
+    # "trunk" string so the projection has the column
+    # populated and the retune's partition is uniform
+    # within a model (the legacy behavior).
+    if "model_role" not in verdict.columns:
+        verdict = verdict.with_columns(
+            pl.lit("trunk", dtype=pl.Utf8).alias("model_role")
+        )
     if rename_map:
         verdict = verdict.rename(rename_map)
     out_cols = [
-        "model_hash", "name", "layer", "iteration", "plan_id",
+        "model_hash", "model_role", "name", "layer", "iteration", "plan_id",
         "family", "sensitivity_score",
         "imatrix_magnitude", "gradient_proxy", "layer_position_prior",
         "recommended_alpha", "recommended_clip",
@@ -352,7 +430,17 @@ def compute_l5_outcome(
         # (The append is OK for first writes; reruns would
         # duplicate. The DELETE-then-INSERT is the production
         # path; see l5_outcome.py:replace_l5_outcome below.)
-        replace_l5_outcome(db_path, model_hash=model_hash, new_rows=verdict)
+        #
+        # Phase 16: the DELETE-then-INSERT pass uses
+        # replace_l5_outcome which now keys the delete on
+        # (model_hash, model_role) so other roles for the
+        # same model are preserved.
+        replace_l5_outcome(
+            db_path,
+            model_hash=model_hash,
+            model_role=model_role,
+            new_rows=verdict,
+        )
 
     return verdict
 
@@ -362,12 +450,21 @@ def replace_l5_outcome(
     *,
     model_hash: str | None,
     new_rows: pl.DataFrame,
+    model_role: str | None = None,
 ) -> int:
-    """Delete the existing l5_outcome rows for ``model_hash``
-    (or all models when model_hash is None) and re-insert the
-    supplied rows. Wrapped in a single transaction so a
-    concurrent reader sees either the old or the new state, not
-    a partial one. Returns the number of rows written.
+    """Delete the existing l5_outcome rows for
+    ``(model_hash, model_role)`` (or all roles when
+    ``model_role`` is None, or all models when ``model_hash``
+    is also None) and re-insert the supplied rows. Wrapped
+    in a single transaction so a concurrent reader sees
+    either the old or the new state, not a partial one.
+    Returns the number of rows written.
+
+    Phase 16: the DELETE key is extended to
+    ``(model_hash, model_role)`` so other roles for the
+    same model are preserved. When both ``model_hash`` and
+    ``model_role`` are None, the entire table is replaced
+    (the legacy pre-Phase-16 path).
     """
     if new_rows.height == 0:
         return 0
@@ -375,14 +472,25 @@ def replace_l5_outcome(
         con = db._conn
         con.execute("BEGIN")
         try:
+            where_clauses: list[str] = []
             if model_hash is not None:
+                where_clauses.append(
+                    f"model_hash = '{sql_escape(model_hash)}'"
+                )
+            if model_role is not None:
+                where_clauses.append(
+                    f"model_role = '{sql_escape(model_role)}'"
+                )
+            if where_clauses:
                 con.execute(
-                    f"DELETE FROM l5_outcome WHERE model_hash = '{sql_escape(model_hash)}'"
+                    "DELETE FROM l5_outcome WHERE "
+                    + " AND ".join(where_clauses)
                 )
             else:
                 con.execute("DELETE FROM l5_outcome")
             db.insert_l5_outcome(
                 model_hash=model_hash or "all_models",
+                model_role=model_role or "trunk",
                 rows=[row for row in new_rows.to_dicts()],
             )
             con.execute("COMMIT")
@@ -460,6 +568,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--model-role",
+        default=None,
+        choices=[
+            "trunk", "dflash", "dspark", "mtp_nextn", "shared_embd",
+        ],
+        help=(
+            "Restrict to this model_role (Phase 16). Default: no "
+            "role filter (the legacy pre-Phase-16 path; reads "
+            "every role for the model). The role is part of the "
+            "l5_outcome PRIMARY KEY: the same (model, name, "
+            "iteration, plan_id) can have one l5_outcome row per "
+            "role (e.g. one row for the trunk's attn_q plan and "
+            "another for the dflash encoder's attn_q plan). "
+            "Requires --model-hash (a bare model_role filter "
+            "would silently mix roles across models)."
+        ),
+    )
+    p.add_argument(
         "--accept-threshold",
         type=float,
         default=DEFAULT_ACCEPT_THRESHOLD,
@@ -488,9 +614,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.model_role is not None and args.model_hash is None:
+        print(
+            "ERROR: --model-role requires --model-hash; a bare "
+            "model_role filter would silently mix roles across "
+            "models.",
+            file=sys.stderr,
+        )
+        return 2
     verdict = compute_l5_outcome(
         args.db,
         model_hash=args.model_hash,
+        model_role=args.model_role,
         accept_threshold=args.accept_threshold,
         write_back=not args.dry_run,
     )
