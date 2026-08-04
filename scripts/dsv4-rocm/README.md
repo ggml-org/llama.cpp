@@ -154,13 +154,23 @@ scripts/dsv4-rocm/screen-rccl-tg.sh ring-ll
 ```
 
 The wrapper forces 16K/32K/64K, tg32, six raw repetitions, one predeclared
-discard, full model hashes, accepted MMQ/HC/LID settings, HIP graphs on, exact tensor
-split, F16 K/V, no profiler, and no speculative path. It rejects every inherited
-`NCCL_*`/`RCCL_*` variable before setting the complete candidate environment.
+discard, full model hashes, accepted MMQ/HC/LID settings, exact tensor split,
+F16 K/V, no profiler, and no speculative path. It rejects every inherited
+`NCCL_*`/`RCCL_*` variable plus `GGML_CUDA_DISABLE_GRAPHS` before setting the
+complete candidate environment. The comparator requires
+`GGML_HIP_GRAPHS:BOOL=ON` in the captured build cache and confirms the runtime
+graph-disable variable remained absent; the similarly named environment value
+is recorded but does not substitute for this build/runtime proof.
 `auto` leaves algorithm/protocol unset; `tree-ll` and `ring-ll` force exactly
-those algorithms with the LL protocol. All use setup-only
-`NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=ENV,TUNING`, which is recorded along with
-set-versus-unset controls in `command.sh`, `executed-command.sh`,
+those algorithms with the LL protocol. All use
+`NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=ENV` to retain RCCL's runtime environment
+acknowledgement without enabling per-collective tuning diagnostics. The complete
+raw stream is preserved verbatim in `bench.stdout.log`, while non-JSON lines are
+also separated into `bench.stdout-nonjson.log`; only parsed JSON records enter
+`result.jsonl` and the result-completion timestamps. `stdout-classification.json`
+fails closed on malformed JSON-like data, unterminated output, capture errors, or
+excessive diagnostics. The settings are recorded
+along with set-versus-unset controls in `command.sh`, `executed-command.sh`,
 `effective-settings.sh`, and `contract.json`.
 
 Channel forcing is excluded. The installed RCCL 2.30.4 binary explicitly says
@@ -173,11 +183,16 @@ scripts/dsv4-rocm/compare-rccl-tg.py CONTROL_DIR CANDIDATE_DIR \
   --json CANDIDATE_DIR/rccl-screen-comparison.json
 ```
 
-The fail-closed gate requires complete stable identity-matched runs, >=3%
-median TG gain at 64K, and no >2% median regression at 16K or 32K. Passing five
-accepted samples selects only a full 31-repetition validation; it never accepts
-an optimization. `test-rccl-screen.py` covers exact wrapper isolation, inherited
-NCCL rejection, positive/no-go gates, and identity mismatch.
+The fail-closed gate requires complete stable identity-matched runs (including
+normalized run-local source provenance), compiled graph support with no runtime
+disable, runtime acknowledgement of every forced algorithm/protocol, no in-band TUNING output,
+>=3% median TG gain at 64K, and no >2% median regression at 16K or 32K. Passing
+five accepted samples selects only a full 31-repetition validation; it never
+accepts an optimization. `test-rccl-screen.py` covers exact wrapper isolation,
+inherited NCCL rejection, runtime acknowledgement, tuning-noise and legacy
+capture rejection, positive/no-go gates, and identity mismatch. The non-GPU
+`test-tg-tools.py` fixture exercises the real `run-tg.sh` FIFO path with mixed
+RCCL/JSON output and proves malformed/high-volume capture failures propagate.
 
 ## Target-only raw-decode profile
 
@@ -462,8 +477,10 @@ Runs are written to collision-resistant directories under
 - `effective-settings.sh`, `command.sh`, `executed-command.sh`: exact effective controls and argv;
 - `result.jsonl`: raw llama-bench records, including every `samples_ts`/`samples_ns` value;
 - `summary.tsv` and `summary.json`: completion state, expected/missing shapes, median/range, latency, and raw samples;
-- `bench.log`: loader/progress/errors;
-- `measurement-start.ns`, `result-completed-at.ns`: trace-alignment timestamps;
+- `bench.log`: stderr loader/progress/errors;
+- `bench.stdout.log`: complete raw stdout stream preserved verbatim;
+- `bench.stdout-nonjson.log`, `stdout-classification.json`: separated diagnostics and fail-closed capture counts/status;
+- `measurement-start.ns`, `result-completed-at.ns`: trace-alignment timestamps for parsed benchmark records only;
 - `clock-domain.txt`: run-time realtime-to-monotonic clock mapping and boot ID;
 - `measured-region-summary.{txt,json}`: optional filtered rocprof attribution;
 - `rocm-smi.log`: one-second utilization/memory/power/clock samples (raw-TG restricts in-band sampling to setup so accepted tg32 repetitions remain unperturbed);

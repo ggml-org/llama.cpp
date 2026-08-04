@@ -31,6 +31,8 @@ ALLOW_BUSY=${DSV4_ALLOW_BUSY_GPUS:-0}
 REQUIRE_ACCEPTED_STACK=${DSV4_REQUIRE_ACCEPTED_STACK:-1}
 LABEL=${DSV4_LABEL:-raw-tg}
 RCCL_CANDIDATE=${DSV4_RCCL_CANDIDATE:-control-auto}
+STDOUT_CAPTURE="$ROOT_DIR/scripts/dsv4-rocm/capture-tg-stdout.py"
+STDOUT_MAX_NON_JSON_LINES=${DSV4_TG_STDOUT_MAX_NON_JSON_LINES:-4096}
 DRY_RUN=0
 
 usage() {
@@ -59,6 +61,7 @@ Important overrides:
   DSV4_TG_SAMPLE_TIMEOUT    cap for each generation sample (300 seconds)
   DSV4_TG_SETUP_TIMEOUT     cap reset for model/context/depth setup (1800 seconds)
   DSV4_TG_STABILITY_LIMIT   MAD/median acceptance threshold (0.03)
+  DSV4_TG_STDOUT_MAX_NON_JSON_LINES  maximum preserved diagnostic lines (4096)
   DSV4_TG_DEPTH_STATE_API  must remain context; sequence restore failed DSV4
                            full-logit equivalence (default: context)
   DSV4_TG_OUTPUT_ROOT       default $HOME/llama-jobs/dsv4-rocm-tg
@@ -99,6 +102,7 @@ done
 for pair in \
     "DSV4_TG_N_GEN:$N_GEN" "DSV4_TG_REPS:$RAW_REPS" \
     "DSV4_TG_SAMPLE_TIMEOUT:$SAMPLE_TIMEOUT_S" "DSV4_TG_SETUP_TIMEOUT:$SETUP_TIMEOUT_S" \
+    "DSV4_TG_STDOUT_MAX_NON_JSON_LINES:$STDOUT_MAX_NON_JSON_LINES" \
     "DSV4_THREADS:$THREADS" "DSV4_BATCH:$BATCH" "DSV4_UBATCH:$UBATCH"; do
     name=${pair%%:*}
     value=${pair#*:}
@@ -169,11 +173,13 @@ if [[ "$PROFILE" == kernel ]]; then
     [[ "$LOAD_MODE" == mmap ]] || fail "kernel profile requires mmap load mode"
 fi
 export DSV4_TG_PROFILE="$PROFILE"
+export DSV4_TG_STDOUT_MAX_NON_JSON_LINES="$STDOUT_MAX_NON_JSON_LINES"
 export DSV4_HASH_MODE="$HASH_MODE"
 export DSV4_RCCL_CANDIDATE="$RCCL_CANDIDATE"
 
 [ -f "$MODEL" ] || fail "model not found: $MODEL"
 [ -x "$BENCH" ] || fail "llama-bench not executable: $BENCH"
+[ -f "$STDOUT_CAPTURE" ] || fail "stdout capture helper not found: $STDOUT_CAPTURE"
 for tool in awk date flock grep mv python3 readlink rocm-smi setsid sha256sum; do
     command -v "$tool" >/dev/null || fail "$tool is required"
 done
@@ -221,9 +227,9 @@ printf 'Mode: %s; profile: %s\n' "$MODE" "$PROFILE"
 printf 'Planned command:'
 printf ' %q' "${bench_cmd[@]}"
 printf '\n'
-printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q DSV4_RCCL_CANDIDATE=%q NCCL_ALGO=%q NCCL_PROTO=%q NCCL_MIN_NCHANNELS=%q NCCL_MAX_NCHANNELS=%q\n' \
+printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q DSV4_RCCL_CANDIDATE=%q NCCL_ALGO=%q NCCL_PROTO=%q NCCL_MIN_NCHANNELS=%q NCCL_MAX_NCHANNELS=%q GGML_CUDA_DISABLE_GRAPHS=%q\n' \
     "$GGML_SCHED_DEBUG" "$LLAMA_BENCH_DEPTH_STATE_API" "$GGML_HIP_RDNA2_MMQ_J" "$GGML_HIP_RDNA2_HC_MIXES" "$GGML_HIP_RDNA2_LID_SUBWAVE" \
-    "$RCCL_CANDIDATE" "${NCCL_ALGO-<unset>}" "${NCCL_PROTO-<unset>}" "${NCCL_MIN_NCHANNELS-<unset>}" "${NCCL_MAX_NCHANNELS-<unset>}"
+    "$RCCL_CANDIDATE" "${NCCL_ALGO-<unset>}" "${NCCL_PROTO-<unset>}" "${NCCL_MIN_NCHANNELS-<unset>}" "${NCCL_MAX_NCHANNELS-<unset>}" "${GGML_CUDA_DISABLE_GRAPHS-<unset>}"
 printf 'Per-sample cap: %ss; per-setup cap: %ss\n' "$SAMPLE_TIMEOUT_S" "$SETUP_TIMEOUT_S"
 if [[ "$PROFILE" == kernel ]]; then
     printf 'Profiler: %s; selected accepted regions only; skip repetitions: %s\n' "$ROCPROF" "$DISCARD_FIRST"
@@ -287,7 +293,7 @@ PY
 
 write_repro_env_prefix() {
     local output=$1 name
-    local -a optional=(NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS)
+    local -a optional=(NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS GGML_CUDA_DISABLE_GRAPHS)
     printf 'env' > "$output"
     for name in "${optional[@]}"; do
         declare -p "$name" >/dev/null 2>&1 || printf ' -u %q' "$name" >> "$output"
@@ -341,7 +347,7 @@ chmod +x "$run_dir/executed-command.sh"
     printf 'DSV4_TG_MODE=%q\n' "$MODE"
     printf 'DSV4_TG_PROFILE=%q\n' "$PROFILE"
     printf 'DSV4_RCCL_CANDIDATE=%q\n' "$RCCL_CANDIDATE"
-    for name in NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS; do
+    for name in NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS GGML_CUDA_DISABLE_GRAPHS; do
         if declare -p "$name" >/dev/null 2>&1; then
             printf '%s_IS_SET=1\n' "$name"
             printf '%s=%q\n' "$name" "${!name}"
@@ -364,6 +370,7 @@ chmod +x "$run_dir/executed-command.sh"
     printf 'DSV4_TG_TELEMETRY_SCOPE=%q\n' "$TELEMETRY_SCOPE"
     printf 'DSV4_TG_SAMPLE_TIMEOUT=%q\n' "$SAMPLE_TIMEOUT_S"
     printf 'DSV4_TG_SETUP_TIMEOUT=%q\n' "$SETUP_TIMEOUT_S"
+    printf 'DSV4_TG_STDOUT_MAX_NON_JSON_LINES=%q\n' "$STDOUT_MAX_NON_JSON_LINES"
     printf 'DSV4_BATCH=%q\n' "$BATCH"
     printf 'DSV4_UBATCH=%q\n' "$UBATCH"
     printf 'DSV4_TENSOR_SPLIT=%q\n' "$TENSOR_SPLIT"
@@ -410,10 +417,18 @@ pathlib.Path(out).write_text(json.dumps({
     "profile_skip_repetitions": int(__import__("os").environ.get("LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS", "0")),
     "model_hash_mode": __import__("os").environ.get("DSV4_HASH_MODE", "metadata"),
     "require_accepted_stack": int(__import__("os").environ.get("DSV4_REQUIRE_ACCEPTED_STACK", "1")),
+    "stdout_capture": {
+        "schema_version": 1,
+        "raw_stream": "bench.stdout.log",
+        "non_json_stream": "bench.stdout-nonjson.log",
+        "classification": "stdout-classification.json",
+        "max_non_json_lines": int(__import__("os").environ.get("DSV4_TG_STDOUT_MAX_NON_JSON_LINES", "4096")),
+    },
     "communication_candidate": {
         "label": __import__("os").environ.get("DSV4_RCCL_CANDIDATE", "control-auto"),
         "backend": __import__("os").environ.get("GGML_CUDA_ALLREDUCE", ""),
         "hip_graphs": __import__("os").environ.get("GGML_HIP_GRAPHS", ""),
+        "runtime_graph_disable": __import__("os").environ.get("GGML_CUDA_DISABLE_GRAPHS"),
         "algorithm": __import__("os").environ.get("NCCL_ALGO"),
         "protocol": __import__("os").environ.get("NCCL_PROTO"),
         "min_channels": __import__("os").environ.get("NCCL_MIN_NCHANNELS"),
@@ -498,14 +513,6 @@ stderr_consumer() {
     done < "$stderr_fifo"
 }
 
-stdout_consumer() {
-    local fifo=$1 result_file=$2 completion_file=$3 line
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        printf '%s\n' "$line" >> "$result_file"
-        printf '%s\n' "$(now_ns)" >> "$completion_file"
-    done < "$fifo"
-}
-
 watch_group() {
     local pgid=$1 phase_file=$2 phase=setup phase_start timeout_s hard term now last_event=""
     local event_ns event_phase event_bench event_rep event_total
@@ -570,10 +577,19 @@ mkfifo "$stderr_fifo" "$stdout_fifo"
 : > "$phase_file"
 : > "$run_dir/result.jsonl"
 : > "$run_dir/result-completed-at.ns"
+: > "$run_dir/bench.stdout.log"
+: > "$run_dir/bench.stdout-nonjson.log"
 : > "$run_dir/measurement-start.ns"
 printf 'timestamp_ns\tphase\tbenchmark\trepetition\ttotal_repetitions\n' > "$run_dir/phase-events.tsv"
 stderr_consumer "$stderr_fifo" "$phase_file" "$run_dir/bench.log" "$run_dir/phase-events.tsv" 9>&- & stderr_pid=$!
-stdout_consumer "$stdout_fifo" "$run_dir/result.jsonl" "$run_dir/result-completed-at.ns" 9>&- & stdout_pid=$!
+python3 "$STDOUT_CAPTURE" \
+    --result "$run_dir/result.jsonl" \
+    --completed-at "$run_dir/result-completed-at.ns" \
+    --raw "$run_dir/bench.stdout.log" \
+    --non-json "$run_dir/bench.stdout-nonjson.log" \
+    --classification "$run_dir/stdout-classification.json" \
+    --max-non-json-lines "$STDOUT_MAX_NON_JSON_LINES" \
+    < "$stdout_fifo" 9>&- & stdout_pid=$!
 
 printf 'run_dir=%s\n' "$run_dir"
 printf 'started_at_ns=%s\n' "$(now_ns)" > "$run_dir/status.txt"
@@ -584,8 +600,8 @@ sample_smi "$bench_pgid" "$phase_file" > "$run_dir/rocm-smi.log" 9>&- & smi_pid=
 watch_group "$bench_pgid" "$phase_file" 9>&- & watchdog_pid=$!
 wait "$bench_pid"; rc=$?
 if group_alive "$bench_pgid"; then terminate_group_now "$bench_pgid"; fi
-wait "$stderr_pid" 2>/dev/null || true; stderr_pid=""
-wait "$stdout_pid" 2>/dev/null || true; stdout_pid=""
+wait "$stderr_pid" 2>/dev/null; stderr_consumer_rc=$?; stderr_pid=""
+wait "$stdout_pid" 2>/dev/null; stdout_consumer_rc=$?; stdout_pid=""
 for child in "$smi_pid" "$watchdog_pid"; do kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; done
 smi_pid=""; watchdog_pid=""; bench_pid=""; bench_pgid=""
 set -e
@@ -598,6 +614,8 @@ if [[ -f "$run_dir/measurement-timeout" ]]; then truncated=1; timeout_phase=meas
 if [[ -f "$run_dir/setup-timeout" ]]; then truncated=1; timeout_phase=setup; fi
 {
     printf 'process_exit_code=%s\n' "$rc"
+    printf 'stderr_consumer_exit_code=%s\n' "$stderr_consumer_rc"
+    printf 'stdout_consumer_exit_code=%s\n' "$stdout_consumer_rc"
     printf 'truncated=%s\n' "$truncated"
     printf 'timeout_phase=%s\n' "$timeout_phase"
     printf 'finished_at_ns=%s\n' "$(now_ns)"
@@ -613,6 +631,10 @@ with Path(sys.argv[1]).open("a") as out:
 PY
 rocm-smi --showuse --showmemuse --showpower --showclocks --showtemp --showmaxpower --showperflevel --showprofile --showoverdrive --showmemoverdrive > "$run_dir/rocm-smi-final.txt" 2>&1 || true
 
+if [[ "$stderr_consumer_rc" -ne 0 || "$stdout_consumer_rc" -ne 0 ]]; then
+    echo "Benchmark output capture failed (stderr=$stderr_consumer_rc stdout=$stdout_consumer_rc); see $run_dir" >&2
+    exit 2
+fi
 if [[ ! -s "$run_dir/result.jsonl" ]]; then
     echo "Benchmark produced no complete result; see $run_dir/bench.log" >&2
     [[ "$timeout_phase" == setup ]] && exit 124

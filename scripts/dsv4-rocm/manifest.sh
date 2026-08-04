@@ -70,7 +70,7 @@ fi
     if [[ -n "$cache" && -f "$cache" ]]; then
         printf '%s\n' '-- selected CMake cache --'
         sha256sum "$cache"
-        grep -E '^(CMAKE_BUILD_TYPE|CMAKE_CXX_COMPILER:|CMAKE_C_COMPILER:|GGML_HIP:|GGML_HIPBLAS:|AMDGPU_TARGETS:|CMAKE_HIP_ARCHITECTURES:|GGML_NATIVE:|GGML_LTO:)' "$cache" || true
+        grep -E '^(CMAKE_BUILD_TYPE|CMAKE_CXX_COMPILER:|CMAKE_C_COMPILER:|GGML_HIP:|GGML_HIPBLAS:|GGML_HIP_GRAPHS:|AMDGPU_TARGETS:|CMAKE_HIP_ARCHITECTURES:|GGML_NATIVE:|GGML_LTO:)' "$cache" || true
     fi
 
     section model_files

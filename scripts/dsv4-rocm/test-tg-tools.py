@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -13,6 +14,8 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parent
 SUMMARIZE = ROOT / "summarize-tg.py"
 PARSE = ROOT / "parse-sched-debug.py"
+CAPTURE = ROOT / "capture-tg-stdout.py"
+RUN_TG = ROOT / "run-tg.sh"
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -62,6 +65,184 @@ def summarize(tmp: pathlib.Path, records: list[dict[str, object]], expected_dept
     )
     assert tsv.read_text().startswith("run_complete\trun_stable\tdepth")
     return json.loads(out.read_text())
+
+
+def capture_stdout(tmp: pathlib.Path, name: str, payload: str, maximum: int = 4096):
+    root = tmp / name
+    root.mkdir()
+    paths = {
+        "result": root / "result.jsonl",
+        "completed": root / "result-completed-at.ns",
+        "raw": root / "bench.stdout.log",
+        "non_json": root / "bench.stdout-nonjson.log",
+        "classification": root / "stdout-classification.json",
+    }
+    process = subprocess.run(
+        [
+            sys.executable, str(CAPTURE), "--result", str(paths["result"]),
+            "--completed-at", str(paths["completed"]), "--raw", str(paths["raw"]),
+            "--non-json", str(paths["non_json"]), "--classification", str(paths["classification"]),
+            "--max-non-json-lines", str(maximum),
+        ],
+        input=payload, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return process, paths
+
+
+def test_stdout_capture(tmp: pathlib.Path) -> None:
+    payload = (
+        "host:1:2 [0] NCCL INFO NCCL_ALGO set by environment to Tree\n"
+        "[2026-08-04 21:00:00] host [0] NCCL WARN fixture warning\n"
+        '{"n_depth": 16384}\n'
+        "\n"
+        '{"n_depth": 32768}\n'
+    )
+    process, paths = capture_stdout(tmp, "mixed", payload)
+    if process.returncode:
+        raise AssertionError(f"stdout capture failed:\n{process.stdout}\n{process.stderr}")
+    assert paths["raw"].read_text() == payload
+    assert paths["result"].read_text() == '{"n_depth": 16384}\n{"n_depth": 32768}\n'
+    assert paths["non_json"].read_text() == (
+        "host:1:2 [0] NCCL INFO NCCL_ALGO set by environment to Tree\n"
+        "[2026-08-04 21:00:00] host [0] NCCL WARN fixture warning\n\n"
+    )
+    completed = paths["completed"].read_text().splitlines()
+    assert len(completed) == 2 and all(item.isdigit() for item in completed)
+    classification = json.loads(paths["classification"].read_text())
+    assert classification["consumer_success"] is True
+    assert classification["json_lines"] == 2 and classification["non_json_lines"] == 2
+    assert classification["blank_lines"] == 1 and classification["total_bytes"] == len(payload.encode())
+
+    malformed, malformed_paths = capture_stdout(tmp, "malformed", "noise\n{broken\n")
+    assert malformed.returncode != 0
+    malformed_value = json.loads(malformed_paths["classification"].read_text())
+    assert malformed_value["malformed_json_like_lines"] == 1
+    assert malformed_value["consumer_success"] is False
+
+    unterminated, unterminated_paths = capture_stdout(tmp, "unterminated", '{"ok": true}')
+    assert unterminated.returncode != 0
+    assert json.loads(unterminated_paths["classification"].read_text())["unterminated_final_data"] is True
+
+    noisy_payload = "".join(f"diagnostic {index}\n" for index in range(50))
+    noisy, noisy_paths = capture_stdout(tmp, "noisy", noisy_payload, maximum=10)
+    assert noisy.returncode != 0
+    noisy_value = json.loads(noisy_paths["classification"].read_text())
+    assert noisy_value["non_json_lines"] == 50 and noisy_value["excessive_non_json_output"] is True
+
+    failure_root = tmp / "write-failure"
+    failure_root.mkdir()
+    raw_directory = failure_root / "raw-directory"
+    raw_directory.mkdir()
+    failed = subprocess.run(
+        [
+            sys.executable, str(CAPTURE), "--result", str(failure_root / "result"),
+            "--completed-at", str(failure_root / "completed"), "--raw", str(raw_directory),
+            "--non-json", str(failure_root / "non-json"),
+            "--classification", str(failure_root / "classification"),
+            "--max-non-json-lines", "10",
+        ],
+        input="{}\n", text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    assert failed.returncode != 0 and "stdout capture failed" in failed.stderr
+
+
+def test_run_tg_output_capture(tmp: pathlib.Path) -> None:
+    fake_bin = tmp / "fake-bin"
+    fake_bin.mkdir()
+    model = tmp / "fixture.gguf"
+    model.write_bytes(b"fixture model")
+    bench = fake_bin / "llama-bench-fixture"
+    bench.write_text("""#!/usr/bin/env python3
+import json, os, sys
+mode = os.environ.get("FAKE_OUTPUT_MODE", "mixed")
+print("host:1:2 [0] NCCL INFO NCCL_ALGO set by environment to Tree")
+print("host:1:2 [0] NCCL INFO NCCL_PROTO set by environment to LL")
+if mode == "noisy":
+    for index in range(11):
+        print(f"diagnostic {index}")
+for benchmark, depth in enumerate((16384, 32768, 65536), 1):
+    print(f"llama-bench: benchmark {benchmark}/3: starting", file=sys.stderr, flush=True)
+    for repetition in range(1, 7):
+        print(f"llama-bench: benchmark {benchmark}/3: depth run {repetition}/6", file=sys.stderr, flush=True)
+        print(f"llama-bench: benchmark {benchmark}/3: generation run {repetition}/6", file=sys.stderr, flush=True)
+    samples_ns = [4_000_000_000, 3_200_000_000, 3_210_000_000, 3_190_000_000, 3_205_000_000, 3_195_000_000]
+    value = {
+        "model_filename": "fixture.gguf", "n_prompt": 0, "n_gen": 32, "n_depth": depth,
+        "n_batch": 512, "n_ubatch": 256, "split_mode": "tensor",
+        "tensor_split": "1.00/1.00/1.00/1.00", "type_k": "f16", "type_v": "f16",
+        "flash_attn": 1, "samples_ns": samples_ns,
+        "samples_ts": [32e9 / sample for sample in samples_ns],
+    }
+    print(json.dumps(value))
+if mode == "malformed":
+    print("{broken")
+""")
+    bench.chmod(0o755)
+    rocm_smi = fake_bin / "rocm-smi"
+    rocm_smi.write_text("#!/usr/bin/env bash\necho 'No GPU processes'\n")
+    rocm_smi.chmod(0o755)
+
+    base_env = dict(os.environ)
+    base_env.update({
+        "PATH": f"{fake_bin}:{base_env['PATH']}",
+        "HOME": str(tmp / "home"),
+        "LLAMA_JOB_DIR": "non-gpu-fixture",
+        "DSV4_MODEL": str(model),
+        "DSV4_BENCH": str(bench),
+        "DSV4_LIBRARY_PATH": str(fake_bin),
+        "DSV4_TG_DEPTHS": "16384,32768,65536",
+        "DSV4_TG_REPS": "6",
+        "DSV4_TG_DISCARD_FIRST": "1",
+        "DSV4_TG_SAMPLE_TIMEOUT": "10",
+        "DSV4_TG_SETUP_TIMEOUT": "10",
+        "DSV4_TERM_GRACE": "1",
+        "DSV4_TG_STDOUT_MAX_NON_JSON_LINES": "10",
+        "DSV4_HASH_MODE": "full",
+        "DSV4_LABEL": "stdout-capture-fixture",
+        "DSV4_RCCL_CANDIDATE": "tree-ll",
+        "NCCL_ALGO": "Tree",
+        "NCCL_PROTO": "LL",
+        "NCCL_DEBUG": "INFO",
+        "NCCL_DEBUG_SUBSYS": "ENV",
+    })
+
+    def invoke(mode: str):
+        output_root = tmp / f"runs-{mode}"
+        env = dict(base_env, DSV4_TG_OUTPUT_ROOT=str(output_root), FAKE_OUTPUT_MODE=mode)
+        process = subprocess.run(
+            [str(RUN_TG)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+        runs = list(output_root.iterdir()) if output_root.is_dir() else []
+        assert len(runs) == 1, (
+            f"expected one fixture artifact for {mode}: {runs}\nstdout:\n{process.stdout}\nstderr:\n{process.stderr}"
+        )
+        return process, runs[0]
+
+    good, good_run = invoke("mixed")
+    if good.returncode:
+        raise AssertionError(f"run-tg mixed-output fixture failed:\n{good.stdout}\n{good.stderr}")
+    classification = json.loads((good_run / "stdout-classification.json").read_text())
+    assert classification["consumer_success"] is True
+    assert classification["json_lines"] == 3 and classification["non_json_lines"] == 2
+    assert len((good_run / "result.jsonl").read_text().splitlines()) == 3
+    assert len((good_run / "result-completed-at.ns").read_text().splitlines()) == 3
+    assert "NCCL_ALGO set by environment" in (good_run / "bench.stdout.log").read_text()
+    assert "NCCL_ALGO set by environment" in (good_run / "bench.stdout-nonjson.log").read_text()
+    assert json.loads((good_run / "summary.json").read_text())["stable"] is True
+
+    malformed, malformed_run = invoke("malformed")
+    assert malformed.returncode == 2
+    malformed_status = (malformed_run / "status.txt").read_text()
+    assert "stdout_consumer_exit_code=2" in malformed_status
+    assert json.loads((malformed_run / "stdout-classification.json").read_text())["malformed_json_like_lines"] == 1
+    assert not (malformed_run / "summary.json").exists()
+
+    noisy, noisy_run = invoke("noisy")
+    assert noisy.returncode == 2
+    noisy_value = json.loads((noisy_run / "stdout-classification.json").read_text())
+    assert noisy_value["excessive_non_json_output"] is True
+    assert "stdout_consumer_exit_code=2" in (noisy_run / "status.txt").read_text()
+    assert not (noisy_run / "summary.json").exists()
 
 
 def test_summary(tmp: pathlib.Path) -> None:
@@ -158,6 +339,8 @@ def test_scheduler(tmp: pathlib.Path) -> None:
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="dsv4-tg-tools-") as name:
         tmp = pathlib.Path(name)
+        test_stdout_capture(tmp)
+        test_run_tg_output_capture(tmp)
         test_summary(tmp)
         test_scheduler(tmp)
     print("dsv4 raw-TG tool fixtures: PASS")

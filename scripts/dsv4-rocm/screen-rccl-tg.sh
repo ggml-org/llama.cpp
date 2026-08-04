@@ -42,10 +42,10 @@ esac
 # unknown shell configuration.
 contaminants=()
 while IFS='=' read -r name _; do
-    case "$name" in NCCL_*|RCCL_*) contaminants+=("$name") ;; esac
+    case "$name" in NCCL_*|RCCL_*|GGML_CUDA_DISABLE_GRAPHS) contaminants+=("$name") ;; esac
 done < <(env)
 if [[ ${#contaminants[@]} -ne 0 ]]; then
-    printf 'ERROR: inherited communication environment is forbidden:' >&2
+    printf 'ERROR: inherited communication/graph environment is forbidden:' >&2
     printf ' %s' "${contaminants[@]}" >&2
     printf '\n' >&2
     exit 2
@@ -67,6 +67,7 @@ export DSV4_TG_N_GEN=32
 export DSV4_TG_REPS=6
 export DSV4_TG_DISCARD_FIRST=1
 export DSV4_TG_STABILITY_LIMIT=0.03
+export DSV4_TG_STDOUT_MAX_NON_JSON_LINES=4096
 export DSV4_TG_DEPTH_STATE_API=context
 export DSV4_HASH_MODE=full
 export DSV4_LABEL=raw-tg-rccl-screen-$candidate
@@ -78,7 +79,8 @@ export DSV4_REQUIRE_ACCEPTED_STACK=1 DSV4_ALLOW_BUSY_GPUS=0
 export GGML_HIP_RDNA2_MMQ_J=16 GGML_HIP_RDNA2_HC_MIXES=1 GGML_HIP_RDNA2_LID_SUBWAVE=4
 export GGML_CUDA_ALLREDUCE=nccl GGML_CUDA_P2P=1 GGML_HIP_GRAPHS=1
 export HSA_NO_SCRATCH_RECLAIM=1 HSA_OVERRIDE_GFX_VERSION=10.3.0
-# INFO is restricted to communicator setup/tuning and occurs outside accepted TG.
-export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=ENV,TUNING
+# Record RCCL's runtime acknowledgement of the forced environment without
+# enabling per-collective TUNING output inside accepted TG measurements.
+export NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=ENV
 
 exec "$RUN_TG" "$@"
