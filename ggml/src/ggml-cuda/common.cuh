@@ -1419,6 +1419,8 @@ struct ggml_backend_cuda_context {
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    void * cublas_workspaces[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    size_t cublas_workspace_sizes[GGML_CUDA_MAX_DEVICES] = {0};
 
     int curr_stream_no = 0;
 
@@ -1500,12 +1502,33 @@ struct ggml_backend_cuda_context {
             ggml_cuda_set_device(device);
             CUBLAS_CHECK(cublasCreate(&cublas_handles[device]));
             CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11000
+            const int cc = ggml_cuda_info().devices[device].cc;
+            cublas_workspace_sizes[device] = (cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
+            CUDA_CHECK(cudaMalloc(&cublas_workspaces[device], cublas_workspace_sizes[device]));
+#endif
         }
         return cublas_handles[device];
     }
 
     cublasHandle_t cublas_handle() {
         return cublas_handle(device);
+    }
+
+    // cublasSetStream resets user workspace to default, so re-bind it here
+    cublasHandle_t cublas_handle(int device, cudaStream_t stream) {
+        cublasHandle_t handle = cublas_handle(device);
+        CUBLAS_CHECK(cublasSetStream(handle, stream));
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11000
+        if (cublas_workspaces[device] != nullptr) {
+            CUBLAS_CHECK(cublasSetWorkspace(handle, cublas_workspaces[device], cublas_workspace_sizes[device]));
+        }
+#endif
+        return handle;
+    }
+
+    cublasHandle_t cublas_handle(cudaStream_t stream) {
+        return cublas_handle(device, stream);
     }
 
     // pool
