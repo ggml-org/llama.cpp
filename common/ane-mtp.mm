@@ -186,15 +186,48 @@ struct common_ane_mtp_program {
 
     // Optional: the ane_state_layout.v1 manifest next to the
     // materialized .mlmodelc. Read at load time if present; the
-    // dispatch path does not yet use it (a follow-on commit
-    // migrates the dispatch to pinned-state slots + outputBackings
-    // against this manifest). When the manifest is present, the
-    // multifunction refactor has the layout it needs; when absent,
-    // the legacy GGUF-metadata path keeps working.
+    // dispatch path uses the manifest's slot/function tables to
+    // wire inputs to the pinned IOSurface slots and outputs to
+    // MLPredictionOptions.outputBackings. When the manifest is
+    // present, the multifunction refactor has the layout it needs;
+    // when absent, the legacy GGUF-metadata path keeps working.
     ane_state_layout_v1_t manifest;
     bool                   manifest_loaded = false;
 
+    // The shared state IOSurface: one buffer of manifest.state_size_bytes
+    // holding every declared slot. All slots share this surface so ANE,
+    // Metal, and the host CPU all see the same bytes (zero-copy). The
+    // state_iosurface is allocated at load when manifest_loaded is true;
+    // it is locked for the program's lifetime. Released in the destructor.
+    IOSurfaceRef state_iosurface = nullptr;
+    void *       state_base      = nullptr;
+    size_t       state_size      = 0;
+
+    // Pinned MLMultiArray wrappers, one per manifest slot, each pointing
+    // into the state_iosurface at the slot's manifest offset with
+    // deallocator:nil. Core ML reads/writes through these arrays; the
+    // host reads/writes the same physical pages. Index = slot_id from
+    // the manifest. Released in the destructor.
+    MLMultiArray * pinned_slots[ANE_STATE_SLOTS_MAX] = {};
+
     ~common_ane_mtp_program() {
+        // Drop the pinned MLMultiArray strong references first; they
+        // wrap the IOSurface so the order matters (the IOSurface
+        // unlock + release below must come after). Under ARC the
+        // strong references are released by setting to nil; no
+        // explicit [obj release] is needed (or allowed).
+        for (uint32_t i = 0; i < ANE_STATE_SLOTS_MAX; ++i) {
+            pinned_slots[i] = nil;
+        }
+        // Unlock + release the state IOSurface. CFRelease is still
+        // required under ARC (CFType is not ARC-managed).
+        if (state_iosurface != nullptr) {
+            IOSurfaceUnlock(state_iosurface, 0, nullptr);
+            CFRelease(state_iosurface);
+            state_iosurface = nullptr;
+        }
+        state_base = nullptr;
+        state_size = 0;
         execution_state = nil;
         model = nil;
         sync_model = nil;
@@ -285,6 +318,81 @@ static void write_float_data(MLMultiArray * array, const float * source, size_t 
     } else {
         ggml_fp32_to_fp16_row(source, (ggml_fp16_t *) array.dataPointer, count);
     }
+}
+
+// Allocate the shared state IOSurface for a manifest. The size is
+// rounded up to the ANE 16 KB page boundary and clamped to the 64 KB
+// IOSurface minimum (Orion #4). Returns the locked base address on
+// success; returns nullptr on failure. The IOSurfaceRef is stored in
+// `out_iosurface` for the caller to release.
+static void * allocate_state_iosurface(size_t requested_bytes,
+                                        IOSurfaceRef * out_iosurface) {
+    const size_t page = 16 * 1024;
+    const size_t min_size = 64 * 1024;
+    const size_t rounded = std::max(min_size,
+            ((requested_bytes + page - 1) / page) * page);
+    // Match the ggml-ane backend's IOSurface allocation: width/height/
+    // bytesPerElement/bytesPerRow/allocSize all set so the kernel can
+    // use the surface for both ANE pages and CPU writes.
+    NSDictionary * properties = @{
+        (id) kIOSurfaceWidth:          @(rounded),
+        (id) kIOSurfaceHeight:         @1,
+        (id) kIOSurfaceBytesPerElement:@1,
+        (id) kIOSurfaceBytesPerRow:    @(rounded),
+        (id) kIOSurfaceAllocSize:      @(rounded),
+    };
+    IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef) properties);
+    if (surface == nullptr) {
+        return nullptr;
+    }
+    if (IOSurfaceLock(surface, 0, nullptr) != kIOReturnSuccess) {
+        CFRelease(surface);
+        return nullptr;
+    }
+    void * base = IOSurfaceGetBaseAddress(surface);
+    if (base == nullptr) {
+        IOSurfaceUnlock(surface, 0, nullptr);
+        CFRelease(surface);
+        return nullptr;
+    }
+    // Zero the state at load so the first real dispatch isn't polluted
+    // by IOSurface allocator garbage. The K/V slots start as zero;
+    // INPUT slots are written before each dispatch.
+    std::memset(base, 0, rounded);
+    *out_iosurface = surface;
+    return base;
+}
+
+// Wrap one IOSurface-backed slot as an MLMultiArray with deallocator:nil
+// (zero-copy). Mirrors the canonical pattern in ggml/src/ggml-ane/ggml-ane.mm
+// (ggml_ane_pin_slot). The MLMultiArray's data pointer is
+// state_base + slot.offset; its shape and dtype come from the manifest.
+// Returns a strong-reference MLMultiArray that the caller stores in a
+// long-lived slot (e.g. program->pinned_slots[]). Under ARC the strong
+// reference is tracked automatically; setting the slot to nil later
+// drops the reference.
+static MLMultiArray * pin_iosurface_slot(void * state_base,
+                                          const ane_slot_v1_t * slot) {
+    NSError * error = nil;
+    NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:slot->n_dim];
+    for (uint32_t i = 0; i < slot->n_dim; ++i) {
+        [shape addObject:@(slot->shape[i])];
+    }
+    NSArray<NSNumber *> * strides = contiguous_strides(shape);
+    MLMultiArrayDataType dtype = MLMultiArrayDataTypeFloat32;
+    switch (slot->dtype) {
+        case ANE_DTYPE_F32: dtype = MLMultiArrayDataTypeFloat32; break;
+        case ANE_DTYPE_F16: dtype = MLMultiArrayDataTypeFloat16; break;
+        case ANE_DTYPE_I32: dtype = MLMultiArrayDataTypeInt32;   break;
+    }
+    void * slot_base = (char *) state_base + slot->offset;
+    return [[MLMultiArray alloc]
+        initWithDataPointer:slot_base
+                      shape:shape
+                   dataType:dtype
+                    strides:strides
+                deallocator:nil
+                      error:&error];
 }
 
 static void read_float_data(const MLMultiArray * array, float * destination, size_t count) {
@@ -852,6 +960,36 @@ static common_ane_mtp_program_ptr common_ane_program_load(
                             manifest_path_str.c_str(), merror.c_str());
                 }
             }
+        }
+        // Allocate the shared state IOSurface and pin every declared
+        // slot to a subregion. Done when the manifest is present; the
+        // dispatch refactor (a follow-on commit) will use these pinned
+        // arrays for input writes and outputBackings. Without the
+        // manifest we keep the legacy per-arena allocation path.
+        if (program->manifest_loaded) {
+            program->state_base = allocate_state_iosurface(
+                program->manifest.state_size_bytes,
+                &program->state_iosurface);
+            if (program->state_base == nullptr) {
+                LOG_WRN("failed to allocate %zu byte state IOSurface for %s\n",
+                        program->manifest.state_size_bytes,
+                        program->manifest.bundle_name);
+                return nullptr;
+            }
+            program->state_size = program->manifest.state_size_bytes;
+            for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+                program->pinned_slots[i] = pin_iosurface_slot(
+                    program->state_base, &program->manifest.slots[i]);
+                if (program->pinned_slots[i] == nil) {
+                    LOG_WRN("failed to pin slot %s for %s\n",
+                            program->manifest.slots[i].name,
+                            program->manifest.bundle_name);
+                    return nullptr;
+                }
+            }
+            LOG_INF("ANE state IOSurface: %zu bytes, %u pinned slots for %s\n",
+                    program->state_size, program->manifest.n_slots,
+                    program->manifest.bundle_name);
         }
         program->queue = dispatch_queue_create("org.ggml.llama.ane", DISPATCH_QUEUE_SERIAL);
         program->cache_path = bundle_path.string();
