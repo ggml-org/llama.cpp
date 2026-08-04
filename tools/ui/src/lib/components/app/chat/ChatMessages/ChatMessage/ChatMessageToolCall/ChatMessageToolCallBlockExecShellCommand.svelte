@@ -248,7 +248,7 @@
 
 <style>
 	:root {
-    	--exec-wd-margin: 0.4rem;
+		--exec-wd-margin: 0.4rem;
 	}
 
 	.exec-wd {
