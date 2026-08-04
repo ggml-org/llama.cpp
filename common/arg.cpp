@@ -35,6 +35,7 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <cstring>
 #include <thread> // for hardware_concurrency
 #include <vector>
 
@@ -901,6 +902,22 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     if ((!params.server_tools.empty() || mcp_enabled) && !params.cors_origins_explicit) {
         LOG_WRN("server tools or MCP servers are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
         params.cors_origins = "localhost";
+    }
+
+    // manual hot store slots need all MoE weights in the CPU (host pointers);
+    // auto-activate -cmoe unless the user already did (or wants autofit slots)
+    if (params.expert_hot_s > 0) {
+        bool has_cmoe = false;
+        for (const auto & o : params.tensor_buft_overrides) {
+            if (o.pattern != nullptr && strcmp(o.pattern, LLM_FFN_EXPS_REGEX) == 0) {
+                has_cmoe = true;
+                break;
+            }
+        }
+        if (!has_cmoe) {
+            params.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
+            LOG_WRN("manually selecting --expert-hot-s slots activates --cmoe (all MoE weights kept in the CPU)\n");
+        }
     }
 
     // pad tensor_buft_overrides for llama_params_fit:
