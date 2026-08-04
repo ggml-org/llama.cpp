@@ -324,6 +324,87 @@ int main(int argc, char ** argv) {
         CHECK(n_source == 2, "retune_source tag is preserved across both rows");
     }
 
+    // ---- tensor_stats recommended_action round-trip ----------------
+    // The recommended_action column is the per-tensor verdict the
+    // Python calibration_to_tensor_stats.py writes from
+    // l5_weights via the l5_action rules. The C++ side just
+    // carries the value through the upsert; the test confirms:
+    //   * the column accepts the documented string values
+    //   * on a re-write, the new value overwrites (same contract
+    //     as the other Python-side columns: rms / mean_abs /
+    //     tail_ratio)
+    //   * a fresh write with an empty string is a no-op (the
+    //     C++ GA-prep walk never sets this field).
+    {
+        ts_tessera_db_tensor_stat row;
+        row.model_hash         = "hash_action";
+        row.name               = "blk.0.attn_q.weight";
+        row.family             = "attn_q";
+        row.layer_depth        = 0;
+        row.out_dim            = 4096;
+        row.in_dim             = 4096;
+        row.n_elements         = 16777216;
+        row.dtype              = "f16";
+        row.kurtosis           = 5.0;
+        row.eff_rank           = 0.85;
+        row.rms                = 0.10;
+        row.mean_abs           = 0.08;
+        row.tail_ratio         = 4.0;
+        row.source             = "py_cal";
+        row.recommended_action = "protect";
+        std::string err;
+        CHECK(ts_tessera_db_upsert_tensor_stat(db, row, &err) == 0,
+              ("upsert_tensor_stat w/ recommended_action failed: " + err).c_str());
+        // Second tensor: requant_up verdict.
+        ts_tessera_db_tensor_stat row2 = row;
+        row2.name               = "blk.0.ffn_gate.weight";
+        row2.family             = "ffn_gate";
+        row2.recommended_action = "requant_up";
+        CHECK(ts_tessera_db_upsert_tensor_stat(db, row2, &err) == 0,
+              ("upsert_tensor_stat row2 failed: " + err).c_str());
+        // Verify via direct SQL: protect landed, requant_up landed.
+        int64_t n_protect = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_hash = 'hash_action' "
+                "AND name = 'blk.0.attn_q.weight' "
+                "AND recommended_action = 'protect'");
+        CHECK(n_protect == 1,
+              "recommended_action='protect' round-trip on the first write");
+        int64_t n_requant = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_hash = 'hash_action' "
+                "AND name = 'blk.0.ffn_gate.weight' "
+                "AND recommended_action = 'requant_up'");
+        CHECK(n_requant == 1,
+              "recommended_action='requant_up' round-trip on the second write");
+        // Re-write: new value overwrites. The column is part of
+        // the upsert target; the new value wins.
+        row.recommended_action = "monitor";
+        CHECK(ts_tessera_db_upsert_tensor_stat(db, row, &err) == 0,
+              ("upsert_tensor_stat re-write failed: " + err).c_str());
+        int64_t n_monitor = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_hash = 'hash_action' "
+                "AND name = 'blk.0.attn_q.weight' "
+                "AND recommended_action = 'monitor'");
+        CHECK(n_monitor == 1,
+              "recommended_action overwrite on re-write (protect -> monitor)");
+        // Empty string is a no-op semantic: it does not get
+        // NULL'd by the upsert, but it does not break the row
+        // either. The C++ side never sets this field; an empty
+        // value is a no-op equivalent of NULL.
+        row.recommended_action = "";
+        CHECK(ts_tessera_db_upsert_tensor_stat(db, row, &err) == 0,
+              ("upsert_tensor_stat empty action failed: " + err).c_str());
+        int64_t n_empty = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_hash = 'hash_action' "
+                "AND name = 'blk.0.attn_q.weight' "
+                "AND recommended_action = ''");
+        CHECK(n_empty == 1,
+              "recommended_action='' round-trip is a no-op semantic");
+    }
+
     if (failures == 0) {
         printf("OK: all tessera-quantize-db tests passed (db=%s)\n", path);
         return 0;
