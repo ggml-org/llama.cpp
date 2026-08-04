@@ -441,3 +441,54 @@ final class TesseraWorkflowUTTypeTests: XCTestCase {
         XCTAssertNotEqual(UTType.tesseraWorkflow.identifier, UTType.json.identifier)
     }
 }
+
+/// `WorkflowRunOutcome` is the single structured result of a
+/// run. These tests pin the parse boundary: terminal `.finished`
+/// events map to exactly one outcome case, non-terminal events
+/// yield nil (the run is still going), and `cancelled` counts
+/// only the nodes that actually finished successfully.
+final class WorkflowRunOutcomeTests: XCTestCase {
+    func testFinishedSuccessParsesToSucceeded() {
+        let event = WorkflowEvent.finished(success: true, message: nil)
+        let outcome = WorkflowRunOutcome(finishedEvent: event)
+        XCTAssertEqual(outcome, .succeeded(summary: nil))
+        XCTAssertTrue(outcome?.isSucceeded ?? false)
+    }
+
+    func testFinishedSuccessCarriesSummary() {
+        let event = WorkflowEvent.finished(success: true, message: "done")
+        XCTAssertEqual(WorkflowRunOutcome(finishedEvent: event), .succeeded(summary: "done"))
+    }
+
+    func testFinishedFailureParsesToFailed() {
+        let event = WorkflowEvent.finished(success: false, message: "node q failed: boom")
+        XCTAssertEqual(
+            WorkflowRunOutcome(finishedEvent: event),
+            .failed(message: "node q failed: boom")
+        )
+    }
+
+    func testNonTerminalEventYieldsNil() {
+        // A mid-run event must not be mistaken for a terminal
+        // outcome — the editor keeps waiting in that case.
+        XCTAssertNil(WorkflowRunOutcome(finishedEvent: .started(workflowName: "w", totalNodes: 2)))
+        XCTAssertNil(WorkflowRunOutcome(finishedEvent: .nodeStarted(nodeId: "a", typeId: "t")))
+        XCTAssertNil(WorkflowRunOutcome(finishedEvent: .nodeFinished(nodeId: "a", success: true, message: nil)))
+        XCTAssertNil(WorkflowRunOutcome(finishedEvent: .log(nodeId: nil, level: .info, message: "hi")))
+    }
+
+    func testCancelledCountsOnlySuccessfulNodes() {
+        let events: [WorkflowEvent] = [
+            .started(workflowName: "w", totalNodes: 3),
+            .nodeStarted(nodeId: "a", typeId: "t"),
+            .nodeFinished(nodeId: "a", success: true, message: nil),
+            .nodeStarted(nodeId: "b", typeId: "t"),
+            .nodeFinished(nodeId: "b", success: false, message: "boom"),
+        ]
+        XCTAssertEqual(WorkflowRunOutcome.cancelled(events: events), .cancelled(completedNodes: 1))
+    }
+
+    func testCancelledOnEmptyTrailIsZero() {
+        XCTAssertEqual(WorkflowRunOutcome.cancelled(events: []), .cancelled(completedNodes: 0))
+    }
+}

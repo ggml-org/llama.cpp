@@ -20,9 +20,7 @@ struct WorkflowsView: View {
     @State private var documentName: String = "calibrate-and-quantize"
     @State private var isExporting = false
     @State private var isImporting = false
-    @State private var isRunning = false
-    @State private var runEvents: [WorkflowEvent] = []
-    @State private var showRunProgress = false
+    @State private var runPhase: WorkflowRunPhase = .idle
 
     @Environment(\.undoManager) private var undoManager
 
@@ -33,7 +31,7 @@ struct WorkflowsView: View {
                 onOpen: { isImporting = true },
                 onSave: { isExporting = true },
                 onRun: { runWorkflow() },
-                isRunning: isRunning
+                isRunning: runPhase.isRunning
             )
             HSplitView {
                 WorkflowPaletteView(registry: registry)
@@ -82,7 +80,7 @@ struct WorkflowsView: View {
                 connectionError = "Open failed: \(err.localizedDescription)"
             }
         }
-        .sheet(isPresented: $showRunProgress) {
+        .sheet(isPresented: runSheetPresented) {
             runProgressSheet
         }
         // Publish File > New / Open / Save actions to the
@@ -173,38 +171,91 @@ struct WorkflowsView: View {
 
     // MARK: - Run progress sheet
 
+    /// Drives the run-progress sheet off ``runPhase``. The sheet
+    /// is presented for any non-idle phase; dismissing it returns
+    /// the phase to `.idle`. While a run is in flight the Close
+    /// button is disabled and only Cancel can end the run.
+    private var runSheetPresented: Binding<Bool> {
+        Binding(
+            get: {
+                if case .idle = runPhase { return false }
+                return true
+            },
+            set: { presented in
+                if !presented { runPhase = .idle }
+            }
+        )
+    }
+
     /// The run-progress sheet. Shows the live stream of
-    /// ``WorkflowEvent``s from the executor. Closes when the
-    /// run finishes (success or failure).
+    /// ``WorkflowEvent``s from the executor. While the run is in
+    /// flight the sheet offers a Cancel button (the only way to
+    /// stop a run); once the run reaches a terminal ``WorkflowRunOutcome``
+    /// the footer states the outcome and Close becomes enabled.
     private var runProgressSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Run progress")
                     .font(.headline)
                 Spacer()
-                Button("Close") { showRunProgress = false }
-                    .disabled(isRunning)
+                switch runPhase {
+                case .running(let task, _):
+                    Button("Cancel", role: .cancel) { cancelRun(task) }
+                        .accessibilityHint("Stop the workflow run")
+                default:
+                    Button("Close") { runPhase = .idle }
+                }
             }
             .padding(12)
             Divider()
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(runEvents.enumerated()), id: \.offset) { (idx, ev) in
+                        ForEach(Array(runPhase.events.enumerated()), id: \.offset) { (idx, ev) in
                             runEventRow(ev)
                                 .id(idx)
                         }
                     }
                     .padding(12)
                 }
-                .onChange(of: runEvents.count) { _, newCount in
+                .onChange(of: runPhase.events.count) { _, newCount in
                     if newCount > 0 {
                         proxy.scrollTo(newCount - 1, anchor: .bottom)
                     }
                 }
             }
+            if case .finished(let outcome, _) = runPhase {
+                Divider()
+                runOutcomeFooter(outcome)
+            }
         }
         .frame(minWidth: 520, minHeight: 360)
+    }
+
+    /// Terminal-outcome footer. One row per outcome case, each
+    /// pairing a symbol with the text so the state is not
+    /// color-only.
+    @ViewBuilder
+    private func runOutcomeFooter(_ outcome: WorkflowRunOutcome) -> some View {
+        HStack(spacing: 6) {
+            switch outcome {
+            case .succeeded:
+                Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                Text("Workflow finished")
+            case .failed(let message):
+                Image(systemName: "xmark.seal.fill").foregroundStyle(.red)
+                Text("Workflow failed")
+                if let message {
+                    Text("(\(message))").foregroundStyle(.secondary)
+                }
+            case .cancelled(let completedNodes):
+                Image(systemName: "xmark.circle").foregroundStyle(.orange)
+                Text("Cancelled after \(completedNodes) node(s)")
+            }
+            Spacer()
+        }
+        .font(.body.weight(.medium))
+        .padding(12)
     }
 
     @ViewBuilder
@@ -276,28 +327,54 @@ struct WorkflowsView: View {
     }
 
     /// Drive the executor. Builds a per-run context (silent
-    /// logger so the progress sheet is the only event
-    /// surface), runs to completion, accumulates the events
-    /// for the sheet, and clears the running flag on the
-    /// final event.
+    /// logger so the progress sheet is the only event surface),
+    /// runs to completion, and folds every event into
+    /// ``runPhase``. The terminal `.finished` event is parsed
+    /// exactly once into a ``WorkflowRunOutcome`` so the sheet
+    /// footer switches on a structured result rather than the
+    /// raw success flag.
     private func runWorkflow() {
-        guard !isRunning else { return }
-        runEvents.removeAll()
-        isRunning = true
-        showRunProgress = true
+        guard !runPhase.isRunning else { return }
         let context = WorkflowExecutionContext(
             fileSystem: LocalTesseraFileSystem(),
             logger: SilentWorkflowLogger()
         )
         let executor = WorkflowExecutor(registry: registry)
-        Task {
+        let workflow = self.workflow
+        let task = Task {
             for await event in await executor.run(workflow, context: context) {
-                await MainActor.run { runEvents.append(event) }
-                if case .finished = event {
-                    await MainActor.run { isRunning = false }
+                if Task.isCancelled { return }
+                if let outcome = WorkflowRunOutcome(finishedEvent: event) {
+                    await MainActor.run {
+                        self.finishRun(outcome: outcome, appending: event)
+                    }
+                    return
                 }
+                await MainActor.run { self.appendRunEvent(event) }
             }
         }
+        runPhase = .running(task: task, events: [])
+    }
+
+    /// Cancel the in-flight run. Cancels the driving task and
+    /// transitions straight to a terminal `.cancelled` outcome;
+    /// `completedNodes` counts the nodes that already finished.
+    private func cancelRun(_ task: Task<Void, Never>) {
+        guard case .running(_, let events) = runPhase else { return }
+        task.cancel()
+        runPhase = .finished(outcome: .cancelled(events: events), events: events)
+    }
+
+    private func appendRunEvent(_ event: WorkflowEvent) {
+        guard case .running(let task, var events) = runPhase else { return }
+        events.append(event)
+        runPhase = .running(task: task, events: events)
+    }
+
+    private func finishRun(outcome: WorkflowRunOutcome, appending event: WorkflowEvent) {
+        var events = runPhase.events
+        events.append(event)
+        runPhase = .finished(outcome: outcome, events: events)
     }
 
     /// The right-hand parameter panel. Hidden visually but kept
@@ -517,6 +594,33 @@ struct WorkflowsView: View {
         "calib": CGPoint(x: 220, y: 220),
         "q":     CGPoint(x: 540, y: 220),
     ]
+}
+
+/// The run-lifecycle state for the editor. A sum type replaces
+/// the old `(isRunning, showRunProgress, runEvents)` flag soup:
+/// a run is either not started, in flight (with its driving task
+/// and the events so far), or terminal (with a structured
+/// ``WorkflowRunOutcome`` and the full event trail). Every UI
+/// question - "show the sheet?", "offer Cancel?", "enable
+/// Close?" - becomes an exhaustive switch instead of a flag
+/// combination that could disagree with itself.
+enum WorkflowRunPhase {
+    case idle
+    case running(task: Task<Void, Never>, events: [WorkflowEvent])
+    case finished(outcome: WorkflowRunOutcome, events: [WorkflowEvent])
+
+    var isRunning: Bool {
+        if case .running = self { return true }
+        return false
+    }
+
+    var events: [WorkflowEvent] {
+        switch self {
+        case .idle: return []
+        case .running(_, let events): return events
+        case .finished(_, let events): return events
+        }
+    }
 }
 
 struct PendingConnection {
