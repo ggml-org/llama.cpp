@@ -96,11 +96,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     };
 
     // string-valued
-    if (arg == "--tessera-runtime-probe")     { if (!require_val("--tessera-runtime-probe")) return -1;     tessera_params.runtime_probe     = val; return 2; }
-    if (arg == "--tessera-runtime-probe-bf16"){ if (!require_val("--tessera-runtime-probe-bf16")) return -1;tessera_params.runtime_probe_bf16= val; return 2; }
-    if (arg == "--tessera-l2-out")            { if (!require_val("--tessera-l2-out")) return -1;            tessera_params.runtime_probe_l2_out = val; return 2; }
-    if (arg == "--tessera-awq-alpha")         { if (!require_val("--tessera-awq-alpha")) return -1;         tessera_params.awq_alpha        = val; return 2; }
-    if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
     if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
     if (arg == "--tessera-acceptance-out") { if (!require_val("--tessera-acceptance-out")) return -1; tessera_params.acceptance_out = val; return 2; }
     if (arg == "--tessera-l5-out")         { if (!require_val("--tessera-l5-out")) return -1;         tessera_params.l5_out          = val; return 2; }
