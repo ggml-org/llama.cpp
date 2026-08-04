@@ -956,9 +956,9 @@ restored-state equivalence gate remains open.
 
 ```bash
 cd /home/edwin/llama.cpp-rdna2
-ARTIFACT=$HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6 \
-OUT=/tmp/dsv4-tg-static-rerun \
-  "$HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/commands.sh"
+ARTIFACT=$HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6
+OUT=/tmp/dsv4-tg-static-rerun
+ARTIFACT="$ARTIFACT" OUT="$OUT" "$ARTIFACT/commands.sh"
 ```
 
 It uses fake llama-bench/model/`rocm-smi` fixtures and launches no GPU work. The planned real commands are `DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh` and `DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency scripts/dsv4-rocm/run-tg.sh`; do not run them until the restored-state gate is closed and GPU ownership is rechecked.
