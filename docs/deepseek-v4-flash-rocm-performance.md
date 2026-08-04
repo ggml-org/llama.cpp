@@ -883,6 +883,17 @@ Use target-only decode measured regions and disk-safe profiling (targeted counte
 
 Branch selection rule: use at least two independent targeted profiles at the decision context(s). Select a family only when it is the largest reproducible measured-region elapsed-device-time family, contributes at least 15%, and leads the runner-up by at least 3 percentage points. If ranks disagree or the lead is smaller, collect more evidence or keep both candidates open; do not select by elegance. Communication requires the existing 20% threshold. Any candidate must later show >=3% median whole-model TG gain at its target depth with <=2% median regression at required shorter depths, unless a different threshold is declared before measurement.
 
+**M5.3 checkpoint — selected-region tooling accepted; first 16K attribution remains diagnostic/unresolved.** Commit `35ee01b7e` adds a disk-safe ROCm-only llama-bench hook and profile harness. For accepted repetitions only, llama-bench calls `roctxProfilerResume(0)` immediately before target-only `test_gen`, records authoritative `CLOCK_MONOTONIC` `resume_return`/`pause_call` boundaries, and pauses after synchronized generation. `rocprofv3 --selected-regions` writes CSV kernel, memory-copy, RCCL, and HIP-runtime domains; load, 16K setup, context restore, and the first discarded sample are absent. Three independent read-only reviews closed exact-contract, boundary, trace-domain, command-reproduction, and non-HIP portability defects before the first run. Commits `667bc100a` and `09f575d10` enforce repetition-only stabilization and preserve scope-valid attribution even when profiler-perturbed wall timing fails, without making that throughput or CSA-decision eligible.
+
+Two fully hashed clean-source 16K runs produced exact selected-region attribution with zero events outside boundaries, all requested domains present, 53 resolved DSO hashes, and 713,244 kernel dispatches per profiled tg32 repetition. Both **exit 4 and remain wall-unstable diagnostics**, so neither establishes TG or permits CSA selection:
+
+| 16K artifact | Profiled reps / target tokens | Profiled-wall MAD/median | Summed device time | Aggregate top / runner-up | Per-repetition top |
+|---|---:|---:|---:|---|---|
+| `...T145326...-raw-tg-profile-16k-a-...-35ee01b7edf9-6030` | 5 / 160 | 6.385% | 17.713 s | other quantized matmul 27.446% / NCCL 23.020% | quantized matmul 5/5 |
+| `...T150438...-raw-tg-profile-16k-b11-...-667bc100a5cc-32436` | 10 / 320 | 6.511% | 40.980 s | NCCL 28.871% / other quantized matmul 26.842% | quantized matmul 8/10; NCCL 2/10 |
+
+The two aggregate ranks disagree; the second run's RCCL stalls also drive its wall outliers. No post-hoc sample was removed. The routed-expert IQ2_XXS/IQ3_XXS MMVQ name-match is only 9.142% / 8.282%; `other_quantized_matmul` still mixes shared FFN and projections and is not yet branch-A proof. Flash attention is 3.810% / 3.303%, LID is 2.845% / 2.435%, and LID TOP_K is 1.917% / 1.656% at 16K; none selects B/C. Communication exceeds the 20% threshold in both aggregates, but rank disagreement prevents selection. Keep quantized matvec and communication open; next evidence must disambiguate exact shapes/operation roles and reproduce at another decision context. Indexed CSA remains held.
+
 Decision branches:
 
 - **A: routed/shared MoE dominant.** Record weight type, M/N/K, expert count, tokens/expert, wave size, dispatch count, total time, and achieved bandwidth. Optimize only the hottest observed combination; measure activation quantization with MMQ. Shared/routed overlap or final-add fusion is eligible only if its standalone cost is material.
@@ -966,6 +977,9 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Accept the fully hashed target-only M5.0 raw-TG baseline. | Clean `1cd80107ee76`; tg32, 31 raw/30 accepted at all eight depths; all latency MAD/median <=1.77%; 7,680 accepted target decodes; zero of 1,054 telemetry query starts in accepted intervals; full model/binary/46-DSO/power identities. | accepted |
 | 2026-08-04 | Accept M5.1 composite Meta scheduler residency; do not trigger M5.2. | Separate tg1 log: exactly 21 TOP_K + 21 LIGHTNING_INDEXER on `Meta(ROCm0..ROCm3)` at 2K-64K, none at depth 0, zero CPU/unknown DSV4 assignment; exact split/marker structure. Does not attest per-GPU ownership or selector correctness. | accepted, qualified |
 | 2026-08-04 | Fail closed on complete residency graph structure. | `6f7115360`: default selector requirement starts at 2K; exact benchmark/depth/generation markers, CPU0 + exact Meta1 split/input counts, operation/backend correlation, no extras/warnings; negative fixtures and real 529 MiB log reparse pass. | accepted tooling fix |
+| 2026-08-04 | Use ROCTx selected regions for disk-safe target-only raw-decode profiling. | `35ee01b7e`: authoritative in-process monotonic boundaries surround accepted `test_gen` only; exact full-hash/stack/config contract; CSV kernel/copy/RCCL/HIP domains; fail-closed summarizer. Three independent reviews; selected-region smoke captured exactly 1 of 3 kernels. | accepted tooling |
+| 2026-08-04 | Stabilize profiles by increasing tg32 repetitions only; preserve attribution on unstable exit 4. | Default 5-profiled-rep 16K run missed at 6.385% MAD; 10-profiled-rep retry still missed at 6.511%. `667bc100a` keeps one discard and tg32; `09f575d10` emits scope-valid diagnostic attribution but marks throughput and CSA ineligible. | accepted policy/tooling |
+| 2026-08-04 | Do not select an M5.3 implementation branch from the first two 16K profiles. | Aggregate ranks disagree: quantized matmul 27.446% vs NCCL 23.020% in run A; NCCL 28.871% vs quantized matmul 26.842% in run B. All samples retained; per-repetition ranks are quantized 13/15 and NCCL 2/15. | unresolved; more evidence required |
 
 ## 10. Closed decisions and open questions
 
@@ -975,7 +989,7 @@ Open questions:
 
 1. Does J16 hold on a future user-supplied production corpus? The committed technical proxy is positive, but no user corpus exists.
 2. Can a later expert-concentration signal select J16/J32/J64 without host synchronization? The accepted patch intentionally stays explicit.
-3. Which subsystem dominates the fresh target-only decode profile after all four accepted PP optimizations?
+3. Does other quantized matvec or NCCL dominate stable target-only decode, and which exact shared-FFN/projection shapes make up the unclassified quantized family? The first two 16K aggregates disagree.
 4. Does HIP flash attention perform partial arbitrary-mask tile pruning, and at what raw-decode context does CSA become material?
 5. How are LID scores and top-k indices assigned across the four meta devices at runtime?
 6. If MTP is reopened separately, which recurrent state/logit component changes after verification/checkpoint round trips with zero accepted drafts?
@@ -990,19 +1004,25 @@ remain: repeated matched 32K A/B, successful 32K attribution, and every 64K PP
 measurement are missing; the prior 64K PP attempt terminated in warmup. No
 user-supplied production corpus has been accepted. Raw TG now has 30 accepted
 tg32 samples at every required depth and a separate strict tg1 scheduler audit.
-Sequence-only restore remains rejected and fails closed. The next blocking
-evidence is a fresh full-stack raw-decode profile, not another baseline sweep.
+Sequence-only restore remains rejected and fails closed. Selected-region M5.3
+tooling is accepted, but the first two 16K profiles are diagnostic only: their
+perturbed wall timing is unstable and aggregate quantized-matvec/NCCL ranks
+disagree. The next blocking evidence is additional targeted profile/shape and
+communication attribution, not another raw-TG baseline sweep.
 
-**Current non-GPU M5.0 harness monitor command** (tooling verification only):
+**Current non-GPU raw-TG tooling monitors:**
 
 ```bash
 cd /home/edwin/llama.cpp-rdna2
-ARTIFACT=$HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6
-OUT=/tmp/dsv4-tg-static-rerun
-ARTIFACT="$ARTIFACT" OUT="$OUT" "$ARTIFACT/commands.sh"
+scripts/dsv4-rocm/test-tg-tools.py
+scripts/dsv4-rocm/test-tg-profile.py
+DSV4_TG_DEPTHS=16384 DSV4_TG_REPS=11 scripts/dsv4-rocm/profile-tg.sh --dry-run
 ```
 
-It uses fake llama-bench/model/`rocm-smi` fixtures and launches no GPU work.
+These launch no GPU/model work. The old static-validation artifact remains
+preserved, but its embedded fake residency split (`Meta/2 inputs`) predates the
+strict `6f7115360` 22/25-input parser and its complete `commands.sh` is no
+longer the canonical monitor.
 
 **Accepted restored-state monitor command:**
 
@@ -1013,7 +1033,33 @@ DSV4_STATE_API=context DSV4_LABEL=context-state-controlled \
   scripts/dsv4-rocm/run-state-restore-equivalence.sh
 ```
 
-The accepted result is the `5d80b8662` artifact listed above; all original/fresh-repeat/restored logits and argmax tokens are bit-identical. The next real commands are `DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh` and `DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency scripts/dsv4-rocm/run-tg.sh`. Recheck GPU ownership immediately before each.
+The accepted result is the `5d80b8662` artifact listed above; all original/fresh-repeat/restored logits and argmax tokens are bit-identical. M5.0/M5.1 no longer require rerunning; use their preserved pair monitor. Recheck GPU ownership immediately before any new M5.3 profile.
+
+**Current exact non-GPU M5.3 diagnostic monitor:**
+
+```bash
+for d in \
+  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T145326.793240911Z-raw-tg-profile-16k-a-performance-35ee01b7edf9-6030 \
+  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436
+do
+  "$d/profile-parser-command.sh"
+done
+P=$HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436
+python3 "$P/profile-comparison-monitor.py"
+```
+
+Expected result: `M5.3 16K PROFILE COMPARISON: UNRESOLVED (EXPECTED)`,
+`branch_selected=0`, and `csa_decision_eligible=0`. The monitor deliberately
+retains both unstable wall curves and verifies aggregate-rank disagreement; it
+is not an acceptance claim. Exact GPU commands were:
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+DSV4_TG_DEPTHS=16384 DSV4_LABEL=raw-tg-profile-16k-a \
+  scripts/dsv4-rocm/profile-tg.sh
+DSV4_TG_DEPTHS=16384 DSV4_TG_REPS=11 DSV4_LABEL=raw-tg-profile-16k-b11 \
+  scripts/dsv4-rocm/profile-tg.sh
+```
 
 **Final externally rerunnable PP verification command** (recorded on ancestor
 `77ef7c2d1`; implementation source unchanged since `803a41c37`, with
@@ -1152,14 +1198,18 @@ Repository implementation/evidence chain:
   81b072481 (telemetry excluded from accepted TG) ->
   4936a8673 (evidence provenance hardening: exact-node parser counts, full hashes, power policy) ->
   1cd80107e (iteration-3 pause/evidence checkpoint; source of accepted resumed artifacts) ->
-  6f7115360 (strict marker/split/backend residency parser)
+  6f7115360 (strict marker/split/backend residency parser) ->
+  7390b73d0 (M5.0/M5.1 acceptance record) ->
+  35ee01b7e (selected-region target-only profile harness) ->
+  667bc100a (repetition-only profile stabilization) ->
+  09f575d10 (unstable-attribution preservation + decode MMVQ classification)
 
 Raw-decode Ralph log:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
 Raw-decode Ralph state:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.state.json
 Raw-decode Ralph status:
-  active, iteration 3/50, resumed and M5.0/M5.1 accepted; started 2026-08-04T03:47:49Z
+  active, iteration 3/50; M5.0/M5.1 accepted, M5.3 profiling in progress/unresolved; started 2026-08-04T03:47:49Z
 Revised roadmap / loop-registration commits:
   5df30a53e / 0376a55aa
 M5.0 harness / corrected depth-state commits:
@@ -1170,11 +1220,16 @@ Accepted M5.0 performance artifact:
   $HOME/edwin/llama-jobs/dsv4-rocm-tg/20260804T124716.565555325Z-raw-tg-baseline-full31-resumed-performance-1cd80107ee76-27396/
 Accepted M5.1 residency artifact:
   $HOME/edwin/llama-jobs/dsv4-rocm-tg/20260804T131957.468937324Z-raw-tg-residency-hardened-full-residency-1cd80107ee76-22574/
+Diagnostic M5.3 16K profile artifacts (both exit 4 / unstable wall):
+  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T145326.793240911Z-raw-tg-profile-16k-a-performance-35ee01b7edf9-6030/
+  $HOME/edwin/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436/
 Current next action:
-  M5.3: capture at least two disk-safe measured-region target-only raw-decode
-  profiles at decision contexts on the accepted full stack; rank elapsed device
-  time and apply the quantitative branch rule. M5.2 is not triggered. Indexed
-  CSA remains on hold until M5.6 component scaling selects it.
+  M5.3 remains unresolved: map `other_quantized_matmul` to exact shared-FFN vs
+  projection shapes, isolate/reproduce the two NCCL stall repetitions, and
+  capture another selected-region profile at a declared decision context
+  (64K is preferred for attention scaling, disk checked first). Do not remove
+  outliers or select quantized matvec/communication yet. M5.2 is not triggered;
+  indexed CSA remains on hold until the mandatory M5.6 gate.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
@@ -1204,6 +1259,14 @@ Purpose:
 - Independent read-only review found no evidence blocker and recommended M5.0/M5.1 closure, but identified residual parser false-pass cases. Commit `6f7115360` closes them with exact marker, split, backend/input, 2K-node, no-extra, and warning-free requirements; negative fixtures and the 529 MiB real log reparse pass.
 - Preserved monitor: `pair-acceptance-validation.py` in the performance artifact checks source/config/status, 3 model hashes, 46 matching DSO hashes, binary, power policy, telemetry boundaries, summary contract, and strict residency JSON. Its rerun prints `M5.0/M5.1 PAIR ACCEPTANCE: PASS`.
 - Accepted: M5.0 observational + post-fix/deployment baseline and M5.1 composite scheduler residency. M5.2 is not triggered. Per-GPU copy/execution ownership and selector correctness are not claimed. Next: M5.3 fresh raw-decode profiling; indexed CSA remains held.
+
+### Iteration 3 continued — M5.3 profiler and first diagnostics
+
+- Added the fail-closed selected-region profiler at `35ee01b7e`; three independent reviews found and closed exact-contract bypasses, asynchronous-boundary false attestation, missing/malformed trace domains, unprofiled command regression, and non-HIP build portability. Non-GPU fixtures, negative dry-run matrix, CMake build, direct ROCTx smoke (exactly one of three kernels captured), and process-group safety pass.
+- First fully hashed clean 16K run (`...T145326...35ee01b7edf9-6030`, five profiled tg32 reps) proved real domain emission and exact boundary scope but exited 4 at 6.385% profiled-wall MAD. Per policy, no tokens/discard changed; `667bc100a` permits repetition-only expansion.
+- The 11-raw/10-profiled retry (`...T150438...667bc100a5cc-32436`) also exited 4 at 6.511% wall MAD. Both runs preserve every sample, three GGUF and 53 DSO hashes, clean source, exact accepted runtime stack, all four trace domains, zero outside-boundary events, and 713,244 dispatches per repetition.
+- Offline classifier/parser `09f575d10` recognizes decode MMVQ and all `dsv4_hc_*` kernels and emits per-repetition ranks. Run A aggregate: other quantized matmul 27.446%, NCCL 23.020%; all five reps rank quantized first. Run B aggregate: NCCL 28.871%, quantized 26.842%; eight reps rank quantized, two rank NCCL due retained stalls. Flash/LID/TOP_K are only 3.3-3.8% / 2.4-2.8% / 1.7-1.9% at 16K.
+- Decision: no M5.3 branch selected. Quantized matvec and communication stay open; profiler throughput and CSA are explicitly ineligible. Exact comparison monitor is preserved in run B and returns the expected unresolved status. GPUs are idle and lock-free after both rejected runs.
 
 **Exact accepted GPU commands:**
 
