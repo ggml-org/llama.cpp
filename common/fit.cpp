@@ -802,7 +802,8 @@ static void common_params_fit_impl(
             final_gpu_model += dmds_final[id].mb.model;
         }
         const int64_t moe_on_gpu = final_gpu_model - dense_model_gpu;
-        *n_expert_hot_s = moe_on_gpu > 0 ? (int) (int64_t(hp_nex) * moe_on_gpu / total_moe_bytes) : 0;
+        const int64_t s = moe_on_gpu > 0 ? int64_t(hp_nex) * moe_on_gpu / total_moe_bytes : 0;
+        *n_expert_hot_s = s > 1 ? (int) (s - 1) : 0;
     }
 }
 
