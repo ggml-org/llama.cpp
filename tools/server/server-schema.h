@@ -28,6 +28,7 @@ struct field {
     std::vector<const char *> name;
     const char * desc = "";
     field_handler custom_handler;
+    bool is_sampler = false;
     field() = default;
     field(const char * n) : name({n}) {}
     virtual ~field() = default;
@@ -41,6 +42,7 @@ struct field {
         return this;
     }
     field * set_handler(field_handler h) { this->custom_handler = h; return this; }
+    field * set_sampler() { is_sampler = true; return this; }
     virtual void eval(field_eval_context & ctx, const json & data) = 0;
 };
 

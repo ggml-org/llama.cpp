@@ -88,104 +88,131 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 
     add((new field_num("top_k", params.sampling.top_k))
         ->set_limits(0, INT32_MAX)
-        ->set_desc("Limit the next token selection to the K most probable tokens (0 = disabled)"));
+        ->set_desc("Limit the next token selection to the K most probable tokens (0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("top_p", params.sampling.top_p))
         ->set_limits(0.0f, 1.0f)
-        ->set_desc("Limit the next token selection to a subset of tokens with cumulative probability above threshold P (1.0 = disabled)"));
+        ->set_desc("Limit the next token selection to a subset of tokens with cumulative probability above threshold P (1.0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("min_p", params.sampling.min_p))
         ->set_limits(0.0f, 1.0f)
-        ->set_desc("The minimum probability for a token to be considered, relative to the probability of the most likely token (0 = disabled)"));
+        ->set_desc("The minimum probability for a token to be considered, relative to the probability of the most likely token (0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("top_n_sigma", params.sampling.top_n_sigma))
-        ->set_desc("Keep tokens within n standard deviations of the top token logit (< 0 = disabled)"));
+        ->set_desc("Keep tokens within n standard deviations of the top token logit (< 0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("xtc_probability", params.sampling.xtc_probability))
         ->set_limits(0.0f, 1.0f)
-        ->set_desc("Set the chance for token removal via XTC sampler (0 = disabled)"));
+        ->set_desc("Set the chance for token removal via XTC sampler (0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("xtc_threshold", params.sampling.xtc_threshold))
         ->set_limits(0.0f, 1.0f)
-        ->set_desc("Set a minimum probability threshold for tokens to be removed via XTC sampler (> 0.5 disables XTC)"));
+        ->set_desc("Set a minimum probability threshold for tokens to be removed via XTC sampler (> 0.5 disables XTC)")
+        ->set_sampler());
 
     add((new field_num("typical_p", params.sampling.typ_p))
         // ->set_limits(0.0f, 1.0f) // what's the valid range?
-        ->set_desc("Enable locally typical sampling with parameter p (1.0 = disabled)"));
+        ->set_desc("Enable locally typical sampling with parameter p (1.0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("temperature", params.sampling.temp))
         ->set_limits(0.0f, std::numeric_limits<float>::infinity())
-        ->set_desc("Adjust the randomness of the generated text (0 = greedy)"));
+        ->set_desc("Adjust the randomness of the generated text (0 = greedy)")
+        ->set_sampler());
 
     add((new field_num("dynatemp_range", params.sampling.dynatemp_range))
-        ->set_desc("Dynamic temperature range. The final temperature will be in [temperature - range, temperature + range] (0 = disabled)"));
+        ->set_desc("Dynamic temperature range. The final temperature will be in [temperature - range, temperature + range] (0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("dynatemp_exponent", params.sampling.dynatemp_exponent))
-        ->set_desc("Dynamic temperature exponent, controls how entropy maps to temperature"));
+        ->set_desc("Dynamic temperature exponent, controls how entropy maps to temperature")
+        ->set_sampler());
 
     add((new field_num("repeat_last_n", params.sampling.penalty_last_n))
         ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled, -1 = ctx-size)"));
+        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled, -1 = ctx-size)")
+        ->set_sampler());
 
     add((new field_num("repeat_penalty", params.sampling.penalty_repeat))
-        ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)"));
+        ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("frequency_penalty", params.sampling.penalty_freq))
-        ->set_desc("Repeat alpha frequency penalty (0 = disabled)"));
+        ->set_desc("Repeat alpha frequency penalty (0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("presence_penalty", params.sampling.penalty_present))
-        ->set_desc("Repeat alpha presence penalty (0 = disabled)"));
+        ->set_desc("Repeat alpha presence penalty (0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("dry_multiplier", params.sampling.dry_multiplier))
-        ->set_desc("Set the DRY (Don't Repeat Yourself) repetition penalty multiplier (0 = disabled)"));
+        ->set_desc("Set the DRY (Don't Repeat Yourself) repetition penalty multiplier (0 = disabled)")
+        ->set_sampler());
 
     add((new field_num("dry_base", params.sampling.dry_base))
         ->set_desc("Set the DRY repetition penalty base value (must be >= 1.0, any values < 1.0 will be replaced with the default value)")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             float v = data.at("dry_base").get<float>();
             ctx.params.sampling.dry_base = (v < 1.0f) ? params_base.sampling.dry_base : v;
-        }));
+        })
+        ->set_sampler());
 
     add((new field_num("dry_allowed_length", params.sampling.dry_allowed_length))
         ->set_hard_limits(0, INT32_MAX)
-        ->set_desc("Tokens that extend repetition beyond this length receive exponentially increasing penalty: multiplier * base ^ (sequence_length - allowed_length)"));
+        ->set_desc("Tokens that extend repetition beyond this length receive exponentially increasing penalty: multiplier * base ^ (sequence_length - allowed_length)")
+        ->set_sampler());
 
     add((new field_num("dry_penalty_last_n", params.sampling.dry_penalty_last_n))
         ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("How many tokens to scan for repetitions (0 = disabled, -1 = context size)"));
+        ->set_desc("How many tokens to scan for repetitions (0 = disabled, -1 = context size)")
+        ->set_sampler());
 
     add((new field_num("mirostat", params.sampling.mirostat))
         ->set_limits(0, 2)
-        ->set_desc("Enable Mirostat sampling, controlling perplexity during text generation (0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)"));
+        ->set_desc("Enable Mirostat sampling, controlling perplexity during text generation (0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)")
+        ->set_sampler());
 
     add((new field_num("mirostat_tau", params.sampling.mirostat_tau))
-        ->set_desc("Set the Mirostat target entropy, parameter tau"));
+        ->set_desc("Set the Mirostat target entropy, parameter tau")
+        ->set_sampler());
 
     add((new field_num("mirostat_eta", params.sampling.mirostat_eta))
-        ->set_desc("Set the Mirostat learning rate, parameter eta"));
+        ->set_desc("Set the Mirostat learning rate, parameter eta")
+        ->set_sampler());
 
     add((new field_num("adaptive_target", params.sampling.adaptive_target))
         ->set_limits(-std::numeric_limits<float>::max(), 1.0f)
-        ->set_desc("Adaptive sampling target entropy (valid range 0.0 to 1.0; negative = disabled)"));
+        ->set_desc("Adaptive sampling target entropy (valid range 0.0 to 1.0; negative = disabled)")
+        ->set_sampler());
 
     add((new field_num("adaptive_decay", params.sampling.adaptive_decay))
         ->set_hard_limits(0.0f, 0.99f)
-        ->set_desc("EMA decay for adaptive sampling; history approximates 1/(1-decay) tokens"));
+        ->set_desc("EMA decay for adaptive sampling; history approximates 1/(1-decay) tokens")
+        ->set_sampler());
 
     // seed is uint32_t; field_num uses int32_t so use a handler
     add((new field_num("seed", params.sampling.seed))
-        ->set_desc("Set the random number generator (RNG) seed (-1 = random)"));
+        ->set_desc("Set the random number generator (RNG) seed (-1 = random)")
+        ->set_sampler());
 
     add((new field_num("n_probs", params.sampling.n_probs))
         ->add_alias("logprobs") // use "logprobs" if "n_probs" wasn't provided
-        ->set_desc("If greater than 0, output the probabilities of top N tokens for each generated token"));
+        ->set_desc("If greater than 0, output the probabilities of top N tokens for each generated token")
+        ->set_sampler());
 
     add((new field_num("min_keep", params.sampling.min_keep))
         ->set_hard_limits(0, INT32_MAX)
-        ->set_desc("If greater than 0, force samplers to return at least N possible tokens"));
+        ->set_desc("If greater than 0, force samplers to return at least N possible tokens")
+        ->set_sampler());
 
     add((new field_bool("backend_sampling", params.sampling.backend_sampling))
-        ->set_desc("Use backend sampling instead of llama.cpp sampling"));
+        ->set_desc("Use backend sampling instead of llama.cpp sampling")
+        ->set_sampler());
 
     add((new field_bool("post_sampling_probs", params.post_sampling_probs))
         ->set_desc("Return probabilities of top n_probs tokens after applying the sampling chain"));
@@ -246,7 +273,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (ctx.params.sampling.dry_sequence_breakers.empty()) {
                 throw std::runtime_error("Error: dry_sequence_breakers must be a non-empty array of strings");
             }
-        }));
+        })
+        ->set_sampler());
 
     // handle both "json_schema" and "grammar"
     add((new field_json("json_schema"))
@@ -281,7 +309,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         }));
 
     add((new field_bool("grammar_lazy", params.sampling.grammar_lazy))
-        ->set_desc("Whether to apply grammar constraints lazily, only when triggered (instead of at every step)"));
+        ->set_desc("Whether to apply grammar constraints lazily, only when triggered (instead of at every step)")
+        ->set_sampler());
 
     //
     // Chat parser params
@@ -429,6 +458,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 
     add((new field_json("logit_bias"))
         ->set_desc("Modify the likelihood of specific tokens. Accepts an array of [token, bias] pairs or an object mapping token to bias. Use false as bias to ban a token")
+        ->set_sampler()
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             GGML_ASSERT(ctx.vocab != nullptr);
             ctx.params.sampling.logit_bias.clear();
@@ -500,6 +530,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 
     add((new field_json("samplers"))
         ->set_desc("The order in which samplers are applied. An array of sampler type names, or a single string of sampler chars")
+        ->set_sampler()
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             const auto & samplers = data.at("samplers");
             if (samplers.is_array()) {
@@ -543,7 +574,11 @@ task_params eval_llama_cmpl_schema(
     auto schema = make_llama_cmpl_schema(params_base, params);
 
     // eval all fields in the schema
+    // skip sampler fields if API sampler overrides are enabled
     for (const auto & f : schema) {
+        if (f->is_sampler && params_base.ignore_api_samplers) {
+            continue;
+        }
         f->eval(ctx, data);
     }
 
