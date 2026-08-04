@@ -324,13 +324,13 @@ void dequantize_q5_1_t4(device const block_q5_1 * xb, short il, thread type4 & r
 
 template <typename type4x4>
 void dequantize_q8_0(device const block_q8_0 *xb, short il, thread type4x4 & reg) {
-    device const int8_t * qs = ((device const int8_t *)xb->qs);
+    device const packed_char4 * qs = (device const packed_char4 *) xb->qs;
     const float d = xb->d;
 
     float4x4 reg_f;
 
-    for (int i = 0; i < 16; i++) {
-        reg_f[i/4][i%4] = (qs[i + 16*il] * d);
+    for (int i = 0; i < 4; ++i) {
+        reg_f[i] = float4(qs[4*il + i]) * d;
     }
 
     reg = (type4x4) reg_f;
@@ -338,12 +338,10 @@ void dequantize_q8_0(device const block_q8_0 *xb, short il, thread type4x4 & reg
 
 template <typename type4>
 void dequantize_q8_0_t4(device const block_q8_0 *xb, short il, thread type4 & reg) {
-    device const int8_t * qs = ((device const int8_t *)xb->qs);
+    device const packed_char4 * qs = (device const packed_char4 *) xb->qs;
     const float d = xb->d;
 
-    for (int i = 0; i < 4; i++) {
-        reg[i] = (qs[4*(il%4) + i + 16*(il/4)] * d);
-    }
+    reg = (type4) (float4(qs[il]) * d);
 }
 
 template <typename type4x4>
@@ -717,3 +715,21 @@ void dequantize_iq4_xs(device const block_iq4_xs * xb, short il, thread type4x4 
     }
 }
 
+template <typename type4x4>
+void dequantize_tq2_0(device const block_tq2_0 * xb, short il, thread type4x4 & reg) {
+    device const uint8_t * qs = xb->qs;
+    const float d = xb->d;
+
+    float4x4 reg_f;
+
+    // 2 bits per element, 4 elements per byte, 128 elements per 32-byte group
+    const short base = il * 16;
+    for (int k = 0; k < 16; k++) {
+        const int i = base + k;
+        const int byte = ((i >> 7) & 1) * 32 + (i & 31);
+        const int l = (i >> 5) & 3;
+        reg_f[k/4][k%4] = d * (float)(((qs[byte] >> (2*l)) & 3) - 1);
+    }
+
+    reg = (type4x4) reg_f;
+}

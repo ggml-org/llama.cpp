@@ -232,3 +232,31 @@ void quantize_iq4_nl(device const float * src, device block_iq4_nl & dst) {
 
     dst.d = sumq2 > 0 ? sumqx/sumq2 : d;
 }
+
+void quantize_tq2_0(device const float * src, device block_tq2_0 & dst) {
+#pragma METAL fp math_mode(safe)
+    float amax = 0.0f; // absolute max
+
+    for (int j = 0; j < QK_K; j++) {
+        const float v = src[j];
+        amax = MAX(amax, fabs(v));
+    }
+
+    const float d = amax;
+    const float id = d ? 1.0f/d : 0.0f;
+
+    dst.d = (half) d;
+
+    for (int j = 0; j < QK_K/4; j += 32) {
+        for (int m = 0; m < 32; ++m) {
+            uint8_t q = 0;
+            for (int n = 0; n < 4; ++n) {
+                // -1, 0, 1 -> 0, 1, 2
+                int xi = (int)round(src[m + n*32] * id) + 1;
+                q += (uint8_t)((xi & 3) << (2*n));
+            }
+            dst.qs[j + m] = q;
+        }
+        src += 4*32;
+    }
+}
