@@ -39,6 +39,7 @@ from tessera_db import TENSOR_STATS_COLS, TesseraDB
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS tensor_stats (
         model_hash         TEXT NOT NULL,
+        model_role         TEXT NOT NULL DEFAULT 'trunk',
         name               TEXT NOT NULL,
         family             TEXT,
         layer_depth        INTEGER,
@@ -54,7 +55,7 @@ SCHEMA_SQL = """
         source             TEXT,
         recommended_action TEXT,
         updated_at         TIMESTAMP,
-        PRIMARY KEY (model_hash, name)
+        PRIMARY KEY (model_hash, model_role, name)
     );
 """
 
@@ -65,6 +66,7 @@ SCHEMA_SQL = """
 L5_SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS l5_weights (
         model_hash      TEXT NOT NULL,
+        model_role      TEXT NOT NULL DEFAULT 'trunk',
         family          TEXT NOT NULL,
         w_imatrix       DOUBLE NOT NULL,
         w_gradient      DOUBLE NOT NULL,
@@ -76,10 +78,11 @@ L5_SCHEMA_SQL = """
         hit_rate        DOUBLE,
         retune_source   TEXT,
         updated_at      TIMESTAMP,
-        PRIMARY KEY (model_hash, family)
+        PRIMARY KEY (model_hash, model_role, family)
     );
     CREATE TABLE IF NOT EXISTS l5_outcome (
         model_hash        TEXT NOT NULL,
+        model_role        TEXT NOT NULL DEFAULT 'trunk',
         name              TEXT NOT NULL,
         layer             INTEGER,
         iteration         INTEGER NOT NULL,
@@ -96,7 +99,7 @@ L5_SCHEMA_SQL = """
         accept_threshold  DOUBLE,
         residual          DOUBLE,
         updated_at        TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
 """
 

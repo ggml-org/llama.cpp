@@ -39,6 +39,7 @@ from tessera_db import TesseraDB
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS tensor_stats (
         model_hash         TEXT NOT NULL,
+        model_role         TEXT NOT NULL DEFAULT 'trunk',
         name               TEXT NOT NULL,
         family             TEXT,
         layer_depth        INTEGER,
@@ -54,7 +55,7 @@ SCHEMA_SQL = """
         source             TEXT,
         recommended_action TEXT,
         updated_at         TIMESTAMP,
-        PRIMARY KEY (model_hash, name)
+        PRIMARY KEY (model_hash, model_role, name)
     );
 """
 

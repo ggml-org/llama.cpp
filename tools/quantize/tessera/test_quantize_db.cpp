@@ -19,6 +19,11 @@
 #include "tessera-quantize-db.h"
 #include "tessera-db-buffer.h"
 
+#ifdef _WIN32
+#  define NOMINMAX
+#endif
+#include "duckdb.hpp"
+
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -205,11 +210,11 @@ int main(int argc, char ** argv) {
     // and the buffer's MPSC flusher landing them.
     {
         std::vector<std::string> cols = {
-            "model_hash", "name", "layer", "iteration", "plan_id",
-            "strategy", "alpha_before", "alpha_after", "clip_before",
-            "clip_after", "outlier_thresh_before", "outlier_thresh_after",
-            "mse_before", "mse_after", "frob_before", "frob_after",
-            "family", "updated_at",
+            "model_hash", "model_role", "name", "layer", "iteration",
+            "plan_id", "strategy", "alpha_before", "alpha_after",
+            "clip_before", "clip_after", "outlier_thresh_before",
+            "outlier_thresh_after", "mse_before", "mse_after",
+            "frob_before", "frob_after", "family", "updated_at",
         };
         ts_db_buffer * buf = ts_db_buffer_open(
             db, "l4_plan_outcome", cols,
@@ -570,6 +575,368 @@ int main(int argc, char ** argv) {
                 "AND recommended_action = ''");
         CHECK(n_empty == 1,
               "recommended_action='' round-trip is a no-op semantic");
+    }
+
+    // ---- Phase 16: model_role round-trip on the 4 C++ structs ----
+    // The unified Gemma4 12B + dspark + dflash + MTP arch has
+    // tensors with the same name in both the trunk and the
+    // drafter (e.g. blk.0.attn_q.weight). The model_role column
+    // disambiguates them on the (model_hash, model_role, ...)
+    // PKs. The C++ side carries model_role through the 4 row
+    // structs (ts_tessera_db_tensor_stat,
+    // ts_tessera_db_l4_outcome, ts_tessera_db_l5_outcome_row,
+    // ts_tessera_db_l5_weight) and the upsert / append / test
+    // helpers. The default "trunk" preserves the pre-Phase-16
+    // contract (an empty model_role in the struct -> "trunk"
+    // in the SQL).
+    //
+    // The test exercises:
+    //   * default "trunk" on a struct that leaves model_role
+    //     empty (preserves the pre-Phase-16 contract)
+    //   * explicit "dflash" / "mtp_nextn" values round-trip
+    //   * the same (model_hash, name) with two different
+    //     model_role values coexist on the new PK
+    //   * the 4 helpers (upsert_tensor_stat, append_l4_outcome,
+    //     test_insert_l5_outcome, upsert_l5_weight) all carry
+    //     model_role through
+    //   * the list_l5_weights reader echoes model_role in
+    //     ts_tessera_db_l5_weight_list_entry
+    {
+        // ---- tensor_stat: default "trunk" on empty model_role ----
+        ts_tessera_db_tensor_stat def_row;
+        def_row.model_hash = "p16_default";
+        def_row.model_role = "";   // -> "trunk" in the SQL
+        def_row.name       = "blk.0.attn_q.weight";
+        def_row.family     = "attn_q";
+        def_row.layer_depth = 0;
+        def_row.kurtosis   = 3.0;
+        def_row.eff_rank   = 0.85;
+        def_row.source     = "py_cal";
+        std::string err;
+        CHECK(ts_tessera_db_upsert_tensor_stat(db, def_row, &err) == 0,
+              ("upsert_tensor_stat default role failed: " + err).c_str());
+        int64_t n_default = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_hash = 'p16_default' "
+                "AND name = 'blk.0.attn_q.weight' "
+                "AND model_role = 'trunk'");
+        CHECK(n_default == 1,
+              "default model_role=empty -> 'trunk' on tensor_stat");
+
+        // ---- tensor_stat: explicit "dflash" --------------------
+        ts_tessera_db_tensor_stat dflash_row = def_row;
+        dflash_row.model_role = "dflash";
+        dflash_row.kurtosis   = 4.0;   // different value
+        dflash_row.source     = "py_cal_dflash";
+        CHECK(ts_tessera_db_upsert_tensor_stat(db, dflash_row, &err) == 0,
+              ("upsert_tensor_stat dflash failed: " + err).c_str());
+        int64_t n_dflash = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_hash = 'p16_default' "
+                "AND name = 'blk.0.attn_q.weight' "
+                "AND model_role = 'dflash'");
+        CHECK(n_dflash == 1,
+              "explicit model_role='dflash' on tensor_stat");
+        // The two rows coexist: same (model_hash, name),
+        // different model_role.
+        int64_t n_total = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM tensor_stats "
+                "WHERE model_hash = 'p16_default' "
+                "AND name = 'blk.0.attn_q.weight'");
+        CHECK(n_total == 2,
+              "trunk + dflash coexist on the new PK");
+
+        // ---- tensor_stat: mtp_nextn ----------------------------
+        ts_tessera_db_tensor_stat mtp_row = def_row;
+        mtp_row.model_role = "mtp_nextn";
+        mtp_row.name       = "blk.0.nextn_proj.weight";
+        mtp_row.family     = "nextn";
+        mtp_row.kurtosis   = 5.0;
+        CHECK(ts_tessera_db_upsert_tensor_stat(db, mtp_row, &err) == 0,
+              ("upsert_tensor_stat mtp_nextn failed: " + err).c_str());
+
+        // ---- l4_outcome: default + dflash ----------------------
+        // The l4_outcome struct is written via the per-table
+        // buffer (ts_db_buffer). Open a buffer for the test
+        // and append two rows (one trunk, one dflash).
+        {
+            std::vector<std::string> cols = {
+                "model_hash", "model_role", "name", "layer", "iteration",
+                "plan_id", "strategy", "alpha_before", "alpha_after",
+                "clip_before", "clip_after", "outlier_thresh_before",
+                "outlier_thresh_after", "mse_before", "mse_after",
+                "frob_before", "frob_after", "family", "updated_at",
+            };
+            ts_db_buffer * buf = ts_db_buffer_open(
+                db, "l4_plan_outcome", cols,
+                /*flush_threshold=*/16, std::chrono::milliseconds(50));
+            CHECK(buf != nullptr, "l4 buffer open (p16)");
+            if (buf != nullptr) {
+                // Row 1: default trunk (empty model_role).
+                ts_tessera_db_l4_outcome l4_trunk;
+                l4_trunk.model_hash = "p16_l4";
+                l4_trunk.model_role = "";   // -> "trunk"
+                l4_trunk.name       = "blk.0.attn_q.weight";
+                l4_trunk.layer      = 0;
+                l4_trunk.iteration  = 0;
+                l4_trunk.plan_id    = "p0";
+                l4_trunk.strategy   = "A";
+                l4_trunk.mse_before = 0.012f;
+                l4_trunk.mse_after  = 0.010f;
+                l4_trunk.family     = "attn_q";
+                CHECK(ts_tessera_db_append_l4_outcome(buf, l4_trunk) == 0,
+                      "append_l4_outcome trunk");
+                // Row 2: explicit dflash.
+                ts_tessera_db_l4_outcome l4_dflash = l4_trunk;
+                l4_dflash.model_role = "dflash";
+                l4_dflash.mse_before = 0.020f;
+                l4_dflash.mse_after  = 0.018f;
+                CHECK(ts_tessera_db_append_l4_outcome(buf, l4_dflash) == 0,
+                      "append_l4_outcome dflash");
+                ts_db_buffer_close(&buf);
+            }
+            int64_t n_l4 = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l4_plan_outcome "
+                    "WHERE model_hash = 'p16_l4'");
+            CHECK(n_l4 == 2, "l4_outcome: 2 rows (trunk + dflash)");
+            int64_t n_l4_dflash = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l4_plan_outcome "
+                    "WHERE model_hash = 'p16_l4' "
+                    "AND model_role = 'dflash'");
+            CHECK(n_l4_dflash == 1,
+                  "l4_outcome: dflash row landed");
+            // Default -> "trunk" on the SQL side.
+            int64_t n_l4_trunk = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l4_plan_outcome "
+                    "WHERE model_hash = 'p16_l4' "
+                    "AND model_role = 'trunk'");
+            CHECK(n_l4_trunk == 1,
+                  "l4_outcome: empty model_role -> 'trunk'");
+        }
+
+        // ---- l5_outcome_row: default + dflash (test-only INSERT) ----
+        {
+            // Trunk row.
+            ts_tessera_db_l5_outcome_row l5_trunk;
+            l5_trunk.model_hash  = "p16_l5";
+            l5_trunk.model_role  = "";   // -> "trunk"
+            l5_trunk.name        = "blk.0.attn_q.weight";
+            l5_trunk.layer       = 0;
+            l5_trunk.iteration   = 0;
+            l5_trunk.plan_id     = "p0";
+            l5_trunk.family      = "attn_q";
+            l5_trunk.sensitivity_score = 0.5;
+            l5_trunk.mse_before  = 0.012;
+            l5_trunk.mse_after   = 0.010;
+            l5_trunk.delta_mse   = -0.002;
+            l5_trunk.plan_accepted = true;
+            CHECK(ts_tessera_db_test_insert_l5_outcome(db, l5_trunk) == 0,
+                  "test_insert_l5_outcome trunk");
+            // Dflash row.
+            ts_tessera_db_l5_outcome_row l5_dflash = l5_trunk;
+            l5_dflash.model_role  = "dflash";
+            l5_dflash.sensitivity_score = 0.6;
+            l5_dflash.mse_before  = 0.020;
+            l5_dflash.mse_after   = 0.018;
+            l5_dflash.delta_mse   = -0.002;
+            CHECK(ts_tessera_db_test_insert_l5_outcome(db, l5_dflash) == 0,
+                  "test_insert_l5_outcome dflash");
+            int64_t n_l5 = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_outcome "
+                    "WHERE model_hash = 'p16_l5'");
+            CHECK(n_l5 == 2, "l5_outcome: 2 rows (trunk + dflash)");
+            int64_t n_l5_dflash = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_outcome "
+                    "WHERE model_hash = 'p16_l5' "
+                    "AND model_role = 'dflash'");
+            CHECK(n_l5_dflash == 1,
+                  "l5_outcome: dflash row landed");
+            int64_t n_l5_trunk = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_outcome "
+                    "WHERE model_hash = 'p16_l5' "
+                    "AND model_role = 'trunk'");
+            CHECK(n_l5_trunk == 1,
+                  "l5_outcome: empty model_role -> 'trunk'");
+        }
+
+        // ---- l5_weight: trunk + dflash + reader echoes model_role ----
+        {
+            ts_tessera_db_l5_weight w_trunk;
+            w_trunk.model_hash = "p16_w";
+            w_trunk.model_role = "trunk";
+            w_trunk.family     = "attn_q";
+            w_trunk.w_imatrix  = 0.4;
+            w_trunk.w_gradient = 0.3;
+            w_trunk.w_layer    = 0.3;
+            w_trunk.hit_rate   = 0.7;
+            w_trunk.n_samples  = 10;
+            CHECK(ts_tessera_db_upsert_l5_weight(db, w_trunk, &err) == 0,
+                  ("upsert_l5_weight trunk: " + err).c_str());
+            // Dflash: same model + family, different model_role.
+            ts_tessera_db_l5_weight w_dflash;
+            w_dflash.model_hash = "p16_w";
+            w_dflash.model_role = "dflash";
+            w_dflash.family     = "attn_q";
+            w_dflash.w_imatrix  = 0.2;
+            w_dflash.w_gradient = 0.5;
+            w_dflash.w_layer    = 0.3;
+            w_dflash.hit_rate   = 0.6;
+            w_dflash.n_samples  = 5;
+            CHECK(ts_tessera_db_upsert_l5_weight(db, w_dflash, &err) == 0,
+                  ("upsert_l5_weight dflash: " + err).c_str());
+            int64_t n_w = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_weights "
+                    "WHERE model_hash = 'p16_w'");
+            CHECK(n_w == 2, "l5_weights: 2 rows (trunk + dflash)");
+            // Re-write on the same PK overwrites; the other
+            // (model_role, family) row is untouched.
+            w_dflash.w_gradient = 0.6;
+            w_dflash.n_samples  = 8;
+            CHECK(ts_tessera_db_upsert_l5_weight(db, w_dflash, &err) == 0,
+                  ("upsert_l5_weight re-write: " + err).c_str());
+            // The trunk row is still 0.3 (untouched by the
+            // dflash re-write; different PK).
+            int64_t n_trunk_unchanged = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_weights "
+                    "WHERE model_hash = 'p16_w' AND model_role = 'trunk' "
+                    "AND w_gradient = 0.3");
+            CHECK(n_trunk_unchanged == 1,
+                  "trunk row untouched by dflash re-write (different PK)");
+
+            // list_l5_weights echoes model_role.
+            ts_tessera_db_l5_weight_list all;
+            CHECK(ts_tessera_db_list_l5_weights(db, "p16_w", "", &all) == 0,
+                  "list_l5_weights (p16) failed");
+            CHECK(all.entries.size() == 2, "list returns 2 entries");
+            // hit_rate DESC: dflash (0.6) first, trunk (0.7) wait...
+            // hit_rate = 0.7 > 0.6, so trunk is first. Just check
+            // both model_role values echo.
+            bool seen_trunk = false, seen_dflash = false;
+            for (const auto & e : all.entries) {
+                if (e.model_role == "trunk")  seen_trunk  = true;
+                if (e.model_role == "dflash") seen_dflash = true;
+            }
+            CHECK(seen_trunk,
+                  "list echoes model_role='trunk'");
+            CHECK(seen_dflash,
+                  "list echoes model_role='dflash'");
+        }
+
+        // ---- migration: fresh DB is no-op; old-shape DB is migrated ----
+        // Open a separate DB on disk and seed a pre-Phase-16
+        // (no model_role) schema by hand, then verify the
+        // migration rebuilds the PK and backfills model_role.
+        // The C++ open path calls ts_tessera_db_migrate_model_role
+        // on every open; here we test the function directly.
+        //
+        // The pre-Phase-16 schema is created via raw SQL
+        // (model_role is part of the new PK, so we cannot
+        // DROP COLUMN on a freshly-opened DB; we must
+        // create the old shape from scratch).
+        {
+            const std::string pre_path = std::string(path) + ".pre16";
+            std::remove(pre_path.c_str());
+            // Create a fresh DuckDB file with the
+            // pre-Phase-16 schema (no model_role, original
+            // PKs). We bypass the C++ open path because
+            // ts_tessera_db_open always runs the new schema
+            // setup, which would already give us the
+            // model_role column. Instead, we open a raw
+            // duckdb::DuckDB / duckdb::Connection and apply
+            // the pre-Phase-16 DDL ourselves.
+            std::unique_ptr<duckdb::DuckDB>     pre_duck;
+            std::unique_ptr<duckdb::Connection> pre_conn;
+            try {
+                pre_duck.reset(new duckdb::DuckDB(pre_path));
+                pre_conn.reset(new duckdb::Connection(*pre_duck));
+                // Pre-Phase-16 schema: no model_role, original
+                // PK (model_hash, name). The full column list
+                // matches the migration's INSERT ... SELECT
+                // (every column the migration carries through
+                // must exist on the source table).
+                pre_conn->Query(
+                    "CREATE TABLE tensor_stats ("
+                    "    model_hash         TEXT NOT NULL,"
+                    "    name               TEXT NOT NULL,"
+                    "    family             TEXT,"
+                    "    layer_depth        INTEGER,"
+                    "    out_dim            BIGINT,"
+                    "    in_dim             BIGINT,"
+                    "    n_elements         BIGINT,"
+                    "    dtype              TEXT,"
+                    "    kurtosis           DOUBLE,"
+                    "    eff_rank           DOUBLE,"
+                    "    rms                DOUBLE,"
+                    "    mean_abs           DOUBLE,"
+                    "    tail_ratio         DOUBLE,"
+                    "    source             TEXT,"
+                    "    recommended_action TEXT,"
+                    "    updated_at         TIMESTAMP,"
+                    "    PRIMARY KEY (model_hash, name)"
+                    ")");
+                pre_conn->Query(
+                    "INSERT INTO tensor_stats "
+                    "(model_hash, name, family, layer_depth, "
+                    " out_dim, in_dim, n_elements, dtype, "
+                    " kurtosis, eff_rank, source) "
+                    "VALUES "
+                    "('pre_model', 'blk.0.attn_q.weight', 'attn_q', 0, "
+                    " 4096, 4096, 16777216, 'f16', "
+                    " 5.0, 0.85, 'py_cal')");
+            } catch (const std::exception & e) {
+                CHECK(false,
+                      ("pre-Phase-16 setup exception: " +
+                       std::string(e.what())).c_str());
+            } catch (...) {
+                CHECK(false, "pre-Phase-16 setup unknown exception");
+            }
+            // Now open via the C++ wrapper. ts_tessera_db_open
+            // runs the new schema (no-op on existing tables
+            // because of CREATE TABLE IF NOT EXISTS) and then
+            // runs ts_tessera_db_migrate_model_role, which
+            // detects the missing column on tensor_stats and
+            // runs the rebuild.
+            std::string mig_err;
+            ts_tessera_db * pre_db = ts_tessera_db_open(pre_path, &mig_err);
+            CHECK(pre_db != nullptr,
+                  ("pre-Phase-16 DB open failed: " + mig_err).c_str());
+            if (pre_db != nullptr) {
+                // The migration should have run on open
+                // (the C++ open path calls
+                // ts_tessera_db_migrate_model_role). Verify
+                // the row has model_role='trunk' and the
+                // new PK is in place.
+                int64_t n_pre_trunk = ts_tessera_db_debug_count(
+                    pre_db, "SELECT COUNT(*) FROM tensor_stats "
+                            "WHERE model_hash = 'pre_model' "
+                            "AND model_role = 'trunk'");
+                CHECK(n_pre_trunk == 1,
+                      "pre-Phase-16 row backfilled to model_role='trunk' "
+                      "by open-path migration");
+
+                // Explicit re-run is a no-op.
+                std::string mig_err2;
+                CHECK(ts_tessera_db_migrate_model_role(pre_db, &mig_err2) == 0,
+                      ("re-migration failed: " + mig_err2).c_str());
+                int64_t n_pre_trunk2 = ts_tessera_db_debug_count(
+                    pre_db, "SELECT COUNT(*) FROM tensor_stats "
+                            "WHERE model_hash = 'pre_model' "
+                            "AND model_role = 'trunk'");
+                CHECK(n_pre_trunk2 == 1,
+                      "re-migration: row count unchanged");
+
+                // The original data survived the rebuild
+                // (kurtosis=5.0 is preserved).
+                int64_t n_kurtosis = ts_tessera_db_debug_count(
+                    pre_db, "SELECT COUNT(*) FROM tensor_stats "
+                            "WHERE model_hash = 'pre_model' "
+                            "AND kurtosis = 5.0");
+                CHECK(n_kurtosis == 1,
+                      "pre-Phase-16 rebuild preserves kurtosis");
+
+                delete pre_db;
+            }
+        }
     }
 
     if (failures == 0) {

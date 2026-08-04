@@ -54,6 +54,7 @@ def _fresh_path(idx: int) -> str:
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS l5_plan_summary (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER NOT NULL,
@@ -66,10 +67,11 @@ SCHEMA_SQL = """
         gradient_proxy        DOUBLE,
         layer_position_prior  DOUBLE,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
     CREATE TABLE IF NOT EXISTS l4_plan_outcome (
         model_hash           TEXT NOT NULL,
+        model_role           TEXT NOT NULL DEFAULT 'trunk',
         name                 TEXT NOT NULL,
         layer                INTEGER,
         iteration            INTEGER NOT NULL,
@@ -87,10 +89,11 @@ SCHEMA_SQL = """
         frob_after           DOUBLE,
         family               TEXT,
         updated_at           TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
     CREATE TABLE IF NOT EXISTS l5_outcome (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER NOT NULL,
@@ -110,7 +113,7 @@ SCHEMA_SQL = """
         accept_threshold      DOUBLE,
         residual              DOUBLE,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
 """
 
@@ -535,7 +538,10 @@ class TestL5Outcome(unittest.TestCase):
         # shape for this test). Note: updated_at IS still on the
         # pre-Phase-15 l5_plan_summary (it's not one of the
         # Phase 15 additions); only the per-tensor component
-        # columns are missing.
+        # columns are missing. Phase 16 added model_role to
+        # l4_plan_outcome (not l5_plan_summary in this test's
+        # pre-Phase-15 schema), so the l4 insert includes
+        # model_role='trunk'.
         con = _dd.connect(path)
         try:
             con.execute(
@@ -545,7 +551,7 @@ class TestL5Outcome(unittest.TestCase):
             )
             con.execute(
                 "INSERT INTO l4_plan_outcome VALUES "
-                "('old', 'blk.0.attn_q.weight', 0, 0, 'p0', 'A', "
+                "('old', 'trunk', 'blk.0.attn_q.weight', 0, 0, 'p0', 'A', "
                 " 0.5, 0.5, 1.0, 1.0, 4.0, 4.0, 0.01, 0.009, 0.01, 0.009, "
                 " 'attn_q', NULL)"
             )

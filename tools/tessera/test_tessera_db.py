@@ -50,6 +50,7 @@ SCHEMA_SQL = """
     );
     CREATE TABLE IF NOT EXISTS tensor_stats (
         model_hash         TEXT NOT NULL,
+        model_role         TEXT NOT NULL DEFAULT 'trunk',
         name               TEXT NOT NULL,
         family             TEXT,
         layer_depth        INTEGER,
@@ -65,10 +66,11 @@ SCHEMA_SQL = """
         source             TEXT,
         recommended_action TEXT,
         updated_at         TIMESTAMP,
-        PRIMARY KEY (model_hash, name)
+        PRIMARY KEY (model_hash, model_role, name)
     );
     CREATE TABLE IF NOT EXISTS l3_outlier_summary (
         model_hash        TEXT NOT NULL,
+        model_role        TEXT NOT NULL DEFAULT 'trunk',
         name              TEXT NOT NULL,
         layer             INTEGER,
         sidecar_label     TEXT,
@@ -77,10 +79,11 @@ SCHEMA_SQL = """
         max_abs           DOUBLE,
         rms               DOUBLE,
         updated_at        TIMESTAMP,
-        PRIMARY KEY (model_hash, name, sidecar_label)
+        PRIMARY KEY (model_hash, model_role, name, sidecar_label)
     );
     CREATE TABLE IF NOT EXISTS l4_probe_summary (
         model_hash        TEXT NOT NULL,
+        model_role        TEXT NOT NULL DEFAULT 'trunk',
         name              TEXT NOT NULL,
         layer             INTEGER,
         current_qtype     TEXT,
@@ -90,10 +93,11 @@ SCHEMA_SQL = """
         top1_mismatch     DOUBLE,
         n_weights         BIGINT,
         updated_at        TIMESTAMP,
-        PRIMARY KEY (model_hash, name)
+        PRIMARY KEY (model_hash, model_role, name)
     );
     CREATE TABLE IF NOT EXISTS l5_plan_summary (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER,
@@ -106,10 +110,11 @@ SCHEMA_SQL = """
         gradient_proxy        DOUBLE,
         layer_position_prior  DOUBLE,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
     CREATE TABLE IF NOT EXISTS l5_outcome (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER NOT NULL,
@@ -130,10 +135,11 @@ SCHEMA_SQL = """
         residual              DOUBLE,
         in_sample_loss        DOUBLE,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, name, iteration, plan_id)
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
     CREATE TABLE IF NOT EXISTS l5_weights (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
         family                TEXT NOT NULL,
         w_imatrix             DOUBLE NOT NULL,
         w_gradient            DOUBLE NOT NULL,
@@ -145,7 +151,29 @@ SCHEMA_SQL = """
         top_fraction          DOUBLE,
         retune_source         TEXT,
         updated_at            TIMESTAMP,
-        PRIMARY KEY (model_hash, family)
+        PRIMARY KEY (model_hash, model_role, family)
+    );
+    CREATE TABLE IF NOT EXISTS l4_plan_outcome (
+        model_hash           TEXT NOT NULL,
+        model_role           TEXT NOT NULL DEFAULT 'trunk',
+        name                 TEXT NOT NULL,
+        layer                INTEGER,
+        iteration            INTEGER NOT NULL,
+        plan_id              TEXT NOT NULL,
+        strategy             TEXT,
+        alpha_before         DOUBLE,
+        alpha_after          DOUBLE,
+        clip_before          DOUBLE,
+        clip_after           DOUBLE,
+        outlier_thresh_before DOUBLE,
+        outlier_thresh_after  DOUBLE,
+        mse_before           DOUBLE,
+        mse_after            DOUBLE,
+        frob_before          DOUBLE,
+        frob_after           DOUBLE,
+        family               TEXT,
+        updated_at           TIMESTAMP,
+        PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
     );
     CREATE TABLE IF NOT EXISTS per_layer_error_summary (
         model_hash        TEXT NOT NULL,
@@ -684,6 +712,297 @@ class TestTesseraDB(unittest.TestCase):
                 "WHERE model_hash = 'add'"
             )["n"][0])
         self.assertEqual(count, 2)
+
+
+# ---- 9. Phase 16: model_role round-trip on the 6 insert helpers -
+
+    def test_insert_tensor_stats_model_role_round_trip(self) -> None:
+        """Phase 16: insert_tensor_stats round-trips
+        model_role. The default is 'trunk' when the row
+        dict omits the key (preserves the pre-Phase-16
+        contract); explicit values land in the new
+        (model_hash, model_role, name) PK.
+        """
+        path = self._fresh(12)
+        with TesseraDB.open(path) as db:
+            # 3 rows: trunk (default), dflash, mtp_nextn.
+            db.insert_tensor_stats(
+                model_hash="p16", rows=[
+                    {"name": "blk.0.attn_q.weight",
+                     "family": "attn_q", "kurtosis": 3.0},
+                    {"model_role": "dflash",
+                     "name": "blk.0.attn_q.weight",
+                     "family": "attn_q", "kurtosis": 4.0},
+                    {"model_role": "mtp_nextn",
+                     "name": "blk.0.nextn_proj.weight",
+                     "family": "nextn", "kurtosis": 5.0},
+                ],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            # Read back as a Python dict keyed by
+            # (model_role, name) to make the assertions
+            # order-independent.
+            df = db.query(
+                "SELECT model_role, name, kurtosis FROM tensor_stats "
+                "WHERE model_hash = 'p16'"
+            )
+            n_blk0 = int(db.query(
+                "SELECT COUNT(*) AS n FROM tensor_stats "
+                "WHERE model_hash = 'p16' AND name = 'blk.0.attn_q.weight'"
+            )["n"][0])
+        self.assertEqual(df.height, 3)
+        by_key = {
+            (r[0], r[1]): r[2]
+            for r in df.iter_rows(named=False)
+        }
+        self.assertEqual(by_key[("trunk", "blk.0.attn_q.weight")], 3.0)
+        self.assertEqual(by_key[("dflash", "blk.0.attn_q.weight")], 4.0)
+        self.assertEqual(
+            by_key[("mtp_nextn", "blk.0.nextn_proj.weight")], 5.0
+        )
+        # Two rows for blk.0.attn_q.weight with different
+        # model_role -> no PK collision.
+        self.assertEqual(n_blk0, 2)
+
+    def test_insert_l3_outlier_model_role_round_trip(self) -> None:
+        """Phase 16: insert_l3_outlier round-trips
+        model_role. A dflash-sidecar row coexists with the
+        trunk's on the (model_hash, model_role, name,
+        sidecar_label) PK.
+        """
+        path = self._fresh(13)
+        with TesseraDB.open(path) as db:
+            db.insert_l3_outlier(
+                model_hash="p16", rows=[
+                    {"name": "blk.0.attn_q.weight", "layer": 0,
+                     "sidecar_label": "ckpt-v3",
+                     "outlier_count": 17, "outlier_fraction": 0.001},
+                    {"model_role": "dflash",
+                     "name": "blk.0.attn_q.weight", "layer": 0,
+                     "sidecar_label": "ckpt-v3-dflash",
+                     "outlier_count": 9, "outlier_fraction": 0.0005},
+                ],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, name, sidecar_label, outlier_count "
+                "FROM l3_outlier_summary WHERE model_hash = 'p16'"
+            )
+        self.assertEqual(df.height, 2)
+        by_key = {
+            (r[0], r[1], r[2]): r[3]
+            for r in df.iter_rows(named=False)
+        }
+        self.assertEqual(
+            by_key[("trunk", "blk.0.attn_q.weight", "ckpt-v3")], 17
+        )
+        self.assertEqual(
+            by_key[("dflash", "blk.0.attn_q.weight", "ckpt-v3-dflash")], 9
+        )
+
+    def test_insert_l4_probe_model_role_round_trip(self) -> None:
+        """Phase 16: insert_l4_probe round-trips model_role.
+        """
+        path = self._fresh(14)
+        with TesseraDB.open(path) as db:
+            db.insert_l4_probe(
+                model_hash="p16", rows=[
+                    {"name": "blk.0.attn_q.weight", "layer": 0,
+                     "current_qtype": "Q4_K", "mse": 0.012,
+                     "perplexity": 5.83, "top1_mismatch": 0.014},
+                    {"model_role": "dflash",
+                     "name": "blk.0.attn_q.weight", "layer": 0,
+                     "current_qtype": "Q4_K", "mse": 0.020,
+                     "perplexity": 6.10, "top1_mismatch": 0.020},
+                ],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, name, mse FROM l4_probe_summary "
+                "WHERE model_hash = 'p16'"
+            )
+        self.assertEqual(df.height, 2)
+        by_key = {
+            (r[0], r[1]): r[2]
+            for r in df.iter_rows(named=False)
+        }
+        self.assertAlmostEqual(
+            by_key[("trunk", "blk.0.attn_q.weight")], 0.012, places=4
+        )
+        self.assertAlmostEqual(
+            by_key[("dflash", "blk.0.attn_q.weight")], 0.020, places=4
+        )
+
+    def test_insert_l4_plan_outcome_model_role_round_trip(self) -> None:
+        """Phase 16: insert_l4_plan_outcome round-trips
+        model_role. The drafter-local tensor name (e.g.
+        'blk.0.attn_q.weight' for the dflash encoder)
+        coexists with the trunk's on the
+        (model_hash, model_role, name, iteration, plan_id) PK.
+        """
+        path = self._fresh(15)
+        with TesseraDB.open(path) as db:
+            db.insert_l4_plan_outcome(
+                model_hash="p16", rows=[
+                    {"name": "blk.0.attn_q.weight", "layer": 0,
+                     "iteration": 0, "plan_id": "p0",
+                     "strategy": "A", "mse_before": 0.012,
+                     "mse_after": 0.010, "family": "attn_q"},
+                    {"model_role": "dflash",
+                     "name": "blk.0.attn_q.weight", "layer": 0,
+                     "iteration": 0, "plan_id": "p0",
+                     "strategy": "A", "mse_before": 0.020,
+                     "mse_after": 0.018, "family": "attn_q"},
+                ],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, name, mse_before, mse_after "
+                "FROM l4_plan_outcome WHERE model_hash = 'p16'"
+            )
+        self.assertEqual(df.height, 2)
+        by_key = {
+            (r[0], r[1]): (r[2], r[3])
+            for r in df.iter_rows(named=False)
+        }
+        self.assertAlmostEqual(
+            by_key[("trunk", "blk.0.attn_q.weight")][1], 0.010, places=4
+        )
+        self.assertAlmostEqual(
+            by_key[("dflash", "blk.0.attn_q.weight")][1], 0.018, places=4
+        )
+
+    def test_insert_l5_plan_model_role_round_trip(self) -> None:
+        """Phase 16: insert_l5_plan round-trips model_role.
+        """
+        path = self._fresh(16)
+        with TesseraDB.open(path) as db:
+            db.insert_l5_plan(
+                model_hash="p16", rows=[
+                    {"name": "blk.0.attn_q.weight", "layer": 0,
+                     "iteration": 0, "plan_id": "p0",
+                     "sensitivity_score": 0.5,
+                     "recommended_qtype": "Q4_K"},
+                    {"model_role": "dflash",
+                     "name": "blk.0.attn_q.weight", "layer": 0,
+                     "iteration": 0, "plan_id": "p0",
+                     "sensitivity_score": 0.6,
+                     "recommended_qtype": "Q4_K"},
+                ],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, name, sensitivity_score "
+                "FROM l5_plan_summary WHERE model_hash = 'p16'"
+            )
+        self.assertEqual(df.height, 2)
+        by_key = {
+            (r[0], r[1]): r[2]
+            for r in df.iter_rows(named=False)
+        }
+        self.assertAlmostEqual(
+            by_key[("trunk", "blk.0.attn_q.weight")], 0.5, places=4
+        )
+        self.assertAlmostEqual(
+            by_key[("dflash", "blk.0.attn_q.weight")], 0.6, places=4
+        )
+
+    def test_insert_l5_outcome_model_role_round_trip(self) -> None:
+        """Phase 16: insert_l5_outcome round-trips model_role.
+        """
+        path = self._fresh(17)
+        with TesseraDB.open(path) as db:
+            db.insert_l5_outcome(
+                model_hash="p16", rows=[
+                    {"name": "blk.0.attn_q.weight", "layer": 0,
+                     "iteration": 0, "plan_id": "p0",
+                     "family": "attn_q",
+                     "sensitivity_score": 0.5,
+                     "mse_before": 0.012, "mse_after": 0.010,
+                     "plan_accepted": True},
+                    {"model_role": "dflash",
+                     "name": "blk.0.attn_q.weight", "layer": 0,
+                     "iteration": 0, "plan_id": "p0",
+                     "family": "attn_q",
+                     "sensitivity_score": 0.6,
+                     "mse_before": 0.020, "mse_after": 0.018,
+                     "plan_accepted": True},
+                ],
+            )
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, name, sensitivity_score, plan_accepted "
+                "FROM l5_outcome WHERE model_hash = 'p16'"
+            )
+        self.assertEqual(df.height, 2)
+        # Build a map: (model_role, name) -> (score, accepted)
+        by_key = {
+            (r[0], r[1]): (r[2], r[3])
+            for r in df.iter_rows(named=False)
+        }
+        self.assertAlmostEqual(
+            by_key[("trunk", "blk.0.attn_q.weight")][0], 0.5, places=4
+        )
+        self.assertTrue(by_key[("trunk", "blk.0.attn_q.weight")][1])
+        self.assertAlmostEqual(
+            by_key[("dflash", "blk.0.attn_q.weight")][0], 0.6, places=4
+        )
+        self.assertTrue(by_key[("dflash", "blk.0.attn_q.weight")][1])
+
+    def test_insert_l5_weights_model_role_round_trip(self) -> None:
+        """Phase 16: insert_l5_weights round-trips model_role.
+        The (model_hash, model_role, family) PK lets the
+        dflash family's retuned weights coexist with the
+        trunk family's. Re-write on the same key overwrites
+        (the upsert contract).
+        """
+        path = self._fresh(18)
+        with TesseraDB.open(path) as db:
+            db.insert_l5_weights([
+                {"model_hash": "p16", "model_role": "trunk",
+                 "family": "attn_q",
+                 "w_imatrix": 0.4, "w_gradient": 0.3, "w_layer": 0.3,
+                 "n_samples": 10, "hit_rate": 0.7},
+                {"model_hash": "p16", "model_role": "dflash",
+                 "family": "attn_q",
+                 "w_imatrix": 0.2, "w_gradient": 0.5, "w_layer": 0.3,
+                 "n_samples": 5, "hit_rate": 0.6},
+            ])
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT model_role, family, w_gradient FROM l5_weights "
+                "WHERE model_hash = 'p16'"
+            )
+        self.assertEqual(df.height, 2)
+        by_key = {
+            (r[0], r[1]): r[2]
+            for r in df.iter_rows(named=False)
+        }
+        self.assertAlmostEqual(
+            by_key[("trunk", "attn_q")], 0.3, places=4
+        )
+        self.assertAlmostEqual(
+            by_key[("dflash", "attn_q")], 0.5, places=4
+        )
+
+        # Re-write with the same model_role+family is an
+        # upsert (overwrites via ON CONFLICT).
+        with TesseraDB.open(path) as db:
+            db.insert_l5_weights([
+                {"model_hash": "p16", "model_role": "dflash",
+                 "family": "attn_q",
+                 "w_imatrix": 0.1, "w_gradient": 0.6, "w_layer": 0.3,
+                 "n_samples": 8, "hit_rate": 0.65},
+            ])
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT w_gradient, n_samples FROM l5_weights "
+                "WHERE model_hash = 'p16' AND model_role = 'dflash' "
+                "AND family = 'attn_q'"
+            )
+        self.assertEqual(df.height, 1)
+        self.assertAlmostEqual(df["w_gradient"][0], 0.6, places=4)
+        self.assertEqual(df["n_samples"][0], 8)
 
 
 if __name__ == "__main__":

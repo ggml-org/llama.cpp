@@ -33,14 +33,14 @@ USING (model_hash, name)` instead of three hand-written parsers.
 | `ga_results` | 1 per converged tensor | C++ (`ts_quantize_db_insert_ga_result`) | Best (alpha, clip) per tensor. Warm-start seed source. |
 | `acceptance` | 1 per tensor | C++ (`ts_quantize_db_insert_acceptance`) | Acceptance-gate verdict. |
 | `l5_fixups` | 1 per requant fixup | C++ (`ts_quantize_db_insert_l5_fixup`) | L5 adaptive requantize fixup rows. |
-| **`tensor_stats`** | 1 per tensor per model | C++ (GA-prep) + Python (cal) | **The cross-pipeline feature table.** PRIMARY KEY (model_hash, name) + ON CONFLICT DO UPDATE = upsert target. C++ writes kurtosis / eff_rank / dtype; Python writes rms / mean_abs / tail_ratio / `recommended_action`. `source` records which pipeline last wrote the row. `recommended_action` is the per-tensor verdict the calibration pipeline derives from `l5_weights` via the `l5_action` rules (one of `protect` / `requant_up` / `requant_down` / `monitor` / `noop`); the C++ side just carries the column through the upsert with no logic. |
-| **`l3_outlier_summary`** | 1 per tensor per sidecar label | Python (analytics) | L3 outlier rate per tensor. model_hash + name joins to tensor_stats. |
-| **`l4_probe_summary`** | 1 per tensor | Python (analytics) | L4 E2E probe (mse, perplexity, top1_mismatch). |
-| **`l4_plan_outcome`** | 1 per (tensor, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
-| **`l5_plan_summary`** | 1 per (tensor, iteration, plan_id) | Python (l5_orchestrator) | L5 requant plan (sensitivity_score, recommended_alpha, recommended_clip). |
-| **`l5_outcome`** | 1 per (tensor, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score (a running measure of how well the orchestrator's sensitivity scoring predicts the actual error delta). Phase 14: also carries the per-tensor components `imatrix_magnitude`, `gradient_proxy`, `layer_position_prior` (all nullable) so a future retune can fit a 3-coefficient model. |
-| **`l5_weights`** | 1 per (model, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db`, closing the loop. Phase 14: also carries `requant_budget_bits` (nullable) — the dispatch-side budget the retune recommends for the next requant pass. |
-| **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. |
+| **`tensor_stats`** | 1 per (tensor, model_role) per model | C++ (GA-prep) + Python (cal) | **The cross-pipeline feature table.** PRIMARY KEY (model_hash, model_role, name) + ON CONFLICT DO UPDATE = upsert target. Phase 16: `model_role` is one of `trunk` / `dflash` / `dspark` / `mtp_nextn` / `shared_embd`; default `'trunk'` preserves the pre-Phase-16 contract. C++ writes kurtosis / eff_rank / dtype; Python writes rms / mean_abs / tail_ratio / `recommended_action`. `source` records which pipeline last wrote the row. `recommended_action` is the per-tensor verdict the calibration pipeline derives from `l5_weights` via the `l5_action` rules (one of `protect` / `requant_up` / `requant_down` / `monitor` / `noop`); the C++ side just carries the column through the upsert with no logic. |
+| **`l3_outlier_summary`** | 1 per (tensor, model_role, sidecar_label) | Python (analytics) | L3 outlier rate per tensor. (model_hash, model_role, name) joins to tensor_stats. |
+| **`l4_probe_summary`** | 1 per (tensor, model_role) | Python (analytics) | L4 E2E probe (mse, perplexity, top1_mismatch). |
+| **`l4_plan_outcome`** | 1 per (tensor, model_role, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
+| **`l5_plan_summary`** | 1 per (tensor, model_role, iteration, plan_id) | Python (l5_orchestrator) | L5 requant plan (sensitivity_score, recommended_alpha, recommended_clip). |
+| **`l5_outcome`** | 1 per (tensor, model_role, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score. Phase 14: also carries the per-tensor components `imatrix_magnitude`, `gradient_proxy`, `layer_position_prior` (all nullable) so a future retune can fit a 3-coefficient model. |
+| **`l5_weights`** | 1 per (model, model_role, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, model_role, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, role, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db`, closing the loop. Phase 14: also carries `requant_budget_bits` (nullable) — the dispatch-side budget the retune recommends for the next requant pass. |
+| **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. Not part of the Phase 16 migration. |
 
 The 7 bolded tables are the additions on top of the existing
 6-table schema; see the scout §0 / §6 for the original inventory.
@@ -495,6 +495,117 @@ python3 tools/tessera/l5_orchestrator.py \
     aggregate row.
   32 retune tests + 7 outcome tests + 11 db tests + 8
   buffer tests + 7 dataframe tests = 65 tests pass.
+- **Phase 16 (this commit):** the unified Gemma4 12B +
+  dspark + dflash + MTP arch disambiguates tensors with
+  the same name in the trunk and the drafters. The
+  shared `tessera.duckdb` gains a `model_role` column on
+  7 of the cross-pipeline tables:
+  * `tensor_stats`
+  * `l3_outlier_summary`
+  * `l4_probe_summary`
+  * `l5_plan_summary`
+  * `l4_plan_outcome`
+  * `l5_outcome`
+  * `l5_weights`
+  The PKs are extended to include `model_role`. The
+  enum:
+  * `trunk` — the main model's transformer blocks
+    (gemma4 `n_layer`). The default; the contract
+    `model_role=""` -> `'trunk'` preserves
+    pre-Phase-16 callers.
+  * `dflash` — the dflash drafter's per-block layers
+    (DFlash's `LLM_TENSOR_FC`, `D2T`, etc.).
+  * `dspark` — the dspark markov/conf heads
+    (`LLM_TENSOR_DSPARK_*`).
+  * `mtp_nextn` — the MTP/nextn projections
+    (`LLM_TENSOR_NEXTN_*`).
+  * `shared_embd` — the shared `tok_embd` + `output`
+    (`lm_head`); only one row per model. The
+    `name` for `shared_embd` rows is `token_embd` /
+    `output` (matching the trunk's existing names).
+  Schema:
+  ```
+  tensor_stats:        PK (model_hash, model_role, name)
+  l3_outlier_summary:  PK (model_hash, model_role, name, sidecar_label)
+  l4_probe_summary:    PK (model_hash, model_role, name)
+  l4_plan_outcome:     PK (model_hash, model_role, name, iteration, plan_id)
+  l5_plan_summary:     PK (model_hash, model_role, name, iteration, plan_id)
+  l5_outcome:          PK (model_hash, model_role, name, iteration, plan_id)
+  l5_weights:          PK (model_hash, model_role, family)
+  ```
+  The `name` column for `dflash` / `dspark` /
+  `mtp_nextn` rows is the **drafter-local** tensor
+  name (NOT the global name with `dflash.` prefix);
+  the consumer joins via `(model_hash, model_role,
+  name)`.
+  Implementation:
+  * C++ side: 4 row structs gain a `model_role`
+    `std::string` field (`ts_tessera_db_tensor_stat`,
+    `ts_tessera_db_l4_outcome`,
+    `ts_tessera_db_l5_outcome_row`,
+    `ts_tessera_db_l5_weight` +
+    `ts_tessera_db_l5_weight_list_entry`). The 4
+    insert / upsert / append / test helpers carry
+    the new column. `ts_tessera_db_list_l5_weights`
+    reads it from the new column position.
+  * Python side: the 6 `L*_COLS` tuples
+    (`TENSOR_STATS_COLS`, `L3_OUTLIER_COLS`,
+    `L4_PROBE_COLS`, `L4_PLAN_OUTCOME_COLS`,
+    `L5_PLAN_COLS`, `L5_OUTCOME_COLS`,
+    `L5_WEIGHTS_COLS`) include `model_role`; the 6
+    `insert_*` helpers accept a `model_role` key in
+    the row dict (default `'trunk'`).
+  * `per_layer_error_summary` is unchanged (not in
+    the Phase 16 list; it does not need
+    disambiguation).
+  Migration: two paths, both idempotent.
+  * **C++ side**: `ts_tessera_db_migrate_model_role`
+    runs the standard DuckDB PK-rebuild dance on each
+    of the 7 affected tables
+    (`CREATE TABLE <name>__p16_new (new schema)`
+    -> `INSERT INTO <name>__p16_new SELECT *,
+    'trunk' AS model_role FROM <name>`
+    -> `DROP TABLE <name>`
+    -> `ALTER TABLE <name>__p16_new RENAME TO <name>`).
+    DuckDB does not support `ALTER TABLE ... DROP
+    CONSTRAINT` in older versions, so the rebuild is
+    the only way to change a PRIMARY KEY. The
+    function is called from `ts_tessera_db_open` on
+    every open. The per-table idempotency check
+    (`information_schema.columns WHERE
+    column_name='model_role'`) short-circuits on a
+    fresh DB (the CREATE TABLE has the column) or a
+    re-opened migrated DB.
+  * **Python side**: `tools/tessera/
+    migrate_model_role.py::migrate(db_path)`. The
+    same PK-rebuild dance, run from Python
+    (DuckDB's Python client). Use this when opening
+    a pre-Phase-16 DB before the C++ side has
+    touched it.
+  Both migrations preserve the data: the INSERT
+  ... SELECT explicitly lists every column (kurtosis,
+  rms, sensitivity_score, plan_accepted, ...) so the
+  per-tensor values are carried through. The new
+  `model_role` column is backfilled with `'trunk'`
+  (the single-model-run default; the disambiguation
+  only matters for new rows written by the dflash /
+  dspark / mtp_nextn / shared_embd producers).
+  Tests:
+  * C++: `test-tessera-quantize-db` round-trip on
+    the 4 row structs (default-empty -> 'trunk',
+    explicit 'dflash' / 'mtp_nextn' on the new PK,
+    reader echoes model_role) + the migration
+    round-trip on a raw-SQL-seeded pre-Phase-16 DB.
+  * Python: 7 new `test_tessera_db.py` cases
+    (round-trip on the 6 insert helpers) +
+    `test_migrate_model_role.py` (4 cases: pre-16
+    migration, idempotency, fresh-DB no-op, mixed
+    model_role coexistence after migration).
+  Schema + struct diff: `git diff --stat main..HEAD`
+  on the branch. 21 Python tests + 3 C++ tests pass
+  (test-tessera-quantize-db,
+  test-tessera-db-buffer,
+  test-tessera-quantize-db-e2e).
 
 ## Open follow-ups (after this commit)
 
