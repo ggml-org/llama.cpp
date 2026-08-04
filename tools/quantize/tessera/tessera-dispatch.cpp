@@ -893,6 +893,21 @@ static bool ts_dispatch_layer_skip(const ts_awq_layer * layer,
 // non-null, the loop writes one l4_plan_outcome row per (tensor, gen)
 // via ts_tessera_db_append_l4_outcome. The integration test passes
 // nullptr (it does not have a DuckDB store wired up).
+// Exact storage footprint (bits) of a 2D quant result: every GGUF
+// component the format writes. The L5 loop's budget-constrained
+// A/B selection measures this on scratch quantizations instead of
+// estimating, so the Lagrangian violation is computed from real
+// bytes, not a bit-model.
+static int64_t ts_dispatch_result_bits(const ts_quant_result_2d * qr) {
+    return (int64_t)qr->packed.size()              * 32
+         + (int64_t)qr->page_scales.size()         * 16
+         + (int64_t)qr->lane_scales.size()         * 8
+         + (int64_t)qr->outlier_row_offsets.size() * 32
+         + (int64_t)qr->outlier_cols.size()        * 32
+         + (int64_t)qr->outlier_vals.size()        * 16
+         + (int64_t)qr->act_scale.size()           * 16;
+}
+
 int ts_dispatch_run_l5_loop(
     const ts_dispatch_params * params,
     ts_dispatch_result * result,
@@ -933,6 +948,21 @@ int ts_dispatch_run_l5_loop(
         names.push_back(kv.first);
     }
     std::sort(names.begin(), names.end());
+
+    // Lagrangian multipliers for the per-family requant budgets.
+    // l5_weights.requant_budget_bits (the retune's size
+    // recommendation) constrains the A/B winner selection via
+    // score = frob + lambda * violation, where violation is the
+    // family's projected post-requant footprint over the budget.
+    // lambda rises (subgradient ascent) each generation the applied
+    // strategy leaves the family over budget, pushing selection
+    // toward the lower-bit strategy; it resets per run (the
+    // multiplier is this loop's optimization state, not a persisted
+    // verdict). Families without a budget (NULL / no l5_weights
+    // row) keep the legacy error-only selection.
+    std::unordered_map<std::string, float> budget_lambda;
+    const float budget_lambda_lr  = 0.5f;
+    const float budget_lambda_max = 10.0f;
 
     for (int gen = 0; gen < max_generations; gen++) {
         // Converged-fast early-exit: the orchestrator's l5_outcome has
@@ -1074,25 +1104,118 @@ int ts_dispatch_run_l5_loop(
             // element in place.
             const float * act = rep.act_scales_copy.empty()
                                     ? nullptr : rep.act_scales_copy.data();
-            // Streaming MSE for the A/B comparison (only needs the scalar,
-            // not the full packed output). ~132 KB scratch per call.
-            float mse_A = ts_quantize_mse_streaming(
-                rep_src.data(), act, tqp_A.alpha, tqp_A.clip,
-                rep.out_dim, rep.in_dim);
-            float mse_B = ts_quantize_mse_streaming(
-                rep_src.data(), act, tqp_B.alpha, tqp_B.clip,
-                rep.out_dim, rep.in_dim);
             float rep_frob2 = ts_vec_dotpr(rep_src.data(), rep_src.data(), rep_n);
-            float frob_A = (mse_A >= 0.0f && rep_frob2 > 0.0f)
-                               ? (mse_A * (float)rep_n / rep_frob2) : 1e30f;
-            float frob_B = (mse_B >= 0.0f && rep_frob2 > 0.0f)
-                               ? (mse_B * (float)rep_n / rep_frob2) : 1e30f;
+            float frob_A = 1e30f;
+            float frob_B = 1e30f;
 
-            bool stage_b_wins = (frob_B < frob_A);
-            family_winners.push_back("{\"family\":\"" + fam + "\",\"stage\":\"" +
+            // Budget-constrained selection. The family's l5_weights row
+            // may carry requant_budget_bits (the retune's size
+            // recommendation, -1 = NULL = unconstrained). When the
+            // budget is present the winner is picked on the Lagrangian
+            // score frob + lambda * violation, with the per-strategy
+            // footprint MEASURED by full scratch quantizations of the
+            // representative (sequential, so the peak stays one recon,
+            // the same as the apply phase below). Unconstrained
+            // families keep the cheap streaming-MSE path.
+            int64_t fam_budget = -1;
+            if (db_wrap != nullptr) {
+                auto w_it = db_wrap->l5_weight_map.find(fam);
+                if (w_it != db_wrap->l5_weight_map.end()) {
+                    fam_budget = w_it->second.requant_budget_bits;
+                }
+            }
+            int64_t fam_bits_now   = 0;   // family footprint before this gen's requant
+            int64_t rep_bits_now   = 0;   // rep's contribution to it
+            int64_t proj_bits_A    = -1;  // projected footprint if A wins
+            int64_t proj_bits_B    = -1;
+            int64_t applied_delta_bits = 0;  // measured footprint change of the apply loop
+            bool budget_path = false;
+            bool stage_b_wins = false;
+            if (fam_budget >= 0) {
+                // Current family footprint: sum the stored results of
+                // every tensor in the family (flagged or not; the
+                // budget caps the family's total, not just the
+                // flagged subset).
+                for (const auto & kv : refine_map) {
+                    if (ts_regime_infer_family(kv.first.c_str()) != fam) {
+                        continue;
+                    }
+                    fam_bits_now += ts_dispatch_result_bits(kv.second.qr);
+                    if (kv.first == specs[0]->tensor_name) {
+                        rep_bits_now = ts_dispatch_result_bits(kv.second.qr);
+                    }
+                }
+                // Scratch quantize A, then B (sequential scopes keep
+                // one recon alive at a time).
+                int64_t bits_A = -1, bits_B = -1;
+                {
+                    ts_quant_result_2d scratch;
+                    if (ts_quantize_2d(rep_src.data(), act, nullptr, nullptr, act,
+                                       rep.out_dim, rep.in_dim, 0,
+                                       &tqp_A, &scratch) == 0) {
+                        bits_A = ts_dispatch_result_bits(&scratch);
+                        if (scratch.mse >= 0.0f && rep_frob2 > 0.0f) {
+                            frob_A = scratch.mse * (float)rep_n / rep_frob2;
+                        }
+                    }
+                }
+                {
+                    ts_quant_result_2d scratch;
+                    if (ts_quantize_2d(rep_src.data(), act, nullptr, nullptr, act,
+                                       rep.out_dim, rep.in_dim, 0,
+                                       &tqp_B, &scratch) == 0) {
+                        bits_B = ts_dispatch_result_bits(&scratch);
+                        if (scratch.mse >= 0.0f && rep_frob2 > 0.0f) {
+                            frob_B = scratch.mse * (float)rep_n / rep_frob2;
+                        }
+                    }
+                }
+                if (bits_A >= 0 && bits_B >= 0) {
+                    budget_path = true;
+                    proj_bits_A = fam_bits_now - rep_bits_now + bits_A;
+                    proj_bits_B = fam_bits_now - rep_bits_now + bits_B;
+                    const float lam = budget_lambda[fam];
+                    const float denom = (float)std::max<int64_t>(1, fam_budget);
+                    const float vio_A = proj_bits_A > fam_budget
+                        ? (float)(proj_bits_A - fam_budget) / denom : 0.0f;
+                    const float vio_B = proj_bits_B > fam_budget
+                        ? (float)(proj_bits_B - fam_budget) / denom : 0.0f;
+                    const float score_A = frob_A + lam * vio_A;
+                    const float score_B = frob_B + lam * vio_B;
+                    // The winner on the Lagrangian score. Ties keep A
+                    // (the no-bit-growth strategy), matching the
+                    // conservative bias of the budget contract.
+                    stage_b_wins = (score_B < score_A);
+                }
+            }
+            if (!budget_path) {
+                // Streaming MSE for the A/B comparison (only needs the scalar,
+                // not the full packed output). ~132 KB scratch per call.
+                float mse_A = ts_quantize_mse_streaming(
+                    rep_src.data(), act, tqp_A.alpha, tqp_A.clip,
+                    rep.out_dim, rep.in_dim);
+                float mse_B = ts_quantize_mse_streaming(
+                    rep_src.data(), act, tqp_B.alpha, tqp_B.clip,
+                    rep.out_dim, rep.in_dim);
+                frob_A = (mse_A >= 0.0f && rep_frob2 > 0.0f)
+                             ? (mse_A * (float)rep_n / rep_frob2) : 1e30f;
+                frob_B = (mse_B >= 0.0f && rep_frob2 > 0.0f)
+                             ? (mse_B * (float)rep_n / rep_frob2) : 1e30f;
+                stage_b_wins = (frob_B < frob_A);
+            }
+
+            std::string winner_json = "{\"family\":\"" + fam + "\",\"stage\":\"" +
                                      (stage_b_wins ? "B" : "A") +
                                      "\",\"frob_A\":" + std::to_string(frob_A) +
-                                     ",\"frob_B\":" + std::to_string(frob_B) + "}");
+                                     ",\"frob_B\":" + std::to_string(frob_B);
+            if (budget_path) {
+                winner_json += ",\"budget\":" + std::to_string(fam_budget) +
+                               ",\"lambda\":" + std::to_string(budget_lambda[fam]) +
+                               ",\"proj_bits_A\":" + std::to_string(proj_bits_A) +
+                               ",\"proj_bits_B\":" + std::to_string(proj_bits_B);
+            }
+            winner_json += "}";
+            family_winners.push_back(winner_json);
 
             // Apply the winning strategy to every flagged tensor in this family.
             for (const auto * spec : specs) {
@@ -1119,12 +1242,17 @@ int ts_dispatch_run_l5_loop(
                 }
 
                 const float before = ts_refine_rel_frob(src.data(), e.qr, n);
+                const int64_t bits_before = (fam_budget >= 0)
+                                                ? ts_dispatch_result_bits(e.qr) : 0;
                 const float * e_act = e.act_scales_copy.empty()
                                           ? nullptr : e.act_scales_copy.data();
                 int rc = ts_quantize_2d(src.data(), e_act, nullptr, nullptr, e_act,
                                         e.out_dim, e.in_dim, 0, &tightened, e.qr);
                 if (rc != 0) {
                     continue;
+                }
+                if (fam_budget >= 0) {
+                    applied_delta_bits += ts_dispatch_result_bits(e.qr) - bits_before;
                 }
                 // Refresh the GGUF descriptors: in-place re-quant may have
                 // reallocated the deque element's buffers.
@@ -1184,6 +1312,20 @@ int ts_dispatch_run_l5_loop(
                     out_row.family       = fam;
                     ts_tessera_db_append_l4_outcome(
                         db_wrap->l4_outcome_buffer, out_row);
+                }
+            }
+
+            // Subgradient ascent on the budget multiplier: if the applied
+            // winner left the family over its requant budget, raise lambda
+            // so the next generation's Lagrangian selection leans harder
+            // toward the lower-bit strategy. The violation is normalized
+            // by the budget, so the step is scale-free across families.
+            if (budget_path && fam_budget > 0) {
+                const int64_t fam_after = fam_bits_now + applied_delta_bits;
+                if (fam_after > fam_budget) {
+                    const float vio = (float)(fam_after - fam_budget) / (float)fam_budget;
+                    float & lam = budget_lambda[fam];
+                    lam = std::min(budget_lambda_max, lam + budget_lambda_lr * vio);
                 }
             }
         }
