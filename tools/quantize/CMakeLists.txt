@@ -117,6 +117,10 @@ add_library(${TARGET}
     ../../common/tessera-debug/tessera-sidecar-v3.cpp
     # DuckDB-backed persistent store (no-op when --quantize-db is not passed)
     tessera/tessera-quantize-db.cpp
+    # Per-table write buffer: parallel producers -> single flusher -> DuckDB
+    # bulk insert. Used for the unified tessera.duckdb schema (ga_evaluations,
+    # tensor_stats, l3/l4/l5/ple summary tables).
+    tessera/tessera-db-buffer.cpp
 )
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
@@ -313,6 +317,22 @@ if(LLAMA_BUILD_TESTS)
     set(TARGET test-tessera-quantize-db)
     add_executable(${TARGET} tessera/test_quantize_db.cpp
                                   tessera/tessera-quantize-db.cpp)
+    target_link_libraries(${TARGET} PRIVATE
+        llama-common ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    if(TS_DUCKDB_AVAILABLE)
+        target_sources(${TARGET} PRIVATE $<TARGET_OBJECTS:duckdb-amalgamation>)
+        target_link_libraries(${TARGET} PRIVATE duckdb-amalgamation)
+    endif()
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+
+    # Per-table write buffer: parallel producer threads, single flusher
+    # thread, count + time + explicit flush triggers, sync-on-exit. Standalone
+    # test that builds against the DuckDB amalgamation + the buffer module.
+    set(TARGET test-tessera-db-buffer)
+    add_executable(${TARGET} tessera/test_db_buffer.cpp
+                                  tessera/tessera-quantize-db.cpp
+                                  tessera/tessera-db-buffer.cpp)
     target_link_libraries(${TARGET} PRIVATE
         llama-common ${CMAKE_THREAD_LIBS_INIT})
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
