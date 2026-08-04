@@ -638,3 +638,7 @@ All URLs verified reachable at the time of this report (2026-07-31).
   catalog, slice-by-slice implementation recommendations.
 - `docs/tessera-coreml-conversion-design.md` — the C++ conversion
   tool design (the in-tree companion to this report).
+- `docs/tessera-ane-pump.md` — the E-core pump (W6/W6.5/W7/W8)
+  and the F4.1-F4.5 follow-ups (in-band caller routing,
+  monotonic counter, QOS background affinity, MTP/DFlash
+  manifest sidecar, Phase 0 profile NDJSON emit).
