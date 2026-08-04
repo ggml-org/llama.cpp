@@ -85,6 +85,12 @@
 	let searchController: AbortController | null = null;
 	let searchSeq = 0;
 
+	// Cache of the last file_glob_search result per (parent, include, max_depth),
+	// so repeated queries in the same directory don't re-walk the tree. Entries
+	// expire after a short TTL.
+	const SEARCH_CACHE_TTL_MS = 2000;
+	const searchCache = new Map<string, { results: GlobEntry[]; base: string; at: number }>();
+
 	const runSearch = debounce((query: string) => {
 		void doSearch(query);
 	}, SEARCH_DEBOUNCE_MS);
@@ -133,6 +139,31 @@
 	// directory is "entered".
 	let searchScope = $state(HOME_TILDE);
 
+	// Runs a directory listing through the cache, so a repeated query in the
+	// same directory does not re-walk the tree on the server.
+	async function searchDirs(
+		path: string,
+		include: string,
+		maxDepth: number,
+		signal: AbortSignal
+	): Promise<{ base: string; entries: GlobEntry[]; error?: string }> {
+		const key = `${path}\u0000${include}\u0000${maxDepth}`;
+		const cached = searchCache.get(key);
+		if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
+			return { base: cached.base, entries: cached.results };
+		}
+		const res = await ToolsService.executeToolRaw(
+			BuiltInTool.FILE_GLOB_SEARCH,
+			{ path, type: GlobSearchType.DIR, include, max_depth: maxDepth, limit: SEARCH_LIMIT },
+			signal
+		);
+		if (typeof res.error === 'string') return { base: '', entries: [], error: res.error };
+		const base = typeof res.base === 'string' ? res.base : '';
+		const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
+		searchCache.set(key, { results: entries, base, at: Date.now() });
+		return { base, entries };
+	}
+
 	async function doSearch(query: string) {
 		const trimmed = query.trim();
 		if (!trimmed) {
@@ -155,30 +186,22 @@
 		try {
 			// A generous limit is requested because ranking happens
 			// client-side; only the top 20 are shown.
-			const res = await ToolsService.executeToolRaw(
-				BuiltInTool.FILE_GLOB_SEARCH,
-				{
-					path: pathQuery ? pathQuery.parent : (homeBase ?? HOME_TILDE),
-					type: GlobSearchType.DIR,
-					include: pathQuery
-						? pathQuery.last
-							? buildCaseInsensitiveGlob(pathQuery.last)
-							: GLOB_WILDCARD
-						: buildCaseInsensitiveGlob(trimmed),
-					max_depth: pathQuery ? PATH_NAV_MAX_DEPTH : SEARCH_MAX_DEPTH,
-					limit: SEARCH_LIMIT
-				},
-				controller.signal
-			);
+			const searchPath = pathQuery ? pathQuery.parent : (homeBase ?? HOME_TILDE);
+			const include = pathQuery
+				? pathQuery.last
+					? buildCaseInsensitiveGlob(pathQuery.last)
+					: GLOB_WILDCARD
+				: buildCaseInsensitiveGlob(trimmed);
+			const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : SEARCH_MAX_DEPTH;
+			const res = await searchDirs(searchPath, include, maxDepth, controller.signal);
 			if (mySeq !== searchSeq) return;
-			if (typeof res.error === 'string') {
+			if (res.error) {
 				queryResults = [];
 				hoveredIndex = -1;
 				searchError = res.error;
 				return;
 			}
-			const base = typeof res.base === 'string' ? res.base : '';
-			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
+			const { base, entries } = res;
 			const ranked = rankEntries(entries, pathQuery?.last ?? trimmed);
 			let results = ranked.map((e) => joinPath(base, e.path));
 			searchScope = pathQuery ? pathQuery.parent : (homeBase ?? HOME_TILDE);
@@ -191,25 +214,16 @@
 				: undefined;
 			if (exact) {
 				const exactDir = joinPath(base, exact.path);
-				const childRes = await ToolsService.executeToolRaw(
-					BuiltInTool.FILE_GLOB_SEARCH,
-					{
-						path: exactDir,
-						type: GlobSearchType.DIR,
-						include: GLOB_WILDCARD,
-						max_depth: PATH_NAV_MAX_DEPTH,
-						limit: SEARCH_LIMIT
-					},
+				const childRes = await searchDirs(
+					exactDir,
+					GLOB_WILDCARD,
+					PATH_NAV_MAX_DEPTH,
 					controller.signal
 				);
 				if (mySeq !== searchSeq) return;
-				if (typeof childRes.error !== 'string') {
-					const childBase = typeof childRes.base === 'string' ? childRes.base : '';
-					const childEntries = Array.isArray(childRes.entries)
-						? (childRes.entries as GlobEntry[])
-						: [];
-					const children = childEntries
-						.map((e) => joinPath(childBase, e.path))
+				if (!childRes.error) {
+					const children = childRes.entries
+						.map((e) => joinPath(childRes.base, e.path))
 						.sort((a, b) => a.localeCompare(b));
 					results = [...results, ...children];
 					searchScope = exactDir;
@@ -253,9 +267,11 @@
 	}
 
 	// Resolve a folder name picked via the browser-native picker (which exposes
-	// only the leaf name) to a server-side absolute path. Falls back to the
-	// leaf name when the server cannot locate a matching directory.
-	async function resolveNativeName(name: string): Promise<string> {
+	// only the leaf name) to a server-side absolute path. Returns null when the
+	// server cannot locate a matching directory, so the caller can fail visibly
+	// instead of committing a bare leaf name that would resolve against the
+	// server process working directory.
+	async function resolveNativeName(name: string): Promise<string | null> {
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
 				path: homeBase ?? HOME_TILDE,
@@ -269,9 +285,9 @@
 			const match = entries.find(
 				(e) => lastPathSegment(e.path).toLowerCase() === name.toLowerCase()
 			);
-			return match ? joinPath(base, match.path) : name;
+			return match ? joinPath(base, match.path) : null;
 		} catch {
-			return name;
+			return null;
 		}
 	}
 
@@ -280,8 +296,14 @@
 		try {
 			const handle = await window.showDirectoryPicker();
 			const path = await resolveNativeName(handle.name);
-			setDirectory(path);
-			closePicker();
+			if (path) {
+				setDirectory(path);
+				closePicker();
+			} else {
+				// keep the previous cwd and fail visibly instead of committing a
+				// bare leaf name that would resolve against the server cwd
+				searchError = `Could not resolve "${handle.name}" to a server path`;
+			}
 		} catch (err) {
 			// user cancelled - silently ignore; other errors are logged
 			if (err instanceof DOMException && err.name === 'AbortError') return;

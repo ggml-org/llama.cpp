@@ -277,8 +277,8 @@ export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte'
  * form; clicking it opens a popover with a directory picker backed by the
  * server's `file_glob_search` built-in tool (POST /tools). The picked
  * directory is exposed via `bind:directory`; changing it records a
- * synthetic "CWD is changed to: ..." user message into chat history so the
- * model passes it to `exec_shell_command` itself.
+ * synthetic "Set working directory to ..." user message into chat history
+ * and is enforced on tool calls via the `x-tool-cwd` request header.
  */
 export { default as ChatFormWorkingDirectory } from './ChatForm/ChatFormWorkingDirectory.svelte';
 
