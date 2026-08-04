@@ -100,6 +100,8 @@ add_library(${TARGET}
     speculative-calibration.h
     speculative.cpp
     speculative.h
+    tessera-config.cpp
+    tessera-config.h
     trie.cpp
     trie.h
     unicode.cpp
