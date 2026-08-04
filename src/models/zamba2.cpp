@@ -70,10 +70,9 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {attn_hidden, attn_hidden}, 0);
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), {attn_hidden, n_embd}, 0);
 
-            // FFN
+            // FFN (fused gate+up, split internally by GEGLU)
             layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
-            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
-            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2*n_ff}, 0);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
 
             // Linear mixing (transformer output -> mamba input adjustment)
