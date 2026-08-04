@@ -2950,8 +2950,14 @@ static void llama_sampler_penalties_free(struct llama_sampler * smpl) {
 
 static bool llama_sampler_penalties_backend_init(
         struct llama_sampler       * smpl,
-        ggml_backend_buffer_type_t   buft) {
+        ggml_backend_buffer_type_t   buft,
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+
+    if (n_outputs_per_seq_max > 1) {
+        sctx->init(false);
+        return false;
+    }
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -3112,6 +3118,12 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
     ggml_backend_tensor_set(sctx->inp_counts,    sctx->host_counts.data(),    0, sctx->n_max * sizeof(int32_t));
 }
 
+static void llama_sampler_penalties_backend_reset(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+    sctx->inp_token_ids = nullptr;
+    sctx->inp_counts    = nullptr;
+}
+
 static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .name              = */ llama_sampler_penalties_name,
     /* .accept            = */ llama_sampler_penalties_accept,
@@ -3123,7 +3135,7 @@ static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_penalties_backend_apply,
     /* .backend_set_input = */ llama_sampler_penalties_backend_set_input,
-    /* .backend_reset     = */ nullptr,
+    /* .backend_reset     = */ llama_sampler_penalties_backend_reset,
 };
 
 struct llama_sampler * llama_sampler_init_penalties(
