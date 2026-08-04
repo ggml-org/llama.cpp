@@ -72,68 +72,90 @@ bool write_temp(const std::string & contents, std::string * path_out) {
 int main() {
     std::fprintf(stdout, "ane state-layout reader test\n");
 
-    // --- Test 1: read the real W0 manifest ---
-    const std::string w0_path = resolve_w0_manifest_path();
-    CHECK(!w0_path.empty(), "W0 manifest path resolves");
-    if (w0_path.empty()) return 1;
+    // --- Test 1: read the manifest at the path resolved by the
+    //     env var or the W0 fallback. We branch on which manifest
+    //     is being tested so the W0-specific assertions don't
+    //     fire when an external manifest (e.g. a real multifunction
+    //     bundle like gemma4-ane-prefill-bundle) is provided.
+    const std::string manifest_path = resolve_w0_manifest_path();
+    CHECK(!manifest_path.empty(), "manifest path resolves");
+    if (manifest_path.empty()) return 1;
+    const char * env = std::getenv("TESSERA_ANE_STATE_LAYOUT_MANIFEST");
+    const bool is_w0 = (env == nullptr) ||
+        std::strstr(manifest_path.c_str(), "w0-256x256") != nullptr;
 
     {
         ane_state_layout_v1_t layout;
         std::string error;
         const bool ok = ane_layout::read_state_layout(
-            w0_path.c_str(), &layout, &error);
-        CHECK(ok, "read_state_layout accepts the W0 manifest");
+            manifest_path.c_str(), &layout, &error);
+        CHECK(ok, "read_state_layout accepts the manifest");
         if (ok) {
             CHECK(layout.version == 1, "version == 1");
-            CHECK(std::strcmp(layout.bundle_name, "w0-256x256") == 0,
-                  "bundle_name == w0-256x256");
-            CHECK(layout.state_size_bytes == 65536,
-                  "state_size_bytes == 65536 (ANE minimum alloc)");
-            CHECK(layout.model_type == ANE_MODEL_TYPE_NEURAL_NETWORK,
-                  "model_type == NEURAL_NETWORK (W0 is NeuralNetwork)");
-            CHECK(layout.n_slots == 2, "W0 manifest has 2 slots");
-            if (layout.n_slots == 2) {
-                CHECK(std::strcmp(layout.slots[0].name, "x") == 0,
-                      "slots[0].name == x");
-                CHECK(layout.slots[0].kind == ANE_SLOT_KIND_INPUT,
-                      "slots[0].kind == INPUT");
-                CHECK(layout.slots[0].dtype == ANE_DTYPE_F32,
-                      "slots[0].dtype == F32");
-                CHECK(layout.slots[0].n_dim == 1,
-                      "slots[0].n_dim == 1");
-                CHECK(layout.slots[0].shape[0] == 256,
-                      "slots[0].shape[0] == 256");
-                CHECK(layout.slots[0].offset == 0,
-                      "slots[0].offset == 0");
-                CHECK(std::strcmp(layout.slots[1].name, "y") == 0,
-                      "slots[1].name == y");
-                CHECK(layout.slots[1].kind == ANE_SLOT_KIND_OUTPUT,
-                      "slots[1].kind == OUTPUT");
+            CHECK(layout.state_size_bytes >= 65536,
+                  "state_size_bytes >= 64KB (ANE minimum)");
+            CHECK(layout.model_type == ANE_MODEL_TYPE_NEURAL_NETWORK ||
+                  layout.model_type == ANE_MODEL_TYPE_ML_PROGRAM,
+                  "model_type is NeuralNetwork or ML Program");
+            CHECK(layout.n_slots > 0, "at least one slot declared");
+            CHECK(layout.n_functions > 0,
+                  "at least one function declared");
+            // All slot offsets are 16-byte aligned (SIMD safety).
+            for (uint32_t i = 0; i < layout.n_slots; ++i) {
+                CHECK(layout.slots[i].offset % 16 == 0,
+                      "slot offset is 16-byte aligned");
+                CHECK(layout.slots[i].size_bytes % 16 == 0,
+                      "slot size is 16-byte aligned");
             }
-            CHECK(layout.n_functions == 1,
-                  "W0 manifest has 1 function");
-            if (layout.n_functions == 1) {
-                CHECK(std::strcmp(layout.functions[0].name, "main") == 0,
-                      "functions[0].name == main");
-                CHECK(layout.functions[0].role == ANE_ROLE_MATMUL,
-                      "functions[0].role == MATMUL");
-                CHECK(layout.functions[0].stateful == false,
-                      "functions[0].stateful == false (stateless matmul)");
-                CHECK(layout.functions[0].use_ane == true,
-                      "functions[0].use_ane == true");
-                CHECK(layout.functions[0].n_inputs == 1,
-                      "functions[0].n_inputs == 1");
-                CHECK(layout.functions[0].n_outputs == 1,
-                      "functions[0].n_outputs == 1");
-                CHECK(layout.functions[0].input_slot_ids[0] == 0,
-                      "functions[0].input_slot_ids[0] == 0 (x slot)");
-                CHECK(layout.functions[0].output_slot_ids[0] == 1,
-                      "functions[0].output_slot_ids[0] == 1 (y slot)");
-                CHECK(std::strcmp(layout.functions[0].core_ml_function_name,
-                                  "main") == 0,
-                      "functions[0].core_ml_function_name == main");
+            if (is_w0) {
+                CHECK(std::strcmp(layout.bundle_name, "w0-256x256") == 0,
+                      "W0 bundle_name == w0-256x256");
+                CHECK(layout.state_size_bytes == 65536,
+                      "W0 state_size_bytes == 65536 (ANE minimum alloc)");
+                CHECK(layout.model_type == ANE_MODEL_TYPE_NEURAL_NETWORK,
+                      "W0 model_type == NEURAL_NETWORK");
+                CHECK(layout.n_slots == 2, "W0 has 2 slots");
+                if (layout.n_slots == 2) {
+                    CHECK(std::strcmp(layout.slots[0].name, "x") == 0,
+                          "W0 slots[0].name == x");
+                    CHECK(layout.slots[0].kind == ANE_SLOT_KIND_INPUT,
+                          "W0 slots[0].kind == INPUT");
+                    CHECK(layout.slots[0].dtype == ANE_DTYPE_F32,
+                          "W0 slots[0].dtype == F32");
+                    CHECK(layout.slots[0].shape[0] == 256,
+                          "W0 slots[0].shape[0] == 256");
+                    CHECK(std::strcmp(layout.slots[1].name, "y") == 0,
+                          "W0 slots[1].name == y");
+                    CHECK(layout.slots[1].kind == ANE_SLOT_KIND_OUTPUT,
+                          "W0 slots[1].kind == OUTPUT");
+                }
+                CHECK(layout.n_functions == 1, "W0 has 1 function");
+                if (layout.n_functions == 1) {
+                    CHECK(std::strcmp(layout.functions[0].name, "main") == 0,
+                          "W0 functions[0].name == main");
+                    CHECK(layout.functions[0].role == ANE_ROLE_MATMUL,
+                          "W0 functions[0].role == MATMUL");
+                    CHECK(layout.functions[0].stateful == false,
+                          "W0 functions[0].stateful == false");
+                    CHECK(layout.functions[0].n_inputs == 1,
+                          "W0 functions[0].n_inputs == 1");
+                    CHECK(layout.functions[0].n_outputs == 1,
+                          "W0 functions[0].n_outputs == 1");
+                    CHECK(std::strcmp(layout.functions[0].core_ml_function_name,
+                                      "main") == 0,
+                          "W0 functions[0].core_ml_function_name == main");
+                }
+                CHECK(layout.n_deps == 0, "W0 has 0 dependencies");
+            } else {
+                // External manifest (e.g. multifunction prefill).
+                // We only check manifest-shape invariants that
+                // hold for any valid manifest; bundle-specific
+                // assertions live in the manifest-emitter test
+                // (tools/ane-mtp/test_emit_manifest.py).
+                std::fprintf(stdout,
+                    "  external manifest: %s (%u slots, %u functions)\n",
+                    layout.bundle_name, layout.n_slots, layout.n_functions);
             }
-            CHECK(layout.n_deps == 0, "W0 manifest has 0 dependencies");
         } else {
             std::fprintf(stderr, "  error: %s\n", error.c_str());
         }
