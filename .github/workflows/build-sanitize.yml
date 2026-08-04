@@ -48,7 +48,7 @@ jobs:
           machine: [self-hosted, X64, Linux]
 
     runs-on: ${{ matrix.machine }}
-    
+
     steps:
       - name: Clone
         id: checkout
