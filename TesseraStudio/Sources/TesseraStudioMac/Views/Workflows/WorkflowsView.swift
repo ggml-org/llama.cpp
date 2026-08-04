@@ -17,12 +17,26 @@ struct WorkflowsView: View {
         workflow: WorkflowsView.exampleWorkflow,
         positions: WorkflowsView.examplePositions
     )
+    /// The document as of the last New / Open / Save. Comparing
+    /// it against `document` yields the "Edited" indicator - a
+    /// derived value, not a flag that could desync.
+    @State private var savedDocument: WorkflowDocument = WorkflowDocument(
+        workflow: WorkflowsView.exampleWorkflow,
+        positions: WorkflowsView.examplePositions
+    )
     @State private var documentName: String = "calibrate-and-quantize"
     @State private var isExporting = false
     @State private var isImporting = false
     @State private var runPhase: WorkflowRunPhase = .idle
 
     @Environment(\.undoManager) private var undoManager
+
+    /// True when the live document differs from the last saved /
+    /// loaded snapshot. Drives the "Edited" marker in the window
+    /// title (macOS documents show `<name> - Edited`).
+    private var isEdited: Bool {
+        document != savedDocument
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,7 +76,13 @@ struct WorkflowsView: View {
             contentType: .tesseraWorkflow,
             defaultFilename: documentName
         ) { result in
-            if case .failure(let err) = result {
+            switch result {
+            case .success(let url):
+                // Save succeeded: the current document is now the
+                // saved baseline, and the title drops "- Edited".
+                savedDocument = document
+                documentName = url.deletingPathExtension().lastPathComponent
+            case .failure(let err):
                 connectionError = "Save failed: \(err.localizedDescription)"
             }
         }
@@ -92,6 +112,11 @@ struct WorkflowsView: View {
             save: { isExporting = true },
             canSave: { !workflow.nodes.isEmpty || !workflow.edges.isEmpty }
         ))
+        // The window title carries the document name plus the
+        // standard "- Edited" marker while there are unsaved
+        // changes (HIG: documents surface modification state in
+        // the title bar, not just a dot somewhere).
+        .navigationTitle(isEdited ? "\(documentName) - Edited" : documentName)
     }
 
     // MARK: - Undo registration
@@ -123,6 +148,10 @@ struct WorkflowsView: View {
 
     private func recordNodeMove(nodeId: String, start: CGPoint, end: CGPoint) {
         guard start != end else { return }
+        // The drag gesture already wrote `end` into `positions`;
+        // sync the save snapshot so the move both flips the
+        // "Edited" marker and survives the next Cmd-S.
+        document = WorkflowDocument(workflow: workflow, positions: positions)
         let nodeId = nodeId
         let start = start, end = end
         registerUndoPair(
@@ -432,7 +461,6 @@ struct WorkflowsView: View {
             },
             set: { newParams in
                 guard let idx = workflow.nodes.firstIndex(where: { $0.id == nodeId }) else { return }
-                let old = workflow.nodes[idx]
                 workflow = Workflow(
                     schema: workflow.schema,
                     name: workflow.name,
@@ -445,7 +473,10 @@ struct WorkflowsView: View {
                     },
                     edges: workflow.edges
                 )
-                _ = old // silence unused-let warning if any
+                // Keep the save snapshot in sync so a parameter
+                // edit both flips the "Edited" marker and is
+                // actually included by the next Cmd-S.
+                document = WorkflowDocument(workflow: workflow, positions: positions)
             }
         )
     }
@@ -477,6 +508,8 @@ struct WorkflowsView: View {
         pendingConnection = nil
         documentName = "untitled"
         document = WorkflowDocument(workflow: workflow, positions: positions)
+        // A fresh document starts clean, not "Edited".
+        savedDocument = document
         // A "New" can't be undone; clear the stack.
         undoManager?.removeAllActions()
     }
@@ -496,6 +529,8 @@ struct WorkflowsView: View {
             positions = envelope.positions ?? [:]
             selectedNodeId = nil
             document = WorkflowDocument(workflow: workflow, positions: positions)
+            // The freshly loaded file is the saved baseline.
+            savedDocument = document
             // fileExporter appends the extension itself (driven
             // by contentType), so the suggested filename must be
             // the bare base name without the `.tessera-workflow`

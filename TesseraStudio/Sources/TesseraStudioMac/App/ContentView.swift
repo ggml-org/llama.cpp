@@ -28,7 +28,15 @@ struct ContentView: View {
     @AppStorage(TesseraSettingsKey.onboardingComplete) private var onboardingComplete = false
     @Environment(\.modelContext) private var modelContext
 
-    @State private var selection: Destination? = .playground
+    // Per-window scene restoration (HIG 2.5). SwiftUI persists
+    // these when the window closes or the app quits and restores
+    // them on relaunch; every window keeps its own copy. The
+    // destination is stored as its raw string because
+    // @SceneStorage needs a RawRepresentable/String-compatible
+    // value, and Optional<Destination> is not one.
+    @SceneStorage("ContentView.destination") private var storedDestinationRaw: String?
+    @SceneStorage("ContentView.telemetryExpanded") private var telemetryExpanded = false
+
     @State private var agentLoop = TesseraAgentLoop(
         registry: TesseraToolRegistry.default,
         approvalEngine: TesseraApprovalEngine(),
@@ -37,7 +45,6 @@ struct ContentView: View {
         tokenLimit: TesseraSettings.tokenBudget
     )
     @State private var showHistory = false
-    @State private var telemetryExpanded = false
     @State private var telemetryMonitor = TelemetryMonitor(
         bridge: TesseraEngineBridgeFactory.makeInferenceBridge()
     )
@@ -75,8 +82,23 @@ struct ContentView: View {
         }
     }
 
+    /// Current sidebar destination. Falls back to the Playground
+    /// on first launch (nothing stored yet) and whenever a stored
+    /// value no longer parses (a destination renamed or removed
+    /// between versions degrades to the default, not a crash).
+    private var selection: Destination? {
+        storedDestinationRaw.flatMap(Destination.init(rawValue:)) ?? .playground
+    }
+
+    private var selectionBinding: Binding<Destination?> {
+        Binding(
+            get: { selection },
+            set: { storedDestinationRaw = $0?.rawValue }
+        )
+    }
+
     private var sidebar: some View {
-        List(Destination.allCases, selection: $selection) { dest in
+        List(Destination.allCases, selection: selectionBinding) { dest in
             Label(dest.rawValue, systemImage: dest.icon)
                 .tag(dest)
         }
@@ -137,7 +159,7 @@ struct ContentView: View {
     private func restore(_ convo: Conversation) {
         restoredMessages = ConversationStore.messages(for: convo.id, in: modelContext)
         playgroundSession = UUID()
-        selection = .playground
+        storedDestinationRaw = Destination.playground.rawValue
         withAnimation { showHistory = false }
     }
 

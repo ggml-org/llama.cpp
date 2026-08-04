@@ -25,7 +25,10 @@ import TesseraCore
 /// UTI conforms to `public.json` — Launch Services treats the
 /// `.tessera-workflow` extension as a first-class Tessera file
 /// type and SwiftUI's file pickers filter to it automatically.
-struct WorkflowDocument: FileDocument {
+/// `Equatable` so the editor derives "edited" by comparing the
+/// live document against the last saved snapshot - no separate
+/// dirty flag that could drift from the real content.
+struct WorkflowDocument: FileDocument, Equatable {
     static let currentSchema = "tessera.workflow.document.v1"
 
     static var readableContentTypes: [UTType] {

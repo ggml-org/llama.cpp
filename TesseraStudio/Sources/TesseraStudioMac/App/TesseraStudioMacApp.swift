@@ -32,10 +32,13 @@ struct TesseraStudioMacApp: App {
         .modelContainer(container)
         .defaultSize(width: 1200, height: 800)
         .commands {
-            // Replace File > New with a Workflows-aware version
-            // (Cmd-N creates a new workflow; no document launcher
-            // because Tessera Studio is single-window for now).
-            CommandGroup(replacing: .newItem) {
+            // Add a Workflows-aware File > New Workflow AFTER the
+            // system's New Window item. Replacing `.newItem` would
+            // delete File > New Window (Cmd-Shift-N), and each
+            // WindowGroup window is an independent studio surface
+            // (own sidebar selection, own agent loop, own
+            // WorkflowsView state), so multi-window is supported.
+            CommandGroup(after: .newItem) {
                 NewWorkflowMenuItem()
             }
 
