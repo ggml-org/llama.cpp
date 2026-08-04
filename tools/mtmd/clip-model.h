@@ -112,8 +112,7 @@ struct clip_hparams {
     // Onyx vision (per-block sparse-window pattern, learned pos-emb, patch-temporal)
     int32_t onyx_patch_temporal = 0;
     int32_t onyx_sparse_factor  = 0;
-    int32_t onyx_pos_emb_h      = 0;
-    int32_t onyx_pos_emb_w      = 0;
+    int32_t onyx_pos_emb_size   = 0;
 
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor

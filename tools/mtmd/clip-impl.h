@@ -94,8 +94,7 @@
 
 #define KEY_ONYX_PATCH_TEMPORAL "clip.vision.onyx.patch_temporal"
 #define KEY_ONYX_SPARSE_FACTOR  "clip.vision.onyx.sparse_attention_factor"
-#define KEY_ONYX_POS_EMB_H      "clip.vision.onyx.pos_emb_height"
-#define KEY_ONYX_POS_EMB_W      "clip.vision.onyx.pos_emb_width"
+#define KEY_ONYX_POS_EMB_SIZE   "clip.vision.onyx.pos_emb_size"
 
 //
 // tensor name constants

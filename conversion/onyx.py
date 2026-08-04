@@ -90,10 +90,11 @@ class OnyxVisionModel(MmprojModel):
         self.gguf_writer.add_vision_spatial_merge_size(int(c["merge_size"]))
         self.gguf_writer.add_vision_rope_theta(float(c.get("rope_parameters", {}).get("rope_theta", self.ROPE_THETA)))
 
+        pos_h, pos_w = int(c["pos_emb_height"]), int(c["pos_emb_width"])
+        assert pos_h == pos_w, f"Onyx assumes square pos-emb grid; got {pos_h}x{pos_w}"
         self.gguf_writer.add_uint32("clip.vision.onyx.patch_temporal",          int(c["patch_temporal"]))
         self.gguf_writer.add_uint32("clip.vision.onyx.sparse_attention_factor", int(c["sparse_attention_factor"]))
-        self.gguf_writer.add_uint32("clip.vision.onyx.pos_emb_height",          int(c["pos_emb_height"]))
-        self.gguf_writer.add_uint32("clip.vision.onyx.pos_emb_width",           int(c["pos_emb_width"]))
+        self.gguf_writer.add_uint32("clip.vision.onyx.pos_emb_size",            pos_h)
 
     @classmethod
     def filter_tensors(cls, item):
