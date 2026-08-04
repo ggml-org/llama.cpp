@@ -69,7 +69,18 @@ L4_PLAN_OUTCOME_COLS: tuple[str, ...] = (
 L5_PLAN_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer", "iteration", "plan_id",
     "sensitivity_score", "recommended_qtype", "recommended_alpha",
-    "recommended_clip", "updated_at",
+    "recommended_clip",
+    # Phase 15: per-tensor sensitivity component columns (additive,
+    # nullable). The orchestrator's write_history populates these
+    # from SensitivityScorer.score()'s per-tensor (imatrix_magnitude,
+    # gradient_proxy, layer_position_prior) outputs. The retune
+    # reads them to fit a 3-coefficient OLS that decomposes the
+    # miscalibration per (model, family). When the columns are
+    # NULL (rows written by older producers or by the C++ side
+    # before this commit), the retune falls back to the 2-coefficient
+    # OLS on the combined sensitivity_score.
+    "imatrix_magnitude", "gradient_proxy", "layer_position_prior",
+    "updated_at",
 )
 L5_OUTCOME_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer", "iteration", "plan_id",
@@ -81,6 +92,17 @@ L5_WEIGHTS_COLS: tuple[str, ...] = (
     "model_hash", "family",
     "w_imatrix", "w_gradient", "w_layer",
     "bias", "n_samples", "in_sample_loss", "hit_rate",
+    # Phase 15: per-family top_fraction retune. The orchestrator's
+    # RequantPlanner can consume this via --per-family-top-fraction
+    # and override the uniform --top-fraction for the families the
+    # retune has flagged as miscalibrated. NULL means "no
+    # recommendation" (use the --top-fraction flag value). The
+    # rule: top_fraction = base * (1 + tanh(2*slope)*(1-hit_rate)).
+    # High slope + low hit rate -> more aggressive requantization
+    # of the miscalibrated family; low slope or high hit rate ->
+    # keep at base. Nullable / additive: existing rows in the
+    # table are unaffected.
+    "top_fraction",
     "retune_source", "updated_at",
 )
 PER_LAYER_ERROR_COLS: tuple[str, ...] = (
@@ -305,6 +327,15 @@ class TesseraDB:
     ) -> int:
         if not rows or self._read_only:
             return 0
+        # Phase 15: the per-tensor component columns are additive
+        # to l5_plan_summary. The C++ side's CREATE TABLE IF NOT
+        # EXISTS may have been run against an older schema; the
+        # Python side ensures the columns exist before the first
+        # INSERT so the buffer's bulk INSERT (which lists every
+        # column) does not fail on a missing column. ``ALTER TABLE
+        # ... ADD COLUMN IF NOT EXISTS`` is a no-op when the
+        # column already exists, so this is safe on every open.
+        self._ensure_l5_plan_columns()
         buf = self._buffer_for("l5_plan_summary", L5_PLAN_COLS)
         now = _now_iso()
         for r in rows:
@@ -318,10 +349,51 @@ class TesseraDB:
                 r.get("recommended_qtype", ""),
                 r.get("recommended_alpha"),
                 r.get("recommended_clip"),
+                r.get("imatrix_magnitude"),
+                r.get("gradient_proxy"),
+                r.get("layer_position_prior"),
                 r.get("updated_at", now),
             )
             buf.append(row)
         return len(rows)
+
+    def _ensure_l5_plan_columns(self) -> None:
+        """Add the Phase 15 per-tensor component columns to
+        ``l5_plan_summary`` if they are not already present.
+
+        The C++ side owns the canonical schema; when a C++ binary
+        creates the DB first the l5_plan_summary table does not
+        yet have ``imatrix_magnitude``, ``gradient_proxy``,
+        ``layer_position_prior``. The Python side adds them
+        via ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` so the
+        bulk INSERT (which lists every L5_PLAN_COLS column) does
+        not fail on a missing column. The operation is a no-op
+        when the columns are already present (i.e. when the
+        Python side creates the schema itself or when the C++
+        side has been updated to include them). Idempotent.
+        """
+        if self._read_only:
+            return
+        # Cache the answer in the instance so we don't repeat
+        # the ALTER for every insert on a long-running loop.
+        if getattr(self, "_l5_plan_columns_ensured", False):
+            return
+        for col in (
+            "imatrix_magnitude",
+            "gradient_proxy",
+            "layer_position_prior",
+        ):
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE l5_plan_summary "
+                    f"ADD COLUMN IF NOT EXISTS {col} DOUBLE"
+                )
+            except Exception as e:
+                sys.stderr.write(
+                    f"tessera-db: ALTER TABLE l5_plan_summary "
+                    f"ADD COLUMN {col} failed: {e}\n"
+                )
+        self._l5_plan_columns_ensured = True
 
     def insert_l4_plan_outcome(
         self,
@@ -429,26 +501,37 @@ class TesseraDB:
 
         ``rows`` is a list of dicts with keys: model_hash, family,
         w_imatrix, w_gradient, w_layer, bias, n_samples,
-        in_sample_loss, hit_rate, retune_source. The retune is
-        the consumer-side half of the "did this requant plan
-        reduce error?" feedback loop: ``tools/tessera/l5_retune.py``
-        fits a per-(model, family) closed-form OLS on
-        ``l5_outcome.delta_mse`` and ``l5_outcome.sensitivity_score``
-        and writes the recommended
+        in_sample_loss, hit_rate, top_fraction (nullable, Phase 15),
+        retune_source. The retune is the consumer-side half of the
+        "did this requant plan reduce error?" feedback loop:
+        ``tools/tessera/l5_retune.py`` fits a per-(model, family)
+        closed-form OLS on ``l5_outcome.delta_mse`` and
+        ``l5_outcome.sensitivity_score`` and writes the recommended
         ``(w_imatrix, w_gradient, w_layer)`` here. The
         orchestrator's next generation reads the table back via
         ``--retune-from-db``.
+
+        Phase 15: ``top_fraction`` is the per-family requant
+        aggressiveness recommendation. NULL means "no
+        recommendation" (use the --top-fraction flag value). The
+        rule: ``top_fraction = base * (1 + tanh(2*slope)*(1-hit_rate))``.
+        The column is added via ALTER TABLE IF NOT EXISTS so the
+        upsert works on DBs created before Phase 15.
 
         Returns the number of rows upserted.
         """
         if not rows or self._read_only:
             return 0
+        # Phase 15: ensure the top_fraction column exists. Same
+        # idempotency story as _ensure_l5_plan_columns: no-op when
+        # the column is already present.
+        self._ensure_l5_weights_columns()
         sql = (
             "INSERT INTO l5_weights ("
             "  model_hash, family, w_imatrix, w_gradient, w_layer, "
             "  bias, n_samples, in_sample_loss, hit_rate, "
-            "  retune_source, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "  top_fraction, retune_source, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (model_hash, family) DO UPDATE SET "
             "  w_imatrix       = excluded.w_imatrix, "
             "  w_gradient      = excluded.w_gradient, "
@@ -457,6 +540,7 @@ class TesseraDB:
             "  n_samples       = excluded.n_samples, "
             "  in_sample_loss  = excluded.in_sample_loss, "
             "  hit_rate        = excluded.hit_rate, "
+            "  top_fraction    = excluded.top_fraction, "
             "  retune_source   = excluded.retune_source, "
             "  updated_at      = excluded.updated_at"
         )
@@ -474,6 +558,7 @@ class TesseraDB:
                     r.get("n_samples"),
                     r.get("in_sample_loss"),
                     r.get("hit_rate"),
+                    r.get("top_fraction"),
                     r.get("retune_source", "ols_slope_v1"),
                     r.get("updated_at", now),
                 ])
@@ -485,6 +570,32 @@ class TesseraDB:
                     f"failed: {e}\n"
                 )
         return n
+
+    def _ensure_l5_weights_columns(self) -> None:
+        """Add the Phase 15 ``top_fraction`` column to ``l5_weights``
+        if it is not already present.
+
+        Same idempotent ALTER TABLE pattern as
+        :py:meth:`_ensure_l5_plan_columns`. The C++ side may have
+        created the l5_weights table before Phase 15; the
+        Python side adds the column on the first open so the
+        upsert does not fail on a missing column.
+        """
+        if self._read_only:
+            return
+        if getattr(self, "_l5_weights_columns_ensured", False):
+            return
+        try:
+            self._conn.execute(
+                "ALTER TABLE l5_weights "
+                "ADD COLUMN IF NOT EXISTS top_fraction DOUBLE"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE l5_weights "
+                f"ADD COLUMN top_fraction failed: {e}\n"
+            )
+        self._l5_weights_columns_ensured = True
 
     def insert_per_layer_error(
         self,
