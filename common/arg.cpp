@@ -71,6 +71,11 @@ const common_tessera_params & common_get_tessera_params() {
     return tessera_params;
 }
 
+// Forward declarations for the add_opt-backed dispatch path used by
+// common_tessera_parse_one. Defined further down in this file.
+static const std::vector<common_arg> & get_common_arg_defs();
+static int common_arg_dispatch_one(int argc, char ** argv, int i, std::string & err);
+
 // Parse one --tessera-* / --calib-* flag at argv[i] into tessera_params, for
 // tools (llama-quantize) that hand-roll their arg loop instead of calling
 // common_params_parse. Mirrors the --tessera-* add_opt validators below; both
@@ -91,7 +96,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     };
 
     // switches
-    if (arg == "--tessera-evolve-only")    { tessera_params.evolve_only    = true; return 1; }
     if (arg == "--tessera-calibrate-only") { tessera_params.calibrate_only = true; return 1; }
     if (arg == "--tessera-champq")         { tessera_params.champq         = true; return 1; }
     if (arg == "--tessera-kernel-fitness") { tessera_params.kernel_fitness = true; return 1; }
@@ -306,7 +310,84 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         return 2;
     }
 
-    return 0;  // not a Tessera flag
+    // Anything below here is reserved for flags that have already been
+    // migrated to the add_opt path in common_params_parse_ex. The if/else
+    // chain above still owns unmigrated flags; once their line is removed
+    // from this function, the dispatch loop below picks them up via the
+    // same registered common_arg that llama-cli / llama-imatrix see.
+    return common_arg_dispatch_one(argc, argv, i, err);
+}
+
+// Dispatch a single Tessera-flavored arg (--tessera-*, --calib-*,
+// --progress-file, --quantize-db, --force-requantize) through the
+// common_arg registered via the add_opt path in common_params_parse_ex.
+// Returns 1 for a switch, 2 for a valued flag, 0 if argv[i] is not a
+// Tessera flag, or -1 on a validation error. This is the single source
+// of truth: the registered common_arg's handler owns the side effect, the
+// type coercion, and the validation message; we only translate the throw
+// into the (err, return) contract common_tessera_parse_one advertises.
+static int common_arg_dispatch_one(int argc, char ** argv, int i, std::string & err) {
+    const std::string arg = argv[i];
+
+    // Restrict to Tessera-flavored names so we never accidentally consume a
+    // generic llama.cpp flag (e.g. --threads) that the caller's outer loop
+    // is supposed to reject as a usage error.
+    const bool tessera_named =
+        arg.compare(0, 10, "--tessera-") == 0 ||
+        arg == "--calib-corpus" ||
+        arg == "--calib-corpus-out" ||
+        arg == "--progress-file" ||
+        arg == "--quantize-db" ||
+        arg == "--force-requantize";
+    if (!tessera_named) {
+        return 0;
+    }
+
+    const auto & defs = get_common_arg_defs();
+    for (const auto & opt : defs) {
+        bool is_pos = false;
+        bool is_neg = false;
+        for (const auto & a : opt.args) {
+            if (a == arg) { is_pos = true; break; }
+        }
+        if (!is_pos) {
+            for (const auto & a : opt.args_neg) {
+                if (a == arg) { is_neg = true; break; }
+            }
+        }
+        if (!is_pos && !is_neg) continue;
+        try {
+            common_params params; // dummy; Tessera handlers write to the global tessera_params
+            if (opt.handler_void) {
+                opt.handler_void(params);
+                return 1;
+            }
+            if (opt.handler_bool) {
+                opt.handler_bool(params, is_pos);
+                return 1;
+            }
+            if (i + 1 >= argc) {
+                err = string_format("error: %s requires a value\n", arg.c_str());
+                return -1;
+            }
+            const std::string val = argv[i + 1];
+            if (opt.handler_int) {
+                opt.handler_int(params, std::stoi(val));
+                return 2;
+            }
+            if (opt.handler_string) {
+                opt.handler_string(params, val);
+                return 2;
+            }
+            err = string_format("error: %s has no handler (args=%s, value_hint=%s)\n",
+                                arg.c_str(), arg.c_str(), opt.value_hint ? opt.value_hint : "(null)");
+            return -1;
+        } catch (const std::exception & e) {
+            err = e.what();
+            return -1;
+        }
+    }
+    return 0; // arg is Tessera-named but not registered (treated as usage error by caller)
 }
 
 static std::string read_file(const std::string & fname) {
