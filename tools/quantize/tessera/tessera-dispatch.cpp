@@ -1760,6 +1760,38 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                                     "insert_tensor('%s') failed: %s\n",
                             name, terr.c_str());
                 }
+                // Also upsert into the cross-pipeline tensor_stats
+                // table (model_hash + name key). The C++ side writes
+                // the kurtosis / eff_rank / dtype fields; the Python
+                // calibration pipeline writes rms / mean_abs /
+                // tail_ratio via the same helper. PRIMARY KEY +
+                // ON CONFLICT DO UPDATE makes this safe to call
+                // from both sides in any order. rms / mean_abs /
+                // tail_ratio are left at 0 here (the C++ side
+                // doesn't compute them); the Python side fills them
+                // in on a subsequent write.
+                ts_quantize_db_tensor_stat tstat;
+                tstat.model_hash = db_wrap->model_hash;
+                tstat.name       = name;
+                tstat.family     = desc.family;
+                tstat.layer_depth = layer.layer_depth;
+                tstat.out_dim     = out_dim;
+                tstat.in_dim      = in_dim;
+                tstat.n_elements  = (int64_t)out_dim * (int64_t)in_dim;
+                tstat.dtype       = ggml_type_name(type);
+                tstat.kurtosis    = desc.kurtosis;
+                tstat.eff_rank    = desc.eff_rank;
+                tstat.rms         = 0.0;
+                tstat.mean_abs    = 0.0;
+                tstat.tail_ratio  = 0.0;
+                tstat.source      = "cpp_quant";
+                std::string uerr;
+                if (ts_quantize_db_upsert_tensor_stat(db_wrap->db, tstat, &uerr) != 0
+                    && !uerr.empty()) {
+                    fprintf(stderr, "tessera-dispatch: warning: "
+                                    "upsert_tensor_stat('%s') failed: %s\n",
+                            name, uerr.c_str());
+                }
             }
             ts_progress_inc(prog, 1, name);
         }

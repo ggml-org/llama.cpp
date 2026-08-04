@@ -695,6 +695,62 @@ int ts_quantize_db_insert_l5_fixup(ts_quantize_db * db,
 }
 
 // ---------------------------------------------------------------------------
+// tensor_stats upsert: cross-pipeline feature table
+// ---------------------------------------------------------------------------
+
+int ts_quantize_db_upsert_tensor_stat(
+    ts_quantize_db * db,
+    const ts_quantize_db_tensor_stat & row,
+    std::string * err) {
+    if (db == nullptr || db->conn == nullptr) return 0;
+    // PRIMARY KEY (model_hash, name). The ON CONFLICT DO UPDATE
+    // clause overwrites every column on a re-write. source is
+    // updated to the current writer's tag.
+    std::ostringstream q;
+    q << "INSERT INTO tensor_stats (model_hash, name, family, "
+         "layer_depth, out_dim, in_dim, n_elements, dtype, "
+         "kurtosis, eff_rank, rms, mean_abs, tail_ratio, source, "
+         "updated_at) VALUES ("
+      << "'" << sql_escape(row.model_hash) << "', "
+      << "'" << sql_escape(row.name) << "', "
+      << "'" << sql_escape(row.family) << "', "
+      << row.layer_depth << ", "
+      << row.out_dim << ", "
+      << row.in_dim << ", "
+      << row.n_elements << ", "
+      << "'" << sql_escape(row.dtype) << "', "
+      << row.kurtosis << ", "
+      << row.eff_rank << ", "
+      << row.rms << ", "
+      << row.mean_abs << ", "
+      << row.tail_ratio << ", "
+      << "'" << sql_escape(row.source) << "', "
+      << ts_now_ts()
+      << ") ON CONFLICT (model_hash, name) DO UPDATE SET "
+         "family=excluded.family, layer_depth=excluded.layer_depth, "
+         "out_dim=excluded.out_dim, in_dim=excluded.in_dim, "
+         "n_elements=excluded.n_elements, dtype=excluded.dtype, "
+         "kurtosis=excluded.kurtosis, eff_rank=excluded.eff_rank, "
+         "rms=excluded.rms, mean_abs=excluded.mean_abs, "
+         "tail_ratio=excluded.tail_ratio, source=excluded.source, "
+         "updated_at=excluded.updated_at";
+    try {
+        auto res = db->conn->Query(q.str());
+        if (res->HasError()) {
+            if (err) *err = "upsert_tensor_stat failed: " + res->GetError();
+            return 1;
+        }
+    } catch (const std::exception & e) {
+        if (err) *err = std::string("upsert_tensor_stat failed: ") + e.what();
+        return 1;
+    } catch (...) {
+        if (err) *err = "upsert_tensor_stat failed: unknown exception";
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // L4 plan outcome: thin shim over ts_db_buffer for the feedback loop
 // ---------------------------------------------------------------------------
 

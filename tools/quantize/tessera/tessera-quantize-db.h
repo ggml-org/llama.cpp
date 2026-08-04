@@ -127,6 +127,37 @@ int ts_quantize_db_insert_l5_fixup(ts_quantize_db * db,
                                    const ts_quantize_db_l5_fixup & f,
                                    std::string * err);
 
+// --- tensor_stats upsert (cross-pipeline feature table) ---
+//
+// One row per (model_hash, name). The C++ GA-prep walk writes
+// kurtosis / eff_rank / dtype here (alongside the legacy `tensors`
+// per-run table); the Python calibration pipeline writes
+// rms / mean_abs / tail_ratio. PRIMARY KEY (model_hash, name) +
+// ON CONFLICT DO UPDATE makes this an upsert target.
+//
+// The `source` field records which pipeline last wrote the row
+// ("cpp_quant" for the C++ side, "py_cal" for Python). It is
+// informational; the upsert overwrites regardless.
+struct ts_quantize_db_tensor_stat {
+    std::string  model_hash;
+    std::string  name;
+    std::string  family;
+    int32_t      layer_depth = 0;
+    int64_t      out_dim     = 0;
+    int64_t      in_dim      = 0;
+    int64_t      n_elements  = 0;
+    std::string  dtype;       // "f16", "f32", "q8_0", ...
+    double       kurtosis    = 0.0;
+    double       eff_rank    = 0.0;
+    double       rms         = 0.0;
+    double       mean_abs    = 0.0;
+    double       tail_ratio  = 0.0;
+    std::string  source;      // "cpp_quant" / "py_cal"
+};
+int ts_quantize_db_upsert_tensor_stat(ts_quantize_db * db,
+                                     const ts_quantize_db_tensor_stat & row,
+                                     std::string * err);
+
 // --- L4 plan outcome (the feedback loop audit trail) ---
 //
 // One row per (model_hash, name, iteration, plan_id) recording the
