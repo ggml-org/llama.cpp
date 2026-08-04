@@ -96,10 +96,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     };
 
     // string-valued
-    if (arg == "--tessera-dpace")           { if (!require_val("--tessera-dpace")) return -1;           tessera_params.dpace_in        = val; return 2; }
-    if (arg == "--tessera-dpace-out")       { if (!require_val("--tessera-dpace-out")) return -1;       tessera_params.dpace_out       = val; return 2; }
-    if (arg == "--tessera-dpace-alpha")     { if (!require_val("--tessera-dpace-alpha")) return -1;     tessera_params.dpace_alpha     = std::stof(val); return 2; }
-    if (arg == "--tessera-dpace-gamma")     { if (!require_val("--tessera-dpace-gamma")) return -1;     tessera_params.dpace_gamma     = std::stof(val); return 2; }
     if (arg == "--tessera-dequant-dir") {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
