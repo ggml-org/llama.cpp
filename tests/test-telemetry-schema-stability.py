@@ -37,6 +37,9 @@ EXCLUDE_DIRS = {
     # the legacy schema names. They are not part of the main source tree
     # so the schema-stability contract doesn't apply to them.
     ".zcode",
+    # worktrees/ holds transient agent worktrees (e.g. an active cherry-pick
+    # worktree that hasn't been pruned yet). Same logic as .zcode above.
+    "worktrees",
 }
 
 # The single canonical schema name. Changing this requires updating
