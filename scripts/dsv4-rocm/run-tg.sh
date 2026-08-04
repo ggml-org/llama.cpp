@@ -7,6 +7,7 @@ MODEL=${DSV4_MODEL:-/home/edwin/models/DeepSeek-V4-Flash-0731-GGUF/UD-IQ2_M/Deep
 BENCH=${DSV4_BENCH:-$ROOT_DIR/build/bin/llama-bench}
 OUTPUT_ROOT=${DSV4_TG_OUTPUT_ROOT:-$HOME/llama-jobs/dsv4-rocm-tg}
 MODE=${DSV4_TG_MODE:-performance}
+PROFILE=${DSV4_TG_PROFILE:-none}
 DEPTH_STATE_API=${DSV4_TG_DEPTH_STATE_API:-context}
 DEPTHS=${DSV4_TG_DEPTHS:-0,2048,3072,4096,8192,16384,32768,65536}
 N_GEN=${DSV4_TG_N_GEN:-32}
@@ -43,6 +44,12 @@ Modes:
                             GGML_SCHED_DEBUG=2 + --verbose, then parse DSV4
                             LID/TOP_K assignments and CPU/GPU graph splits.
 
+Profiling:
+  DSV4_TG_PROFILE=kernel    disk-safe rocprofv3 CSV for accepted target-only
+                            generation regions only. Requires performance mode
+                            and exactly one depth; setup and discarded rep 1
+                            are excluded by ROCTx profiler control.
+
 Important overrides:
   DSV4_TG_DEPTHS            default 0,2048,3072,4096,8192,16384,32768,65536
   DSV4_TG_N_GEN             fixed evaluated tokens in performance mode (32)
@@ -56,6 +63,7 @@ Important overrides:
   DSV4_TG_OUTPUT_ROOT       default $HOME/llama-jobs/dsv4-rocm-tg
   DSV4_LABEL                safe run label
   DSV4_HASH_MODE=full       hash all GGUF shards; metadata is default
+  DSV4_ROCPROF              rocprofv3 executable (fallback: /opt/rocm/bin/rocprofv3)
   DSV4_ALLOW_BUSY_GPUS=1    unsafe override; never use for controlled evidence
   DSV4_REQUIRE_ACCEPTED_STACK=0  allow non-16/1/4 MMQ/HC/LID controls
 
@@ -84,6 +92,7 @@ done
 
 [[ "$LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "invalid DSV4_LABEL: $LABEL"
 [[ "$MODE" == performance || "$MODE" == residency ]] || fail "DSV4_TG_MODE must be performance or residency"
+[[ "$PROFILE" == none || "$PROFILE" == kernel ]] || fail "DSV4_TG_PROFILE must be none or kernel"
 [[ "$DEPTH_STATE_API" == context ]] || fail "DSV4_TG_DEPTH_STATE_API must be context; sequence restore failed the DSV4 equivalence gate"
 for pair in \
     "DSV4_TG_N_GEN:$N_GEN" "DSV4_TG_REPS:$RAW_REPS" \
@@ -120,9 +129,19 @@ if [[ "$MODE" == residency ]]; then
     N_GEN=1
     RAW_REPS=1
     DISCARD_FIRST=0
+    [[ "$PROFILE" == none ]] || fail "DSV4_TG_PROFILE requires performance mode"
 else
     [ "$DISCARD_FIRST" -lt "$RAW_REPS" ] || fail "discard count must be below raw repetitions"
     [ $(( RAW_REPS - DISCARD_FIRST )) -ge 5 ] || fail "performance mode requires at least five accepted repetitions"
+fi
+if [[ "$PROFILE" == kernel ]]; then
+    [ "${#depth_values[@]}" -eq 1 ] || fail "DSV4_TG_PROFILE=kernel requires exactly one depth"
+    ROCPROF=${DSV4_ROCPROF:-$(command -v rocprofv3 || true)}
+    [[ -n "$ROCPROF" ]] || ROCPROF=/opt/rocm/bin/rocprofv3
+    [ -x "$ROCPROF" ] || fail "rocprofv3 not executable: $ROCPROF"
+    ROCPROF=$(readlink -f "$ROCPROF")
+    export LLAMA_BENCH_ROCPROF_SELECTED_REGIONS=1
+    export LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS="$DISCARD_FIRST"
 fi
 
 export GGML_HIP_RDNA2_MMQ_J=${GGML_HIP_RDNA2_MMQ_J:-16}
@@ -133,6 +152,22 @@ if [[ "$REQUIRE_ACCEPTED_STACK" == 1 ]]; then
     [[ "$GGML_HIP_RDNA2_HC_MIXES" == 1 ]] || fail "accepted baseline requires GGML_HIP_RDNA2_HC_MIXES=1"
     [[ "$GGML_HIP_RDNA2_LID_SUBWAVE" == 4 ]] || fail "accepted baseline requires GGML_HIP_RDNA2_LID_SUBWAVE=4"
 fi
+if [[ "$PROFILE" == kernel ]]; then
+    [[ "$N_GEN" == 32 ]] || fail "kernel profile requires DSV4_TG_N_GEN=32"
+    [[ "$RAW_REPS" == 6 ]] || fail "kernel profile requires DSV4_TG_REPS=6"
+    [[ "$DISCARD_FIRST" == 1 ]] || fail "kernel profile requires DSV4_TG_DISCARD_FIRST=1"
+    [[ "$HASH_MODE" == full ]] || fail "kernel profile requires DSV4_HASH_MODE=full"
+    [[ "$REQUIRE_ACCEPTED_STACK" == 1 ]] || fail "kernel profile requires DSV4_REQUIRE_ACCEPTED_STACK=1"
+    [[ "$GGML_HIP_RDNA2_MMQ_J" == 16 && "$GGML_HIP_RDNA2_HC_MIXES" == 1 && "$GGML_HIP_RDNA2_LID_SUBWAVE" == 4 ]] || \
+        fail "kernel profile requires exact J16/HC1/LID4 controls"
+    [[ "$BATCH" == 512 && "$UBATCH" == 256 ]] || fail "kernel profile requires batch/ubatch 512/256"
+    [[ "$TENSOR_SPLIT" == 1/1/1/1 ]] || fail "kernel profile requires tensor split 1/1/1/1"
+    [[ "$CACHE_TYPE_K" == f16 && "$CACHE_TYPE_V" == f16 ]] || fail "kernel profile requires F16 K/V"
+    [[ "$THREADS" == 12 ]] || fail "kernel profile requires 12 host threads"
+    [[ "$LOAD_MODE" == mmap ]] || fail "kernel profile requires mmap load mode"
+fi
+export DSV4_TG_PROFILE="$PROFILE"
+export DSV4_HASH_MODE="$HASH_MODE"
 
 [ -f "$MODEL" ] || fail "model not found: $MODEL"
 [ -x "$BENCH" ] || fail "llama-bench not executable: $BENCH"
@@ -179,13 +214,16 @@ bench_cmd=(
 )
 [[ "$MODE" == residency ]] && bench_cmd+=(--verbose)
 
-printf 'Mode: %s\n' "$MODE"
+printf 'Mode: %s; profile: %s\n' "$MODE" "$PROFILE"
 printf 'Planned command:'
 printf ' %q' "${bench_cmd[@]}"
 printf '\n'
 printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q\n' \
     "$GGML_SCHED_DEBUG" "$LLAMA_BENCH_DEPTH_STATE_API" "$GGML_HIP_RDNA2_MMQ_J" "$GGML_HIP_RDNA2_HC_MIXES" "$GGML_HIP_RDNA2_LID_SUBWAVE"
 printf 'Per-sample cap: %ss; per-setup cap: %ss\n' "$SAMPLE_TIMEOUT_S" "$SETUP_TIMEOUT_S"
+if [[ "$PROFILE" == kernel ]]; then
+    printf 'Profiler: %s; selected accepted regions only; skip repetitions: %s\n' "$ROCPROF" "$DISCARD_FIRST"
+fi
 if [[ "$DRY_RUN" == 1 ]]; then
     echo "Dry run only; no ROCm query, model load, or benchmark process was started."
     exit 0
@@ -244,13 +282,47 @@ Path(sys.argv[1]).write_text(
 PY
 
 printf 'env LLAMA_BENCH_DEPTH_STATE_API=%q ' "$LLAMA_BENCH_DEPTH_STATE_API" > "$run_dir/command.sh"
+if [[ "$PROFILE" == kernel ]]; then
+    export LLAMA_BENCH_ROCPROF_BOUNDARIES="$run_dir/rocprof-selected-regions.tsv"
+    printf 'LLAMA_BENCH_ROCPROF_SELECTED_REGIONS=1 LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS=%q LLAMA_BENCH_ROCPROF_BOUNDARIES=%q ' \
+        "$DISCARD_FIRST" "$LLAMA_BENCH_ROCPROF_BOUNDARIES" >> "$run_dir/command.sh"
+fi
 printf '%q ' "${bench_cmd[@]}" >> "$run_dir/command.sh"
 printf '\n' >> "$run_dir/command.sh"
-cp "$run_dir/command.sh" "$run_dir/executed-command.sh"
-chmod +x "$run_dir/command.sh" "$run_dir/executed-command.sh"
+chmod +x "$run_dir/command.sh"
+
+payload_cmd=("${bench_cmd[@]}")
+if [[ "$PROFILE" == kernel ]]; then
+    mkdir "$run_dir/rocprof"
+    profile_args=(
+        --output-directory "$run_dir/rocprof"
+        --output-file dsv4-tg
+        --output-format csv
+        --kernel-trace
+        --memory-copy-trace
+        --rccl-trace
+        --hip-runtime-trace
+        --selected-regions
+        --stats
+        --summary
+        --summary-per-domain
+        --summary-output-file "$run_dir/rocprof-summary.txt"
+    )
+    payload_cmd=("$ROCPROF" "${profile_args[@]}" -- "${bench_cmd[@]}")
+fi
+printf 'env LLAMA_BENCH_DEPTH_STATE_API=%q ' "$LLAMA_BENCH_DEPTH_STATE_API" > "$run_dir/executed-command.sh"
+if [[ "$PROFILE" == kernel ]]; then
+    printf 'LLAMA_BENCH_ROCPROF_SELECTED_REGIONS=1 LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS=%q LLAMA_BENCH_ROCPROF_BOUNDARIES=%q ' \
+        "$DISCARD_FIRST" "$LLAMA_BENCH_ROCPROF_BOUNDARIES" >> "$run_dir/executed-command.sh"
+fi
+printf '%q ' "${payload_cmd[@]}" >> "$run_dir/executed-command.sh"
+printf '\n' >> "$run_dir/executed-command.sh"
+chmod +x "$run_dir/executed-command.sh"
 
 {
     printf 'DSV4_TG_MODE=%q\n' "$MODE"
+    printf 'DSV4_TG_PROFILE=%q\n' "$PROFILE"
+    [[ "$PROFILE" == kernel ]] && printf 'DSV4_ROCPROF=%q\n' "$ROCPROF"
     printf 'DSV4_TG_DEPTH_STATE_API=%q\n' "$DEPTH_STATE_API"
     printf 'LLAMA_BENCH_DEPTH_STATE_API=%q\n' "$LLAMA_BENCH_DEPTH_STATE_API"
     printf 'DSV4_MODEL=%q\n' "$MODEL"
@@ -280,6 +352,11 @@ chmod +x "$run_dir/command.sh" "$run_dir/executed-command.sh"
     printf 'HSA_NO_SCRATCH_RECLAIM=%q\n' "$HSA_NO_SCRATCH_RECLAIM"
     printf 'HSA_OVERRIDE_GFX_VERSION=%q\n' "$HSA_OVERRIDE_GFX_VERSION"
     printf 'LD_LIBRARY_PATH=%q\n' "$LD_LIBRARY_PATH"
+    if [[ "$PROFILE" == kernel ]]; then
+        printf 'LLAMA_BENCH_ROCPROF_SELECTED_REGIONS=%q\n' "$LLAMA_BENCH_ROCPROF_SELECTED_REGIONS"
+        printf 'LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS=%q\n' "$LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS"
+        printf 'LLAMA_BENCH_ROCPROF_BOUNDARIES=%q\n' "$LLAMA_BENCH_ROCPROF_BOUNDARIES"
+    fi
 } > "$run_dir/effective-settings.sh"
 
 python3 - "$run_dir/contract.json" "$MODE" "$DEPTHS" "$N_GEN" "$RAW_REPS" "$DISCARD_FIRST" "$DEPTH_STATE_API" "${bench_cmd[@]}" <<'PY'
@@ -301,7 +378,23 @@ pathlib.Path(out).write_text(json.dumps({
     "accepted_repetitions": int(reps) - int(discard),
     "depth_state_api": depth_state_api,
     "telemetry_scope": "setup-and-discarded-first-repetition",
+    "profile": __import__("os").environ.get("DSV4_TG_PROFILE", "none"),
+    "profile_scope": "accepted-target-generation-selected-regions" if __import__("os").environ.get("DSV4_TG_PROFILE") == "kernel" else "none",
+    "profile_skip_repetitions": int(__import__("os").environ.get("LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS", "0")),
     "model_hash_mode": __import__("os").environ.get("DSV4_HASH_MODE", "metadata"),
+    "require_accepted_stack": int(__import__("os").environ.get("DSV4_REQUIRE_ACCEPTED_STACK", "1")),
+    "accepted_stack": {
+        "mmq_j": int(__import__("os").environ["GGML_HIP_RDNA2_MMQ_J"]),
+        "hc_mixes": int(__import__("os").environ["GGML_HIP_RDNA2_HC_MIXES"]),
+        "lid_subwave": int(__import__("os").environ["GGML_HIP_RDNA2_LID_SUBWAVE"]),
+    },
+    "batch": int(__import__("os").environ.get("DSV4_BATCH", "512")),
+    "ubatch": int(__import__("os").environ.get("DSV4_UBATCH", "256")),
+    "tensor_split": __import__("os").environ.get("DSV4_TENSOR_SPLIT", "1/1/1/1"),
+    "cache_type_k": __import__("os").environ.get("DSV4_CACHE_TYPE_K", "f16"),
+    "cache_type_v": __import__("os").environ.get("DSV4_CACHE_TYPE_V", "f16"),
+    "threads": int(__import__("os").environ.get("DSV4_THREADS", "12")),
+    "load_mode": __import__("os").environ.get("DSV4_LOAD_MODE", "mmap"),
     "expected_dsv4_nodes_per_graph": 21,
     "token_contract": "llama-bench test_gen: exactly n_gen target llama_decode calls; BOS then deterministic process-local std::rand tokens; no sampler or EOS",
     "depth_contract": "llama-bench n_depth setup occurs outside samples_ns; later repetitions restore the attested full context state; sequence-only restore is forbidden for DSV4",
@@ -447,7 +540,7 @@ stdout_consumer "$stdout_fifo" "$run_dir/result.jsonl" "$run_dir/result-complete
 printf 'run_dir=%s\n' "$run_dir"
 printf 'started_at_ns=%s\n' "$(now_ns)" > "$run_dir/status.txt"
 set +e
-setsid "${bench_cmd[@]}" > "$stdout_fifo" 2> "$stderr_fifo" &
+setsid "${payload_cmd[@]}" > "$stdout_fifo" 2> "$stderr_fifo" &
 bench_pid=$!; bench_pgid=$bench_pid
 sample_smi "$bench_pgid" "$phase_file" > "$run_dir/rocm-smi.log" 9>&- & smi_pid=$!
 watch_group "$bench_pgid" "$phase_file" 9>&- & watchdog_pid=$!
@@ -524,6 +617,12 @@ PY
     if [[ "$stable" -ne 1 ]]; then
         echo "UNSTABLE raw-TG sweep; increase tokens/repetitions before acceptance. Artifacts: $run_dir"
         exit 4
+    fi
+    if [[ "$PROFILE" == kernel ]]; then
+        python3 "$ROOT_DIR/scripts/dsv4-rocm/summarize-tg-profile.py" "$run_dir" \
+            --json "$run_dir/profile-summary.json" --tsv "$run_dir/profile-families.tsv" \
+            > "$run_dir/profile-summary.txt"
+        cat "$run_dir/profile-summary.txt"
     fi
 else
     python3 "$ROOT_DIR/scripts/dsv4-rocm/parse-sched-debug.py" "$run_dir/bench.log" \

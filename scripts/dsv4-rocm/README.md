@@ -22,6 +22,7 @@ scripts/dsv4-rocm/run-pp.sh --dry-run
 scripts/dsv4-rocm/profile-pp.sh --dry-run
 scripts/dsv4-rocm/run-tg.sh --dry-run
 DSV4_TG_MODE=residency scripts/dsv4-rocm/run-tg.sh --dry-run
+DSV4_TG_DEPTHS=16384 scripts/dsv4-rocm/profile-tg.sh --dry-run
 ```
 
 ## Target-only raw decode baseline
@@ -59,8 +60,10 @@ Dry-run and non-GPU fixture validation:
 ```bash
 cd /home/edwin/llama.cpp-rdna2
 scripts/dsv4-rocm/test-tg-tools.py
+scripts/dsv4-rocm/test-tg-profile.py
 scripts/dsv4-rocm/run-tg.sh --dry-run
 DSV4_TG_MODE=residency scripts/dsv4-rocm/run-tg.sh --dry-run
+DSV4_TG_DEPTHS=16384 scripts/dsv4-rocm/profile-tg.sh --dry-run
 ```
 
 Before performance mode may reuse llama-bench's saved full context state, run
@@ -131,9 +134,47 @@ are preserved in `phase-events.tsv` and `measurement-start.ns`; setup time is
 never reported as TG. A timeout preserves completed depth records and marks the
 sweep incomplete.
 
-Do not use scheduler-debug TG as a production throughput number, do not combine
-performance and residency samples, and do not use full rocprof CSV tracing at
-32K/64K.
+Do not use scheduler-debug TG as a production throughput number and do not
+combine performance and residency samples.
+
+## Target-only raw-decode profile
+
+`profile-tg.sh` is the disk-safe M5.3 profile wrapper. It requires exactly one
+starting depth and fails closed unless the evidence contract is exactly tg32,
+six raw repetitions, first discarded/five profiled, full GGUF hashing,
+full-context state, batch/ubatch 512/256, F16 K/V, tensor split `1/1/1/1`,
+12 host threads, mmap loading, and the guarded J16/HC1/LID4 stack. A ROCm-only optional llama-bench hook calls
+`roctxProfilerResume(0)` immediately around `test_gen` for repetitions 2-6 and
+pauses after each synchronized generation. The benchmark process writes its own
+authoritative `CLOCK_MONOTONIC` `resume_return`/`pause_call` pairs to
+`rocprof-selected-regions.tsv`; the summarizer requires every trace event to fit
+wholly within those exact boundaries. `rocprofv3 --selected-regions` therefore
+records no model load, depth setup, context-state restore, or discarded first
+repetition. The compact profile writes CSV only, but requires kernel,
+memory-copy, RCCL, and HIP-runtime domain files so launch/synchronization calls
+remain visible. Never substitute an unscoped whole-process trace at 32K/64K.
+
+Run independent decision-context profiles as separate processes/artifacts:
+
+```bash
+DSV4_TG_DEPTHS=16384 DSV4_LABEL=raw-tg-profile-16k-a \
+  scripts/dsv4-rocm/profile-tg.sh
+DSV4_TG_DEPTHS=65536 DSV4_LABEL=raw-tg-profile-64k-a \
+  scripts/dsv4-rocm/profile-tg.sh
+```
+
+The wrapper requires full GGUF hashing and writes under
+`$HOME/llama-jobs/dsv4-rocm-tg-profile/`. `run-tg.sh` invokes
+`summarize-tg-profile.py` after the normal stability gate and preserves
+`profile-summary.{txt,json}` plus `profile-families.tsv`. The summarizer verifies
+that every trace event is wholly inside an authoritative accepted generation interval, then
+reports accepted wall time, target-token count, dispatches, summed device time,
+per-agent totals, HIP/RCCL/copy calls, exclusive name-matched families, and top
+kernel/grid/workgroup groups. Summed device time spans four devices/queues and
+is the branch-share denominator; it is not wall time. IQ2_XXS/IQ3_XXS routed-MMQ
+classification remains an explicit model/name/shape inference and must be
+checked against call/grid evidence before selecting branch A. Unclassified
+`other` time is not silently assigned.
 
 ## Five-minute quick PP baseline
 
