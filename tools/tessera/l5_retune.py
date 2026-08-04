@@ -553,6 +553,255 @@ def _compute_coupling_score(
     return corr
 
 
+# Retune follow-ups: cross-model dedup. The retune's
+# --retune-from-db path looks up l5_weights by
+# (model_hash, model_role, family). When the requested
+# model_hash is not in the table, a fallback to a different
+# model with a very similar per-tensor stat distribution
+# is sometimes reasonable: a fine-tune of the same base
+# model that re-uses the same retune weights is fine, a
+# different architecture is not. The fingerprint is a
+# short hash of the first N moments of the per-tensor
+# (kurtosis, eff_rank, rms, mean_abs, tail_ratio)
+# distributions.
+#
+# The fingerprint is intentionally coarse (5-10 moments
+# rounded to 4 sig figs): it discriminates architectures
+# (which have very different per-tensor stats) but
+# accepts fine-tunes of the same base (which have nearly
+# identical per-tensor stats). The dedup is opt-in via
+# --cross-model-dedup; the default is "no dedup, fall
+# back to the --w-* flag values".
+FINGERPRINT_STAT_COLS: tuple[str, ...] = (
+    "kurtosis", "eff_rank", "rms", "mean_abs", "tail_ratio",
+)
+# Number of significant figures used to round each moment
+# before hashing. 4 sig figs tolerates small numerical
+# drift (e.g. quantisation noise on rms) but rejects
+# different architectures (which differ in the first
+# significant figure on at least one moment).
+FINGERPRINT_SIG_FIGS: int = 4
+# Maximum number of distinct models we read when looking
+# for a fingerprint match. Bounds the read cost on a DB
+# with many models.
+FINGERPRINT_MAX_MODELS: int = 256
+
+
+def _model_hash_fingerprint(
+    db: "TesseraDB",
+    model_hash: str,
+    *,
+    model_role: str = "trunk",
+    n_moments: int = 2,
+) -> str | None:
+    """Compute a stable fingerprint of a model's per-tensor
+    stat distribution.
+
+    The fingerprint is a SHA-1 (truncated to 16 hex chars)
+    of the first ``n_moments`` central moments of each
+    column in :py:data:`FINGERPRINT_STAT_COLS`. With
+    ``n_moments=2`` (the default), the fingerprint is the
+    hash of (mean, std) for each of the 5 stat columns ->
+    10 numbers. The numbers are rounded to
+    :py:data:`FINGERPRINT_SIG_FIGS` sig figs before
+    hashing so small numerical drift does not break the
+    match.
+
+    Two models with the same fingerprint have very
+    similar per-tensor stat distributions (a fine-tune of
+    the same base, or two random seeds of the same
+    architecture with the same training data). Two
+    different architectures have different fingerprints.
+
+    Returns ``None`` when:
+      - the tensor_stats table is missing (the DB was
+        created before the unified schema).
+      - the model has no tensor_stats rows (the
+        calibration side never ran).
+      - all the stat columns are NULL (the C++ side
+        hasn't written kurtosis / eff_rank yet and the
+        Python side hasn't written rms / mean_abs /
+        tail_ratio yet).
+
+    Args:
+      db: an open TesseraDB instance (the function does
+        not close it).
+      model_hash: the model to fingerprint.
+      model_role: the architectural role to fingerprint
+        (Phase 16; the per-role tensor_stats are
+        independent). Default "trunk".
+      n_moments: the number of central moments per stat
+        column (1 = mean only, 2 = mean + std, 3 = mean
+        + std + skew, 4 = mean + std + skew + kurt).
+        Default 2 (mean + std).
+
+    Returns:
+      A 16-char hex string, or ``None`` when the
+      fingerprint is undefined.
+    """
+    names = set(db.table_names())
+    if "tensor_stats" not in names:
+        return None
+    has_model_role = _table_has_column(db, "tensor_stats", "model_role")
+    cols = ", ".join(FINGERPRINT_STAT_COLS)
+    role_filter = ""
+    if has_model_role:
+        cols = "model_role, " + cols
+        role_filter = f" AND model_role = '{sql_escape(model_role)}'"
+    df = db.query(
+        f"SELECT {cols} FROM tensor_stats "
+        f"WHERE model_hash = '{sql_escape(model_hash)}'" + role_filter
+    )
+    if df.height == 0:
+        return None
+    # Compute the first n_moments of each stat column.
+    # numpy mean / std / skew / kurtosis are well-defined
+    # for n_moments in {1, 2, 3, 4}. The skew/kurt helpers
+    # require at least 3 non-null values; we filter NULLs
+    # per column.
+    import hashlib
+    import math
+    digest_input: list[str] = []
+    has_any = False
+    for col in FINGERPRINT_STAT_COLS:
+        if col not in df.columns:
+            digest_input.append("nan")
+            continue
+        vals = [v for v in df[col].to_list() if v is not None]
+        if not vals:
+            digest_input.append("nan")
+            continue
+        has_any = True
+        arr = vals
+        mean_v = sum(arr) / len(arr)
+        digest_input.append(f"{col}:mean={_round_sig(mean_v, FINGERPRINT_SIG_FIGS)}")
+        if n_moments >= 2:
+            if len(arr) > 1:
+                var_v = sum((x - mean_v) ** 2 for x in arr) / (len(arr) - 1)
+                std_v = math.sqrt(max(0.0, var_v))
+                digest_input.append(
+                    f"{col}:std={_round_sig(std_v, FINGERPRINT_SIG_FIGS)}"
+                )
+            else:
+                digest_input.append(f"{col}:std=nan")
+        if n_moments >= 3:
+            # skew: E[(X - mean)^3] / std^3. Skip when std=0.
+            if len(arr) > 2 and std_v > 0.0:
+                m3 = sum((x - mean_v) ** 3 for x in arr) / len(arr)
+                skew_v = m3 / (std_v ** 3)
+                digest_input.append(
+                    f"{col}:skew={_round_sig(skew_v, FINGERPRINT_SIG_FIGS)}"
+                )
+            else:
+                digest_input.append(f"{col}:skew=nan")
+        if n_moments >= 4:
+            # kurt: E[(X - mean)^4] / std^4 - 3 (excess kurt).
+            if len(arr) > 3 and std_v > 0.0:
+                m4 = sum((x - mean_v) ** 4 for x in arr) / len(arr)
+                kurt_v = m4 / (std_v ** 4) - 3.0
+                digest_input.append(
+                    f"{col}:kurt={_round_sig(kurt_v, FINGERPRINT_SIG_FIGS)}"
+                )
+            else:
+                digest_input.append(f"{col}:kurt=nan")
+    if not has_any:
+        return None
+    raw = "|".join(digest_input).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def _round_sig(x: float, sig_figs: int) -> str:
+    """Round ``x`` to ``sig_figs`` significant figures and
+    format as a decimal string. Used by the fingerprint
+    hash so 0.001234 and 0.001233 round to the same
+    string.
+
+    Implementation: explicit sig-figs rounding rather
+    than the ``g`` format's fixed-decimals rounding (the
+    latter rounds to ``decimals`` digits after the
+    point, which is a different operation for tiny
+    values; e.g. 0.0977765 with ``.4g`` gives 0.09778
+    while a hand-rolled decimals-of-5 gives 0.097777).
+    The hand-rolled path here rounds to the nearest
+    ``10^(mag - sig_figs + 1)`` and formats with
+    ``%g`` to drop trailing zeros.
+
+    Returns "0" for x == 0.
+    """
+    if x == 0.0:
+        return "0"
+    import math
+    digits = max(1, int(sig_figs))
+    magnitude = math.floor(math.log10(abs(x)))
+    # The sig-figs rounding step is 10^(magnitude - digits + 1).
+    # round() to the nearest multiple of that step.
+    step = 10.0 ** (magnitude - digits + 1)
+    rounded = round(x / step) * step
+    # Format with %g for the right number of sig figs.
+    # %g uses the number of significant digits from the
+    # precision specifier; precision = digits.
+    return f"{rounded:.{digits}g}"
+
+
+def find_fingerprint_match(
+    db_path: str | Path,
+    model_hash: str,
+    *,
+    model_role: str = "trunk",
+    n_moments: int = 2,
+) -> str | None:
+    """Find a different model whose tensor_stats
+    distribution matches ``model_hash``'s.
+
+    Used by the orchestrator's --retune-from-db path
+    when the requested model_hash is not in the l5_weights
+    table. If a different model with the same fingerprint
+    is found, that model's l5_weights can be reused (the
+    caller is responsible for verifying the l5_weights
+    actually exist for the matched model_hash).
+
+    Returns the matched model_hash, or ``None`` when no
+    match is found. The function reads every model's
+    tensor_stats; the read is bounded by
+    :py:data:`FINGERPRINT_MAX_MODELS` (a soft cap that
+    prevents the dedup from being a full table scan on
+    a huge multi-model DB).
+    """
+    if not Path(db_path).is_file():
+        return None
+    with TesseraDB.open(db_path, read_only=True) as db:
+        names = set(db.table_names())
+        if "tensor_stats" not in names:
+            return None
+        target_fp = _model_hash_fingerprint(
+            db, model_hash, model_role=model_role, n_moments=n_moments,
+        )
+        if target_fp is None:
+            return None
+        has_model_role = _table_has_column(db, "tensor_stats", "model_role")
+        role_filter = ""
+        if has_model_role:
+            role_filter = f" WHERE model_role = '{sql_escape(model_role)}'"
+        # Read every distinct model_hash (limit by
+        # FINGERPRINT_MAX_MODELS to bound the read on
+        # huge DBs).
+        models_df = db.query(
+            "SELECT DISTINCT model_hash FROM tensor_stats"
+            + role_filter
+            + f" LIMIT {FINGERPRINT_MAX_MODELS}"
+        )
+        for cand in models_df["model_hash"].to_list():
+            cand_str = str(cand)
+            if cand_str == model_hash:
+                continue
+            cand_fp = _model_hash_fingerprint(
+                db, cand_str, model_role=model_role, n_moments=n_moments,
+            )
+            if cand_fp is not None and cand_fp == target_fp:
+                return cand_str
+    return None
+
+
 def _confidence_weight(
     n_samples: int, in_sample_loss: float, max_n_samples: int,
     loss_scale: float = DEFAULT_LOSS_SCALE,

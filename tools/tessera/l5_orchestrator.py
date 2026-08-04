@@ -1626,6 +1626,25 @@ def _build_parser() -> argparse.ArgumentParser:
             "explicitly with a different DB to override."
         ),
     )
+    parser.add_argument(
+        "--cross-model-dedup",
+        action="store_true",
+        help=(
+            "When --retune-from-db is set and the requested "
+            "model_hash has no l5_weights row, look for a "
+            "different model with a matching tensor_stats "
+            "fingerprint (a 5-moment hash of the per-tensor "
+            "(kurtosis, eff_rank, rms, mean_abs, tail_ratio) "
+            "distributions). If a match is found, log a warning "
+            "and reuse the matched model's l5_weights as the "
+            "warm-start. Off by default; the default is to fall "
+            "back to the --w-* flag values when the model is "
+            "missing. The dedup is rare in practice (different "
+            "models usually have different fingerprints) but "
+            "useful for fine-tunes of the same base that re-use "
+            "the parent's retune rows."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -1677,6 +1696,47 @@ def main(argv: list[str] | None = None) -> int:
             read_l5_weights,
             read_per_family_top_fraction,
         )
+        # Retune follow-ups: cross-model dedup. When the
+        # requested model_hash is not in the DB and
+        # --cross-model-dedup is set, look for a different
+        # model with a matching tensor_stats fingerprint and
+        # reuse the matched model's l5_weights. The
+        # fingerprint match is a 5-moment hash of the
+        # per-tensor stat distributions (see
+        # ``_model_hash_fingerprint`` in l5_retune.py). On
+        # a match, we override args.model_hash with the
+        # matched value so the rest of the lookup chain
+        # uses the matched model. The override is logged to
+        # stderr; a final warning in the "no row found"
+        # branch also references the original model_hash
+        # so the operator can see what happened.
+        dedup_matched_from: str | None = None
+        if args.cross_model_dedup:
+            from l5_retune import find_fingerprint_match
+            role_for_dedup = args.model_role or "trunk"
+            try:
+                match = find_fingerprint_match(
+                    args.retune_from_db,
+                    args.model_hash,
+                    model_role=role_for_dedup,
+                )
+            except Exception as e:
+                sys.stderr.write(
+                    f"[l5] cross-model-dedup: fingerprint scan "
+                    f"failed ({e.__class__.__name__}: "
+                    f"{str(e)[:120]}); skipping dedup\n"
+                )
+                match = None
+            if match is not None and match != args.model_hash:
+                dedup_matched_from = args.model_hash
+                print(
+                    f"[l5] cross-model-dedup: model_hash="
+                    f"{args.model_hash!r} not in DB; reusing "
+                    f"weights from fingerprint-matched model "
+                    f"{match!r}",
+                    file=sys.stderr,
+                )
+                args.model_hash = match
         # Phase 16: 3-tier lookup. The retune is per-(model,
         # model_role, family) so the same family in different
         # roles gets independent (w_imatrix, w_gradient,

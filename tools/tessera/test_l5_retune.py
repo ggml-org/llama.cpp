@@ -66,6 +66,8 @@ from l5_retune import (
     _retune_family,
     _compute_top_fraction,
     _compute_coupling_score,
+    _model_hash_fingerprint,
+    find_fingerprint_match,
     _confidence_weight,
 )
 from tessera_db import TesseraDB
@@ -115,6 +117,26 @@ SCHEMA_SQL = """
         retune_source         TEXT,
         updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, model_role, family)
+    );
+    CREATE TABLE IF NOT EXISTS tensor_stats (
+        model_hash            TEXT NOT NULL,
+        model_role            TEXT NOT NULL DEFAULT 'trunk',
+        name                  TEXT NOT NULL,
+        family                TEXT,
+        layer_depth           INTEGER,
+        out_dim               INTEGER,
+        in_dim                INTEGER,
+        n_elements            INTEGER,
+        dtype                 TEXT,
+        kurtosis              DOUBLE,
+        eff_rank              DOUBLE,
+        rms                   DOUBLE,
+        mean_abs              DOUBLE,
+        tail_ratio            DOUBLE,
+        source                TEXT,
+        recommended_action    TEXT,
+        updated_at            TIMESTAMP,
+        PRIMARY KEY (model_hash, model_role, name)
     );
 """
 
@@ -1956,6 +1978,247 @@ class TestL5Retune(unittest.TestCase):
         df = read_l5_weights(self.db_path, model_hash="c6")
         self.assertEqual(df.height, 1)
         self.assertIsNone(df["coupling_score"][0])
+
+    # ---- 16. Retune follow-ups: F3.2 cross-model hash dedup ----
+
+    def test_model_hash_fingerprint_deterministic(self) -> None:
+        """The fingerprint is deterministic: two reads of
+        the same model's tensor_stats produce the same
+        hash. The function is pure (no side effects)."""
+        self._seed_tensor_stats("fp1", n_tensors=20)
+        with TesseraDB.open(self.db_path, read_only=True) as db:
+            fp1 = _model_hash_fingerprint(db, "fp1")
+            fp2 = _model_hash_fingerprint(db, "fp1")
+        self.assertIsNotNone(fp1)
+        self.assertEqual(fp1, fp2)
+        # 16 hex chars (truncated SHA-1).
+        self.assertEqual(len(fp1), 16)
+        # Hex characters.
+        import re
+        self.assertRegex(fp1, r"^[0-9a-f]{16}$")
+
+    def test_model_hash_fingerprint_different_models_differ(self) -> None:
+        """Two models with very different per-tensor stat
+        distributions have different fingerprints. A 10x
+        difference in mean rms shifts the first sig fig
+        of the mean moment -> different hash."""
+        self._seed_tensor_stats("fp_a", n_tensors=20, rms_base=0.1)
+        self._seed_tensor_stats("fp_b", n_tensors=20, rms_base=1.0)
+        with TesseraDB.open(self.db_path, read_only=True) as db:
+            fp_a = _model_hash_fingerprint(db, "fp_a")
+            fp_b = _model_hash_fingerprint(db, "fp_b")
+        self.assertIsNotNone(fp_a)
+        self.assertIsNotNone(fp_b)
+        self.assertNotEqual(fp_a, fp_b)
+
+    def test_model_hash_fingerprint_small_drift_same(self) -> None:
+        """Two models with the same per-tensor stat
+        distributions up to numerical noise have the same
+        fingerprint. The 4-sig-fig rounding absorbs the
+        drift. The dedup's whole point: a fine-tune of the
+        same base matches the parent."""
+        # Same seed -> identical per-tensor values, just a
+        # tiny rms jitter shift.
+        self._seed_tensor_stats("fp_c", n_tensors=20, rms_base=0.1, seed=42)
+        self._seed_tensor_stats(
+            "fp_d", n_tensors=20, rms_base=0.1, rms_jitter=1e-6, seed=42,
+        )
+        with TesseraDB.open(self.db_path, read_only=True) as db:
+            fp_c = _model_hash_fingerprint(db, "fp_c")
+            fp_d = _model_hash_fingerprint(db, "fp_d")
+        self.assertEqual(fp_c, fp_d)
+
+    def test_model_hash_fingerprint_missing_model_returns_none(
+        self,
+    ) -> None:
+        """A model with no tensor_stats rows -> None."""
+        with TesseraDB.open(self.db_path, read_only=True) as db:
+            fp = _model_hash_fingerprint(db, "no_such_model")
+        self.assertIsNone(fp)
+
+    def test_find_fingerprint_match_finds_matching_model(self) -> None:
+        """``find_fingerprint_match`` returns the other
+        model_hash whose fingerprint matches the requested
+        one. Used by the orchestrator's --cross-model-dedup
+        path."""
+        # Two models with identical fingerprints (same
+        # seed, tiny jitter).
+        self._seed_tensor_stats("m_a", n_tensors=20, rms_base=0.1, seed=42)
+        self._seed_tensor_stats(
+            "m_b", n_tensors=20, rms_base=0.1, rms_jitter=1e-6, seed=42,
+        )
+        # A third model with a different fingerprint
+        # (same seed, very different rms).
+        self._seed_tensor_stats("m_c", n_tensors=20, rms_base=1.0, seed=42)
+        # The match for m_a is m_b (same fingerprint).
+        match = find_fingerprint_match(self.db_path, "m_a")
+        self.assertEqual(match, "m_b")
+        # The match for m_c is None (no other model has
+        # the same fingerprint).
+        match_none = find_fingerprint_match(self.db_path, "m_c")
+        self.assertIsNone(match_none)
+
+    def test_find_fingerprint_match_self_excluded(self) -> None:
+        """The match never returns the requested model_hash
+        itself. When m_a is the only model in the DB, the
+        match is None (no OTHER model to match)."""
+        self._seed_tensor_stats("only", n_tensors=20, rms_base=0.1)
+        match = find_fingerprint_match(self.db_path, "only")
+        self.assertIsNone(match)
+
+    def test_orchestrator_cross_model_dedup_overrides(self) -> None:
+        """The orchestrator's --cross-model-dedup looks up
+        a fingerprint-matched model when the requested
+        model_hash is not in the DB. The matched model's
+        l5_weights are reused; a warning is printed.
+
+        We test via a subprocess so we exercise the
+        actual CLI wiring.
+        """
+        # Seed two models with identical fingerprints and
+        # the second's l5_weights row. The orchestrator
+        # asks for the first model (no l5_weights row);
+        # --cross-model-dedup finds the second model and
+        # reuses its row.
+        self._seed_tensor_stats("dedup_a", n_tensors=20, rms_base=0.1, seed=42)
+        self._seed_tensor_stats(
+            "dedup_b", n_tensors=20, rms_base=0.1, rms_jitter=1e-6, seed=42,
+        )
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([{
+                "model_hash": "dedup_b", "family": "attn_q",
+                "w_imatrix": 0.7, "w_gradient": 0.2, "w_layer": 0.1,
+                "bias": 0.0, "n_samples": 100,
+                "in_sample_loss": 0.001, "hit_rate": 0.6,
+                "retune_source": RETUNE_SOURCE_TAG,
+            }])
+        l4_report = {
+            "tensors": {
+                f"blk.{i}.attn_q.weight": {
+                    "current_qtype": "Q4_K", "mse": 0.001,
+                    "mse_minus_one": 0.002, "n_weights": 4096,
+                } for i in range(4)
+            }
+        }
+        l4_path = self._td / "l4.json"
+        l4_path.write_text(json.dumps(l4_report))
+        result = subprocess.run(
+            [sys.executable, str(THIS_DIR / "l5_orchestrator.py"),
+             "--l4-report", str(l4_path),
+             "--retune-from-db", self.db_path,
+             "--model-hash", "dedup_a",
+             "--cross-model-dedup",
+             "--max-iterations", "1",
+             "--top-fraction", "0.5"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+            f"orchestrator failed: {result.stderr}")
+        # The warning is printed to stderr.
+        self.assertIn("cross-model-dedup", result.stderr)
+        # The matched model's weights (0.7/0.2/0.1) are
+        # used. The dedup successfully reused the row.
+        summary = _extract_top_level_json(result.stdout.strip())
+        weights = summary["weights"]
+        self.assertAlmostEqual(weights[0], 0.7, places=6)
+        self.assertAlmostEqual(weights[1], 0.2, places=6)
+        self.assertAlmostEqual(weights[2], 0.1, places=6)
+
+    def test_orchestrator_cross_model_dedup_off_by_default(self) -> None:
+        """The dedup is opt-in. Without --cross-model-dedup,
+        a missing model_hash falls back to the --w-* flag
+        values (the legacy path)."""
+        self._seed_tensor_stats("legacy_a", n_tensors=20, rms_base=0.1, seed=42)
+        self._seed_tensor_stats(
+            "legacy_b", n_tensors=20, rms_base=0.1, rms_jitter=1e-6, seed=42,
+        )
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([{
+                "model_hash": "legacy_b", "family": "attn_q",
+                "w_imatrix": 0.7, "w_gradient": 0.2, "w_layer": 0.1,
+                "n_samples": 100, "in_sample_loss": 0.001,
+                "hit_rate": 0.6, "retune_source": RETUNE_SOURCE_TAG,
+            }])
+        l4_report = {
+            "tensors": {
+                f"blk.{i}.attn_q.weight": {
+                    "current_qtype": "Q4_K", "mse": 0.001,
+                    "mse_minus_one": 0.002, "n_weights": 4096,
+                } for i in range(4)
+            }
+        }
+        l4_path = self._td / "l4.json"
+        l4_path.write_text(json.dumps(l4_report))
+        result = subprocess.run(
+            [sys.executable, str(THIS_DIR / "l5_orchestrator.py"),
+             "--l4-report", str(l4_path),
+             "--retune-from-db", self.db_path,
+             "--model-hash", "legacy_a",
+             # Note: no --cross-model-dedup.
+             "--max-iterations", "1",
+             "--top-fraction", "0.5"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+            f"orchestrator failed: {result.stderr}")
+        # No dedup warning.
+        self.assertNotIn("cross-model-dedup", result.stderr)
+        # The legacy WARN is printed.
+        self.assertIn("WARN: --retune-from-db", result.stderr)
+        # The summary uses the --w-* flag values (default
+        # 0.5/0.3/0.2).
+        summary = _extract_top_level_json(result.stdout.strip())
+        weights = summary["weights"]
+        self.assertAlmostEqual(weights[0], DEFAULT_BASE_WEIGHTS[0], places=6)
+        self.assertAlmostEqual(weights[1], DEFAULT_BASE_WEIGHTS[1], places=6)
+        self.assertAlmostEqual(weights[2], DEFAULT_BASE_WEIGHTS[2], places=6)
+
+    def _seed_tensor_stats(
+        self,
+        model_hash: str,
+        *,
+        n_tensors: int = 20,
+        rms_base: float = 0.1,
+        rms_jitter: float = 0.0,
+        kurt_base: float = 5.0,
+        eff_rank_base: float = 100.0,
+        mean_abs_base: float = 0.08,
+        tail_ratio_base: float = 4.0,
+        seed: int = 42,
+    ) -> None:
+        """Seed tensor_stats with ``n_tensors`` rows for
+        ``model_hash``. The stat values are the per-row
+        inputs to the fingerprint hash; the helper lets
+        the test sweep one parameter (e.g. rms_base) and
+        keep the others constant.
+
+        Used by the F3.2 fingerprint tests to construct
+        two models with controlled statistical similarity.
+        The default ``seed=42`` makes the per-tensor
+        values deterministic across calls; two models
+        seeded with the same ``seed`` have identical
+        per-tensor values except for the ``rms_jitter``
+        shift on the rms column.
+        """
+        import random
+        rng = random.Random(seed)
+        rows = []
+        for i in range(n_tensors):
+            rows.append({
+                "name": f"blk.{i}.attn_q.weight",
+                "family": "attn_q",
+                "layer_depth": i,
+                "out_dim": 4096, "in_dim": 4096, "n_elements": 4096 * 4096,
+                "dtype": "f16",
+                "kurtosis": kurt_base + rng.uniform(-0.5, 0.5),
+                "eff_rank": eff_rank_base + rng.uniform(-5, 5),
+                "rms": rms_base + rng.uniform(-0.01, 0.01) + rms_jitter,
+                "mean_abs": mean_abs_base + rng.uniform(-0.005, 0.005),
+                "tail_ratio": tail_ratio_base + rng.uniform(-0.1, 0.1),
+                "source": "py_cal",
+            })
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_tensor_stats(model_hash=model_hash, rows=rows)
 
     def test_read_per_family_top_fraction_role_filter(self) -> None:
         """The per-family top_fraction consumer is role-aware:
