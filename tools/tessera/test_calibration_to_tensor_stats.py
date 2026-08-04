@@ -32,21 +32,22 @@ from tessera_db import TENSOR_STATS_COLS, TesseraDB
 # schema so the script can write to it.
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS tensor_stats (
-        model_hash   TEXT NOT NULL,
-        name         TEXT NOT NULL,
-        family       TEXT,
-        layer_depth  INTEGER,
-        out_dim      BIGINT,
-        in_dim       BIGINT,
-        n_elements   BIGINT,
-        dtype        TEXT,
-        kurtosis     DOUBLE,
-        eff_rank     DOUBLE,
-        rms          DOUBLE,
-        mean_abs     DOUBLE,
-        tail_ratio   DOUBLE,
-        source       TEXT,
-        updated_at   TIMESTAMP,
+        model_hash         TEXT NOT NULL,
+        name               TEXT NOT NULL,
+        family             TEXT,
+        layer_depth        INTEGER,
+        out_dim            BIGINT,
+        in_dim             BIGINT,
+        n_elements         BIGINT,
+        dtype              TEXT,
+        kurtosis           DOUBLE,
+        eff_rank           DOUBLE,
+        rms                DOUBLE,
+        mean_abs           DOUBLE,
+        tail_ratio         DOUBLE,
+        source             TEXT,
+        recommended_action TEXT,
+        updated_at         TIMESTAMP,
         PRIMARY KEY (model_hash, name)
     );
 """
