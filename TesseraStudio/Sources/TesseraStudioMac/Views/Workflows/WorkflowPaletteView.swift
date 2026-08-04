@@ -21,14 +21,18 @@ struct WorkflowPaletteView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
                 .padding(.bottom, 4)
+                .accessibilityAddTraits(.isHeader)
             TextField("Filter", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 6)
+                .accessibilityLabel("Filter nodes")
             List(filteredEntries, id: \.typeId) { entry in
                 row(entry)
             }
             .listStyle(.sidebar)
+            .accessibilityLabel("Node palette")
+            .accessibilityHint("Drag a node from here onto the canvas to add it to the workflow")
         }
         .frame(minWidth: 220)
     }

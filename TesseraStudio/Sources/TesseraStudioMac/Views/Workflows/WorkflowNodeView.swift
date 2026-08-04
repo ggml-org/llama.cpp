@@ -24,6 +24,11 @@ struct WorkflowNodeView: View {
     let onPortDragStarted: (PendingPortEndpoint) -> Void
     let onPortDragChanged: (CGPoint) -> Void
     let onPortDragEnded: (CGPoint) -> Void
+    /// Fired on drag-end with the original and final positions
+    /// so the parent can register an undo entry. Optional; when
+    /// nil, the view still drags normally but no undo is
+    /// registered. Equal start and end positions don't fire.
+    var onPositionDragEnded: ((CGPoint, CGPoint) -> Void)? = nil
 
     @State private var dragStart: CGPoint?
 
@@ -68,9 +73,17 @@ struct WorkflowNodeView: View {
                     }
                 }
                 .onEnded { _ in
+                    let start = dragStart ?? position
                     dragStart = nil
+                    if start != position {
+                        onPositionDragEnded?(start, position)
+                    }
                 }
         )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(type.displayName) node")
+        .accessibilityHint("Drag to move. Use the action menu to delete.")
+        .accessibilityAddTraits(.isButton)
     }
 
     private var header: some View {
@@ -154,6 +167,11 @@ struct WorkflowPortView: View {
                             onDragEnded(value.location)
                         }
                 )
+                .accessibilityElement()
+                .accessibilityLabel("\(port.label) \(side == .left ? "input" : "output") port")
+                .accessibilityHint(side == .left
+                    ? "Drag to this port to wire an output to it"
+                    : "Drag from this port to an input port to wire them")
             if side == .left {
                 Text(port.label)
                     .font(.caption2)

@@ -24,6 +24,8 @@ struct WorkflowsView: View {
     @State private var runEvents: [WorkflowEvent] = []
     @State private var showRunProgress = false
 
+    @Environment(\.undoManager) private var undoManager
+
     var body: some View {
         VStack(spacing: 0) {
             WorkflowToolbarView(
@@ -44,6 +46,9 @@ struct WorkflowsView: View {
                         selectedNodeId: $selectedNodeId,
                         onConnectionCompleted: { dropPoint, canvasSize in
                             completeConnection(at: dropPoint, in: canvasSize)
+                        },
+                        onPositionDragEnded: { nodeId, start, end in
+                            recordNodeMove(nodeId: nodeId, start: start, end: end)
                         }
                     )
                     if let err = connectionError {
@@ -80,7 +85,93 @@ struct WorkflowsView: View {
         .sheet(isPresented: $showRunProgress) {
             runProgressSheet
         }
+        // Publish File > New / Open / Save actions to the
+        // focused scene so the App-level menu commands
+        // (Cmd-N, Cmd-O, Cmd-S, Shift-Cmd-S) can reach us.
+        .focusedSceneValue(\.workflowMenuActions, WorkflowMenuActions(
+            new: newDocument,
+            open: { isImporting = true },
+            save: { isExporting = true },
+            canSave: { !workflow.nodes.isEmpty || !workflow.edges.isEmpty }
+        ))
     }
+
+    // MARK: - Undo registration
+
+    /// Register a single undo / redo pair on the env UndoManager.
+    /// The action name is shown in the Edit menu ("Undo Connect
+    /// Nodes", "Undo Move Node", etc.).
+    private func registerUndoPair(
+        name: String,
+        undo: @escaping (WorkflowsView) -> Void,
+        redo: @escaping (WorkflowsView) -> Void
+    ) {
+        guard let mgr = undoManager else { return }
+        mgr.setActionName(name)
+        // `registerUndo(withTarget:handler:)` requires an
+        // `AnyObject` target; `WorkflowsView` is a struct. The
+        // `UndoPair` helper holds the closures and re-registers
+        // itself for redo after each undo (and vice versa).
+        // The captured `self` is a struct copy, but writes through
+        // `@State` go to the same backing storage as the live
+        // view, so the undo actually mutates the live state.
+        let pair = UndoPair(
+            undo: { undo(self) },
+            redo: { redo(self) },
+            manager: mgr
+        )
+        mgr.registerUndo(withTarget: pair) { $0.performUndo() }
+    }
+
+    private func recordNodeMove(nodeId: String, start: CGPoint, end: CGPoint) {
+        guard start != end else { return }
+        let nodeId = nodeId
+        let start = start, end = end
+        registerUndoPair(
+            name: "Move Node",
+            undo: { vc in
+                var p = vc.positions
+                p[nodeId] = start
+                vc.positions = p
+                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
+            },
+            redo: { vc in
+                var p = vc.positions
+                p[nodeId] = end
+                vc.positions = p
+                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
+            }
+        )
+    }
+
+    private func recordConnectionAddition(
+        newEdge: WorkflowEdge,
+        oldEdges: [WorkflowEdge]
+    ) {
+        registerUndoPair(
+            name: "Connect Nodes",
+            undo: { vc in
+                vc.workflow = Workflow(
+                    schema: vc.workflow.schema,
+                    name: vc.workflow.name,
+                    nodes: vc.workflow.nodes,
+                    edges: oldEdges
+                )
+                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
+            },
+            redo: { vc in
+                vc.workflow = Workflow(
+                    schema: vc.workflow.schema,
+                    name: vc.workflow.name,
+                    nodes: vc.workflow.nodes,
+                    edges: oldEdges + [newEdge]
+                )
+                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
+            }
+        )
+    }
+
+    // MARK: - Run progress sheet
 
     /// The run-progress sheet. Shows the live stream of
     /// ``WorkflowEvent``s from the executor. Closes when the
@@ -224,6 +315,12 @@ struct WorkflowsView: View {
     /// keyed by node id. Reads return the current dict;
     /// writes replace the node with a new copy (Swift value
     /// type) so the workflow change republishes.
+    ///
+    /// The `TextField` inside `WorkflowParameterPanelView` uses
+    /// the same UndoManager from the environment, so per-keystroke
+    /// undo is handled by the text field's own undo registration.
+    /// We don't wrap parameter changes here to avoid creating
+    /// one undo entry per keystroke.
     private func parametersBinding(
         for nodeId: String
     ) -> Binding<[String: JSONValue]> {
@@ -278,6 +375,8 @@ struct WorkflowsView: View {
         pendingConnection = nil
         documentName = "untitled.tessera-workflow"
         document = WorkflowDocument(workflow: workflow, positions: positions)
+        // A "New" can't be undone; clear the stack.
+        undoManager?.removeAllActions()
     }
 
     private func loadDocument(from url: URL) {
@@ -296,6 +395,8 @@ struct WorkflowsView: View {
             selectedNodeId = nil
             document = WorkflowDocument(workflow: workflow, positions: positions)
             documentName = url.lastPathComponent
+            // Loading a new file replaces the undo stack.
+            undoManager?.removeAllActions()
         } catch {
             connectionError = "Open failed: \(error.localizedDescription)"
         }
@@ -327,18 +428,21 @@ struct WorkflowsView: View {
             connectionError = "Input port \"\(target.portId)\" already has a source."
             return
         }
+        let oldEdges = workflow.edges
+        let newEdge = WorkflowEdge(
+            fromNode: pending.source.nodeId,
+            fromPort: pending.source.portId,
+            toNode: target.nodeId,
+            toPort: target.portId
+        )
         workflow = Workflow(
             schema: workflow.schema,
             name: workflow.name,
             nodes: workflow.nodes,
-            edges: workflow.edges + [WorkflowEdge(
-                fromNode: pending.source.nodeId,
-                fromPort: pending.source.portId,
-                toNode: target.nodeId,
-                toPort: target.portId
-            )]
+            edges: oldEdges + [newEdge]
         )
         document = WorkflowDocument(workflow: workflow, positions: positions)
+        recordConnectionAddition(newEdge: newEdge, oldEdges: oldEdges)
     }
 
     private func nearestPort(
@@ -406,4 +510,35 @@ struct PendingPortEndpoint: Equatable {
     let nodeId: String
     let portId: String
     let portType: WorkflowPortType
+}
+
+/// Pair of undo / redo closures used as the `AnyObject` target
+/// for `UndoManager.registerUndo(withTarget:handler:)` (which
+/// requires a class target, not a SwiftUI View struct). After
+/// each invocation the helper re-registers itself in the
+/// opposite direction, so the UndoManager always has one
+/// pending entry that alternates between undo and redo.
+@MainActor
+private final class UndoPair {
+    let undo: () -> Void
+    let redo: () -> Void
+    weak var manager: UndoManager?
+
+    init(undo: @escaping () -> Void, redo: @escaping () -> Void, manager: UndoManager?) {
+        self.undo = undo
+        self.redo = redo
+        self.manager = manager
+    }
+
+    func performUndo() {
+        undo()
+        guard let mgr = manager else { return }
+        mgr.registerUndo(withTarget: self) { $0.performRedo() }
+    }
+
+    func performRedo() {
+        redo()
+        guard let mgr = manager else { return }
+        mgr.registerUndo(withTarget: self) { $0.performUndo() }
+    }
 }

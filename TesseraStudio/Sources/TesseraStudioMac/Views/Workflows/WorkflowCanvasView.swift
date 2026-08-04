@@ -18,6 +18,10 @@ struct WorkflowCanvasView: View {
     @Binding var pendingConnection: PendingConnection?
     @Binding var selectedNodeId: String?
     let onConnectionCompleted: (CGPoint, CGSize) -> Void
+    /// Fired by `WorkflowNodeView` after a drag-to-move gesture
+    /// completes, with `(nodeId, startPosition, endPosition)`.
+    /// The parent uses this to register an undo entry.
+    let onPositionDragEnded: (String, CGPoint, CGPoint) -> Void
 
     var body: some View {
         GeometryReader { geo in
@@ -100,6 +104,9 @@ struct WorkflowCanvasView: View {
                                 ? locationOnly(location, size: size)
                                 : size
                         )
+                    },
+                    onPositionDragEnded: { start, end in
+                        onPositionDragEnded(node.id, start, end)
                     }
                 )
             }

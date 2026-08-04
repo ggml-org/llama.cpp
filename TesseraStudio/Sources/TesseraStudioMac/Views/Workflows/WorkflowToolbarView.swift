@@ -21,18 +21,24 @@ struct WorkflowToolbarView: View {
             }
             .help("New workflow")
             .disabled(isRunning)
+            .accessibilityLabel("New workflow")
+            .accessibilityHint("Replace the current workflow with an empty one")
 
             Button(action: onOpen) {
                 Label("Open", systemImage: "folder")
             }
             .help("Open workflow from disk")
             .disabled(isRunning)
+            .accessibilityLabel("Open workflow")
+            .accessibilityHint("Choose a workflow file to open")
 
             Button(action: onSave) {
                 Label("Save", systemImage: "square.and.arrow.down")
             }
             .help("Save workflow to disk")
             .disabled(isRunning)
+            .accessibilityLabel("Save workflow")
+            .accessibilityHint("Save the current workflow to a file")
 
             Spacer()
 
@@ -40,6 +46,7 @@ struct WorkflowToolbarView: View {
                 ProgressView()
                     .controlSize(.small)
                     .padding(.trailing, 4)
+                    .accessibilityLabel("Workflow running")
             }
 
             Button(action: onRun) {
@@ -47,6 +54,8 @@ struct WorkflowToolbarView: View {
             }
             .help("Run workflow")
             .disabled(isRunning)
+            .accessibilityLabel("Run workflow")
+            .accessibilityHint("Execute the current workflow and show progress")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
