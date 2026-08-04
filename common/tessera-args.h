@@ -97,6 +97,12 @@ struct common_tessera_params {
     std::string runtime_probe;
     std::string runtime_probe_bf16;
     std::string runtime_probe_l2_out;
+    // --tessera-config FILE: path to an INI file that supplies default
+    // values for any --tessera-* option. Populated by the --tessera-config
+    // add_opt handler in common/arg.cpp. The file is loaded and applied at
+    // the top of common_params_parse_ex, before env-var and CLI handling,
+    // so env vars and explicit CLI flags naturally take precedence.
+    std::string tessera_config_path;
 };
 
 const common_tessera_params & common_get_tessera_params();
