@@ -71,13 +71,19 @@ project is **ComfyUI** (Stable Diffusion community, GPL-3.0):
 
 - **Patterns reimplemented**: node-graph editor, typed input /
   output ports, per-node parameters, JSON workflow persistence,
-  palette-driven node discovery, real-time progress streaming,
-  plugin / extension model.
+  palette-driven node discovery, real-time progress streaming.
 - **Patterns deliberately not ported**: server-client architecture
   (Tessera Studio is a native in-process app), web frontend
   (Tessera Studio is SwiftUI on macOS), Python runtime (Tessera
   Studio is Swift + the existing C++ engine), any specific
   ComfyUI JSON schema or Python API.
+- **Plugin model not adopted**: Tessera Studio is a single-shipped
+  Mac app. There is no third-party node-pack system, no manifest
+  format, no plugin discovery under
+  `~/Library/Application Support/`. Adding nodes is a code change
+  in `TesseraCore`. This keeps the GPL/POLYFORM analysis simple
+  (we are reimplementing the editor UX; there are no third-party
+  derived works to license) and avoids the third-party legal tail.
 - **License note**: ComfyUI is GPL-3.0; Tessera Studio is
   PolyForm Noncommercial 1.0.0. These two licenses are
   mutually exclusive (commercial-use asymmetry, not viral
@@ -3795,8 +3801,11 @@ already owns.
 The first shipped slice of the workflow system. This section
 covers the Phase-1 deliverable: the data model, the executor,
 and the wrapped Tessera tools. The SwiftUI graph editor
-(Phase 2) and the custom node-pack plugin model (Phase 3) are
-deferred — see "Phasing" below.
+(Phase 2) is deferred — see "Phasing" below. The custom
+node-pack plugin model that was once Phase 3 has been
+removed from scope (architect decision 2026-08-04): Tessera
+Studio is a single-shipped Mac app, no third-party node
+system, no plugin discovery.
 
 ### 16.1 What a workflow is
 
@@ -3915,7 +3924,7 @@ A `run` that fails validation produces a single
 
 ### 16.6 Phasing
 
-The workflow system is shipped in three phases. The phases
+The workflow system is shipped in two phases. The phases
 have strict gates; the gates are not soft deadlines.
 
 1. **Phase 1 — Data model + workflow-as-code execution
@@ -3937,31 +3946,23 @@ have strict gates; the gates are not soft deadlines.
    `.app` from main is wasted; this phase does not start
    until Phase 1 is merged AND TesseraStudioMac is
    installable.
-3. **Phase 3 — Custom node packs (deferred, depends on
-   Phase 2).** A `TesseraNodePlugin` protocol, a
-   `tessera.node-plugin.v1.json` manifest, plugin discovery
-   from
-   `~/Library/Application Support/TesseraStudio/Plugins/`,
-   `WorkflowNodeRegistry.merge(_:)` for combining plugin
-   contributions with the default registry, per-plugin actor
-   sandboxing with opt-in `capabilities` for file system
-   and network access. Plugin authors need a target; this
-   phase does not start until Phase 2 has shipped.
+
+A third phase (custom node-pack plugin system) was
+originally planned here and is now removed from scope:
+Tessera Studio is a single-shipped Mac app, no third-party
+node system, no plugin discovery, no per-plugin manifest.
+Adding a new node is a code change in `TesseraCore`. This
+removes the third-party legal tail entirely and matches
+the architect's scope statement (2026-08-04): "the scope
+is just the tessera studio mac app".
 
 ### 16.7 Why this order
 
 Phase 1 is load-bearing: the editor (Phase 2) is just a
 pretty picture without a clean protocol + Codable + executor.
 The palette-entry shape shipped in 1.1 is exactly the API a
-SwiftUI `List` will consume in Phase 2.
-
-Phase 2 must exist before Phase 3 has any consumer; plugin
-authors need a target.
-
-Phase 3 has the most legal tail (plugins distributed by
-third parties). Doing it last lets the manifest spec
-reflect what we actually used in Phases 1+2, not what we
-imagine a plugin author would want.
+SwiftUI `List` will consume in Phase 2. There is no third
+phase to justify; the workflow system ends at the editor.
 
 ### 16.8 License analysis (binding)
 
@@ -3979,6 +3980,11 @@ justification:
   code is.
 - Reimplementing the patterns from scratch in Swift is the
   only path that satisfies both licenses.
+- With no third-party plugin system, the analysis is
+  bounded to Tessera Studio itself: it is from-scratch
+  Swift that re-implements the editor UX. There is no
+  scenario in which a ComfyUI-derived work would be
+  distributed as part of Tessera Studio.
 
 This is the same constraint Prism Engine operates under
 (its compiler / runtime is also from-scratch despite
