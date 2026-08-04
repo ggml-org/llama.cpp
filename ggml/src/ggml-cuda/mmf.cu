@@ -160,6 +160,13 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
     }
 
     if (mul_mat_id) {
+        // For more than 16 columns the compact-ids kernel is used, which relies on mm_ids_helper.
+        // Its shared-memory scratch scales with the token count, so fall back to the generic path
+        // when it does not fit: e.g. when the driver reports a bogus sharedMemPerBlockOptin (0 has
+        // been observed on Blackwell), or for very large token counts on any device.
+        if (src1_ncols > 16 && !ggml_cuda_mm_ids_helper_fits(src1_ncols)) {
+            return false;
+        }
         if (src0_ne[1] <= 1024 && src1_ncols > 512) {
             return false;
         } else if(src0_ne[1] > 1024 && src1_ncols > 128) {
