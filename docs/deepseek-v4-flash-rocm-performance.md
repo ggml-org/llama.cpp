@@ -1,24 +1,25 @@
-# DeepSeek-V4-Flash ROCm prompt-processing performance plan
+# DeepSeek-V4-Flash ROCm prompt-processing and raw-decode performance plan
 
-Status: living engineering record  
+Status: living canonical engineering record
 Owner branch: `perf/dsv4-rocm-pp-20260803`  
 Base: `b88a59fbc6ac255e6bf5e2dd790f559c89ce911c` in Edwin's llama.cpp fork  
 Target host: `edwin@192.168.1.161` (`webhie`)  
-Last updated: 2026-08-03
+Last updated: 2026-08-04
+Current phase: accepted four-optimization PP stack is closed; target-only raw-decode baseline is blocking; indexed CSA is on hold pending raw-TG evidence.
 
 ## 1. Objective and success criteria
 
-Primary objective: improve DeepSeek-V4-Flash prompt-processing throughput on the four-V620 ROCm host without changing model math or sacrificing existing llama.cpp deployment modes.
+The completed phase optimized DeepSeek-V4-Flash prompt processing on the four-V620 ROCm host. The current primary objective is target-only raw-decode throughput and latency on the accepted four-optimization stack, without changing model math or sacrificing existing llama.cpp deployment modes. Keep generic/non-HIP fallbacks and structure upstream work as independently reviewable changes when practical.
 
-Secondary objectives: improve decode only when it does not distract from PP; keep generic and non-HIP fallbacks; upstream work as independently reviewable changes when practical.
+A phase-specific change is successful only when all of the following hold:
 
-A change is successful only when all of the following hold:
-
-1. A matched before/after run shows a repeatable PP gain on this host.
+1. A matched before/after run shows a repeatable gain in the target metric: PP for closed PP work, or raw TG and ms/token for current decode work.
 2. The changed operation is proven to execute in a trace or targeted test.
 3. DSV4 layer-reference versus tensor-split validation remains green.
-4. Short-context performance does not regress materially; long-context wins are reported separately.
+4. Non-target contexts/modes do not regress materially; context-specific wins are reported separately.
 5. Exact source/build/model/runtime identities and raw logs are preserved.
+
+Phase boundary (2026-08-04): the initial PP loop is complete with four guarded optimizations (J16 MMQ, exact-shape HC, LID subwave-4, and IQ3 J16 T128). Existing PP throughput and PP context scaling are not raw token-generation evidence and must not be used as the TG baseline.
 
 The supplied vLLM throughput numbers are not an acceptance gate. The reference vLLM hardware, checkpoint, GPU count, batching, and residency are unmatched. Four PCIe-connected gfx1030 GPUs have very different low-precision and matrix capabilities from B200/B300.
 
@@ -57,7 +58,7 @@ Implication: inter-GPU collectives and mirrored tensors cross PCIe. GPU3's x8 li
 - Target: `DeepSeek-V4-Flash-0731-UD-IQ2_M`, three GGUF shards, about 90.9 GB total.
 - MTP: `DeepSeek-V4-Flash-MTP-Q4_0.gguf`, about 4.2 GB.
 - Main checkpoint tensor inventory includes IQ2_XXS/IQ3_XXS experts and Q8_0 indexer projections; this is not equivalent to a native vLLM FP4/FP8 checkpoint.
-- The active service uses all four GPUs, tensor split `1,1,1,1`, FA on, F16 K/V, context 262144, batch 512, ubatch 256, and DSpark/MTP max 3.
+- The last recorded production service used all four GPUs, tensor split `1,1,1,1`, FA on, F16 K/V, context 262144, batch 2048, ubatch 1024, and MTP n-max 2 at sampling temperature 1.0. It was stopped before this new phase. The raw-decode baseline must load no draft model and use no speculative flags.
 
 ## 3. Baseline evidence available before this project
 
@@ -78,6 +79,12 @@ Reusable assets:
 - `/home/edwin/llama-jobs`: established command/result/log artifact convention.
 
 Do not cite incomplete `haraldh_n16_p02.log` as a result.
+
+### Raw-decode evidence status: BLOCKING / NOT YET ACCEPTED
+
+No stable, speculation-disabled context-depth TG sweep has been accepted on the current four-optimization stack. The historical 20.1 t/s value used DSpark, and the 20.208 t/s main-only observation came from a single failed MTP diagnostic; neither is a raw-decode baseline.
+
+Required closure: identical target model/quantization/layer split; MTP and DSpark absent; fixed measured generation count; at least five valid repetitions at every required depth, including 32K and 64K; scheduler/backend residency attested; exact command, commit, clocks/power state, and artifacts recorded.
 
 ## 4. Current DSV4 execution facts
 
@@ -111,55 +118,56 @@ DeepSeek's intended index/sparse design.
    `build_csa_lid_attention` instead concatenates `raw_k` with **all** `T =
    ctx/4` compressed CSA keys and calls generic flash attention with a dense
    `-INF` mask scattering zeros only at the selected indices (`deepseek4.cpp`
-   732-789). So core attention reads every compressed key, not just the
-   selected 512.
+   732-789). The graph therefore presents every compressed key to core
+   attention rather than a compact selected operand. Source inspection alone
+   does not prove the HIP flash kernel physically reads every masked element.
 2. **Ratios/top-k match.** `DSV4_CSA_RATIO=4` (overlap), `DSV4_HCA_RATIO=128`
    (non-overlap), `indexer_top_k<=512` per query, and 64 indexer heads all
    match the paper and the Transformers implementation are correct in our
    graph.
-3. **Full-score materialization is itself the long-context ceiling.** With
-   V4-Flash dims (`H_I=64`, `m=4`), the materialize-then-top-k FP32 score
-   tensor is `[B, S, H_I, T]` = **256 GB at S=65,536**, exceeding any single
-   GPU's HBM; the public reference materialize path OOMs above 32K. A chunked
-   streaming-top-k/Triton path runs the same indexer to 1M at ~6.2 GB
-   (StreamIndex, arXiv 2605.02568). Our vector indexer writes a full F32 score
-   for every compressed entry, which reproduces this scaling wall.
-4. **Attention cost consequence at the production 262,144 context.**
-   Dense-masked flash cost grows with `T = ctx/4` (65,536 compressed entries at
-   256K) instead of the intended ~512-selected constant-position cost. The
-   16K trace measured flash 10.29% and indexer 9.12%; at 256K these scale
-   roughly with context and become the dominant long-context cost, consistent
-   with DeepSeek's claim of 27% single-token FLOPs at 1M vs V3.2.
+3. **Full-score materialization is a reference-design warning, not this
+   implementation's peak-allocation measurement.** A full-sequence reference
+   tensor `[B,S,H_I,T]` would reach **256 GB at S=65,536** with the published
+   V4-Flash dimensions, and StreamIndex (arXiv 2605.02568) reports that a
+   streaming top-k design avoids that reference OOM. llama.cpp's fused
+   `GGML_OP_LIGHTNING_INDEXER`, however, reduces indexer heads inside the
+   kernel and materializes `[T,n_batch,1,n_stream]` for one ubatch at a time.
+   It therefore does not allocate the 256 GB full-sequence tensor. It still
+   performs O(S*T) total indexer work and F32 score traffic over a complete PP
+   run, and O(T) scanning for each raw decode token.
+4. **Attention cost consequence at production context is plausible but not
+   yet locally attributed for TG.** Dense-masked flash receives `T = ctx/4`
+   compressed entries (65,536 at 256K) rather than ~512 selected entries. The
+   accepted 16K PP trace measured flash 10.29% and indexer 9.12%. Those shares
+   motivate a long-context test; they do not prove either component dominates
+   raw decode at 32K-256K.
 
-Verdict: our recorded source facts for the *current* graph are accurate, but
-the "deferred/not-dominant" framing was a 16K-measurement-limit decision, not
-evidence *against* indexed CSA. External architecture and scaling evidence
-makes indexed (gather-only-selected) CSA + streaming top-k the strongest
-candidate for the remaining long-context gains at 256K-1M. Confirming it
-locally still requires raising the five-minute measured cap to reach the
->=64K crossover, per the existing H1 test.
+Verdict: source and external architecture evidence keep indexed CSA and
+streaming selection as credible long-context candidates, but they no longer
+select the next patch. For the raw-decode track, CSA is carried/deferred until
+the target-only TG sweep and a measured component breakdown establish its
+share and crossover.
 
-#### Local measured scaling (new, 2026-08): dense CSA cost grows super-linearly
+#### Local measured scaling (2026-08): whole-graph PP is super-linear
 
-A same-day full-stack PP sweep (J16+HC+LID, non-traced llama-bench) shows the
-dense/masked CSA path does not scale linearly in context:
+A same-day full-stack PP sweep (J16+HC+LID, non-traced llama-bench) measured:
 
 | Native context | PP t/s (single run) | measured prompt time | cost vs 16K |
 |---|---:|---:|---:|
 | 16,384 | 372.1 t/s | 44 s | 1.0x |
 | 32,768 | 117.4 t/s | 279 s | ~6.3x |
 
-Doubling context 16K->32K multiplied measured time ~6.3x instead of 2x. This
-super-linear growth is consistent with the dense-mask attention cost scaling
-with `T = ctx/4` compressed entries *and* the full-score indexer/top-k
-materialization growing between 16K and 32K. It is direct local evidence for
-H1: the dense CSA path becomes the dominant long-context cost, so gains from an
-indexed (gather-only-selected) CSA should grow with context. The 64K point was
-attempted but exceeds the ~900s measured cap and is recorded as an incomplete
-termination (its elapsed-time failure is itself super-linear evidence).
+Doubling context 16K->32K multiplied whole-graph PP time by ~6.3x. This is
+strong evidence of super-linear PP scaling and is consistent with dense CSA
+attention plus LID/indexer work, but it is **not** component attribution: no
+successful 32K measured-region profile exists. The 64K job exited 137 during
+`warmup prompt run` before `measurement-start.ns` was written, so it provides
+no 64K throughput, no measured elapsed time, and no additional scaling point.
 
-Artifacts: `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T025141.681162476Z-csa-scaling-16k-16384-d032b943d185-13070/`
-(driver: `20260804-025141-csa-scaling2-d032b943d`).
+Artifacts:
+- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T025141.681162476Z-csa-scaling-16k-16384-d032b943d185-13070/`
+- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T025414.444077827Z-csa-scaling-32k-32768-d032b943d185-7005/`
+- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T030440.549424222Z-csa-scaling-64k-65536-d032b943d185-6545/` (incomplete warmup; no result)
 
 ### HCA and raw attention
 
@@ -191,19 +199,19 @@ Test: profile 512 and 2048 tokens, attribute time and bytes to routed/shared MoE
 
 ### H1 - dense masked CSA dominates as context grows
 
-Above the 512-compressed-entry crossover (roughly above 2K native positions), generic attention is passed every compressed entry. Long-context CSA attention work should scale with context/4 rather than selected 512 + local 128. (Status after the external fact-check: **supported.** The paper/Transformers design is indexed-sparse, and StreamIndex shows full-score materialization OOMs at 64K, so the dense-masked HIP path and its O(ctx/4) attention cost are expected to dominate at production 256K-1M. The 16K shares understate this because the cap blocks >=32K measurement; raise the cap to close the crossover measurement.)
+Above the 512-compressed-entry crossover (roughly above 2K native positions), generic attention is passed every compressed entry. Source inspection establishes O(ctx/4) dense operands. The 16K->32K PP observation supports super-linear whole-graph scaling but does not establish component dominance. **Verdict: structurally supported for PP, carried/deferred for raw decode pending M5.0 and M5.6.**
 
-Test: fixed ubatch, sweep 2K/8K/32K/64K. Compare flash-attention kernel duration and memory traffic against compressed length.
+Test: target-only raw decode plus measured component timing at 8K/16K/32K/64K (128K only if practical). Record CSA flash, indexer, TOP_K, mask construction, complete attention block, and whole-model TG separately.
 
-Candidate implementation if confirmed: introduce a backend-agnostic indexed shared-KV attention operation with a generic correctness fallback, then implement a HIP direct-index kernel. A gather proof is acceptable only if it handles per-query index sets and the union softmax over selected compressed entries, local SWA, and sinks correctly.
+Candidate implementation if confirmed: start with a decode-only selected-KV proof, then a direct indexed HIP attention kernel. Multi-query PP needs an indexed-attention layout/kernel; existing common-KV flash plus a simple `GET_ROWS` gather is not established for per-query selections.
 
 ### H2 - LID plus top-k is an independent long-context bottleneck
 
-Even perfect sparse attention must scan all LID entries. The HIP vector kernel emits all scores and top-k rereads them. At long context this is a large F32 round trip and selection cost.
+Even perfect sparse attention must scan all LID entries. The HIP vector kernel emits all reduced scores and top-k rereads them. **Verdict: partially confirmed for PP.** LID reached 14.87% before optimization and subwave-4 passed; separate selection was only ~0.31% at 16K. Raw-decode LID/TOP_K share and scheduler residency remain unknown.
 
-Test: profile `lightning_indexer_kernel_vec`, rocPRIM top-k, argsort/copies, and score tensor bytes over the same context sweep.
+Test: profile `lightning_indexer_kernel_vec`, rocPRIM top-k/argsort, score traffic, scheduler placement, and graph splits over the target-only context sweep.
 
-Candidate implementation if confirmed: tiled fused LID + local top-k, then hierarchical merge. Keep a debug/reference path that emits full scores. For tensor split, merge device-local candidates with correct global indices.
+Candidate implementation if confirmed: keep TOP_K GPU-resident, optimize the exact observed selector path, reduce score-buffer traffic, then fuse tiled LID scoring with hierarchical top-512 merge. Preserve a full-score reference path.
 
 ### H3 - PCIe tensor-split overhead limits PP
 
@@ -211,15 +219,25 @@ Four GPUs have no XGMI and GPU3 is x8. Multi-GPU collectives, mirrored activatio
 
 Test: capture HIP copies/RCCL and per-GPU kernel timelines; compare one/two/four GPUs only with model residency/offload effects explicitly separated. Measure device imbalance.
 
-Candidate implementation if confirmed: reduce mirrored activations/collectives, aggregate transfers, revisit tensor ownership, or choose an asymmetric split that compensates for GPU3 x8. Do not optimize a compute kernel before proving communication is not dominant.
+**Verdict: rejected as the first-order limiter for the tested four-GPU PP configuration, not universally rejected.** The accepted trace measured RCCL near 9.8%, explicit copies near 0.2%, and did not identify the x8 GPU as slowest. Different topology, split, batch, or raw-decode graphs can differ.
 
 ### H4 - RDNA2 quantized MoE kernels dominate
 
 The 284B model activates about 13B parameters/token. The IQ2/IQ3 expert path and routed MMQ shape may underutilize V620s during PP.
 
-Test: attribute PP to `MUL_MAT_ID`/MMQ and routing; record achieved bandwidth/waves, expert tile occupancy, and per-layer time. Compare relevant existing RDNA2 K-quant commits rather than restarting from upstream.
+Test: attribute PP/TG to `MUL_MAT_ID`/MMQ, shared expert, activation quantization, and routing; record exact shapes, expert skew, achieved bandwidth/waves, dispatch count, and total time.
 
-Candidate implementation if confirmed: tune only the measured dominant GGUF quant/shape, guarded by architecture/shape dispatch with generic fallback.
+**Verdict: confirmed for the original PP profile** (routed MMQ ~40% and therefore the measured first target). It is not a current raw-decode verdict; the old percentage breakdown is stale after the accepted whole-model optimizations.
+
+### Hypothesis verdict summary
+
+| Hypothesis | Current verdict |
+|---|---|
+| H0 short PP outside sparse CSA | Confirmed for the tested initial PP profile; routed MMQ, not CSA, was selected first. |
+| H1 dense CSA at long context | PP structure/scaling supported; raw-decode indexed CSA carried/deferred pending 32K/64K TG attribution. |
+| H2 LID + TOP_K | LID confirmed and optimized for PP; TOP_K raw-decode residency/cost not yet established. |
+| H3 multi-GPU/PCIe | Rejected as first-order for the tested PP configuration only. |
+| H4 quantized MoE/MMQ | Confirmed for the original PP profile; fresh raw-decode profile required. |
 
 ## 6. Milestone plan
 
@@ -280,9 +298,10 @@ device-seconds, and 70.382 seconds wall time. The dominant Cijk kernel remains
 26.43%; lightning indexer rises to 11.11%, explicit flash attention to 7.06%,
 routed MMQ totals about 34.8%, and RCCL device work is 7.28%. The attention
 subsystem is growing, but neither explicit CSA nor LID/top-k individually
-crosses 15% at 16K. The complete artifact is 809 MiB. A complete 32K sample
-exceeds the fixed five-minute measured cap even with warmup disabled, so 16K
-is the longest complete attribution point under the current rule.
+crosses 15% at 16K. The complete artifact is 809 MiB. A later ordinary
+(non-profiled) 32K PP sample completed in 279 seconds, but no successful 32K
+measured-region attribution exists; full rocprof output at that size also
+exhausted disk. Thus 16K remains the longest accepted attribution point.
 
 Measured-region artifacts:
 
@@ -731,36 +750,145 @@ equality or represent the zero-accept diagnostics as TG evidence.
 
 ### M3 - implementation and matched A/B
 
-One implementation branch and one writer. Keep the base binary and build artifacts. A frozen baseline is valid only when its sibling llama/ggml DSOs are selected and hashed; an executable that resolves candidate-build libraries is not frozen. Run static/backend tests first, then DSV4 validation, then matched benchmark/profile. Report local kernel speed separately from whole-model PP.
+One implementation branch and one writer. Keep the base binary and build artifacts. A frozen baseline is valid only when its sibling llama/ggml DSOs are selected and hashed; an executable that resolves candidate-build libraries is not frozen. Run static/backend tests first, then DSV4 validation, then matched benchmark/profile. Report local kernel speed separately from the applicable whole-model metric (PP or raw TG).
 
 ### M4 - independent review and next decision
 
 Fresh review must cover correctness/causality, HIP synchronization/memory safety, generic backend behavior, multi-GPU index semantics, and benchmark validity. Update this document with accepted findings and raw artifact paths.
 
-## 7. Correctness contract for indexed CSA
+## 7. Revised next-phase roadmap: raw decode first
 
-If indexed CSA becomes M1, it must preserve:
+### Evidence boundary
+
+The accepted four-optimization stack and PP reproduction record remain valid. The next phase must not conflate three different evidence classes:
+
+| Evidence | Status | What it can decide |
+|---|---|---|
+| Repeated PP through 16K | accepted | Existing PP optimizations and previous bottleneck choices. |
+| Single-run PP at 16K/32K | accepted as scaling observation only | Whole-graph PP is super-linear; not CSA attribution. |
+| PP 64K | missing | The attempt died during warmup before measurement start. |
+| Target-only raw TG sweep | **blocking / missing** | Next decode optimization, TOP_K residency, TG cliffs, and CSA crossover. |
+
+### Revised milestone order
+
+| Order | Milestone | Required evidence |
+|---|---|---|
+| M5.0 | Raw TG baseline | Stable target-only median TG with MTP/DSpark absent. |
+| M5.1 | ROCm backend-residency audit | DSV4 LID and TOP_K remain GPU-resident; CPU/GPU split counts recorded. |
+| M5.2 | Large HIP TOP_K, **only if reproduced** | Exact selected indices and GPU residency through 64K; no CPU split. |
+| M5.3 | Fresh whole-model raw-decode profile | Ranked elapsed device-time breakdown on the full accepted branch. |
+| M5.4 | Next dominant MMQ/MoE optimization | Exact hot shape and end-to-end TG gain, only if MoE remains dominant. |
+| M5.5 | LID + TOP_K optimization | Only if raw profile shows material share. |
+| M5.6 | 32K/64K attention-scaling study | CSA/indexer/TOP_K/mask/block/TG timings and measured crossover. |
+| M5.7 | Indexed CSA | Only if M5.6 supports it. |
+| M5.8 | Decode-chain fusion | Only if measured launch/elementwise cost dominates. |
+| M5.9 | Multi-stream overlap | After single-stream paths are optimized. |
+| Separate | DSpark/MTP | Acceptance/state-management workstream; never baseline evidence. |
+
+### M5.0 / P0 - establish a valid raw-decode baseline
+
+Run the accepted target stack with **no draft model or speculative flags** (MTP off, DSpark off), identical model/quantization, exact `--split-mode tensor --tensor-split 1,1,1,1`, F16 K/V, flash attention on, identical batch/ubatch settings, and identical clocks/power policy. Record the exact seed/sampling contract if sampling is used (temperature, top-k/top-p/min-p, penalties, grammar, and EOS policy). Prefer benchmark-native fixed-token evaluation so exactly 32 target evaluations occur without sampler/EOS ambiguity; otherwise any early stop or differing generated count is incomplete. Record fixed input/generated token IDs where the harness supplies them and the actual KV depth before the first measured token.
+
+Depth sweep: minimal/empty prompt (label it by the actual starting KV depth, not blindly `0`), 2048, 3072, 4096, 8192, 16384, 32768, and 65536. Use **tg32 for the entire sweep** to keep generation count fixed; use tg64 for the entire sweep only if it fits. At least five measured repetitions per depth. Context setup/warmup is outside the measured TG interval, but its time and failures remain recorded. Every repetition starts from a fresh equivalent KV state; reused/restored prompt state is allowed only after target-only logit/token equivalence to fresh prefill is attested.
+
+Set `GGML_SCHED_DEBUG=2` for the residency audit and parse the measured decode graph, not model-load/prefill noise. Record for every depth:
+
+- five raw samples, median tokens/s, median ms/token, range and MAD/median;
+- actual initial KV depth and fixed generated-token count;
+- every DSV4 `TOP_K` backend assignment and fused lightning-indexer backend;
+- CPU and per-GPU graph-split counts, plus introduced copies;
+- per-GPU utilization samples, clocks, power cap/state, VRAM, temperature;
+- exact source/build/DSO/model identities, environment, and command.
+
+P0 has two acceptance states:
+
+1. **Observational pre-fix baseline accepted:** untouched target-only measurement integrity, identities, fixed token count, timing boundaries, and five repetitions are valid. A reproduced CPU LID/TOP_K assignment or repeatable TG cliff is recorded as the finding that routes to M5.2/M5.3; it does not erase the observation.
+2. **Post-fix/deployment baseline accepted:** no context-dependent migration of DSV4 TOP_K/lightning indexer to CPU and no unexplained context-step TG cliff.
+
+Both states require no speculative decoding/draft model; a stable five-run median (initial target MAD/median <=3%, otherwise increase tg/repetitions and retain instability as evidence); and an exact externally rerunnable command/artifact directory. A GPU split count need not be zero under four-way tensor execution; it must be stable/explained. A CPU LID/TOP_K split blocks post-fix/deployment acceptance until corrected or causally justified.
+
+### M5.1-M5.2 / P0-A - TOP_K residency, then fix only if reproduced
+
+The premise that this branch lacks large HIP TOP_K is **not currently true**. Source audit at commit `925d93700` (implementation source unchanged by the subsequent documentation edits):
+
+- `ggml/src/ggml-cuda/common.cuh:114-120` enables `GGML_CUDA_USE_CUB` on HIP when hipCUB is present;
+- `ggml/src/ggml-cuda/ggml-cuda.cu:5129-5143` advertises all TOP_K/ARGSORT widths under that path;
+- `ggml/src/ggml-cuda/top-k.cu:6-16,60-105,161-173` uses `rocprim::topk_pairs` for supported K and the DSV4 large-row shape, with hipCUB argsort fallback;
+- commits `b60551777` and `b72684c0d` added the HIP partial top-k path and fixed gfx1030 DSV4 index corruption.
+
+Therefore M5.2 is conditional. First reproduce a CPU fallback or incorrect result in the raw graph. If reproduced, determine whether the cause is a build lacking hipCUB/rocPRIM, a support-gate mismatch, a meta-scheduler assignment, or a shape/correctness bug. Do **not** replace a bounded support test with unconditional `return true` unless every advertised shape has a correct implementation.
+
+If a new fallback is genuinely required, prefer in order: repair/use the existing `rocprim::topk_pairs` path; a stable segmented descending key-value radix sort as a correctness reference; then a specialized hierarchical k=512 selector. AMD documents that rocPRIM `partial_sort` does not support streams in graph-capture mode, so it is not the sole production answer for graph-captured execution.
+
+TOP_K gates: candidate sizes below/above 1024 and around 4096; 2K-64K native contexts; fewer/exactly/more than 512 valid entries; multiple rows/streams; tied scores; `-INFINITY`; CPU-reference score/index agreement; deterministic repeated output; no CPU split. Exact index-set equality is required for unique scores. For boundary ties, preserve the accepted implementation's explicit index tie-break where one exists. If tie policy intentionally changes, require dense-reference downstream attention/logit/token equivalence in tied fixtures; score-threshold validity plus determinism alone is insufficient. Do not assume rocPRIM stability.
+
+### M5.3 / P1 - fresh profile of the accepted branch
+
+The original ~40% routed-MMQ profile is stale after J16, HC, LID subwave-4, and IQ3 T128; LID alone changed 16K whole-model PP by 10.18%. After any accepted whole-model optimization above 3%, prior percentage attribution is considered stale and the next target must come from a new profile of the complete accepted stack.
+
+Use target-only decode measured regions and disk-safe profiling (targeted counters/kernel filters; never repeat the full >=32K rocprof CSV that exhausted disk). Rank by **total elapsed device time**, while also reporting wall time and dispatch count:
+
+- routed expert MMQ and shared-expert FFN;
+- activation quantization;
+- lightning indexer and TOP_K separately;
+- dense-mask construction;
+- CSA/HCA attention and complete attention block;
+- HC operations and output projections;
+- copies, RCCL, synchronization, and graph/scheduler overhead.
+
+Branch selection rule: use at least two independent targeted profiles at the decision context(s). Select a family only when it is the largest reproducible measured-region elapsed-device-time family, contributes at least 15%, and leads the runner-up by at least 3 percentage points. If ranks disagree or the lead is smaller, collect more evidence or keep both candidates open; do not select by elegance. Communication requires the existing 20% threshold. Any candidate must later show >=3% median whole-model TG gain at its target depth with <=2% median regression at required shorter depths, unless a different threshold is declared before measurement.
+
+Decision branches:
+
+- **A: routed/shared MoE dominant.** Record weight type, M/N/K, expert count, tokens/expert, wave size, dispatch count, total time, and achieved bandwidth. Optimize only the hottest observed combination; measure activation quantization with MMQ. Shared/routed overlap or final-add fusion is eligible only if its standalone cost is material.
+- **B: LID/TOP_K dominant.** Keep TOP_K GPU-resident, optimize the actual GPU selector, reduce score-buffer traffic, then consider fused indexer + hierarchical selection (`tile -> wave/workgroup candidates -> global merge -> final 512`). Exact selection still scans all candidates; streaming bounds intermediate traffic, not asymptotic scan time.
+- **C: attention meets the predeclared M5.6 gate at long context.** Then consider indexed CSA. CUDA draft PR #25917 is design/correctness reference only (open draft, CUDA MMA, author measurements); its tiling and crossover are not ROCm evidence.
+- **D: elementwise/launch work meets the branch threshold.** Only then pursue decode-chain fusion (compression/norm/RoPE/cache conversion/insertion or inverse-RoPE/packing/projection preparation).
+
+### M5.6 / P2 - mandatory 32K and 64K raw TG
+
+32K and 64K target-only TG are mandatory before indexed CSA is accepted or permanently rejected. The existing complete 32K result is **PP-only** (`n_gen=0`, one sample), and the 64K PP attempt has no result; neither closes this gate.
+
+Use tg32 (or tg64 uniformly if it fits), **five valid decode repetitions at both 32K and 64K**, one model load where valid, and separate context setup from measured generation. Disable duplicate 64K warmup if the harness supports a verified `--no-warmup`/equivalent path. Reuse/cache a prompt state only after proving target logits/tokens match fresh prefill. Keep A/B commands identical. A cap-limited, unstable, early-stop, or fewer-than-five point is incomplete and permits no CSA selection/acceptance/permanent rejection; repair the harness/resource issue or leave CSA on hold.
+
+For 8K/16K/32K/64K (128K optional), record lightning indexer, TOP_K, mask construction, CSA flash, complete attention block, and whole-model TG. Indexed CSA may be selected only if repeated profiles show either (a) CSA flash >=15% of measured raw-decode device time at 32K or 64K, or (b) CSA flash ms/token grows >=1.5x when context doubles and its Amdahl-limited removable share projects >=3% whole-model TG gain. It must still satisfy the branch reproducibility rule and then demonstrate the actual >=3% TG gate.
+
+### M5.7 - indexed CSA, only after selection
+
+Phase A is a **decode-only**, one-query-per-stream selected-KV gather proof. Gather selected compressed K/V plus valid local-window K/V; keep attention sinks in the existing separate `sinks` argument (not a physical KV row). Preserve selected mask values or compact invalid `-INFINITY` candidates; top-k can contain invalid entries when fewer than 512 positions are visible. Map logical compressed indices through the allocated per-stream cache stride.
+
+Prefill remains dense-masked in Phase A because each query has a different selected set and existing flash consumes common K/V per stream. Phase B is direct indexed ROCm attention; Phase C is fused/streaming indexer selection. Require a sparse-attention microbenchmark, dense-vs-indexed numeric/logit/token gates, scheduler residency, sinks/SWA/inverse-RoPE/causal/cache-wrap checks, and a measured dense/indexed crossover. Keep dense below that crossover.
+
+### P3 - DSpark and MTP remain separate
+
+Raw baseline and kernel selection use one target token per target evaluation with MTP/DSpark absent. Zero-accept speculative runs cannot establish TG, select kernels, or judge MMQ/CSA/fusion changes. Production MTP remains deferred for exact-greedy state divergence; reopen DSpark/MTP only after the target-only raw baseline is stable.
+
+## 8. Correctness contract for indexed CSA (on hold until M5.6 selects it)
+
+If indexed CSA becomes M5.7, it must preserve:
 
 - shared K=V MQA, 64 query heads, 512-dimensional heads;
 - per-query selected index sets and top-k <=512;
 - local 128-token raw/SWA branch;
-- one stable softmax over selected compressed entries + local entries + per-head sink;
+- one stable softmax over selected compressed entries + local entries + per-head sink, with sinks passed separately;
+- original mask validity for selected entries, including partially valid/all-`-INF` top-k tails;
 - causal visibility and compression completion boundaries;
-- inverse partial RoPE behavior;
-- stream/batch sequences with different lengths/phases;
-- deterministic duplicate/tie policy compatible with the existing top-k reference;
+- inverse partial RoPE/Hadamard rotation behavior;
+- allocated cache stream stride, wrap/reuse/reset, and unequal stream lengths;
+- deterministic duplicate/tie policy compatible with the accepted TOP_K contract;
+- layer-owner device residency with no CPU fallback or unintended peer transfer;
 - dense generic fallback and a force-reference switch for testing.
 
-A dense mask is not a sparse performance implementation. Success requires runtime or traffic scaling with selected + local entries after the crossover.
+A dense mask is not a sparse performance implementation. The first gather proof is decode-only. Multi-query PP requires a supported per-query indexed-KV representation or a direct indexed kernel. Success requires numeric/logit/token equivalence gates and runtime/traffic scaling with selected + local entries after a measured crossover.
 
-## 8. Decision log
+## 9. Decision log
 
 | Date | Decision | Evidence | Status |
 |---|---|---|---|
 | 2026-08-03 | Use `/home/edwin/llama.cpp-rdna2` as sole base. | User direction. | final |
 | 2026-08-03 | Branch from `b88a59fbc`, retaining gfx1030 top-k fixes. | Active fork history and source audit. | final |
 | 2026-08-03 | Do not interrupt current server; request a GPU window before controlled runs. | External client connected; GPUs 99% busy. | final |
-| 2026-08-03 | PP first; TG secondary. | User objective. | final |
+| 2026-08-03 | PP first; TG secondary. | Initial user objective; the four-optimization PP loop completed. | superseded by raw-decode phase 2026-08-04 |
 | 2026-08-03 | Profile short-prompt MoE/communication and long-context attention/LID separately. | Existing 512-token 13.9 t/s result plus graph inspection. | final |
 | 2026-08-03 | Direct indexed CSA remains the leading long-context architectural candidate, not yet the selected first patch. | Dense operands proven in source; wall-time dominance unmeasured. | provisional |
 | 2026-08-03 | Do not treat historical 13.9 t/s as current production throughput; user observes about 80-300 PP t/s under varying live IQ2_M workloads. | User report; controlled conditions not yet recorded. | final |
@@ -776,32 +904,43 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Promote same-tree LID subwave-4 as guarded optimization three for the known stack. | Focused exact/path/fallback/counter gates pass; J16+HC-held-constant whole model is +10.18% at 16K with 0.14% control drift and has no >2% short midpoint regression; fully hashed LID-off/on proxy outputs match in all six layer/tensor cases. | accepted guarded |
 | 2026-08-03 | Promote RDNA2 IQ3_XXS J16 128-thread blocks as optimization four. | Exact focused outputs; IQ3 uniform/hot -16.08/-16.38%; whole-model +2.11/+2.37/+1.70/+1.69% at 512/2K/8K/16K; natural-proxy gate `complete=1` (all six equal); compact rocprof dispatch shows IQ3 wavefronts 11,264→5,632. I64 regresses, I256 unsupported, occupancy 1/3 neutral. | accepted |
 | 2026-08-03 | Reject/defer production MTP for the exact-greedy DSV4 stack. | Production and n-max matrix diverge; rejection-only sequential replay fixes target-only continuation but not continued speculation; even zero-accept target-single advancement with full-state checkpoints later forks. No exact output or TG acceptance exists. | final deferred |
-| 2026-08-03 | Reframe indexed CSA as the strongest remaining long-context candidate after an external fact-check. | Source facts confirmed (dense-masked, ratios 4/128, top-k<=512, full-score write). Paper/Transformers confirm the intended design is indexed-sparse; StreamIndex shows score materialization OOMs at 64K and a viable streaming top-k to 1M; dense flash cost scales with ctx/4 vs ~512 selected. | provisional |
-| 2026-08-04 | Local scaling confirms dense CSA cost grows super-linearly with context. | Same-day PP sweep: 16K=372.1 t/s (44 s) vs 32K=117.4 t/s (279 s) = ~6.3x cost for 2x tokens; 64K exceeds the 900s cap. Supports H1 and justifies prototyping indexed CSA. | accepted evidence |
+| 2026-08-03 | Reframe indexed CSA as a credible long-context candidate after an external fact-check. | Source facts confirmed (dense-masked operands, ratios 4/128, top-k<=512). Paper/Transformers describe indexed-sparse intent; StreamIndex supports streaming selection. Local TG dominance remains unmeasured. | provisional / on hold |
+| 2026-08-04 | Record 16K->32K super-linear **whole-graph PP** scaling without assigning component dominance. | Single PP observations: 16K=372.1 t/s (44 s), 32K=117.4 t/s (279 s). No successful 32K attribution trace. 64K exited 137 during warmup before measurement start and supplies no timing. | accepted, qualified evidence |
+| 2026-08-04 | Make target-only raw decode the blocking next phase and hold indexed CSA. | No accepted MTP/DSpark-disabled repeated TG sweep exists; PP scaling cannot select the raw-decode bottleneck. | selected |
+| 2026-08-04 | Treat large HIP TOP_K work as conditional, not presumed missing. | Current branch enables HIP hipCUB, uses rocPRIM top-k for DSV4 large rows, and advertises TOP_K support; scheduler residency must still be attested in raw decode. | selected diagnostic |
+| 2026-08-04 | Invalidate old percentage profiles for target selection after >3% whole-model gains. | Accepted J16/HC/LID/T128 changes materially altered Amdahl shares; LID alone changed 16K PP by +10.18%. | final rule |
+| 2026-08-04 | Keep MTP/DSpark outside raw-decode baselines and kernel selection. | Exact-greedy MTP state diverges; speculative acceptance/checkpoint behavior is a separate workstream. | final |
 
-## 9. Open questions
+## 10. Closed decisions and open questions
 
-1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but no user corpus exists and 32K cannot complete under the five-minute cap.
-2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. Does the locally accepted IQ3_XXS J16 128-thread configuration pass fully attested natural-proxy equality and focused dispatch/resource proof, and does its older/unclassified-AMD performance risk justify keeping it service-local or upstreaming broadly?
-4. If production MTP is ever reopened, which model-level recurrent state/logit component changes after verification/checkpoint round trips even with zero accepted drafts? A focused state-hash/logit fixture is required before another server-level repair or full validator.
-5. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
-6. How are LID scores and global top-k distributed across the four meta devices at runtime?
-7. RCCL kernels do not make x8 bus 46 the slowest, but what algorithm roles and actual peer bytes/bandwidth explain the per-agent RCCL asymmetry?
-8. Which short-prompt/long-context mix and fixed corpus best represent the user's production workload?
+Closed: IQ3_XXS J16 T128 passed focused exact-output, dispatch/counter, natural-proxy, and whole-model gates and is accepted as guarded optimization four. Its older/unclassified-AMD performance coverage remains an upstreaming-scope caveat, not an open local acceptance question.
 
-## 10. Reproduction record
+Open questions:
 
-The controlled baseline, fixed natural-text proxy, and four accepted PP
+1. Does J16 hold on a future user-supplied production corpus? The committed technical proxy is positive, but no user corpus exists.
+2. Can a later expert-concentration signal select J16/J32/J64 without host synchronization? The accepted patch intentionally stays explicit.
+3. What is the stable target-only raw TG curve and actual starting KV depth at minimal/2K/3K/4K/8K/16K/32K/64K?
+4. Do all DSV4 LID TOP_K nodes remain ROCm-resident at every raw-decode depth, and how many CPU/GPU splits are present?
+5. Which subsystem dominates the fresh target-only decode profile after all four accepted PP optimizations?
+6. Does HIP flash attention perform partial arbitrary-mask tile pruning, and at what raw-decode context does CSA become material?
+7. How are LID scores and top-k indices assigned across the four meta devices at runtime?
+8. If MTP is reopened separately, which recurrent state/logit component changes after verification/checkpoint round trips with zero accepted drafts?
+9. Which fixed corpus best represents production once the user supplies one?
+
+## 11. Reproduction record
+
+The controlled PP baseline, fixed natural-text proxy, and four accepted PP
 optimizations are complete. This section records the externally
-monitor-rerunnable final verification command. Complete 32K/64K matched A/B
-and any user-supplied production corpus remain explicitly deferred (32K cannot
-finish under the fixed five-minute measured cap, and no user corpus exists).
-All harness runs cap measured time at five minutes while excluding model load.
+monitor-rerunnable PP verification command. A complete single-run 32K PP
+result now exists, but repeated matched 32K A/B, successful 32K attribution,
+and every 64K PP measurement remain missing. The 64K attempt terminated in
+warmup before measurement start. No target-only repeated raw-TG sweep or
+user-supplied production corpus has been accepted. The new raw-decode harness
+must preserve its own measured-generation cap separately from context setup.
 
-**Final externally rerunnable verification command** (head `c4c0737a4`; source
-unchanged since the `c98197389` code commit, later commits are documentation
-only):
+**Final externally rerunnable PP verification command** (recorded on ancestor
+`77ef7c2d1`; implementation source unchanged since `803a41c37`, with
+acceptance recorded at `c98197389`; later commits are documentation only):
 
 ```bash
 cd /home/edwin/llama.cpp-rdna2
@@ -907,6 +1046,36 @@ The counter commands and raw DBs are preserved under
 `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/`.
 The production failure is under
 `$HOME/edwin/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`.
+
+### Artifact and loop index
+
+```text
+Canonical master:
+  /home/edwin/llama.cpp-rdna2/docs/deepseek-v4-flash-rocm-performance.md
+
+Completed PP Ralph log:
+  /Users/edwin/.ralph/dsv4-flash-rocm.md
+Completed PP Ralph state:
+  /Users/edwin/.ralph/dsv4-flash-rocm.state.json (status=completed)
+Repository implementation/evidence chain:
+  803a41c37 (optimization-four implementation) ->
+  c98197389 (optimization-four acceptance record) ->
+  77ef7c2d1 (final PP verification) ->
+  3cf35253f (initial 16K/32K PP scaling record; interpretation corrected here) ->
+  925d93700 (indexed-CSA design note, now held by this roadmap)
+
+New raw-decode Ralph log:
+  /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
+New raw-decode Ralph state:
+  /Users/edwin/.ralph/dsv4-raw-decode-roadmap.state.json
+Last synchronized:
+  2026-08-04 (new-loop commit to be recorded after creation)
+
+Purpose:
+  Ralph files contain per-iteration checkpoints, rejected variants, commands,
+  and blockers. This repository document is canonical for accepted evidence,
+  current decisions, and the next action; every Ralph iteration must update it.
+```
 
 Planned final record:
 

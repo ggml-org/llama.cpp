@@ -1,7 +1,6 @@
 # DSV4-Flash Indexed CSA — design note (gather-only-selected)
 
-Status: design/proposal (not yet implemented). Owner commit for this note:
-`3cf35253f`. Read-only review verdict: **feasible, no hard blocker**.
+Status: **on hold** behind the target-only raw-decode baseline and M5.6 scaling gate in `deepseek-v4-flash-rocm-performance.md`; not implemented. Owner commit for the original note: `925d93700`. The initial review's "feasible" verdict applies to a single-query decode proof, not a general multi-query PP gather.
 
 ## 1. Problem this solves
 
@@ -16,25 +15,35 @@ The current CSA path is dense-masked (source-confirmed in `deepseek4.cpp`
    `T = ctx/4` compressed CSA keys and runs generic flash attention with the
    dense arbitrary mask (+ sink).
 
-The softmax *math* already reduces to `selected + local + sink` (non-selected
-run `exp(-inf)=0`), but the *compute* touches every compressed key, so flash
-cost grows with `T = ctx/4`. Local measured scaling confirms this is severe:
-16K -> 32K raised PP time ~6.3x (372 -> 117 t/s).
+The softmax *math* reduces to `selected + local + sink` (non-selected run
+`exp(-inf)=0`). The graph presents every compressed key to flash, so its
+operand length grows with `T = ctx/4`; source alone does not prove how many
+masked elements the HIP kernel physically reads. A single-run 16K -> 32K PP
+sweep raised whole-graph time ~6.3x, which is consistent with CSA/LID scaling
+but does not attribute the increase to flash.
 
 ## 2. Design
 
-Replace the dense all-keys flash with a **gather-only-selected** flash:
+Phase A, if selected by M5.6, is a **raw-decode-only** gather proof enabled
+only for one query token per stream:
 
 - Keep `build_lid_top_k` unchanged: it emits per-token indices
   `top_k [n_top_k, n_batch, 1, n_stream]` into the compressed axis.
-- Instead of concatenating all `csa_k`, gather only the selected compressed
-  K (`csa_sel_k`) from the **same** shared-K=V CSA cache tensor, concatenate
-  with the local raw-window K and sink, and call the existing `build_attn_mha`
-  over `O(n_top_k + n_local)` keys (~641) rather than `O(T)`.
-- The non-selected compressed entries are simply absent; no `-INF` rows.
+- Gather selected compressed K/V from the same shared-K=V cache plus the valid
+  local raw-window K/V, producing at most 512 + 128 = 640 physical KV rows.
+- Continue passing per-head sinks through the existing separate `sinks`
+  argument; a sink is a virtual softmax input, not a concatenated KV row.
+- Gather the selected original mask values or compact invalid selected tails.
+  When fewer than 512 positions are valid, `top_k` may return masked `-INF`
+  entries; the gather must not make them visible.
+- Run the existing flash path over the compact KV only if its tensor layout
+  correctly represents the single query and introduces no backend fallback.
 
-Result: flash attention cost becomes **constant in context** (~512 + 128 +
-sink) instead of linear in `ctx/4`.
+For multi-query PP, each query has a different selected set while existing
+flash consumes common K/V per stream. A plain `GGML_OP_GET_ROWS` + existing
+flash is therefore not an established PP implementation; prefill remains
+on the dense-mask path until a per-query indexed layout or direct indexed
+attention kernel exists.
 
 ## 3. Correctness contract (indexed CSA)
 
@@ -44,17 +53,23 @@ Must preserve (from dense-masked, which is the accepted reference):
   the per-(batch,stream) gathered KV set.
 - Per-token selected index sets; `top_k <= 512`.
 - Local raw/SWA branch (<=128 tokens) + per-head attention sink.
-- One stable softmax over `selected compressed + local + sink`; identical to
-  the dense-masked union (non-selected contribute exp(-inf)=0).
-- Causal visibility and compression/overlap completion boundaries: top_k
-  indices are already restricted to the visible set by `kq_mask`; the gather
-  must not expose entries beyond them.
+- One stable softmax over `selected compressed + local + sink`;
+  mathematically equivalent to the dense-masked union (non-selected
+  contribute exp(-inf)=0), but not assumed bitwise identical.
+- Causal visibility and compression/overlap completion boundaries: the score
+  mask sends invalid entries to `-INF`, but top-k tails can still name them
+  when fewer than K entries are valid. Preserve/gather the original mask or
+  compact invalid entries; never treat every returned index as visible.
 - Inverse partial RoPE / k_rot: `csa_sel_k` must be gathered from the exact
   same `csa_k` tensor in the same rotation state as the dense path (gather
   from the cached compressed K before/after the identical rotation).
-- Stream/batch sequences with different lengths/phases.
-- Deterministic duplicate/tie policy: reuse `ggml_top_k` so index sets
-  (including ties) match the reference.
+- Allocated cache stream stride and logical-to-physical mapping across cache
+  wrap, reuse, reset, and any moving cache base; include streams with unequal
+  lengths and phases.
+- Deterministic duplicate/tie policy: reuse the accepted TOP_K operation and
+  define tie semantics explicitly. Repeated output must be deterministic;
+  exact CPU index equality for tied values is required only if an index
+  tie-break is part of the contract.
 - Multi-GPU tensor-split: gather is valid if CSA K is present on the device
   executing each token's attention (mirrored/replicated KV); must not rely on
   cross-device scatter of arbitrary per-token indices.
@@ -73,31 +88,39 @@ Must preserve (from dense-masked, which is the accepted reference):
 - **Bitwise equivalence is NOT guaranteed.** Dense-masked (large `N_v` with
   `-INF`/`0.0` rows) vs gather-only (small `N_v`, those rows absent) may differ
   in flash online-softmax running max, `l`/`seql`, and accumulation order.
-  Gate: a deterministic dense-masked vs indexed A/B with a strict relative
-  tolerance (and report whether a small subset is bitwise), plus routing/layer
-  checks on the fixed natural proxy.
-- MQA broadcast, rotation state, and multi-GPU gather locality were all
-  reviewed as fine for this shared-K layout.
+  Before implementation acceptance, declare absolute and relative tolerances
+  and their comparison formula; require identical NaN/Inf classification;
+  report max and percentile error; and pass fixed downstream logit/token
+  gates. Report any bitwise subset separately.
+- MQA broadcast and rotation state are compatible with gathering from the
+  same cache tensor. Multi-GPU locality still requires scheduler proof.
+- **R6 (high for PP):** existing `ggml_get_rows` batch rules and
+  `ggml_flash_attn_ext` common-KV semantics do not directly represent a
+  different compact selected-KV set per query. "No new kernel needed" is not
+  accepted for `n_batch > 1`.
 
 ## 5. Where the next bottleneck is
 
-After flash is reduced to constant `N_v`, the remaining long-context cost is
-the **indexer/top-k selection**: `indexer_score [ubatch, n_indexer_head, T]`
-is materialized and `ggml_top_k` runs over all `T` per token (O(S*T)). That is
-still linear in `ctx/4` and, per StreamIndex (arXiv 2605.02568), the full score
-tensor at 64K+ (256 GB at S=65,536 with V4-Flash dims) and the raw top-k
-reduction are the binding wall. A later phase must add **chunked/streaming
-top-k** (tile-partition-merge) for 32K-1M; the indexed-flash change and the
-streaming-indexer change are separable and should be staged in that order.
+If flash is bounded for decode, the remaining long-context cost includes the
+**indexer/top-k selection**. llama.cpp's fused indexer reduces the 64 indexer
+heads internally and materializes `[T,ubatch,1,n_stream]`, not a resident
+full-sequence `[S,H_I,T]` tensor. It still scans O(T) and writes/re-reads F32
+scores for every raw decode token, and performs O(S*T) total work over full
+prefill. The external 256 GB figure describes a full-sequence reference
+materialization, not llama.cpp's ubatched peak allocation. A later measured
+phase may add chunked/streaming top-k (tile candidates -> hierarchical merge)
+to bound intermediate traffic; exact selection remains linear in candidates.
 
 ## 6. Proposal / follow-ups
 
-1. Build a minimal gather-only-selected CSA with a dense fallback and
-   force-reference switch (backend: reuse existing GGML_OP_GET_ROWS gather +
-   existing flash; no new flash kernel needed).
-2. A/B dense-masked vs indexed at 8K/16K/32K on the fixed natural proxy and a
-   fixed synthetic context to (a) confirm equivalence within tolerance and
-   (b) confirm the flash t/s win grows with context.
-3. If green, consider chunked/streaming top-k for the indexer selection.
-4. Do not change the top-k semantics, tie policy, ratios (CSA 4 / HCA 128),
-   or the model math; keep generic/non-HIP fallbacks intact.
+1. Hold implementation until the target-only raw-TG sweep and M5.6 component
+   profile select CSA.
+2. If selected, add a decode-only sparse-attention microbenchmark and prove
+   the stream/cache indexing and selected-mask semantics before integration.
+3. Build a one-query gather proof with dense fallback and force-reference
+   switch; A/B 8K/16K/32K/64K and establish the measured crossover.
+4. Then consider direct indexed ROCm attention; keep multi-query PP dense until
+   a correct per-query indexed representation/kernel exists.
+5. If selection becomes material, consider fused/streaming top-k.
+6. Do not change top-k semantics, ratios (CSA 4 / HCA 128), sinks, or model
+   math; keep generic/non-HIP fallbacks intact.
