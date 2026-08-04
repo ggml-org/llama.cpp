@@ -368,3 +368,44 @@ final class WorkflowExecutorTests: XCTestCase {
         XCTAssertEqual(sinkValue, .string("carried"))
     }
 }
+
+// MARK: - Position math (used by the canvas hit-test)
+
+final class WorkflowPositionMathTests: XCTestCase {
+    /// Phase 2.3 makes the canvas's port-center math visible
+    /// outside the canvas (so the drop test can find the
+    /// target port). This test pins the math so the canvas
+    /// and the drop test can't drift.
+    func testPortCenterMatchesExpectedRight() {
+        let p = WorkflowGeometry.portCenter(
+            nodeCenter: CGPoint(x: 200, y: 200),
+            portIndex: 0,
+            isLeft: false,
+            portCount: 3
+        )
+        // nodeWidth is 200; xOffset for right = 200-14=186;
+        // nodeCenter.x + 186 - 100 = 286.
+        XCTAssertEqual(p.x, 286, accuracy: 0.5)
+        // nodeHeight(3) = 40 + 8 + 60 + 8 = 116; yOffset for
+        // the first port = 40 + 8 + 0 + 10 = 58; nodeCenter.y
+        // + 58 - 58 = 200.
+        XCTAssertEqual(p.y, 200, accuracy: 0.5)
+    }
+
+    func testPortCenterMatchesExpectedLeft() {
+        let p = WorkflowGeometry.portCenter(
+            nodeCenter: CGPoint(x: 200, y: 200),
+            portIndex: 0,
+            isLeft: true,
+            portCount: 3
+        )
+        // xOffset for left = 14; nodeCenter.x + 14 - 100 = 114.
+        XCTAssertEqual(p.x, 114, accuracy: 0.5)
+    }
+
+    func testNodeHeightScalesWithPorts() {
+        XCTAssertEqual(WorkflowGeometry.nodeHeight(portCount: 0), 56, accuracy: 0.5)
+        XCTAssertEqual(WorkflowGeometry.nodeHeight(portCount: 1), 76, accuracy: 0.5)
+        XCTAssertEqual(WorkflowGeometry.nodeHeight(portCount: 5), 156, accuracy: 0.5)
+    }
+}

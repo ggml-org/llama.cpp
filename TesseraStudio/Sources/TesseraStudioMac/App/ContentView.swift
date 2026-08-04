@@ -7,6 +7,7 @@ enum Destination: String, CaseIterable, Identifiable {
     case playground = "Playground"
     case runs = "Runs"
     case learning = "Learning"
+    case workflows = "Workflows"
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum Destination: String, CaseIterable, Identifiable {
         case .playground: "bubble.left.and.text.bubble.right"
         case .runs: "clock.arrow.circlepath"
         case .learning: "chart.bar.doc.horizontal"
+        case .workflows: "rectangle.connected.to.line.below"
         }
     }
 }
@@ -109,11 +111,13 @@ struct ContentView: View {
             RunsView()
         case .learning:
             LearningDashboardView()
+        case .workflows:
+            WorkflowsView()
         case nil:
             ContentUnavailableView(
                 "Select a destination",
                 systemImage: "sidebar.left",
-                description: Text("Choose Library, Playground, Runs, or Learning from the sidebar.")
+                description: Text("Choose Library, Playground, Runs, Learning, or Workflows from the sidebar.")
             )
         }
     }
