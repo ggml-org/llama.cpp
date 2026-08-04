@@ -152,6 +152,16 @@ int ts_tessera_db_insert_l5_fixup(ts_tessera_db * db,
 // without disturbing the C++ side's other columns.
 struct ts_tessera_db_tensor_stat {
     std::string  model_hash;
+    // Phase 16: "trunk" / "dflash" / "dspark" / "mtp_nextn" / "shared_embd".
+    // Disambiguates tensors with the same name in the unified
+    // Gemma4 12B + dspark + dflash + MTP arch
+    // (e.g. "blk.0.attn_q.weight" exists in both the trunk and the
+    // dflash encoder). Default "trunk" preserves the pre-Phase-16
+    // contract when the caller leaves the field empty. The
+    // ts_tessera_db_read_unified_policy reader (Phase 16) keys on
+    // (model_hash, model_role, name) to route per-tensor qtype
+    // queries to the right component.
+    std::string  model_role;
     std::string  name;
     std::string  family;
     int32_t      layer_depth = 0;
@@ -172,6 +182,51 @@ struct ts_tessera_db_tensor_stat {
 int ts_tessera_db_upsert_tensor_stat(ts_tessera_db * db,
                                      const ts_tessera_db_tensor_stat & row,
                                      std::string * err);
+
+// --- Per-component qtype reader (Phase 16 unified writer) ---
+//
+// The unified Gemma4 12B + dspark + dflash + MTP arch shares tensor
+// names across components. The per-tensor qtype the writer needs is
+// keyed on (model_hash, model_role, name). The reader pulls every
+// tensor_stats row for a model (or a single role) so the writer can
+// pick the right qtype for each component tensor in a single round
+// trip.
+//
+// Empty `role` returns all roles. Rows are returned in
+// (model_role, name) order so the writer's per-component scan is
+// cache-friendly. dtype is the per-tensor qtype the calibration
+// pipeline recommended (or "f16" / "f32" for the no-quantize
+// passthrough); the writer filters on this when assigning qtypes to
+// gemma4-assistant tensor slots.
+struct ts_tessera_db_unified_policy_entry {
+    std::string  model_role;
+    std::string  name;
+    std::string  family;
+    std::string  dtype;
+    std::string  source;
+    std::string  recommended_action;
+};
+struct ts_tessera_db_unified_policy {
+    std::vector<ts_tessera_db_unified_policy_entry> entries;
+};
+int ts_tessera_db_read_unified_policy(
+    ts_tessera_db * db,
+    const std::string & model_hash,
+    const std::string & role,    // empty = all roles
+    ts_tessera_db_unified_policy * out,
+    std::string * err);
+
+// --- Phase 16 migration: in-place model_role column add ---
+//
+// Performs the standard DuckDB PK-rebuild dance on tensor_stats:
+// CREATE new -> INSERT FROM old -> DROP old -> RENAME. Idempotent
+// via information_schema.columns check. The writer branch only
+// needs the model_role column on tensor_stats; the schema branch
+// (evolve/unified-schema) extends the same dance to the other 6
+// affected tables. Called from ts_tessera_db_open on every open.
+int ts_tessera_db_migrate_model_role(
+    ts_tessera_db * db,
+    std::string * err);
 
 // --- L5 weights: per-(model, family) retuned scoring weights ---
 //

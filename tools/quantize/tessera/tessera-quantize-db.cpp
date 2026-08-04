@@ -233,6 +233,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     // new code should read from tensor_stats.
     "CREATE TABLE IF NOT EXISTS tensor_stats (\n"
     "    model_hash         TEXT NOT NULL,\n"
+    "    model_role         TEXT NOT NULL DEFAULT 'trunk',\n"
     "    name               TEXT NOT NULL,\n"
     "    family             TEXT,\n"
     "    layer_depth        INTEGER,\n"
@@ -248,7 +249,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    source             TEXT,\n"
     "    recommended_action TEXT,\n"
     "    updated_at         TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, name)\n"
+    "    PRIMARY KEY (model_hash, model_role, name)\n"
     ");\n"
     // ---- per-tensor summary mirrors of the four analytical outputs ----
     // These are the per-tensor summary of the typed-NDJSON outputs the
@@ -507,6 +508,19 @@ ts_tessera_db * ts_tessera_db_open(const std::string & path,
             delete wrap;
             return nullptr;
         }
+        // Phase 16: in-place migration of pre-Phase-16 DBs. The
+        // CREATE TABLE IF NOT EXISTS above is a no-op on an existing
+        // old schema, so the migration is what actually adds
+        // model_role to a pre-Phase-16 tensor_stats. Idempotent: a
+        // fresh DB has the column already, so the migration
+        // short-circuits to a no-op. NOTE: the writer branch
+        // (evolve/unified-writer) only needs the model_role column
+        // on tensor_stats; the schema branch (evolve/unified-schema)
+        // extends the same column to the other 6 tables.
+        if (ts_tessera_db_migrate_model_role(wrap, err) != 0) {
+            delete wrap;
+            return nullptr;
+        }
     } catch (const std::exception & e) {
         if (err) *err = std::string("duckdb open failed: ") + e.what();
         delete wrap;
@@ -754,15 +768,20 @@ int ts_tessera_db_upsert_tensor_stat(
     const ts_tessera_db_tensor_stat & row,
     std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
-    // PRIMARY KEY (model_hash, name). The ON CONFLICT DO UPDATE
-    // clause overwrites every column on a re-write. source is
-    // updated to the current writer's tag.
+    // PRIMARY KEY (model_hash, model_role, name). The ON CONFLICT
+    // DO UPDATE clause overwrites every column on a re-write.
+    // source is updated to the current writer's tag. Phase 16 adds
+    // model_role; empty defaults to "trunk" to preserve the
+    // pre-Phase-16 contract.
+    const std::string role = row.model_role.empty()
+        ? std::string("trunk") : row.model_role;
     std::ostringstream q;
-    q << "INSERT INTO tensor_stats (model_hash, name, family, "
+    q << "INSERT INTO tensor_stats (model_hash, model_role, name, family, "
          "layer_depth, out_dim, in_dim, n_elements, dtype, "
          "kurtosis, eff_rank, rms, mean_abs, tail_ratio, source, "
          "recommended_action, updated_at) VALUES ("
       << "'" << sql_escape(row.model_hash) << "', "
+      << "'" << sql_escape(role) << "', "
       << "'" << sql_escape(row.name) << "', "
       << "'" << sql_escape(row.family) << "', "
       << row.layer_depth << ", "
@@ -778,7 +797,7 @@ int ts_tessera_db_upsert_tensor_stat(
       << "'" << sql_escape(row.source) << "', "
       << "'" << sql_escape(row.recommended_action) << "', "
       << ts_now_ts()
-      << ") ON CONFLICT (model_hash, name) DO UPDATE SET "
+      << ") ON CONFLICT (model_hash, model_role, name) DO UPDATE SET "
          "family=excluded.family, layer_depth=excluded.layer_depth, "
          "out_dim=excluded.out_dim, in_dim=excluded.in_dim, "
          "n_elements=excluded.n_elements, dtype=excluded.dtype, "
@@ -798,6 +817,173 @@ int ts_tessera_db_upsert_tensor_stat(
         return 1;
     } catch (...) {
         if (err) *err = "upsert_tensor_stat failed: unknown exception";
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// tensor_stats read helper: per-component qtype lookup
+// ---------------------------------------------------------------------------
+//
+// Phase 16: the unified Gemma4 12B + dspark + dflash + MTP arch
+// shares tensor names across components (e.g. "blk.0.attn_q.weight"
+// exists in both the trunk and the dflash encoder). The per-tensor
+// calibration policy that the writer (ts_unified_writer) needs to
+// pick a qtype for each tensor is keyed on (model_hash, model_role,
+// name) so the dflash drafter's per-tensor qtype does not collide
+// with the trunk's.
+//
+// This reader returns one row per (model_hash, model_role, name) it
+// finds. The Python calibration pipeline writes the per-tensor qtype
+// into tensor_stats.dtype (when it has a calibration verdict for
+// the tensor); the writer treats dtype as the "this is the qtype
+// recommended for this tensor" signal. dtype values that are
+// "f16" or "f32" (the no-quantize passthrough) are filtered out by
+// the writer's per-tensor slot logic; the reader returns them as-is
+// so the writer can apply the filter.
+//
+// Empty `role` is treated as "all roles" so the writer can do a
+// single bulk read for a model rather than one round-trip per
+// component. Result rows are returned in (model_role, name) order
+// so the writer's per-component scan is cache-friendly.
+int ts_tessera_db_read_unified_policy(
+    ts_tessera_db * db,
+    const std::string & model_hash,
+    const std::string & role,    // empty = all roles
+    ts_tessera_db_unified_policy * out,
+    std::string * err) {
+    if (db == nullptr || db->conn == nullptr || out == nullptr) return 1;
+    out->entries.clear();
+    std::ostringstream q;
+    q << "SELECT model_role, name, family, dtype, source, "
+         "recommended_action FROM tensor_stats WHERE model_hash = '"
+      << sql_escape(model_hash) << "'";
+    if (!role.empty()) {
+        q << " AND model_role = '" << sql_escape(role) << "'";
+    }
+    q << " ORDER BY model_role, name";
+    try {
+        auto res = db->conn->Query(q.str());
+        if (res->HasError()) {
+            if (err) *err = "read_unified_policy failed: " + res->GetError();
+            return 1;
+        }
+        while (auto chunk = res->Fetch()) {
+            const idx_t n = chunk->size();
+            for (idx_t i = 0; i < n; i++) {
+                ts_tessera_db_unified_policy_entry e;
+                if (!chunk->GetValue(0, i).IsNull()) e.model_role = chunk->GetValue(0, i).ToString();
+                if (!chunk->GetValue(1, i).IsNull()) e.name       = chunk->GetValue(1, i).ToString();
+                if (!chunk->GetValue(2, i).IsNull()) e.family     = chunk->GetValue(2, i).ToString();
+                if (!chunk->GetValue(3, i).IsNull()) e.dtype      = chunk->GetValue(3, i).ToString();
+                if (!chunk->GetValue(4, i).IsNull()) e.source     = chunk->GetValue(4, i).ToString();
+                if (!chunk->GetValue(5, i).IsNull()) e.recommended_action = chunk->GetValue(5, i).ToString();
+                out->entries.push_back(std::move(e));
+            }
+        }
+    } catch (const std::exception & ex) {
+        if (err) *err = std::string("read_unified_policy failed: ") + ex.what();
+        return 1;
+    } catch (...) {
+        if (err) *err = "read_unified_policy failed: unknown exception";
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 16 migration: in-place model_role column add for tensor_stats
+// ---------------------------------------------------------------------------
+//
+// Pre-Phase-16 DBs have tensor_stats with PRIMARY KEY (model_hash,
+// name). Phase 16 needs (model_hash, model_role, name). DuckDB
+// does not support ALTER TABLE ... ADD COLUMN with PRIMARY KEY
+// change, so the migration uses the standard PK-rebuild dance:
+//   1. CREATE new table with the new schema
+//   2. INSERT INTO new SELECT FROM old
+//   3. DROP old
+//   4. ALTER TABLE new RENAME TO <original>
+//
+// Idempotent: the new column already exists on a fresh DB (set up
+// by TS_QDB_SCHEMA_SQL), so the migration short-circuits to a
+// no-op. The information_schema.columns check is the
+// authoritative "did this run already" signal.
+//
+// The function is intentionally narrow: the writer branch
+// (evolve/unified-writer) only needs the model_role column on
+// tensor_stats. The schema branch (evolve/unified-schema) extends
+// the same dance to the other 6 affected tables; the writer
+// branch's migration does not block on those because none of the
+// writer's reads go through them.
+
+int ts_tessera_db_migrate_model_role(
+    ts_tessera_db * db,
+    std::string * err) {
+    if (db == nullptr || db->conn == nullptr) return 0;
+    try {
+        // Idempotency check: does tensor_stats already have model_role?
+        auto chk = db->conn->Query(
+            "SELECT COUNT(*) FROM information_schema.columns "
+            "WHERE table_name = 'tensor_stats' AND column_name = 'model_role'");
+        if (chk->HasError()) {
+            if (err) *err = "migrate_model_role check failed: " + chk->GetError();
+            return 1;
+        }
+        idx_t n_cols = 0;
+        if (auto chunk = chk->Fetch()) {
+            n_cols = chunk->GetValue(0, 0).GetValue<idx_t>();
+        }
+        if (n_cols > 0) {
+            return 0;   // already migrated
+        }
+        // Pre-Phase-16 DB: build the new table, copy, drop, rename.
+        // NOTE: the CREATE TABLE statement is the same as in
+        // TS_QDB_SCHEMA_SQL; keeping it inlined here makes the
+        // migration self-contained and avoids a circular dep on
+        // the schema SQL constant.
+        const char * migrate_steps[] = {
+            "CREATE TABLE tensor_stats_new ("
+            "    model_hash         TEXT NOT NULL,"
+            "    model_role         TEXT NOT NULL DEFAULT 'trunk',"
+            "    name               TEXT NOT NULL,"
+            "    family             TEXT,"
+            "    layer_depth        INTEGER,"
+            "    out_dim            BIGINT,"
+            "    in_dim             BIGINT,"
+            "    n_elements         BIGINT,"
+            "    dtype              TEXT,"
+            "    kurtosis           DOUBLE,"
+            "    eff_rank           DOUBLE,"
+            "    rms                DOUBLE,"
+            "    mean_abs           DOUBLE,"
+            "    tail_ratio         DOUBLE,"
+            "    source             TEXT,"
+            "    recommended_action TEXT,"
+            "    updated_at         TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, name))",
+            "INSERT INTO tensor_stats_new "
+            "SELECT model_hash, 'trunk', name, family, layer_depth, "
+            "       out_dim, in_dim, n_elements, dtype, kurtosis, "
+            "       eff_rank, rms, mean_abs, tail_ratio, source, "
+            "       recommended_action, updated_at FROM tensor_stats",
+            "DROP TABLE tensor_stats",
+            "ALTER TABLE tensor_stats_new RENAME TO tensor_stats",
+            "CREATE INDEX IF NOT EXISTS idx_tensor_stats_family "
+            "    ON tensor_stats(model_hash, family)",
+        };
+        for (const char * step : migrate_steps) {
+            auto r = db->conn->Query(step);
+            if (r->HasError()) {
+                if (err) *err = std::string("migrate_model_role step failed: ") + r->GetError();
+                return 1;
+            }
+        }
+    } catch (const std::exception & ex) {
+        if (err) *err = std::string("migrate_model_role failed: ") + ex.what();
+        return 1;
+    } catch (...) {
+        if (err) *err = "migrate_model_role failed: unknown exception";
         return 1;
     }
     return 0;
