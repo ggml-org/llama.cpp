@@ -108,6 +108,12 @@ def make_fixture(root: pathlib.Path) -> pathlib.Path:
         ("void mul_mat_vec_q<(ggml_type)14, 1, true, false>(...)", 131072, 1, 42),
         ("void mul_mat_vec_q<(ggml_type)8, 1, true, false>(...)", 131072, 1, 1),
     ]
+    attention_concat_signatures = [
+        ("void concat_cont<unsigned short, 2>(unsigned short const*, unsigned short const*, unsigned short*, long, long, long, long, long, long)", 2490368, 21),
+        ("void concat_cont<unsigned short, 2>(unsigned short const*, unsigned short const*, unsigned short*, long, long, long, long, long, long)", 393216, 20),
+        ("void concat_cont<unsigned short, 0>(unsigned short const*, unsigned short const*, unsigned short*, long, long, long, long, long, long)", 4864, 21),
+        ("void concat_cont<unsigned short, 0>(unsigned short const*, unsigned short const*, unsigned short*, long, long, long, long, long, long)", 768, 20),
+    ]
     kernel_path = rocprof / "dsv4-tg_kernel_trace.csv"
     with kernel_path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=kernel_fields)
@@ -124,6 +130,15 @@ def make_fixture(root: pathlib.Path) -> pathlib.Path:
                                 "Start_Timestamp": event_start, "End_Timestamp": event_start + 1,
                                 "Workgroup_Size_X": 32, "Workgroup_Size_Y": 1, "Workgroup_Size_Z": 1,
                                 "Grid_Size_X": grid_x, "Grid_Size_Y": grid_y, "Grid_Size_Z": 1,
+                            })
+                    for concat_index, (kernel_name, grid_x, calls_per_token_agent) in enumerate(attention_concat_signatures):
+                        for _call in range(calls_per_token_agent):
+                            event_start = start + len(signatures) + concat_index
+                            writer.writerow({
+                                "Agent_Id": f"Agent {agent_index}", "Kernel_Name": kernel_name,
+                                "Start_Timestamp": event_start, "End_Timestamp": event_start + 1,
+                                "Workgroup_Size_X": 256, "Workgroup_Size_Y": 1, "Workgroup_Size_Z": 1,
+                                "Grid_Size_X": grid_x, "Grid_Size_Y": 1, "Grid_Size_Z": 1,
                             })
             for index, (kernel_name, duration, grid_x, grid_y) in enumerate([
                 ("void mul_mat_vec_q<(ggml_type)8, 1, false, false>(...)", 60, 262144, 1),
@@ -182,6 +197,56 @@ def move_first_kernel_outside(path: pathlib.Path) -> None:
     replacement.rename(path)
 
 
+def remap_fixture_depth(run: pathlib.Path, depth: int, grids: dict[str, str]) -> None:
+    contract_path = run / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["depths"] = [depth]
+    replace_text(contract_path, json.dumps(contract))
+    summary_path = run / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["records"][0]["depth"] = depth
+    replace_text(summary_path, json.dumps(summary))
+    boundaries = run / "rocprof-selected-regions.tsv"
+    replace_text(boundaries, boundaries.read_text().replace("\t16384\t", f"\t{depth}\t"))
+    kernel_path = run / "rocprof" / "dsv4-tg_kernel_trace.csv"
+    replacement = kernel_path.with_suffix(".replacement")
+    with kernel_path.open(newline="") as source, replacement.open("w", newline="") as destination:
+        reader = csv.DictReader(source)
+        writer = csv.DictWriter(destination, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        for row in reader:
+            if row["Kernel_Name"].startswith("void concat_cont<unsigned short,"):
+                row["Grid_Size_X"] = grids.get(row["Grid_Size_X"], row["Grid_Size_X"])
+            writer.writerow(row)
+    kernel_path.unlink()
+    replacement.rename(kernel_path)
+
+
+def mutate_first_concat(path: pathlib.Path, mutation: str) -> None:
+    replacement = path.with_suffix(".replacement")
+    changed = False
+    with path.open(newline="") as source, replacement.open("w", newline="") as destination:
+        reader = csv.DictReader(source)
+        writer = csv.DictWriter(destination, fieldnames=reader.fieldnames)
+        writer.writeheader()
+        for row in reader:
+            if not changed and row["Kernel_Name"].startswith("void concat_cont<unsigned short, 2>"):
+                if mutation == "agent":
+                    assert row["Agent_Id"] == "Agent 1"
+                    row["Agent_Id"] = "Agent 2"
+                elif mutation == "repetition":
+                    row["Start_Timestamp"], row["End_Timestamp"] = "360", "361"
+                elif mutation == "near-name":
+                    row["Kernel_Name"] = "not_the_kernel_" + row["Kernel_Name"]
+                else:
+                    raise AssertionError(mutation)
+                changed = True
+            writer.writerow(row)
+    assert changed
+    path.unlink()
+    replacement.rename(path)
+
+
 def expect_bad(run: pathlib.Path, needle: str) -> None:
     result = subprocess.run(
         [sys.executable, str(TOOL), str(run)],
@@ -206,12 +271,13 @@ def main() -> None:
         value = json.loads(out.read_text())
         assert value["complete"] and value["profiled_repetitions"] == 5
         assert value["evaluated_target_tokens"] == 160
-        assert value["kernel_dispatches"] == 165130
+        assert value["kernel_dispatches"] == 217610
         assert value["outside_selected_interval_events"]["kernel"] == 0
         assert value["families"][0]["family"] == "routed_expert_quant_matmul"
         assert {row["family"] for row in value["families"]} == {
             "routed_expert_quant_matmul", "shared_expert_quant_matmul",
             "non_moe_quantized_matmul", "communication_nccl",
+            "csa_k_concat", "hca_k_concat", "csa_mask_concat", "hca_mask_concat",
         }
         assert value["moe_roles"]["routed_gate_up"]["calls"] == 55040
         assert value["moe_roles"]["routed_down"]["calls"] == 27520
@@ -221,6 +287,16 @@ def main() -> None:
         assert value["moe_signatures"]["routed_down_type39"]["calls"] == 1280
         assert value["moe_signatures"]["shared_gate_up_type14"]["calls"] == 1280
         assert value["moe_signatures"]["shared_down_type8"]["calls"] == 640
+        assert value["attention_concat_roles"]["csa_k_concat"]["calls"] == 13440
+        assert value["attention_concat_roles"]["hca_k_concat"]["calls"] == 12800
+        assert value["attention_concat_roles"]["csa_mask_concat"]["calls"] == 13440
+        assert value["attention_concat_roles"]["hca_mask_concat"]["calls"] == 12800
+        assert value["attention_concat_dispatch_contract"] == {
+            "applicable": True, "complete": True, "depth": 16384, "gpu_agents": 4, "target_tokens": 160,
+            "actual_role_calls": {"csa_k_concat": 13440, "hca_k_concat": 12800, "csa_mask_concat": 13440, "hca_mask_concat": 12800},
+            "expected_role_calls": {"csa_k_concat": 13440, "hca_k_concat": 12800, "csa_mask_concat": 13440, "hca_mask_concat": 12800},
+            "per_agent_exact": True, "per_repetition_exact": True,
+        }
         assert value["moe_dispatch_contract"] == {
             "complete": True, "block_count": 43, "gpu_agents": 4, "target_tokens": 160,
             "actual_role_calls": {"routed_gate_up": 55040, "routed_down": 27520, "shared_gate_up": 55040, "shared_down": 27520},
@@ -253,6 +329,41 @@ def main() -> None:
             "rccl": "present_with_events", "hip": "present_with_events",
         }
         assert tsv.read_text().startswith("depth\tprofiled_repetitions\ttarget_tokens\tfamily")
+
+        secondary_grids = clone_fixture(good, root / "secondary-grids")
+        replace_first(secondary_grids / "rocprof" / "dsv4-tg_kernel_trace.csv", ",2490368,1,1", ",2359296,1,1")
+        replace_first(secondary_grids / "rocprof" / "dsv4-tg_kernel_trace.csv", ",4864,1,1", ",4608,1,1")
+        result = subprocess.run(
+            [sys.executable, str(TOOL), str(secondary_grids)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert result.returncode == 0, result.stderr
+
+        depth64 = clone_fixture(good, root / "depth64")
+        remap_fixture_depth(depth64, 65536, {
+            "2490368": "8781824", "393216": "524288", "4864": "17152", "768": "1024",
+        })
+        replace_first(depth64 / "rocprof" / "dsv4-tg_kernel_trace.csv", ",8781824,1,1", ",8650752,1,1")
+        replace_first(depth64 / "rocprof" / "dsv4-tg_kernel_trace.csv", ",17152,1,1", ",16896,1,1")
+        depth64_out = depth64 / "profile.json"
+        result = subprocess.run(
+            [sys.executable, str(TOOL), str(depth64), "--json", str(depth64_out)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(depth64_out.read_text())["attention_concat_dispatch_contract"]["complete"] is True
+
+        generic_depth = clone_fixture(good, root / "generic-depth")
+        remap_fixture_depth(generic_depth, 32768, {})
+        generic_out = generic_depth / "profile.json"
+        result = subprocess.run(
+            [sys.executable, str(TOOL), str(generic_depth), "--json", str(generic_out)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(generic_out.read_text())["attention_concat_dispatch_contract"] == {
+            "applicable": False, "complete": False,
+        }
 
         unstable = clone_fixture(good, root / "unstable")
         unstable_summary = json.loads((unstable / "summary.json").read_text())
@@ -307,6 +418,32 @@ def main() -> None:
             "mul_mat_vec_q<(ggml_type)16", "mul_mat_vec_q<(ggml_type)22",
         )
         expect_bad(bad_signature, "signature dispatch contract mismatch")
+
+        bad_concat_shape = clone_fixture(good, root / "concat-shape")
+        replace_first(
+            bad_concat_shape / "rocprof" / "dsv4-tg_kernel_trace.csv",
+            ",2490368,1,1", ",2490369,1,1",
+        )
+        expect_bad(bad_concat_shape, "unknown exact DSV4 F16 attention concat signature")
+
+        bad_concat_count = clone_fixture(good, root / "concat-count")
+        replace_first(
+            bad_concat_count / "rocprof" / "dsv4-tg_kernel_trace.csv",
+            "concat_cont<unsigned short, 2>", "concat_cont<unsigned int, 2>",
+        )
+        expect_bad(bad_concat_count, "attention concat dispatch contract mismatch")
+
+        bad_concat_name = clone_fixture(good, root / "concat-name")
+        mutate_first_concat(bad_concat_name / "rocprof" / "dsv4-tg_kernel_trace.csv", "near-name")
+        expect_bad(bad_concat_name, "attention concat dispatch contract mismatch")
+
+        bad_concat_agent = clone_fixture(good, root / "concat-agent")
+        mutate_first_concat(bad_concat_agent / "rocprof" / "dsv4-tg_kernel_trace.csv", "agent")
+        expect_bad(bad_concat_agent, "attention concat per-agent dispatch mismatch")
+
+        bad_concat_repetition = clone_fixture(good, root / "concat-repetition")
+        mutate_first_concat(bad_concat_repetition / "rocprof" / "dsv4-tg_kernel_trace.csv", "repetition")
+        expect_bad(bad_concat_repetition, "attention concat per-repetition dispatch mismatch")
 
         bad_status = clone_fixture(good, root / "status")
         replace_text(

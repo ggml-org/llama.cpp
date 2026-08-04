@@ -110,26 +110,68 @@ def containing_repetition(intervals: list[tuple[int, int, int]], start: int, end
     return matches[0] if matches else None
 
 
-def classify_kernel(row: dict[str, str]) -> tuple[str, str | None, str | None]:
-    """Return an exclusive family and optional exact DSV4 MoE sub-role.
+# Exact F16 concat signatures for the fully hashed 43-layer DSV4-Flash model.
+# The grids distinguish CSA/HCA K and mask materialization at the two profiled
+# decision depths. Counts are validated globally, per GPU, and per repetition.
+DSV4_ATTENTION_CONCAT_SIGNATURES: dict[int, dict[tuple[int, str], tuple[str, str]]] = {
+    16384: {
+        (2, "2490368"): ("csa_k_concat", "csa_k_concat"),
+        (2, "2359296"): ("csa_k_concat", "csa_k_concat"),
+        (2, "393216"): ("hca_k_concat", "hca_k_concat"),
+        (0, "4864"): ("csa_mask_concat", "csa_mask_concat"),
+        (0, "4608"): ("csa_mask_concat", "csa_mask_concat"),
+        (0, "768"): ("hca_mask_concat", "hca_mask_concat"),
+    },
+    65536: {
+        (2, "8781824"): ("csa_k_concat", "csa_k_concat"),
+        (2, "8650752"): ("csa_k_concat", "csa_k_concat"),
+        (2, "524288"): ("hca_k_concat", "hca_k_concat"),
+        (0, "17152"): ("csa_mask_concat", "csa_mask_concat"),
+        (0, "16896"): ("csa_mask_concat", "csa_mask_concat"),
+        (0, "1024"): ("hca_mask_concat", "hca_mask_concat"),
+    },
+}
 
-    The MMVQ signatures below are tied to the fully hashed V4-Flash IQ2_M
-    tensor inventory. The dispatch-count contract later in the parser prevents
-    a partial or coincidental signature match from being accepted as MoE
-    attribution.
+
+def classify_kernel(row: dict[str, str], depth: int) -> tuple[str, str | None, str | None, str | None]:
+    """Return an exclusive family plus optional exact MoE/attention roles.
+
+    The MMVQ and attention-concat signatures are tied to the fully hashed
+    V4-Flash IQ2_M inventory. Dispatch-count contracts later in the parser
+    prevent partial or coincidental matches from being accepted.
     """
     name = row["Kernel_Name"]
     lower = name.lower()
     if name.startswith("ncclDevKernel"):
-        return "communication_nccl", None, None
+        return "communication_nccl", None, None, None
     if "lightning_indexer_kernel" in lower:
-        return "lightning_indexer", None, None
+        return "lightning_indexer", None, None, None
     if ("top_k" in lower or "topk" in lower) and "topk_moe" not in lower:
-        return "lid_top_k", None, None
+        return "lid_top_k", None, None, None
     if "flash_attn" in lower:
-        return "flash_attention", None, None
+        return "flash_attention", None, None, None
     if "dsv4_hc_" in lower:
-        return "hc_mixes", None, None
+        return "hc_mixes", None, None, None
+
+    concat_names = {
+        0: "void concat_cont<unsigned short, 0>(unsigned short const*, unsigned short const*, unsigned short*, long, long, long, long, long, long)",
+        2: "void concat_cont<unsigned short, 2>(unsigned short const*, unsigned short const*, unsigned short*, long, long, long, long, long, long)",
+    }
+    concat_dim = next((dim for dim, exact_name in concat_names.items() if name == exact_name), None)
+    if depth in DSV4_ATTENTION_CONCAT_SIGNATURES and name.startswith("void concat_cont<unsigned short,") and concat_dim is None:
+        raise ValueError(f"unknown exact DSV4 F16 attention concat kernel name at depth {depth}: {name}")
+    if concat_dim is not None and depth in DSV4_ATTENTION_CONCAT_SIGNATURES:
+        workgroup = (row["Workgroup_Size_X"], row["Workgroup_Size_Y"], row["Workgroup_Size_Z"])
+        grid = (row["Grid_Size_X"], row["Grid_Size_Y"], row["Grid_Size_Z"])
+        key = (concat_dim, grid[0])
+        signature = DSV4_ATTENTION_CONCAT_SIGNATURES[depth].get(key)
+        if workgroup != ("256", "1", "1") or grid[1:] != ("1", "1") or signature is None:
+            raise ValueError(
+                f"unknown exact DSV4 F16 attention concat signature at depth {depth}: "
+                f"dim={concat_dim} workgroup={workgroup} grid={grid}"
+            )
+        family, role = signature
+        return family, None, None, role
 
     mmvq = re.search(r"mul_mat_vec_q<\(ggml_type\)(\d+),\s*1,\s*(true|false),", name)
     if mmvq and (row["Workgroup_Size_X"], row["Workgroup_Size_Y"], row["Workgroup_Size_Z"]) == ("32", "1", "1"):
@@ -137,30 +179,30 @@ def classify_kernel(row: dict[str, str]) -> tuple[str, str | None, str | None]:
         fused = mmvq.group(2) == "true"
         grid = (row["Grid_Size_X"], row["Grid_Size_Y"], row["Grid_Size_Z"])
         if grid == ("16384", "6", "1") and quant_type in {16, 22} and not fused:
-            return "routed_expert_quant_matmul", "routed_gate_up", f"routed_gate_up_type{quant_type}"
+            return "routed_expert_quant_matmul", "routed_gate_up", f"routed_gate_up_type{quant_type}", None
         if grid == ("131072", "6", "1") and quant_type in {18, 39} and not fused:
-            return "routed_expert_quant_matmul", "routed_down", f"routed_down_type{quant_type}"
+            return "routed_expert_quant_matmul", "routed_down", f"routed_down_type{quant_type}", None
         if grid == ("65536", "1", "1") and quant_type in {13, 14} and not fused:
-            return "shared_expert_quant_matmul", "shared_gate_up", f"shared_gate_up_type{quant_type}"
+            return "shared_expert_quant_matmul", "shared_gate_up", f"shared_gate_up_type{quant_type}", None
         if grid == ("131072", "1", "1") and quant_type in {8, 14} and fused:
-            return "shared_expert_quant_matmul", "shared_down", f"shared_down_type{quant_type}"
+            return "shared_expert_quant_matmul", "shared_down", f"shared_down_type{quant_type}", None
     if "mul_mat_q<" in name or "mul_mat_vec_q<" in name:
-        return "non_moe_quantized_matmul", None, None
+        return "non_moe_quantized_matmul", None, None, None
     if "quantize" in lower and ("q8_1" in lower or "mmq" in lower):
-        return "activation_quantization", None, None
+        return "activation_quantization", None, None, None
     if "build_mmq_active_tiles" in lower or "mm_ids" in lower or "topk_moe" in lower:
-        return "moe_routing_support", None, None
+        return "moe_routing_support", None, None, None
     if name.startswith("Cijk_") or "rocblas" in lower or "gemm" in lower:
-        return "dense_gemm", None, None
+        return "dense_gemm", None, None, None
     if "mask" in lower:
-        return "dense_mask", None, None
+        return "dense_mask", None, None, None
     if "rope" in lower:
-        return "rope", None, None
+        return "rope", None, None, None
     if "norm" in lower:
-        return "normalization", None, None
+        return "normalization", None, None, None
     if "copybuffer" in lower or "fillbuffer" in lower or "memcpy" in lower:
-        return "device_copy_fill", None, None
-    return "other", None, None
+        return "device_copy_fill", None, None, None
+    return "other", None, None, None
 
 
 def shape_key(row: dict[str, str]) -> str:
@@ -271,6 +313,9 @@ def main() -> int:
     moe_signature_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     moe_signature_agent_calls: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     moe_signature_repetition_calls: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    attention_concat_role_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    attention_concat_agent_calls: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    attention_concat_repetition_calls: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
     agent_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     kernel_totals: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
     outside_events = 0
@@ -297,7 +342,7 @@ def main() -> int:
             if agent not in agents:
                 raise ValueError(f"kernel row references unknown GPU agent {agent}")
             duration = end - start
-            family, moe_role, moe_signature = classify_kernel(row)
+            family, moe_role, moe_signature, attention_concat_role = classify_kernel(row, depths[0])
             family_totals[family][0] += 1
             family_totals[family][1] += duration
             if moe_role is not None:
@@ -309,6 +354,12 @@ def main() -> int:
                 moe_signature_agent_calls[moe_signature][agent] += 1
                 if repetition is not None:
                     moe_signature_repetition_calls[moe_signature][repetition] += 1
+            if attention_concat_role is not None:
+                attention_concat_role_totals[attention_concat_role][0] += 1
+                attention_concat_role_totals[attention_concat_role][1] += duration
+                attention_concat_agent_calls[attention_concat_role][agent] += 1
+                if repetition is not None:
+                    attention_concat_repetition_calls[attention_concat_role][repetition] += 1
             if repetition is not None:
                 repetition_family_totals[repetition][family][0] += 1
                 repetition_family_totals[repetition][family][1] += duration
@@ -384,6 +435,56 @@ def main() -> int:
         "expected_signature_calls": expected_signature_calls, "per_agent_exact": True,
         "per_repetition_exact": True,
     }
+
+    attention_concat_dispatch_contract: dict[str, object] = {
+        "applicable": depths[0] in DSV4_ATTENTION_CONCAT_SIGNATURES,
+        "complete": False,
+    }
+    if depths[0] in DSV4_ATTENTION_CONCAT_SIGNATURES:
+        concat_role_layers = {
+            "csa_k_concat": 21,
+            "hca_k_concat": 20,
+            "csa_mask_concat": 21,
+            "hca_mask_concat": 20,
+        }
+        expected_concat_calls = {
+            role: evaluated_tokens * len(agents) * layers
+            for role, layers in concat_role_layers.items()
+        }
+        actual_concat_calls = {
+            role: attention_concat_role_totals[role][0]
+            for role in concat_role_layers
+        }
+        if set(attention_concat_role_totals) != set(concat_role_layers) or actual_concat_calls != expected_concat_calls:
+            raise ValueError(
+                f"exact DSV4 attention concat dispatch contract mismatch: "
+                f"actual={actual_concat_calls} expected={expected_concat_calls} "
+                f"roles={sorted(attention_concat_role_totals)}"
+            )
+        for role, layers in concat_role_layers.items():
+            expected_agent_calls = evaluated_tokens * layers
+            actual_agents = dict(attention_concat_agent_calls[role])
+            if set(actual_agents) != set(agents) or any(value != expected_agent_calls for value in actual_agents.values()):
+                raise ValueError(
+                    f"exact DSV4 attention concat per-agent dispatch mismatch for {role}: "
+                    f"actual={actual_agents} expected_each={expected_agent_calls}"
+                )
+            expected_repetition_calls = n_gen * len(agents) * layers
+            actual_repetitions = dict(attention_concat_repetition_calls[role])
+            expected_repetitions = set(range(discard + 1, reps + 1))
+            if set(actual_repetitions) != expected_repetitions or any(
+                    value != expected_repetition_calls for value in actual_repetitions.values()):
+                raise ValueError(
+                    f"exact DSV4 attention concat per-repetition dispatch mismatch for {role}: "
+                    f"actual={actual_repetitions} expected_each={expected_repetition_calls}"
+                )
+        attention_concat_dispatch_contract = {
+            "applicable": True, "complete": True, "depth": depths[0],
+            "gpu_agents": len(agents), "target_tokens": evaluated_tokens,
+            "actual_role_calls": actual_concat_calls,
+            "expected_role_calls": expected_concat_calls,
+            "per_agent_exact": True, "per_repetition_exact": True,
+        }
 
     def aggregate_api(path: Path, key: str) -> tuple[dict[str, dict[str, int]], int, str, dict[int, dict[str, dict[str, int]]]]:
         output: dict[str, list[int]] = defaultdict(lambda: [0, 0])
@@ -534,6 +635,15 @@ def main() -> int:
             for signature, value in sorted(moe_signature_totals.items())
         },
         "moe_dispatch_contract": moe_dispatch_contract,
+        "attention_concat_roles": {
+            role: {
+                "calls": value[0], "duration_ns": value[1],
+                "share_of_summed_device_time": value[1] / total_device_ns,
+                "device_ms_per_token": value[1] / evaluated_tokens / 1e6,
+            }
+            for role, value in sorted(attention_concat_role_totals.items())
+        },
+        "attention_concat_dispatch_contract": attention_concat_dispatch_contract,
         "top_kernel_shapes": top_kernels,
         "per_agent": per_agent,
         "per_repetition": per_repetition,
@@ -542,9 +652,11 @@ def main() -> int:
         "hip_api": hip,
         "classification_caveat": (
             "Families are exclusive. Routed/shared expert MMVQ signatures are tied to this fully hashed DSV4-Flash IQ2_M "
-            "tensor inventory and must satisfy exact block_count*four-GPU*target-token dispatch counts. non_moe_quantized_matmul "
-            "combines attention/indexer/final-output projections; other may contain unclassified attention, mask, elementwise, "
-            "or scheduler work. Kernel durations are summed across devices/queues; API durations may overlap and are diagnostic."
+            "tensor inventory and must satisfy exact block_count*four-GPU*target-token dispatch counts. At 16K/64K, exact F16 "
+            "concat dimension/grid signatures separately identify CSA/HCA K and final mask materialization and must satisfy "
+            "21/20-layer counts globally, per GPU, and per repetition. non_moe_quantized_matmul combines attention/indexer/"
+            "final-output projections; other may contain remaining unclassified attention, mask, elementwise, or scheduler work. "
+            "Kernel durations are summed across devices/queues; API durations may overlap and are diagnostic."
         ),
     }
 
