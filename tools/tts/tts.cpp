@@ -110,7 +110,8 @@ int main(int argc, char ** argv) {
         speaker_bitmap.reset(wrapper.bitmap);
     }
 
-    mtmd_helper::gen_audio gen(lctx, mctx.get());
+    mtmd_helper::gen_audio gen;
+    gen.init(lctx, mctx.get());
     mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
     inp.prompt      = params.prompt.c_str();

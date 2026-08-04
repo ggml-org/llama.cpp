@@ -16,6 +16,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "base64.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -43,7 +44,8 @@ static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
 
     if (params.embedding ||
-            (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
+            (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE) ||
+            !params.mmproj.path.empty()) { // gen-audio (TTS) capability isn't known until the mmproj loads, size generously
         return n_batch;
     }
 
@@ -204,6 +206,23 @@ struct server_slot {
     // multimodal
     mtmd_context * mctx = nullptr;
     mtmd::batch_ptr mbatch = nullptr;
+
+    struct tts_ctx {
+        mtmd_helper::gen_audio ctx;
+        const float * h_state;
+        llama_token   sampled;
+        int32_t       n_decoded;
+        bool is_supported() const {
+            return ctx.valid();
+        }
+        void reset() {
+            ctx.reset();
+            h_state   = nullptr;
+            sampled   = LLAMA_TOKEN_NULL;
+            n_decoded = 0;
+        }
+    };
+    tts_ctx tts;
 
     // speculative decoding
     common_speculative * spec;
@@ -370,6 +389,8 @@ struct server_slot {
 
         // clear multimodal state
         mbatch.reset();
+
+        tts.reset();
     }
 
     void init_sampler() const {
@@ -1338,6 +1359,9 @@ private:
             model_dft = nullptr;
         }
 
+        bool has_tts = mctx != nullptr
+                && mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE;
+
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot & slot = slots[i];
 
@@ -1350,6 +1374,10 @@ private:
 
             slot.mctx                   = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
+
+            if (has_tts) {
+                slot.tts.ctx.init(ctx_tgt, mctx);
+            }
 
             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
 
@@ -1804,6 +1832,21 @@ private:
 
         SLT_DBG(slot, "launching slot : %s\n", safe_json_to_str(slot.to_json()).c_str());
 
+        if (task.type == SERVER_TASK_TYPE_TTS) {
+            if (!slot.mctx || mtmd_gen_audio_get_info(slot.mctx).type == MTMD_GEN_AUDIO_TYPE_NONE) {
+                send_error(task, "this server does not support audio generation", ERROR_TYPE_NOT_SUPPORTED);
+                return false;
+            }
+            if (!slot.tts.is_supported()) {
+                slot.tts.ctx.init(ctx_tgt, slot.mctx);
+            }
+            task.tts_inp.data.seq_id = slot.id;
+            if (slot.tts.ctx.set_input(task.tts_inp.get()) != 0) {
+                send_error(task, "failed to process TTS prompt", ERROR_TYPE_SERVER);
+                return false;
+            }
+        }
+
         // initialize samplers
         if (task.need_sampling()) {
             try {
@@ -1827,6 +1870,9 @@ private:
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             backend_sampling &= !need_pre_sample_logits;
 
+            // TODO: check verify if this actually works with TTS
+            backend_sampling &= task.type != SERVER_TASK_TYPE_TTS;
+
             // TODO: tmp until backend sampling is fully implemented
             if (backend_sampling) {
                 llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
@@ -1842,9 +1888,13 @@ private:
 
         slot.task = std::make_unique<const server_task>(std::move(task));
 
-        slot.state = slot.task->is_child()
-            ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
-            : SLOT_STATE_STARTED;
+        if (slot.task->type == SERVER_TASK_TYPE_TTS) {
+            slot.state = SLOT_STATE_PROCESSING_PROMPT;
+        } else {
+            slot.state = slot.task->is_child()
+                ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
+                : SLOT_STATE_STARTED;
+        }
 
         // reset server kill-switch counter
         n_empty_consecutive = 0;
@@ -2117,6 +2167,18 @@ private:
         if (slot.stop != STOP_TYPE_NONE || slot.task->params.timings_per_token) {
             res->timings = slot.get_timings();
         }
+
+        queue_results.send(std::move(res));
+    }
+
+    void send_tts_result(server_slot & slot, int32_t sample_rate, const char * data, size_t data_len, bool final) {
+        auto res = std::make_unique<server_task_result_tts>();
+
+        res->id          = slot.task->id;
+        res->index       = slot.task->index;
+        res->sample_rate = sample_rate;
+        res->audio.assign(data, data_len);
+        res->final       = final;
 
         queue_results.send(std::move(res));
     }
@@ -2396,6 +2458,7 @@ private:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_TTS:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
@@ -2826,6 +2889,14 @@ private:
             abort_all_slots("pre_decode() failed: " + std::string(e.what()));
         }
 
+        // TTS slots bypass the shared batch entirely and drive their own llama_decode() calls
+        try {
+            process_tts_slots();
+        } catch (const std::exception & e) {
+            SRV_ERR("process_tts_slots() failed: %s\n", e.what());
+            abort_all_slots("process_tts_slots() failed: " + std::string(e.what()));
+        }
+
         GGML_ASSERT(batch.slot_batched || batch.size() == 0);
 
         if (batch.slot_batched) {
@@ -2889,10 +2960,77 @@ private:
         }
     }
 
+    void process_tts_slots() {
+        iterate(slots, [&](server_slot & slot) {
+            if (!slot.is_processing() || slot.task->type != SERVER_TASK_TYPE_TTS) {
+                return;
+            }
+
+            llama_set_embeddings(ctx_tgt, true);
+
+            if (slot.state == SLOT_STATE_PROCESSING_PROMPT) {
+                const int32_t ret = slot.tts.ctx.step_prompt(llama_n_batch(ctx_tgt));
+                if (ret < 0) {
+                    send_error(slot, "TTS prompt processing failed", ERROR_TYPE_SERVER);
+                    slot.release();
+                } else if (ret == 0) {
+                    slot.tts.sampled = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
+                    common_sampler_accept(slot.smpl.get(), slot.tts.sampled, true);
+                    slot.tts.h_state = llama_get_embeddings_ith(ctx_tgt, -1);
+                    slot.state = SLOT_STATE_GENERATING;
+                }
+                return;
+            }
+
+            const int32_t n_predict = slot.task->params.n_predict > 0 ? slot.task->params.n_predict : 512;
+            if (slot.tts.n_decoded >= n_predict || llama_vocab_is_eog(vocab, slot.tts.sampled)) {
+                int32_t      sample_rate = 0;
+                const char * data        = nullptr;
+                size_t       data_len    = 0;
+                // generation truly ends here: force out any sub-window remainder still buffered
+                if (slot.tts.ctx.flush() != 0 || slot.tts.ctx.get_output(&sample_rate, &data, &data_len) != 0) {
+                    send_error(slot, "failed to finalize TTS output", ERROR_TYPE_SERVER);
+                } else {
+                    send_tts_result(slot, sample_rate, data, data_len, true);
+                }
+                slot.release();
+                return;
+            }
+
+            const float * h_state_next = nullptr;
+            if (slot.tts.ctx.step_gen(slot.tts.sampled, slot.tts.h_state, &h_state_next) != 0) {
+                send_error(slot, "TTS generation failed", ERROR_TYPE_SERVER);
+                slot.release();
+                return;
+            }
+            slot.tts.h_state = h_state_next;
+            slot.tts.n_decoded++;
+
+            slot.tts.sampled = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
+            common_sampler_accept(slot.smpl.get(), slot.tts.sampled, true);
+
+            if (slot.task->params.stream) {
+                int32_t      sample_rate = 0;
+                const char * data        = nullptr;
+                size_t       data_len    = 0;
+                if (slot.tts.ctx.get_output(&sample_rate, &data, &data_len) != 0) {
+                    send_error(slot, "TTS streaming output failed", ERROR_TYPE_SERVER);
+                    slot.release();
+                } else if (data_len > 0) {
+                    send_tts_result(slot, sample_rate, data, data_len, false);
+                }
+            }
+        });
+    }
+
     void pre_decode() {
         // apply context-shift if needed
         // TODO: simplify and improve
         iterate(slots, [&](server_slot & slot) {
+            if (slot.task && slot.task->type == SERVER_TASK_TYPE_TTS) {
+                // TTS slots drive their own decode loop in process_tts_slots(), never enter the shared batch
+                return;
+            }
             if (slot.state == SLOT_STATE_GENERATING && slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
                 if (!params_base.ctx_shift) {
                     // this check is redundant (for good)
@@ -2965,7 +3103,7 @@ private:
 
         // determine which slots are generating and drafting
         iterate(slots, [&](server_slot & slot) {
-            if (slot.state != SLOT_STATE_GENERATING) {
+            if (slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS) {
                 return;
             }
 
@@ -3097,7 +3235,7 @@ private:
                     return; // batch is full, skip remaining slots
                 }
 
-                if (!slot.is_processing()) {
+                if (!slot.is_processing() || slot.task->type == SERVER_TASK_TYPE_TTS) {
                     return;
                 }
 
@@ -5055,6 +5193,132 @@ void server_routes::init_routes() {
             top_n);
 
         res->ok(root);
+        return res;
+    };
+
+    this->post_tts = [this](const server_http_req & req) {
+        auto res = create_response();
+        res->set_req(&req); // will also set spipe if needed
+
+        if (!ctx_server.mctx || mtmd_gen_audio_get_info(ctx_server.mctx).type == MTMD_GEN_AUDIO_TYPE_NONE) {
+            res->error(format_error_response("this server does not support audio generation", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        const json body = json::parse(req.body);
+
+        std::string prompt = json_value(body, "input", json_value(body, "prompt", std::string()));
+        if (prompt.empty()) {
+            res->error(format_error_response("\"input\" must be a non-empty string", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        const std::string response_format = json_value(body, "response_format", std::string("wav"));
+        const bool stream = json_value(body, "stream", false);
+
+        server_task task(SERVER_TASK_TYPE_TTS);
+        task.tts_inp.set_prompt(prompt);
+        task.tts_inp.set_lang(json_value(body, "lang", std::string()));
+        task.tts_inp.data.top_k     = json_value(body, "top_k", 0);
+        task.tts_inp.data.top_p     = json_value(body, "top_p", 0.0f);
+        task.tts_inp.data.stream    = stream;
+        task.tts_inp.data.out_type  = response_format == "pcm"
+            ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM
+            : MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+        task.params.stream    = stream;
+        task.params.n_predict = json_value(body, "n_predict", -1);
+        task.params.sampling  = params.sampling; // baseline defaults, then apply overrides below
+        // codec token streams need repetition penalty over the whole generation, or the
+        // backbone loops and re-generates the same utterance (see LLAMA_EXAMPLE_TTS in arg.cpp)
+        task.params.sampling.penalty_repeat  = json_value(body, "repeat_penalty", 1.05f);
+        task.params.sampling.penalty_last_n  = -1;
+        if (task.tts_inp.data.top_k > 0) {
+            task.params.sampling.top_k = task.tts_inp.data.top_k;
+        }
+        if (task.tts_inp.data.top_p > 0) {
+            task.params.sampling.top_p = task.tts_inp.data.top_p;
+        }
+
+        std::string speaker_ref_b64 = json_value(body, "speaker_ref", std::string());
+        if (!speaker_ref_b64.empty()) {
+            std::string bytes = base64::decode(speaker_ref_b64);
+            auto wrapper = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, (const unsigned char *) bytes.data(), bytes.size(), false);
+            if (!wrapper.bitmap) {
+                res->error(format_error_response("failed to decode \"speaker_ref\"", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
+        }
+
+        auto & rd = res->rd;
+        task.id = rd.get_new_id();
+        rd.post_task(std::move(task));
+
+        const std::string content_type = response_format == "pcm" ? "audio/L16" : "audio/wav";
+
+        if (!stream) {
+            auto result = rd.next(req.should_stop);
+            if (!result) {
+                GGML_ASSERT(req.should_stop());
+                return res; // connection is closed
+            }
+            if (result->is_error()) {
+                res->error(result->to_json());
+                return res;
+            }
+            auto * tts_res = dynamic_cast<server_task_result_tts *>(result.get());
+            GGML_ASSERT(tts_res != nullptr);
+            res->status       = 200;
+            res->content_type = content_type;
+            res->data         = std::move(tts_res->audio);
+            return res;
+        } else {
+            auto first_result = rd.next(req.should_stop);
+            if (!first_result) {
+                GGML_ASSERT(req.should_stop());
+                return res; // connection is closed
+            }
+            if (first_result->is_error()) {
+                res->error(first_result->to_json());
+                return res;
+            }
+            auto * first_tts_res = dynamic_cast<server_task_result_tts *>(first_result.get());
+            GGML_ASSERT(first_tts_res != nullptr);
+
+            res->status       = 200;
+            res->content_type = content_type;
+            res->data          = std::move(first_tts_res->audio);
+            bool is_done       = first_tts_res->final;
+
+            res->set_next([res_this = res.get(), is_done](std::string & output) mutable -> bool {
+                if (is_done) {
+                    return false;
+                }
+                if (res_this->should_stop()) {
+                    return false;
+                }
+                if (!res_this->data.empty()) {
+                    output = std::move(res_this->data);
+                    res_this->data.clear();
+                    return true;
+                }
+
+                server_response_reader & rd = res_this->rd;
+                if (!rd.has_next()) {
+                    return false;
+                }
+                auto result = rd.next([&res_this]() { return res_this->should_stop(); });
+                if (!result || result->is_error()) {
+                    return false;
+                }
+                auto * tts_res = dynamic_cast<server_task_result_tts *>(result.get());
+                GGML_ASSERT(tts_res != nullptr);
+                output  = std::move(tts_res->audio);
+                is_done = tts_res->final;
+                return true;
+            });
+        }
+
         return res;
     };
 

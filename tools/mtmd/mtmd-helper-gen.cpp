@@ -98,6 +98,8 @@ public:
     // those read what they need from h_state_in instead
     virtual int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out) = 0;
     virtual int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) = 0;
+    // forces any buffered codes through code2wav now, regardless of window_frames
+    virtual int32_t flush() = 0;
 
 protected:
     llama_context * lctx;
@@ -302,13 +304,13 @@ public:
     }
 
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
-        if (!flush_gen_wav()) {
-            return 1;
-        }
-
         *out_sample_rate = info.sample_rate;
 
         if (!stream) {
+            // one-shot call: force out whatever's left, regardless of window_frames
+            if (!flush_gen_wav()) {
+                return 1;
+            }
             if (out_n_samples) {
                 *out_n_samples = (int64_t) audio_pcm.size();
             }
@@ -350,6 +352,10 @@ public:
         *out_data     = out_buf.data();
         *out_data_len = out_buf.size();
         return 0;
+    }
+
+    int32_t flush() override {
+        return flush_gen_wav() ? 0 : 1;
     }
 
 private:
@@ -551,4 +557,11 @@ int32_t mtmd_helper_gen_audio_get_output(mtmd_helper_gen_audio * ctx, int32_t * 
         return 1;
     }
     return ctx->pipeline->get_output(out_sample_rate, out_data, out_data_len, out_n_samples);
+}
+
+int32_t mtmd_helper_gen_audio_flush(mtmd_helper_gen_audio * ctx) {
+    if (!ctx->pipeline) {
+        return 1;
+    }
+    return ctx->pipeline->flush();
 }
