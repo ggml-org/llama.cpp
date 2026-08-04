@@ -1,20 +1,29 @@
 import SwiftUI
 
 /// Actions that the Workflows view publishes to the focused scene
-/// so the App-level menu commands (File > New / Open / Save) can
-/// dispatch into the live view. Without this plumbing, menu
-/// commands can't reach the view's mutable state.
+/// so the App-level menu commands (File > New / Open / Save and
+/// the View menu toggles) can dispatch into the live view.
+/// Without this plumbing, menu commands can't reach the view's
+/// mutable state.
 struct WorkflowMenuActions {
     var new: () -> Void
     var open: () -> Void
     var save: () -> Void
     var canSave: () -> Bool
+    var togglePalette: () -> Void
+    var paletteVisible: () -> Bool
+    var toggleInspector: () -> Void
+    var inspectorVisible: () -> Bool
 
     static let unavailable = WorkflowMenuActions(
         new: {},
         open: {},
         save: {},
-        canSave: { false }
+        canSave: { false },
+        togglePalette: {},
+        paletteVisible: { false },
+        toggleInspector: {},
+        inspectorVisible: { false }
     )
 }
 
@@ -26,6 +35,24 @@ extension FocusedValues {
     var workflowMenuActions: WorkflowMenuActions? {
         get { self[WorkflowMenuActionsKey.self] }
         set { self[WorkflowMenuActionsKey.self] = newValue }
+    }
+}
+
+/// Telemetry drawer controls, published by the shell (ContentView)
+/// so the View menu can toggle the drawer from any destination.
+struct TelemetryMenuActions {
+    var toggle: () -> Void
+    var isExpanded: () -> Bool
+}
+
+private struct TelemetryMenuActionsKey: FocusedValueKey {
+    typealias Value = TelemetryMenuActions
+}
+
+extension FocusedValues {
+    var telemetryMenuActions: TelemetryMenuActions? {
+        get { self[TelemetryMenuActionsKey.self] }
+        set { self[TelemetryMenuActionsKey.self] = newValue }
     }
 }
 
@@ -99,5 +126,38 @@ struct HelpMenuItems: View {
             if let url = samplesURL { NSWorkspace.shared.open(url) }
         }
         .disabled(samplesURL == nil)
+    }
+}
+
+/// View menu items. The Workflows-surface toggles (node palette,
+/// parameter inspector) need a focused WorkflowsView and stay
+/// disabled otherwise; the telemetry drawer toggle is always
+/// available. Titles flip Show/Hide off the live state, so the
+/// menu reads as a statement of what will happen.
+struct ViewMenuItems: View {
+    @FocusedValue(\.workflowMenuActions) private var workflowActions
+    @FocusedValue(\.telemetryMenuActions) private var telemetryActions
+
+    var body: some View {
+        Button(workflowActions?.paletteVisible() == true
+               ? "Hide Node Palette" : "Show Node Palette") {
+            workflowActions?.togglePalette()
+        }
+        .disabled(workflowActions == nil)
+
+        Button(workflowActions?.inspectorVisible() == true
+               ? "Hide Inspector" : "Show Inspector") {
+            workflowActions?.toggleInspector()
+        }
+        .keyboardShortcut("i", modifiers: [.command, .option])
+        .disabled(workflowActions == nil)
+
+        Divider()
+
+        Button(telemetryActions?.isExpanded() == true
+               ? "Hide Telemetry" : "Show Telemetry") {
+            telemetryActions?.toggle()
+        }
+        .disabled(telemetryActions == nil)
     }
 }

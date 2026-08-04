@@ -59,6 +59,14 @@ struct TesseraStudioMacApp: App {
                 HelpMenuItems()
             }
 
+            // View menu: node palette + inspector toggles (live
+            // only when a Workflows surface is focused) and the
+            // telemetry drawer toggle. Inserted after the system
+            // sidebar group so the standard items stay put.
+            CommandGroup(after: .sidebar) {
+                ViewMenuItems()
+            }
+
             // Edit menu's Undo/Redo are auto-bound by the system
             // to the first responder's UndoManager. Views that
             // need undoable mutations read `@Environment(\.undoManager)`

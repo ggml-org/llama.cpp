@@ -80,6 +80,13 @@ struct ContentView: View {
                 telemetryMonitor.stop()
             }
         }
+        // Publish the telemetry drawer toggle to the focused scene
+        // so View > Show/Hide Telemetry can reach it from any
+        // destination.
+        .focusedSceneValue(\.telemetryMenuActions, TelemetryMenuActions(
+            toggle: { withAnimation { telemetryExpanded.toggle() } },
+            isExpanded: { telemetryExpanded }
+        ))
     }
 
     /// Current sidebar destination. Falls back to the Playground

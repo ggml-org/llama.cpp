@@ -28,6 +28,13 @@ struct WorkflowsView: View {
     @State private var isExporting = false
     @State private var isImporting = false
     @State private var runPhase: WorkflowRunPhase = .idle
+    /// Palette column visibility for the NavigationSplitView
+    /// (View > Show/Hide Node Palette toggles it).
+    @State private var paletteVisibility: NavigationSplitViewVisibility = .all
+    /// The parameter panel is presented as an inspector (HIG:
+    /// supplementary detail about the current selection). On by
+    /// default so the editor reads the same as before.
+    @State private var inspectorVisible = true
 
     @Environment(\.undoManager) private var undoManager
 
@@ -39,36 +46,40 @@ struct WorkflowsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            WorkflowToolbarView(
-                onNew: newDocument,
-                onOpen: { isImporting = true },
-                onSave: { isExporting = true },
-                onRun: { runWorkflow() },
-                isRunning: runPhase.isRunning
-            )
-            HSplitView {
-                WorkflowPaletteView(registry: registry)
-                ZStack {
-                    WorkflowCanvasView(
-                        workflow: workflow,
-                        registry: registry,
-                        positions: $positions,
-                        pendingConnection: $pendingConnection,
-                        selectedNodeId: $selectedNodeId,
-                        onConnectionCompleted: { dropPoint, canvasSize in
-                            completeConnection(at: dropPoint, in: canvasSize)
-                        },
-                        onPositionDragEnded: { nodeId, start, end in
-                            recordNodeMove(nodeId: nodeId, start: start, end: end)
-                        }
-                    )
-                    if let err = connectionError {
-                        connectionErrorBanner(err)
+        NavigationSplitView(columnVisibility: $paletteVisibility) {
+            WorkflowPaletteView(registry: registry)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+        } detail: {
+            ZStack {
+                WorkflowCanvasView(
+                    workflow: workflow,
+                    registry: registry,
+                    positions: $positions,
+                    pendingConnection: $pendingConnection,
+                    selectedNodeId: $selectedNodeId,
+                    onConnectionCompleted: { dropPoint, canvasSize in
+                        completeConnection(at: dropPoint, in: canvasSize)
+                    },
+                    onPositionDragEnded: { nodeId, start, end in
+                        recordNodeMove(nodeId: nodeId, start: start, end: end)
                     }
+                )
+                if let err = connectionError {
+                    connectionErrorBanner(err)
                 }
-                parameterPanel
             }
+            // The parameter panel is a HIG inspector: supplementary
+            // detail about the canvas selection, toggleable from
+            // View > Show/Hide Inspector.
+            .inspector(isPresented: $inspectorVisible) {
+                parameterPanel
+                    .inspectorColumnWidth(min: 240, ideal: 300, max: 380)
+            }
+            .toolbar { workflowToolbarItems }
+            // The outer shell already contributes the destination
+            // sidebar toggle; the palette is toggled from the View
+            // menu instead of a second, identical toolbar button.
+            .toolbar(removing: .sidebarToggle)
         }
         .fileExporter(
             isPresented: $isExporting,
@@ -110,13 +121,71 @@ struct WorkflowsView: View {
             new: newDocument,
             open: { isImporting = true },
             save: { isExporting = true },
-            canSave: { !workflow.nodes.isEmpty || !workflow.edges.isEmpty }
+            canSave: { !workflow.nodes.isEmpty || !workflow.edges.isEmpty },
+            togglePalette: togglePalette,
+            paletteVisible: { paletteVisibility != .detailOnly },
+            toggleInspector: { inspectorVisible.toggle() },
+            inspectorVisible: { inspectorVisible }
         ))
         // The window title carries the document name plus the
         // standard "- Edited" marker while there are unsaved
         // changes (HIG: documents surface modification state in
         // the title bar, not just a dot somewhere).
         .navigationTitle(isEdited ? "\(documentName) - Edited" : documentName)
+    }
+
+    // MARK: - Window toolbar
+
+    /// The window-toolbar items for the Workflows surface
+    /// (replaces the old custom HStack toolbar). New / Open /
+    /// Save sit in the secondary group; Run is the primary
+    /// action, paired with the running spinner while a run is
+    /// in flight.
+    @ToolbarContentBuilder
+    private var workflowToolbarItems: some ToolbarContent {
+        ToolbarItemGroup(placement: .secondaryAction) {
+            Button(action: newDocument) {
+                Label("New", systemImage: "doc.badge.plus")
+            }
+            .help("New workflow")
+            .disabled(runPhase.isRunning)
+            .accessibilityLabel("New workflow")
+            .accessibilityHint("Replace the current workflow with an empty one")
+
+            Button(action: { isImporting = true }) {
+                Label("Open", systemImage: "folder")
+            }
+            .help("Open workflow from disk")
+            .disabled(runPhase.isRunning)
+            .accessibilityLabel("Open workflow")
+            .accessibilityHint("Choose a workflow file to open")
+
+            Button(action: { isExporting = true }) {
+                Label("Save", systemImage: "square.and.arrow.down")
+            }
+            .help("Save workflow to disk")
+            .disabled(runPhase.isRunning)
+            .accessibilityLabel("Save workflow")
+            .accessibilityHint("Save the current workflow to a file")
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
+            if runPhase.isRunning {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Workflow running")
+            }
+            Button(action: { runWorkflow() }) {
+                Label("Run", systemImage: "play.fill")
+            }
+            .help("Run workflow")
+            .disabled(runPhase.isRunning)
+            .accessibilityLabel("Run workflow")
+            .accessibilityHint("Execute the current workflow and show progress")
+        }
+    }
+
+    private func togglePalette() {
+        paletteVisibility = (paletteVisibility == .all) ? .detailOnly : .all
     }
 
     // MARK: - Undo registration
