@@ -20,6 +20,11 @@ struct WorkflowNodeView: View {
     let type: any WorkflowNodeType.Type
     @Binding var position: CGPoint
     let isSelected: Bool
+    /// Type of the port an in-flight wire was dragged from, if
+    /// any. Input ports use it to show live compatibility
+    /// feedback (accent ring vs dim + slash) while the drag is
+    /// active; nil renders ports normally.
+    var pendingSourceType: WorkflowPortType? = nil
     let onSelect: () -> Void
     let onPortDragStarted: (PendingPortEndpoint) -> Void
     let onPortDragChanged: (CGPoint) -> Void
@@ -108,6 +113,7 @@ struct WorkflowNodeView: View {
                 WorkflowPortView(
                     port: port,
                     side: side,
+                    pendingSourceType: side == .left ? pendingSourceType : nil,
                     onDragStarted: { _ in
                         onPortDragStarted(PendingPortEndpoint(
                             nodeId: node.id, portId: port.id, portType: port.type
@@ -137,11 +143,27 @@ struct WorkflowNodeView: View {
 struct WorkflowPortView: View {
     enum Side { case left, right }
 
+    /// Live feedback state while a wire drag is in flight.
+    /// `.none` outside a drag (and on output ports); input
+    /// ports compare their type against the dragged source.
+    private enum DragFeedback { case none, compatible, incompatible }
+
     let port: WorkflowPort
     let side: Side
+    /// Type of the port an in-flight wire was dragged from.
+    /// Set on input ports only; drives the live compatibility
+    /// feedback while the drag is active.
+    var pendingSourceType: WorkflowPortType? = nil
     let onDragStarted: (CGPoint) -> Void
     let onDragChanged: (CGPoint) -> Void
     let onDragEnded: (CGPoint) -> Void
+
+    private var dragFeedback: DragFeedback {
+        guard side == .left, let pendingSourceType else { return .none }
+        return WorkflowGeometry.isWireCompatible(
+            source: pendingSourceType, target: port.type
+        ) ? .compatible : .incompatible
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -155,7 +177,23 @@ struct WorkflowPortView: View {
             Circle()
                 .fill(color)
                 .frame(width: 8, height: 8)
-                .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 0.5))
+                .overlay(
+                    Circle().stroke(
+                        dragFeedback == .compatible
+                            ? Color.accentColor
+                            : Color.primary.opacity(0.2),
+                        lineWidth: dragFeedback == .compatible ? 1.5 : 0.5
+                    )
+                )
+                .opacity(dragFeedback == .incompatible ? 0.35 : 1.0)
+                .overlay {
+                    if dragFeedback == .incompatible {
+                        Image(systemName: "circle.slash")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .contentShape(Circle())
                 .gesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .global)
@@ -170,8 +208,10 @@ struct WorkflowPortView: View {
                 .accessibilityElement()
                 // The dot's color encodes the port type; the
                 // label spells the type out so the encoding is
-                // not color-only.
-                .accessibilityLabel("\(port.label), \(portTypeName) \(side == .left ? "input" : "output") port")
+                // not color-only. The drag state is spelled
+                // out too, so the ring / slash feedback is not
+                // visual-only.
+                .accessibilityLabel("\(port.label), \(portTypeName) \(side == .left ? "input" : "output") port\(accessibilityDragState)")
                 .accessibilityHint(side == .left
                     ? "Drag to this port to wire an output to it"
                     : "Drag from this port to an input port to wire them")
@@ -193,6 +233,16 @@ struct WorkflowPortView: View {
         case .json: return .purple
         case .toolResult: return .green
         case .bag: return .pink
+        }
+    }
+
+    /// Compatibility state during an in-flight wire drag, as a
+    /// label suffix. Empty outside a drag.
+    private var accessibilityDragState: String {
+        switch dragFeedback {
+        case .none: return ""
+        case .compatible: return ", compatible drop target"
+        case .incompatible: return ", incompatible drop target"
         }
     }
 

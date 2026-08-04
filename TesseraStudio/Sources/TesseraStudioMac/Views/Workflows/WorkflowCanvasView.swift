@@ -17,6 +17,11 @@ struct WorkflowCanvasView: View {
     @Binding var positions: WorkflowPositionMap
     @Binding var pendingConnection: PendingConnection?
     @Binding var selectedNodeId: String?
+    /// Type of the output port an in-flight wire was dragged
+    /// from, if any. The parent sets it while a pending
+    /// connection is live so input ports can show compatibility
+    /// feedback before the drop; nil renders ports normally.
+    var pendingSourceType: WorkflowPortType? = nil
     let onConnectionCompleted: (CGPoint, CGSize) -> Void
     /// Fired by `WorkflowNodeView` after a drag-to-move gesture
     /// completes, with `(nodeId, startPosition, endPosition)`.
@@ -76,6 +81,7 @@ struct WorkflowCanvasView: View {
                     type: type,
                     position: bindingFor(nodeId: node.id, type: type),
                     isSelected: selectedNodeId == node.id,
+                    pendingSourceType: pendingSourceType,
                     onSelect: { selectedNodeId = node.id },
                     onPortDragStarted: { endpoint in
                         let pos = positions[endpoint.nodeId] ?? .zero

@@ -24,6 +24,17 @@ public enum WorkflowGeometry {
         40 + 8 + CGFloat(portCount) * 20 + 8
     }
 
+    /// Whether a wire dragged from an output port of type
+    /// ``source`` may land on an input port of type ``target``.
+    /// Applies the same rule as the drop-time validation
+    /// (``WorkflowPortType/canFlowInto``); lifted here so the
+    /// live drag feedback and the drop check can't drift apart.
+    public static func isWireCompatible(
+        source: WorkflowPortType, target: WorkflowPortType
+    ) -> Bool {
+        source.canFlowInto(target)
+    }
+
     /// Centre of a port dot, in canvas coordinates. `isLeft`
     /// is true for input ports (rendered on the left edge) and
     /// false for output ports (rendered on the right). The
