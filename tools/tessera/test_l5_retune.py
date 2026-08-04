@@ -94,6 +94,7 @@ SCHEMA_SQL = """
         n_samples             INTEGER,
         in_sample_loss        DOUBLE,
         hit_rate              DOUBLE,
+        top_fraction          DOUBLE,
         retune_source         TEXT,
         updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, family)

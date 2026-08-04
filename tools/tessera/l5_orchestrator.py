@@ -283,6 +283,39 @@ class RequantPlan:
 # ---------------------------------------------------------------------------
 
 
+def _tensor_family(tensor_name: str) -> str:
+    """Return the family for ``tensor_name`` (Phase 15).
+
+    The family is the ``.weight``-stripped, ``blk.<i>.``-stripped
+    second ``.``-separated segment of the tensor name. Examples:
+
+        blk.0.attn_q.weight      -> attn_q
+        blk.0.ffn_gate.weight    -> ffn_gate
+        token_embd.weight        -> token_embd
+        output.weight             -> output
+
+    This is the same convention as
+    ``calibration_rollup.py``'s family extraction: the family
+    is the part of the name that identifies the tensor's role
+    (attention query, FFN gate, embedding, etc.). The
+    per-family top_fraction lookup keys on this value.
+    """
+    base = str(tensor_name)
+    for suf in (".weight", ".bias"):
+        if base.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    parts = base.split(".")
+    if len(parts) >= 3 and parts[0] == "blk":
+        return parts[2]
+    if len(parts) >= 2:
+        return parts[1]
+    return base
+
+
+
+
+
 class SensitivityScorer:
     """Combine the three L5 sensitivity components and run them through EMA.
 
@@ -494,6 +527,7 @@ class RequantPlanner:
         bottom_fraction: float = 0.05,
         budget_bits: int | None = None,
         divergence_threshold: float | None = None,
+        per_family_top_fraction: dict[str, float] | None = None,
     ) -> None:
         if not 0.0 <= top_fraction <= 1.0:
             raise ValueError(f"top_fraction must be in [0, 1], got {top_fraction}")
@@ -505,6 +539,60 @@ class RequantPlanner:
         self.divergence_threshold = (
             float(divergence_threshold) if divergence_threshold is not None else None
         )
+        # Phase 15: per-family top_fraction override. The retune
+        # writes a per-(model, family) top_fraction recommendation
+        # to l5_weights; the orchestrator reads it via
+        # --per-family-top-fraction and overrides the uniform
+        # --top-fraction for the families the retune has flagged.
+        # A family without a per-family row falls back to the
+        # uniform --top-fraction value. The dict is keyed by
+        # family (the tensor family, e.g. "attn_q"); the values
+        # are the per-family top_fraction (in [0, 1]).
+        self.per_family_top_fraction: dict[str, float] = (
+            dict(per_family_top_fraction)
+            if per_family_top_fraction is not None
+            else {}
+        )
+        # Per-family lookup. The cohort selection uses
+        # ``top_fraction_for(tensor)`` which checks the tensor's
+        # family in the override map. The default is the
+        # uniform --top-fraction.
+        # The family is computed from the tensor name (the
+        # block layer + name pattern); we use a simple
+        # suffix-stripping helper.
+
+    def top_fraction_for(self, tensor_name: str) -> float:
+        """Return the per-family top_fraction for this tensor,
+        or the uniform ``--top-fraction`` value when the
+        family is not in the override map.
+
+        The family is the leading part of the tensor name
+        (e.g. ``blk.0.attn_q.weight`` -> ``attn_q``). The
+        matching is the same convention as
+        ``calibration_rollup.py``: take the second ``.``-separated
+        segment after the block prefix.
+        """
+        if not self.per_family_top_fraction:
+            return self.top_fraction
+        family = _tensor_family(tensor_name)
+        return float(self.per_family_top_fraction.get(
+            family, self.top_fraction,
+        ))
+
+    def top_fraction_for_name(self, family: str) -> float:
+        """Return the per-family top_fraction for a given
+        family name (Phase 15). Used by the per-family
+        cohort selection when the retune has produced a
+        per-family top_fraction override. The lookup is the
+        same map as :py:meth:`top_fraction_for` (per-family
+        override keyed by family); families without an
+        override fall back to the uniform ``--top-fraction``.
+        """
+        if not self.per_family_top_fraction:
+            return self.top_fraction
+        return float(self.per_family_top_fraction.get(
+            str(family), self.top_fraction,
+        ))
 
     def plan(
         self,
@@ -587,24 +675,93 @@ class RequantPlanner:
         # ``metrics.pick_top_fraction`` / ``pick_bottom_fraction``
         # helpers operate on a dict and would duplicate work; the
         # polars rank is one expression each.
-        top_n = max(1, int(round(n * self.top_fraction))) if n > 0 else 0
-        bottom_n = max(1, int(round(n * self.bottom_fraction))) if n > 0 else 0
-
-        cohort_df = df.with_columns(
-            pl.col("sensitivity_ema")
-              .rank(method="ordinal", descending=True)
-              .alias("rank_desc"),
-            pl.col("sensitivity_ema")
-              .rank(method="ordinal")
-              .alias("rank_asc"),
-        ).with_columns(
-            ((pl.col("rank_desc") <= top_n)
-             & (pl.col("rank_asc") > bottom_n)
-            ).alias("in_top_cohort"),
-            ((pl.col("rank_asc") <= bottom_n)
-             & (pl.col("rank_desc") > top_n)
-            ).alias("in_bottom_cohort"),
-        )
+        #
+        # Phase 15: per-family top_fraction override. The retune
+        # may have flagged some families as more miscalibrated
+        # than others; the per-family top_fraction is applied
+        # independently to each family. The rank is per-family
+        # (each family's top X% is selected). Families without
+        # a per-family row use the uniform ``--top-fraction``.
+        # A tensor's family is computed from the name (the
+        # ``blk.<i>.``-stripped second ``.``-separated segment).
+        # The family column is added here and consumed by the
+        # rank expressions.
+        if self.per_family_top_fraction:
+            # Build a per-tensor family column for the
+            # rank+filter. The family derivation is a
+            # vectorised string transformation; we use a
+            # polars expression so the whole rank+filter
+            # stays a single lazy expression (no Python
+            # row-by-row loop).
+            df_with_family = df.with_columns(
+                pl.col("tensor").map_elements(
+                    _tensor_family, return_dtype=pl.String,
+                ).alias("family")
+            )
+            # Per-family top_n: the family column is the key.
+            # We compute the per-family top_n outside the
+            # expression (one Python call per family, then a
+            # single polars join) and use a join to bring
+            # the per-row top_n into the DataFrame.
+            families = df_with_family["family"].unique().to_list()
+            family_top_n: dict[str, int] = {}
+            family_bottom_n: dict[str, int] = {}
+            for fam in families:
+                fam_n = df_with_family.filter(
+                    pl.col("family") == fam
+                ).height
+                top_frac = self.top_fraction_for_name(fam)
+                family_top_n[fam] = max(
+                    1, int(round(fam_n * top_frac))
+                ) if fam_n > 0 else 0
+                family_bottom_n[fam] = max(
+                    1, int(round(fam_n * self.bottom_fraction))
+                ) if fam_n > 0 else 0
+            # Apply via polars joins. The
+            # ``with_columns`` form keeps the lazy
+            # expression pipeline intact.
+            family_top_df = pl.DataFrame({
+                "family":  list(family_top_n.keys()),
+                "family_top_n": list(family_top_n.values()),
+                "family_bottom_n": list(family_bottom_n.values()),
+            })
+            cohort_df = df_with_family.join(
+                family_top_df, on="family", how="left",
+            ).with_columns(
+                pl.col("sensitivity_ema")
+                  .rank(method="ordinal", descending=True)
+                  .over("family")
+                  .alias("rank_desc"),
+                pl.col("sensitivity_ema")
+                  .rank(method="ordinal")
+                  .over("family")
+                  .alias("rank_asc"),
+            ).with_columns(
+                ((pl.col("rank_desc") <= pl.col("family_top_n"))
+                 & (pl.col("rank_asc") > pl.col("family_bottom_n"))
+                ).alias("in_top_cohort"),
+                ((pl.col("rank_asc") <= pl.col("family_bottom_n"))
+                 & (pl.col("rank_desc") > pl.col("family_top_n"))
+                ).alias("in_bottom_cohort"),
+            ).drop("family_top_n", "family_bottom_n", "rank_desc", "rank_asc")
+        else:
+            top_n = max(1, int(round(n * self.top_fraction))) if n > 0 else 0
+            bottom_n = max(1, int(round(n * self.bottom_fraction))) if n > 0 else 0
+            cohort_df = df.with_columns(
+                pl.col("sensitivity_ema")
+                  .rank(method="ordinal", descending=True)
+                  .alias("rank_desc"),
+                pl.col("sensitivity_ema")
+                  .rank(method="ordinal")
+                  .alias("rank_asc"),
+            ).with_columns(
+                ((pl.col("rank_desc") <= top_n)
+                 & (pl.col("rank_asc") > bottom_n)
+                ).alias("in_top_cohort"),
+                ((pl.col("rank_asc") <= bottom_n)
+                 & (pl.col("rank_desc") > top_n)
+                ).alias("in_bottom_cohort"),
+            ).drop("rank_desc", "rank_asc")
         top_set = set(
             cohort_df.filter(pl.col("in_top_cohort"))["tensor"].to_list()
         )
@@ -1356,6 +1513,37 @@ def _build_parser() -> argparse.ArgumentParser:
             "required for a meaningful retune)."
         ),
     )
+    parser.add_argument(
+        "--retune-cross-model-fallback",
+        action="store_true",
+        help=(
+            "When --retune-from-db is set, fall back to the "
+            "cross-model l5_weights row (model_hash='*') for any "
+            "family the per-model lookup missed. The cross-model "
+            "row is the n_samples-weighted mean across all models "
+            "(written by l5_retune.py --retune-cross-model); the "
+            "fallback lets new models warm-start from the "
+            "cross-model mean. Off by default; the consumer-side "
+            "default is to leave families without per-model rows "
+            "at the --w-* flag values."
+        ),
+    )
+    parser.add_argument(
+        "--per-family-top-fraction",
+        default=None,
+        type=Path,
+        help=(
+            "Path to the unified tessera.duckdb file. When set, "
+            "the orchestrator reads the per-family top_fraction "
+            "recommendation from l5_weights (the column the retune "
+            "writes) and uses it instead of the uniform "
+            "--top-fraction for the families the retune flagged. "
+            "Families without a per-family row fall back to the "
+            "--top-fraction value. Defaults to the --retune-from-db "
+            "path when --retune-from-db is set; pass this flag "
+            "explicitly with a different DB to override."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -1378,6 +1566,7 @@ def main(argv: list[str] | None = None) -> int:
         args.w_imatrix, args.w_gradient, args.w_layer,
     )
     retune_source = None
+    per_family_top_fraction: dict[str, float] = {}
     if args.retune_from_db is not None:
         if args.model_hash is None:
             raise ValueError(
@@ -1387,9 +1576,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         # Local import to keep the top of this module light; the
         # l5_retune module pulls polars + duckdb at import time.
-        from l5_retune import aggregate_weights, read_l5_weights
+        from l5_retune import (
+            aggregate_weights,
+            read_l5_weights,
+            read_per_family_top_fraction,
+        )
         weights_df = read_l5_weights(
-            args.retune_from_db, model_hash=args.model_hash,
+            args.retune_from_db,
+            model_hash=args.model_hash,
+            cross_model_fallback=args.retune_cross_model_fallback,
         )
         if weights_df.height == 0:
             print(
@@ -1410,6 +1605,31 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
+    # Per-family top_fraction. The retune writes a
+    # top_fraction recommendation per (model, family); the
+    # orchestrator consumes it via --per-family-top-fraction
+    # (which defaults to --retune-from-db when not set). The
+    # value overrides the uniform --top-fraction for the
+    # families the retune has flagged. Families without a
+    # per-family row use the --top-fraction flag value.
+    top_fraction_db = args.per_family_top_fraction
+    if top_fraction_db is None and args.retune_from_db is not None:
+        top_fraction_db = args.retune_from_db
+    if top_fraction_db is not None:
+        from l5_retune import read_per_family_top_fraction
+        per_family_top_fraction = read_per_family_top_fraction(
+            top_fraction_db,
+            model_hash=args.model_hash,
+            cross_model_fallback=args.retune_cross_model_fallback,
+        )
+        if per_family_top_fraction:
+            print(
+                f"[l5] per-family-top-fraction: "
+                f"{len(per_family_top_fraction)} family recommendation(s) "
+                f"from {top_fraction_db}",
+                file=sys.stderr,
+            )
+
     scorer = SensitivityScorer(
         decay=args.ema_decay,
         weights=(w_im, w_grad, w_layer),
@@ -1420,6 +1640,7 @@ def main(argv: list[str] | None = None) -> int:
         bottom_fraction=args.bottom_fraction,
         budget_bits=args.budget_bits,
         divergence_threshold=args.divergence_threshold,
+        per_family_top_fraction=per_family_top_fraction,
     )
 
     apply_fn: ApplyFn | None = None
