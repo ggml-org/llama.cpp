@@ -4311,12 +4311,17 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FC,
         MODEL_TENSOR.ENC_OUTPUT_NORM,
+        # Gemma-4 dspark: per-layer output scale (layer_scalar in safetensors)
+        MODEL_TENSOR.LAYER_OUT_SCALE,
         # optional DSpark heads
         MODEL_TENSOR.DSPARK_MARKOV_W1,
         MODEL_TENSOR.DSPARK_MARKOV_W2,
