@@ -93,13 +93,13 @@ jobs:
           - build: 'arm64'
             arch: 'arm64'
             os: macos-26
-            defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON"
+            defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3"
           # TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23780)
           #       in order to enable it again, we have to provision dedicated runners  to run it
           #- build: 'arm64-kleidiai'
           #  arch: 'arm64'
           #  os: macos-14
-          #  defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_CPU_KLEIDIAI=ON"
+          #  defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 -DGGML_CPU_KLEIDIAI=ON"
           - build: 'x64'
             arch: 'x64'
             os: macos-15-intel

@@ -12,6 +12,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
 	import {
+		abbreviateHome,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
@@ -21,6 +22,7 @@
 		type ExecShellExitStatus,
 		type ToolResultLine
 	} from '$lib/utils';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import ToolCallBlock from './ToolCallBlock.svelte';
@@ -74,6 +76,14 @@
 	const highlightedCommandHtml = $derived(
 		execShellMeta ? highlightCode(execShellMeta.command, 'bash') : ''
 	);
+
+	// The working directory the command ran with, persisted per call on the
+	// tool result message (it travels via the x-tool-cwd header, not the tool
+	// args). Reading it from the section keeps it accurate even if the
+	// conversation cwd changes later.
+	const cwd = $derived(section.toolCwd);
+	const home = $derived(toolsStore.serverHome);
+	const wdDisplay = $derived(abbreviateHome(cwd ?? '', home));
 
 	const exitBadgeClass = $derived(
 		execShellExitStatus?.timedOut
@@ -159,6 +169,11 @@
 </script>
 
 {#snippet execShellTitle()}
+	{#if cwd}
+		<span class="exec-wd" title={cwd}>{wdDisplay}</span>
+		<span class="exec-prompt">$</span>
+	{/if}
+
 	{#if highlightedCommandHtml}
 		<span class="font-mono">{@html highlightedCommandHtml}</span>
 	{:else}
@@ -232,6 +247,23 @@
 </ToolCallBlock>
 
 <style>
+	:root {
+		--exec-wd-margin: 0.4rem;
+	}
+
+	.exec-wd {
+		font-family: var(--font-mono);
+		color: var(--muted-foreground);
+		margin-right: var(--exec-wd-margin);
+	}
+
+	.exec-prompt {
+		font-family: var(--font-mono);
+		color: var(--muted-foreground);
+		opacity: 0.55;
+		margin-right: var(--exec-wd-margin);
+	}
+
 	.terminal-output {
 		overscroll-behavior: contain;
 	}
