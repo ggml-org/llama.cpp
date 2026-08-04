@@ -31,6 +31,7 @@
 #include "tessera-progress.h"
 #include "tessera-sharded-map.h"
 #include "tessera-quantize-db.h"
+#include "tessera-db-buffer.h"
 #include "tessera-vec.h"
 
 #include "gguf.h"
@@ -518,11 +519,11 @@ static std::string ts_join(const std::vector<std::string> & parts,
 // DuckDB store plumbing
 //
 // ts_dispatch_db is the per-run state threaded through the GA hooks. It owns
-// the open ts_quantize_db plus the per-tensor appenders used to bulk-log GA
-// candidate evaluations. The appenders live in a sharded map keyed by tensor
-// name so concurrent GA workers (one per layer) each get their own appender
-// without contending; DuckDB Appenders are not thread-safe across rows of the
-// same table, but distinct Appenders on the same Connection are.
+// the open ts_quantize_db plus a single ts_db_buffer for the ga_evaluations
+// table (the GA hot path; up to 1.6M rows per run). The buffer replaces the
+// previous per-tensor DuckDB Appender sharded map: a single MPSC queue with
+// a dedicated flusher thread, 65536-row batches, 1-second time flush, and
+// sync-on-exit via the unique_ptr deleter. See tessera-db-buffer.h.
 //
 // All DB calls are best-effort: a failure logs a one-line warning and the
 // pipeline continues. The DB is a recording/warm-start aid, not a correctness
@@ -534,15 +535,10 @@ struct ts_dispatch_db {
     // Resume set: tensor names with a converged result for this run_id.
     // Populated at startup; the layer_skip_lookup callback checks membership.
     std::unordered_set<std::string> converged;
-    // Open appenders keyed by tensor name. Each GA worker opens one on first
-    // eval_recorder call for its layer and flushes+closes it when evolve_all
-    // returns. The map's shard lock serializes open/close but per-row appends
-    // are uncontended once a worker holds its appender pointer (only that
-    // worker writes to it for the layer's GA duration).
-    ts_sharded_map<std::string, ts_quantize_db_appender *> appenders;
-    // Counter for eval rows lost to appender failures (best-effort logging;
-    // reported once at run end so a silent DB problem is visible).
-    std::atomic<int64_t> eval_rows_dropped{0};
+    // Single buffer for the ga_evaluations table. Replaces the
+    // per-tensor Appender sharded map. The buffer is null when --quantize-db
+    // is unset; eval_recorder checks for null and returns early.
+    ts_db_buffer *   eval_buffer = nullptr;
 };
 
 // Open the store and begin a run. Returns a heap-allocated ts_dispatch_db
@@ -607,6 +603,28 @@ static ts_dispatch_db * ts_dispatch_db_open(
                wrap->model_hash.empty() ? "(hash failed)" : wrap->model_hash.c_str(),
                wrap->converged.size());
     }
+    // Open the per-table write buffer for ga_evaluations. 65536-row
+    // batches match the evidence-store row_group_size convention; 1
+    // second time flush keeps the table visible in DuckDB without
+    // flooding on small writes. Best-effort: if the buffer fails to
+    // open (allocation, invalid arg), the dispatch runs without DB
+    // eval logging but keeps the run_lifecycle / warm-start / resume
+    // path alive. That matches the existing --quantize-db failure
+    // mode (warn-and-continue).
+    {
+        std::vector<std::string> ga_cols = {
+            "run_id", "tensor_name", "generation", "island", "candidate_idx",
+            "alpha", "clip", "composite", "mse", "relative_frob", "evaluated_at",
+        };
+        wrap->eval_buffer = ts_db_buffer_open(
+            wrap->db, "ga_evaluations", ga_cols,
+            /*flush_threshold=*/65536,
+            std::chrono::milliseconds(1000));
+        if (wrap->eval_buffer == nullptr) {
+            fprintf(stderr, "tessera-dispatch: warning: eval buffer open failed "
+                            "(eval logging disabled; run_lifecycle still works)\n");
+        }
+    }
     return wrap;
 }
 
@@ -623,34 +641,27 @@ static void ts_dispatch_db_close(ts_dispatch_db * wrap, const char * status) {
                             "failed: %s\n", status, err.c_str());
         }
     }
-    // Close any appenders that were never explicitly flushed (e.g. an early
-    // return between evolve_all and the per-tensor close loop).
-    wrap->appenders.with_lock("__close_all__",
-        [&](std::unordered_map<std::string, ts_quantize_db_appender *> & m,
-           const std::string &)
-    {
-        for (auto & kv : m) {
-            ts_quantize_db_appender_flush(kv.second);
-            ts_quantize_db_appender_close(kv.second);
+    // Close the GA-eval buffer. ts_db_buffer_close drains the pending
+    // queue (sync-on-exit) and nulls the handle, so a subsequent
+    // eval_recorder call (e.g. an early-return path) is a no-op.
+    if (wrap->eval_buffer != nullptr) {
+        ts_db_buffer_stats s = ts_db_buffer_stats_get(wrap->eval_buffer);
+        ts_db_buffer_close(&wrap->eval_buffer);
+        if (s.rows_dropped > 0) {
+            fprintf(stderr, "tessera-dispatch: warning: %llu GA eval rows dropped "
+                            "(DB buffer flush failures)\n",
+                    (unsigned long long)s.rows_dropped);
         }
-        m.clear();
-    });
-    if (wrap->eval_rows_dropped.load(std::memory_order_relaxed) > 0) {
-        fprintf(stderr, "tessera-dispatch: warning: %lld GA eval rows dropped "
-                        "(DB appender failures)\n",
-                (long long)wrap->eval_rows_dropped.load(std::memory_order_relaxed));
     }
     delete wrap->db;
     wrap->db = nullptr;
 }
 
-// Per-evaluation callback: opens (lazily) and writes to the layer's appender.
-// Thread-safety: the GA evaluates a layer's population across multiple
-// candidate-eval threads (n_eval_threads), so this callback fires
-// concurrently for the SAME layer->name. DuckDB Appenders are not thread-safe
-// across rows of one appender, so the entire open+append sequence runs under
-// the shard lock for that tensor name. Different tensors hash to different
-// shards and append concurrently without contention.
+// Per-evaluation callback: formats one row and pushes it into the
+// shared ga_evaluations buffer. The buffer's MPSC queue serializes the
+// SQL writes on a single flusher thread, so this callback is hot-path
+// cheap: a vector copy under the buffer's mutex + maybe a cv signal.
+// DuckDB never sees the GA worker threads directly.
 static void ts_dispatch_eval_recorder(const ts_awq_layer * layer,
                                       int32_t generation, int32_t island,
                                       int32_t candidate_idx,
@@ -658,41 +669,35 @@ static void ts_dispatch_eval_recorder(const ts_awq_layer * layer,
                                       const ts_awq_score    * score,
                                       void * user) {
     auto * wrap = static_cast<ts_dispatch_db *>(user);
-    if (wrap == nullptr || wrap->db == nullptr || layer == nullptr) return;
-    const std::string key = layer->name;
-    ts_quantize_db_eval_row row;
-    row.run_id        = wrap->run_id;
-    row.tensor_name   = key;
-    row.generation    = generation;
-    row.island        = island;
-    row.candidate_idx = candidate_idx;
-    row.alpha         = cand ? cand->genes.alpha : 0.0f;
-    row.clip          = cand ? cand->genes.clip  : 0.0f;
-    row.composite     = score ? score->composite     : 0.0f;
-    row.mse           = score ? score->mse           : 0.0f;
-    row.relative_frob = score ? score->relative_frob : 0.0f;
-
-    bool dropped = wrap->appenders.with_lock(key,
-        [&](std::unordered_map<std::string, ts_quantize_db_appender *> & m,
-           const std::string & k) -> bool
-    {
-        auto it = m.find(k);
-        ts_quantize_db_appender * ap = (it != m.end()) ? it->second : nullptr;
-        if (ap == nullptr) {
-            std::string err;
-            ap = ts_quantize_db_appender_open(wrap->db, wrap->run_id, k, &err);
-            if (ap == nullptr) {
-                fprintf(stderr, "tessera-dispatch: warning: appender open for "
-                                "'%s' failed: %s\n", k.c_str(), err.c_str());
-                return true;  // dropped
-            }
-            m.emplace(k, ap);
-        }
-        return ts_quantize_db_appender_row(ap, row) != 0;
-    });
-    if (dropped) {
-        wrap->eval_rows_dropped.fetch_add(1, std::memory_order_relaxed);
+    if (wrap == nullptr || wrap->db == nullptr || wrap->eval_buffer == nullptr
+        || layer == nullptr) {
+        return;
     }
+    // Format the row. Numeric columns are emitted without quotes (the
+    // buffer's looks_like_int / looks_like_float pass-through skips the
+    // quote path); text columns are pre-escaped via sql_escape. NULL
+    // is the special token the buffer recognizes. The order matches
+    // the ga_evaluations CREATE TABLE column list.
+    const float alpha         = cand  ? cand->genes.alpha      : 0.0f;
+    const float clip          = cand  ? cand->genes.clip       : 0.0f;
+    const float composite     = score ? score->composite      : 0.0f;
+    const float mse           = score ? score->mse            : 0.0f;
+    const float relative_frob = score ? score->relative_frob  : 0.0f;
+
+    std::vector<std::string> row = {
+        ts_db_sql_escape(wrap->run_id),
+        ts_db_sql_escape(layer->name),
+        std::to_string(generation),
+        std::to_string(island),
+        std::to_string(candidate_idx),
+        std::to_string(alpha),
+        std::to_string(clip),
+        std::to_string(composite),
+        std::to_string(mse),
+        std::to_string(relative_frob),
+        "NULL",   // evaluated_at: left NULL per row, like the Appender path
+    };
+    ts_db_buffer_append(wrap->eval_buffer, row);
 }
 
 // Look up a family warm-start seed in the persistent store. Used as the
@@ -1765,25 +1770,16 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 t2[l]                 = ga_results[l].best_score.relative_frob;
             }
 
-            // Persist GA results + flush per-tensor eval appenders. Each
-            // layer's appender was opened lazily inside eval_recorder; close
-            // it now so the ga_evaluations rows for this tensor are visible
-            // to subsequent queries (warm-start, resume, the duckdb CLI).
+            // Persist GA results. The eval buffer is shared across all
+            // tensors (one MPSC queue + one flusher thread), so there is
+            // no per-tensor appender to close here. A periodic
+            // ts_db_buffer_flush_now() at the end of every layer's GA
+            // is unnecessary: the buffer's count + time triggers will
+            // have already drained the eval rows. Sync-on-exit is
+            // handled by the destructor when ts_dispatch_db_close
+            // runs at the end of the run.
             if (db_wrap != nullptr) {
                 for (size_t l = 0; l < ga_results.size(); l++) {
-                    // Flush + close this layer's appender (no-op if none).
-                    db_wrap->appenders.with_lock(ga_names[l],
-                        [&](std::unordered_map<std::string,
-                                                ts_quantize_db_appender *> & m,
-                           const std::string & key)
-                    {
-                        auto it = m.find(key);
-                        if (it != m.end()) {
-                            ts_quantize_db_appender_flush(it->second);
-                            ts_quantize_db_appender_close(it->second);
-                            m.erase(it);
-                        }
-                    });
                     ts_quantize_db_ga_result gr;
                     gr.run_id          = db_wrap->run_id;
                     gr.tensor_name     = ga_names[l];

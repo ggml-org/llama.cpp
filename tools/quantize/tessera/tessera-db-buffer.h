@@ -109,3 +109,10 @@ void ts_db_buffer_close(ts_db_buffer ** buf_p);
 // production code paths (the value is stale by the time the caller
 // reads it). Returns 0 if buf is null.
 size_t ts_db_buffer_pending_for_test(const ts_db_buffer * buf);
+
+// SQL escape helper, shared by the dispatch's eval_recorder and any
+// other caller that builds a value list for ts_db_buffer_append.
+// Doubles single quotes (DuckDB's escape convention); sufficient for
+// run_id, model_path, family, tensor_name, etc. that do not contain
+// LIKE / backslash semantics.
+std::string ts_db_sql_escape(const std::string & s);

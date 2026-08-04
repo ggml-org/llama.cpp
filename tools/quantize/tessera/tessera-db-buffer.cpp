@@ -395,3 +395,13 @@ size_t ts_db_buffer_pending_for_test(const ts_db_buffer * buf) {
     auto * impl = reinterpret_cast<const ts_db_buffer_impl *>(buf);
     return impl->pending_size();
 }
+
+std::string ts_db_sql_escape(const std::string & s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        if (c == '\'') out += "''";
+        else           out += c;
+    }
+    return out;
+}
