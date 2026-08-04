@@ -109,6 +109,11 @@ struct clip_hparams {
     int32_t downsample_query_side;
     int32_t downsample_window_side;
 
+    // Onyx vision (per-block sparse-window pattern, learned pos-emb, patch-temporal)
+    int32_t onyx_patch_temporal = 0;
+    int32_t onyx_sparse_factor  = 0;
+    int32_t onyx_pos_grid       = 0;
+
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
@@ -407,6 +412,11 @@ struct clip_model {
     ggml_tensor * mm_ffn_down_b = nullptr;
     ggml_tensor * mm_post_norm_w = nullptr;
     ggml_tensor * mm_post_norm_b = nullptr;
+
+    // Onyx adapter + final vision projection (3-linear MLP with erf-GELU)
+    ggml_tensor * mm_adapter_fc   = nullptr;
+    ggml_tensor * mm_adapter_proj = nullptr;
+    ggml_tensor * mm_vision_proj  = nullptr;
 
     // LLaVA projection
     ggml_tensor * mm_input_norm_w = nullptr;

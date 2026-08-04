@@ -91,6 +91,12 @@
 #define KEY_A_LOCAL_GROUP_SIZE     "clip.audio.local_group_size"     // mimo-v2.5: input_local_transformer grouping size
 #define KEY_AUDIO_SUBSAMPLING_FACTOR "clip.audio.subsampling_factor"
 
+#define KEY_ONYX_PATCH_TEMPORAL "clip.vision.onyx.patch_temporal"
+#define KEY_ONYX_DOWNSAMPLE     "clip.vision.onyx.downsample_factor"
+#define KEY_ONYX_SPARSE_FACTOR  "clip.vision.onyx.sparse_attention_factor"
+#define KEY_ONYX_POS_GRID       "clip.vision.onyx.pos_emb_grid"
+#define KEY_ONYX_ROPE_THETA     "clip.vision.onyx.rope_theta"
+
 //
 // tensor name constants
 //
@@ -128,6 +134,9 @@
 #define TN_MM_GATE         "mm.gate.%s"
 #define TN_MM_DOWN         "mm.down.%s"
 #define TN_MM_POST_NORM    "mm.post_norm.%s"
+#define TN_MM_ADAPTER_FC   "mm.adapter_fc.%s"   // onyx
+#define TN_MM_ADAPTER_PROJ "mm.adapter_proj.%s" // onyx
+#define TN_MM_VISION_PROJ  "mm.vision_proj.%s"  // onyx
 #define TN_MVLM_PROJ_MLP   "mm.model.mlp.%d.%s"
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
@@ -408,6 +417,7 @@ enum projector_type {
     PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
     PROJECTOR_TYPE_MIMO_AUDIO,
+    PROJECTOR_TYPE_ONYX,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -465,6 +475,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
     { PROJECTOR_TYPE_MIMO_AUDIO,        "mimo_audio"},
     { PROJECTOR_TYPE_PARAKEET,          "parakeet"},
+    { PROJECTOR_TYPE_ONYX,              "onyx"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
