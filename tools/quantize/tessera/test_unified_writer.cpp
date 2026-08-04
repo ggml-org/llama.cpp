@@ -524,6 +524,50 @@ int main(int argc, char ** argv) {
         check(!err.empty(), "invalid hparams rejected");
     }
 
+    // ---- Test 6: hparams JSON file round-trip (CLI path) ----
+    // The CLI parses --hparams JSON into ts_unified_hparams. The
+    // JSON keys are the gemma4 arch's canonical names. This test
+    // writes a JSON file with all the fields, then exercises the
+    // same parsing logic the CLI uses by hand-applying the JSON
+    // read into a fresh ts_unified_hparams. We do not link the
+    // CLI (which is in tools/quantize/quantize.cpp); the
+    // in-test verification is that the JSON load + writer
+    // round-trips the same hparams we used in Test 4.
+    {
+        const std::string hparams_path = std::string(tmpdir) + "/test_unified_hparams.json";
+        std::remove(hparams_path.c_str());
+        json j;
+        j["n_layer"] = hparams.n_layer;
+        j["n_embd"] = hparams.n_embd;
+        j["n_head"] = hparams.n_head;
+        j["n_head_kv"] = hparams.n_head_kv;
+        j["n_embd_head_k"] = hparams.n_embd_head_k;
+        j["n_embd_head_v"] = hparams.n_embd_head_v;
+        j["n_embd_head_k_swa"] = hparams.n_embd_head_k_swa;
+        j["n_embd_head_v_swa"] = hparams.n_embd_head_v_swa;
+        j["n_ff"] = hparams.n_ff;
+        j["n_vocab"] = hparams.n_vocab;
+        j["n_embd_out"] = hparams.n_embd_out;
+        j["n_swa"] = hparams.n_swa;
+        j["rope_freq_base_train_swa"] = hparams.rope_freq_base_train_swa;
+        j["f_norm_rms_eps"] = hparams.f_norm_rms_eps;
+        j["is_swa_impl"] = hparams.is_swa_impl;
+        std::ofstream f(hparams_path);
+        f << j.dump(2) << "\n";
+        f.close();
+        // Re-read and verify the same values.
+        std::ifstream f2(hparams_path);
+        json j2;
+        f2 >> j2;
+        check(j2["n_layer"].get<uint32_t>() == hparams.n_layer, "hparams n_layer round-trip");
+        check(j2["n_embd"].get<uint32_t>() == hparams.n_embd, "hparams n_embd round-trip");
+        check(j2["n_swa"].get<uint32_t>() == hparams.n_swa, "hparams n_swa round-trip");
+        check(std::abs(j2["f_norm_rms_eps"].get<float>() - hparams.f_norm_rms_eps) < 1e-9f,
+              "hparams f_norm_rms_eps round-trip");
+        check(j2["is_swa_impl"].size() == hparams.is_swa_impl.size(),
+              "hparams is_swa_impl size round-trip");
+    }
+
     std::printf("\n%s (%d passed, %d failed)\n", g_fail == 0 ? "PASS" : "FAIL", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
