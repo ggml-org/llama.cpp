@@ -220,21 +220,21 @@ struct SettingsView: View {
     }
 
     private var autonomyYoloSection: some View {
-        Section("Scoped YOLO") {
+        Section("Autonomous session") {
             if let yolo = yoloSession {
                 LabeledContent("goal", value: yolo.goal ?? "-")
                 LabeledContent("reason", value: yolo.reason.isEmpty ? "-" : yolo.reason)
                 LabeledContent("expires", value: yolo.expiresAt.formatted())
                 LabeledContent("actions so far", value: "\(yolo.actionCount)")
-                Button("End YOLO") { endYolo() }
+                Button("End autonomous session") { endYolo() }
             } else {
                 TextField("Goal (optional)", text: $yoloGoal)
                 TextField("Reason (for the audit log)", text: $yoloReason)
                 Stepper("Minutes: \(yoloMinutes)", value: $yoloMinutes, in: 5...240)
-                Button("Start YOLO") { startYolo() }
+                Button("Start autonomous session") { startYolo() }
                     .disabled(autonomySessionID.isEmpty)
                 if autonomySessionID.isEmpty {
-                    Text("Run the agent once first; YOLO binds to that session.")
+                    Text("Run the agent once first; the autonomous session binds to that run.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -242,7 +242,7 @@ struct SettingsView: View {
                     Text(yoloNote).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Text("YOLO auto-approves within scope, but irreversible actions always prompt. It expires on time and never persists across sessions.")
+            Text("An autonomous session auto-approves within scope, but irreversible actions always prompt. It expires on time and never persists across sessions.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -386,7 +386,7 @@ struct SettingsView: View {
 
     private func endYolo() {
         if let summary = TesseraLearningCenter.shared.autonomy.endYolo() {
-            yoloNote = "Last YOLO ran \(summary.actionCount) action(s) across \(summary.classes.count) class(es); \(summary.denials) denial(s)."
+            yoloNote = "Last autonomous session ran \(summary.actionCount) action(s) across \(summary.classes.count) class(es); \(summary.denials) denial(s)."
         }
         yoloSession = nil
     }
