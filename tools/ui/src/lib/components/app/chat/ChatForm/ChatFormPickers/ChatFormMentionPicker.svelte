@@ -6,6 +6,7 @@
 		joinPath,
 		lastPathSegment,
 		rankEntries,
+		splitPathQuery,
 		type GlobEntry
 	} from '$lib/utils';
 	import { debounce } from '$lib/utils/debounce';
@@ -20,7 +21,11 @@
 	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
 	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
 	import type { FileMentionEntry } from '$lib/types';
-	import { FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH } from '$lib/constants';
+	import {
+		FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
+		GLOB_WILDCARD,
+		PATH_NAV_MAX_DEPTH
+	} from '$lib/constants';
 
 	/**
 	 * Floating file/folder mention picker.
@@ -117,13 +122,26 @@
 
 		isSearching = true;
 		try {
+			// A query starting with `~` or `/` navigates the tree: search the
+			// parent for the last segment instead of glob-matching the whole
+			// string (which would never match because the base path is already
+			// home-relative and contains no literal `~`).
+			const pathQuery = splitPathQuery(query);
+			const searchPath = pathQuery ? pathQuery.parent : (scopePath ?? home ?? '~');
+			const include = pathQuery
+				? pathQuery.last
+					? buildCaseInsensitiveGlob(pathQuery.last)
+					: GLOB_WILDCARD
+				: buildCaseInsensitiveGlob(query);
+			const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : searchDepth;
+
 			const res = await ToolsService.executeToolRaw(
 				BuiltInTool.FILE_GLOB_SEARCH,
 				{
-					path: scopePath ?? home ?? '~',
+					path: searchPath,
 					type: 'all',
-					include: buildCaseInsensitiveGlob(query),
-					max_depth: searchDepth,
+					include,
+					max_depth: maxDepth,
 					limit: 50
 				},
 				controller.signal
@@ -136,7 +154,7 @@
 			}
 			const base = typeof res.base === 'string' ? res.base : '';
 			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-			searchResults = rankEntries(entries, query).map((e) => {
+			searchResults = rankEntries(entries, pathQuery?.last ?? query).map((e) => {
 				const path = joinPath(base, e.path);
 				return {
 					path,
