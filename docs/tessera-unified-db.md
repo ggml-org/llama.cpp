@@ -1992,3 +1992,142 @@ conservative partner differs from the source's qtype.
   data; the worst-of is applied to the trunk's write's
   qtype). This is correct behavior but the test could
   cover the trunk-wins case explicitly.
+
+## Phase 16 CI gate (cross-cutting test infrastructure)
+
+The Phase 16 stack is the closed loop calibration -> DB ->
+retune -> weights. A green build of the per-component code
+is necessary but not sufficient: the round-trip has to
+hold. The CI gate is the smoke that proves the calibrate ->
+DB -> retune -> weights chain is wired end-to-end.
+
+### The unified test runner
+
+`scripts/test-all.sh` is the single entry point for both
+test surfaces:
+
+  * C++: `ctest --output-on-failure -jN` in
+    `build*/CTestTestfile.cmake` (priority order:
+    `build/` > `build-ane/` > `build-g0/` > `build-st/`,
+    picked by the most recent mtime of the ctest artifact).
+  * Python: `python3 -m pytest -x -q` against
+    `tools/tessera/` and `tests/`. Uses `python3 -m
+    pytest` (not a standalone `pytest` shim) so the
+    pytest process inherits the same interpreter as the
+    test scripts themselves -- Homebrew's `pytest` is
+    pinned to python 3.13 and the tessera tests need
+    polars / duckdb from 3.14.
+
+The output is a single summary line in the form the
+spec mandates:
+
+```
+C++: 89/89 passed | Python: 188/188 passed | TOTAL: 277/277 passed in 42s
+```
+
+Flags:
+
+  * `--quick`: forwards `-m "not slow"` to pytest; skips
+    the calibration E2Es and the Phase 16 round-trip.
+  * `--cpp-only` / `--py-only`: surface selectors.
+  * `--build DIR`: override the build dir discovery.
+    When the path is explicitly given and not buildable
+    (no `CTestTestfile.cmake`), the runner returns exit
+    code 2 -- a hard error rather than a silent fallback
+    to the discovery order.
+  * `-j N`: ctest parallelism (default: `sysctl -n
+    hw.ncpu`).
+  * `--help`: usage text.
+
+Stdlib only (bash + standard unix tools). No new
+dependencies. The runner is symlink-safe: it self-locates
+the repo root from its own resolved path, so a
+worktree-invoked script still resolves to the worktree's
+test surface.
+
+### The Phase 16 E2E test
+
+`tests/test_phase16_e2e.py` exercises the round-trip end-
+to-end:
+
+  1. Synthesize 4 `.npz` bundles (one per component:
+     trunk, dflash, dspark, mtp_nextn).
+  2. Run `tools/tessera/unified_calibrate.py` against
+     the bundles. Parse the policy JSON.
+  3. Create a fresh `tessera.duckdb` and run
+     `migrate_model_role.py` to bring it to the Phase 16
+     schema (model_role column on the 7 affected
+     tables, idempotent CREATE TABLE IF NOT EXISTS).
+  4. Insert the policy's per-tensor rows into
+     `tensor_stats` via `TesseraDB.insert_tensor_stats`.
+     The orchestrator's `read_unified_policy` reads the
+     same shape.
+  5. Seed `l5_outcome` with 8 synthetic rows: 4 per
+     family, 2 families. `attn_q` has hit_rate 0.5 (2 of
+     4 plans accepted). `ffn_gate` has hit_rate 1.0 (4
+     of 4 plans accepted).
+  6. Run `tools/tessera/l5_retune.py --print-table`
+     against the DB (writes to `l5_weights`).
+  7. Read `l5_weights` back and assert the per-family
+     weights differ: `ffn_gate` is at the base (gate=0
+     because hit_rate=1.0); `attn_q` has shifted
+     weights (gate=0.5, positive slope).
+
+Marked `@pytest.mark.slow` so the unified runner's
+`--quick` flag skips it. The slow marker is registered
+in the repo-root `conftest.py`; a CI invocation that
+wants the gate should NOT pass `--quick` (or should
+explicitly opt back in with `-m slow`).
+
+### Self-test for the runner
+
+`tests/test_test_all_sh.py` is the black-box test for
+the runner itself. 15 cases:
+
+  * `--help` / `-h` print the usage block and exit 0.
+  * Unknown flag exits non-zero.
+  * `--py-only` skips the C++ surface and runs pytest.
+  * `--py-only` summary line shape matches the spec.
+  * `--py-only` exits 0 when the Python surface passes.
+  * `--quick` deselects exactly the slow E2E (1 fewer
+    test in the count than the default run).
+  * `--quick` does not change the pass/fail verdict.
+  * `--cpp-only` skips the Python surface.
+  * `--cpp-only` with a bogus `--build` reports the
+    missing CTestTestfile.cmake to stderr and exits
+    non-zero.
+  * A full run (no surface flags) with a bogus `--build`
+    exits non-zero via the C++ side.
+  * The runner self-locates the repo root from its own
+    path (running from a subdir still finds the test
+    surface).
+  * `--help` lists `-j` and the `Examples:` block.
+
+`test_test_all_sh.py` is excluded from the runner's
+pytest auto-discovery (via `collect_ignore_glob` in the
+repo-root `conftest.py`) to avoid a self-reference
+loop: the runner invokes pytest, which discovers the
+test, which invokes the runner, ... Excluding the test
+from auto-discovery preserves the invariant that the
+test surface the runner measures is the project test
+surface, not the test-of-the-runner itself.
+
+### Test surface layout
+
+| Path | Surface | Auto-collected by pytest |
+|---|---|---|
+| `tools/tessera/test_*.py` | Python unit + integration tests for the calibration / retune / DB / etc. surface. | yes |
+| `tools/tessera/test_l2_forward.py` | Script-runner test (the `def test_end_to_end(llama_cli: str)` signature collides with pytest's fixture injection; the test runs as `python3 tools/tessera/test_l2_forward.py --llama-cli <path>`). | no (`conftest.py collect_ignore_glob`) |
+| `tests/test_*.cpp` / `tests/test-*.cpp` / `tests/test-*.mm` | C++ unit + integration tests; collected by `ctest` in the active build dir, not by pytest. | no (the `test-` hyphen prefix does not match pytest's `test_*.py` glob) |
+| `tests/test_phase16_e2e.py` | Phase 16 round-trip smoke. `@pytest.mark.slow`. | yes |
+| `tests/test_test_all_sh.py` | Black-box self-test for the runner. | no (`conftest.py collect_ignore_glob`; the file would create a self-reference loop) |
+| `tools/quantize/tessera/test_*.cpp` | C++ port-specific tests (compiled standalone by `tools/quantize/tessera/test_all.sh`, not by `ctest`). | no |
+
+### Files
+
+| File | Role |
+|---|---|
+| `scripts/test-all.sh` | The unified runner. Stdlib only. |
+| `conftest.py` | Repo-root pytest config: registers the `slow` marker; excludes `tools/tessera/test_l2_forward.py` (script-runner that collides with pytest fixture injection) and `tests/test_test_all_sh.py` (self-reference) from auto-discovery. |
+| `tests/test_phase16_e2e.py` | The Phase 16 round-trip smoke. `@pytest.mark.slow`. |
+| `tests/test_test_all_sh.py` | Black-box self-test for the runner. 15 cases. |
