@@ -32,6 +32,11 @@ EXCLUDE_DIRS = {
     "build-agent-g",
     "node_modules",
     "__pycache__",
+    # .zcode holds alphaevolve worktrees + integration snapshots whose
+    # source predates the spec-consolidate refactor and may still mention
+    # the legacy schema names. They are not part of the main source tree
+    # so the schema-stability contract doesn't apply to them.
+    ".zcode",
 }
 
 # The single canonical schema name. Changing this requires updating
