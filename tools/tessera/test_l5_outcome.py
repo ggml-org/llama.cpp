@@ -54,6 +54,7 @@ def _fresh_path(idx: int) -> str:
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS l5_plan_summary (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER NOT NULL,
@@ -91,6 +92,7 @@ SCHEMA_SQL = """
     );
     CREATE TABLE IF NOT EXISTS l5_outcome (
         model_hash            TEXT NOT NULL,
+        model_role            TEXT DEFAULT 'trunk',
         name                  TEXT NOT NULL,
         layer                 INTEGER,
         iteration             INTEGER NOT NULL,

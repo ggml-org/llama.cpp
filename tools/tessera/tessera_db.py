@@ -67,7 +67,7 @@ L4_PLAN_OUTCOME_COLS: tuple[str, ...] = (
     "family", "updated_at",
 )
 L5_PLAN_COLS: tuple[str, ...] = (
-    "model_hash", "name", "layer", "iteration", "plan_id",
+    "model_hash", "model_role", "name", "layer", "iteration", "plan_id",
     "sensitivity_score", "recommended_qtype", "recommended_alpha",
     "recommended_clip",
     # Phase 15: per-tensor sensitivity component columns (additive,
@@ -83,7 +83,7 @@ L5_PLAN_COLS: tuple[str, ...] = (
     "updated_at",
 )
 L5_OUTCOME_COLS: tuple[str, ...] = (
-    "model_hash", "name", "layer", "iteration", "plan_id",
+    "model_hash", "model_role", "name", "layer", "iteration", "plan_id",
     "family", "sensitivity_score",
     # Phase 15: per-tensor sensitivity components (additive,
     # nullable). Populated from the plan side (l5_plan_summary)
@@ -99,7 +99,7 @@ L5_OUTCOME_COLS: tuple[str, ...] = (
     "plan_accepted", "accept_threshold", "residual", "updated_at",
 )
 L5_WEIGHTS_COLS: tuple[str, ...] = (
-    "model_hash", "family",
+    "model_hash", "model_role", "family",
     "w_imatrix", "w_gradient", "w_layer",
     "bias", "n_samples", "in_sample_loss", "hit_rate",
     # Phase 15: per-family top_fraction retune. The orchestrator's
@@ -338,7 +338,24 @@ class TesseraDB:
         self,
         model_hash: str,
         rows: Sequence[dict],
+        *,
+        model_role: str = "trunk",
     ) -> int:
+        """Push rows into the ``l5_plan_summary`` table.
+
+        ``model_role`` (Phase 16) tags the rows by their
+        architectural role in the unified model: ``"trunk"``
+        for the main backbone, ``"dflash"`` for the dflash
+        encoder, ``"dspark"`` for the dspark drafter,
+        ``"mtp_nextn"`` for the MTP-NextN head, ``"shared_embd"``
+        for the shared embedding / output projection. Defaults
+        to ``"trunk"`` for backward compat with Phase 15 callers
+        that pre-date the role dimension.
+
+        The ``model_role`` column is added via ``ALTER TABLE ...
+        ADD COLUMN IF NOT EXISTS`` so the upsert works on DBs
+        created before Phase 16.
+        """
         if not rows or self._read_only:
             return 0
         # Phase 15: the per-tensor component columns are additive
@@ -349,12 +366,15 @@ class TesseraDB:
         # column) does not fail on a missing column. ``ALTER TABLE
         # ... ADD COLUMN IF NOT EXISTS`` is a no-op when the
         # column already exists, so this is safe on every open.
+        # Phase 16: the same idempotent ALTER covers ``model_role``.
         self._ensure_l5_plan_columns()
+        role = str(model_role) if model_role else "trunk"
         buf = self._buffer_for("l5_plan_summary", L5_PLAN_COLS)
         now = _now_iso()
         for r in rows:
             row = (
                 model_hash,
+                r.get("model_role", role),
                 r.get("name", ""),
                 r.get("layer"),
                 r.get("iteration"),
@@ -372,19 +392,27 @@ class TesseraDB:
         return len(rows)
 
     def _ensure_l5_plan_columns(self) -> None:
-        """Add the Phase 15 per-tensor component columns to
-        ``l5_plan_summary`` if they are not already present.
+        """Add the Phase 15 per-tensor component columns AND the
+        Phase 16 ``model_role`` column to ``l5_plan_summary`` if
+        they are not already present.
 
         The C++ side owns the canonical schema; when a C++ binary
         creates the DB first the l5_plan_summary table does not
         yet have ``imatrix_magnitude``, ``gradient_proxy``,
-        ``layer_position_prior``. The Python side adds them
-        via ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` so the
-        bulk INSERT (which lists every L5_PLAN_COLS column) does
-        not fail on a missing column. The operation is a no-op
-        when the columns are already present (i.e. when the
-        Python side creates the schema itself or when the C++
-        side has been updated to include them). Idempotent.
+        ``layer_position_prior``, or ``model_role``. The Python
+        side adds them via ``ALTER TABLE ... ADD COLUMN IF NOT
+        EXISTS`` so the bulk INSERT (which lists every
+        L5_PLAN_COLS column) does not fail on a missing column.
+        The operation is a no-op when the columns are already
+        present (i.e. when the Python side creates the schema
+        itself or when the C++ side has been updated to include
+        them). Idempotent.
+
+        The ``model_role`` column is TEXT with a default of
+        ``"trunk"`` so pre-Phase-16 rows that did not specify
+        the role still read back with the legacy value. The
+        retune / orchestrator treat ``NULL`` and ``"trunk"``
+        interchangeably (the legacy lookup path).
         """
         if self._read_only:
             return
@@ -407,6 +435,19 @@ class TesseraDB:
                     f"tessera-db: ALTER TABLE l5_plan_summary "
                     f"ADD COLUMN {col} failed: {e}\n"
                 )
+        # Phase 16: model_role column. TEXT with default
+        # 'trunk' for backward compat. The retune / orchestrator
+        # treat NULL and 'trunk' as the same role.
+        try:
+            self._conn.execute(
+                "ALTER TABLE l5_plan_summary "
+                "ADD COLUMN IF NOT EXISTS model_role TEXT DEFAULT 'trunk'"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE l5_plan_summary "
+                f"ADD COLUMN model_role failed: {e}\n"
+            )
         self._l5_plan_columns_ensured = True
 
     def insert_l4_plan_outcome(
@@ -456,6 +497,8 @@ class TesseraDB:
         self,
         model_hash: str,
         rows: Sequence[dict],
+        *,
+        model_role: str = "trunk",
     ) -> int:
         """Push rows into the ``l5_outcome`` table. Written by
         ``tools/tessera/l5_outcome.py`` after joining
@@ -466,12 +509,21 @@ class TesseraDB:
         imatrix_magnitude, gradient_proxy, layer_position_prior
         (Phase 15), recommended_alpha, recommended_clip,
         mse_before, mse_after, delta_mse, delta_frob,
-        plan_accepted, accept_threshold, residual.
+        plan_accepted, accept_threshold, residual,
+        model_role (Phase 16).
 
         Phase 15: the per-tensor component columns are nullable.
         Older C++ writers do not set them; the retune falls back
         to the 2-coefficient OLS on the combined sensitivity_score
         when the components are NULL.
+
+        Phase 16: ``model_role`` is the architectural role
+        (``"trunk"``, ``"dflash"``, ``"dspark"``, ``"mtp_nextn"``,
+        ``"shared_embd"``). The retune's per-(model, family)
+        groupby is now per-(model, model_role, family) so the
+        trunk's ``attn_q`` and the dflash encoder's ``attn_q``
+        get independent retune verdicts. Defaults to ``"trunk"``
+        for backward compat with Phase 15 callers.
 
         Returns the number of rows accepted.
         """
@@ -479,13 +531,16 @@ class TesseraDB:
             return 0
         # Phase 15: ensure the per-tensor component columns exist
         # before the first INSERT. Same idempotent ALTER TABLE
-        # pattern as _ensure_l5_plan_columns.
+        # pattern as _ensure_l5_plan_columns. Phase 16: also
+        # ensure the model_role column exists.
         self._ensure_l5_outcome_columns()
+        role = str(model_role) if model_role else "trunk"
         buf = self._buffer_for("l5_outcome", L5_OUTCOME_COLS)
         now = _now_iso()
         for r in rows:
             row = (
                 model_hash,
+                r.get("model_role", role),
                 r.get("name", ""),
                 r.get("layer"),
                 r.get("iteration"),
@@ -510,8 +565,9 @@ class TesseraDB:
         return len(rows)
 
     def _ensure_l5_outcome_columns(self) -> None:
-        """Add the Phase 15 per-tensor component columns to
-        ``l5_outcome`` if they are not already present.
+        """Add the Phase 15 per-tensor component columns AND the
+        Phase 16 ``model_role`` column to ``l5_outcome`` if they
+        are not already present.
 
         The C++ side may or may not have picked up the column
         addition (the docs claim the C++ side "pre-emptively
@@ -540,6 +596,21 @@ class TesseraDB:
                     f"tessera-db: ALTER TABLE l5_outcome "
                     f"ADD COLUMN {col} failed: {e}\n"
                 )
+        # Phase 16: model_role column. TEXT with default
+        # 'trunk' for backward compat. Pre-Phase-16 rows that
+        # did not specify the role still read back with the
+        # legacy value; the retune / orchestrator treat NULL
+        # and 'trunk' as the same role.
+        try:
+            self._conn.execute(
+                "ALTER TABLE l5_outcome "
+                "ADD COLUMN IF NOT EXISTS model_role TEXT DEFAULT 'trunk'"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE l5_outcome "
+                f"ADD COLUMN model_role failed: {e}\n"
+            )
         self._l5_outcome_columns_ensured = True
 
     # ---- write API: l5_weights (PRIMARY KEY -> direct upsert) ----
@@ -549,27 +620,29 @@ class TesseraDB:
         rows: Sequence[dict],
     ) -> int:
         """Upsert rows into the ``l5_weights`` table (per-model,
-        per-family retuned scoring weights).
+        per-role, per-family retuned scoring weights).
 
         Bypasses the buffer and uses a direct ``INSERT ... ON
-        CONFLICT (model_hash, family) DO UPDATE`` because the table
-        has a primary key; the buffer's plain INSERT would fail on
-        a duplicate. The C++ side has the same primary key and the
-        same upsert pattern (see
+        CONFLICT (model_hash, model_role, family) DO UPDATE``
+        because the table has a primary key; the buffer's plain
+        INSERT would fail on a duplicate. The C++ side has the
+        same primary key and the same upsert pattern (see
         ``ts_tessera_db_upsert_l5_weight`` in
         ``tessera-quantize-db.cpp``).
 
-        ``rows`` is a list of dicts with keys: model_hash, family,
-        w_imatrix, w_gradient, w_layer, bias, n_samples,
-        in_sample_loss, hit_rate, top_fraction (nullable, Phase 15),
-        retune_source. The retune is the consumer-side half of the
-        "did this requant plan reduce error?" feedback loop:
-        ``tools/tessera/l5_retune.py`` fits a per-(model, family)
-        closed-form OLS on ``l5_outcome.delta_mse`` and
-        ``l5_outcome.sensitivity_score`` and writes the recommended
-        ``(w_imatrix, w_gradient, w_layer)`` here. The
-        orchestrator's next generation reads the table back via
-        ``--retune-from-db``.
+        ``rows`` is a list of dicts with keys: model_hash,
+        model_role (Phase 16), family, w_imatrix, w_gradient,
+        w_layer, bias, n_samples, in_sample_loss, hit_rate,
+        top_fraction (nullable, Phase 15), retune_source. The
+        retune is the consumer-side half of the "did this
+        requant plan reduce error?" feedback loop:
+        ``tools/tessera/l5_retune.py`` fits a per-(model,
+        model_role, family) closed-form OLS on
+        ``l5_outcome.delta_mse`` and
+        ``l5_outcome.sensitivity_score`` and writes the
+        recommended ``(w_imatrix, w_gradient, w_layer)`` here.
+        The orchestrator's next generation reads the table back
+        via ``--retune-from-db --model-role R``.
 
         Phase 15: ``top_fraction`` is the per-family requant
         aggressiveness recommendation. NULL means "no
@@ -578,21 +651,35 @@ class TesseraDB:
         The column is added via ALTER TABLE IF NOT EXISTS so the
         upsert works on DBs created before Phase 15.
 
+        Phase 16: the primary key is now ``(model_hash,
+        model_role, family)`` so the trunk's ``attn_q`` and the
+        dflash encoder's ``attn_q`` get independent
+        (w_imatrix, w_gradient, w_layer) recommendations. The
+        per-row ``model_role`` defaults to ``"trunk"`` when
+        not provided (the pre-Phase-16 callers). The column is
+        added via ``ALTER TABLE IF NOT EXISTS`` so the upsert
+        works on DBs created before Phase 16.
+
         Returns the number of rows upserted.
         """
         if not rows or self._read_only:
             return 0
         # Phase 15: ensure the top_fraction column exists. Same
         # idempotency story as _ensure_l5_plan_columns: no-op when
-        # the column is already present.
+        # the column is already present. Phase 16: also ensure
+        # the model_role column exists. We add model_role BEFORE
+        # the upsert (rather than relying on the table's CREATE
+        # TABLE) so legacy DBs that pre-date Phase 16's
+        # CREATE TABLE migration also work.
         self._ensure_l5_weights_columns()
         sql = (
             "INSERT INTO l5_weights ("
-            "  model_hash, family, w_imatrix, w_gradient, w_layer, "
+            "  model_hash, model_role, family, "
+            "  w_imatrix, w_gradient, w_layer, "
             "  bias, n_samples, in_sample_loss, hit_rate, "
             "  top_fraction, retune_source, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (model_hash, family) DO UPDATE SET "
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
             "  w_imatrix       = excluded.w_imatrix, "
             "  w_gradient      = excluded.w_gradient, "
             "  w_layer         = excluded.w_layer, "
@@ -610,6 +697,7 @@ class TesseraDB:
             try:
                 self._conn.execute(sql, [
                     r.get("model_hash", ""),
+                    str(r.get("model_role", "trunk") or "trunk"),
                     r.get("family", ""),
                     float(r.get("w_imatrix", 0.0)),
                     float(r.get("w_gradient", 0.0)),
@@ -626,20 +714,28 @@ class TesseraDB:
             except Exception as e:
                 sys.stderr.write(
                     f"tessera-db: insert_l5_weights on "
-                    f"({r.get('model_hash', '')}, {r.get('family', '')}) "
-                    f"failed: {e}\n"
+                    f"({r.get('model_hash', '')}, "
+                    f"{r.get('model_role', 'trunk')}, "
+                    f"{r.get('family', '')}) failed: {e}\n"
                 )
         return n
 
     def _ensure_l5_weights_columns(self) -> None:
-        """Add the Phase 15 ``top_fraction`` column to ``l5_weights``
-        if it is not already present.
+        """Add the Phase 15 ``top_fraction`` column AND the
+        Phase 16 ``model_role`` column to ``l5_weights`` if
+        not already present.
 
         Same idempotent ALTER TABLE pattern as
-        :py:meth:`_ensure_l5_plan_columns`. The C++ side may have
-        created the l5_weights table before Phase 15; the
+        :py:meth:`_ensure_l5_plan_columns`. The C++ side may
+        have created the l5_weights table before Phase 15; the
         Python side adds the column on the first open so the
         upsert does not fail on a missing column.
+
+        Phase 16: the ``model_role`` column is added with a
+        default of ``"trunk"`` for backward compat. Pre-Phase-16
+        rows that did not specify the role still read back with
+        the legacy value; the retune / orchestrator treat
+        NULL and ``"trunk"`` as the same role.
         """
         if self._read_only:
             return
@@ -654,6 +750,18 @@ class TesseraDB:
             sys.stderr.write(
                 f"tessera-db: ALTER TABLE l5_weights "
                 f"ADD COLUMN top_fraction failed: {e}\n"
+            )
+        # Phase 16: model_role column. TEXT with default
+        # 'trunk' for backward compat.
+        try:
+            self._conn.execute(
+                "ALTER TABLE l5_weights "
+                "ADD COLUMN IF NOT EXISTS model_role TEXT DEFAULT 'trunk'"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE l5_weights "
+                f"ADD COLUMN model_role failed: {e}\n"
             )
         self._l5_weights_columns_ensured = True
 
