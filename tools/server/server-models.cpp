@@ -721,7 +721,9 @@ void server_models::unload_lru() {
         for (const auto & m : mapping) {
             if (m.second.meta.is_running()) {
                 count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
+                // do not evict busy one
+                bool is_model_idle = m.second.req_count == 0 && m.second.meta.is_ready_or_sleep();
+                if (is_model_idle && m.second.meta.last_used < lru_last_used) {
                     lru_model_name = m.first;
                     lru_last_used = m.second.meta.last_used;
                 }
@@ -739,6 +741,7 @@ void server_models::unload_lru() {
             });
         }
     }
+    // TODO @ngxson : if no idle model is found, queue the load request
 }
 
 void server_models::load(const std::string & name) {
@@ -1180,9 +1183,12 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     if (!meta->is_running()) {
         throw std::invalid_argument("model name=" + name + " is not running");
     }
-    if (update_last_used) {
+    {
         std::unique_lock<std::mutex> lk(mutex);
-        mapping[name].meta.last_used = ggml_time_ms();
+        if (update_last_used) {
+            mapping[name].meta.last_used = ggml_time_ms();
+        }
+        mapping[name].req_count++;
     }
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
@@ -1198,13 +1204,22 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             req.headers,
             req.body,
             req.files,
-            // a detached request belongs to a replay session that outlives the client socket:
-            // it reaches the child even when the downstream died during the load wait, the
-            // session buffer is the recipient and DELETE remains the stop
-            detached ? std::function<bool()>([]() { return false; }) : req.should_stop,
+            // a detached request belongs to a replay session
+            detached
+                ? std::function<bool()>([]() { return false; })
+                : req.should_stop,
             base_params.timeout_read,
             base_params.timeout_write
             );
+
+    proxy->cleanup = [this, name]() {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it != mapping.end() && it->second.req_count > 0) {
+            it->second.req_count--;
+        }
+    };
+
     return proxy;
 }
 
@@ -2064,7 +2079,7 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup = [pipe]() {
+    this->cleanup_pipes = [pipe]() {
         pipe->close_read();
         pipe->close_write();
     };

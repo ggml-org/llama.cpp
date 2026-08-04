@@ -84,7 +84,6 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
-    // bool need_download = false; // whether the model needs to be downloaded before loading // TODO @ngxson: implement this
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -92,6 +91,10 @@ struct server_model_meta {
 
     bool is_running() const {
         return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING;
+    }
+
+    bool is_ready_or_sleep() const {
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_SLEEPING;
     }
 
     bool is_failed() const {
@@ -113,6 +116,7 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
+        int req_count = 0; // number of active proxy requests
     };
 
     std::mutex mutex;
@@ -343,7 +347,6 @@ struct server_models_routes {
  */
 struct server_http_proxy : server_http_res {
     std::function<void()> cleanup = nullptr;
-public:
     server_http_proxy(const std::string & method,
                       const std::string & scheme,
                       const std::string & host,
@@ -357,11 +360,15 @@ public:
                       int32_t timeout_write
                       );
     ~server_http_proxy() {
+        if (cleanup_pipes) {
+            cleanup_pipes();
+        }
         if (cleanup) {
             cleanup();
         }
     }
 private:
+    std::function<void()> cleanup_pipes = nullptr;
     std::thread thread;
     struct msg_t {
         std::map<std::string, std::string> headers;
