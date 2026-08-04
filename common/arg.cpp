@@ -96,15 +96,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     };
 
     // string-valued
-    if (arg == "--tessera-imatrix")           { if (!require_val("--tessera-imatrix")) return -1;           tessera_params.imatrix          = val; return 2; }
-    if (arg == "--tessera-policy")            { if (!require_val("--tessera-policy")) return -1;            tessera_params.policy           = val; return 2; }
-    if (arg == "--tessera-policy-out")        { if (!require_val("--tessera-policy-out")) return -1;        tessera_params.policy_out       = val; return 2; }
-    if (arg == "--tessera-ga-checkpoint")     { if (!require_val("--tessera-ga-checkpoint")) return -1;     tessera_params.ga_checkpoint    = val; return 2; }
-    if (arg == "--calib-corpus")              { if (!require_val("--calib-corpus")) return -1;              tessera_params.calib_corpus     = val; return 2; }
-    if (arg == "--calib-corpus-out")          { if (!require_val("--calib-corpus-out")) return -1;          tessera_params.calib_corpus_out = val; return 2; }
-    if (arg == "--progress-file")             { if (!require_val("--progress-file")) return -1;             tessera_params.progress_file    = val; return 2; }
-    if (arg == "--quantize-db")               { if (!require_val("--quantize-db")) return -1;               tessera_params.quantize_db      = val; return 2; }
-    if (arg == "--force-requantize")          {                                                              tessera_params.force_requantize = true; return 1; }
     if (arg == "--tessera-runtime-probe")     { if (!require_val("--tessera-runtime-probe")) return -1;     tessera_params.runtime_probe     = val; return 2; }
     if (arg == "--tessera-runtime-probe-bf16"){ if (!require_val("--tessera-runtime-probe-bf16")) return -1;tessera_params.runtime_probe_bf16= val; return 2; }
     if (arg == "--tessera-l2-out")            { if (!require_val("--tessera-l2-out")) return -1;            tessera_params.runtime_probe_l2_out = val; return 2; }
