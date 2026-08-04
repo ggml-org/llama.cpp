@@ -1274,7 +1274,7 @@ extern "C" {
         // [EXPERIMENTAL]
         // backend sampling interface:
 
-        // return true if the backend supports all ops needed by the sampler and the requested output mode
+        // return true if the backend supports all ops needed by the sampler and can handle up to n_outputs_per_seq_max outputs per sequence
         // note: call once per sampler
         bool (*backend_init)(
                 struct llama_sampler       * smpl,
@@ -1298,7 +1298,7 @@ extern "C" {
         // called before graph execution to set inputs for the current ubatch
         void (*backend_set_input)(struct llama_sampler * smpl);
 
-        // called before rebuilding a sampling graph to clear graph-owned tensor references
+        // called before rebuilding a sampling graph to clear any internal sampler state
         void (*backend_reset)(struct llama_sampler * smpl);
     };
 
