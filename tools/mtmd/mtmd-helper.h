@@ -202,7 +202,6 @@ MTMD_API int32_t mtmd_helper_gen_audio_set_input(
                         const struct mtmd_helper_gen_audio_inp * inp);
 
 // processes at most n_batch prompt tokens per call
-// returns 0 (no more prompt left to process)
 // returns: >0 = number of prompt tokens remaining, 0 = done, <0 = error
 MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
                         mtmd_helper_gen_audio * ctx,
@@ -217,8 +216,7 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
                         const float ** h_state_out);
 
 // out_data valid until next get_output() or reset() call
-// out_n_samples (optional, can be NULL) receives the number of generated PCM samples,
-// which combined with out_sample_rate gives the output audio duration
+// out_n_samples (optional, can be NULL) receives the number of generated PCM samples
 MTMD_API int32_t mtmd_helper_gen_audio_get_output(
                         mtmd_helper_gen_audio * ctx,
                         int32_t * out_sample_rate,

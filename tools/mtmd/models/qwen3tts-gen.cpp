@@ -332,9 +332,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv1d_dw(ggml_tensor * 
     return y;
 }
 
-// causal ConvTranspose1d with persisted overlap-add tail: adjacent frames'
-// output windows overlap by (kernel - stride) samples; that overlap is
-// carried forward as state instead of being discarded
+// causal ConvTranspose1d, the (kernel - stride) overlap tail is kept as state for the next call
 // x: [T, IC], w: [K, OC, IC]. state_name empty means K == stride (no overlap). returns [T * stride, OC]
 ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & state_name) const {
     const int     K        = (int) w->ne[0];
@@ -342,8 +340,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv_transpose1d(ggml_te
     const int     trim     = K - stride;
     const int64_t emit_len = x->ne[0] * stride;
 
-    // transposed conv as GEMM + scatter-add: fold w [K, OC, IC] to [IC, K*OC], contract over IC
-    // then col2im scatters each column to its strided output offset. y: [emit_len + trim, OC]
+    // transposed conv as GEMM + col2im scatter-add, y: [emit_len + trim, OC]
     ggml_tensor * w2  = ggml_reshape_2d(ctx0, w, (int64_t) K * OC, w->ne[2]);
     w2                = ggml_cont(ctx0, ggml_transpose(ctx0, w2));
     ggml_tensor * xt  = ggml_cont(ctx0, ggml_transpose(ctx0, x));
@@ -415,10 +412,8 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::quant_decode(ggml_tensor * inp_
 }
 
 // one pre_transformer layer over a batch of N = sliding_window new frames
-// attention runs over [(W-1)-frame prefix from the last batch] + [N new frames]:
-// the prefix gives left-context, a banded causal mask keeps each query within its W-frame window,
-// and RoPE uses a persisted, ever-increasing position counter so phases line up across batches
-// next batch's persisted state is just this batch's last (W-1) frames
+// attention runs over [(W-1)-frame prefix from the last batch] + [N new frames]
+// RoPE positions come from a persisted counter, so phases line up across batches
 ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, int il) const {
     const int     n_head    = hparams.wav_tfm_n_head;
     const int     n_head_kv = hparams.wav_tfm_n_head_kv;
@@ -450,7 +445,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor *
     k = ggml_rope_ext(ctx0, k, pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0,
                       hparams.wav_tfm_rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
-    // the position counter is layer-independent -- only push it once, from layer 0
+    // the position counter is the same for all layers, push it once from layer 0
     if (il == 0) {
         state_out.push_back({"tfm_pos", ggml_scale_bias(ctx0, state_in.at("tfm_pos"), 1.0f, (float) N)});
     }
@@ -470,8 +465,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor *
     state_out.push_back({"tfm_v_" + std::to_string(il),
         ggml_cont(ctx0, ggml_view_2d(ctx0, v_full, v_full->ne[0], prefix, v_full->nb[1], (size_t) N * v_full->nb[1]))});
 
-    // banded causal mask over [total_kv keys, N queries]: key j is visible to
-    // query i (offset by `prefix`) iff 0 <= (prefix+i) - j < W
+    // banded causal mask: key j is visible to query i iff 0 <= (prefix+i) - j < W
     ggml_tensor * pos_k = ggml_reshape_2d(ctx0, ggml_arange(ctx0, 0.0f, (float) total_kv, 1.0f), total_kv, 1);
     ggml_tensor * pos_q = ggml_reshape_2d(ctx0, ggml_arange(ctx0, (float) prefix, (float) (prefix + N), 1.0f), 1, N);
     ggml_tensor * pos_q_grid = ggml_repeat_4d(ctx0, pos_q, total_kv, N, 1, 1);
@@ -481,8 +475,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor *
     ggml_tensor * in_window   = ggml_step(ctx0, ggml_scale_bias(ctx0, diff, -1.0f, (float) W - 0.5f)); // diff < W
     ggml_tensor * keep = ggml_mul(ctx0, causal_keep, in_window);
 
-    // clamp the cold prefix: key j holds real state only when j >= prefix - tfm_pos
-    // earlier keys are zero-filled cold start; attending to them would dilute the softmax
+    // on a cold start, key j is real state only when j >= prefix - tfm_pos, mask out the rest
     ggml_tensor * warm = ggml_step(ctx0, ggml_scale_bias(ctx0, ggml_add(ctx0, pos_k, base),
                                                          1.0f, 0.5f - (float) prefix)); // j + pos > prefix - 0.5
     keep = ggml_mul(ctx0, keep, warm);
@@ -559,8 +552,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::decode(ggml_tensor * inp_codes)
     x = causal_conv1d(x, c2w.pre_conv_w, c2w.pre_conv_b, 1, "pre_conv"); // [N, 1024]
     cb(x, "wav_pre_conv_out", -1);
 
-    // 3. pre_transformer: back to C-first [1024, N], project down to hidden_size,
-    // run 8 layers with a persisted sliding-window KV cache, project back up
+    // 3. pre_transformer: back to C-first [1024, N], project down, run the layers, project back up
     ggml_tensor * cur = ggml_cont(ctx0, ggml_transpose(ctx0, x)); // [1024, N]
     cur = ggml_mul_mat(ctx0, c2w.tfm_in_proj_w, cur);
     cur = ggml_add(ctx0, cur, c2w.tfm_in_proj_b); // [512 (tfm hidden), N]
@@ -575,8 +567,8 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::decode(ggml_tensor * inp_codes)
     cur = ggml_add(ctx0, cur, c2w.tfm_out_proj_b); // [1024, N]
     cb(cur, "wav_tfm_out", -1);
 
-    // 4. upsample: 2x (causal ConvTranspose1d, stride 2 + ConvNeXt block), back to T-first.
-    // kernel == stride here, so there's no transpose-conv overlap, no state needed.
+    // 4. upsample: 2x (causal ConvTranspose1d, stride 2 + ConvNeXt block), back to T-first
+    // kernel == stride here, so there is no overlap tail to persist
     x = ggml_cont(ctx0, ggml_transpose(ctx0, cur)); // [N, 1024]
     for (size_t il = 0; il < c2w.upsample.size(); il++) {
         const auto & up = c2w.upsample[il];
@@ -612,17 +604,15 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::decode(ggml_tensor * inp_codes)
     return x;
 }
 
-// enumerates code2wav's persisted state buffers: RoPE position counter, one
-// K/V slot per pre_transformer layer, one left-context/tail slot per stateful conv
-// pure shape lookup, no graph needed; shared by build() and clip.cpp's state (de)serialization
+// code2wav's persisted state buffers: RoPE position counter, K/V per pre_transformer layer,
+// left-context/tail per stateful conv. shape lookup only, no graph needed
 std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model) {
     const auto & c2w = model.c2w;
     std::vector<c2w_state_slot> slots;
 
     slots.push_back({"tfm_pos", 1, 1});
 
-    // persisted prefix is (W-1) frames: the code2wav batch itself supplies the
-    // other N=W frames of context for its own later frames (see tfm_layer_forward)
+    // prefix is (W-1) frames, the batch itself gives the other N=W frames (see tfm_layer_forward)
     const int64_t d_head = c2w.tfm_layers[0].q_w->ne[1] / hparams.wav_tfm_n_head;
     const int64_t kv_ch  = d_head * hparams.wav_tfm_n_head_kv;
     const int64_t prefix = hparams.wav_tfm_swa - 1;
@@ -658,9 +648,8 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, c
     return slots;
 }
 
-// builds both the code_gen sub-graph (h_state -> 16 RVQ codes + next embd) and the
-// code2wav sub-graph (16 RVQ codes -> raw PCM) into the same cgraph every call, then
-// selects which one runs via ggml_build_forward_select(), keeping topology constant
+// both sub-graphs are always built, so the topology stays constant
+// ggml_build_forward_select() then picks the one that actually runs
 ggml_cgraph * clip_graph_qwen3tts_gen::build() {
     GGML_ASSERT(n_batch == 1); // this module only ever processes one frame at a time
 
@@ -672,7 +661,7 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
     }
 
     // ---- CLIP_GEN_PROCESS_GEN_CODE: backbone hidden state -> 16 RVQ codes + next-step embd ----
-    // fixed-size [n_mmproj_embd] input; not build_inp_raw(), since a GEN_WAV call's `img` has no hidden-state data
+    // not build_inp_raw(), a GEN_WAV call's `img` has no hidden-state data
     ggml_tensor * h_state = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_mmproj_embd);
     ggml_set_name(h_state, "inp_raw"); // must keep this exact name, clip_encode() sets it by name
     ggml_set_input(h_state);
@@ -762,9 +751,7 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
         ggml_set_output(slot.second);
     }
 
-    // select the active branch; both are always built above (constant topology), only the
-    // selected side's nodes actually compute. out_embd goes last so it ends up as the graph's
-    // last node, since clip_encode() reads it back via ggml_graph_node(gf, -1)
+    // out_embd goes last, clip_encode() reads it back via ggml_graph_node(gf, -1)
     ggml_tensor * outs[2];
     outs[0] = out_codes; outs[1] = out_audio;
     ggml_build_forward_select(gf, outs, 2, idx);

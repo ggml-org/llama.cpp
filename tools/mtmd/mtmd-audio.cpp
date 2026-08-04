@@ -794,12 +794,8 @@ bool mtmd_audio_preprocessor_mimo_audio::preprocess(const float *               
 //
 // mtmd_audio_preprocessor_qwen3tts_spk
 //
-// Mirrors qwen_tts.core.models.modeling_qwen3_tts.mel_spectrogram():
-//   pad reflect by (n_fft - hop) / 2, STFT (n_fft, hop, win=n_fft, hann
-//   periodic, center=False), mel = slaney_mel_basis @ |STFT|, log(max(mel, 1e-5)).
-// Unlike Whisper-style encoders the whole clip is consumed in a single
-// forward pass by the ECAPA-TDNN body, so there's no 30s/3000-frame chunking
-// or Whisper (max-8)/4 normalization here.
+// same as mel_spectrogram() in modeling_qwen3_tts.py
+// ECAPA-TDNN takes the whole clip in one pass, so no Whisper-style chunking or normalization
 //
 
 void mtmd_audio_preprocessor_qwen3tts_spk::initialize() {

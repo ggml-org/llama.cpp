@@ -299,8 +299,7 @@ struct clip_layer {
     ggml_tensor * cross_attn_norm_w = nullptr;
     ggml_tensor * cross_attn_norm_b = nullptr;
 
-    // qwen3tts speaker encoder: SE-Res2Net block (conv_pw1_w/b and conv_pw2_w/b
-    // above are reused for this block's tdnn1/tdnn2 bottleneck convs)
+    // qwen3tts speaker encoder: SE-Res2Net block, tdnn1/tdnn2 reuse conv_pw1_w/b and conv_pw2_w/b above
     ggml_tensor * se_conv1_w = nullptr;
     ggml_tensor * se_conv1_b = nullptr;
     ggml_tensor * se_conv2_w = nullptr;
@@ -389,8 +388,7 @@ struct qf_block {
 
 // qwen3tts code2wav: RVQ codes -> raw PCM
 struct clip_code2wav {
-    // one ConvNeXt block + its preceding causal ConvTranspose1d
-    // (the "upsample" stage between pre_transformer and the DAC decoder)
+    // "upsample" stage: one ConvNeXt block plus the causal ConvTranspose1d before it
     struct upsample_block {
         ggml_tensor * conv_w   = nullptr; // causal ConvTranspose1d, 2x
         ggml_tensor * conv_b   = nullptr;
@@ -405,8 +403,7 @@ struct clip_code2wav {
         ggml_tensor * gamma    = nullptr; // layer scale
     };
 
-    // one DAC residual unit
-    // (SnakeBeta -> dilated causal conv -> SnakeBeta -> pointwise causal conv)
+    // one DAC residual unit: SnakeBeta -> dilated causal conv -> SnakeBeta -> pointwise causal conv
     struct dac_res {
         ggml_tensor * act1_alpha = nullptr;
         ggml_tensor * act1_beta  = nullptr;
@@ -668,9 +665,8 @@ struct clip_model {
     ggml_tensor * conv2d_3_w = nullptr;
     ggml_tensor * conv2d_3_b = nullptr;
 
-    // qwen3tts speaker encoder (ECAPA-TDNN): the stem conv (block 0) reuses
-    // conv1d_1_w/b, the multi-layer feature aggregation conv reuses conv_out_w/b,
-    // and the final speaker embedding projection reuses mm_fc_w/b
+    // qwen3tts speaker encoder (ECAPA-TDNN)
+    // reused tensors: stem conv is conv1d_1_w/b, feature aggregation is conv_out_w/b, output proj is mm_fc_w/b
     ggml_tensor * spk_asp_attn_w = nullptr;
     ggml_tensor * spk_asp_attn_b = nullptr;
     ggml_tensor * spk_asp_tdnn_w = nullptr;

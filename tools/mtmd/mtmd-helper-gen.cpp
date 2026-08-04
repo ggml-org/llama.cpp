@@ -19,8 +19,7 @@
 // Audio generation helpers
 //
 
-// maps the --tts-lang codes (see tools/tts/README.md) to the language
-// names used by the codec_language special tokens
+// --tts-lang codes -> language names used by the codec_language special tokens
 static const std::unordered_map<std::string, std::string> tts_lang_codes = {
     { "zh", "chinese"    },
     { "en", "english"    },
@@ -86,9 +85,8 @@ public:
     virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
     // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
     virtual int32_t step_prompt(int32_t n_batch) = 0;
-    // sampled may be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token
-    // (e.g. continuous/diffusion models); such pipelines read whatever they need
-    // directly off h_state_in instead
+    // sampled can be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token,
+    // those read what they need from h_state_in instead
     virtual int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out) = 0;
     virtual int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) = 0;
 
@@ -101,8 +99,8 @@ protected:
     mtmd_gen_audio_info info;
 };
 
-// Qwen3-TTS: dual-track discrete AR (backbone codec_0 + MTP code-predictor for the
-// remaining 15 codebooks) into a windowed causal conv/transformer decode (code2wav)
+// Qwen3-TTS: backbone samples codec_0, code_predictor gives the other 15 codebooks,
+// then code2wav decodes them to PCM
 class qwen3tts_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
 public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
@@ -187,9 +185,7 @@ public:
 
         n_prompt = (int) prompt.size();
 
-        // the talker rides the qwen3vl interleaved mrope: positions carry
-        // n_pos_per_embd sections laid out [section * n_tokens + i], all
-        // equal for a pure text/codec stream
+        // the talker uses the qwen3vl interleaved mrope, all sections are equal for a text/codec stream
         mrope = llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE ||
                 llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
         const int n_pos_per_embd = mrope ? 4 : 1;
@@ -209,9 +205,8 @@ public:
         top_p = inp->top_p > 0 ? inp->top_p : 1.0f;
         out_type = inp->out_type;
 
-        // the text stream keeps flowing during generation: the input after
-        // frame k adds trailing text row k on top of the codes embedding,
-        // then tts_eos, then tts_pad once the utterance is spent
+        // the text stream keeps flowing during generation: after frame k, the input adds
+        // trailing text row k on top of the codes embedding, then tts_eos, then tts_pad
         for (int i = 3; i < n_ids - 5; i++) overlay.push_back(row(ids[(size_t) i]));
         overlay.push_back(row(tts_eos));
         overlay.push_back(row(tts_pad));
@@ -356,8 +351,7 @@ private:
         return true;
     }
 
-    // encodes a reference wav (already loaded as a bitmap) through the mmproj's
-    // speaker encoder, returning the single x-vector embedding row it produces
+    // runs the reference wav through the speaker encoder, returns one x-vector embedding row
     bool encode_speaker(mtmd_bitmap * bitmap, std::vector<float> & out) {
         if (!mtmd_support_audio(mctx)) {
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no speaker/audio encoder\n");
@@ -390,8 +384,7 @@ private:
         return ok;
     }
 
-    // runs one GEN_WAV process() call on whatever is currently buffered, carrying
-    // the persisted state (KV cache + conv left-context) across batches
+    // one GEN_WAV process() call over the buffered codes, state is carried across batches
     bool flush_gen_wav() {
         if (codes_buf.empty()) {
             return true;
@@ -427,8 +420,7 @@ private:
     llama_token tts_eos    = LLAMA_TOKEN_NULL;
     std::vector<float> tok_embd; // whole token embedding matrix, n_vocab * n_embd
 
-    // matches hparams.wav_tfm_sliding_window hardcoded in clip.cpp; code2wav
-    // batches exactly this many frames per call
+    // must match hparams.wav_tfm_swa hardcoded in clip.cpp
     size_t window_frames = 72;
 
     // per-generation state, cleared by reset()

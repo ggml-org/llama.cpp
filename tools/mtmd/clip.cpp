@@ -1701,8 +1701,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                     {
-                        // ECAPA-TDNN speaker/voice encoder; mel_spectrogram() front-end
-                        // matches the Slaney mel default (fmin=0, fmax=sample_rate/2)
+                        // ECAPA-TDNN speaker encoder, mel front-end uses the Slaney default (fmin=0, fmax=sr/2)
                         hparams.audio_sample_rate = 24000;
                         hparams.audio_n_fft       = 1024;
                         hparams.audio_window_len  = 1024;
@@ -1710,7 +1709,6 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_QWEN3TTS_GEN:
                     {
-                        // discrete-token autoregressive predictor, no mel-frontend needed
                         // TODO: hardcoded for now, read from code_predictor_config instead
                         hparams.rope_theta = 1000000.0f;
 
@@ -2754,9 +2752,7 @@ struct clip_model_loader {
                         c2w.tfm_out_proj_b    = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "bias"));
                         c2w.tfm_output_norm_w = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_NORM, "weight"));
 
-                        // pre_transformer layers: own prefix/layer-count, so loaded manually
-                        // rather than through the generic model.layers loop (already claimed
-                        // by code_predictor's 5 layers)
+                        // loaded manually, the generic model.layers loop is taken by code_predictor
                         c2w.tfm_layers.resize(hparams.wav_tfm_n_layer);
                         for (int il = 0; il < hparams.wav_tfm_n_layer; il++) {
                             auto & layer = c2w.tfm_layers[il];
@@ -4020,8 +4016,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             {
-                // attentive statistics pooling collapses the whole clip into
-                // a single speaker embedding vector, regardless of its length
+                // pooling gives one speaker embedding, whatever the clip length is
                 n_patches = 1;
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
@@ -4173,7 +4168,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         set_input_f32("inp_raw", inp_raw);
 
     } else if (!(ctx->proj_type() == PROJECTOR_TYPE_QWEN3TTS_GEN && params->gen_process == CLIP_GEN_PROCESS_GEN_WAV)) {
-        // audio input (code2wav has no hidden-state/raw input at all, its only input is the "inp_codes" tensor handled in the switch below)
+        // audio input, code2wav is not here: its only input is "inp_codes", set in the switch below
         GGML_ASSERT(imgs.entries.size() == 1);
 
         const auto & mel_inp = imgs.entries[0];
@@ -4738,15 +4733,13 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 if (params->gen_process == CLIP_GEN_PROCESS_GEN_WAV) {
                     GGML_ASSERT(params->codes != nullptr);
 
-                    // reorder frame-major input to the group-major layout the graph wants,
-                    // padding the rear with code 0 up to one window (tail trimmed off below)
+                    // frame-major input to group-major, rear-padded with code 0 up to one window
                     const int64_t n_codes  = model.gen_code_head_w->ne[2] + 1;
                     const int64_t n_frames_w = hparams.wav_tfm_swa;
                     const int64_t n_frames   = (int64_t) params->codes->size() / n_codes;
                     GGML_ASSERT(n_frames > 0 && n_frames <= n_frames_w);
 
-                    // bound each code against its codebook's vocab before it becomes
-                    // a ggml_get_rows index into the codebook tensor
+                    // codes are used as ggml_get_rows indices, so check them against the codebook vocab
                     const int64_t vocab_first = model.c2w.quant_first_cb_w->ne[1];
                     const int64_t vocab_rest  = model.c2w.quant_rest_cb_w->ne[1];
                     for (int64_t f = 0; f < n_frames; f++) {
@@ -4769,8 +4762,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     }
                     set_input_i32("inp_codes", codes);
 
-                    // upload the state carried over from the previous call, or
-                    // zero-fill on a cold start (no previous state, or wrong size)
+                    // upload the state from the previous call, or zero-fill on a cold start
                     size_t offset = 0;
                     for (const auto & slot : list_c2w_state_slots(hparams, model)) {
                         ggml_tensor * t = get_inp_tensor(("state_in_" + slot.name).c_str());
@@ -4793,8 +4785,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     std::vector<int32_t> code0 = { params->code0 };
                     set_input_i32("inp_code0", code0);
 
-                    // one uniform(0,1) draw per codebook, consumed by do_sampling()'s
-                    // inverse-CDF token selection (inp_rand_0 .. inp_rand_{n_acoustic-1})
+                    // one uniform(0,1) draw per codebook, used by do_sampling()
                     static std::mt19937 rng{ std::random_device{}() };
                     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
                     const int64_t n_acoustic = model.gen_code_head_w->ne[2];
@@ -5219,7 +5210,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         return false;
     }
 
-    // the last node is the embedding tensor (not produced by the code2wav sub-graph, which has no out_embd at all)
+    // the last node is the embedding tensor, code2wav has no out_embd
     ggml_tensor * embeddings = params->out_embd ? ggml_graph_node(gf, -1) : nullptr;
 
     if (embeddings != nullptr) {
@@ -5270,8 +5261,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         out_audio.resize(ggml_nelements(audio));
         ggml_backend_tensor_get(audio, out_audio.data(), 0, ggml_nbytes(audio));
 
-        // a short (rear-padded) batch only has real audio for its real frames;
-        // the tail generated from the code-0 padding is discarded
+        // drop the tail audio that comes from the code-0 rear padding
         const int64_t n_codes    = model.gen_code_head_w->ne[2] + 1;
         const int64_t n_frames_w = hparams.wav_tfm_swa;
         const int64_t n_frames   = (int64_t) params->codes->size() / n_codes;

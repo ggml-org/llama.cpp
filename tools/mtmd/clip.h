@@ -96,26 +96,20 @@ struct clip_encode_params {
     const clip_image_f32_batch * imgs = nullptr;
     std::vector<float> * out_embd = nullptr;
 
-    // for audio gen, imgs has exactly one entry (unused content for GEN_WAV,
-    // for GEN_CODE it holds the hidden state from backbone, size (n_text_embd, 1))
+    // for audio gen, imgs has exactly one entry: hidden state from backbone (GEN_CODE) or unused (GEN_WAV)
     clip_gen_process_type gen_process = CLIP_GEN_PROCESS_GEN_UNKNOWN;
 
-    // GEN_CODE: code0 is the sampled semantic code from backbone, out_codes
-    // receives this frame's 16 sampled codes, out_embd receives the embd to
-    // be fed back to the backbone for the next frame
-    int32_t code0 = 0;
+    // GEN_CODE: out_embd receives the embd to feed back to the backbone
+    int32_t code0 = 0; // semantic code sampled by the backbone
     int32_t top_k = 50;
     float   top_p = 1.0f;
-    std::vector<int32_t> * out_codes = nullptr;
+    std::vector<int32_t> * out_codes = nullptr; // this frame's 16 sampled codes
 
-    // GEN_WAV: codes holds this frame's 16 RVQ codes, out_audio receives the
-    // decoded PCM samples (F32). state_in is the state from the previous
-    // call (null or wrong size means cold start, state is zero-filled).
-    // state_out receives the state to pass into the next call.
-    const std::vector<int32_t> * codes = nullptr;
-    std::vector<float> * out_audio = nullptr;
-    const std::vector<uint8_t> * state_in  = nullptr;
-    std::vector<uint8_t> *       state_out = nullptr;
+    // GEN_WAV
+    const std::vector<int32_t> * codes = nullptr;     // this frame's 16 RVQ codes
+    std::vector<float> * out_audio = nullptr;         // decoded PCM samples, F32
+    const std::vector<uint8_t> * state_in  = nullptr; // state from previous call, null or wrong size means cold start
+    std::vector<uint8_t> *       state_out = nullptr; // state for the next call
 };
 bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params);
 

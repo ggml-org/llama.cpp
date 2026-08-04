@@ -976,7 +976,7 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_SE_CONV2        = auto() # qwen3tts
     A_ENC_ASP_ATTN        = auto() # qwen3tts
     A_ENC_ASP_TDNN        = auto() # qwen3tts
-    # qwen3tts code_predictor: autoregressively predicts the remaining RVQ codebooks
+    # qwen3tts code_predictor: predicts the remaining RVQ codebooks
     A_GEN_CODE_PROJ_IN     = auto() # small_to_mtp_projection
     A_GEN_CODE_EMBD        = auto() # per-codebook embedding table, merged 3D [n_codebooks, vocab, dim]
     A_GEN_CODE_HEAD        = auto() # per-codebook output head, merged 3D [n_codebooks, vocab, dim]
@@ -993,8 +993,7 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_CODE_FFN_UP      = auto()
     A_GEN_CODE_FFN_DOWN    = auto()
     A_GEN_CODE_OUTPUT_NORM = auto()
-    # qwen3tts code2wav: RVQ codes -> raw PCM (quantizer decode + pre_conv +
-    # pre_transformer + ConvNeXt upsample + DAC decoder)
+    # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj
     A_GEN_WAV_QUANT_FIRST_CB = auto() # semantic RVQ codebook (1 layer), folded from embedding_sum/cluster_usage

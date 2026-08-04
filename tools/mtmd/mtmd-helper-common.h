@@ -56,7 +56,7 @@ struct mtmd_helper_logger {
     }
 };
 
-// inline (C++17): one shared instance across every TU that includes this header
+// inline, so all TUs including this header share one instance
 inline mtmd_helper_logger g_logger;
 
 #define LOG_DBG(...) g_logger.log(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)

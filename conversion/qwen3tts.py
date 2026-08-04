@@ -216,8 +216,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
         hparams["text_config"] = {"hidden_size": hparams["talker_config"]["hidden_size"]}
-        # ECAPA-TDNN has a fixed 4-stage backbone, not a configurable transformer depth;
-        # MmprojModel.__init__ still needs one of the n_block_keys to build its tensor map
+        # ECAPA-TDNN has a fixed 4-stage backbone, but MmprojModel.__init__ needs a n_block_keys
         hparams["speaker_encoder_config"]["n_layers"] = 4
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self._wav_config_cache = None
@@ -234,7 +233,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
         # mel_spectrogram() front-end: sr=24000, n_fft=1024, hop=256, n_mels=128, fmin=0, fmax=12000 (=sr/2, the clip.cpp default)
         self.gguf_writer.add_audio_num_mel_bins(128)
-        # the 3 SE-Res2Net stages (blocks 1-3); the stem conv, mfa, asp and fc are singletons, not part of this count
+        # 3 SE-Res2Net stages; the stem conv, mfa, asp and fc are not counted here
         self.gguf_writer.add_audio_block_count(3)
         # ECAPA-TDNN has no attention/FFN, these are dummy to allow clip.cpp to load it
         self.gguf_writer.add_audio_embedding_length(1536)
@@ -256,8 +255,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         # note: code2wav hparams are hardcoded on the mtmd/clip.cpp side for now, not written here
 
     def _wav_decoder_config(self) -> dict[str, Any] | None:
-        # code2wav (RVQ codes -> raw PCM) lives in its own checkpoint dir, sibling to
-        # the main safetensors, with its own config.json
+        # code2wav has its own config.json, inside the speech_tokenizer dir
         if self._wav_config_cache is None:
             path = self.dir_model / "speech_tokenizer" / "config.json"
             with open(path, "r", encoding="utf-8") as f:
@@ -266,18 +264,14 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         return self._wav_config_cache
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        # regular (non-transpose) conv1d/conv1d_dw weights must be F16, never BF16:
-        # ggml_conv_1d(_dw) pairs the kernel as mul_mat's src1 against an F32 im2col
-        # src0, and the CPU backend only accepts src1 in F32 -- BF16 kernels can't be
-        # scheduled.
+        # conv1d/conv1d_dw kernels must be F16, ggml_conv_1d(_dw) has no BF16 path
         if new_name.endswith(".weight") and (
             new_name in ("a.gen.wav.pre_conv.weight", "a.gen.wav.dac.entry.weight", "a.gen.wav.dac.post_conv.weight")
             or (".up.blk." in new_name and new_name.endswith(".dwconv.weight"))
             or (".dac.blk." in new_name and (new_name.endswith(".conv1.weight") or new_name.endswith(".conv2.weight")))
         ):
             return gguf.GGMLQuantizationType.F16
-        # causal ConvTranspose1d weights: ggml_compute_forward_conv_transpose_1d
-        # only implements F16/F32 kernels, never BF16
+        # ConvTranspose1d kernels: only F16/F32 are implemented, no BF16
         if new_name.endswith(".conv.weight") and (".up.blk." in new_name or ".dac.blk." in new_name):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
@@ -296,16 +290,12 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # code2wav tensors come from generate_extra_tensors() already renamed to their
-        # final gguf name (bypassing tensor_mapping.py, same as the code_predictor
-        # tensors below); prepare_tensors() re-runs modify_tensors() on them too, so
-        # pass them through untouched instead of falling into map_tensor_name()
+        # code2wav tensors are already named by generate_extra_tensors(), pass them through
         if name.startswith("a.gen.wav."):
             yield (name, data_torch)
             return
 
-        # codebook-0 embedding: fed back into the talker backbone once a codec token is
-        # generated, the counterpart of code_predictor's codec_embedding.{0..14} for codebooks 1-15
+        # codebook-0 embedding, fed back to the talker backbone (codebooks 1-15 live in code_predictor)
         if name == "talker.model.codec_embedding.weight":
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_GEN_CODE_OUT_EMBD), data_torch)
             return
@@ -360,8 +350,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         yield from self._generate_code2wav_tensors()
 
     def _generate_code2wav_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        # code2wav lives in its own checkpoint dir (speech_tokenizer/model.safetensors),
-        # not the main safetensors this ModelBase was constructed from
+        # code2wav weights live in speech_tokenizer/model.safetensors, not the main safetensors
         from safetensors.torch import load_file
 
         wav_config = self._wav_decoder_config()
@@ -371,13 +360,11 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
             return state_dict[name]
 
         def snake_fold(alpha: Tensor, beta: Tensor) -> tuple[Tensor, Tensor]:
-            # SnakeBeta activation folds its exp()/reciprocal at conversion time, so the
-            # runtime graph is only mul -> sin -> sqr -> mul -> add
+            # fold SnakeBeta's exp()/reciprocal here, so the graph is only mul/sin/sqr/mul/add
             return torch.exp(alpha), 1.0 / (torch.exp(beta) + 1e-9)
 
         def rvq_codebook(prefix: str, n_layers: int) -> Tensor:
-            # the checkpoint stores EMA training accumulators, not a ready embedding
-            # table: codebook[i] = embedding_sum[i] / cluster_usage[i]
+            # checkpoint has EMA accumulators, so codebook[i] = embedding_sum[i] / cluster_usage[i]
             books = []
             for i in range(n_layers):
                 embedding_sum = get(f"{prefix}.vq.layers.{i}._codebook.embedding_sum")

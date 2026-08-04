@@ -3,7 +3,7 @@
 static constexpr int SPK_RES2NET_SCALE = 8; // enc_res2net_scale
 static constexpr int SPK_DILATIONS[3]  = { 2, 3, 4 }; // enc_dilations[1..3]
 
-// Conv1d, kernel K, padding "same" (reflect), dilation d.
+// conv1d, kernel K, padding "same" (reflect), dilation d
 // x: [C, T] (ne[0]=C, ne[1]=T) -> [out_c, T]
 ggml_tensor * clip_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const {
     const int K   = (int) w->ne[0];
@@ -11,16 +11,14 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tens
     const int OC  = (int) w->ne[2];
     const int pad = ((K - 1) * dilation) / 2;
 
-    // ggml_pad_reflect_1d pads ne[0], so bring T onto ne[0] first; im2col
-    // below expects the same [T, IC] layout.
+    // ggml_pad_reflect_1d pads ne[0], so bring T onto ne[0] first, same layout as im2col wants
     ggml_tensor * x_t = ggml_cont(ctx0, ggml_transpose(ctx0, x)); // [T, IC]
     if (pad > 0) {
         x_t = ggml_pad_reflect_1d(ctx0, x_t, pad, pad); // [T + 2*pad, IC]
     }
     ggml_tensor * x4d = ggml_reshape_4d(ctx0, x_t, x_t->ne[0], IC, 1, 1);
 
-    // Dummy F32 kernel: im2col only reads its shape (K, IC), never its data,
-    // so this avoids a type assert when w is quantized.
+    // dummy F32 kernel, im2col only reads its shape, so a quantized w does not assert
     ggml_tensor * dummy = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, K, IC, 1, 1);
 
     ggml_tensor * col = ggml_im2col(ctx0, dummy, x4d, 1, 1, 0, 0, dilation, 1, false, GGML_TYPE_F32);
@@ -36,8 +34,8 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tens
     return y;
 }
 
-// Res2Net: split channel axis into `scale` chunks, chain dilated conv1d
-// branches. x: [C, T] -> [C, T]
+// Res2Net: split channel axis into `scale` chunks, chain dilated conv1d branches
+// x: [C, T] -> [C, T]
 ggml_tensor * clip_graph_qwen3tts_spkenc::res2net(ggml_tensor * x, const clip_layer & layer, int dilation, int scale) const {
     const int64_t C  = x->ne[0];
     const int64_t T  = x->ne[1];
@@ -71,7 +69,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::res2net(ggml_tensor * x, const clip_la
     return acc;
 }
 
-// Squeeze-and-excitation gate. x: [C, T] -> [C, T]
+// squeeze-and-excitation gate. x: [C, T] -> [C, T]
 ggml_tensor * clip_graph_qwen3tts_spkenc::se_block(ggml_tensor * x, const clip_layer & layer) const {
     // temporal mean, keepdim: transpose so T is on ne[0], reduce, transpose back
     ggml_tensor * x_t  = ggml_cont(ctx0, ggml_transpose(ctx0, x));    // [T, C]
@@ -98,7 +96,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::se_res2net_block(ggml_tensor * x, cons
     return ggml_add(ctx0, h, residual);
 }
 
-// Attentive statistics pooling. x: [C, T] -> [2*C, 1]
+// attentive statistics pooling. x: [C, T] -> [2*C, 1]
 ggml_tensor * clip_graph_qwen3tts_spkenc::attentive_stats_pool(ggml_tensor * x) const {
     const int64_t T = x->ne[1];
 
@@ -132,8 +130,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::attentive_stats_pool(ggml_tensor * x) 
     ggml_tensor * w_t = ggml_soft_max(ctx0, a_t);
     ggml_tensor * w   = ggml_cont(ctx0, ggml_transpose(ctx0, w_t)); // [C, T]
 
-    // weighted mean: sum(w * x) over T (w already sums to 1 over T,
-    // ggml_mean gives 1/T scaling so multiply back by T to undo it)
+    // weighted mean: sum(w * x) over T, multiply by T to undo ggml_mean's 1/T scaling
     ggml_tensor * wx     = ggml_mul(ctx0, w, x);
     ggml_tensor * wx_t   = ggml_cont(ctx0, ggml_transpose(ctx0, wx));
     ggml_tensor * w_mean = ggml_mean(ctx0, wx_t);
@@ -155,8 +152,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::attentive_stats_pool(ggml_tensor * x) 
 }
 
 ggml_cgraph * clip_graph_qwen3tts_spkenc::build() {
-    // inp_raw: [T, n_mel, 1, 1] (nx=T frames, ny=n_mel bins), from the
-    // preprocessor's mel_spectrogram() output (mtmd_audio_preprocessor_qwen3tts_spk)
+    // inp_raw: [T, n_mel, 1, 1], from mtmd_audio_preprocessor_qwen3tts_spk
     ggml_tensor * inp = build_inp_raw(1);
     inp = ggml_reshape_2d(ctx0, inp, inp->ne[0], inp->ne[1]);
 

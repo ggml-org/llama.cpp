@@ -219,7 +219,7 @@
 #define TN_A_GEN_CODE_NORM     "a.gen.code.output_norm.%s"
 
 // qwen3tts code2wav (RVQ codes -> raw PCM)
-// pre_transformer per-layer tensors are loaded through the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros with prefix "a.gen.wav.tfm"
+// pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
 #define TN_A_GEN_WAV_QUANT_FIRST_IN  "a.gen.wav.quant.first.in_proj.%s"
 #define TN_A_GEN_WAV_QUANT_FIRST_OUT "a.gen.wav.quant.first.out_proj.%s"
 #define TN_A_GEN_WAV_QUANT_FIRST_CB  "a.gen.wav.quant.first.codebook.%s"

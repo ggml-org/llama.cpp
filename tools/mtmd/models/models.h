@@ -244,8 +244,8 @@ struct clip_graph_qwen3tts_gen : clip_graph {
     float top_p;
 
     //
-    // code_gen: backbone hidden state + sampled code0 -> 16 RVQ codes.
-    // MTP-style autoregressive code predictor: one token per codebook, causal KV cache.
+    // code_gen: backbone hidden state + sampled code0 -> 16 RVQ codes
+    // MTP-style code predictor, one token per codebook
     //
     struct code_gen : clip_graph {
         code_gen(const clip_graph & parent, int top_k, float top_p)
@@ -308,7 +308,6 @@ struct clip_graph_qwen3tts_gen : clip_graph {
         ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
 
         ggml_tensor * quant_decode(ggml_tensor * inp_codes) const;
-        // il: layer index, used to look up this layer's K/V slice of the sliding-window KV cache
         ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, int il) const;
         ggml_tensor * convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const;
         ggml_tensor * dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
@@ -318,13 +317,12 @@ struct clip_graph_qwen3tts_gen : clip_graph {
     };
 };
 
-// one named, shaped (ne0, ne1) persisted state buffer used by code2wav; see qwen3tts-gen.cpp
+// one persisted state buffer used by code2wav, see qwen3tts-gen.cpp
 struct c2w_state_slot {
     std::string name;
     int64_t     ne0;
     int64_t     ne1;
 };
-// enumerates code2wav's persisted state buffers; see qwen3tts-gen.cpp
 std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model);
 
 struct clip_graph_kimik25 : clip_graph {
