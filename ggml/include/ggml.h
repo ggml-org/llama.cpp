@@ -2461,6 +2461,17 @@ extern "C" {
             struct ggml_tensor  * C,
             struct ggml_tensor  * ids);
 
+    GGML_API struct ggml_tensor * ggml_ssm_scan_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * s,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * dt,
+            struct ggml_tensor  * A,
+            struct ggml_tensor  * B,
+            struct ggml_tensor  * C,
+            struct ggml_tensor  * ids,
+            int64_t               K);
+
     // partition into non-overlapping windows with padding if needed
     // example:
     // a:   768   64   64    1
