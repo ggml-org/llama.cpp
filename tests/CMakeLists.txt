@@ -473,6 +473,28 @@ if (APPLE)
                               "-framework Foundation"
                               "-framework Metal")
     endif()
+    # Phase 0 profile: per-function phase table for a real ANE
+    # dispatch. Validates the four-phase timing
+    # (input_prep / ane_dispatch / output_read / signal) is
+    # collected lock-free and exposed via
+    # common_ane_mtp_program_phase_stats. Gated on the gemma4
+    # prefill bundle + TESSERA_ANE_STATE_LAYOUT_MANIFEST.
+    llama_build(test-ane-phase-profile.cpp)
+    if (TARGET test-ane-phase-profile)
+        target_link_libraries(test-ane-phase-profile PRIVATE
+                              llama-common)
+        if (EXISTS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf")
+            add_test(
+                NAME test-ane-phase-profile
+                COMMAND test-ane-phase-profile
+                    /Volumes/Julian\ T7/models/gemma4-ane-prefill-flat-slab.gguf
+            )
+            set_tests_properties(test-ane-phase-profile PROPERTIES
+                LABELS "ane"
+                ENVIRONMENT "TESSERA_ANE_STATE_LAYOUT_MANIFEST=/Volumes/Julian T7/models/gemma4-ane-prefill-bundle/prefill-bundle.ane_state.v1.json"
+            )
+        endif()
+    endif()
     # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
     llama_build(test-ane-matmul-w1-dispatch.cpp)
     if (TARGET test-ane-matmul-w1-dispatch)

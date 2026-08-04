@@ -33,6 +33,25 @@
 
 namespace fs = std::filesystem;
 
+// Internal per-function phase stats. Same field layout as the
+// public common_ane_phase_stats snapshot (in ane-mtp.h) but with
+// std::atomic<uint64_t> fields so the E-core thread can update
+// them without explicit locking while the host reads them via
+// common_ane_mtp_program_phase_stats. The snapshot is built by
+// individual .load() calls and copied into a plain common_ane_phase_stats
+// for return; the atomic struct itself never leaves the file.
+struct common_ane_phase_stats_internal {
+    std::atomic<uint64_t> input_prep_us_total{0};
+    std::atomic<uint64_t> input_prep_us_max{0};
+    std::atomic<uint64_t> ane_dispatch_us_total{0};
+    std::atomic<uint64_t> ane_dispatch_us_max{0};
+    std::atomic<uint64_t> output_read_us_total{0};
+    std::atomic<uint64_t> output_read_us_max{0};
+    std::atomic<uint64_t> signal_us_total{0};
+    std::atomic<uint64_t> signal_us_max{0};
+    std::atomic<uint64_t> count{0};
+};
+
 struct common_ane_compute_instance {
     MLModel * model = nil;
     // Single MLState per function. The 5s re-warm timer used to
@@ -57,6 +76,15 @@ struct common_ane_compute_instance {
     common_ane_pump pump;
     // True once pump has been initialized.
     bool pump_ready = false;
+    // Phase 0 profile: per-function timing of the four dispatch
+    // phases. The counters are mutated on the E-core thread (the
+    // pump runs the submit_fn + signal_fn there); the host reads
+    // them via common_ane_mtp_program_phase_stats on the host
+    // thread. The atomic fields give tearing-free reads; the
+    // counters are approximate (the host snapshot can sample
+    // mid-dispatch) but the per-row inconsistency is bounded by
+    // one in-flight dispatch and is acceptable for a profile.
+    common_ane_phase_stats_internal phase_stats;
 };
 
 struct common_ane_prefill_request {
@@ -530,6 +558,19 @@ static std::string strip_manifest_prefix(
 // while the async path runs on the program queue already and
 // invokes this directly. The caller is responsible for queue
 // serialization; the body is the prediction + zero-copy proof.
+//
+// Phase 0 profile: the body times three phases via ggml_time_us
+// and records them on instance.phase_stats. The phases are:
+//   input_prep   building the input feature dict (slot loop +
+//                extra_inputs merge + MLDictionaryFeatureProvider)
+//   ane_dispatch the Core ML predictionFromFeatures call (the
+//                actual ANE/CPU work)
+//   output_read  reading outputs from the feature provider +
+//                zero-copy verification
+// The fourth phase (signal) is recorded by ane_signal_slot_events.
+// Failed dispatches do not update the phase_stats counters; the
+// host can detect a clean run by checking (count == 0 -> no
+// successful dispatches yet).
 static bool dispatch_pinned_function_locked(
         common_ane_mtp_program & program,
         const std::string & function_name,
@@ -548,6 +589,7 @@ static bool dispatch_pinned_function_locked(
     if (!instance.warm.load()) {
         return false;
     }
+    const int64_t t_input_start = ggml_time_us();
     @autoreleasepool {
         NSError * error = nil;
         NSMutableDictionary<NSString *, MLFeatureValue *> * features =
@@ -594,10 +636,12 @@ static bool dispatch_pinned_function_locked(
                 program.pinned_slots[slot_id];
         }
         options.outputBackings = backings;
+        const int64_t t_ane_start = ggml_time_us();
         id<MLFeatureProvider> output = [instance.model
             predictionFromFeatures:inputs
                            options:options
                              error:&error];
+        const int64_t t_output_start = ggml_time_us();
         if (output == nil) {
             LOG_WRN("ANE pinned dispatch %s: prediction failed: %s\n",
                     function_name.c_str(),
@@ -623,6 +667,38 @@ static bool dispatch_pinned_function_locked(
                 return false;
             }
         }
+        const int64_t t_end = ggml_time_us();
+        // Record phase stats. Each phase's duration is a uint64
+        // microsecond delta; we accumulate totals via fetch_add
+        // and update max via a CAS loop. Failed dispatches have
+        // already returned false above; we only reach this point
+        // on success.
+        const uint64_t dt_input = (uint64_t) (t_ane_start - t_input_start);
+        const uint64_t dt_ane = (uint64_t) (t_output_start - t_ane_start);
+        const uint64_t dt_output = (uint64_t) (t_end - t_output_start);
+        instance.phase_stats.input_prep_us_total.fetch_add(
+            dt_input, std::memory_order_relaxed);
+        instance.phase_stats.ane_dispatch_us_total.fetch_add(
+            dt_ane, std::memory_order_relaxed);
+        instance.phase_stats.output_read_us_total.fetch_add(
+            dt_output, std::memory_order_relaxed);
+        // Max updates: load-CAS loop. Single-thread per instance
+        // (the pump's E-core thread is the only writer), so the
+        // CAS rarely retries; we use relaxed ordering.
+        auto update_max = [](std::atomic<uint64_t> & field, uint64_t value) {
+            uint64_t cur = field.load(std::memory_order_relaxed);
+            while (value > cur &&
+                    !field.compare_exchange_weak(cur, value,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed)) {
+                // cur is reloaded by compare_exchange_weak; loop.
+            }
+        };
+        update_max(instance.phase_stats.input_prep_us_max, dt_input);
+        update_max(instance.phase_stats.ane_dispatch_us_max, dt_ane);
+        update_max(instance.phase_stats.output_read_us_max, dt_output);
+        instance.phase_stats.count.fetch_add(
+            1, std::memory_order_relaxed);
         return true;
     }
     return true;  // unreachable
@@ -657,6 +733,13 @@ static bool dispatch_pinned_function_locked(
 // are indexed by slot id). The function_id is the manifest's
 // function index; the program resolves the output slot ids
 // from the manifest and signals each.
+//
+// Phase 0 profile: the per-slot signals are timed via
+// ggml_time_us and recorded on the function's instance.phase_stats.
+// The signal phase is typically <1us per slot (the signal is
+// a single setSignaledValue: call), so the totals are small
+// relative to ane_dispatch; the metric is here for tail-latency
+// debugging when downstream Metal consumers are involved.
 static void ane_signal_slot_events(
         common_ane_mtp_program & program,
         uint32_t function_id,
@@ -667,12 +750,39 @@ static void ane_signal_slot_events(
         return;
     }
     const ane_function_v1_t & function = program.manifest.functions[function_id];
+    // Resolve the function's compute instance for phase stats.
+    // The manifest's function name maps to the program's
+    // functions map; if the function was never registered (e.g.
+    // a stale manifest), fall back gracefully.
+    common_ane_compute_instance * instance = nullptr;
+    auto it = program.functions.find(function.name);
+    if (it != program.functions.end() && it->second != nullptr) {
+        instance = it->second.get();
+    }
+    const int64_t t_signal_start = ggml_time_us();
     for (uint32_t i = 0; i < function.n_outputs; ++i) {
         const uint32_t slot_id = function.output_slot_ids[i];
         if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
         ggml_mtl_shared_event_t event = program.slot_events[slot_id];
         if (event != nullptr) {
             ggml_mtl_shared_event_signal(event, value);
+        }
+    }
+    const int64_t t_signal_end = ggml_time_us();
+    if (instance != nullptr) {
+        const uint64_t dt = (uint64_t) (t_signal_end - t_signal_start);
+        instance->phase_stats.signal_us_total.fetch_add(
+            dt, std::memory_order_relaxed);
+        // Max update via load-CAS loop (single-writer on the
+        // E-core thread, contention-free in practice).
+        uint64_t cur = instance->phase_stats.signal_us_max.load(
+            std::memory_order_relaxed);
+        while (dt > cur &&
+                !instance->phase_stats.signal_us_max.compare_exchange_weak(
+                    cur, dt,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+            // cur reloaded; loop.
         }
     }
 }
@@ -1661,6 +1771,57 @@ std::vector<common_ane_compute_function> common_ane_compute_functions(
         if (a.role != b.role) {
             return a.role < b.role;
         }
+        return a.bucket < b.bucket;
+    });
+    return result;
+}
+
+std::vector<common_ane_program_phase_stats_row> common_ane_mtp_program_phase_stats(
+        const common_ane_mtp_program_ptr & program) {
+    std::vector<common_ane_program_phase_stats_row> result;
+    if (!program) {
+        return result;
+    }
+    result.reserve(program->functions.size());
+    for (const auto & entry : program->functions) {
+        const auto & instance = *entry.second;
+        // Snapshot the per-function phase stats. The values are
+        // atomic so we read them in a consistent order; the
+        // snapshot is not strictly atomic (the four phase totals
+        // can be sampled at slightly different microsecond
+        // boundaries if the E-core thread is in the middle of a
+        // dispatch), but the resulting per-row inconsistency is
+        // bounded by one in-flight dispatch and is acceptable
+        // for a profile snapshot.
+        common_ane_program_phase_stats_row row;
+        row.function_name = instance.name;
+        row.role = instance.role;
+        row.bucket = instance.bucket;
+        row.stats.input_prep_us_total = instance.phase_stats.input_prep_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.input_prep_us_max = instance.phase_stats.input_prep_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.ane_dispatch_us_total = instance.phase_stats.ane_dispatch_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.ane_dispatch_us_max = instance.phase_stats.ane_dispatch_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.output_read_us_total = instance.phase_stats.output_read_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.output_read_us_max = instance.phase_stats.output_read_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.signal_us_total = instance.phase_stats.signal_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.signal_us_max = instance.phase_stats.signal_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.count = instance.phase_stats.count.load(
+            std::memory_order_relaxed);
+        result.push_back(std::move(row));
+    }
+    // Same sort order as common_ane_compute_functions: (role, bucket).
+    std::sort(result.begin(), result.end(),
+            [](const common_ane_program_phase_stats_row & a,
+               const common_ane_program_phase_stats_row & b) {
+        if (a.role != b.role) return a.role < b.role;
         return a.bucket < b.bucket;
     });
     return result;
