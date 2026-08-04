@@ -205,9 +205,20 @@ static int test_with_model(common_params & params_in, const std::string & teleme
     }
 
     // For the drafter we use the same model file.  The calibration API
-    // does not care whether the drafter is "good" — it just needs a
+    // does not care whether the drafter is "good" - it just needs a
     // context that can produce logits.  Using the same model keeps the
     // test hermetic (no second GGUF to download).
+    //
+    // We set draft.target_model_path (the new 'embedded drafter' field)
+    // and leave draft.mparams empty.  has_dft() in common.h was relaxed
+    // (Workstream A) to return true for either field, and the ctor in
+    // common/speculative.cpp picks the embedded branch when
+    // target_model_path is set and mparams is empty.  This is the
+    // single-source-of-truth the test wants to exercise: the drafter
+    // IS the target GGUF, expressed through the field that semantically
+    // means 'drafter lives inside this target'.  No backstop
+    // mparams.path; that would shadow the embedded branch and the test
+    // would not actually exercise the new code.
     common_params params_dft = common_base_params_to_speculative(params);
     params_dft.speculative.draft.target_model_path = params.model.path;
     params_dft.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE };
