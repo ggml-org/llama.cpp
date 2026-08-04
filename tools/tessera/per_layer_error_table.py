@@ -15,7 +15,7 @@ Both files use the v3 schema described in ``common/tessera-debug.h``
 (magic ``"TDQT"``, 40-byte header + 28R per-row strip + F32 data).
 The reader used here is the canonical Python reader
 ``l3_sidecar_v3_reader.py``; this tool only adds the L1 vs L1.5
-error computation and the per-layer aggregation.
+error computation.
 
 For each pair (L1, L1.5) with the same tensor name, the per-tensor
 error is the relative Frobenius-norm-squared difference
@@ -28,9 +28,13 @@ this tensor relative to its original FP16 reference" metric for
 Tessera. The denominator normalizes by the reference energy, so
 the metric is comparable across tensors of different sizes.
 
-The per-layer total is the sum of per-tensor epsilons within a
-layer. The summary reports the mean and max across tensors, the
-total number of tensors, and the number of layers.
+Output: one NDJSON line per tensor, conformant to
+``common/schemas/per_layer_error.schema.json``. Consumers read the
+output via ``tools/tessera/_analytical_io.py:read_analytical``.
+The per-layer / per-network rollup is the consumer's job: different
+consumers want different aggregations, and the polars group_by
+one-liner is simpler than carrying both raw and rolled-up views
+in the producer.
 
 WAVE-4 GOTCHA: in real production runs, L1.5 currently contains
 the same F32 data as L1 (the FP16 reference path is not yet
@@ -75,13 +79,13 @@ CLI
 
     python3 tools/tessera/per_layer_error_table.py \\
         --sidecar-dir /path/to/sidecars \\
-        --out         /path/to/per_layer_error_table.json \\
-        --format      json
+        --out         /path/to/per_layer_error.ndjson
 
+    # Optional: print a human-readable summary to stdout
     python3 tools/tessera/per_layer_error_table.py \\
         --sidecar-dir /path/to/sidecars \\
-        --out         /path/to/per_layer_error_table.txt \\
-        --format      table
+        --out         /path/to/per_layer_error.ndjson \\
+        --print-table
 
 Missing-pair behavior
 ---------------------
@@ -89,51 +93,90 @@ Missing-pair behavior
 If a sidecar has only an L1 file (no matching L1.5), the pair is
 skipped with a warning printed to stderr; the same goes for an
 L1.5 file with no L1. The tool never crashes on a partial
-directory; it always emits a valid output document.
+directory; it always emits a valid NDJSON document (possibly
+empty).
 
 Schema versioning
 -----------------
 
-The JSON output is versioned by a top-level ``schema`` field:
-
-    "schema": "llama.tessera.per-layer-error-table.v1"
-
-so downstream consumers (L3 metric, L5 IterQuant orchestrator,
-the L6 plan writer) can dispatch on the schema name. Adding a
-field is non-breaking; removing or renaming a field requires
-bumping the schema name (``.v2``).
+The NDJSON output is typed per
+``common/schemas/per_layer_error.schema.json``. Adding a column
+is non-breaking (consumers ignore unknown columns); removing or
+renaming a column requires bumping the schema name.
 """
 
 import argparse
 import json
 import os
 import re
+import subprocess
 import sys
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import polars as pl
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS_DIR)
-import l3_sidecar_v3_reader as reader  # noqa: E402
 
-SCHEMA = "llama.tessera.per-layer-error-table.v1"
+import l3_sidecar_v3_reader as reader  # noqa: E402
+from _analytical_io import polars_schema as _schema_polars_types  # noqa: E402
+
+# Match the schema's name field; carries through to consumers for
+# provenance. The schema-file itself is the source of truth for
+# the columns; this constant is the human-readable name in the
+# ``tessera_main_tip`` provenance field, not a parse target.
+SCHEMA_NAME = "tessera.per-layer-error-record.v1"
 
 L1_SUFFIX = ".dequant.f32"
 L15_SUFFIX = ".act.dequant.f32"
 
 # Matches the canonical block (layer) prefix used by llama.cpp / ggml:
 #   blk.<N>.<component>.<kind>[.expert_index]
-# Examples it should match:
-#   blk.3.attn_q.weight
-#   blk.7.ffn_down.bias
-#   blk.12.ffn_moe_up.3.weight
-#   blk.0.attn_norm.weight
 _BLK_RE = re.compile(r"^(blk\.\d+)\.")
 
 
 def _err(msg: str, *args: Any) -> None:
     sys.stderr.write("per_layer_error_table: " + (msg % args) + "\n")
+
+
+def _tessera_provenance() -> Tuple[str, str, str]:
+    """Return (kernel_version, created_at, tessera_main_tip).
+
+    Tries the C++ provenance helpers (which read the auto-populated
+    build-info header baked in by CMake) and falls back to
+    subprocess calls to ``git`` for standalone / un-CMake-built
+    invocations (e.g. when run directly from a worktree as
+    ``python3 tools/tessera/per_layer_error_table.py ...``).
+
+    The values are stamped into every NDJSON record so downstream
+    consumers can audit which build wrote the row. See
+    ``common/tessera-debug/tessera-debug.h:tessera_kernel_version``
+    for the canonical contract.
+    """
+    kernel_version = "unknown"
+    main_tip = "unknown"
+    try:
+        # 1. Try the canonical C++ helper via subprocess. The
+        #    binary ``-print-tessera-provenance`` is not yet wired;
+        #    fall back to git for now.
+        kv = subprocess.run(
+            ["git", "describe", "--all", "--always"],
+            capture_output=True, text=True, check=False,
+            cwd=os.path.dirname(THIS_DIR))
+        if kv.returncode == 0 and kv.stdout.strip():
+            kernel_version = kv.stdout.strip()
+        mt = subprocess.run(
+            ["git", "rev-parse", "--short", "main"],
+            capture_output=True, text=True, check=False,
+            cwd=os.path.dirname(THIS_DIR))
+        if mt.returncode == 0 and mt.stdout.strip():
+            main_tip = mt.stdout.strip()
+    except FileNotFoundError:
+        pass  # git not installed
+    created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return kernel_version, created_at, main_tip
 
 
 def derive_layer_name(tensor_name: str) -> str:
@@ -153,10 +196,6 @@ def derive_layer_name(tensor_name: str) -> str:
     m = _BLK_RE.match(base + ".")  # ensure we only match the prefix
     if m is not None:
         return m.group(1)
-    # Fall back: strip any trailing ``.<int>`` (expert index), but
-    # only for tensors that already have a ``blk.`` shape; otherwise
-    # keep the full name so embedding/output tensors stay
-    # distinguishable from the block tensors.
     if base.startswith("blk."):
         # already handled above; if we got here the regex did not match
         # because there was no component segment (e.g. ``blk.3.`` only).
@@ -277,8 +316,6 @@ def compute_per_tensor(pairs: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
             })
             continue
 
-        # F32 in, F32 out. Use the same dtype through the diff and
-        # the norm; the reader already returns float32.
         diff = (d15 - d1).astype(np.float32, copy=False)
         eps = _safe_rel_error(diff, d15)
         out.append({
@@ -291,113 +328,92 @@ def compute_per_tensor(pairs: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
     return out
 
 
-def aggregate_per_layer(per_tensor: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Sum per-tensor epsilons per layer. Layers are sorted by
-    block index when they are ``blk.<N>`` style, otherwise
-    alphabetically for stability. Tensors with ``epsilon is None``
-    (shape mismatch) are not summed into the layer total.
-    """
-    sums: Dict[str, Dict[str, Any]] = {}
-    for rec in per_tensor:
-        layer = rec["layer"]
-        eps = rec["epsilon"]
-        if eps is None:
-            continue
-        s = sums.setdefault(layer, {"layer": layer, "total_epsilon": 0.0,
-                                    "n_tensors": 0})
-        s["total_epsilon"] += float(eps)
-        s["n_tensors"] += 1
-
-    def _sort_key(item: Dict[str, Any]) -> Tuple[int, str]:
-        m = re.match(r"^blk\.(\d+)$", item["layer"])
-        if m is not None:
-            return (0, "%010d" % int(m.group(1)))
-        return (1, item["layer"])
-
-    return [sums[k] for k in sorted(sums, key=lambda l: _sort_key(sums[l]))]
-
-
-def build_summary(per_tensor: List[Dict[str, Any]],
-                  per_layer: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build the top-level summary block."""
-    finite = [r["epsilon"] for r in per_tensor
-              if r["epsilon"] is not None]
-    if finite:
-        mean_eps = float(sum(finite) / len(finite))
-        max_eps = float(max(finite))
-    else:
-        mean_eps = 0.0
-        max_eps = 0.0
-    return {
-        "n_tensors":    len(per_tensor),
-        "n_layers":     len(per_layer),
-        "mean_epsilon": mean_eps,
-        "max_epsilon":  max_eps,
-    }
-
-
-def build_table(per_tensor: List[Dict[str, Any]],
-                per_layer: List[Dict[str, Any]],
-                summary: Dict[str, Any]) -> str:
-    """Render the result as a human-readable, greppable table."""
+def build_table(per_tensor: List[Dict[str, Any]]) -> str:
+    """Render the per-tensor result as a human-readable, greppable
+    table for stdout. Aggregation across layers is the consumer's
+    job (a one-liner polars group_by); this is a quick-look view."""
     lines: List[str] = []
-    lines.append("# Tessera per-layer error table (schema=%s)" % SCHEMA)
+    lines.append("# Tessera per-tensor L1/L1.5 relative error")
     lines.append("# epsilon(l, b) = ||L15 - L1||^2_F / ||L15||^2_F")
     lines.append("")
-    lines.append("## Summary")
-    lines.append("n_tensors     = %d" % summary["n_tensors"])
-    lines.append("n_layers      = %d" % summary["n_layers"])
-    lines.append("mean_epsilon  = %.6e" % summary["mean_epsilon"])
-    lines.append("max_epsilon   = %.6e" % summary["max_epsilon"])
-    lines.append("")
-    lines.append("## Per-tensor")
     lines.append("layer          tensor                            epsilon")
     for rec in per_tensor:
         eps = rec["epsilon"]
         eps_s = "%.6e" % eps if eps is not None else "n/a(shape)"
         lines.append("%-14s %-32s %s" % (rec["layer"], rec["name"], eps_s))
     lines.append("")
-    lines.append("## Per-layer")
-    lines.append("layer          total_epsilon  n_tensors")
-    for rec in per_layer:
-        lines.append("%-14s %-13.6e %d" % (
-            rec["layer"], rec["total_epsilon"], rec["n_tensors"]))
-    lines.append("")
     return "\n".join(lines)
+
+
+def write_ndjson(per_tensor: List[Dict[str, Any]],
+                 out_path: str,
+                 sidecar_dir: str,
+                 provenance: Tuple[str, str, str]) -> int:
+    """Write the per-tensor records as NDJSON, typed per
+    ``common/schemas/per_layer_error.schema.json``.
+
+    Returns the number of records written. An empty input emits
+    a valid empty NDJSON file (one closing line so ``pl.read_ndjson``
+    does not error on zero-row input).
+    """
+    kernel_version, created_at, main_tip = provenance
+    rows: List[Dict[str, Any]] = []
+    for rec in per_tensor:
+        eps = rec["epsilon"]
+        rows.append({
+            "tensor":           rec["name"],
+            "layer":            rec["layer"],
+            "epsilon":          eps if eps is not None else float("nan"),
+            "epsilon_is_nan":   eps is None,
+            "note":             rec.get("note", ""),
+            "sidecar_dir":      sidecar_dir,
+            "kernel_version":   kernel_version,
+            "created_at":       created_at,
+            "tessera_main_tip": main_tip,
+        })
+    # Pin the column dtypes per the schema's polars_schema so a
+    # consumer reading via _analytical_io:read_analytical sees
+    # exactly the types the schema promises.
+    schema_types = _schema_polars_types("per_layer_error")
+    if rows:
+        df = pl.DataFrame(rows, infer_schema_length=max(len(rows), 1))
+    else:
+        # Empty input: build a zero-row frame with the schema's
+        # column order so read_analytical on the result has the
+        # expected columns even when no records were produced.
+        df = pl.DataFrame(
+            {col: pl.Series(name=col, values=[], dtype=dtype)
+             for col, dtype in schema_types.items()},
+            schema=schema_types,
+        )
+    for col, dtype in schema_types.items():
+        if col in df.columns and df.schema[col] != dtype:
+            df = df.with_columns(pl.col(col).cast(dtype, strict=False))
+    df.write_ndjson(out_path)
+    return len(rows)
 
 
 def _main(argv: List[str]) -> int:
     p = argparse.ArgumentParser(
         description=(
             "Tessera per-layer error table: compares L1 vs L1.5 v3 "
-            "dequant sidecars and aggregates to per-layer totals."))
+            "dequant sidecars and emits per-tensor NDJSON. Consumers "
+            "do the per-layer / per-network rollup via polars."))
     p.add_argument("--sidecar-dir", required=True,
                    help="directory containing L1 .dequant.f32 and "
                         "L1.5 .act.dequant.f32 v3 sidecars")
     p.add_argument("--out", required=True,
-                   help="output path (JSON or text, depending on --format)")
-    p.add_argument("--format", choices=("json", "table"), default="json",
-                   help="output format (default: json)")
+                   help="output NDJSON path (one record per tensor)")
+    p.add_argument("--print-table", action="store_true",
+                   help="print a human-readable per-tensor table to stdout")
     args = p.parse_args(argv)
 
     l1_paths, l15_paths = scan_sidecar_dir(args.sidecar_dir)
     if not l1_paths and not l15_paths:
         _err("no L1 or L1.5 sidecar files found in %s", args.sidecar_dir)
-        # Still emit an empty-but-valid document.
-        empty = {
-            "schema":     SCHEMA,
-            "per_tensor": [],
-            "per_layer":  [],
-            "summary":    build_summary([], []),
-            "missing":    {"l1_only": [], "l15_only": []},
-        }
-        if args.format == "json":
-            with open(args.out, "w") as f:
-                json.dump(empty, f, indent=2)
-                f.write("\n")
-        else:
-            with open(args.out, "w") as f:
-                f.write(build_table([], [], empty["summary"]))
+        # Still emit an empty-but-valid NDJSON document.
+        provenance = _tessera_provenance()
+        write_ndjson([], args.out, args.sidecar_dir, provenance)
         return 0
 
     pairs, missing_l1, missing_l15 = pair_l1_l15(l1_paths, l15_paths)
@@ -407,26 +423,15 @@ def _main(argv: List[str]) -> int:
         _err("missing L1 for %s (skipping)", path)
 
     per_tensor = compute_per_tensor(pairs)
-    per_layer = aggregate_per_layer(per_tensor)
-    summary = build_summary(per_tensor, per_layer)
+    provenance = _tessera_provenance()
+    n = write_ndjson(per_tensor, args.out, args.sidecar_dir, provenance)
 
-    if args.format == "json":
-        doc = {
-            "schema":     SCHEMA,
-            "per_tensor": per_tensor,
-            "per_layer":  per_layer,
-            "summary":    summary,
-            "missing":    {
-                "l1_only":  missing_l1,
-                "l15_only": missing_l15,
-            },
-        }
-        with open(args.out, "w") as f:
-            json.dump(doc, f, indent=2)
-            f.write("\n")
+    if args.print_table:
+        sys.stdout.write(build_table(per_tensor))
     else:
-        with open(args.out, "w") as f:
-            f.write(build_table(per_tensor, per_layer, summary))
+        sys.stderr.write(
+            "wrote %d per-tensor records to %s\n" % (n, args.out))
+
     return 0
 
 

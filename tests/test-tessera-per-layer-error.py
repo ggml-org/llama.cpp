@@ -7,29 +7,39 @@ Smoke test for ``tools/tessera/per_layer_error_table.py``.
 Builds synthetic v3 L1 / L1.5 sidecar files using the same
 synthesize pattern as ``l3_sidecar_v3_smoke.py`` (no C++ build
 required), then runs the CLI as a subprocess and verifies the
-JSON / table output.
+NDJSON output via ``tools/tessera/_analytical_io.py``.
+
+Phase B (polars scout) refactor: the producer now emits per-tensor
+NDJSON only; the per-layer / per-network rollup is the consumer's
+job. The tests use polars group_by to verify the rollup matches
+the expected formulas, so the test exercises the same patterns
+the architect uses in practice.
 
 Test cases:
 
   1. L1 == L1.5 (data block is bit-identical) -> epsilon == 0
-     for every tensor.
+     for every tensor. Per-layer sum is 0.
   2. L1 differs from L1.5 by a known delta ->
      epsilon matches ``||delta||^2 / ||L15||^2`` to 4 decimal
      places.
-  3. Multi-tensor dir -> per-layer aggregation sums correctly
-     across tensors within a layer, and the layer grouping
-     matches the canonical ``blk.<N>`` prefix.
+  3. Multi-tensor dir -> per-layer aggregation (computed by
+     the test via polars) sums correctly across tensors within
+     a layer, and the layer grouping matches the canonical
+     ``blk.<N>`` prefix.
   4. Missing L1.5 file -> the tool skips the pair with a warning
-     and still emits a valid output document.
+     and still emits a valid NDJSON document with the matched
+     records.
   5. Missing L1 file -> same as (4), the other direction.
+  6. --print-table flag prints a human-readable table to stdout.
+  7. Empty dir -> empty-but-valid NDJSON (zero rows, schema-pinned
+     column types).
 
 The test runs the CLI as a subprocess on the synthetic dir,
-verifies exit 0, and checks the JSON schema. A short PASS / FAIL
-summary is printed.
+verifies exit 0, and checks the polars-parsed output. A short
+PASS / FAIL summary is printed.
 """
 
 import importlib.util
-import json
 import os
 import struct
 import subprocess
@@ -38,6 +48,7 @@ import tempfile
 import unittest
 
 import numpy as np
+import polars as pl
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(THIS_DIR)
@@ -45,10 +56,14 @@ TOOL_PATH = os.path.join(ROOT, "tools", "tessera",
                          "per_layer_error_table.py")
 READER_PATH = os.path.join(ROOT, "tools", "tessera",
                            "l3_sidecar_v3_reader.py")
+ANALYTICAL_IO_PATH = os.path.join(ROOT, "tools", "tessera",
+                                  "_analytical_io.py")
 sys.path.insert(0, os.path.dirname(READER_PATH))
+sys.path.insert(0, os.path.dirname(ANALYTICAL_IO_PATH))
 import l3_sidecar_v3_reader as reader  # noqa: E402
+from _analytical_io import read_analytical, polars_schema  # noqa: E402
 
-SCHEMA = "llama.tessera.per-layer-error-table.v1"
+SCHEMA = "tessera.per-layer-error-record.v1"
 
 MAGIC = b"TDQT"
 DTYPE_F32 = 0
@@ -125,16 +140,47 @@ def _deterministic_l15(rows: int, cols: int, seed: int) -> np.ndarray:
 
 
 # --------------------------------------------------------------------
+# Polars helpers (the per-layer rollup the producer no longer emits).
+# --------------------------------------------------------------------
+
+def _per_layer_rollup(df: pl.DataFrame) -> pl.DataFrame:
+    """Aggregate per-tensor epsilons into per-layer totals. Mirrors
+    the ``aggregate_per_layer`` function the producer used to ship
+    internally; reproduced here as the canonical consumer pattern.
+
+    Returns a DataFrame with columns: ``layer, total_epsilon,
+    n_tensors`` sorted by canonical block index (blk.0, blk.1, ...,
+    then non-block layers alphabetically).
+    """
+    valid = df.filter(~pl.col("epsilon_is_nan"))
+    rolled = valid.group_by("layer").agg(
+        pl.col("epsilon").sum().alias("total_epsilon"),
+        pl.len().alias("n_tensors"),
+    )
+
+    def _sort_key(layer: str) -> tuple:
+        import re
+        m = re.match(r"^blk\.(\d+)$", layer)
+        if m is not None:
+            return (0, "%010d" % int(m.group(1)))
+        return (1, layer)
+
+    order = sorted(rolled["layer"].to_list(), key=_sort_key)
+    return rolled.filter(pl.col("layer").is_in(order)).sort(
+        pl.col("layer").cast(pl.Enum(order)))
+
+
+# --------------------------------------------------------------------
 # CLI runner.
 # --------------------------------------------------------------------
 
 def _run_cli(sidecar_dir: str, out_path: str,
-             fmt: str = "json") -> subprocess.CompletedProcess:
+             *extra_args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, TOOL_PATH,
          "--sidecar-dir", sidecar_dir,
          "--out",       out_path,
-         "--format",    fmt],
+         *extra_args],
         capture_output=True, text=True)
 
 
@@ -147,8 +193,7 @@ class PerLayerErrorTableTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.mkdtemp(prefix="ple_test_")
-        self._out_json = os.path.join(self._tmp, "out.json")
-        self._out_table = os.path.join(self._tmp, "out.txt")
+        self._out_ndjson = os.path.join(self._tmp, "out.ndjson")
 
     def tearDown(self) -> None:
         import shutil
@@ -165,30 +210,21 @@ class PerLayerErrorTableTest(unittest.TestCase):
         _synthesize_pair(d, "blk.0.attn_q.weight", l15, delta=np.zeros_like(l15))
         _synthesize_pair(d, "blk.0.attn_k.weight", l15, delta=np.zeros_like(l15))
 
-        r = _run_cli(d, self._out_json, fmt="json")
+        r = _run_cli(d, self._out_ndjson)
         self.assertEqual(
             r.returncode, 0,
             "CLI failed: stdout=%s stderr=%s" % (r.stdout, r.stderr))
-        with open(self._out_json) as f:
-            doc = json.load(f)
-        self.assertEqual(doc["schema"], SCHEMA)
-        self.assertEqual(len(doc["per_tensor"]), 2)
-        for rec in doc["per_tensor"]:
+        df = read_analytical(self._out_ndjson, "per_layer_error")
+        self.assertEqual(df.height, 2)
+        for rec in df.iter_rows(named=True):
             self.assertEqual(rec["epsilon"], 0.0,
                              "expected 0 epsilon for %s, got %r"
-                             % (rec["name"], rec["epsilon"]))
-        # Per-layer sums must be 0.
-        self.assertEqual(len(doc["per_layer"]), 1)
-        self.assertEqual(doc["per_layer"][0]["total_epsilon"], 0.0)
-        self.assertEqual(doc["per_layer"][0]["n_tensors"], 2)
-        # Summary.
-        self.assertEqual(doc["summary"]["n_tensors"], 2)
-        self.assertEqual(doc["summary"]["n_layers"], 1)
-        self.assertEqual(doc["summary"]["mean_epsilon"], 0.0)
-        self.assertEqual(doc["summary"]["max_epsilon"], 0.0)
-        # Missing lists must be empty.
-        self.assertEqual(doc["missing"]["l1_only"], [])
-        self.assertEqual(doc["missing"]["l15_only"], [])
+                             % (rec["tensor"], rec["epsilon"]))
+        # Per-layer rollup (consumer-side polars).
+        rolled = _per_layer_rollup(df)
+        self.assertEqual(rolled.height, 1)
+        self.assertEqual(rolled["total_epsilon"].to_list(), [0.0])
+        self.assertEqual(rolled["n_tensors"].to_list(), [2])
 
     # ---- 2) Known delta -> epsilon matches the formula --------------
 
@@ -207,12 +243,11 @@ class PerLayerErrorTableTest(unittest.TestCase):
         expected_den = float(np.sum(l15.astype(np.float32) ** 2))
         expected_eps = expected_num / expected_den
 
-        r = _run_cli(d, self._out_json, fmt="json")
+        r = _run_cli(d, self._out_ndjson)
         self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
-        with open(self._out_json) as f:
-            doc = json.load(f)
-        self.assertEqual(len(doc["per_tensor"]), 1)
-        got = doc["per_tensor"][0]["epsilon"]
+        df = read_analytical(self._out_ndjson, "per_layer_error")
+        self.assertEqual(df.height, 1)
+        got = df["epsilon"].to_list()[0]
         self.assertAlmostEqual(got, expected_eps, places=4,
                                msg="epsilon %r vs expected %r"
                                % (got, expected_eps))
@@ -226,13 +261,11 @@ class PerLayerErrorTableTest(unittest.TestCase):
 
     def test_multi_tensor_aggregation(self) -> None:
         """A directory with several tensors across multiple layers
-        must aggregate per-layer totals correctly."""
+        must aggregate per-layer totals correctly. The rollup is
+        computed by the test via polars; the producer emits only
+        per-tensor records."""
         d = os.path.join(self._tmp, "dir")
         os.makedirs(d, exist_ok=True)
-        # Two tensors in blk.0, two tensors in blk.1, plus one
-        # non-block tensor (token_embd). Each pair has a different
-        # known delta so the per-layer total is the sum of the
-        # individual epsilons.
         l15_a = _deterministic_l15(4, 8, seed=3)
         l15_b = _deterministic_l15(4, 8, seed=4)
         l15_c = _deterministic_l15(4, 8, seed=5)
@@ -249,145 +282,131 @@ class PerLayerErrorTableTest(unittest.TestCase):
         _synthesize_pair(d, "blk.1.attn_k.weight", l15_d_, delta_d)
         _synthesize_pair(d, "token_embd.weight",   l15_e, delta_e)
 
-        r = _run_cli(d, self._out_json, fmt="json")
+        r = _run_cli(d, self._out_ndjson)
         self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
-        with open(self._out_json) as f:
-            doc = json.load(f)
-        self.assertEqual(len(doc["per_tensor"]), 5)
-        # Per-tensor epsilons.
+        df = read_analytical(self._out_ndjson, "per_layer_error")
+        self.assertEqual(df.height, 5)
+
         def _eps(name: str) -> float:
-            for rec in doc["per_tensor"]:
-                if rec["name"] == name:
-                    return rec["epsilon"]
-            self.fail("missing tensor %s" % name)
-            return 0.0
+            mask = df["tensor"] == name
+            return df.filter(mask)["epsilon"].to_list()[0]
+
         eps_a = _eps("blk.0.attn_q.weight")
         eps_b = _eps("blk.0.attn_k.weight")
         eps_c = _eps("blk.1.attn_q.weight")
         eps_d = _eps("blk.1.attn_k.weight")
         eps_e = _eps("token_embd.weight")
-        # Per-layer: blk.0, blk.1, token_embd.
-        layer_totals = {rec["layer"]: rec["total_epsilon"]
-                        for rec in doc["per_layer"]}
-        layer_counts = {rec["layer"]: rec["n_tensors"]
-                        for rec in doc["per_layer"]}
+
+        # Per-layer rollup via polars (consumer pattern).
+        rolled = _per_layer_rollup(df)
+        self.assertEqual(rolled.height, 3)
+        layer_totals = dict(zip(rolled["layer"].to_list(),
+                                rolled["total_epsilon"].to_list()))
+        layer_counts = dict(zip(rolled["layer"].to_list(),
+                                rolled["n_tensors"].to_list()))
         self.assertAlmostEqual(layer_totals["blk.0"], eps_a + eps_b, places=5)
         self.assertAlmostEqual(layer_totals["blk.1"], eps_c + eps_d, places=5)
         self.assertAlmostEqual(layer_totals["token_embd"], eps_e, places=5)
         self.assertEqual(layer_counts["blk.0"], 2)
         self.assertEqual(layer_counts["blk.1"], 2)
         self.assertEqual(layer_counts["token_embd"], 1)
-        # Summary.
-        self.assertEqual(doc["summary"]["n_tensors"], 5)
-        self.assertEqual(doc["summary"]["n_layers"], 3)
-        all_eps = [eps_a, eps_b, eps_c, eps_d, eps_e]
-        self.assertAlmostEqual(doc["summary"]["mean_epsilon"],
-                               sum(all_eps) / len(all_eps), places=6)
-        self.assertAlmostEqual(doc["summary"]["max_epsilon"],
-                               max(all_eps), places=6)
         # Layers must be sorted: blk.0, blk.1, token_embd.
-        layer_order = [rec["layer"] for rec in doc["per_layer"]]
-        self.assertEqual(layer_order, ["blk.0", "blk.1", "token_embd"])
+        self.assertEqual(rolled["layer"].to_list(),
+                         ["blk.0", "blk.1", "token_embd"])
 
     # ---- 4) Missing L1.5 -> skip with warning, no crash -------------
 
     def test_missing_l15_is_skipped(self) -> None:
         """An L1 file without a matching L1.5 must be skipped
         with a warning on stderr; the tool must still exit 0 and
-        emit a valid output document that lists the missing
-        pair in ``missing.l1_only``."""
+        emit a valid NDJSON document that contains only the
+        matched tensor."""
         d = os.path.join(self._tmp, "dir")
         os.makedirs(d, exist_ok=True)
         l15 = _deterministic_l15(4, 8, seed=8)
-        # L1.5 only for one tensor; L1 only (no L1.5) for another.
         _synthesize_pair(d, "blk.0.attn_q.weight", l15, delta=np.zeros_like(l15))
         timing, kid, dc, oc = _meta(4)
         _write_v3(os.path.join(d, "blk.0.attn_k.weight" + L1_SUFFIX),
                   l15, timing, kid, dc, oc)
 
-        r = _run_cli(d, self._out_json, fmt="json")
+        r = _run_cli(d, self._out_ndjson)
         self.assertEqual(r.returncode, 0,
                          "CLI failed: stdout=%s stderr=%s"
                          % (r.stdout, r.stderr))
         # The warning was printed to stderr.
         self.assertIn("missing L1.5", r.stderr)
-        with open(self._out_json) as f:
-            doc = json.load(f)
-        # Only the matched pair made it into per_tensor.
-        self.assertEqual(len(doc["per_tensor"]), 1)
-        self.assertEqual(doc["per_tensor"][0]["name"], "blk.0.attn_q.weight")
-        # The unmatched L1 path is recorded under missing.l1_only.
-        self.assertEqual(len(doc["missing"]["l1_only"]), 1)
-        self.assertTrue(doc["missing"]["l1_only"][0]
-                        .endswith("blk.0.attn_k.weight" + L1_SUFFIX))
-        self.assertEqual(doc["missing"]["l15_only"], [])
+        df = read_analytical(self._out_ndjson, "per_layer_error")
+        # Only the matched pair made it into the per-tensor records.
+        self.assertEqual(df.height, 1)
+        self.assertEqual(df["tensor"].to_list(), ["blk.0.attn_q.weight"])
 
     # ---- 5) Missing L1 -> skip with warning, no crash ---------------
 
     def test_missing_l1_is_skipped(self) -> None:
         """An L1.5 file without a matching L1 must be skipped
         with a warning on stderr; the tool must still exit 0 and
-        emit a valid output document that lists the missing
-        pair in ``missing.l15_only``."""
+        emit a valid NDJSON document that contains only the
+        matched tensor."""
         d = os.path.join(self._tmp, "dir")
         os.makedirs(d, exist_ok=True)
         l15 = _deterministic_l15(4, 8, seed=9)
-        # L1 only for one tensor; L1.5 only (no L1) for another.
         _synthesize_pair(d, "blk.0.attn_q.weight", l15, delta=np.zeros_like(l15))
         timing, kid, dc, oc = _meta(4)
         _write_v3(os.path.join(d, "blk.0.attn_k.weight" + L15_SUFFIX),
                   l15, timing, kid, dc, oc)
 
-        r = _run_cli(d, self._out_json, fmt="json")
+        r = _run_cli(d, self._out_ndjson)
         self.assertEqual(r.returncode, 0,
                          "CLI failed: stdout=%s stderr=%s"
                          % (r.stdout, r.stderr))
         self.assertIn("missing L1", r.stderr)
-        with open(self._out_json) as f:
-            doc = json.load(f)
-        self.assertEqual(len(doc["per_tensor"]), 1)
-        self.assertEqual(doc["per_tensor"][0]["name"], "blk.0.attn_q.weight")
-        self.assertEqual(doc["missing"]["l15_only"],
-                         [os.path.join(d,
-                                       "blk.0.attn_k.weight" + L15_SUFFIX)])
+        df = read_analytical(self._out_ndjson, "per_layer_error")
+        self.assertEqual(df.height, 1)
+        self.assertEqual(df["tensor"].to_list(), ["blk.0.attn_q.weight"])
 
-    # ---- 6) Table output is greppable and consistent ----------------
+    # ---- 6) --print-table prints a human-readable table to stdout --
 
-    def test_table_output_is_greppable(self) -> None:
-        """The ``--format table`` output must be human-readable,
-        contain the per-tensor and per-layer sections, and be
-        consistent with the JSON output."""
+    def test_print_table_emits_human_readable_table(self) -> None:
+        """The ``--print-table`` flag must print a human-readable
+        per-tensor table to stdout. (The previous --format=table
+        file output is gone; the table is now a stdout-only
+        diagnostic that mirrors the NDJSON file output.)"""
         d = os.path.join(self._tmp, "dir")
         os.makedirs(d, exist_ok=True)
         l15 = _deterministic_l15(4, 8, seed=10)
         _synthesize_pair(d, "blk.0.attn_q.weight", l15,
                          delta=np.full_like(l15, 0.03))
-        r = _run_cli(d, self._out_table, fmt="table")
+        r = _run_cli(d, self._out_ndjson, "--print-table")
         self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
-        with open(self._out_table) as f:
-            text = f.read()
-        for marker in ("## Per-tensor", "## Per-layer", "## Summary",
-                       "blk.0", "blk.0.attn_q.weight"):
-            self.assertIn(marker, text,
-                          "table output missing %r\n--- table ---\n%s"
-                          % (marker, text))
+        for marker in ("# Tessera per-tensor",
+                       "blk.0.attn_q.weight",
+                       "epsilon"):
+            self.assertIn(marker, r.stdout,
+                          "table stdout missing %r\n--- stdout ---\n%s"
+                          % (marker, r.stdout))
+        # The NDJSON file is also written.
+        df = read_analytical(self._out_ndjson, "per_layer_error")
+        self.assertEqual(df.height, 1)
 
-    # ---- 7) Empty dir -> empty-but-valid output --------------------
+    # ---- 7) Empty dir -> empty-but-valid NDJSON (zero rows) --------
 
     def test_empty_dir_emits_empty_valid_output(self) -> None:
         """A sidecar dir with no files at all must still produce
-        a valid output document (empty per_tensor / per_layer)."""
+        a valid NDJSON document. The polars reader returns a
+        zero-row DataFrame with the schema-pinned column types."""
         d = os.path.join(self._tmp, "empty")
         os.makedirs(d, exist_ok=True)
-        r = _run_cli(d, self._out_json, fmt="json")
+        r = _run_cli(d, self._out_ndjson)
         self.assertEqual(r.returncode, 0, "stderr=%s" % r.stderr)
-        with open(self._out_json) as f:
-            doc = json.load(f)
-        self.assertEqual(doc["schema"], SCHEMA)
-        self.assertEqual(doc["per_tensor"], [])
-        self.assertEqual(doc["per_layer"], [])
-        self.assertEqual(doc["summary"]["n_tensors"], 0)
-        self.assertEqual(doc["summary"]["n_layers"], 0)
+        df = read_analytical(self._out_ndjson, "per_layer_error")
+        self.assertEqual(df.height, 0)
+        # Schema-pinned types are still present.
+        expected_types = polars_schema("per_layer_error")
+        for col, dtype in expected_types.items():
+            self.assertIn(col, df.columns,
+                          "missing column %r in empty NDJSON" % col)
+            self.assertEqual(df.schema[col], dtype,
+                             "wrong dtype for column %r" % col)
 
 
 if __name__ == "__main__":
@@ -397,8 +416,4 @@ if __name__ == "__main__":
     suite = _u.defaultTestLoader.loadTestsFromTestCase(PerLayerErrorTableTest)
     runner = _u.TextTestRunner(verbosity=2)
     result = runner.run(suite)
-    n_pass = result.testsRun - len(result.failures) - len(result.errors)
-    n_fail = len(result.failures) + len(result.errors)
-    print()
-    print("Summary: %d passed, %d failed" % (n_pass, n_fail))
-    sys.exit(0 if n_fail == 0 else 1)
+    sys.exit(0 if result.wasSuccessful() else 1)
