@@ -487,6 +487,14 @@ ggml_add_backend(OpenCL)
 ggml_add_backend(Hexagon)
 ggml_add_backend(ZenDNN)
 ggml_add_backend(OPENVINO)
+# ANE backend (Apple Silicon only, gated by ggml/src/ggml-ane/CMakeLists.txt).
+# The backend library has been in the tree since the MTP/prefill work landed
+# but was never added to the build, so the IOSurface/Core ML bridge
+# surface was effectively dead. The W0 spike (test-ane-matmul-w0-spike.mm)
+# exercises the public Core ML path directly; this wires the backend
+# library so the dispatch path (ggml_backend_sched_auto_select +
+# ggml_backend_ane_graph_compute) can reach it.
+ggml_add_backend(ANE)
 
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)
