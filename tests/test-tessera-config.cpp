@@ -343,17 +343,19 @@ static void test_cli_overrides_config(void) {
         "[evolve]\n"
         "evolve-iters = 12\n"
         "[general]\n"
-        "mode = evolve-only\n"
+        "imatrix = /tmp/from-config.npz\n"
         "nthreads = 8\n";
     const std::string path = write_tmp(ini);
 
-    // argv: --tessera-config <path> --tessera-mode default
+    // argv: --tessera-config <path> --tessera-imatrix /tmp/from-cli.npz
     // (no evolve-iters flag, so the config's 12 should win;
-    //  --tessera-mode default should override the config's evolve-only)
+    //  --tessera-imatrix /tmp/from-cli.npz should override the config's
+    //  imatrix value). --tessera-mode was removed in Tier 2's hard break,
+    //  so we use --tessera-imatrix (top-level TESSERA scope) instead.
     auto argv = argv_holder({
         "binary",
         "--tessera-config", path,
-        "--tessera-mode", "default",
+        "--tessera-imatrix", "/tmp/from-cli.npz",
         "-m", "/tmp/dummy.gguf",
     });
     common_params params;
@@ -372,8 +374,9 @@ static void test_cli_overrides_config(void) {
     assert(tp.tessera_config_path == path);
     // config-supplied value (no CLI override):
     assert(tp.evolve_iters == 12);
-    // CLI-overridden value (config said evolve-only, CLI said default):
-    assert(tp.mode == "default");
+    // CLI-overridden value (config said /tmp/from-config.npz, CLI said
+    // /tmp/from-cli.npz):
+    assert(tp.imatrix == "/tmp/from-cli.npz");
 
     // Cleanup
     unlink(path.c_str());

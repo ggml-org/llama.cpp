@@ -8,6 +8,7 @@
 #include "llama.h"
 #include "log.h"
 #include "tessera-args.h"
+#include "tessera-config.h"
 #include "tessera-debug.h"
 #include "tessera-matmul-output.h"
 #include "sampling.h"
@@ -778,6 +779,37 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
         for (const auto & arg : opt.args_neg) {
             arg_to_options[arg] = {&opt, /* is_positive */ false};
+        }
+    }
+
+    // --tessera-config / TESSERA_CONFIG: load INI defaults BEFORE env and
+    // CLI handling so later writes naturally take precedence. We scan
+    // argv here (the add_opt for --tessera-config has not yet run) and
+    // fall back to the TESSERA_CONFIG env var if no CLI flag was passed.
+    {
+        std::string cfg_path;
+        for (int i = 1; i + 1 < argc; i++) {
+            if (std::string(argv[i]) == "--tessera-config") {
+                cfg_path = argv[i + 1];
+                break;
+            }
+        }
+        if (cfg_path.empty()) {
+            const char * env = std::getenv("TESSERA_CONFIG");
+            if (env && *env) cfg_path = env;
+        }
+        if (!cfg_path.empty()) {
+            tessera_config cfg;
+            std::string cfg_err;
+            if (!tessera_config_load(cfg_path, cfg, cfg_err)) {
+                throw std::invalid_argument(cfg_err);
+            }
+            if (!tessera_config_apply(cfg, tessera_params, cfg_err)) {
+                throw std::invalid_argument(cfg_err);
+            }
+            // remember the resolved path so tools that re-parse (e.g.
+            // llama-quantize via common_tessera_parse_one) can see it
+            tessera_params.tessera_config_path = cfg_path;
         }
     }
 
@@ -5523,6 +5555,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             //params.speculative.ngram_map_k4v.min_hits = 2;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--tessera-config"}, "FILE",
+        "Tessera: load default --tessera-* options from this INI file. "
+        "Precedence is config < env < CLI, so explicit CLI flags and "
+        "TESSERA_* env vars always win over config-file values. The file "
+        "is loaded at the top of the parse path, before env and CLI "
+        "handling, so later writes naturally take precedence. See "
+        "examples/tessera-config.ini for the supported sections and "
+        "key names.",
+        [](common_params &, const std::string & value) {
+            tessera_params.tessera_config_path = value;
+        }
+    ).set_env("TESSERA_CONFIG"));
 
     return ctx_arg;
 }

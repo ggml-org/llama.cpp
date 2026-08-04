@@ -27,6 +27,19 @@ static void test(void) {
                     if (seen_args.find(arg) == seen_args.end()) {
                         seen_args.insert(arg);
                     } else {
+                        // Tessera fork (Tier 2): a flag name like "--out" is
+                        // reused across subcommands (accept/adapt/anonymize/
+                        // capability/dataset/dpace/l2/l5/policy/throughput)
+                        // with per-subcommand tessera_sc tagging. The flag
+                        // is only visible inside its tagged subcommand, so
+                        // the duplicate is intentional and not a handler
+                        // conflict. Skip if the current opt has a non-empty
+                        // tessera_sc (subcommand-tagged), since the prior
+                        // handler for the same name will be tagged to a
+                        // different subcommand.
+                        if (!opt.tessera_sc.empty()) {
+                            continue;
+                        }
                         fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg.c_str());
                         exit(1);
                     }
