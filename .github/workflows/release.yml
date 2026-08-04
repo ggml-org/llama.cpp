@@ -302,7 +302,7 @@ jobs:
       - name: Get latest Vulkan SDK version
         id: vulkan_sdk_version
         run: |
-          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
+          echo "VULKAN_SDK_VERSION=1.4.357.0" >> "$GITHUB_ENV"
 
       - name: Use Vulkan SDK Cache
         uses: actions/cache@v5
