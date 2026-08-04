@@ -495,6 +495,30 @@ if (APPLE)
             )
         endif()
     endif()
+    # Drafter shape contract: synthetic validation of dflash /
+    # hybrid / mtp_predict slot shape contract without a real
+    # drafter bundle. The test builds a synthetic
+    # ane_state_layout.v1.json with the drafter functions and
+    # their declared slots, then asserts the slot dtypes and
+    # shapes match the dispatch path's contract. Also calls
+    # the drafter public API on a prefill bundle to verify
+    # graceful rejection when the bundle declares no drafter
+    # functions. End-to-end validation against a real MTP /
+    # DFlash bundle is deferred until a bundle with manifest
+    # sidecar is available. .mm because ane-state-layout.h
+    # imports Foundation.
+    llama_build_and_test(test-ane-drafter-shape.mm)
+    if (TARGET test-ane-drafter-shape)
+        target_link_libraries(test-ane-drafter-shape PRIVATE
+                              llama-common
+                              "-framework Foundation")
+        if (EXISTS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf")
+            set_tests_properties(test-ane-drafter-shape PROPERTIES
+                ENVIRONMENT "TESSERA_ANE_STATE_LAYOUT_MANIFEST=/Volumes/Julian T7/models/gemma4-ane-prefill-bundle/prefill-bundle.ane_state.v1.json"
+                ARGS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf"
+            )
+        endif()
+    endif()
     # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
     llama_build(test-ane-matmul-w1-dispatch.cpp)
     if (TARGET test-ane-matmul-w1-dispatch)
