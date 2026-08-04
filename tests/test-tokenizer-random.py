@@ -110,6 +110,8 @@ class LibLlamaModel:
         for i, id in enumerate(ids):
             self.token_ids[i] = id
         num = self.lib.llama_detokenize(self.model, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
+        if num == - (1 << 31):
+            raise RuntimeError("error: detokenization failed: some supplied token is invalid")
         while num < 0 and len(self.text_buff) < (16 << 20):
             self.text_buff = self.ffi.new("uint8_t[]", -2 * num)
             num = self.lib.llama_detokenize(self.model, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
