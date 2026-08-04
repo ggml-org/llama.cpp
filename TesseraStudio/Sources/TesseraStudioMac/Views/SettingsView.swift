@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import TesseraCore
 
 /// macOS Settings scene (Settings { SettingsView() }), backed by @AppStorage.
@@ -53,7 +54,10 @@ struct SettingsView: View {
             modelTab
                 .tabItem { Label("Model", systemImage: "brain") }
             autonomyTab
-                .tabItem { Label("Autonomy", systemImage: "hand.raised") }
+                // Was "Autonomy" (HIG 2.14): the tab configures what
+                // the agent is ALLOWED to do on its own - permissions
+                // is the word users scan for.
+                .tabItem { Label("Permissions", systemImage: "hand.raised") }
             advancedTab
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
@@ -68,7 +72,7 @@ struct SettingsView: View {
                     Text(rt.displayName).tag(rt.rawValue)
                 }
             }
-            TextField("Model directory", text: $modelDirectory)
+            PathField("Model directory", text: $modelDirectory, picks: .directory)
             Stepper("Threads: \(threadCount == 0 ? "all cores" : "\(threadCount)")", value: $threadCount, in: 0...64)
         }
         .formStyle(.grouped)
@@ -113,8 +117,10 @@ struct SettingsView: View {
 
             if llmProviderType == TesseraLLMProviderType.onDevice.rawValue {
                 Section("On-Device (llama.cpp)") {
-                    TextField("GGUF model path", text: $onDeviceModelPath)
-                    TextField("libllama.dylib path (optional)", text: $onDeviceLibraryPath)
+                    PathField("GGUF model path", text: $onDeviceModelPath,
+                              picks: .file(types: [.init(filenameExtension: "gguf")].compactMap { $0 }))
+                    PathField("libllama.dylib path (optional)", text: $onDeviceLibraryPath,
+                              picks: .file(types: [UTType(filenameExtension: "dylib")].compactMap { $0 }))
                     TextField("Context length", value: $onDeviceContextLength, format: .number)
                     Stepper("GPU layers: \(onDeviceGPULayers < 0 ? "all" : "\(onDeviceGPULayers)")",
                             value: $onDeviceGPULayers, in: -1...200)
@@ -409,9 +415,69 @@ struct SettingsView: View {
                     Text(level.rawValue.uppercased()).tag(level.rawValue)
                 }
             }
-            TextField("Custom CLI path", text: $cliPath)
+            PathField("Custom CLI path", text: $cliPath, picks: .directory)
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+/// A path setting with a Browse... button. Free typing still works
+/// (power users paste paths), but HIG 2.13 asks that path fields
+/// also offer a real file / folder picker instead of making the
+/// user hand-type an absolute path. The NSOpenPanel resolves
+/// security-scoped access for us on selection.
+private struct PathField: View {
+    enum PickTarget {
+        case file(types: [UTType])
+        case directory
+    }
+
+    let label: String
+    @Binding var text: String
+    let picks: PickTarget
+
+    init(_ label: String, text: Binding<String>, picks: PickTarget) {
+        self.label = label
+        self._text = text
+        self.picks = picks
+    }
+
+    var body: some View {
+        LabeledContent(label) {
+            HStack(spacing: 6) {
+                TextField(label, text: $text)
+                Button("Browse…") { browse() }
+                    .accessibilityLabel("Browse for \(label)")
+            }
+        }
+    }
+
+    private func browse() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        switch picks {
+        case .file(let types):
+            panel.canChooseFiles = true
+            if !types.isEmpty { panel.allowedContentTypes = types }
+        case .directory:
+            panel.canChooseDirectories = true
+        }
+        // Start the panel where the current value points, when it
+        // names an existing path - saves re-navigating from $HOME.
+        if !text.isEmpty {
+            let expanded = (text as NSString).expandingTildeInPath
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir) {
+                panel.directoryURL = URL(fileURLWithPath: isDir.boolValue
+                    ? expanded
+                    : (expanded as NSString).deletingLastPathComponent)
+            }
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            text = url.path
+        }
     }
 }

@@ -22,11 +22,6 @@ struct WorkflowPaletteView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 4)
                 .accessibilityAddTraits(.isHeader)
-            TextField("Filter", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
-                .accessibilityLabel("Filter nodes")
             List(filteredEntries, id: \.typeId) { entry in
                 row(entry)
             }
@@ -34,6 +29,10 @@ struct WorkflowPaletteView: View {
             .accessibilityLabel("Node palette")
             .accessibilityHint("Drag a node from here onto the canvas to add it to the workflow")
         }
+        // HIG 2.9: use the system search field instead of a
+        // hand-rolled TextField; the sidebar placement puts it
+        // where macOS users expect list filtering to live.
+        .searchable(text: $query, placement: .automatic, prompt: "Filter nodes")
         .frame(minWidth: 220)
     }
 
