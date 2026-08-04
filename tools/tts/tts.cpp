@@ -111,7 +111,7 @@ int main(int argc, char ** argv) {
     }
 
     mtmd_helper::gen_audio gen(lctx, mctx.get());
-    mtmd_helper_gen_audio_inp inp{};
+    mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
     inp.prompt      = params.prompt.c_str();
     inp.prompt_len  = params.prompt.size();
@@ -119,7 +119,6 @@ int main(int argc, char ** argv) {
     inp.lang        = params.tts_lang.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
-    inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
 
     //
     // stage 1: process prompt via backbone model, generate semantic representation

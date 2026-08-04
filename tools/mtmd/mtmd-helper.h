@@ -175,6 +175,7 @@ enum mtmd_helper_gen_audio_outtype {
     MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE, mono
 };
 struct mtmd_helper_gen_audio_inp {
+    bool stream; // if true, output() must be called after each step_gen()
     llama_seq_id seq_id;
 
     const char * prompt;
@@ -188,6 +189,8 @@ struct mtmd_helper_gen_audio_inp {
 
     enum mtmd_helper_gen_audio_outtype out_type;
 };
+
+MTMD_API struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void);
 
 MTMD_API mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(
                                     struct llama_context * lctx,
@@ -217,6 +220,7 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
 
 // out_data valid until next get_output() or reset() call
 // out_n_samples (optional, can be NULL) receives the number of generated PCM samples
+// if inp->stream is true, each call returns only the audio produced since the previous call
 MTMD_API int32_t mtmd_helper_gen_audio_get_output(
                         mtmd_helper_gen_audio * ctx,
                         int32_t * out_sample_rate,
