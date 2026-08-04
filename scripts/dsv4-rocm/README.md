@@ -140,11 +140,12 @@ combine performance and residency samples.
 ## Target-only raw-decode profile
 
 `profile-tg.sh` is the disk-safe M5.3 profile wrapper. It requires exactly one
-starting depth and fails closed unless the evidence contract is exactly tg32,
-six raw repetitions, first discarded/five profiled, full GGUF hashing,
+starting depth and fails closed unless the evidence contract is tg32, at least
+six raw repetitions, exactly the first discarded/at least five profiled, full
+GGUF hashing,
 full-context state, batch/ubatch 512/256, F16 K/V, tensor split `1/1/1/1`,
 12 host threads, mmap loading, and the guarded J16/HC1/LID4 stack. A ROCm-only optional llama-bench hook calls
-`roctxProfilerResume(0)` immediately around `test_gen` for repetitions 2-6 and
+`roctxProfilerResume(0)` immediately around `test_gen` for repetitions 2+ and
 pauses after each synchronized generation. The benchmark process writes its own
 authoritative `CLOCK_MONOTONIC` `resume_return`/`pause_call` pairs to
 `rocprof-selected-regions.tsv`; the summarizer requires every trace event to fit
@@ -154,12 +155,14 @@ repetition. The compact profile writes CSV only, but requires kernel,
 memory-copy, RCCL, and HIP-runtime domain files so launch/synchronization calls
 remain visible. Never substitute an unscoped whole-process trace at 32K/64K.
 
-Run independent decision-context profiles as separate processes/artifacts:
+Run independent decision-context profiles as separate processes/artifacts.
+The wrapper defaults to six raw repetitions; if the 3% stability gate misses,
+increase `DSV4_TG_REPS` only and retain exactly one discard:
 
 ```bash
-DSV4_TG_DEPTHS=16384 DSV4_LABEL=raw-tg-profile-16k-a \
+DSV4_TG_DEPTHS=16384 DSV4_TG_REPS=11 DSV4_LABEL=raw-tg-profile-16k-a \
   scripts/dsv4-rocm/profile-tg.sh
-DSV4_TG_DEPTHS=65536 DSV4_LABEL=raw-tg-profile-64k-a \
+DSV4_TG_DEPTHS=65536 DSV4_TG_REPS=11 DSV4_LABEL=raw-tg-profile-64k-a \
   scripts/dsv4-rocm/profile-tg.sh
 ```
 

@@ -167,7 +167,14 @@ def main() -> None:
         contract = json.loads((bad_contract / "contract.json").read_text())
         contract["n_gen"] = 64
         (bad_contract / "contract.json").write_text(json.dumps(contract))
-        expect_bad(bad_contract, "exact tg32/6 raw")
+        expect_bad(bad_contract, "requires tg32")
+
+        too_few = make_fixture(root / "too-few")
+        contract = json.loads((too_few / "contract.json").read_text())
+        contract["raw_repetitions"] = 5
+        contract["accepted_repetitions"] = 4
+        (too_few / "contract.json").write_text(json.dumps(contract))
+        expect_bad(too_few, "at least 6 raw")
 
         bad_stack = make_fixture(root / "stack")
         contract = json.loads((bad_stack / "contract.json").read_text())

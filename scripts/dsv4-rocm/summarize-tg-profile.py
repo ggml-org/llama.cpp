@@ -182,8 +182,8 @@ def main() -> int:
     discard = int(contract["discard_first"])
     accepted_reps = int(contract["accepted_repetitions"])
     n_gen = int(contract["n_gen"])
-    if (n_gen, reps, discard, accepted_reps) != (32, 6, 1, 5):
-        raise ValueError("profile requires exact tg32/6 raw/first discarded/5 accepted contract")
+    if n_gen != 32 or reps < 6 or discard != 1 or accepted_reps != reps - 1 or accepted_reps < 5:
+        raise ValueError("profile requires tg32, at least 6 raw repetitions, exactly first discarded, and at least 5 accepted")
     if int(contract.get("profile_skip_repetitions", -1)) != discard:
         raise ValueError("profiler skip count does not match discarded repetitions")
     if not summary.get("complete") or not summary.get("stable"):

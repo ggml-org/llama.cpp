@@ -154,8 +154,8 @@ if [[ "$REQUIRE_ACCEPTED_STACK" == 1 ]]; then
 fi
 if [[ "$PROFILE" == kernel ]]; then
     [[ "$N_GEN" == 32 ]] || fail "kernel profile requires DSV4_TG_N_GEN=32"
-    [[ "$RAW_REPS" == 6 ]] || fail "kernel profile requires DSV4_TG_REPS=6"
-    [[ "$DISCARD_FIRST" == 1 ]] || fail "kernel profile requires DSV4_TG_DISCARD_FIRST=1"
+    [[ "$RAW_REPS" =~ ^[0-9]+$ && "$RAW_REPS" -ge 6 ]] || fail "kernel profile requires DSV4_TG_REPS>=6"
+    [[ "$DISCARD_FIRST" == 1 ]] || fail "kernel profile requires exactly one discarded repetition"
     [[ "$HASH_MODE" == full ]] || fail "kernel profile requires DSV4_HASH_MODE=full"
     [[ "$REQUIRE_ACCEPTED_STACK" == 1 ]] || fail "kernel profile requires DSV4_REQUIRE_ACCEPTED_STACK=1"
     [[ "$GGML_HIP_RDNA2_MMQ_J" == 16 && "$GGML_HIP_RDNA2_HC_MIXES" == 1 && "$GGML_HIP_RDNA2_LID_SUBWAVE" == 4 ]] || \
@@ -615,7 +615,7 @@ PY
         exit 3
     fi
     if [[ "$stable" -ne 1 ]]; then
-        echo "UNSTABLE raw-TG sweep; increase tokens/repetitions before acceptance. Artifacts: $run_dir"
+        echo "UNSTABLE raw-TG sweep; increase repetitions only; keep tg32 and the predeclared discard unchanged. Artifacts: $run_dir"
         exit 4
     fi
     if [[ "$PROFILE" == kernel ]]; then
