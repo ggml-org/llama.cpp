@@ -564,9 +564,9 @@ static void gguf_merge(const split_params & split_params) {
             int delete_result = std::remove(split_path);
             if (delete_result != 0) {
                 fprintf(stderr, "error: failed to delete %s\n", split_path);
-                exit(EXIT_FAILURE);
+            } else {
+                fprintf(stderr, "%s: deleted file %s\n", __func__, split_path);
             }
-            fprintf(stderr, "%s: deleted file %s\n", __func__, split_path);
         }
 
     }
