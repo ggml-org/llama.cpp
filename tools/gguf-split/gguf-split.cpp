@@ -66,7 +66,7 @@ static void split_print_usage(const char * executable) {
     printf("  --split-max-size N(M|G) max size per split\n");
     printf("  --no-tensor-first-split do not add tensors to the first split (disabled by default)\n");
     printf("  --dry-run               only print out a split plan and exit, without writing any new files\n");
-    printf("  --delete-files          delete the split files during execution to free up disk space\n");
+    printf("  --delete-files          delete the split files during merge to free up disk space\n");
     printf("\n");
 }
 
