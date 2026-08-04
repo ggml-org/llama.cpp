@@ -196,6 +196,15 @@ capture rejection, positive/no-go gates, and identity mismatch. The non-GPU
 `test-tg-tools.py` fixture exercises the real `run-tg.sh` FIFO path with mixed
 RCCL/JSON output and proves malformed/high-volume capture failures propagate.
 
+Current M5.4 outcome (2026-08-04): the first `ENV,TUNING` Tree+LL run is invalid
+instrumentation and must never be compared. The repaired Tree+LL screen is
+unstable and falls to 14.847 t/s at 64K; the Ring+LL fallback is unstable at
+32K and reaches only 18.318 t/s at 64K (-0.460% versus the accepted historical
+median). Neither candidate reaches the preliminary gate, so `auto` was not run
+and neither candidate advances. The canonical performance document records the
+exact artifacts. Next is the predeclared guarded RDNA2/four-way BF16 hidden
+reduction, not another runtime candidate or routine profile.
+
 ## Target-only raw-decode profile
 
 `profile-tg.sh` is the disk-safe M5.3 profile wrapper. It requires exactly one

@@ -5,7 +5,7 @@ Owner branch: `perf/dsv4-rocm-pp-20260803`
 Base: `b88a59fbc6ac255e6bf5e2dd790f559c89ce911c` in Edwin's llama.cpp fork  
 Target host: `edwin@192.168.1.161` (`webhie`)  
 Last updated: 2026-08-04
-Current phase: PP plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selects communication at 16K/64K, routine profiling is frozen, and M5.4 has pivoted to unprofiled RCCL/raw-TG candidates; no decode optimization is accepted yet and indexed CSA is held.
+Current phase: PP plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selects communication at 16K/64K and routine profiling is frozen. M5.4 Tree+LL and Ring+LL runtime candidates failed screen advancement, so the next predeclared work is the guarded RDNA2/four-way BF16 hidden-reduction source candidate; no decode optimization is accepted yet and indexed CSA is held.
 
 ## 1. Objective and success criteria
 
@@ -86,7 +86,7 @@ A stable, speculation-disabled target-only context-depth sweep is accepted on th
 
 Historical 20.1 t/s DSpark and 20.208 t/s failed-MTP observations remain non-baselines. They are superseded for controlled raw TG by M5.0, not retroactively accepted.
 
-Harness status (2026-08-04): `scripts/dsv4-rocm/run-tg.sh` has accepted separate performance/residency mechanics, manifests, phase-aware watchdogs, setup-only telemetry, exact-depth/repetition summaries, strict scheduler parsing, and full-context state. Static fixtures, fake-runner tests, and model-dependent restore equivalence pass. M5.3 is complete: two profiles at each of 16K/64K select communication in all 30 retained ranks. Routine profiling is frozen; M5.4 unprofiled RCCL/raw-TG solution testing is active.
+Harness status (2026-08-04): `scripts/dsv4-rocm/run-tg.sh` has accepted separate performance/residency mechanics, manifests, phase-aware watchdogs, setup-only telemetry, exact-depth/repetition summaries, strict scheduler parsing, full-context state, and fail-closed raw/JSON stdout isolation. Static fixtures, real FIFO fake-runner tests, and model-dependent restore equivalence pass. M5.3 is complete: two profiles at each of 16K/64K select communication in all 30 retained ranks. Routine profiling is frozen; M5.4 runtime RCCL controls are exhausted without a screen winner and source work is next.
 
 ## 4. Current DSV4 execution facts
 
@@ -941,9 +941,20 @@ Installed-library attestation, not an upstream-version guess: `/opt/rocm/core-7.
 2. `auto`: both unset — run only if tree-ll is plausibly >=3% over the accepted historical 64K median, to obtain a contemporaneous control;
 3. `ring-ll`: `NCCL_ALGO=Ring NCCL_PROTO=LL` — one fallback if tree-ll fails the matched gate.
 
-No 1/2-channel sweep and no rocprof run participate. `screen-rccl-tg.sh` fails closed on inherited `NCCL_*`/`RCCL_*`, forces one load with exact 16K/32K/64K tg32, six raw/one discarded/five accepted repetitions, full hashes, accepted stack, no speculative flags, and setup-only RCCL INFO/TUNING logging. `run-tg.sh` now records set-versus-unset communication controls in both rerunnable commands, effective settings, and `contract.json`. `compare-rccl-tg.py` requires stable complete identity-matched results and predeclares >=3% median TG gain at 64K with no >2% median regression at 16K/32K. A five-repetition pass selects full 31-repetition validation only; `optimization_accepted=0` until that validation and correctness pass.
+No 1/2-channel sweep and no rocprof run participate. `screen-rccl-tg.sh` fails closed on inherited `NCCL_*`/`RCCL_*` and `GGML_CUDA_DISABLE_GRAPHS`, forces one load with exact 16K/32K/64K tg32, six raw/one discarded/five accepted repetitions, full hashes, accepted stack, and no speculative path. Commits `a9c80dd84` and `4b8caa954` replace the false setup-only `ENV,TUNING` claim with `INFO/ENV`, preserve complete raw stdout plus separated non-JSON output, timestamp only parsed JSON records, fail on malformed/unterminated/excessive output or consumer errors, normalize run-local manifest identities, require `GGML_HIP_GRAPHS:BOOL=ON`, and reject runtime graph disable. The comparator permits RCCL's small setup matrix but rejects the observed per-collective `AllReduce:`/`threadThreshold`/channel-tuning families. It requires stable complete identity-matched results and predeclares >=3% median TG gain at 64K with no >2% median regression at 16K/32K. A five-repetition pass selects full 31-repetition validation only; `optimization_accepted=0` until validation and correctness pass.
 
-If both forced protocol candidates fail, the next and only predeclared source candidate is an RDNA2/four-way guard that tests BF16 for these unforced hidden reductions, halving collective input to 14,336 bytes while paying conversion kernels. It must retain force-FP32 outputs, pass deterministic output/logit correctness, and meet the same TG gate. No attempt will collapse two dependency-separated reductions into one.
+The first Tree+LL attempt at source `45064b0d3` is **invalid measurement instrumentation**, not a candidate result: `$HOME/llama-jobs/dsv4-rocm-tg/20260804T192247.461599490Z-raw-tg-rccl-screen-tree-ll-performance-45064b0d3397-4656/` contains 1,497,247 non-JSON stdout lines, including 88,064 AllReduce and 4 x 352,256 per-call tuning lines. The old consumer mixed them into `result.jsonl` and spawned `date` per line; no `summary.json` exists and the three ~0.159 t/s records are ineligible. `screen-invalid.txt` and `screen-invalid-analysis.json` preserve the rejection. Do not salvage or compare it.
+
+A metadata-only depth-0/tg1 non-evidence smoke at `a9c80dd84` then proved the repaired installed-library behavior: `$HOME/llama-jobs/dsv4-rocm-tg/20260804T214242.500623821Z-raw-tg-rccl-env-smoke-tree-ll-residency-a9c80dd84f74-24936/` has one JSON/one timestamp, 27 non-JSON lines, zero malformed/excessive output, capture rc0, exact Tree/LL acknowledgements on all four ranks, `GGML_HIP_GRAPHS:BOOL=ON`, and no per-collective tuning markers. The setup matrix is permitted evidence of environment processing, not per-collective path proof.
+
+The repaired forced screens are complete but produce no candidate eligible for a matched control or full validation:
+
+- Tree+LL: `$HOME/llama-jobs/dsv4-rocm-tg/20260804T214837.068203556Z-raw-tg-rccl-screen-tree-ll-performance-4b8caa954627-16362/`; medians 22.7059 / 16.4285 / 14.8470 t/s at 16K/32K/64K; MAD/median 0.137% / 4.668% / 15.576%. It is globally unstable, regresses 64K by 19.320% versus the accepted historical median, and even its best 64K sample (18.3567 t/s) is below the predeclared 18.9544 t/s plausibility threshold. Per protocol, `auto` was not run.
+- Ring+LL fallback: `$HOME/llama-jobs/dsv4-rocm-tg/20260804T221418.737155192Z-raw-tg-rccl-screen-ring-ll-performance-4b8caa954627-214/`; medians 23.0775 / 16.4675 / 18.3176 t/s; MAD/median 0.364% / 14.023% / 0.352%. It is globally unstable, regresses 32K by 16.532%, and its stable 64K median is 0.460% below historical rather than >=3% above.
+
+Both repaired artifacts have three JSON/three timestamps, zero malformed/excessive output, capture rc0, twelve exact algorithm plus twelve LL acknowledgements, no forbidden per-collective diagnostics, clean process status, and graph build/runtime attestation. They are **NO-GO for advancement**; no matched comparison JSON, 31-repetition validation, or optimization acceptance is allowed. This exhausts only the predeclared runtime-control branch, not generic RCCL behavior.
+
+The next and only predeclared source candidate is an RDNA2/four-way guard that tests BF16 for these unforced hidden reductions, halving collective input to 14,336 bytes while paying conversion kernels. It must retain force-FP32 outputs, pass deterministic output/logit correctness, and meet the same TG gate. No attempt will collapse two dependency-separated reductions into one.
 
 ### M5.6 / P2 - mandatory 32K and 64K raw TG
 
@@ -1032,6 +1043,8 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Treat communication as a provisional 64K candidate, not a global selection. | Reclassified first 64K profile: NCCL 20.173% vs non-MoE quantized 17.080%, 3.092-point lead, NCCL first 5/5. Only one independent 64K artifact existed at that checkpoint. | superseded by replicated 64K selection |
 | 2026-08-04 | Select communication as the 64K/global M5.3 investigation branch, not an accepted optimization. | Second independent 64K profile: NCCL 22.762% vs non-MoE quantized 16.502%, 6.260-point lead, NCCL first 10/10; first profile also qualifies, for 15/15 consistent ranks. Both wall curves remain ineligible. | selected at 64K for investigation only |
 | 2026-08-04 | Freeze routine profiling and pivot to unprofiled communication candidates. | Four independent 16K/64K profiles already select NCCL in 30/30 ranks; source identifies 86 FP32 28,672-byte layer collectives/token. More attribution cannot establish a TG gain. | tree-ll first; matched auto only if promising |
+| 2026-08-04 | Invalidate the first Tree+LL attempt and harden stdout/graph/identity evidence. | `ENV,TUNING` emitted 1,497,247 non-JSON lines and the old consumer spawned `date` per line. `a9c80dd84`/`4b8caa954` add raw capture/classification, ENV-only acknowledgement, normalized manifests, compiled/runtime graph gates, and adversarial fixtures; repaired smoke passes. | invalid instrumentation; never throughput evidence |
+| 2026-08-04 | Do not advance Tree+LL or Ring+LL and do not run auto. | Repaired Tree has 64K median 14.847 t/s and 15.576% MAD; Ring has stable 64K 18.318 t/s (-0.460% historical) but unstable/regressed 32K. Neither meets preliminary plausibility/stability, so conditional auto and matched comparison are not allowed. | runtime-control branch exhausted; guarded BF16 source candidate next |
 | 2026-08-04 | Bound communication evidence without inventing payload or critical-path claims. | Exact cadence is 86 AllReduce groups/token and 11,008 rank calls/device kernels per tg32 rep. RCCL schema lacks message arguments; API/kernel correlation IDs are disjoint. Long intervals and near-zero same-agent compute overlap do not prove cause/dependencies. | accepted forensics `fa1e98ba2`; critical path open |
 
 ## 10. Closed decisions and open questions
@@ -1300,12 +1313,18 @@ Diagnostic M5.3 profile artifacts (all exit 4 / unstable wall):
   $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T150438.588831000Z-raw-tg-profile-16k-b11-performance-667bc100a5cc-32436/
   $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T161130.092022210Z-raw-tg-profile-64k-a-performance-27f432de97fc-17771/
   $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T180714.788127093Z-raw-tg-profile-64k-b11-performance-877a73b581c9-31443/
+Invalid/repaired M5.4 runtime artifacts:
+  INVALID: $HOME/llama-jobs/dsv4-rocm-tg/20260804T192247.461599490Z-raw-tg-rccl-screen-tree-ll-performance-45064b0d3397-4656/
+  ENV smoke: $HOME/llama-jobs/dsv4-rocm-tg/20260804T214242.500623821Z-raw-tg-rccl-env-smoke-tree-ll-residency-a9c80dd84f74-24936/
+  Tree+LL NO-GO: $HOME/llama-jobs/dsv4-rocm-tg/20260804T214837.068203556Z-raw-tg-rccl-screen-tree-ll-performance-4b8caa954627-16362/
+  Ring+LL NO-GO: $HOME/llama-jobs/dsv4-rocm-tg/20260804T221418.737155192Z-raw-tg-rccl-screen-ring-ll-performance-4b8caa954627-214/
 Current next action:
-  Routine profiling is frozen. Run the predeclared unprofiled `tree-ll`
-  16K/32K/64K raw-TG screen first. Only if it is plausibly >=3% at 64K, run the
-  matched `auto` control; otherwise try the single `ring-ll` fallback. A matched
-  five-repetition pass advances to full validation but accepts nothing. M5.2 is
-  not triggered; indexed CSA remains held.
+  Routine profiling remains frozen. Runtime Tree+LL/Ring+LL candidates are
+  NO-GO and conditional auto was correctly skipped. Implement only the
+  predeclared guarded RDNA2/four-way BF16 hidden-reduction source candidate;
+  retain force-FP32 outputs and the two dependency-separated reductions. Pass
+  deterministic output/logit correctness before a matched 16K/32K/64K tg32
+  screen. M5.2 is not triggered; indexed CSA remains held.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
@@ -1376,6 +1395,15 @@ Purpose:
 - Source audit identifies exactly two dependency-separated 7,168-element FP32 layer reductions across each of 43 blocks. The existing backend threshold is based on RTX 4090 PCIe and has not been tuned for four RDNA2 V620s. Combining collectives is rejected; reversible RCCL selection is the fastest safe first solution.
 - Installed RCCL is 2.30.4, not the initially researched 2.28 baseline. Local binary strings attest Tree/Ring and LL support and reject a useful min-channel experiment below eight GPUs. The predeclared order is tree-ll -> conditional matched auto -> one ring-ll fallback; no profiler.
 - Added fail-closed wrapper, environment provenance, matched comparator, and fixtures. Screen gate: stable five accepted tg32 samples at 16K/32K/64K, >=3% 64K median gain, <=2% shorter regression; pass advances only to full 31-repetition correctness/performance validation.
+
+### Iteration 3 continued — RCCL screens fail; source candidate selected
+
+- First Tree+LL attempt at `45064b0d3` is invalid instrumentation: 1,497,247 non-JSON stdout lines under `ENV,TUNING`, per-line `date` process creation, no summary, and no eligible throughput. Preserved explicit rejection in the artifact.
+- `a9c80dd84` adds the persistent fail-closed stdout classifier, raw/non-JSON logs, consumer-status propagation, ENV-only control acknowledgement, exact graph/runtime state, normalized run-local identities, and real FIFO failure fixtures. Follow-up `4b8caa954` permits the observed small ENV setup matrix while continuing to reject per-collective tuning. Multiple blocker reviews end GO.
+- Depth-0/tg1 metadata smoke proves installed RCCL's ENV-only behavior with 27 diagnostics, exact Tree/LL acknowledgements, no per-collective markers, and clean capture/process/graph state. It is validation only, not performance evidence.
+- Repaired Tree+LL screen exits 4: medians 22.7059/16.4285/14.8470 t/s; MAD 0.137%/4.668%/15.576%. It fails preliminary plausibility and stability; auto is correctly skipped.
+- Ring+LL fallback exits 4: medians 23.0775/16.4675/18.3176 t/s; MAD 0.364%/14.023%/0.352%. Its stable 64K result is -0.460% historical, not >=3%, and 32K is unstable/regressed. No candidate advances, no matched comparator is run, and no optimization is accepted.
+- Next: implement the already-declared guarded RDNA2/four-way BF16 conversion/reduction path for the 86 hidden reductions/token, retaining force-FP32 outputs and all dependency boundaries; correctness precedes performance.
 
 **Exact accepted GPU commands:**
 
