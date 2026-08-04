@@ -148,10 +148,25 @@ using submit_fn = bool (*)(
     common_ane_compute_instance & instance,
     void * context);
 
+// W7: signal-side callback. Invoked after the pump transitions
+// ANE_BUSY -> OUTPUT_READY. The callback is expected to signal
+// the per-slot MTLSharedEvent handles so downstream consumers
+// (Metal via ggml_mtl_shared_event_encode_wait) can read the
+// output slots. `value` is the pump's monotonic completion
+// counter; pass it as the event value so a Metal consumer can
+// waitUntilSignaledValue:value and observe a strict ordering.
+// May be nullptr (the pump no-ops on the signal).
+using signal_fn = void (*)(
+    common_ane_mtp_program & program,
+    uint32_t function_id,
+    uint64_t value,
+    void * context);
+
 bool run(common_ane_pump & pump,
         common_ane_mtp_program & program,
         common_ane_compute_instance & instance,
         submit_fn submit,
+        signal_fn signal,
         void * context);
 
 // Block until the pump returns to IDLE. Spins with a small

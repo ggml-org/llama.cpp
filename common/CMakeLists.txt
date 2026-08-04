@@ -128,7 +128,17 @@ if (APPLE)
         ane-pump.mm ane-pump.h)
     set_source_files_properties(ane-mtp.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     set_source_files_properties(ane-pump.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    target_link_libraries(${TARGET} PRIVATE "-framework CoreML" "-framework Foundation" "-framework IOSurface")
+    # ggml-metal provides ggml_mtl_shared_event_t for the W7
+    # MTLSharedEvent handoff per state slot. The events are
+    # signaled by the ANE dispatch path on OUTPUT_READY and
+    # consumed by the Metal backend (or by the host via
+    # ggml_mtl_shared_event_wait). The dependency is
+    # architecturally justified: the events are the cross-timeline
+    # lock-free primitive between the ANE side (in common) and
+    # the Metal side (in ggml). ggml-base pulls in nothing extra.
+    target_link_libraries(${TARGET} PRIVATE
+        ggml ggml-base
+        "-framework CoreML" "-framework Foundation" "-framework IOSurface")
 endif()
 
 set_target_properties(${TARGET} PROPERTIES

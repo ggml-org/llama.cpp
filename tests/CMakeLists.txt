@@ -459,6 +459,20 @@ if (APPLE)
         target_link_libraries(test-ane-pump PRIVATE
                               llama-common)
     endif()
+    # W7 MTLSharedEvent handoff per state slot. Validates that
+    # the per-slot events are signaled by the dispatch path on
+    # OUTPUT_READY and that a consumer thread can wait on the
+    # event with the signaled value (the cross-thread lock-free
+    # contract). Gated on the gemma4 prefill bundle +
+    # TESSERA_ANE_STATE_LAYOUT_MANIFEST.
+    llama_build(test-ane-slot-event.cpp)
+    if (TARGET test-ane-slot-event)
+        target_link_libraries(test-ane-slot-event PRIVATE
+                              llama-common
+                              ggml ggml-base
+                              "-framework Foundation"
+                              "-framework Metal")
+    endif()
     # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
     llama_build(test-ane-matmul-w1-dispatch.cpp)
     if (TARGET test-ane-matmul-w1-dispatch)

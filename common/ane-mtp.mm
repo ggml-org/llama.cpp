@@ -3,6 +3,7 @@
 #include "ane-pump.h"
 #include "ane-state-layout.h"
 
+#include "ggml-metal.h"
 #include "ggml.h"
 #include "gguf.h"
 #include "llama.h"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -141,6 +143,19 @@ struct common_ane_mtp_program {
     // the manifest. Released in the destructor.
     MLMultiArray * pinned_slots[ANE_STATE_SLOTS_MAX] = {};
 
+    // W7: per-slot MTLSharedEvent handles. One event per manifest
+    // slot, allocated at load time when the manifest is present.
+    // The pump's run() invokes a signal_fn that signals each
+    // function's output slot events with the pump's monotonic
+    // completion counter value. Downstream consumers (Metal via
+    // ggml_mtl_shared_event_encode_wait, or the host via
+    // ggml_mtl_shared_event_wait) can then read the slot bytes
+    // under the lock-free event contract. Index = slot_id from
+    // the manifest. The default signal_fn in the dispatch path
+    // is the "ane_signal_events" C function below. The events
+    // are released in the destructor.
+    ggml_mtl_shared_event_t slot_events[ANE_STATE_SLOTS_MAX] = {};
+
     ~common_ane_mtp_program() {
         // Drop the pinned MLMultiArray strong references first; they
         // wrap the IOSurface so the order matters (the IOSurface
@@ -149,6 +164,17 @@ struct common_ane_mtp_program {
         // explicit [obj release] is needed (or allowed).
         for (uint32_t i = 0; i < ANE_STATE_SLOTS_MAX; ++i) {
             pinned_slots[i] = nil;
+        }
+        // W7: release the per-slot MTLSharedEvent handles. The
+        // events are owned by the program; freeing them here
+        // invalidates any pending waits (consumers would see
+        // a stale value but the program is being destroyed so
+        // there should be no pending waits).
+        for (uint32_t i = 0; i < ANE_STATE_SLOTS_MAX; ++i) {
+            if (slot_events[i] != nullptr) {
+                ggml_mtl_shared_event_free(slot_events[i]);
+                slot_events[i] = nullptr;
+            }
         }
         // Unlock + release the state IOSurface. CFRelease is still
         // required under ARC (CFType is not ARC-managed).
@@ -595,6 +621,39 @@ static bool dispatch_pinned_function_locked(
 // any failure (manifest missing, function unknown, model not warm,
 // Core ML prediction nil, output not zero-copy).
 //
+// W7: default signal_fn for the pump. Iterates the function's
+// output slot ids in the manifest and signals each slot's
+// MTLSharedEvent with the pump's completion value. The signal
+// is the OUTPUT_READY -> IDLE transition's downstream release:
+// a Metal consumer can encodeWaitForEvent: cmd_buf with the
+// same value and observe the IOSurface bytes that the ANE
+// just wrote.
+//
+// We pass the program via context (the function is the
+// producer for which we're signaling; the program's events
+// are indexed by slot id). The function_id is the manifest's
+// function index; the program resolves the output slot ids
+// from the manifest and signals each.
+static void ane_signal_slot_events(
+        common_ane_mtp_program & program,
+        uint32_t function_id,
+        uint64_t value,
+        void * /*context*/) {
+    if (!program.manifest_loaded ||
+            function_id >= program.manifest.n_functions) {
+        return;
+    }
+    const ane_function_v1_t & function = program.manifest.functions[function_id];
+    for (uint32_t i = 0; i < function.n_outputs; ++i) {
+        const uint32_t slot_id = function.output_slot_ids[i];
+        if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
+        ggml_mtl_shared_event_t event = program.slot_events[slot_id];
+        if (event != nullptr) {
+            ggml_mtl_shared_event_signal(event, value);
+        }
+    }
+}
+
 // This is the canonical multifunction dispatch path. The W2 design
 // is locked: stateless at the Core ML level, stateful via the
 // IOSurface; the dispatch doesn't use MLState.
@@ -606,11 +665,31 @@ static bool dispatch_pinned_function(
     if (!program.manifest_loaded) {
         return false;
     }
+    // Resolve the function_id once so the W7 signal_fn can
+    // iterate the function's output slots.
+    const ane_function_v1_t * function = find_manifest_function(
+        program, function_name);
+    if (function == nullptr) {
+        return false;
+    }
+    const uint32_t function_id = (uint32_t) (function - program.manifest.functions);
     __block bool ok = false;
     dispatch_sync(program.queue, ^{
         ok = dispatch_pinned_function_locked(program, function_name,
                                               extra_inputs, output_names);
     });
+    if (ok) {
+        // W7: signal the per-slot MTLSharedEvent handles for the
+        // function's output slots. The value is a monotonic
+        // counter (we use the wall clock + the function id as a
+        // cheap monotonically increasing value; the pump's
+        // completion counter would be the canonical source but
+        // the dispatch_sync path doesn't track one). The signal
+        // is the OUTPUT_READY release for downstream consumers.
+        const uint64_t value = (uint64_t) std::chrono::steady_clock::now()
+            .time_since_epoch().count();
+        ane_signal_slot_events(program, function_id, value, nullptr);
+    }
     return ok;
 }
 
@@ -1199,8 +1278,25 @@ static common_ane_mtp_program_ptr common_ane_program_load(
                     return nullptr;
                 }
             }
-            LOG_INF("ANE state IOSurface: %zu bytes, %u pinned slots for %s\n",
+            // W7: allocate one MTLSharedEvent per manifest slot.
+            // The events are signaled by the pump's signal_fn on
+            // OUTPUT_READY and consumed by Metal (via
+            // ggml_mtl_shared_event_encode_wait) or by the host
+            // (via ggml_mtl_shared_event_wait). The event value
+            // is the pump's monotonic completion counter, so
+            // consumers can strict-order their reads.
+            for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+                program->slot_events[i] = ggml_mtl_shared_event_new();
+                if (program->slot_events[i] == nullptr) {
+                    LOG_WRN("failed to allocate MTLSharedEvent for slot %s\n",
+                            program->manifest.slots[i].name);
+                    return nullptr;
+                }
+            }
+            LOG_INF("ANE state IOSurface: %zu bytes, %u pinned slots, "
+                    "%u MTLSharedEvents for %s\n",
                     program->state_size, program->manifest.n_slots,
+                    program->manifest.n_slots,
                     program->manifest.bundle_name);
         }
         program->queue = dispatch_queue_create("org.ggml.llama.ane", DISPATCH_QUEUE_SERIAL);

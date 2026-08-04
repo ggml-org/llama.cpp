@@ -89,6 +89,7 @@ bool run(common_ane_pump & pump,
         common_ane_mtp_program & program,
         common_ane_compute_instance & instance,
         submit_fn submit,
+        signal_fn signal,
         void * context) {
     // INPUT_READY -> ANE_BUSY
     uint32_t expected = ANE_PUMP_INPUT_READY;
@@ -101,8 +102,7 @@ bool run(common_ane_pump & pump,
     // synchronous (it returns when the prediction is complete);
     // for the current Core ML public API this is the only mode
     // (the model.predictionFromFeatures:options:error: path is
-    // synchronous). W7 will replace the sync submit with an
-    // async-with-MTLSharedEvent path.
+    // synchronous).
     const bool submit_ok = submit(program, instance, context);
     if (!submit_ok) {
         // Revert to IDLE so the host can retry. The completions
@@ -122,6 +122,18 @@ bool run(common_ane_pump & pump,
         // Should be impossible: only the pump transitions
         // ANE_BUSY. Log and continue.
         return false;
+    }
+    // W7: signal downstream consumers. The signal_fn is the
+    // per-slot MTLSharedEvent signaller; the value is the
+    // pump's monotonic completion counter so consumers can
+    // strict-order their reads. The signal is invoked AFTER
+    // the ANE_BUSY -> OUTPUT_READY transition so consumers
+    // observing the signaled value are guaranteed to see the
+    // data plane state (the IOSurface bytes the ANE wrote).
+    if (signal != nullptr) {
+        const uint64_t value = pump.completions.load(
+            std::memory_order_acquire) + 1;
+        signal(program, pump.function_id, value, context);
     }
     // OUTPUT_READY -> IDLE. The host's next signal_input_ready
     // will be the IDLE -> INPUT_READY transition.
