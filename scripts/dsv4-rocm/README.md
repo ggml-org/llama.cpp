@@ -43,8 +43,12 @@ Scheduler logging is deliberately separate so verbose debug output cannot
 perturb accepted TG. Residency mode runs one target evaluation per depth with
 `GGML_SCHED_DEBUG=2 --verbose`; `parse-sched-debug.py` records DSV4 LID/TOP_K
 backend assignments plus CPU and ROCm/meta split counts and scheduled split-input
-copies. A CPU assignment exits 4 as valid pre-fix evidence, not as a deployment
-pass.
+copies. It counts only real operation lines (not `CONT`/`SET_ROWS` consumers)
+and requires exactly 21 TOP_K plus 21 LIGHTNING_INDEXER nodes per measured graph
+at applicable depths. A CPU/unknown DSV4 assignment or count mismatch exits
+nonzero as valid pre-fix/incomplete evidence, not as a deployment pass. The
+scheduler exposes the four devices as one `Meta(ROCm0,...,ROCm3)` backend, so
+its split/copy counts are aggregate Meta counts, not independent per-GPU counts.
 
 Dry-run and non-GPU fixture validation:
 
@@ -94,7 +98,8 @@ After a GPU window is confirmed and this gate passes:
 
 ```bash
 # Performance: tg32, six raw / five accepted samples at every depth.
-DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh
+# Use full hashing for a final evidence run; it reads every GGUF shard before load.
+DSV4_HASH_MODE=full DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh
 
 # Separate scheduler-residency audit; timings are not baseline TG.
 DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency \
@@ -331,7 +336,7 @@ budget.
 Runs are written to collision-resistant directories under
 `$HOME/llama-jobs/dsv4-rocm-pp/`:
 
-- `manifest.txt`: host, source, binary/DSO hashes, model shard metadata, ROCm, topology, and environment;
+- `manifest.txt`: host, source, binary/all-resolved-DSO hashes, model shard metadata or full hashes, ROCm, topology, clock/performance level, power cap/profile, and environment;
 - `source.patch`, `source-status.txt`, `untracked-files.sha256`: dirty-source identity;
 - `effective-settings.sh`, `command.sh`, `executed-command.sh`: exact effective controls and argv;
 - `result.jsonl`: raw llama-bench records, including every `samples_ts`/`samples_ns` value;

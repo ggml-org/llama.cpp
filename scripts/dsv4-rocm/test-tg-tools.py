@@ -94,7 +94,10 @@ llama-bench: benchmark 2/2: depth run 1/1
 llama-bench: benchmark 2/2: generation run 1/1
 ## SPLIT #0: Meta(ROCm0,ROCm1,ROCm2,ROCm3) # 2 inputs
 node # 10 (     TOP_K): lid_top_k-1          ( 2KiB) [{top_backend:<5}    2.sup] use=1,c=1:
-node # 11 ( LIGHTNING): lid_score_masked-1   ( 4KiB) [Meta(    2.sup] use=1,c=1:
+node # 11 (      CONT): lid_top_k-1          ( 2KiB) [Meta(    2.sup] use=1,c=1:
+node # 12 (  SET_ROWS): selected             ( 2KiB) [Meta(    2.sup] use=1,c=1: lid_top_k-1
+node # 13 ( LIGHTNING): lid_score_masked-1   ( 4KiB) [Meta(    2.sup] use=1,c=1:
+node # 14 (      CONT): lid_score_copy        ( 4KiB) [Meta(    2.sup] use=1,c=1: lid_score_masked-1
 """
 
 
@@ -105,7 +108,7 @@ def parse_scheduler(tmp: pathlib.Path, cpu_top_k: bool = False) -> dict[str, obj
     log.write_text(scheduler_log(cpu_top_k))
     run(
         sys.executable, str(PARSE), str(log), "--depths", "0,2048",
-        "--json", str(out), "--tsv", str(tsv),
+        "--json", str(out), "--tsv", str(tsv), "--expected-nodes", "1",
     )
     assert tsv.read_text().startswith("run_complete\tresidency_ok\tdepth")
     return json.loads(out.read_text())

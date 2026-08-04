@@ -13,6 +13,8 @@ N_GEN=${DSV4_TG_N_GEN:-32}
 RAW_REPS=${DSV4_TG_REPS:-6}
 DISCARD_FIRST=${DSV4_TG_DISCARD_FIRST:-1}
 STABILITY_LIMIT=${DSV4_TG_STABILITY_LIMIT:-0.03}
+HASH_MODE=${DSV4_HASH_MODE:-metadata}
+EXPECTED_DSV4_NODES=21
 TELEMETRY_SCOPE=setup-and-discarded-first-repetition
 SAMPLE_TIMEOUT_S=${DSV4_TG_SAMPLE_TIMEOUT:-300}
 SETUP_TIMEOUT_S=${DSV4_TG_SETUP_TIMEOUT:-1800}
@@ -95,6 +97,7 @@ done
 [[ "$TERM_GRACE_S" =~ ^[0-9]+$ ]] || fail "DSV4_TERM_GRACE must be a non-negative integer"
 [[ "$ALLOW_BUSY" == 0 || "$ALLOW_BUSY" == 1 ]] || fail "DSV4_ALLOW_BUSY_GPUS must be 0 or 1"
 [[ "$REQUIRE_ACCEPTED_STACK" == 0 || "$REQUIRE_ACCEPTED_STACK" == 1 ]] || fail "DSV4_REQUIRE_ACCEPTED_STACK must be 0 or 1"
+[[ "$HASH_MODE" == metadata || "$HASH_MODE" == full ]] || fail "DSV4_HASH_MODE must be metadata or full"
 [ "$UBATCH" -le "$BATCH" ] || fail "ubatch $UBATCH exceeds batch $BATCH"
 [ "$TERM_GRACE_S" -lt "$SAMPLE_TIMEOUT_S" ] || fail "DSV4_TERM_GRACE must be below sample timeout"
 [ "$TERM_GRACE_S" -lt "$SETUP_TIMEOUT_S" ] || fail "DSV4_TERM_GRACE must be below setup timeout"
@@ -257,6 +260,8 @@ chmod +x "$run_dir/command.sh" "$run_dir/executed-command.sh"
     printf 'DSV4_TG_REPS=%q\n' "$RAW_REPS"
     printf 'DSV4_TG_DISCARD_FIRST=%q\n' "$DISCARD_FIRST"
     printf 'DSV4_TG_STABILITY_LIMIT=%q\n' "$STABILITY_LIMIT"
+    printf 'DSV4_HASH_MODE=%q\n' "$HASH_MODE"
+    printf 'DSV4_EXPECTED_DSV4_NODES=%q\n' "$EXPECTED_DSV4_NODES"
     printf 'DSV4_TG_TELEMETRY_SCOPE=%q\n' "$TELEMETRY_SCOPE"
     printf 'DSV4_TG_SAMPLE_TIMEOUT=%q\n' "$SAMPLE_TIMEOUT_S"
     printf 'DSV4_TG_SETUP_TIMEOUT=%q\n' "$SETUP_TIMEOUT_S"
@@ -296,6 +301,8 @@ pathlib.Path(out).write_text(json.dumps({
     "accepted_repetitions": int(reps) - int(discard),
     "depth_state_api": depth_state_api,
     "telemetry_scope": "setup-and-discarded-first-repetition",
+    "model_hash_mode": __import__("os").environ.get("DSV4_HASH_MODE", "metadata"),
+    "expected_dsv4_nodes_per_graph": 21,
     "token_contract": "llama-bench test_gen: exactly n_gen target llama_decode calls; BOS then deterministic process-local std::rand tokens; no sampler or EOS",
     "depth_contract": "llama-bench n_depth setup occurs outside samples_ns; later repetitions restore the attested full context state; sequence-only restore is forbidden for DSV4",
     "command_argv": command,
@@ -473,7 +480,7 @@ real = (before + after) // 2
 with Path(sys.argv[1]).open("a") as out:
     out.write(f"end_captured_realtime_ns={real}\nend_captured_monotonic_ns={mono}\nend_realtime_minus_monotonic_ns={real-mono}\nend_calibration_span_ns={after-before}\n")
 PY
-rocm-smi --showuse --showmemuse --showpower --showclocks --showtemp > "$run_dir/rocm-smi-final.txt" 2>&1 || true
+rocm-smi --showuse --showmemuse --showpower --showclocks --showtemp --showmaxpower --showperflevel --showprofile --showoverdrive --showmemoverdrive > "$run_dir/rocm-smi-final.txt" 2>&1 || true
 
 if [[ ! -s "$run_dir/result.jsonl" ]]; then
     echo "Benchmark produced no complete result; see $run_dir/bench.log" >&2
@@ -520,8 +527,8 @@ PY
     fi
 else
     python3 "$ROOT_DIR/scripts/dsv4-rocm/parse-sched-debug.py" "$run_dir/bench.log" \
-        --depths "$DEPTHS" --json "$run_dir/scheduler-summary.json" \
-        --tsv "$run_dir/scheduler-summary.tsv"
+        --depths "$DEPTHS" --expected-nodes "$EXPECTED_DSV4_NODES" \
+        --json "$run_dir/scheduler-summary.json" --tsv "$run_dir/scheduler-summary.tsv"
     cat "$run_dir/scheduler-summary.tsv"
     read -r complete resident < <(python3 - "$run_dir/scheduler-summary.json" <<'PY'
 import json, sys

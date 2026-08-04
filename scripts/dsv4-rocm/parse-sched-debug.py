@@ -18,6 +18,8 @@ GEN_RE = re.compile(r"llama-bench: benchmark\s+(\d+)/(\d+):\s+generation run\s+(
 SPLIT_RE = re.compile(r"## SPLIT #\d+:\s+(.+?)\s+#\s+(\d+)\s+inputs")
 BACKEND_USE_RE = re.compile(r"\[\s*([^\s\]]+)\s+[^\]]+\]\s+use=")
 BACKEND_RE = re.compile(r"\[\s*([^\s\]]+)")
+TOP_K_NODE_RE = re.compile(r"node\s+#\s*\d+\s+\(\s*TOP_K\s*\):")
+LID_NODE_RE = re.compile(r"node\s+#\s*\d+\s+\(\s*LIGHTNING[^)]*\):")
 
 
 def csv_nonnegative_ints(value: str) -> list[int]:
@@ -45,10 +47,14 @@ def main() -> int:
     parser.add_argument("--json", dest="json_out", type=pathlib.Path, required=True)
     parser.add_argument("--tsv", dest="tsv_out", type=pathlib.Path, required=True)
     parser.add_argument("--require-top-k-from", type=int, default=3072)
+    parser.add_argument("--expected-nodes", type=int, default=21,
+                        help="expected real TOP_K and LIGHTNING_INDEXER nodes per measured graph")
     args = parser.parse_args()
 
     if args.require_top_k_from < 0:
         raise ValueError("require-top-k-from must be non-negative")
+    if args.expected_nodes <= 0:
+        raise ValueError("expected-nodes must be positive")
     lines = args.log.read_text(encoding="utf-8", errors="replace").splitlines()
     depths = args.depths
     per_depth: dict[int, dict[str, Any]] = {}
@@ -102,8 +108,10 @@ def main() -> int:
             per_depth[current_depth]["split_input_copies"][backend] += int(split.group(2))
             continue
 
-        is_top_k = "lid_top_k" in line or ("TOP_K" in line and "node #" in line)
-        is_lid = "lid_score_masked" in line or ("LIGHTNING" in line and "node #" in line)
+        # Count only the actual operation line. Tensor names such as lid_top_k
+        # also occur on CONT/SET_ROWS consumers and must not inflate attestation.
+        is_top_k = TOP_K_NODE_RE.search(line) is not None
+        is_lid = LID_NODE_RE.search(line) is not None
         if not is_top_k and not is_lid:
             continue
         backend_match = BACKEND_USE_RE.search(line) or BACKEND_RE.search(line)
@@ -136,7 +144,22 @@ def main() -> int:
         lid_cpu = sum(count for name, count in lid_counts.items() if cpu_backend(name))
         top_k_unknown = sum(count for name, count in top_k_counts.items() if not cpu_backend(name) and not target_backend(name))
         lid_unknown = sum(count for name, count in lid_counts.items() if not cpu_backend(name) and not target_backend(name))
-        required_nodes_present = depth < args.require_top_k_from or (top_k_total > 0 and lid_total > 0)
+        expected_node_total = args.expected_nodes * decode_graphs
+        if depth >= args.require_top_k_from:
+            required_nodes_present = top_k_total == expected_node_total and lid_total == expected_node_total
+        else:
+            # Below the selector crossover, either both operation families are
+            # absent or the graph must contain their complete expected counts.
+            required_nodes_present = (
+                top_k_total == lid_total
+                and top_k_total in (0, expected_node_total)
+            )
+        if decode_graphs == 1 and not required_nodes_present:
+            parse_warnings.append(
+                f"depth {depth}: expected 0 or {expected_node_total} nodes below crossover "
+                f"and exactly {expected_node_total} at/above it; observed "
+                f"TOP_K={top_k_total}, LIGHTNING_INDEXER={lid_total}"
+            )
         row_complete = decode_graphs == 1 and bool(split_counts) and required_nodes_present
         row_resident = row_complete and top_k_cpu == 0 and lid_cpu == 0 and top_k_unknown == 0 and lid_unknown == 0
         complete = complete and row_complete
@@ -162,6 +185,8 @@ def main() -> int:
             "lid_total": lid_total,
             "lid_cpu": lid_cpu,
             "lid_unknown": lid_unknown,
+            "expected_nodes_per_graph": args.expected_nodes,
+            "expected_node_total": expected_node_total,
             "required_nodes_present": required_nodes_present,
             "complete": row_complete,
             "rocm_resident": row_resident,
@@ -180,6 +205,7 @@ def main() -> int:
         "expected_depths": depths,
         "reported_benchmark_count": total_benchmarks,
         "require_top_k_from": args.require_top_k_from,
+        "expected_nodes_per_graph": args.expected_nodes,
         "parse_warnings": parse_warnings,
         "records": records,
     }

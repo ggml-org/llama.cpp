@@ -59,13 +59,13 @@ fi
     readelf -n "$BENCH" 2>/dev/null | grep -E 'Build ID|Owner|NT_GNU' || true
     printf '%s\n' '-- resolved dependencies --'
     ldd "$BENCH" 2>&1 || true
-    printf '%s\n' '-- local llama/ggml dependency hashes --'
+    printf '%s\n' '-- all resolved dependency hashes (local + ROCm/system DSOs) --'
     while IFS= read -r library; do
         [ -f "$library" ] && sha256sum "$library"
     done < <(ldd "$BENCH" 2>/dev/null | awk '
         /=> \// { print $3 }
         /^\// { print $1 }
-    ' | grep -E '/lib(llama|ggml)[^/]*\.so' | sort -u)
+    ' | sort -u)
     cache=$(readlink -f "$(dirname "$BENCH")/../CMakeCache.txt" 2>/dev/null || true)
     if [[ -n "$cache" && -f "$cache" ]]; then
         printf '%s\n' '-- selected CMake cache --'
@@ -111,7 +111,7 @@ PY
     section rocm
     hipcc --version 2>&1 | head -20 || true
     # This query does not execute the GPU-linked benchmark binary.
-    rocm-smi --showproductname --showuniqueid --showmeminfo vram --showclocks --showpower --showtopo 2>&1 || true
+    rocm-smi --showproductname --showuniqueid --showmeminfo vram --showclocks --showpower --showmaxpower --showperflevel --showprofile --showoverdrive --showmemoverdrive --showtopo 2>&1 || true
 
     section environment
     env | grep -E '^(DSV4_|GGML_|HSA_|HIP_|ROCM_|OMP_|MALLOC_|LD_LIBRARY_PATH=)' | sort || true
