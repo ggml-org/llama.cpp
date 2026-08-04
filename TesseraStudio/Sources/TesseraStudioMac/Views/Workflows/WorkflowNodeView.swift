@@ -168,7 +168,10 @@ struct WorkflowPortView: View {
                         }
                 )
                 .accessibilityElement()
-                .accessibilityLabel("\(port.label) \(side == .left ? "input" : "output") port")
+                // The dot's color encodes the port type; the
+                // label spells the type out so the encoding is
+                // not color-only.
+                .accessibilityLabel("\(port.label), \(portTypeName) \(side == .left ? "input" : "output") port")
                 .accessibilityHint(side == .left
                     ? "Drag to this port to wire an output to it"
                     : "Drag from this port to an input port to wire them")
@@ -190,6 +193,21 @@ struct WorkflowPortView: View {
         case .json: return .purple
         case .toolResult: return .green
         case .bag: return .pink
+        }
+    }
+
+    /// Human-readable port type for the accessibility label, so
+    /// the type encoding is not carried by the dot color alone.
+    private var portTypeName: String {
+        switch port.type {
+        case .string: return "string"
+        case .number: return "number"
+        case .boolean: return "boolean"
+        case .path: return "path"
+        case .gguf: return "GGUF"
+        case .json: return "JSON"
+        case .toolResult: return "tool result"
+        case .bag: return "bag"
         }
     }
 }

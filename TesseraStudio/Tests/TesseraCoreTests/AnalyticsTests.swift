@@ -277,3 +277,62 @@ final class AnalyticsReportRoutingTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Fitness heatmap text contrast (HIG 1.6 / 1.7)
+
+/// The archive heatmap fills tiles across a red (worst) -> green
+/// (best) scale at fixed brightness 0.85. A single fixed text
+/// color fails contrast at one end or the other (white on green,
+/// black on red). These tests pin the WCAG-based picker: light
+/// fills get dark text, dark fills get light text, and the text
+/// color only ever flips between the two extremes.
+final class FitnessScaleContrastTests: XCTestCase {
+    private func cell(_ fitness: Double) -> ArchiveCell {
+        ArchiveCell(
+            kurtosisBucket: 0, effRankBucket: 0, familyBucket: 0,
+            modalityBucket: 0, bestFitness: fitness, bestAlpha: 0,
+            bestClip: 0, evalCount: 1, tensorName: "t"
+        )
+    }
+
+    private func scale() -> FitnessScale {
+        FitnessScale(cells: [cell(0.05), cell(0.12)])
+    }
+
+    func testBestIsGreenWorstIsRed() {
+        let s = scale()
+        // best = min fitness (0.05), worst = max (0.12).
+        XCTAssertEqual(s.best, 0.05)
+        XCTAssertEqual(s.worst, 0.12)
+    }
+
+    func testGreenBestTileGetsDarkText() {
+        // The best cell maps to hue 0.33 (green, high luminance),
+        // which needs dark text for contrast.
+        XCTAssertEqual(scale().textColor(for: 0.05), .black)
+    }
+
+    func testRedWorstTileGetsLightText() {
+        // The worst cell maps to hue 0 (red, low luminance), which
+        // needs light text for contrast.
+        XCTAssertEqual(scale().textColor(for: 0.12), .white)
+    }
+
+    func testDegenerateSingleFitnessGetsDarkText() {
+        // All-equal fitness collapses to the green branch of
+        // color(for:), so the text must be dark to match.
+        let s = FitnessScale(cells: [cell(0.07), cell(0.07)])
+        XCTAssertEqual(s.textColor(for: 0.07), .black)
+    }
+
+    func testTextColorIsOnlyBlackOrWhite() {
+        // The picker must stay binary so the tile never renders a
+        // mid-gray that fails contrast against both fill ends.
+        let s = scale()
+        for f in stride(from: 0.05, through: 0.12, by: 0.01) {
+            let c = s.textColor(for: f)
+            XCTAssertTrue(c == .black || c == .white,
+                "unexpected text color \(c) at fitness \(f)")
+        }
+    }
+}

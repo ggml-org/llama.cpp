@@ -169,6 +169,11 @@ public enum ChartImageRenderer {
             .padding(24)
             .frame(width: 720, height: 560)
             .background(Color.white)
+            // The export canvas is always white; pin the chart's
+            // semantic colors to their light variants so a
+            // dark-mode host does not render dark-mode ink on a
+            // light canvas.
+            .environment(\.colorScheme, .light)
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2.0
         #if canImport(AppKit)

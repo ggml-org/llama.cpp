@@ -244,13 +244,18 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func autonomyBadges(for entry: TesseraLearnedPermission) -> some View {
+        // Each badge pairs its state color with a symbol so the
+        // state is not encoded by color alone.
         if entry.irreversible {
-            Text("irreversible").font(.caption2).padding(.horizontal, 4).background(.red.opacity(0.15))
+            Label("irreversible", systemImage: "exclamationmark.octagon")
+                .font(.caption2).padding(.horizontal, 4).background(.red.opacity(0.15))
         } else if entry.granted {
-            Text("granted").font(.caption2).padding(.horizontal, 4).background(.green.opacity(0.15))
+            Label("granted", systemImage: "checkmark.circle")
+                .font(.caption2).padding(.horizontal, 4).background(.green.opacity(0.15))
         }
         if entry.revoked {
-            Text("revoked").font(.caption2).padding(.horizontal, 4).background(.orange.opacity(0.15))
+            Label("revoked", systemImage: "slash.circle")
+                .font(.caption2).padding(.horizontal, 4).background(.orange.opacity(0.15))
         }
     }
 

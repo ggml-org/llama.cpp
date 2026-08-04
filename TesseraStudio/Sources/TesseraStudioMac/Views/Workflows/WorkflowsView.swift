@@ -229,11 +229,16 @@ struct WorkflowsView: View {
                 Text("Node \(id) \(success ? "finished" : "failed")\(msg.map { ": \($0)" } ?? "")")
             }
         case .log(_, let level, let message):
-            HStack {
-                Text(level.rawValue.uppercased())
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(levelColor(level))
-                    .frame(width: 50, alignment: .leading)
+            HStack(spacing: 6) {
+                // Symbol + text carry the severity; the color is
+                // redundant emphasis, not the only signal.
+                HStack(spacing: 3) {
+                    Image(systemName: levelSymbol(level))
+                    Text(level.rawValue.uppercased())
+                        .font(.caption2.monospaced())
+                }
+                .foregroundStyle(levelColor(level))
+                .frame(width: 70, alignment: .leading)
                 Text(message)
                     .font(.callout)
             }
@@ -258,6 +263,15 @@ struct WorkflowsView: View {
         case .info:  return .blue
         case .warn:  return .orange
         case .error: return .red
+        }
+    }
+
+    private func levelSymbol(_ level: WorkflowLogLevel) -> String {
+        switch level {
+        case .debug: return "terminal"
+        case .info:  return "info.circle"
+        case .warn:  return "exclamationmark.triangle"
+        case .error: return "xmark.octagon"
         }
     }
 

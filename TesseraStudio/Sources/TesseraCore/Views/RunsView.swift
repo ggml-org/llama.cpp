@@ -119,12 +119,15 @@ struct StatusBadge: View {
     let status: RunStatus
 
     var body: some View {
-        Text(status.rawValue)
-            .font(.caption2.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+            Text(status.rawValue)
+        }
+        .font(.caption2.bold())
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.15), in: Capsule())
+        .foregroundStyle(color)
     }
 
     private var color: Color {
@@ -135,6 +138,17 @@ struct StatusBadge: View {
         case .cancelled: .orange
         }
     }
+
+    // Status is never encoded by color alone; the symbol carries
+    // the same meaning for reduced-color / high-contrast modes.
+    private var symbol: String {
+        switch status {
+        case .running: "arrow.triangle.2.circlepath"
+        case .completed: "checkmark.circle"
+        case .failed: "xmark.circle"
+        case .cancelled: "slash.circle"
+        }
+    }
 }
 
 /// Pass/fail chip for a run's G6 acceptance gate verdict.
@@ -142,12 +156,15 @@ struct AcceptanceBadge: View {
     let passed: Bool
 
     var body: some View {
-        Text(passed ? "PASS" : "FAIL")
-            .font(.caption2.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+        HStack(spacing: 4) {
+            Image(systemName: passed ? "checkmark.seal" : "xmark.seal")
+            Text(passed ? "PASS" : "FAIL")
+        }
+        .font(.caption2.bold())
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.15), in: Capsule())
+        .foregroundStyle(color)
     }
 
     private var color: Color {

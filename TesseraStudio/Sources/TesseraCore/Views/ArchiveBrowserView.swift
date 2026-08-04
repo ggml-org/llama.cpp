@@ -131,7 +131,7 @@ public struct ArchiveBrowserView: View {
                     .overlay(
                         Text(String(format: "%.3g", cell.representative.bestFitness))
                             .font(.system(size: 7, design: .monospaced))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(scale.textColor(for: cell.representative.bestFitness))
                             .lineLimit(1)
                             .minimumScaleFactor(0.4)
                     )
@@ -140,7 +140,7 @@ public struct ArchiveBrowserView: View {
             .help(cell.representative.tensorName)
         } else {
             RoundedRectangle(cornerRadius: 4)
-                .fill(Color.gray.opacity(0.15))
+                .fill(.quaternary)
                 .frame(width: 34, height: 34)
         }
     }
@@ -222,7 +222,9 @@ private struct GridCell: Identifiable {
 }
 
 /// Maps a fitness value to a green (best) -> red (worst) color.
-private struct FitnessScale {
+/// Internal (not private) so the contrast tests in AnalyticsTests
+/// can pin the tile text-color contract.
+struct FitnessScale {
     let best: Double
     let worst: Double
 
@@ -237,6 +239,44 @@ private struct FitnessScale {
         let t = (fitness - best) / (worst - best)
         // hue 0.33 = green, 0 = red
         return Color(hue: (1 - t) * 0.33, saturation: 0.75, brightness: 0.85)
+    }
+
+    /// Text color with enough contrast against ``color(for:)``.
+    /// The fill spans red (low luminance) to green (high
+    /// luminance), so a single fixed text color fails at one end
+    /// or the other. Pick white or black from the fill's relative
+    /// luminance instead (WCAG contrast, HIG color guidance).
+    func textColor(for fitness: Double) -> Color {
+        // Degenerate archive (all-equal fitness) renders green,
+        // which needs dark text.
+        guard worst > best else { return .black }
+        let t = (fitness - best) / (worst - best)
+        let hue = (1 - t) * 0.33
+        return Self.luminance(hue: hue, saturation: 0.75, brightness: 0.85) > 0.45
+            ? .black : .white
+    }
+
+    /// Relative luminance (0 = black, 1 = white) of an HSB color,
+    /// via the standard HSB -> RGB -> linear-luma conversion.
+    private static func luminance(hue: Double, saturation: Double, brightness: Double) -> Double {
+        let h = hue * 6
+        let c = brightness * saturation
+        let x = c * (1 - abs(h.truncatingRemainder(dividingBy: 2) - 1))
+        let m = brightness - c
+        let (r, g, b): (Double, Double, Double)
+        switch h {
+        case ..<1: (r, g, b) = (c, x, 0)
+        case ..<2: (r, g, b) = (x, c, 0)
+        case ..<3: (r, g, b) = (0, c, x)
+        case ..<4: (r, g, b) = (0, x, c)
+        case ..<5: (r, g, b) = (x, 0, c)
+        default:   (r, g, b) = (c, 0, x)
+        }
+        // sRGB relative luminance.
+        func lin(_ v: Double) -> Double {
+            v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * lin(r + m) + 0.7152 * lin(g + m) + 0.0722 * lin(b + m)
     }
 }
 
