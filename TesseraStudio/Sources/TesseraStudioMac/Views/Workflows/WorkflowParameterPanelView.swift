@@ -37,6 +37,10 @@ struct WorkflowParameterPanelView: View {
                     }
                     .padding(12)
                 }
+                // The numeric fields keep field-local text state;
+                // recreate them when the selection changes so that
+                // state can't leak between nodes.
+                .id(node.id)
             }
         }
         .frame(minWidth: 240)
@@ -96,11 +100,10 @@ struct WorkflowParameterPanelView: View {
                 Toggle("", isOn: bindingForBool(key: key))
                     .labelsHidden()
             case "integer", "number":
-                TextField(
-                    "",
-                    text: bindingForString(key: key)
+                NumericParameterField(
+                    isInteger: prop.type == "integer",
+                    value: bindingForValue(key: key)
                 )
-                .textFieldStyle(.roundedBorder)
             case "string":
                 TextField(
                     "",
@@ -139,6 +142,19 @@ struct WorkflowParameterPanelView: View {
         )
     }
 
+    private func bindingForValue(key: String) -> Binding<JSONValue?> {
+        Binding(
+            get: { parameters[key] },
+            set: { newValue in
+                if let newValue {
+                    parameters[key] = newValue
+                } else {
+                    parameters.removeValue(forKey: key)
+                }
+            }
+        )
+    }
+
     private func bindingForEnum(
         key: String, values: [String]
     ) -> Binding<String> {
@@ -160,5 +176,50 @@ struct WorkflowParameterPanelView: View {
                 parameters[key] = .bool(newValue)
             }
         )
+    }
+}
+
+/// A numeric parameter field. The display is a plain text field,
+/// but valid parses write through to the stored value as a
+/// `.number` JSONValue (tools read `numberValue`). The text is
+/// kept in field-local state so a mid-typing entry ("12.", "-")
+/// survives the parse; the write-through rule itself lives in
+/// ``WorkflowNumericInput`` so the tests can drive it directly.
+private struct NumericParameterField: View {
+    let isInteger: Bool
+    @Binding var value: JSONValue?
+    @State private var text: String
+    @FocusState private var isEditing: Bool
+
+    init(isInteger: Bool, value: Binding<JSONValue?>) {
+        self.isInteger = isInteger
+        self._value = value
+        self._text = State(
+            initialValue: WorkflowNumericInput.displayText(for: value.wrappedValue))
+    }
+
+    var body: some View {
+        TextField("", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .focused($isEditing)
+            .onChange(of: text) { _, newValue in
+                switch WorkflowNumericInput.edit(text: newValue, integer: isInteger) {
+                case .clear:
+                    value = nil
+                case .store(let number):
+                    value = .number(number)
+                case .reject:
+                    break
+                }
+            }
+            .onChange(of: value) { _, newValue in
+                // Stepper, undo, or a document load changed the
+                // stored value; follow it unless we are typing.
+                if let synced = WorkflowNumericInput.syncedText(
+                    current: text, value: newValue, isEditing: isEditing)
+                {
+                    text = synced
+                }
+            }
     }
 }

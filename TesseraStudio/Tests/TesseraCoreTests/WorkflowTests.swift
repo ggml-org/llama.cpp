@@ -527,3 +527,105 @@ final class WorkflowRunNotificationContentTests: XCTestCase {
         XCTAssertEqual(content.body, "\"w\" stopped after 2 node(s).")
     }
 }
+
+// MARK: - Numeric parameter fields (HIG T1-4)
+
+/// The parameter panel renders integer/number schema properties as
+/// text fields, but must STORE numeric JSONValues - a node's
+/// `samples = 100` has to reach the executor as 100, not "100".
+/// These tests drive the same write-through rule the panel applies
+/// on every keystroke (`WorkflowNumericInput.edit`).
+final class WorkflowNumericParameterTests: XCTestCase {
+    /// Apply one text-field edit the way the panel does.
+    private func apply(
+        _ text: String, integer: Bool,
+        to parameters: inout [String: JSONValue],
+        key: String = "samples"
+    ) {
+        switch WorkflowNumericInput.edit(text: text, integer: integer) {
+        case .clear:
+            parameters.removeValue(forKey: key)
+        case .store(let number):
+            parameters[key] = .number(number)
+        case .reject:
+            break
+        }
+    }
+
+    func testIntegerTextStoresNumberNotString() {
+        var parameters: [String: JSONValue] = [:]
+        apply("100", integer: true, to: &parameters)
+        XCTAssertEqual(parameters["samples"], .number(100))
+        if case .string = parameters["samples"] {
+            XCTFail("integer field stored a JSON string")
+        }
+    }
+
+    func testNumberTextKeepsDecimals() {
+        var parameters: [String: JSONValue] = [:]
+        apply("4.5", integer: false, to: &parameters)
+        XCTAssertEqual(parameters["samples"], .number(4.5))
+    }
+
+    func testIntegerTextRoundsToWhole() {
+        var parameters: [String: JSONValue] = [:]
+        apply("4.7", integer: true, to: &parameters)
+        XCTAssertEqual(parameters["samples"], .number(5))
+    }
+
+    func testMidTypingKeepsPreviousValue() {
+        var parameters: [String: JSONValue] = ["samples": .number(100)]
+        // "-" does not parse yet; the stored value must survive
+        // the in-progress edit.
+        apply("-", integer: true, to: &parameters)
+        XCTAssertEqual(parameters["samples"], .number(100))
+        // And the in-progress text is not clobbered by a re-sync.
+        XCTAssertNil(WorkflowNumericInput.syncedText(
+            current: "-", value: parameters["samples"], isEditing: true))
+    }
+
+    func testClearRemovesTheKey() {
+        var parameters: [String: JSONValue] = ["samples": .number(100)]
+        apply("", integer: true, to: &parameters)
+        XCTAssertNil(parameters["samples"])
+    }
+
+    func testDocumentWithNumericParameterLoadsAndDisplays() throws {
+        let json = """
+        {
+          "schema": "tessera.workflow.v1",
+          "name": "w",
+          "nodes": [
+            { "id": "calib", "type": "calibrate",
+              "parameters": { "n_tokens": 8000 } }
+          ],
+          "edges": []
+        }
+        """
+        let wf = try JSONDecoder().decode(Workflow.self, from: Data(json.utf8))
+        let stored = wf.nodes.first?.parameters["n_tokens"]
+        XCTAssertEqual(stored, .number(8000))
+        // The panel shows integral numbers without a trailing ".0".
+        XCTAssertEqual(WorkflowNumericInput.displayText(for: stored), "8000")
+    }
+
+    func testLegacyStringNumberStillDisplays() {
+        // Documents saved by the old string binding keep working:
+        // shown as-is, healed to .number on the next valid edit.
+        let legacy = JSONValue.string("100")
+        XCTAssertEqual(WorkflowNumericInput.displayText(for: legacy), "100")
+        var parameters: [String: JSONValue] = ["samples": legacy]
+        apply("200", integer: true, to: &parameters)
+        XCTAssertEqual(parameters["samples"], .number(200))
+    }
+
+    func testExternalChangeSyncsWhenNotEditing() {
+        XCTAssertEqual(
+            WorkflowNumericInput.syncedText(
+                current: "100", value: .number(250), isEditing: false),
+            "250")
+        // Nothing changed -> no rewrite.
+        XCTAssertNil(WorkflowNumericInput.syncedText(
+            current: "250", value: .number(250), isEditing: false))
+    }
+}
