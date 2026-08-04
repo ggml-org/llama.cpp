@@ -141,7 +141,7 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
     if (tensor_name.find("ffn_up") != std::string::npos) {
         return tensor_category::FFN_UP;
     }
-    if (tensor_name.find("ffn_gate") != std::string::npos) {
+    if (tensor_name.find("ffn_gate") != std::string::npos && tensor_name.find("ffn_gate_inp") == std::string::npos) {
         return tensor_category::FFN_GATE;
     }
     if (tensor_name.find("ffn_down") != std::string::npos) {
@@ -302,10 +302,6 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("_norm.weight") == std::string::npos;
 
     quantize &= params->quantize_output_tensor || name != "output.weight";
-
-    // do not quantize expert gating tensors
-    // NOTE: can't use LLM_TN here because the layer number is not known
-    quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
     // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
     quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
