@@ -1,5 +1,7 @@
 #include "ane-mtp.h"
 
+#include "ane-state-layout.h"
+
 #include "ggml.h"
 #include "gguf.h"
 #include "llama.h"
@@ -101,8 +103,14 @@ struct common_ane_mtp_arena_buffer {
 
 struct common_ane_compute_instance {
     MLModel * model = nil;
+    // Single MLState per function. The 5s re-warm timer used to
+    // require a separate keepalive_state so the live state wasn't
+    // mutated by periodic warm-up predictions. With the timer gone
+    // (the .mlmodelc stays loaded; IOSurface-backed state never
+    // goes cold) we only need the live execution_state. Future
+    // commits will drop this too once the dispatch path uses
+    // pinned-state slots + outputBackings instead of MLState.
     MLState * execution_state = nil;
-    MLState * keepalive_state = nil;
     std::string name;
     std::string role;
     uint32_t bucket = 0;
@@ -123,12 +131,29 @@ struct common_ane_prefill_request {
 
 struct common_ane_mtp_program {
     MLModel * model = nil;
+    // sync_model and reset_model are kept for this commit. The
+    // architecture call is to drop them (sync/reset become
+    // memcpy/memset on the E-core pump), but the dispatch path
+    // in this file still calls into these CPU-only MLModel
+    // functions. Replacing them is a follow-on commit that
+    // re-implements common_ane_mtp_program_sync_kv and
+    // common_ane_mtp_program_reset as direct memcpy/memset on
+    // a state_iosurface. The 5s re-warm timer (below) and
+    // per-instance keepalive_state (which only existed for the
+    // timer) are dropped now because they were pure
+    // performance-only machinery; the sync_model/reset_model
+    // stay until the memcpy/memset refactor lands.
     MLModel * sync_model = nil;
     MLModel * reset_model = nil;
     MLState * execution_state = nil;
-    MLState * keepalive_state = nil;
     dispatch_queue_t queue = nullptr;
-    dispatch_source_t keepalive = nullptr;
+    // keepalive (5s re-warm timer) is dropped. The .mlmodelc is
+    // loaded once and stays loaded; state is in IOSurface (not in
+    // an opaque MLState) and never "goes cold" in a way that
+    // requires re-warming. Removing the timer also removes the
+    // dispatch_source event handler and the per-instance
+    // keepalive_state that existed only to keep the live state
+    // untouched during re-warm.
     std::string cache_path;
     uint32_t batch_bucket = 1;
     uint32_t context_length = 0;
@@ -159,13 +184,18 @@ struct common_ane_mtp_program {
     uint32_t embedding_dim = 0;
     std::string gguf_path;
 
+    // Optional: the ane_state_layout.v1 manifest next to the
+    // materialized .mlmodelc. Read at load time if present; the
+    // dispatch path does not yet use it (a follow-on commit
+    // migrates the dispatch to pinned-state slots + outputBackings
+    // against this manifest). When the manifest is present, the
+    // multifunction refactor has the layout it needs; when absent,
+    // the legacy GGUF-metadata path keeps working.
+    ane_state_layout_v1_t manifest;
+    bool                   manifest_loaded = false;
+
     ~common_ane_mtp_program() {
-        if (keepalive) {
-            dispatch_source_cancel(keepalive);
-            keepalive = nullptr;
-        }
         execution_state = nil;
-        keepalive_state = nil;
         model = nil;
         sync_model = nil;
         reset_model = nil;
@@ -652,8 +682,11 @@ static bool warm_model(
 }
 
 static bool warm_program(common_ane_mtp_program & program, uint32_t batch_hint) {
+    // Use the live execution_state (no separate keepalive_state;
+    // the 5s re-warm timer is gone, so the warm path can use the
+    // live state directly).
     return warm_model(
-        program.model, program.keepalive_state, batch_hint, "MTP");
+        program.model, program.execution_state, batch_hint, "MTP");
 }
 
 static common_ane_mtp_program_ptr common_ane_program_load(
@@ -743,6 +776,16 @@ static common_ane_mtp_program_ptr common_ane_program_load(
 
         auto program = std::make_shared<common_ane_mtp_program>();
         program->model = model;
+        // sync_model and reset_model are kept for this commit.
+        // The architecture call is to drop them (sync/reset
+        // become memcpy/memset on the E-core pump) but the
+        // dispatch path in this file still calls them. The
+        // follow-on refactor will replace the public
+        // common_ane_mtp_program_sync_kv and
+        // common_ane_mtp_program_reset with direct memcpy/memset
+        // against a state_iosurface; once that lands, the
+        // CPU-only MLModel objects can be dropped along with the
+        // .mlmodelc's "sync" and "reset" functions.
         if (@available(macOS 15.0, *)) {
             MLModelConfiguration * sync_config = [[MLModelConfiguration alloc] init];
             // Stateful scatter/reset operations are latency-insensitive and
@@ -766,10 +809,50 @@ static common_ane_mtp_program_ptr common_ane_program_load(
                                                    configuration:reset_config
                                                            error:&reset_error];
         }
-        // Keep residency traffic isolated from the state used for real MTP
-        // predictions. A keepalive prediction is allowed to mutate its state.
+        // Keep the live execution_state for the dispatch path. The
+        // 5s re-warm timer and the keepalive_state it protected
+        // are gone; with IOSurface-backed state and the .mlmodelc
+        // loaded once at startup, neither the state nor the
+        // compiled model goes cold.
         program->execution_state = [model newState];
-        program->keepalive_state = [model newState];
+
+        // Optional: read the ane_state_layout.v1 manifest next to
+        // the .mlmodelc. The manifest is the source of truth for
+        // the multifunction state layout (slot kinds, offsets,
+        // function inputs/outputs, dependency graph). The
+        // dispatch path doesn't use it yet (still on the
+        // GGUF-metadata + arena + MLState path) but the load
+        // path now reserves the space and validates the manifest
+        // so the converter can start emitting it without the
+        // runtime being unprepared. When the manifest is
+        // present, the multifunction refactor has the layout it
+        // needs; when absent, the legacy GGUF-metadata path
+        // keeps working.
+        {
+            const std::string manifest_path_str =
+                ane_layout::manifest_path_for_mlmodelc_dir(
+                    bundle_path.c_str());
+            if (!manifest_path_str.empty()) {
+                std::string merror;
+                if (ane_layout::read_state_layout(manifest_path_str.c_str(),
+                                                  &program->manifest, &merror)) {
+                    program->manifest_loaded = true;
+                    LOG_INF("loaded ane_state_layout.v1 manifest for %s: "
+                            "%u slots, %u functions, %u deps\n",
+                            program->manifest.bundle_name,
+                            program->manifest.n_slots,
+                            program->manifest.n_functions,
+                            program->manifest.n_deps);
+                } else if (fs::exists(manifest_path_str)) {
+                    // Manifest exists but is malformed. The load
+                    // is still allowed (the legacy path covers it)
+                    // but we warn loudly so the converter knows.
+                    LOG_WRN("ignoring malformed ane_state_layout.v1 "
+                            "manifest at %s: %s\n",
+                            manifest_path_str.c_str(), merror.c_str());
+                }
+            }
+        }
         program->queue = dispatch_queue_create("org.ggml.llama.ane", DISPATCH_QUEUE_SERIAL);
         program->cache_path = bundle_path.string();
         program->batch_bucket = lane_bucket_override ? lane_bucket_override : selected_batch;
@@ -839,14 +922,18 @@ static common_ane_mtp_program_ptr common_ane_program_load(
                 }
                 auto instance = std::make_unique<common_ane_compute_instance>();
                 instance->model = function_model;
+                // Single execution_state (no keepalive_state). The
+                // 5s re-warm timer is gone; the live state is the
+                // only state. The dispatch path is unchanged in this
+                // commit; future commits will migrate to pinned-state
+                // slots + outputBackings.
                 instance->execution_state = [function_model newState];
-                instance->keepalive_state = [function_model newState];
                 instance->name = function_name;
                 instance->role = role;
                 instance->bucket = bucket;
                 instance->warm.store(warm_model(
                     instance->model,
-                    instance->keepalive_state,
+                    instance->execution_state,
                     program->batch_bucket,
                     function_name.c_str()));
                 if (!instance->warm.load()) {
@@ -858,27 +945,12 @@ static common_ane_mtp_program_ptr common_ane_program_load(
             }
         }
 
-        program->keepalive = dispatch_source_create(
-            DISPATCH_SOURCE_TYPE_TIMER, 0, 0, program->queue);
-        dispatch_source_set_timer(program->keepalive,
-            dispatch_time(DISPATCH_TIME_NOW, 5ull * NSEC_PER_SEC),
-            5ull * NSEC_PER_SEC,
-            250ull * NSEC_PER_MSEC);
-        std::weak_ptr<common_ane_mtp_program> weak = program;
-        dispatch_source_set_event_handler(program->keepalive, ^{
-            if (auto retained = weak.lock()) {
-                retained->warm.store(warm_program(*retained, retained->batch_bucket));
-                for (auto & entry : retained->functions) {
-                    auto & instance = *entry.second;
-                    instance.warm.store(warm_model(
-                        instance.model,
-                        instance.keepalive_state,
-                        retained->batch_bucket,
-                        instance.name.c_str()));
-                }
-            }
-        });
-        dispatch_resume(program->keepalive);
+        // No 5s re-warm timer. The .mlmodelc is loaded once and
+        // stays loaded; state is in IOSurface (not in an opaque
+        // MLState) and never "goes cold" in a way that requires
+        // re-warming. The dispatch path uses execution_state for
+        // now; future commits will replace it with pinned-state
+        // slots + outputBackings (zero-copy across ANE/Metal/CPU).
         LOG_INF("loaded and warmed embedded ANE program in namespace %s at %s (requested batch=%u, bucket=%u)\n",
                 root_prefix.c_str(),
                 program->cache_path.c_str(), batch_hint, selected_batch);
