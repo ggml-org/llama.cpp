@@ -8,6 +8,14 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+
+// Forward-declarations for backends that are not in the ggml core
+// library. The ANE backend is the ggml-ane translation unit, which
+// is linked into libggml when GGML_USE_ANE is defined. Declared after
+// the includes so the types are visible.
+#ifdef GGML_USE_ANE
+extern "C" GGML_BACKEND_API ggml_backend_reg_t ggml_backend_ane_reg(void);
+#endif
 #include <vector>
 #include <cctype>
 
@@ -158,6 +166,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_BLAS
         register_backend(ggml_backend_blas_reg());
+#endif
+#ifdef GGML_USE_ANE
+        register_backend(ggml_backend_ane_reg());
 #endif
 #ifdef GGML_USE_RPC
         register_backend(ggml_backend_rpc_reg());
@@ -571,6 +582,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
 #endif
 
     ggml_backend_load_best("blas", silent, dir_path);
+    ggml_backend_load_best("ane", silent, dir_path);
     ggml_backend_load_best("zendnn", silent, dir_path);
     ggml_backend_load_best("cann", silent, dir_path);
     ggml_backend_load_best("cuda", silent, dir_path);

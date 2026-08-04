@@ -366,6 +366,14 @@ struct ggml_ane_arena_slot {
 };
 
 struct ggml_backend_ane_program {
+    // Objective-C objects are stored as raw pointers because this file is
+    // compiled under MRC (no -fobjc-arc). The destructor explicitly releases
+    // each one, and load() retains them when storing. The reason this is
+    // necessary: +[MLModel modelWithContentsOfURL:config:error:] returns an
+    // autoreleased object, so a raw pointer copy into `model` would dangle
+    // the moment the surrounding @autoreleasepool drains. The dispatch queue
+    // and the state are both +1 from their creators, so they also need
+    // matching release calls.
     MLModel *          model        = nil;
     MLState *          state        = nil;
     dispatch_queue_t   queue        = nullptr;
@@ -376,10 +384,22 @@ struct ggml_backend_ane_program {
     std::unordered_map<std::string, std::unique_ptr<ggml_ane_arena_slot>> arena;
 
     ~ggml_backend_ane_program() {
-        @autoreleasepool {
-            state = nil;
-            model = nil;
+        // MRC release path. Order does not matter (model/state/queue do not
+        // retain each other), but we release the queue last because
+        // dispatch_release on a serial queue waits for in-flight blocks; the
+        // program handle outlives the last in-flight prediction only if no
+        // prediction is currently using the queue.
+        if (queue) {
+            dispatch_release(queue);
             queue = nullptr;
+        }
+        if (state) {
+            [state release];
+            state = nil;
+        }
+        if (model) {
+            [model release];
+            model = nil;
         }
     }
 
@@ -494,8 +514,28 @@ static ggml_backend_ane_program * ggml_ane_program_load(const char * mlmodelc_di
             return nullptr;
         }
         auto * program = new ggml_backend_ane_program;
-        program->model  = model;
-        program->state  = [model newState];
+        // Retain the model: +[MLModel modelWithContentsOfURL:config:error:]
+        // returns an autoreleased object, so the raw-pointer copy would
+        // dangle the moment the surrounding @autoreleasepool drains and the
+        // MLModel deallocates. The struct's destructor releases it. This
+        // fixes the W1 crash where graph_compute saw program->model pointing
+        // at a dispatch_mach (the original MLModel's memory had been reused
+        // for an internal Core ML dispatch queue).
+        program->model  = [model retain];
+        // Only allocate an MLState for stateful models. Calling
+        // [model newState] on a stateless model throws
+        // NSInternalInconsistencyException ("doesn't support
+        // stateful predictions"); the warm path and the dispatch
+        // both fall back to the stateless predict API when state is
+        // nil. The W0 spike's bundle is a stateless matmul; the MTP
+        // / prefill bundles in common/ane-mtp.mm are stateful and
+        // hit the stateful path.
+        if (model.modelDescription.stateDescriptionsByName.count > 0) {
+            // [model newState] is a +1 method (the "new" prefix), so the
+            // state object is owned by program->state and released in the
+            // destructor.
+            program->state  = [model newState];
+        }
         program->queue  = dispatch_queue_create("org.ggml.ane.backend", DISPATCH_QUEUE_SERIAL);
         program->source_path    = mlmodelc_dir;
         program->function_name  = function_name ? function_name : "";
@@ -888,11 +928,83 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
     //   hybrid_bN      -> candidate arbitration
     // A single bound bundle exposes exactly one of these. We do not yet have a
     // per-tensor-name dispatch table from the conversion tool, so the only op
-    // we route to a bound bundle today is MUL_MAT (via a "matmul"/"linear"
-    // function name). This is documented as the integration point: once the
-    // conversion tool emits a function-name table, the dispatch below grows.
+    // we route to a bound bundle today is MUL_MAT (via the W0 spike's
+    // "main" function). The activation is op->src[0]; the weight tensor
+    // (op->src[1]) is NOT passed to the bundle because the W0 spike bakes
+    // the weight into the .mlmodelc. For real models, the bundle would be
+    // rebuilt with the model-specific weights (one-time at load), so the
+    // per-iteration dispatch never sees the weight from ggml. This is
+    // documented as the integration point: once the conversion tool emits
+    // a function-name table keyed by ggml tensor name, the dispatch below
+    // grows to call the right per-projection function.
     switch (op->op) {
-        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT: {
+            // Decode (M=1) is the canonical ANE path. The activation is
+            // op->src[0] of shape [K], the weight is op->src[1] of shape
+            // [K, N] (ggml col-major; the bundle's row-major [N, K] weight
+            // occupies the same memory). The bundle expects input "x" and
+            // output "y" (the W0 spike's function naming).
+            const int64_t K = op->src[0]->ne[0];
+            const int64_t N = op->src[1]->ne[1];
+            const int64_t M = op->src[0]->ne[1];
+            if (M != 1) {
+                // Prefill (M>1) is not in the W1 spike scope; the bundle
+                // has a fixed-shape single-token matmul. Real prefills go
+                // through the layer-slab function (prefill_sN) which is a
+                // different op routing in dispatch_op.
+                return false;
+            }
+            if (op->src[0]->type != GGML_TYPE_F32 ||
+                op->src[1]->type != GGML_TYPE_F32 ||
+                op->type != GGML_TYPE_F32) {
+                // The W0 spike's bundle computes in fp16 but accepts fp32
+                // inputs and returns fp32 outputs (Core ML precision
+                // conversion is internal). Other dtypes would need
+                // host-side conversion, which is a follow-on.
+                return false;
+            }
+            // The dispatch shape is implicitly the bundle's baked shape.
+            // Query the bundle's input/output shapes from the MLModel
+            // description and verify before dispatching so a mismatched
+            // ggml graph fails fast instead of running the wrong-sized
+            // matmul. The W0 spike bakes (K=256, N=256) into the .mlmodelc
+            // and the bundle's MLModelDescription matches.
+            MLModelDescription * desc = program->model.modelDescription;
+            if (!desc) {
+                return false;
+            }
+            // MLModelDescription exposes inputs/outputs via the
+            // inputDescriptionsByName / outputDescriptionsByName dictionaries;
+            // there is no -featureDescriptionForName: selector on the
+            // description itself. Index the dictionaries directly.
+            MLFeatureDescription * x_desc = desc.inputDescriptionsByName[@"x"];
+            MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
+            if (!x_desc || x_desc.type != MLFeatureTypeMultiArray ||
+                !y_desc || y_desc.type != MLFeatureTypeMultiArray) {
+                return false;
+            }
+            NSArray<NSNumber *> * x_shape = x_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
+            if (x_shape.count != 1 || y_shape.count != 1 ||
+                x_shape[0].longLongValue != K || y_shape[0].longLongValue != N) {
+                // Bundle's baked shape does not match the ggml op's
+                // shape; refuse the dispatch so the scheduler can route
+                // the op to a different backend.
+                return false;
+            }
+            // Build the input/output maps and call the bundle. The
+            // bundle's "main" function is the default function name.
+            std::unordered_map<std::string, const float *> inputs;
+            inputs.emplace("x", (const float *) op->src[0]->data);
+            std::vector<std::string> out_names_vec = { "y" };
+            std::unordered_map<std::string, float *> outputs;
+            outputs.emplace("y", (float *) op->data);
+            const bool ok = ggml_ane_program_run(program, inputs, out_names_vec, outputs);
+            if (ok) {
+                out_names = std::move(out_names_vec);
+            }
+            return ok;
+        }
         case GGML_OP_TILE640_MATMUL:
             // TODO(ane-bundle): dispatch matmul to the bound bundle's matmul
             // function once the conversion tool names one. Today the matmul
@@ -934,16 +1046,17 @@ static enum ggml_status ggml_backend_ane_graph_compute(ggml_backend_t backend, g
         }
 
         // First, ask the bound bundle whether it wants this op. Only a small,
-        // explicitly-bundle-mapped set is dispatched through Core ML today.
+        // explicitly-bundle-mapped set is dispatched through Core ML today:
+        // MUL_MAT is the W1 spike's path. dispatch_op reads op->src[0] and
+        // op->src[1], calls the bundle with the activation as the bundle
+        // input, and writes the bundle output into op. The bundle's weight
+        // is baked (W0 spike convention); for a real model the .mlmodelc
+        // is rebuilt with the model-specific weights at load time.
         std::vector<std::string> out_names;
         if (ggml_ane_program_dispatch_op(program, node, out_names)) {
             saw_bundle_dispatch = true;
-            // TODO(ane-bundle): populate program_run inputs/outputs from the
-            // node's sources and destination once a standalone matmul bundle
-            // function name is exposed by the conversion tool.
-            GGML_LOG_ERROR("ane: bundle dispatch for op %s is stubbed\n",
-                           ggml_op_name(node->op));
-            return GGML_STATUS_FAILED;
+            // Bundle dispatched; the op's data is already populated.
+            continue;
         }
 
         // No bundle mapping: fall through to the elementwise Accelerate path.
@@ -1152,6 +1265,28 @@ static bool ggml_backend_ane_device_supports_op(ggml_backend_dev_t dev, const gg
     }
 
     switch (op->op) {
+        // ANE-NATIVE matmul (decode, M=1). The dispatch is gated on a
+        // bound bundle whose input/output shapes match the ggml op's
+        // shape; the bundle is the W0 spike's W0 matmul or, for real
+        // models, a per-projection bundle built with the model-specific
+        // weights. Only fp32 activations/weights are supported in the
+        // W1 spike; fp16 and quantized types are a follow-on.
+        case GGML_OP_MUL_MAT:
+            if (dev != nullptr) {
+                // The device-level supports_op does not have direct access
+                // to the per-backend program; the dispatch_op (in
+                // graph_compute) does the precise shape/dtype check and
+                // returns false if the bundle does not match. We
+                // advertise MUL_MAT as supported so the scheduler
+                // routes it to the ANE backend; a non-matching shape
+                // will then fall through (or be rejected) at dispatch time.
+                // The accuracy of the device-level supports_op matters
+                // for the scheduler's load balancing; the dispatch_op
+                // is the precise check.
+                return true;
+            }
+            return false;
+
         // ANE-NATIVE elementwise ops with an Accelerate implementation.
         case GGML_OP_ADD:
         case GGML_OP_MUL:

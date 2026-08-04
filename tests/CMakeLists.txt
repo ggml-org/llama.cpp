@@ -395,6 +395,12 @@ if (APPLE)
                               "-framework Metal"
                               "-framework IOSurface")
     endif()
+    # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
+    llama_build(test-ane-matmul-w1-dispatch.cpp)
+    if (TARGET test-ane-matmul-w1-dispatch)
+        target_link_libraries(test-ane-matmul-w1-dispatch PRIVATE
+                              ggml ggml-base)
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
