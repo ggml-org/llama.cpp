@@ -259,14 +259,21 @@ def compute_l5_outcome(
         plan = _read_l5_plan_safe(
             db, model_hash, L5_PLAN_COLS, model_role=model_role,
         )
+        # Phase 16: l4_plan_outcome does NOT carry a
+        # model_role column (the C++ side does not know
+        # about the role dimension; the role lives on the
+        # l5_plan_summary / l5_outcome side). The
+        # l4_plan_outcome SELECT is filtered by model_hash
+        # only; the join with l5_plan_summary on
+        # (model_hash, name, iteration, plan_id) preserves
+        # the role dimension (the role comes from the plan
+        # side after the join). A role-agnostic l4_plan_outcome
+        # read is correct because the per-tensor outcome
+        # doesn't carry a role tag.
         outcome_where_clauses: list[str] = []
         if model_hash:
             outcome_where_clauses.append(
                 f"model_hash = '{sql_escape(model_hash)}'"
-            )
-        if model_role is not None:
-            outcome_where_clauses.append(
-                f"model_role = '{sql_escape(model_role)}'"
             )
         outcome_where = (
             (" WHERE " + " AND ".join(outcome_where_clauses))

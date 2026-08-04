@@ -572,6 +572,274 @@ class TestL5Outcome(unittest.TestCase):
         # The combined sensitivity_score is still present.
         self.assertAlmostEqual(row["sensitivity_score"], 0.5, places=6)
 
+    # ---- Phase 16: model_role propagation ----
+
+    def _seed_plan_outcome_pair(
+        self,
+        path: str,
+        *,
+        model_hash: str,
+        name: str,
+        plan_id: str,
+        family: str,
+        model_role: str = "trunk",
+        sens: float = 0.5,
+        im: float | None = 0.5,
+        grad: float | None = 0.5,
+        layer: float | None = 0.5,
+        mse_before: float = 0.01,
+        mse_after: float = 0.011,
+    ) -> None:
+        """Insert one (plan, outcome) pair across the
+        l5_plan_summary / l4_plan_outcome tables. Used by
+        the model_role tests below."""
+        with TesseraDB.open(path) as db:
+            db.insert_l5_plan(
+                model_hash=model_hash,
+                rows=[{
+                    "name": name, "layer": 0, "iteration": 0,
+                    "plan_id": plan_id, "model_role": model_role,
+                    "sensitivity_score": sens,
+                    "recommended_qtype": "Q4_K",
+                    "recommended_alpha": 0.5,
+                    "recommended_clip": 1.0,
+                    "imatrix_magnitude": im,
+                    "gradient_proxy": grad,
+                    "layer_position_prior": layer,
+                }],
+                model_role=model_role,
+            )
+            db.insert_l4_plan_outcome(
+                model_hash=model_hash,
+                rows=[{
+                    "name": name, "layer": 0, "iteration": 0,
+                    "plan_id": plan_id, "strategy": "noop",
+                    "mse_before": mse_before, "mse_after": mse_after,
+                    "frob_before": 0.0, "frob_after": 0.0,
+                    "family": family,
+                }],
+            )
+
+    def test_outcome_surfaces_model_role(self) -> None:
+        """The l5_outcome projection surfaces model_role."""
+        idx = len(self.paths) + 1
+        path = self._fresh(idx)
+        self.paths.append(path)
+        _create_fresh_db(path)
+        self._seed_plan_outcome_pair(
+            path, model_hash="m1", name="blk.0.attn_q.weight",
+            plan_id="p0", family="attn_q", model_role="trunk",
+        )
+        verdict = l5o.compute_l5_outcome(
+            path, model_hash="m1", write_back=False,
+        )
+        self.assertEqual(verdict.height, 1)
+        self.assertIn("model_role", verdict.columns)
+        self.assertEqual(verdict["model_role"][0], "trunk")
+
+    def test_outcome_role_filter(self) -> None:
+        """``compute_l5_outcome(model_role=...)`` filters the
+        SELECT to the given role; the l5_outcome rows
+        carry the role."""
+        idx = len(self.paths) + 1
+        path = self._fresh(idx)
+        self.paths.append(path)
+        _create_fresh_db(path)
+        # Two roles, two plans.
+        for role in ("trunk", "dflash"):
+            self._seed_plan_outcome_pair(
+                path, model_hash="m1",
+                name=f"blk.0.attn_q.{role}.weight",
+                plan_id=f"p{role}", family="attn_q",
+                model_role=role,
+            )
+        # Filter on trunk only.
+        verdict = l5o.compute_l5_outcome(
+            path, model_hash="m1", model_role="trunk",
+            write_back=False,
+        )
+        self.assertEqual(verdict.height, 1)
+        self.assertEqual(verdict["model_role"][0], "trunk")
+        # Filter on dflash only.
+        verdict = l5o.compute_l5_outcome(
+            path, model_hash="m1", model_role="dflash",
+            write_back=False,
+        )
+        self.assertEqual(verdict.height, 1)
+        self.assertEqual(verdict["model_role"][0], "dflash")
+        # No role filter: both rows.
+        verdict_all = l5o.compute_l5_outcome(
+            path, model_hash="m1", write_back=False,
+        )
+        self.assertEqual(verdict_all.height, 2)
+
+    def test_outcome_role_filter_requires_model_hash(self) -> None:
+        """A bare model_role filter (no model_hash) is
+        rejected: it would silently mix roles across models.
+        """
+        idx = len(self.paths) + 1
+        path = self._fresh(idx)
+        self.paths.append(path)
+        _create_fresh_db(path)
+        with self.assertRaises(ValueError):
+            l5o.compute_l5_outcome(
+                path, model_role="dflash", write_back=False,
+            )
+
+    def test_outcome_write_back_role_aware_delete(self) -> None:
+        """``replace_l5_outcome``'s DELETE key is
+        ``(model_hash, model_role)``: writing one role's
+        outcome rows does not clobber other roles' rows
+        for the same model.
+        """
+        idx = len(self.paths) + 1
+        path = self._fresh(idx)
+        self.paths.append(path)
+        _create_fresh_db(path)
+        for role in ("trunk", "dflash"):
+            self._seed_plan_outcome_pair(
+                path, model_hash="m1",
+                name=f"blk.0.attn_q.{role}.weight",
+                plan_id=f"p{role}", family="attn_q",
+                model_role=role,
+            )
+        # First, write all roles for the model.
+        l5o.compute_l5_outcome(
+            path, model_hash="m1", write_back=True,
+        )
+        # Now the trunk's row is in l5_outcome with
+        # model_role='trunk'; the dflash's row is in
+        # l5_outcome with model_role='dflash'.
+        import duckdb as _dd
+        con = _dd.connect(path, read_only=True)
+        try:
+            n = con.execute(
+                "SELECT COUNT(*) FROM l5_outcome WHERE model_hash = 'm1'"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        self.assertEqual(n, 2)
+        # Re-run the trunk-only retune. The trunk's row is
+        # replaced (1 row), the dflash's row is preserved
+        # (1 row). Total stays at 2.
+        l5o.compute_l5_outcome(
+            path, model_hash="m1", model_role="trunk",
+            write_back=True,
+        )
+        con = _dd.connect(path, read_only=True)
+        try:
+            rows = con.execute(
+                "SELECT model_role, COUNT(*) FROM l5_outcome "
+                "WHERE model_hash = 'm1' GROUP BY model_role "
+                "ORDER BY model_role"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(
+            rows, [("dflash", 1), ("trunk", 1)],
+        )
+
+    def test_outcome_backfills_role_for_pre_phase16_db(self) -> None:
+        """A pre-Phase-16 DB (no model_role column on
+        l5_plan_summary) still produces l5_outcome rows
+        with model_role='trunk' (the backfill)."""
+        # Use a unique path that is NOT created via
+        # _create_fresh_db (which builds the post-Phase-16
+        # schema). The DB file is built from a literal
+        # pre-Phase-16 SCHEMA_SQL.
+        idx = len(self.paths) + 100
+        path = _fresh_path(idx)
+        self.paths.append(path)
+        PRE_PHASE16_SCHEMA = """
+            CREATE TABLE IF NOT EXISTS l5_plan_summary (
+                model_hash            TEXT NOT NULL,
+                name                  TEXT NOT NULL,
+                layer                 INTEGER,
+                iteration             INTEGER NOT NULL,
+                plan_id               TEXT NOT NULL,
+                sensitivity_score     DOUBLE,
+                recommended_qtype     TEXT,
+                recommended_alpha     DOUBLE,
+                recommended_clip      DOUBLE,
+                imatrix_magnitude     DOUBLE,
+                gradient_proxy        DOUBLE,
+                layer_position_prior  DOUBLE,
+                updated_at            TIMESTAMP,
+                PRIMARY KEY (model_hash, name, iteration, plan_id)
+            );
+            CREATE TABLE IF NOT EXISTS l4_plan_outcome (
+                model_hash           TEXT NOT NULL,
+                name                 TEXT NOT NULL,
+                layer                INTEGER,
+                iteration            INTEGER NOT NULL,
+                plan_id              TEXT NOT NULL,
+                strategy             TEXT,
+                alpha_before         DOUBLE,
+                alpha_after          DOUBLE,
+                clip_before          DOUBLE,
+                clip_after           DOUBLE,
+                outlier_thresh_before DOUBLE,
+                outlier_thresh_after  DOUBLE,
+                mse_before           DOUBLE,
+                mse_after            DOUBLE,
+                frob_before          DOUBLE,
+                frob_after           DOUBLE,
+                family               TEXT,
+                updated_at           TIMESTAMP,
+                PRIMARY KEY (model_hash, name, iteration, plan_id)
+            );
+            CREATE TABLE IF NOT EXISTS l5_outcome (
+                model_hash            TEXT NOT NULL,
+                name                  TEXT NOT NULL,
+                layer                 INTEGER,
+                iteration             INTEGER NOT NULL,
+                plan_id               TEXT NOT NULL,
+                family                TEXT,
+                sensitivity_score     DOUBLE,
+                imatrix_magnitude     DOUBLE,
+                gradient_proxy        DOUBLE,
+                layer_position_prior  DOUBLE,
+                recommended_alpha     DOUBLE,
+                recommended_clip      DOUBLE,
+                mse_before            DOUBLE,
+                mse_after             DOUBLE,
+                delta_mse             DOUBLE,
+                delta_frob            DOUBLE,
+                plan_accepted         BOOLEAN,
+                accept_threshold      DOUBLE,
+                residual              DOUBLE,
+                updated_at            TIMESTAMP,
+                PRIMARY KEY (model_hash, name, iteration, plan_id)
+            );
+        """
+        import duckdb as _dd
+        con = _dd.connect(path)
+        try:
+            for stmt in PRE_PHASE16_SCHEMA.strip().split(";"):
+                s = stmt.strip()
+                if s:
+                    con.execute(s)
+            con.execute(
+                "INSERT INTO l5_plan_summary VALUES ("
+                "  'm1', 'blk.0.attn_q.weight', 0, 0, 'p0', 0.5, "
+                "  'Q4_K', 0.5, 1.0, 0.5, 0.5, 0.5, NULL)"
+            )
+            con.execute(
+                "INSERT INTO l4_plan_outcome VALUES ("
+                "  'm1', 'blk.0.attn_q.weight', 0, 0, 'p0', "
+                "  'noop', 0.5, 0.5, 1.0, 1.0, 0.0, 0.0, "
+                "  0.01, 0.011, 0.0, 0.0, 'attn_q', NULL)"
+            )
+        finally:
+            con.close()
+        verdict = l5o.compute_l5_outcome(
+            path, model_hash="m1", write_back=False,
+        )
+        self.assertEqual(verdict.height, 1)
+        # The backfill substitutes 'trunk' for the role.
+        self.assertIn("model_role", verdict.columns)
+        self.assertEqual(verdict["model_role"][0], "trunk")
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestL5Outcome)
