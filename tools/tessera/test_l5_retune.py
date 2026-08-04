@@ -65,6 +65,7 @@ from l5_retune import (
     _project_simplex,
     _retune_family,
     _compute_top_fraction,
+    _compute_coupling_score,
     _confidence_weight,
 )
 from tessera_db import TesseraDB
@@ -110,6 +111,7 @@ SCHEMA_SQL = """
         in_sample_loss        DOUBLE,
         hit_rate              DOUBLE,
         top_fraction          DOUBLE,
+        coupling_score        DOUBLE,
         retune_source         TEXT,
         updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, model_role, family)
@@ -139,6 +141,27 @@ def _count(path: str, table: str) -> int:
     con = duckdb.connect(path, read_only=True)
     try:
         return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    finally:
+        con.close()
+
+
+def _read_l5_outcome_df(
+    path: str, model_hash: str,
+) -> pl.DataFrame:
+    """Read the l5_outcome rows for a model as a polars
+    DataFrame. Used by the F3.1 coupling-score tests to
+    drive ``_compute_coupling_score`` with a DataFrame
+    matching what ``compute_l5_weights`` produces (after
+    the column-existence backfill).
+    """
+    import duckdb
+    con = duckdb.connect(path, read_only=True)
+    try:
+        return con.execute(
+            "SELECT model_hash, model_role, family, layer, "
+            "plan_accepted FROM l5_outcome "
+            f"WHERE model_hash = '{model_hash}'"
+        ).pl()
     finally:
         con.close()
 
@@ -1712,6 +1735,227 @@ class TestL5Retune(unittest.TestCase):
         # No role filter: both rows.
         df_all = read_l5_weights(self.db_path, model_hash="x")
         self.assertEqual(df_all.height, 2)
+
+    # ---- 15. Retune follow-ups: F3.1 cross-component coupling ----
+
+    def test_compute_coupling_score_perfect_positive(self) -> None:
+        """When the trunk's per-layer hit_rate and the
+        dflash's per-layer hit_rate are perfectly positively
+        correlated, the score is +1.0. A high score means a
+        single retune covers both roles.
+        """
+        rows: list[dict] = []
+        # 4 layers; trunk and dflash hit_rate move
+        # together perfectly: (1, 1, 0, 0) for both roles.
+        for layer, hit in enumerate([1.0, 1.0, 0.0, 0.0]):
+            for role, prefix in (("trunk", "t"), ("dflash", "d")):
+                for j in range(2):
+                    rows.append({
+                        "name": f"{prefix}.L{layer}.{j}",
+                        "layer": layer,
+                        "iteration": 0,
+                        "plan_id": f"{prefix}p{layer}{j}",
+                        "family": "attn_q",
+                        "model_role": role,
+                        "sensitivity_score": 0.5,
+                        "delta_mse": 0.0,
+                        "plan_accepted": hit >= 0.5,
+                    })
+        _seed_l5_outcome(self.db_path, "c1", rows)
+        df = _read_l5_outcome_df(self.db_path, model_hash="c1")
+        score = _compute_coupling_score(
+            df, model_hash="c1", family="attn_q",
+        )
+        self.assertIsNotNone(score)
+        self.assertAlmostEqual(score, 1.0, places=6)
+
+    def test_compute_coupling_score_perfect_negative(self) -> None:
+        """When the trunk's per-layer hit_rate and the
+        dflash's per-layer hit_rate are perfectly anti-
+        correlated, the score is -1.0. A negative score
+        means the two roles' miscalibration is
+        independent (or opposite).
+        """
+        rows: list[dict] = []
+        trunk_hits = [1.0, 1.0, 0.0, 0.0]
+        dflash_hits = [0.0, 0.0, 1.0, 1.0]
+        for layer in range(4):
+            for role, hits, prefix in (
+                ("trunk", trunk_hits, "t"),
+                ("dflash", dflash_hits, "d"),
+            ):
+                for j in range(2):
+                    hit = hits[layer]
+                    rows.append({
+                        "name": f"{prefix}.L{layer}.{j}",
+                        "layer": layer,
+                        "iteration": 0,
+                        "plan_id": f"{prefix}p{layer}{j}",
+                        "family": "attn_q",
+                        "model_role": role,
+                        "sensitivity_score": 0.5,
+                        "delta_mse": 0.0,
+                        "plan_accepted": hit >= 0.5,
+                    })
+        _seed_l5_outcome(self.db_path, "c2", rows)
+        df = _read_l5_outcome_df(self.db_path, model_hash="c2")
+        score = _compute_coupling_score(
+            df, model_hash="c2", family="attn_q",
+        )
+        self.assertIsNotNone(score)
+        self.assertAlmostEqual(score, -1.0, places=6)
+
+    def test_compute_coupling_score_single_role_returns_none(self) -> None:
+        """A family with rows for only one of the two roles
+        (e.g. trunk only) has no correlation -> None."""
+        rows: list[dict] = []
+        for layer, hit in enumerate([1.0, 0.0, 1.0, 0.0]):
+            for j in range(3):
+                rows.append({
+                    "name": f"blk.{layer}.attn_q.{j}",
+                    "layer": layer,
+                    "iteration": 0, "plan_id": f"p{layer}{j}",
+                    "family": "attn_q",
+                    "model_role": "trunk",
+                    "sensitivity_score": 0.5,
+                    "delta_mse": 0.0,
+                    "plan_accepted": hit >= 0.5,
+                })
+        _seed_l5_outcome(self.db_path, "c3", rows)
+        df = _read_l5_outcome_df(self.db_path, model_hash="c3")
+        score = _compute_coupling_score(
+            df, model_hash="c3", family="attn_q",
+        )
+        self.assertIsNone(score)
+
+    def test_compute_coupling_score_zero_variance_returns_none(self) -> None:
+        """When both roles' per-layer hit rates are constant
+        (zero variance), the correlation is mathematically
+        undefined -> None."""
+        rows: list[dict] = []
+        for layer in range(3):
+            for role, prefix in (("trunk", "t"), ("dflash", "d")):
+                for j in range(2):
+                    rows.append({
+                        "name": f"{prefix}.L{layer}.{j}",
+                        "layer": layer,
+                        "iteration": 0,
+                        "plan_id": f"{prefix}p{layer}{j}",
+                        "family": "attn_q",
+                        "model_role": role,
+                        "sensitivity_score": 0.5,
+                        "delta_mse": 0.0,
+                        "plan_accepted": True,
+                    })
+        _seed_l5_outcome(self.db_path, "c4", rows)
+        df = _read_l5_outcome_df(self.db_path, model_hash="c4")
+        score = _compute_coupling_score(
+            df, model_hash="c4", family="attn_q",
+        )
+        self.assertIsNone(score)
+
+    def test_compute_l5_weights_writes_coupling_score(self) -> None:
+        """A retune on a DB with rows for both trunk and
+        dflash writes the coupling_score column on every
+        (model, model_role, family) row, with the same
+        score shared by both roles."""
+        rows: list[dict] = []
+        # Trunk: 4 layers, hit_rate moves from 1.0 to 0.0
+        # monotonically.
+        for layer, hits in enumerate([
+            [True, True, True, True],
+            [True, True, True, False],
+            [True, True, False, False],
+            [True, False, False, False],
+        ]):
+            for j, h in enumerate(hits):
+                rows.append({
+                    "name": f"blk.{layer}.attn_q.t.{j}",
+                    "layer": layer,
+                    "iteration": 0, "plan_id": f"tp{layer}{j}",
+                    "family": "attn_q",
+                    "model_role": "trunk",
+                    "sensitivity_score": 0.5,
+                    "delta_mse": 0.0,
+                    "plan_accepted": h,
+                })
+        # Dflash: identical per-layer hit_rate pattern
+        # (perfectly correlated with trunk).
+        for layer, hits in enumerate([
+            [True, True, True, True],
+            [True, True, True, False],
+            [True, True, False, False],
+            [True, False, False, False],
+        ]):
+            for j, h in enumerate(hits):
+                rows.append({
+                    "name": f"blk.{layer}.attn_q.d.{j}",
+                    "layer": layer,
+                    "iteration": 0, "plan_id": f"dp{layer}{j}",
+                    "family": "attn_q",
+                    "model_role": "dflash",
+                    "sensitivity_score": 0.5,
+                    "delta_mse": 0.0,
+                    "plan_accepted": h,
+                })
+        _seed_l5_outcome(self.db_path, "c5", rows)
+
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="c5", write_back=True,
+        )
+        # Two verdicts: trunk/attn_q and dflash/attn_q.
+        self.assertEqual(len(verdicts), 2)
+        # Both carry the same coupling_score (the score
+        # is per (model, family), not per (model, role,
+        # family)).
+        scores = [v.coupling_score for v in verdicts]
+        self.assertEqual(scores[0], scores[1])
+        # The pattern is perfectly correlated.
+        self.assertIsNotNone(scores[0])
+        self.assertAlmostEqual(scores[0], 1.0, places=6)
+        # The l5_weights column is populated.
+        df = read_l5_weights(self.db_path, model_hash="c5")
+        self.assertEqual(df.height, 2)
+        self.assertIn("coupling_score", df.columns)
+        coupling_col = df["coupling_score"].to_list()
+        self.assertTrue(all(c is not None for c in coupling_col))
+        # Both rows have the same score.
+        self.assertAlmostEqual(
+            coupling_col[0], coupling_col[1], places=9,
+        )
+
+    def test_compute_l5_weights_single_role_coupling_is_null(self) -> None:
+        """A retune on a single-role DB (trunk only)
+        produces a None coupling_score (the helper returns
+        None when only one role is present)."""
+        rows: list[dict] = []
+        for layer, hits in enumerate([
+            [True, True, True, True],
+            [True, True, True, False],
+            [True, True, False, False],
+        ]):
+            for j, h in enumerate(hits):
+                rows.append({
+                    "name": f"blk.{layer}.attn_q.{j}",
+                    "layer": layer,
+                    "iteration": 0, "plan_id": f"p{layer}{j}",
+                    "family": "attn_q",
+                    "model_role": "trunk",
+                    "sensitivity_score": 0.5,
+                    "delta_mse": 0.0,
+                    "plan_accepted": h,
+                })
+        _seed_l5_outcome(self.db_path, "c6", rows)
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="c6", write_back=True,
+        )
+        # One verdict: trunk/attn_q. coupling_score is None.
+        self.assertEqual(len(verdicts), 1)
+        self.assertIsNone(verdicts[0].coupling_score)
+        # The l5_weights column is NULL.
+        df = read_l5_weights(self.db_path, model_hash="c6")
+        self.assertEqual(df.height, 1)
+        self.assertIsNone(df["coupling_score"][0])
 
     def test_read_per_family_top_fraction_role_filter(self) -> None:
         """The per-family top_fraction consumer is role-aware:
