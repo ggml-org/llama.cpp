@@ -134,20 +134,24 @@ static __global__ void unary_op_kernel_strided(const T * x,T * dst,
                                                const int64_t sx0, const int64_t sx1, const int64_t sx2, const int64_t sx3,
                                                const int64_t sd0, const int64_t sd1, const int64_t sd2, const int64_t sd3
 ) {
-    const int64_t i = blockDim.x * blockIdx.x + threadIdx.x;
-    if (i >= ne_total) return;
+    ggml_cuda_pdl_lc();
+    const int64_t i = (int64_t) blockDim.x * blockIdx.x + threadIdx.x;
+     if (i >= ne_total) {
+         return;
+     }
 
-    int64_t i3 = i / (ne0 * ne1 * ne2);
-    int64_t rem = i - i3 * (ne0 * ne1 * ne2);
-    int64_t i2 = rem / (ne0 * ne1);
-    rem -= i2 * (ne0 * ne1);
-    int64_t i1 = rem / ne0;
-    int64_t i0 = rem - i1 * ne0;
-
-    int64_t src_off = i0 * sx0 + i1 * sx1 + i2 * sx2 + i3 * sx3;
-    int64_t dst_off = i0 * sd0 + i1 * sd1 + i2 * sd2 + i3 * sd3;
-
-    dst[dst_off] = (T)op((float)x[src_off]);
+     const int64_t ne01  = ne0 * ne1;
+     const int64_t ne012 = ne01 * ne2;
+     const int64_t i3 = i / ne012;
+     int64_t rem = i - i3 * ne012;
+     const int64_t i2 = rem / ne01;
+     rem -= i2 * ne01;
+     const int64_t i1 = rem / ne0;
+     const int64_t i0 = rem - i1 * ne0;
+     const int64_t src_off = i0 * sx0 + i1 * sx1 + i2 * sx2 + i3 * sx3;
+     const int64_t dst_off = i0 * sd0 + i1 * sd1 + i2 * sd2 + i3 * sd3;
+     ggml_cuda_pdl_sync();
+     dst[dst_off] = (T) op((float) x[src_off]);
 }
 
 template <float (*op)(float), typename T>
