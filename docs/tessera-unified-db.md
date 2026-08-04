@@ -41,6 +41,14 @@ USING (model_hash, name)` instead of three hand-written parsers.
 | **`l5_outcome`** | 1 per (tensor, model_role, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score. Phase 14: also carries the per-tensor components `imatrix_magnitude`, `gradient_proxy`, `layer_position_prior` (all nullable) so a future retune can fit a 3-coefficient model. |
 | **`l5_weights`** | 1 per (model, model_role, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, model_role, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, role, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db`, closing the loop. Phase 14: also carries `requant_budget_bits` (nullable) — the dispatch-side budget the retune recommends for the next requant pass. |
 | **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. Not part of the Phase 16 migration. |
+| **`tensor_stats`** | 1 per tensor per model | C++ (GA-prep) + Python (cal) | **The cross-pipeline feature table.** PRIMARY KEY (model_hash, name) + ON CONFLICT DO UPDATE = upsert target. C++ writes kurtosis / eff_rank / dtype; Python writes rms / mean_abs / tail_ratio / `recommended_action`. `source` records which pipeline last wrote the row. `recommended_action` is the per-tensor verdict the calibration pipeline derives from `l5_weights` via the `l5_action` rules (one of `protect` / `requant_up` / `requant_down` / `monitor` / `noop`); the C++ side just carries the column through the upsert with no logic. |
+| **`l3_outlier_summary`** | 1 per tensor per sidecar label | Python (analytics) | L3 outlier rate per tensor. model_hash + name joins to tensor_stats. |
+| **`l4_probe_summary`** | 1 per tensor | Python (analytics) | L4 E2E probe (mse, perplexity, top1_mismatch). |
+| **`l4_plan_outcome`** | 1 per (tensor, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
+| **`l5_plan_summary`** | 1 per (tensor, iteration, plan_id) | Python (l5_orchestrator) | L5 requant plan (sensitivity_score, recommended_alpha, recommended_clip). |
+| **`l5_outcome`** | 1 per (tensor, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score (a running measure of how well the orchestrator's sensitivity scoring predicts the actual error delta). Phase 14: also carries the per-tensor components `imatrix_magnitude`, `gradient_proxy`, `layer_position_prior` (all nullable) so a future retune can fit a 3-coefficient model. |
+| **`l5_weights`** | 1 per (model, model_role, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, model_role, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, model_role, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db --model-role R`, closing the loop. Phase 16: the `model_role` dimension lets the same family in different architectural roles (trunk / dflash / dspark / mtp_nextn / shared_embd) get independent retune verdicts. Phase 15: also carries `top_fraction` (nullable) — the per-family requant aggressiveness recommendation. Phase 14: also carries `requant_budget_bits` (nullable) — the dispatch-side budget the retune recommends for the next requant pass. |
+| **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. |
 
 The 7 bolded tables are the additions on top of the existing
 6-table schema; see the scout §0 / §6 for the original inventory.
@@ -126,11 +134,14 @@ result onto the (w_imatrix, w_gradient, w_layer) simplex:
 
 The shifted weights are projected to the simplex
 (non-negative, sum=1) and written to `l5_weights` with
-PRIMARY KEY `(model_hash, family)`. The orchestrator's next
-generation reads the table back via `--retune-from-db` and
-uses the n_samples-weighted average across families as the
-starting `(w_imatrix, w_gradient, w_layer)` tuple. This is
-the closed-loop optimization the feedback loop was designed
+PRIMARY KEY `(model_hash, model_role, family)` (Phase 16;
+the legacy 2-tuple `(model_hash, family)` PK is supported
+via the `_l5_weights_pk_shape` fallback). The
+orchestrator's next generation reads the table back via
+`--retune-from-db --model-role R` and uses the
+n_samples-weighted average across families as the starting
+`(w_imatrix, w_gradient, w_layer)` tuple. This is the
+closed-loop optimization the feedback loop was designed
 for.
 
 ## The write buffer pattern
@@ -646,3 +657,118 @@ about adding the next leg.
   diagnostics surface would change (one number per
   component per family instead of one number per
   family).
+
+## Phase 16: retune role propagation (this branch)
+
+The unified multi-component architecture (gemma4_12B +
+dflash encoder + dspark drafter + MTP-NextN head +
+shared embedding / output projection) puts the same
+tensor family in different architectural roles: the
+trunk's `attn_q` and the dflash encoder's `attn_q` are
+the same family in the l5_outcome row's `family`
+column, but they calibrate independently (the dflash
+encoder consumes trunk hidden states; its residual
+surface is very different from the trunk's). The Phase
+15 retune's `(model_hash, family)` PK would conflate
+them; the per-(model, family) OLS would see the union
+of the trunk's and the dflash encoder's rows and
+produce a single (w_imatrix, w_gradient, w_layer)
+verdict that miscalibrates both.
+
+Phase 16 introduces a `model_role` dimension on the
+retune. The `l5_weights` PK is now `(model_hash,
+model_role, family)`. The same family in different
+roles gets independent (w_imatrix, w_gradient, w_layer)
+recommendations. The orchestrator's
+`--retune-from-db --model-role dflash` looks up the
+dflash-specific row; the cross-model fallback is also
+role-aware; the legacy `(model_hash, family)` lookup is
+preserved as a fallback for new roles without their own
+retune rows.
+
+**Schema additions (additive via `ALTER TABLE ... ADD
+COLUMN IF NOT EXISTS` so legacy DBs work; the
+`evolve/unified-schema` worker owns the
+`tessera-quantize-db.cpp` CREATE TABLE migration that
+moves the l5_weights PK from 2-tuple to 3-tuple):
+
+* `l5_plan_summary` gains `model_role TEXT DEFAULT
+  'trunk'`. The orchestrator's `write_history`
+  (NDJSON) populates the column from
+  `RequantAction.model_role`.
+* `l5_outcome` gains `model_role TEXT DEFAULT 'trunk'`.
+  Populated by `l5_outcome.py` at read time via the
+  l5_plan_summary join.
+* `l5_weights` gains `model_role TEXT DEFAULT 'trunk'`.
+  The `l5_weights` PK is now `(model_hash, model_role,
+  family)` so the trunk's `attn_q` and the dflash
+  encoder's `attn_q` get independent retune verdicts.
+
+**New retune features:**
+
+* **Per-(model, model_role, family) partition**. The
+  retune's `partition_by` is now `["model_hash",
+  "model_role", "family"]`. The 3-coefficient OLS is
+  fit per (model, model_role, family); the verdict's
+  FamilyWeights carries the role. The retune's
+  write-back DELETE keys on `(model_hash, model_role)`
+  so other roles' l5_weights rows are preserved.
+* **Cross-model, per-role aggregate**. The
+  `--retune-cross-model` write path is now
+  per-(model_role, family), not per-family. The
+  cross-model row's `model_role` is the same string as
+  the per-model rows it aggregates.
+* **Role-aware orchestrator lookup**. The orchestrator's
+  `--retune-from-db --model-role R` looks up
+  per-(model_hash, R, family) rows; the
+  `--retune-cross-model-fallback` falls back to
+  per-(R, family) cross-model rows; the legacy
+  per-(model_hash, *, family) trunk row is the final
+  fallback for new roles. The 3-tier lookup is
+  implemented in `l5_orchestrator.py:main`.
+* **Role-aware top_fraction consumer**. The
+  `RequantPlanner`'s per-family top_fraction map is
+  loaded via `read_per_family_top_fraction(model_role=R)`;
+  the dflash encoder's attn_q top_fraction is
+  independent of the trunk's.
+* **Role plumbed through SensitivityScorer /
+  RequantPlanner / RequantAction**. The
+  `SensitivityScorer` and `RequantPlanner` each carry a
+  `model_role`; every per-tensor `RequantAction` tags
+  the row with the role so the l5_plan_summary writer
+  can put the role on the l5_outcome side. The
+  `l5_metrics.combine` and `l5_metrics.decompose`
+  helpers accept the role as an optional pass-through
+  parameter (the math is unchanged).
+
+**Backward compatibility:**
+
+* Pre-Phase-16 l5_outcome rows (no `model_role` column)
+  are backfilled with a uniform `'trunk'` string in
+  the verdict projection; the partition still produces
+  a single group per (model, family) tagged with
+  `model_role='trunk'`.
+* Pre-Phase-16 l5_weights (2-tuple PK `(model_hash,
+  family)`) is detected via the
+  `_l5_weights_pk_shape` helper; the upsert falls back
+  to a 2-tuple `ON CONFLICT` target. The role is still
+  written to the row (the column was added by
+  `_ensure_l5_weights_columns`); the legacy PK is
+  upgraded to the 3-tuple by the schema worker's
+  migration.
+* The default `model_role` is `'trunk'`. The
+  pre-Phase-16 callers that did not pass a role get
+  the legacy `(model_hash, family)` retune verdict,
+  tagged with `model_role='trunk'`.
+
+**Algorithm tags written to `l5_weights.retune_source`**
+(unchanged from Phase 15):
+* `ols_3coef_v1`: the 3-coefficient OLS path (the
+  production path when components are present).
+* `ols_slope_v1`: the 2-coefficient OLS fallback (the
+  Phase 12 path; preserved for backward-compat).
+* `ols_3coef_crossmodel_v1`: the cross-model
+  aggregate row (now per-(model_role, family)).
+
+42 retune tests + 12 outcome tests + 19 db tests + 7
+dataframe tests = 80 tests pass.

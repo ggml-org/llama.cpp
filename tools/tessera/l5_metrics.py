@@ -151,11 +151,20 @@ def layer_position_prior(
 def combine(
     components: tuple[ComponentScores, ComponentScores, ComponentScores],
     weights: tuple[float, float, float] = DEFAULT_WEIGHTS,
+    model_role: str | None = None,
 ) -> ComponentScores:
     """Combine the three components into a single sensitivity score.
 
     The union of names from the three components forms the output key set.
     Missing components contribute zero.
+
+    Phase 16: ``model_role`` is an optional pass-through parameter
+    (the orchestrator's ``SensitivityScorer`` carries the role
+    through the call chain; this helper accepts it for API
+    symmetry but the role does not change the math). The role
+    is recorded on the per-tensor ``RequantAction`` and
+    ``l5_plan_summary`` rows so the retune's per-(model,
+    model_role, family) partition can find the right group.
     """
     w_im, w_grad, w_layer = weights
     names: set[str] = set()
@@ -174,6 +183,7 @@ def combine(
 def decompose(
     combined_score: float,
     weights: tuple[float, float, float] = DEFAULT_WEIGHTS,
+    model_role: str | None = None,
 ) -> tuple[float, float, float]:
     """Best-effort inversion of :func:`combine` for a single tensor.
 
@@ -194,6 +204,14 @@ def decompose(
     ``(im, grad, layer)`` triples that produce a given combined
     score); the uniform-spread assumption is the most reasonable
     one when the per-tensor components are not available.
+
+    Phase 16: ``model_role`` is an optional pass-through
+    parameter; the role does not change the math. The
+    orchestrator's ``SensitivityScorer`` carries the role
+    through the call chain so the per-tensor ``RequantAction``
+    and ``l5_plan_summary`` rows can be tagged with the
+    role for the retune's per-(model, model_role, family)
+    partition.
 
     Edge cases:
       * If all weights are zero (degenerate), returns

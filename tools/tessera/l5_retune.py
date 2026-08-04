@@ -160,12 +160,24 @@ DEFAULT_LOSS_SCALE: float = 100.0
 
 @dataclass
 class FamilyWeights:
-    """The per-(model, family) retune verdict: the recommended
-    (w_imatrix, w_gradient, w_layer) and the OLS fit diagnostics.
+    """The per-(model, model_role, family) retune verdict: the
+    recommended (w_imatrix, w_gradient, w_layer) and the OLS
+    fit diagnostics.
 
     Fields:
       model_hash:        the model the weights apply to (or
                          ``"*"`` for the cross-model aggregate).
+      model_role:        the architectural role (Phase 16) the
+                         weights apply to. One of
+                         ``"trunk"``, ``"dflash"``, ``"dspark"``,
+                         ``"mtp_nextn"``, ``"shared_embd"``. The
+                         ``"*"`` model_hash / specific
+                         model_role combination is the
+                         cross-model, per-role aggregate. The
+                         trunk's ``attn_q`` and the dflash
+                         encoder's ``attn_q`` get independent
+                         retune verdicts (different rows in
+                         ``l5_weights``).
       family:            the tensor family the weights apply to.
       weights:           (w_imatrix, w_gradient, w_layer) on the
                          simplex. The combined shift is the
@@ -199,6 +211,7 @@ class FamilyWeights:
     """
 
     model_hash: str
+    model_role: str
     family: str
     weights: tuple[float, float, float]
     bias: float
@@ -213,6 +226,7 @@ class FamilyWeights:
     def to_dict(self) -> dict:
         return {
             "model_hash":       self.model_hash,
+            "model_role":       self.model_role,
             "family":           self.family,
             "w_imatrix":        float(self.weights[0]),
             "w_gradient":       float(self.weights[1]),
@@ -467,14 +481,26 @@ def _retune_family(
     base_top_fraction: float = DEFAULT_BASE_TOP_FRACTION,
     alpha: float = DEFAULT_ALPHA,
     min_samples: int = DEFAULT_MIN_SAMPLES,
+    model_role: str = "trunk",
 ) -> FamilyWeights:
-    """Retune one (model, family) group.
+    """Retune one (model, model_role, family) group.
 
     Phase 15: when the per-tensor components are available, fit
     a 3-coefficient OLS with sample weights derived from
     in_sample_loss and n_samples. When the components are
     missing, fall back to the 2-coefficient OLS on the
     combined sensitivity_score.
+
+    Phase 16: the ``model_role`` is the architectural role
+    (``"trunk"``, ``"dflash"``, ``"dspark"``, ``"mtp_nextn"``,
+    ``"shared_embd"``). The same ``family`` in different
+    roles gets independent retune verdicts: the trunk's
+    ``attn_q`` and the dflash encoder's ``attn_q`` may have
+    very different (w_imatrix, w_gradient, w_layer) optimums
+    because the data they fit is different (the dflash
+    encoder consumes trunk hidden states; its calibration
+    is independent). Defaults to ``"trunk"`` for backward
+    compat with Phase 15 callers.
 
     The shift rule (3-coefficient path):
         shift = alpha * (b_im, b_grad, b_layer) * (1 - hit_rate)
@@ -492,10 +518,11 @@ def _retune_family(
     norm of (b_im, b_grad, b_layer)); for the 2-coefficient
     path it is the single slope ``b``.
     """
+    role = str(model_role) if model_role else "trunk"
     n = len(sensitivity)
     if n < 1:
         return FamilyWeights(
-            model_hash=model_hash, family=family,
+            model_hash=model_hash, model_role=role, family=family,
             weights=base_weights,
             bias=0.0, slopes=(0.0, 0.0, 0.0),
             n_samples=0, in_sample_loss=0.0, hit_rate=0.0,
@@ -507,7 +534,7 @@ def _retune_family(
     hit_rate = n_accepted / n if n else 0.0
     if n < min_samples:
         return FamilyWeights(
-            model_hash=model_hash, family=family,
+            model_hash=model_hash, model_role=role, family=family,
             weights=base_weights,
             bias=0.0, slopes=(0.0, 0.0, 0.0),
             n_samples=n, in_sample_loss=0.0, hit_rate=hit_rate,
@@ -589,7 +616,7 @@ def _retune_family(
             b_im * b_im + b_grad * b_grad + b_layer * b_layer
         )
         return FamilyWeights(
-            model_hash=model_hash, family=family,
+            model_hash=model_hash, model_role=role, family=family,
             weights=projected,
             bias=a,
             slopes=(b_im, b_grad, b_layer),
@@ -615,7 +642,7 @@ def _retune_family(
     )
     projected = _project_simplex(new_w)
     return FamilyWeights(
-        model_hash=model_hash, family=family,
+        model_hash=model_hash, model_role=role, family=family,
         weights=projected,
         bias=a,
         slopes=(0.0, b, 0.0),
@@ -634,6 +661,7 @@ def compute_l5_weights(
     db_path: str | Path,
     *,
     model_hash: str | None = None,
+    model_role: str | None = None,
     base_weights: tuple[float, float, float] = DEFAULT_BASE_WEIGHTS,
     base_top_fraction: float = DEFAULT_BASE_TOP_FRACTION,
     alpha: float = DEFAULT_ALPHA,
@@ -641,13 +669,27 @@ def compute_l5_weights(
     use_ema: bool = True,
     write_back: bool = True,
 ) -> list[FamilyWeights]:
-    """Read ``l5_outcome``, run the per-(model, family) retune,
-    and (optionally) write the result to ``l5_weights``.
+    """Read ``l5_outcome``, run the per-(model, model_role,
+    family) retune, and (optionally) write the result to
+    ``l5_weights``.
 
     Args:
       db_path: path to the unified tessera.duckdb file.
       model_hash: if non-None, restrict to this model. Default
         None = all models in the DB.
+      model_role: if non-None, restrict to this architectural
+        role. Default None = all roles in the DB. Phase 16.
+        When set, the partition is
+        ``(model_hash, model_role, family)`` and the write-back
+        deletes only rows with the same
+        ``(model_hash, model_role)`` tuple. A ``None`` value
+        means "all roles" (the legacy pre-Phase-16 path); the
+        write-back then DELETEs all rows for the model
+        regardless of role. The ``model_role`` filter on the
+        SELECT is only applied when both ``model_hash`` AND
+        ``model_role`` are given (a bare ``model_role`` filter
+        is ambiguous without a model; the conservative
+        behaviour is to read all roles for the model).
       base_weights: the (w_imatrix, w_gradient, w_layer) the
         retune perturbs. Default = l5_metrics.DEFAULT_WEIGHTS.
       base_top_fraction: the per-family top_fraction base; see
@@ -665,9 +707,9 @@ def compute_l5_weights(
         without writing.
 
     Returns:
-      A list of FamilyWeights, one per (model, family) group
-      seen in the join. The list is sorted by (model_hash,
-      family) for stable output.
+      A list of FamilyWeights, one per (model, model_role,
+      family) group seen in the join. The list is sorted by
+      (model_hash, model_role, family) for stable output.
     """
     if not Path(db_path).is_file():
         raise FileNotFoundError(f"tessera.duckdb not found: {db_path}")
@@ -681,9 +723,26 @@ def compute_l5_weights(
                 f"unified schema is missing tables: {sorted(missing)}. "
                 f"Run l5_outcome.py first (it produces l5_outcome)."
             )
-        where = ""
+        where_clauses: list[str] = []
         if model_hash:
-            where = f" WHERE model_hash = '{sql_escape(model_hash)}'"
+            where_clauses.append(
+                f"model_hash = '{sql_escape(model_hash)}'"
+            )
+        # Phase 16: only apply a model_role filter on the
+        # SELECT when the caller supplied one. The legacy
+        # pre-Phase-16 retune path (model_role=None) does
+        # not filter; the l5_outcome rows are read for
+        # every role, and the partition handles the role
+        # dimension. (Pre-Phase-16 l5_outcome rows all have
+        # model_role='trunk' or NULL via the column default.)
+        if model_role is not None:
+            where_clauses.append(
+                f"model_role = '{sql_escape(model_role)}'"
+            )
+        where = (
+            (" WHERE " + " AND ".join(where_clauses))
+            if where_clauses else ""
+        )
         # Phase 15: select the per-tensor component columns
         # alongside sensitivity_score. When they are NULL
         # (pre-Phase-15 rows or a DB the C++ side has not yet
@@ -706,6 +765,20 @@ def compute_l5_weights(
         has_in_sample_loss = _table_has_column(
             db, "l5_outcome", "in_sample_loss",
         )
+        # Phase 16: model_role is the architectural role
+        # (trunk / dflash / dspark / mtp_nextn / shared_embd).
+        # Read it from l5_outcome so the partition can use it
+        # as a groupby key. The column-existence probe is
+        # defensive: pre-Phase-16 DBs do not have the
+        # column; the backfill below substitutes a uniform
+        # "trunk" string for those rows (the pre-Phase-16
+        # behavior was a single (model, family) group, not
+        # role-aware, so the partition still produces a
+        # single group per (model, family) with the
+        # synthetic role).
+        has_model_role = _table_has_column(
+            db, "l5_outcome", "model_role",
+        )
         col_list = (
             "model_hash, family, sensitivity_score, "
             "delta_mse, plan_accepted"
@@ -713,12 +786,13 @@ def compute_l5_weights(
             + (", gradient_proxy" if has_grad else "")
             + (", layer_position_prior" if has_layer else "")
             + (", in_sample_loss" if has_in_sample_loss else "")
+            + (", model_role" if has_model_role else "")
         )
         df = db.query(
             f"SELECT {col_list} FROM l5_outcome" + where
         )
-        # Backfill any missing component / in_sample_loss
-        # columns as NULL so the rest of the retune can
+        # Backfill any missing component / in_sample_loss /
+        # model_role columns so the rest of the retune can
         # use a uniform schema.
         for col in ("imatrix_magnitude", "gradient_proxy",
                     "layer_position_prior", "in_sample_loss"):
@@ -726,6 +800,16 @@ def compute_l5_weights(
                 df = df.with_columns(
                     pl.lit(None, dtype=pl.Float64).alias(col)
                 )
+        if "model_role" not in df.columns:
+            # Pre-Phase-16 DB: every l5_outcome row is the
+            # legacy trunk. Substitute a uniform "trunk"
+            # string so the partition's role key is a
+            # constant within a model. The retune still
+            # produces a (model, family) verdict tagged with
+            # model_role='trunk' (the legacy PK).
+            df = df.with_columns(
+                pl.lit("trunk", dtype=pl.Utf8).alias("model_role")
+            )
 
         # EMA-aware path: optional join with l5_plan_ema. The
         # EMA table is additive; older DBs do not have it and
@@ -775,13 +859,27 @@ def compute_l5_weights(
     if df.height == 0:
         return []
 
-    # Per-(model, family) retune. partition_by is stable in
-    # polars 0.20+, so the output is in (model_hash, family)
-    # order.
-    groups = df.partition_by(["model_hash", "family"], maintain_order=True)
+    # Per-(model, model_role, family) retune. partition_by is
+    # stable in polars 0.20+, so the output is in
+    # (model_hash, model_role, family) order. Phase 16: the
+    # role is part of the groupby key so the trunk's
+    # ``attn_q`` and the dflash encoder's ``attn_q`` get
+    # independent retune verdicts.
+    groups = df.partition_by(
+        ["model_hash", "model_role", "family"],
+        maintain_order=True,
+    )
     verdicts: list[FamilyWeights] = []
     for g in groups:
         mh = str(g["model_hash"][0])
+        # Phase 16: the role is part of the partition key.
+        # NULL model_role (which can happen on pre-Phase-16
+        # rows that we backfilled with "trunk") is normalised
+        # to "trunk" so the verdict carries a real string.
+        role_raw = g["model_role"][0]
+        role = str(role_raw) if role_raw is not None else "trunk"
+        if not role:
+            role = "trunk"
         fam = str(g["family"][0])
         sens = [float(v) if v is not None else 0.0
                 for v in g["sensitivity_score"].to_list()]
@@ -841,6 +939,7 @@ def compute_l5_weights(
         n_samples_per_row = [len(sens)] * len(sens)
         verdicts.append(_retune_family(
             model_hash=mh, family=fam,
+            model_role=role,
             sensitivity=sens, delta_mse=deltas,
             plan_accepted=accepted,
             components=components,
@@ -858,7 +957,24 @@ def compute_l5_weights(
                 con = db._conn
                 con.execute("BEGIN")
                 try:
-                    if model_hash is not None:
+                    # Phase 16: the write-back DELETEs on
+                    # (model_hash, model_role) so other roles
+                    # for the same model are not clobbered.
+                    # When model_role is None (the legacy
+                    # pre-Phase-16 path), the DELETE is
+                    # only keyed on model_hash (the whole
+                    # model's rows are replaced); this is
+                    # the conservative behaviour because a
+                    # bare model without a role filter is
+                    # ambiguous (the retune may have read
+                    # multiple roles' rows).
+                    if model_hash is not None and model_role is not None:
+                        con.execute(
+                            "DELETE FROM l5_weights "
+                            f"WHERE model_hash = '{sql_escape(model_hash)}' "
+                            f"AND model_role = '{sql_escape(model_role)}'"
+                        )
+                    elif model_hash is not None:
                         con.execute(
                             "DELETE FROM l5_weights "
                             f"WHERE model_hash = '{sql_escape(model_hash)}'"
@@ -889,8 +1005,9 @@ def write_cross_model_aggregate(
     base_top_fraction: float = DEFAULT_BASE_TOP_FRACTION,
     min_samples: int = DEFAULT_MIN_SAMPLES,
 ) -> list[FamilyWeights]:
-    """Read l5_weights grouped by family (across all models),
-    write one row per family with ``model_hash = "*"``.
+    """Read l5_weights grouped by (model_role, family) (across
+    all models), write one row per (model_role, family) with
+    ``model_hash = "*"``.
 
     The aggregate is the n_samples-weighted mean of the
     per-model rows, with the top_fraction and hit_rate
@@ -899,6 +1016,17 @@ def write_cross_model_aggregate(
     the orchestrator's --retune-from-db falls back to the
     cross-model row when the per-model row is missing
     (warm-start new models from the cross-model mean).
+
+    Phase 16: the cross-model aggregate is per-(model_role,
+    family), not per-family. The trunk's ``attn_q`` and the
+    dflash encoder's ``attn_q`` get independent
+    cross-model rows; the orchestrator's
+    ``--retune-from-db --model-role dflash`` looks up the
+    dflash row independently of the trunk row. The
+    cross-model ``model_role`` is the same string as the
+    per-model rows it aggregates (e.g. ``"trunk"`` for
+    trunk aggregates, ``"dflash"`` for dflash encoder
+    aggregates).
 
     The aggregate is tagged with
     ``RETUNE_SOURCE_TAG_CROSSMODEL`` so the consumer can
@@ -918,13 +1046,14 @@ def write_cross_model_aggregate(
         used for the aggregate's top_fraction (the
         formula is the same as the per-family path).
       min_samples: minimum total n_samples across models
-        for a family to be aggregated. Below this the
-        cross-model row is not written (the per-family
-        n is too thin to warm-start from).
+        for a (model_role, family) pair to be aggregated.
+        Below this the cross-model row is not written (the
+        per-role n is too thin to warm-start from).
 
     Returns:
-      A list of FamilyWeights, one per family the
-      aggregate produced. The list is sorted by family.
+      A list of FamilyWeights, one per (model_role,
+      family) the aggregate produced. The list is sorted
+      by (model_role, family).
     """
     if not Path(db_path).is_file():
         return []
@@ -934,22 +1063,37 @@ def write_cross_model_aggregate(
             return []
         # Read every row except the cross-model itself (we
         # don't want to fold the previous aggregate into the
-        # new one).
-        df = db.query(
-            "SELECT model_hash, family, w_imatrix, w_gradient, "
+        # new one). The model_role column is read for the
+        # per-(model_role, family) grouping; pre-Phase-16
+        # DBs do not have the column, so the backfill
+        # below substitutes a uniform "trunk" string.
+        has_model_role_col = _table_has_column(
+            db, "l5_weights", "model_role",
+        )
+        cols = (
+            "model_hash, family, w_imatrix, w_gradient, "
             "w_layer, bias, n_samples, in_sample_loss, hit_rate, "
-            "top_fraction FROM l5_weights "
+            "top_fraction"
+            + (", model_role" if has_model_role_col else "")
+        )
+        df = db.query(
+            f"SELECT {cols} FROM l5_weights "
             f"WHERE model_hash != '*'"
         )
+        if "model_role" not in df.columns:
+            df = df.with_columns(
+                pl.lit("trunk", dtype=pl.Utf8).alias("model_role")
+            )
     if df.height == 0:
         return []
 
-    # Group by family, aggregate. Polars' group_by with
-    # multiple aggregations; the n_samples-weighted mean is
-    # the standard sum(w*x) / sum(w) expression. For the
-    # top_fraction we aggregate only the rows that have a
-    # non-NULL top_fraction (the per-family recommendation
-    # is optional); when none of the rows have a top_fraction
+    # Group by (model_role, family), aggregate. Polars'
+    # group_by with multiple aggregations; the
+    # n_samples-weighted mean is the standard sum(w*x) /
+    # sum(w) expression. For the top_fraction we
+    # aggregate only the rows that have a non-NULL
+    # top_fraction (the per-family recommendation is
+    # optional); when none of the rows have a top_fraction
     # the aggregate's top_fraction is NULL.
     import numpy as np
     agg_exprs = []
@@ -967,20 +1111,22 @@ def write_cross_model_aggregate(
     # polars). We sum the weights separately to avoid
     # double-counting the rows with NULL top_fraction.
     agg_exprs.append(pl.col("n_samples").sum().alias("total_n"))
-    aggregated = df.group_by("family").agg(agg_exprs)
+    aggregated = df.group_by(["model_role", "family"]).agg(agg_exprs)
     # top_fraction needs a separate pass because polars'
     # ``sum()`` over (top_fraction * n_samples) drops rows
     # where top_fraction is NULL. Compute it on the same
     # group_by with a different filter.
     top_frac_df = (
         df.filter(pl.col("top_fraction").is_not_null())
-          .group_by("family")
+          .group_by(["model_role", "family"])
           .agg(
               ((pl.col("top_fraction") * pl.col("n_samples")).sum()
                / pl.col("n_samples").sum()).alias("top_fraction")
           )
     )
-    aggregated = aggregated.join(top_frac_df, on="family", how="left")
+    aggregated = aggregated.join(
+        top_frac_df, on=["model_role", "family"], how="left",
+    )
     # Filter by min_samples (total n across models).
     aggregated = aggregated.filter(pl.col("total_n") >= min_samples)
 
@@ -988,6 +1134,10 @@ def write_cross_model_aggregate(
     now_str = None  # filled in by TesseraDB
     rows_to_write: list[dict] = []
     for row in aggregated.iter_rows(named=True):
+        role_raw = row.get("model_role")
+        role = str(role_raw) if role_raw is not None else "trunk"
+        if not role:
+            role = "trunk"
         fam = str(row["family"])
         n_total = int(row["total_n"])
         if n_total < min_samples:
@@ -1013,7 +1163,7 @@ def write_cross_model_aggregate(
         else:
             top_frac_out = float(top_frac_val)
         verdicts.append(FamilyWeights(
-            model_hash="*", family=fam,
+            model_hash="*", model_role=role, family=fam,
             weights=projected,
             bias=float(row["bias"]),
             slopes=(0.0, 0.0, 0.0),  # aggregated, not stored
@@ -1026,6 +1176,7 @@ def write_cross_model_aggregate(
         ))
         rows_to_write.append({
             "model_hash":      "*",
+            "model_role":      role,
             "family":          fam,
             "w_imatrix":       projected[0],
             "w_gradient":      projected[1],
@@ -1058,6 +1209,7 @@ def read_l5_weights(
     db_path: str | Path,
     *,
     model_hash: str | None = None,
+    model_role: str | None = None,
     cross_model_fallback: bool = False,
 ) -> pl.DataFrame:
     """Read the l5_weights table for the consumer (the
@@ -1065,15 +1217,31 @@ def read_l5_weights(
 
     Returns an empty DataFrame with the l5_weights schema when
     the table is missing or empty. When ``model_hash`` is given,
-    the result is filtered to that model. When
+    the result is filtered to that model. When ``model_role``
+    is given, the result is filtered to that role. When
     ``cross_model_fallback`` is True, rows with
     ``model_hash = "*"`` are appended for any family the
     per-model lookup missed; this is the orchestrator's
     "warm-start new model from cross-model mean" path.
 
-    The orchestrator-side lookup is a 3-tier resolution:
-      1. (model_hash, family) per-model, per-family
-      2. ("*", family) cross-model, per-family
+    Phase 16: the ``model_role`` filter is part of the
+    PRIMARY KEY lookup. The orchestrator's
+    ``--retune-from-db --model-role dflash`` looks up the
+    dflash-specific rows; the lookup is independent of
+    the trunk rows (different ``model_role`` values get
+    different (w_imatrix, w_gradient, w_layer) tuples).
+    When ``model_role`` is None, no role filter is
+    applied (the legacy pre-Phase-16 path). The
+    cross-model fallback preserves the role dimension
+    too: the ``("*", "dflash", "attn_q")`` row is the
+    dflash-encoder cross-model aggregate, not the trunk
+    cross-model aggregate.
+
+    The orchestrator-side lookup is a 3-tier resolution
+    (Phase 16):
+      1. (model_hash, model_role, family) per-model, per-role, per-family
+      2. ("*", model_role, family) cross-model, per-role, per-family
+         (when cross_model_fallback=True)
       3. base weights
     The cross-model fallback only triggers for families the
     per-model lookup missed. A family with neither per-model
@@ -1087,20 +1255,45 @@ def read_l5_weights(
         if "l5_weights" not in names:
             return pl.DataFrame(schema=L5_WEIGHTS_COLS)
         if not cross_model_fallback or not model_hash:
-            where = ""
+            where_clauses: list[str] = []
             if model_hash:
-                where = f" WHERE model_hash = '{sql_escape(model_hash)}'"
+                where_clauses.append(
+                    f"model_hash = '{sql_escape(model_hash)}'"
+                )
+            if model_role is not None:
+                where_clauses.append(
+                    f"model_role = '{sql_escape(model_role)}'"
+                )
+            where = (
+                (" WHERE " + " AND ".join(where_clauses))
+                if where_clauses else ""
+            )
             return db.query("SELECT * FROM l5_weights" + where)
         # Cross-model fallback: union the per-model rows with
         # the cross-model rows for any family the per-model
-        # lookup missed.
+        # lookup missed. Both the per-model SELECT and the
+        # cross-model SELECT carry the model_role filter so
+        # the fallback stays role-aware.
+        per_where_clauses: list[str] = [
+            f"model_hash = '{sql_escape(model_hash)}'"
+        ]
+        if model_role is not None:
+            per_where_clauses.append(
+                f"model_role = '{sql_escape(model_role)}'"
+            )
         per_model = db.query(
-            "SELECT * FROM l5_weights "
-            f"WHERE model_hash = '{sql_escape(model_hash)}'"
+            "SELECT * FROM l5_weights WHERE "
+            + " AND ".join(per_where_clauses)
         )
         per_model_families = set(per_model["family"].to_list())
+        cross_where_clauses: list[str] = ["model_hash = '*'"]
+        if model_role is not None:
+            cross_where_clauses.append(
+                f"model_role = '{sql_escape(model_role)}'"
+            )
         cross = db.query(
-            "SELECT * FROM l5_weights WHERE model_hash = '*'"
+            "SELECT * FROM l5_weights WHERE "
+            + " AND ".join(cross_where_clauses)
         )
         # The cross-model rows are an aggregate across
         # models; the orchestrator's --retune-from-db wants
@@ -1155,6 +1348,7 @@ def read_per_family_top_fraction(
     db_path: str | Path,
     *,
     model_hash: str | None = None,
+    model_role: str | None = None,
     cross_model_fallback: bool = True,
 ) -> dict[str, float]:
     """Read the per-family top_fraction recommendations for
@@ -1166,12 +1360,30 @@ def read_per_family_top_fraction(
     (model_hash = "*") fill in for families the per-model
     lookup missed; per-model rows take priority.
 
+    Phase 16: the ``model_role`` filter is applied on both
+    the per-model SELECT and the cross-model SELECT. The
+    orchestrator's ``--retune-from-db --model-role dflash``
+    looks up dflash-specific top_fraction recommendations;
+    the dflash encoder's ``attn_q`` may have a very
+    different top_fraction than the trunk's ``attn_q``
+    (the dflash encoder's residual surface is different
+    from the trunk's). The role filter is preserved on
+    the cross-model fallback path so the dflash
+    cross-model aggregate fills in for dflash
+    per-model families the per-model lookup missed
+    (not the trunk cross-model aggregate, which would
+    be a category error).
+
     Args:
       db_path: path to the unified tessera.duckdb file.
       model_hash: if non-None, prefer the per-model rows
         for this model and fall back to the cross-model
         rows for families the per-model lookup missed.
         Default None = read the cross-model rows only.
+      model_role: if non-None (Phase 16), restrict both
+        the per-model and cross-model lookups to this
+        role. Default None = no role filter (the legacy
+        pre-Phase-16 path).
       cross_model_fallback: when True (default), use the
         cross-model rows for any family the per-model
         lookup missed. The orchestrator enables this on
@@ -1186,18 +1398,33 @@ def read_per_family_top_fraction(
         if "l5_weights" not in names:
             return out
         if model_hash is not None:
+            per_where = [
+                f"model_hash = '{sql_escape(model_hash)}'",
+                "top_fraction IS NOT NULL",
+            ]
+            if model_role is not None:
+                per_where.append(
+                    f"model_role = '{sql_escape(model_role)}'"
+                )
             per_model = db.query(
-                "SELECT family, top_fraction FROM l5_weights "
-                f"WHERE model_hash = '{sql_escape(model_hash)}' "
-                "AND top_fraction IS NOT NULL"
+                "SELECT family, top_fraction FROM l5_weights WHERE "
+                + " AND ".join(per_where)
             )
             for row in per_model.iter_rows(named=True):
                 if row.get("top_fraction") is not None:
                     out[str(row["family"])] = float(row["top_fraction"])
         if cross_model_fallback or model_hash is None:
+            cross_where = [
+                "model_hash = '*'",
+                "top_fraction IS NOT NULL",
+            ]
+            if model_role is not None:
+                cross_where.append(
+                    f"model_role = '{sql_escape(model_role)}'"
+                )
             cross = db.query(
-                "SELECT family, top_fraction FROM l5_weights "
-                "WHERE model_hash = '*' AND top_fraction IS NOT NULL"
+                "SELECT family, top_fraction FROM l5_weights WHERE "
+                + " AND ".join(cross_where)
             )
             for row in cross.iter_rows(named=True):
                 fam = str(row["family"])
@@ -1227,6 +1454,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--model-hash", default=None,
         help="Restrict to this model_hash (default: all models)",
+    )
+    p.add_argument(
+        "--model-role", default=None,
+        choices=[
+            "trunk", "dflash", "dspark", "mtp_nextn", "shared_embd",
+        ],
+        help=(
+            "Restrict to this model_role (default: all roles). "
+            "Phase 16: the retune's per-(model, model_role, family) "
+            "partition lets the same family in different "
+            "architectural roles (e.g. the trunk's attn_q vs the "
+            "dflash encoder's attn_q) get independent retune "
+            "verdicts. The default 'all roles' path is the legacy "
+            "pre-Phase-16 behaviour: one verdict per (model, "
+            "family), the model_role column on the read rows is "
+            "ignored."
+        ),
     )
     p.add_argument(
         "--alpha", type=float, default=DEFAULT_ALPHA,
@@ -1274,12 +1518,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _format_table(verdicts: list[FamilyWeights]) -> str:
-    rows = ["model_hash,family,w_imatrix,w_gradient,w_layer,"
+    rows = ["model_hash,model_role,family,w_imatrix,w_gradient,w_layer,"
             "b_im,b_grad,b_layer,slope,hit_rate,n_samples,"
             "top_fraction,retune_source,was_acted_on"]
     for v in verdicts:
         rows.append(
-            f"{v.model_hash},{v.family},"
+            f"{v.model_hash},{v.model_role},{v.family},"
             f"{v.weights[0]:.4f},{v.weights[1]:.4f},{v.weights[2]:.4f},"
             f"{v.slopes[0]:+.6f},{v.slopes[1]:+.6f},{v.slopes[2]:+.6f},"
             f"{v.slopes[1]:+.6f},{v.hit_rate:.3f},"
@@ -1296,6 +1540,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     verdicts = compute_l5_weights(
         args.db,
         model_hash=args.model_hash,
+        model_role=args.model_role,
         base_weights=DEFAULT_BASE_WEIGHTS,
         base_top_fraction=args.base_top_fraction,
         alpha=args.alpha,
