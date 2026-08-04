@@ -358,6 +358,43 @@ struct common_params_speculative_draft {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 };
 
+// Workstream B: per-drafter slots for the ADAPTIVE muxer.
+//
+// COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE runs all 4 embedded drafters (MTP,
+// DFlash, DSPark, Eagle3) per step.  Each drafter needs its own llama_context
+// because the architectures differ and the per-drafter KV caches must be
+// independent.  This struct carries the 4 ctx_dft pointers and the per-drafter
+// n_max override.
+//
+// The drafter contexts are non-owning here; lifetime is managed by the caller
+// (typically common_speculative_init_from_params when Workstream A's embedded
+// loader is in place; the test fixtures construct short-lived contexts).
+//
+// For the deterministic tie-breaking, the muxer runs drafters in this fixed
+// order (matches the architect's spec): MTP, DFlash, DSPark, Eagle3.  See
+// common_speculative_impl_draft_adaptive for the use of this order.
+struct common_params_speculative_adaptive {
+    llama_context * ctx_dft_mtp    = nullptr;
+    llama_context * ctx_dft_dflash = nullptr;
+    llama_context * ctx_dft_dspark = nullptr;
+    llama_context * ctx_dft_eagle3 = nullptr;
+
+    // Per-drafter n_max override.  0 = use params.speculative.draft.n_max.
+    int32_t n_max_mtp    = 0;
+    int32_t n_max_dflash = 0;
+    int32_t n_max_dspark = 0;
+    int32_t n_max_eagle3 = 0;
+
+    // true when at least the MTP drafter is wired (the others are optional
+    // for incremental bring-up; the muxer skips drafters whose ctx is null).
+    bool has_any() const {
+        return ctx_dft_mtp    != nullptr ||
+               ctx_dft_dflash != nullptr ||
+               ctx_dft_dspark != nullptr ||
+               ctx_dft_eagle3 != nullptr;
+    }
+};
+
 struct common_params_speculative_ngram_mod {
     int32_t n_match = 24;
 
@@ -381,6 +418,10 @@ struct common_params_speculative {
 
     // used by Simple, MTP, Eagle3, etc. - all methods that require some kind of draft model
     common_params_speculative_draft draft;
+
+    // Workstream B: ADAPTIVE muxer per-drafter context slots.  Only consulted
+    // when COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE is in `types`.
+    common_params_speculative_adaptive adaptive;
 
     common_params_speculative_ngram_mod ngram_mod;
     common_params_speculative_ngram_map ngram_simple;

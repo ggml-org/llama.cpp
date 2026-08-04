@@ -81,6 +81,18 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 
+// Workstream B: deterministic longest-accepted-prefix picker for the ADAPTIVE
+// muxer.  Given a vector of (n_accepted, draft_tokens) pairs in the order
+// [MTP, DFlash, DSPark, Eagle3], returns the index of the draft with the
+// longest accepted prefix; ties are broken by the caller's order (the first
+// tied index wins).
+//
+// Exposed as a free function so the selection logic is unit-testable without
+// instantiating real drafter contexts.  The muxer (common_speculative_impl_draft_adaptive)
+// calls this internally after running its 4 trial verifier forwards.
+size_t common_speculative_pick_best_accepted_idx(
+    const std::vector<std::pair<uint16_t, llama_tokens>> & drafts_with_accepted);
+
 struct common_speculative_deleter {
     void operator()(common_speculative * s) { common_speculative_free(s); }
 };
