@@ -94,6 +94,14 @@ struct ContentView: View {
             toggle: { withAnimation { telemetryExpanded.toggle() } },
             isExpanded: { telemetryExpanded }
         ))
+        // Runs are scene-lived, so one can reach a terminal outcome
+        // while its own window is showing another destination. Keep
+        // the editor store told whether the Workflows surface is on
+        // screen so the completion ping fires exactly when the user
+        // is NOT looking at the result (see WorkflowRunNotifier).
+        .onChange(of: selection, initial: true) { _, newValue in
+            workflowEditor.workflowsSurfaceVisible = (newValue == .workflows)
+        }
     }
 
     /// Current sidebar destination. Falls back to the Playground

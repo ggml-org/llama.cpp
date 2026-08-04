@@ -28,6 +28,13 @@ final class WorkflowEditorStore {
     var selectedNodeId: String?
     var documentName: String
     var runPhase: WorkflowRunPhase = .idle
+    /// Whether this window currently shows the Workflows
+    /// destination. Pushed in by the owning scene (ContentView)
+    /// - the store itself stays navigation-agnostic. Read at run
+    /// completion to decide whether the user needs a ping: a run
+    /// that finishes with its own surface on screen needs none.
+    /// Defaults to visible, the direction that suppresses pings.
+    var workflowsSurfaceVisible = true
     /// The document as of the last New / Open / Save. Comparing
     /// it against the derived ``document`` yields the "Edited"
     /// indicator - a derived value, not a flag that could desync.
@@ -198,10 +205,14 @@ final class WorkflowEditorStore {
         var events = runPhase.events
         events.append(event)
         runPhase = .finished(outcome: outcome, events: events)
-        // Pull the user back only if they wandered off mid-run
-        // (the notifier no-ops while the app is frontmost and
-        // for cancellations).
-        WorkflowRunNotifier.post(outcome: outcome, workflowName: workflowName)
+        // Pull the user back only if they wandered off mid-run:
+        // the notifier posts only when the outcome is not on
+        // screen (app backgrounded, or the window showing another
+        // destination) and never for cancellations.
+        WorkflowRunNotifier.post(
+            outcome: outcome, workflowName: workflowName,
+            runSurfaceVisible: workflowsSurfaceVisible
+        )
     }
 
     // MARK: - Seed content

@@ -10,22 +10,32 @@ import TesseraCore
 ///   run, not app launch: the request is only justified once
 ///   the user has actually started a long-running workflow.
 ///   A denial is remembered by the system and never re-asked.
-/// - No notification while the app is frontmost: the run sheet
-///   is already on screen, and notifying for something the user
-///   can already see is noise.
+/// - No notification while the run surface is visible to the
+///   user (app frontmost AND the run's own window showing the
+///   Workflows destination): the sheet already carries the
+///   outcome, and notifying for something on screen is noise.
+///   Runs are scene-lived, so a run can finish while its window
+///   has swapped to another destination - that case DOES ping.
 @MainActor
 enum WorkflowRunNotifier {
     /// Notify about a terminal run outcome. Cancelled runs are
     /// not posted: a cancel is always a deliberate foreground
     /// act, so there is nothing to pull the user back to.
-    static func post(outcome: WorkflowRunOutcome, workflowName: String) {
+    /// `runSurfaceVisible` says whether the run's own surface
+    /// (the Workflows destination of its window) is on screen;
+    /// the ping fires only when the outcome is NOT visible.
+    static func post(
+        outcome: WorkflowRunOutcome,
+        workflowName: String,
+        runSurfaceVisible: Bool
+    ) {
         switch outcome {
         case .succeeded, .failed:
             break
         case .cancelled:
             return
         }
-        guard !NSApplication.shared.isActive else { return }
+        guard !(NSApplication.shared.isActive && runSurfaceVisible) else { return }
         let content = WorkflowRunNotificationContent(
             outcome: outcome, workflowName: workflowName
         )
