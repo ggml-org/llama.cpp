@@ -138,8 +138,31 @@ LRQ_AGGREGATIONS = ("mean", "rms")
 # so the consumer (tile640_quantize_v3.py) can route per-tensor entries to
 # the correct lane when the same model is being quantized as a single
 # unified GGUF.
-MODEL_ROLES = ("trunk", "dflash", "dspark", "mtp_nextn", "shared_embd")
+#
+# M0a added the three mmproj roles (``vision_tower`` / ``audio_tower`` /
+# ``mm_projector``) to the unified schema; the dispatch side
+# (``ts_regime_infer_modality``) routes tensors by their v./a./mm. prefix
+# and the writer stamps the matching ``model_role`` on each row. The
+# calibration side accepts the same eight-value set; the activation
+# source for the three mmproj roles is the multimodal capture driver
+# (``multimodal_calibrate.py``) rather than the text-side imatrix / spec
+# flow. The text-side path is unchanged: ``trunk`` / ``dflash`` /
+# ``dspark`` / ``mtp_nextn`` / ``shared_embd`` still go through the
+# existing imatrix / spec_calib plumbing.
+MODEL_ROLES = (
+    "trunk", "dflash", "dspark", "mtp_nextn", "shared_embd",
+    "vision_tower", "audio_tower", "mm_projector",
+)
 DEFAULT_MODEL_ROLE = "trunk"
+# The M0a mmproj roles. Used to flag the per-tensor activation source
+# for the consumer (the unified writer routes mmproj tensors to the
+# multimodal capture path instead of the text-side imatrix path).
+MMPROJ_ROLES = ("vision_tower", "audio_tower", "mm_projector")
+# Activation source for the consumer. The text-side path uses
+# ``"imatrix"`` (the imatrix GGUF produced by the text-side
+# calibration pipeline); the mmproj-side path uses ``"multimodal"``
+# (the tensor_stats rows produced by ``multimodal_calibrate.py``).
+ACTIVATION_SOURCE = {"imatrix": "imatrix", "multimodal": "multimodal"}
 
 # DartQuant defaults. The QR-Orth step size is intentionally small: the
 # Stiefel retraction is a first-order scheme and large steps drift the
@@ -2441,6 +2464,14 @@ def run_compare(args: argparse.Namespace, tracker: ResidencyTracker | None = Non
         "lrq_lr": args.lr,
         "lrq_aggregation": args.lrq_agg,
         "bundle_digests": digests,
+        # M0a: activation source the policy was built from. The
+        # text side uses "imatrix" (the imatrix GGUF); the mmproj
+        # roles use "multimodal" (the tensor_stats rows produced by
+        # multimodal_calibrate.py). The default of "imatrix" matches
+        # the pre-M0a contract.
+        "tensor_stats_source": ACTIVATION_SOURCE.get(
+            getattr(args, "tensor_stats_source", "imatrix"), "imatrix"
+        ),
         "timestamp": time.time(),
     }
     policy = build_lrq_policy(lrq_results, provenance, model_role=args.model_role)
@@ -2528,6 +2559,12 @@ def run_dartquant(args: argparse.Namespace, tracker: ResidencyTracker | None = N
         "dartquant_orth_lr": args.dartquant_orth_lr,
         "dartquant_whip_weight": args.dartquant_whip_weight,
         "bundle_digests": digests,
+        # M0a: see the compare-mode provenance block for the
+        # tensor_stats_source contract. The default of "imatrix"
+        # matches the pre-M0a behaviour.
+        "tensor_stats_source": ACTIVATION_SOURCE.get(
+            getattr(args, "tensor_stats_source", "imatrix"), "imatrix"
+        ),
         "timestamp": time.time(),
     }
     policy = build_dartquant_policy(results, provenance, model_role=args.model_role)
@@ -2658,6 +2695,11 @@ def run_flrq(args: argparse.Namespace, tracker: ResidencyTracker | None = None) 
         "flrq_blc_iters": int(args.flrq_blc_iters),
         "flrq_qbits": int(args.flrq_qbits),
         "bundle_digests": digests,
+        # M0a: see the compare-mode provenance block for the
+        # tensor_stats_source contract.
+        "tensor_stats_source": ACTIVATION_SOURCE.get(
+            getattr(args, "tensor_stats_source", "imatrix"), "imatrix"
+        ),
         "timestamp": time.time(),
     }
     policy = build_flrq_policy(flrq_results, provenance, per_rank=per_rank, model_role=args.model_role)
@@ -2933,7 +2975,26 @@ def _build_parser() -> argparse.ArgumentParser:
             "per-role. The default is 'trunk' which is the legacy "
             "single-model behaviour. The unified_calibrate.py driver "
             "invokes per_tensor_calibrate.py once per component with the "
-            "appropriate role."
+            "appropriate role. The M0a mmproj roles (vision_tower / "
+            "audio_tower / mm_projector) are accepted: their activation "
+            "source is the multimodal capture driver "
+            "(multimodal_calibrate.py), not the text-side imatrix path."
+        ),
+    )
+    parser.add_argument(
+        "--tensor-stats-source",
+        choices=tuple(ACTIVATION_SOURCE.keys()),
+        default="imatrix",
+        help=(
+            "Activation source for the per-tensor calibration pass. "
+            "'imatrix' (default) is the text-side imatrix / spec_calib "
+            "path; 'multimodal' reads the tensor_stats rows produced by "
+            "multimodal_calibrate.py (the M0a mmproj roles). The choice "
+            "is recorded on the policy's provenance block so the "
+            "downstream consumer can reconstruct how the policy was "
+            "built. The role and the source are independent: the text "
+            "side may pass 'multimodal' for an mmproj role, and the "
+            "default 'imatrix' for the text-side roles."
         ),
     )
     return parser
@@ -2981,6 +3042,15 @@ def _main_components(
             "lrq_aggregation": args.lrq_agg,
             "spatial_occupancy": getattr(args, "spatial_occupancy", "interleaved"),
             "per_role_tensor_count": counts,
+            # M0a: see the compare-mode provenance block for the
+            # tensor_stats_source contract. The multi-component
+            # shell-out may mix sources (text side imatrix + mmproj
+            # multimodal); the per-component dispatch records the
+            # source in the policy entries; the top-level field
+            # records the call-site default.
+            "tensor_stats_source": ACTIVATION_SOURCE.get(
+                getattr(args, "tensor_stats_source", "imatrix"), "imatrix"
+            ),
             "timestamp": time.time(),
         }
         policy = build_lrq_policy(lrq_results, provenance)
@@ -3017,6 +3087,11 @@ def _main_components(
             "lrq_aggregation": args.lrq_agg,
             "spatial_occupancy": getattr(args, "spatial_occupancy", "interleaved"),
             "per_role_tensor_count": counts,
+            # M0a: see the compare-mode provenance block for the
+            # tensor_stats_source contract.
+            "tensor_stats_source": ACTIVATION_SOURCE.get(
+                getattr(args, "tensor_stats_source", "imatrix"), "imatrix"
+            ),
             "timestamp": time.time(),
         }
         policy = build_lrq_policy(lrq_results, provenance)
@@ -3081,6 +3156,12 @@ def main(argv: list[str] | None = None) -> int:
             "lrq_lr": args.lr,
             "lrq_aggregation": args.lrq_agg,
             "bundle_digests": digests,
+            # M0a: see the compare-mode provenance block for the
+            # tensor_stats_source contract. The default of "imatrix"
+            # matches the pre-M0a behaviour.
+            "tensor_stats_source": ACTIVATION_SOURCE.get(
+                getattr(args, "tensor_stats_source", "imatrix"), "imatrix"
+            ),
             "timestamp": time.time(),
         }
         policy = build_lrq_policy(lrq_results, provenance, model_role=args.model_role)
