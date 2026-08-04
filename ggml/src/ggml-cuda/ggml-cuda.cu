@@ -2848,13 +2848,15 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     return true;
 }
 
-// returns whether the write (out) nodes overwrite the read nodes in operation
+// Returns whether the write (out) nodes overwrite the read nodes in operation.
+// preserved_inputs are copied or otherwise preserved before an overlapping output is written.
 static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int           node_idx,
                                                  const int           node_count,
                                                  const int *         out_nodes,
                                                  const int           out_count,
-                                                 const bool          is_topk_moe = false) {
+                                                 const bool          is_topk_moe = false,
+                                                 std::initializer_list<const ggml_tensor *> preserved_inputs = {}) {
     auto nodes_overlap = [&](const ggml_tensor * a, const ggml_tensor * b) {
         const int64_t a_start = (int64_t) a->data;
         const int64_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
@@ -2900,7 +2902,9 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                         }
                     }
 
-                    if (!found) {
+                    const bool preserved = std::find(preserved_inputs.begin(), preserved_inputs.end(), src) !=
+                                           preserved_inputs.end();
+                    if (!found && !preserved) {
                         is_ok = false;
                         break;
                     }
@@ -2912,12 +2916,8 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
     return is_ok;
 }
 
-// Largest router top-k we fuse. The bound comes from ggml_can_fuse_subgraph(), which matches at
-// most 31 nodes (fixed int idxs[32] with GGML_ASSERT(count < 32)). Our fused subgraph spans
-// node_count = 2*k + n_muls - 1 nodes (n_muls is 1 or 2), so 2*k + 1 <= 31 gives k <= 15. Real MoE
-// routing uses a small top-k, so this covers every current model; larger k simply falls back to
-// the per-op path. Dispatch: k <= 8 -> per-k fully-unrolled kernels, 9..15 -> one runtime-k kernel
-// (see ggml_cuda_op_moe_weighted_reduction in moe-weighted-reduction.cu).
+// The long form spans 2*k + 1 nodes. ggml_can_fuse_subgraph() accepts at most
+// 31 nodes, so k <= 15; larger values use the per-operation path.
 static constexpr int MOE_WEIGHTED_REDUCTION_MAX_EXPERTS = 15;
 
 struct ggml_cuda_moe_weighted_reduction_match {
@@ -2969,13 +2969,10 @@ static bool ggml_cuda_match_moe_weighted_reduction(
     const ggml_tensor * weights      = nullptr;
     int                 mul_count    = 1;
 
-    // The MoE combine tail comes in two shapes and we match both, purely on graph structure:
-    //   long  form:  (experts * expert_scale) * router_weight   -- two MULs
-    //   short form:   experts * router_weight                   -- one MUL
-    // The extra MUL exists only when a separate per-expert output scale survives into the graph
-    // (e.g. the reference NVFP4 dequant path); it is absent when that scale is folded upstream
-    // (e.g. Marlin's GEMM epilogue) or the quantization has none at all (Q4_K, Q8_0, F16, ...).
-    // Detection keys on the presence of this second MUL -- never on the quant or model type.
+    // Match both structural forms:
+    //   (experts * expert_scale) * router_weight
+    //   experts * router_weight
+    // The matcher does not depend on the model or quantization type.
     if (node_idx + 1 < cgraph->n_nodes) {
         const ggml_tensor * second = cgraph->nodes[node_idx + 1];
         const ggml_tensor * scaled = nullptr;
@@ -3058,20 +3055,17 @@ static bool ggml_cuda_match_moe_weighted_reduction(
         return false;
     }
 
-    ggml_tensor *       dst           = cgraph->nodes[output_idx];
-    const uintptr_t     experts_begin = (uintptr_t) experts->data;
-    const uintptr_t     experts_end   = experts_begin + ggml_nbytes(experts);
-    const uintptr_t     dst_begin     = (uintptr_t) dst->data;
-    const uintptr_t     dst_end       = dst_begin + ggml_nbytes(dst);
-    // The fused op preserves overlapping weights, but cannot safely overwrite expert rows while reading them.
-    if (experts_begin < dst_end && dst_begin < experts_end) {
+    // The kernel copies these small inputs before writing dst when the graph allocator aliases them.
+    const std::initializer_list<const ggml_tensor *> preserved_inputs = { expert_scale, weights };
+    if (!ggml_cuda_check_fusion_memory_ranges(
+            cgraph, node_idx, node_count, &output_idx, 1, false, preserved_inputs)) {
         return false;
     }
 
     match.experts      = experts;
     match.expert_scale = expert_scale;
     match.weights      = weights;
-    match.dst          = dst;
+    match.dst          = cgraph->nodes[output_idx];
     match.node_count   = node_count;
     return true;
 }
@@ -3308,9 +3302,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     ggml_tensor * node = cgraph->nodes[i];
 
     static const bool use_moe_weighted_reduction = [] {
-        // Enabled by default; the fused result is bit-identical to the mul/mul/view/add tail it
-        // replaces and the matcher falls back safely on any unrecognized graph. Set
-        // GGML_CUDA_MOE_WEIGHTED_REDUCTION=0 to force the reference per-op path (kill switch).
+        // Enabled by default. Unrecognized graphs use the per-operation path.
+        // Set GGML_CUDA_MOE_WEIGHTED_REDUCTION=0 to disable the fusion.
         const char * env = getenv("GGML_CUDA_MOE_WEIGHTED_REDUCTION");
         return env == nullptr || atoi(env) != 0;
     }();
