@@ -1064,17 +1064,23 @@ Repository implementation/evidence chain:
   3cf35253f (initial 16K/32K PP scaling record; interpretation corrected here) ->
   925d93700 (indexed-CSA design note, now held by this roadmap)
 
-New raw-decode Ralph log:
+Raw-decode Ralph log:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
-New raw-decode Ralph state:
+Raw-decode Ralph state:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.state.json
-Last synchronized:
-  2026-08-04 (new-loop commit to be recorded after creation)
+Raw-decode Ralph status:
+  active, iteration 1/50; started 2026-08-04T03:47:49Z
+Initial synchronized roadmap commit:
+  5df30a53e
+Current next action:
+  Design and statically validate the M5.0 raw-TG harness before consuming a
+  GPU window.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
   and blockers. This repository document is canonical for accepted evidence,
-  current decisions, and the next action; every Ralph iteration must update it.
+  current decisions, and the next action; every Ralph iteration must update
+  and commit it before advancing.
 ```
 
 Planned final record:
