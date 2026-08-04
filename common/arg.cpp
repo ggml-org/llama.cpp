@@ -106,6 +106,7 @@ static const std::vector<tessera_subcommand_def> & tessera_subcommand_table() {
         { "policy",         TESSERA_SC_POLICY,         "calibration policy I/O and range selection" },
         { "runtime-probe",  TESSERA_SC_RUNTIME_PROBE,  "L2 forward-pass orchestrator marker" },
         { "throughput",     TESSERA_SC_THROUGHPUT,     "north-star batched-throughput workload harness" },
+        { "unified-writer", TESSERA_SC_UNIFIED_WRITER, "Phase 16: write a gemma4-assistant GGUF from 4+ per-component GGUFs + a per-tensor calibration policy" },
         { "w4a4",           TESSERA_SC_W4A4,           "enable W4A4 activation quantization for the current quantize run" },
     };
     return table;
@@ -948,7 +949,16 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
         // model is required (except for server)
         // TODO @ngxson : maybe show a list of available models in CLI in this case
-        bool can_skip_model = params.usage || params.completion || !params.server_base.empty();
+        bool can_skip_model = params.usage || params.completion || !params.server_base.empty()
+            // Exit-without-quantize subcommands do not need --model.
+            || tessera_active_sc == TESSERA_SC_CAPABILITY
+            || tessera_active_sc == TESSERA_SC_ADAPT
+            || tessera_active_sc == TESSERA_SC_ANONYMIZE
+            || tessera_active_sc == TESSERA_SC_THROUGHPUT
+            || tessera_active_sc == TESSERA_SC_DATASET
+            || tessera_active_sc == TESSERA_SC_DPACE
+            || tessera_active_sc == TESSERA_SC_L2
+            || tessera_active_sc == TESSERA_SC_UNIFIED_WRITER;
         if (!can_skip_model && params.model.path.empty()) {
             throw std::invalid_argument("error: --model is required\n");
         }
@@ -4433,6 +4443,109 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             tessera_params.dpace_gamma = std::stof(value);
         }
     ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_DPACE}));
+
+    // ----- `unified-writer` subcommand (Phase 16) -----
+    // Writes a single gemma4-assistant GGUF from 4+ per-component
+    // source GGUFs (trunk / dflash / dspark / mtp_nextn / shared_embd)
+    // + a per-tensor calibration policy (sidecar JSON via --policy,
+    // OR the dispatch's tessera_db via --tessera-db). At least one
+    // --{component} flag is required. --out is the destination path.
+    //
+    // The CLI matches the brief's spec:
+    //   llama-quantize --write-unified-gguf <out.gguf> \
+    //                   --arch gemma4-assistant \
+    //                   --policy <policy.json> \
+    //                   --trunk <trunk.gguf> \
+    //                   --dflash <dflash.gguf> \
+    //                   --dspark <dspark.gguf> \
+    //                   --mtp <mtp.gguf> \
+    //                   --shared-embd <embd.gguf>
+    //
+    // In subcommand form the same flags work:
+    //   llama-tessera unified-writer --out <out.gguf> \
+    //                                 --arch gemma4-assistant \
+    //                                 --policy <policy.json> \
+    //                                 --trunk <trunk.gguf> ...
+    add_opt(common_arg(
+        {"--out"}, "PATH",
+        "Tessera: destination unified GGUF path (default: unified.gguf)",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--arch"}, "ARCH",
+        "Tessera: destination arch (default: gemma4-assistant). The only\n"
+        "supported value is gemma4-assistant; other archs would need a\n"
+        "different writer.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_arch = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--policy"}, "PATH",
+        "Tessera: per-tensor calibration policy JSON. The JSON shape mirrors\n"
+        "unified_calibrate.py's output: a top-level 'tensor_families' array\n"
+        "of {model_role, name, dtype} triples. When --tessera-db is also\n"
+        "set, the DB's per-(model_hash, model_role, name) tensor_stats\n"
+        "rows override the sidecar.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_policy = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--hparams"}, "PATH",
+        "Tessera: JSON file with the gemma4-assistant hparams (n_layer,\n"
+        "n_embd, n_head, n_embd_head_k/v, n_swa, ...). When omitted, the\n"
+        "writer derives sensible defaults from the source GGUFs.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_hparams = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--trunk"}, "PATH",
+        "Tessera: path to the trunk's per-component GGUF (the gemma4-12B\n"
+        "weights that the MTP graph borrows via the drafter's ctx_other).",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_trunk = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--dflash"}, "PATH",
+        "Tessera: path to the dflash drafter's per-component GGUF. The\n"
+        "writer copies the drafter's tensors with a 'dflash.' prefix to\n"
+        "disambiguate from the trunk's identically-named tensors.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_dflash = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--dspark"}, "PATH",
+        "Tessera: path to the dspark heads' per-component GGUF. The dspark\n"
+        "extension (markov_w1, markov_w2, conf_proj) lives on the dflash\n"
+        "arch; the writer copies the heads as-is.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_dspark = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--mtp"}, "PATH",
+        "Tessera: path to the MTP nextn per-component GGUF. The mtp_nextn\n"
+        "tensors are blk.{i}.nextn.* in the gemma4 arch convention.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_mtp = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--shared-embd"}, "PATH",
+        "Tessera: path to the shared embeddings GGUF (token_embd,\n"
+        "output). The shared_embd component's tensor data is the\n"
+        "canonical 'worst-of-trunk-and-dflash qtype' token table when\n"
+        "both components reference the same shared tensor.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_shared_embd = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
 
     // ----- `evolve` subcommand -----
     add_opt(common_arg(

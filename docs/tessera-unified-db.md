@@ -1010,3 +1010,195 @@ variant (default) needs ~0.5 GB and ~2-10 s.
   needs ~30 GB free disk. The default small variant
   is fast and validates the property; the 12B variant
   is the production validation.
+||||||| 1a5d56ca2
+
+## Phase 16: unified GGUF writer (C++ side)
+
+The unified Gemma4 12B + dspark + dflash + MTP pipeline
+(LLM_ARCH_GEMMA4_ASSISTANT) emits a single self-contained GGUF
+in one quantization pass. The writer (`ts_unified_writer`,
+`tools/quantize/tessera/tessera-unified-writer.{h,cpp}`) takes
+4+ per-component source GGUFs (trunk / dflash / dspark /
+mtp_nextn / shared_embd) and the per-tensor calibration policy
+and produces a `gemma4-assistant` GGUF that the loader
+(`src/models/gemma4-assistant.cpp`) can read end-to-end.
+
+### Per-tensor qtype reader (Phase 16 schema)
+
+The pre-Phase-16 `tensor_stats` table had `PRIMARY KEY
+(model_hash, name)`. The unified arch's per-block tensors
+collide on `name` (the trunk and the dflash drafter both
+export `blk.0.attn_q.weight`); the new PK is
+`(model_hash, model_role, name)` where `model_role` is one of
+`trunk` / `dflash` / `dspark` / `mtp_nextn` / `shared_embd`.
+
+The migration is the standard DuckDB PK-rebuild dance
+(`CREATE new -> INSERT FROM old -> DROP old -> RENAME`)
+on `tensor_stats`, idempotent via an
+`information_schema.columns` check. The writer branch
+(`evolve/unified-writer`) only needs the column on
+`tensor_stats`; the schema branch (`evolve/unified-schema`)
+extends the same dance to the other 6 tables that share the
+collision pattern (`l3_outlier_summary`, `l4_probe_summary`,
+`l5_plan_summary`, `l4_plan_outcome`, `l5_outcome`,
+`l5_weights`). The writer's `ts_tessera_db_upsert_tensor_stat`
+honors the new column; an empty `model_role` defaults to
+`"trunk"` so the pre-Phase-16 contract (single-component
+writes) is preserved.
+
+The new reader is `ts_tessera_db_read_unified_policy(db,
+model_hash, role, out, err)`:
+* `role` is empty -> all roles for the model
+* `role` is non-empty -> just that role
+* Rows are returned in `(model_role, name)` order so the
+  writer's per-component scan is cache-friendly.
+
+The dispatch's GA-prep walk uses this reader (via the
+`tessera_db` CLI flag) to feed the writer with the
+calibration-verdict qtype per tensor. When the dispatch
+opens a pre-Phase-16 DB (no `model_role` column yet), the
+migration runs transparently on the first `ts_tessera_db_open`.
+
+### The writer
+
+`ts_unified_writer` is a C++ class that knows the
+gemma4-assistant tensor layout. Per-component routing:
+
+* `trunk`        -> copy as-is. The trunk's `blk.{i}.attn_q.weight`
+                    IS the gemma4-assistant MTP-side per-block
+                    attn_q (the MTP graph uses the same names).
+* `dflash`       -> copy with a `dflash.` prefix to disambiguate
+                    from the trunk's identically-named tensors.
+* `dspark`       -> copy as-is. The dspark heads
+                    (`markov_w1`, `markov_w2`, `conf_proj`) are
+                    unique.
+* `mtp_nextn`    -> copy as-is. The mtp_nextn tensors are
+                    `blk.{i}.nextn.*` with unique suffixes.
+* `shared_embd`  -> copy as-is. The shared embeddings
+                    (`token_embd`, `output`) are unique.
+
+Tile640 (`GGML_TYPE_TESSERA_T640`) cluster format is preserved
+end-to-end: the writer detects the base tensor's tile640 type,
+copies the 6+ sub-tensors by data pointer, and emits a
+`TESSERA_T640` placeholder for the base (the loader reads the
+sub-tensors via `get_tile640_tensor`).
+
+Per-tensor qtype override: the calibration policy's
+`(model_role, name) -> dtype` map is consulted for each tensor;
+when the policy's dtype differs from the source's qtype, the
+destination tensor's type is set to the policy value. A
+no-op override (policy says F16, source is F16) is intentionally
+not counted as an override (the per-tensor override counter
+in the writer's stats reflects actual changes).
+
+Duplicate detection: the writer tracks each destination name
+emitted; on a collision (the same dst_name from a later
+component), the tensor is skipped rather than calling
+`gguf_add_tensor`'s `ABORT` path. The `shared_embd`-vs-`trunk`
+case for `token_embd` is the common collision: trunk is
+written first, `shared_embd`'s copy is silently skipped (they
+should be the same tensor data anyway).
+
+### CLI
+
+```
+llama-tessera unified-writer \
+    --out <dest.gguf> \
+    --arch gemma4-assistant \
+    --hparams <hparams.json> \
+    --policy <policy.json> \
+    --trunk <trunk.gguf> \
+    --dflash <dflash.gguf> \
+    --dspark <dspark.gguf> \
+    --mtp <mtp.gguf> \
+    --shared-embd <embd.gguf>
+```
+
+At least one `--{component}` flag is required. `--hparams` is
+a JSON file with the gemma4 arch's canonical field names
+(`n_layer`, `n_embd`, `feed_forward_length`, `attention.head_count`,
+`attention.head_count_kv`, `attention.key_length`, `attention.value_length`,
+`attention.key_length_swa`, `attention.value_length_swa`,
+`attention.sliding_window`, `attention.sliding_window_pattern` (uint8 array),
+`attention.layer_norm_rms_epsilon`, `rope.freq_base_swa`,
+`nextn_predict_layers`, `vocab_size`, `embedding_length_out`,
+`n_kv_shared_layers`).
+
+`--policy` is a sidecar JSON file with the same shape
+`unified_calibrate.py` emits: a top-level `tensor_families` array
+of `{model_role, name, dtype}` triples. When `--tessera-db` is
+also set, the per-`(model_hash, model_role, name)` `tensor_stats`
+rows override the sidecar on collision (the DB is the
+production data source; the sidecar is a debugging affordance).
+
+### End-to-end example
+
+Synthetic 4-component input (1 trunk + 1 dflash + 1 dspark +
+1 mtp_nextn + 1 shared_embd = 17 tensors, ~26 KB output):
+
+```
+$ llama-tessera unified-writer \
+    --out unified.gguf \
+    --arch gemma4-assistant \
+    --hparams hparams.json \
+    --policy policy.json \
+    --trunk trunk.gguf \
+    --dflash dflash.gguf \
+    --dspark dspark.gguf \
+    --mtp mtp.gguf \
+    --shared-embd shared.gguf
+unified-writer: unified.gguf -> ok
+  tensors: trunk=6 dflash=3 dspark=3 mtp_nextn=4 shared_embd=1
+  qtype overrides: 2 (per-tensor calibration policy)
+  total bytes: 26122
+```
+
+The output GGUF's `general.architecture` is `gemma4-assistant`,
+the gemma4-specific hparams land (block_count, embedding_length,
+attention.key_length_swa, rope.freq_base_swa, ...), the per-tensor
+qtype overrides from the policy take effect, and the byte-level
+data round-trips through the writer (the writer copies tensors
+by data pointer; the source GGUF's data is mmap'd and not
+re-read or re-quantized). Tile640 cluster format is preserved
+end-to-end (a tile640-encoded source tensor arrives at the
+destination with all 6+ sub-tensors intact).
+
+### Tests
+
+`test-unified-writer` (`tools/quantize/tessera/test_unified_writer.cpp`,
+95 cases):
+1. qtype string round-trip (F16, Q4_K, TESSERA_T640, ...)
+2. policy JSON round-trip (load + save + structural compare)
+3. per-component qtype reader (`ts_tessera_db_read_unified_policy`)
+   with 5 rows, all-roles + per-role + unknown-model +
+   unknown-role coverage
+4. synthetic 4-component GGUF build (trunk + dflash + dspark +
+   mtp_nextn + shared_embd), write to a single gemma4-assistant
+   GGUF, reopen, verify arch + hparams + tensor count + 7
+   tensor name samples (including the dflash. prefix) +
+   byte-identical data round-trip for a non-overridden tensor +
+   type override verification for 2 tensors
+5. invalid-hparams rejection
+6. hparams JSON file round-trip (the CLI's --hparams path)
+
+`test-tessera-quantize-db` extends the existing
+`tensor_stats` round-trip with the new `model_role` column:
+* Pre-Phase-16 DBs (no `model_role` column) open cleanly via
+  the in-place migration
+* Post-Phase-16 DBs (column already present) no-op
+* `ts_tessera_db_read_unified_policy` returns the correct rows
+  for `(model_hash, "")`, `(model_hash, "trunk")`, etc.
+
+### Files
+
+| File | Role |
+|---|---|
+| `tools/quantize/tessera/tessera-unified-writer.{h,cpp}` | The writer class (`ts_unified_writer`), the per-tensor policy struct, the qtype string<->enum helpers, the policy JSON load/save helpers. |
+| `tools/quantize/tessera/tessera-quantize-db.{h,cpp}` | The minimal additive `model_role` migration on `tensor_stats` (the writer branch's scope); the new `ts_tessera_db_read_unified_policy` reader. |
+| `tools/quantize/tessera/test_unified_writer.cpp` | Round-trip + CLI test. 95 cases. |
+| `tools/quantize/tessera/test_quantize_db.cpp` | Extended with `ts_tessera_db_read_unified_policy` round-trip. |
+| `common/common.h` | New `TESSERA_SC_UNIFIED_WRITER` enum value. |
+| `common/tessera-args.h` | New `common_tessera_params` fields (`unified_out`, `unified_policy`, `unified_hparams`, `unified_{trunk,dflash,dspark,mtp,shared_embd}`, `unified_arch`). |
+| `common/arg.cpp` | The `unified-writer` subcommand table entry + 9 new `--{out,arch,policy,hparams,trunk,dflash,dspark,mtp,shared-embd}` add_opt entries; the `--model-is-required` early-exit list extended to include the new subcommand. |
+| `tools/quantize/quantize.cpp` | The `ts_cli_unified_writer` helper and the `TESSERA_SC_UNIFIED_WRITER` dispatch case. |
+| `tools/quantize/CMakeLists.txt` | New `tessera-unified-writer.cpp` in the `llama-quantize-impl` source list; new `test-unified-writer` test target. |

@@ -13,6 +13,8 @@
 #include "tessera/tessera-throughput.h"
 #include "tessera/tessera-dataset.h"
 #include "tessera/tessera-dpace.h"
+#include "tessera/tessera-unified-writer.h"
+#include "tessera/tessera-quantize-db.h"
 
 #include "gguf.h"
 
@@ -749,6 +751,220 @@ static int ts_cli_dpace(const common_tessera_params & tp) {
     return 0;
 }
 
+// --tessera-unified-writer: write a gemma4-assistant GGUF from 4+ per-component
+// GGUFs + a per-tensor calibration policy. Phase 16. No model loading runs;
+// the writer opens each source GGUF, copies the tensors (with optional
+// qtype overrides from the policy), and emits a single gemma4-assistant
+// GGUF. Returns a process exit code.
+//
+// CLI:
+//   llama-tessera unified-writer \
+//       --out <dest.gguf> \
+//       --arch gemma4-assistant \
+//       --policy <policy.json> \
+//       --hparams <hparams.json> \
+//       --trunk <trunk.gguf> \
+//       --dflash <dflash.gguf> \
+//       --dspark <dspark.gguf> \
+//       --mtp <mtp.gguf> \
+//       --shared-embd <embd.gguf>
+//
+// At least one --{component} flag is required. The hparams JSON is the
+// gemma4-assistant block_count / embedding_length / etc. that the loader
+// reads in src/models/gemma4-assistant.cpp:41-60. The policy JSON mirrors
+// unified_calibrate.py's tensor_families output.
+static int ts_cli_unified_writer(const common_tessera_params & tp) {
+    if (tp.unified_out.empty()) {
+        fprintf(stderr, "error: `unified-writer` subcommand requires --out PATH\n");
+        return 1;
+    }
+    if (tp.unified_arch != "gemma4-assistant") {
+        fprintf(stderr, "error: `unified-writer` only supports --arch gemma4-assistant; got '%s'\n",
+                tp.unified_arch.c_str());
+        return 1;
+    }
+
+    // Build the components list from the supplied --{component} flags.
+    // At least one must be set; the writer does not require all five.
+    std::vector<ts_unified_component> components;
+    auto add_component = [&](const std::string & path, const std::string & role) {
+        if (path.empty()) return;
+        if (!std::ifstream(path)) {
+            fprintf(stderr, "error: --%s: file not found: %s\n", role.c_str(), path.c_str());
+            // Non-fatal: continue with the other components. The
+            // writer's open_source will catch missing files.
+        }
+        ts_unified_component c;
+        c.path = path;
+        c.model_role = role;
+        components.push_back(std::move(c));
+    };
+    add_component(tp.unified_trunk,      "trunk");
+    add_component(tp.unified_dflash,     "dflash");
+    add_component(tp.unified_dspark,     "dspark");
+    add_component(tp.unified_mtp,        "mtp_nextn");
+    add_component(tp.unified_shared_embd, "shared_embd");
+    if (components.empty()) {
+        fprintf(stderr, "error: `unified-writer` requires at least one --{trunk,dflash,dspark,mtp,shared-embd} flag\n");
+        return 1;
+    }
+
+    // Load the per-tensor calibration policy from --policy (sidecar
+    // JSON) and, when --tessera-db is also set, merge in the DB's
+    // per-(model_hash, model_role, name) tensor_stats rows. The DB
+    // overrides the sidecar on collision (the DB is the production
+    // data source; the sidecar is a debugging affordance).
+    ts_unified_policy policy;
+    if (!tp.unified_policy.empty()) {
+        std::string err;
+        if (ts_unified_policy_load_json(tp.unified_policy, &policy, &err) != 0) {
+            fprintf(stderr, "error: --policy: %s\n", err.c_str());
+            return 1;
+        }
+    }
+    if (!tp.tessera_db.empty()) {
+        // The dispatch's tessera_db is the production data source.
+        // We need a model_hash to read the per-(model_hash,
+        // model_role, name) rows. The convention is the SHA256 of
+        // the trunk GGUF (the same hash the dispatch uses for the
+        // ga-prep walk's warm-start). When the trunk is not
+        // supplied, fall back to "dispatch-default".
+        std::string model_hash = "dispatch-default";
+        if (!tp.unified_trunk.empty()) {
+            model_hash = ts_tessera_db_hash_gguf(tp.unified_trunk);
+            if (model_hash.empty()) {
+                fprintf(stderr, "error: --tessera-db: failed to hash trunk GGUF for model_hash lookup\n");
+                return 1;
+            }
+        }
+        std::string err;
+        ts_tessera_db * db = ts_tessera_db_open(tp.tessera_db, &err);
+        if (db == nullptr) {
+            fprintf(stderr, "error: --tessera-db: %s\n", err.c_str());
+            return 1;
+        }
+        ts_tessera_db_unified_policy db_policy;
+        if (ts_tessera_db_read_unified_policy(db, model_hash, "", &db_policy, &err) != 0) {
+            fprintf(stderr, "error: --tessera-db: %s\n", err.c_str());
+            delete db;
+            return 1;
+        }
+        // DB overrides sidecar on collision: walk the DB rows and
+        // replace the sidecar's matching (model_role, name) entry.
+        for (const auto & db_e : db_policy.entries) {
+            bool replaced = false;
+            for (auto & s_e : policy.entries) {
+                if (s_e.model_role == db_e.model_role && s_e.name == db_e.name) {
+                    s_e.dtype = db_e.dtype;
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) {
+                ts_unified_policy_entry e;
+                e.model_role = db_e.model_role;
+                e.name       = db_e.name;
+                e.dtype      = db_e.dtype;
+                policy.entries.push_back(std::move(e));
+            }
+        }
+        delete db;
+    }
+
+    // Load the hparams. When --hparams is empty, fall back to a
+    // minimal "n_layer = 0" default; the writer rejects that with a
+    // clear error.
+    ts_unified_hparams hparams;
+    if (!tp.unified_hparams.empty()) {
+        std::ifstream f(tp.unified_hparams);
+        if (!f) {
+            fprintf(stderr, "error: --hparams: cannot read: %s\n", tp.unified_hparams.c_str());
+            return 1;
+        }
+        nlohmann::json j;
+        try {
+            f >> j;
+        } catch (const std::exception & e) {
+            fprintf(stderr, "error: --hparams: parse error: %s\n", e.what());
+            return 1;
+        }
+        // JSON key names match the writer's struct field names.
+        // The writer uses snake_case internally but the hparams
+        // file uses the gemma4 arch's canonical names (camelCase)
+        // so the same JSON can be authored from the legacy
+        // meta-sidecar tools.
+        auto get_u = [&](const char * k) -> uint32_t {
+            return j.contains(k) ? j[k].get<uint32_t>() : 0;
+        };
+        hparams.n_layer               = get_u("n_layer");
+        hparams.n_embd                = get_u("n_embd");
+        hparams.n_head                = get_u("n_head");
+        hparams.n_head_kv             = get_u("n_head_kv");
+        hparams.n_embd_head_k         = get_u("n_embd_head_k");
+        hparams.n_embd_head_v         = get_u("n_embd_head_v");
+        hparams.n_embd_head_k_swa     = get_u("n_embd_head_k_swa");
+        hparams.n_embd_head_v_swa     = get_u("n_embd_head_v_swa");
+        hparams.n_ff                  = get_u("n_ff");
+        hparams.n_vocab               = get_u("n_vocab");
+        hparams.n_embd_out            = get_u("n_embd_out");
+        hparams.n_swa                 = get_u("n_swa");
+        hparams.n_kv_shared_layers    = get_u("n_kv_shared_layers");
+        if (j.contains("rope_freq_base_train_swa")) {
+            hparams.rope_freq_base_train_swa = j["rope_freq_base_train_swa"].get<float>();
+        }
+        if (j.contains("f_norm_rms_eps")) {
+            hparams.f_norm_rms_eps = j["f_norm_rms_eps"].get<float>();
+        }
+        if (j.contains("is_swa_impl") && j["is_swa_impl"].is_array()) {
+            for (const auto & v : j["is_swa_impl"]) {
+                hparams.is_swa_impl.push_back(v.get<uint8_t>());
+            }
+        }
+    }
+    if (hparams.n_layer == 0) {
+        fprintf(stderr, "error: --hparams: n_layer must be > 0 (use a --hparams JSON with at least n_layer set)\n");
+        return 1;
+    }
+
+    // DFlash / DSpark hparams (optional). The writer does not
+    // strictly need them; they are emitted as auxiliary KV pairs
+    // when non-zero. The CLI uses zero defaults for now.
+    ts_unified_dflash_hparams dflash_hp{};
+    ts_unified_dspark_hparams dspark_hp{};
+
+    // Tessera provenance: best-effort. The build info is the
+    // llama-tessera commit + build-info; the main_tip is a TODO
+    // (we'd need to read the .git/HEAD on the user's filesystem).
+    ts_unified_meta meta;
+    const char * commit = llama_commit();
+    meta.build_info = std::string("tessera-unified-writer @ ") + (commit ? commit : "unknown");
+    meta.main_tip   = "";   // TODO: read from .git/HEAD when available
+
+    // Construct the writer and emit the unified GGUF.
+    std::string err;
+    ts_unified_writer w(tp.unified_out, components, policy,
+                         hparams, dflash_hp, dspark_hp, meta, &err);
+    if (!err.empty()) {
+        fprintf(stderr, "error: unified-writer: %s\n", err.c_str());
+        return 1;
+    }
+    int rc = w.write_all(&err);
+    if (rc != 0) {
+        fprintf(stderr, "error: unified-writer: write_all: %s\n", err.c_str());
+        return rc;
+    }
+    const auto & s = w.get_stats();
+    printf("unified-writer: %s -> %s\n", tp.unified_out.c_str(),
+           "ok");
+    printf("  tensors: trunk=%d dflash=%d dspark=%d mtp_nextn=%d shared_embd=%d\n",
+           s.n_tensors_trunk, s.n_tensors_dflash, s.n_tensors_dspark,
+           s.n_tensors_mtp_nextn, s.n_tensors_shared_embd);
+    printf("  qtype overrides: %d (per-tensor calibration policy)\n",
+           s.n_qtype_overrides);
+    printf("  total bytes: %lld\n", (long long)s.total_bytes);
+    return 0;
+}
+
 int llama_quantize(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     if (argc < 3) {
@@ -1231,6 +1447,8 @@ int llama_tessera_main(int argc, char ** argv) {
                 return 1;
             }
             return ts_cli_dpace(tp);
+        case TESSERA_SC_UNIFIED_WRITER:
+            return ts_cli_unified_writer(tp);
         default:
             break;
     }
