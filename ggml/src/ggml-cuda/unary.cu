@@ -200,19 +200,22 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         const int64_t sd2 = dst->nb[2] / type_size;
         const int64_t sd3 = dst->nb[3] / type_size;
 
-        const int block_size = CUDA_NEG_BLOCK_SIZE;
-        const int grid_size = (n_total + block_size - 1) / block_size;
+        const int64_t block_size = CUDA_NEG_BLOCK_SIZE;
+        const int64_t block_num = (n_total + block_size - 1) / block_size;
+        GGML_ASSERT(block_num <= INT_MAX);
+        const int grid_size = static_cast<int>(block_num);
+
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)grid_size, block_size, 0, stream);
 
         if (src0->type == GGML_TYPE_F16) {
             ggml_cuda_kernel_launch(unary_op_kernel_strided<op, half>,
-                launch_params,(const half*)src0->data, (half*)dst->data,
+                launch_params,(const half*)src0_d, (half*)dst_d,
                 ne0, ne1, ne2, ne3, n_total,
                 sx0, sx1, sx2, sx3,
                 sd0, sd1, sd2, sd3);
         } else {
             ggml_cuda_kernel_launch(unary_op_kernel_strided<op, float>,
-                launch_params,(const float*)src0->data, (float*)dst->data,
+                launch_params,(const float*)src0_d, (float*)dst_d,
                 ne0, ne1, ne2, ne3, n_total,
                 sx0, sx1, sx2, sx3,
                 sd0, sd1, sd2, sd3);
