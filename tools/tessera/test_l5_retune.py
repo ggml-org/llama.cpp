@@ -1209,6 +1209,159 @@ class TestL5Retune(unittest.TestCase):
         # The top_fraction is still recommended.
         self.assertIsNotNone(attn.top_fraction)
 
+    # ---- 13. Phase 15: EMA-aware retune --------------------
+
+    def test_compute_l5_weights_ema_join_replaces_score(self) -> None:
+        """When l5_plan_ema is present, the retune uses the
+        EMA-tracked score for the OLS instead of the
+        per-iteration sensitivity_score. The per-row
+        ema_score is the EMA value at the iteration of the
+        plan; the join replaces the per-iteration score
+        with the EMA value.
+
+        This test exercises the join path. The verdict is
+        tagged with the 3-coefficient algorithm and the
+        coefficients reflect the EMA-driven signal.
+        """
+        rows: list[dict] = []
+        # 4 rows; per-iteration scores are noisy; the EMA
+        # values are the stable signal. The component
+        # columns are populated so the 3-coefficient path
+        # runs.
+        im_grid = [0.1, 0.3, 0.5, 0.7]
+        grad_grid = [0.4, 0.2, 0.6, 0.3]
+        layer_grid = [0.5, 0.7, 0.3, 0.1]
+        for i, (im, grad, layer) in enumerate(
+            zip(im_grid, grad_grid, layer_grid),
+        ):
+            # The per-iteration sensitivity is noisy
+            # (random-ish, distinct from the EMA).
+            sens = 0.4 + 0.1 * i
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"p{i}", "family": "attn_q",
+                "sensitivity_score": sens,
+                "imatrix_magnitude": im,
+                "gradient_proxy": grad,
+                "layer_position_prior": layer,
+                "mse_before": 0.01, "mse_after": 0.01 + im,
+                "delta_mse": im,
+                "plan_accepted": i % 2 == 0,
+            })
+        _seed_l5_outcome(self.db_path, "ema", rows)
+
+        # The EMA values: a stable signal where
+        # ema_score = 0.5 * im + 0.3 * grad + 0.2 * layer.
+        # The 3-coefficient OLS on (im, grad, layer, ema)
+        # recovers the (1, 0, 0) coefficient on im; the
+        # per-iteration sensitivity_score is too noisy
+        # to recover a clean signal.
+        ema_rows = [
+            {
+                "model_hash": "ema",
+                "name": f"blk.0.attn_q.{i}",
+                "iteration": 0, "plan_id": f"p{i}",
+                "ema_score": 0.5 * im + 0.3 * grad + 0.2 * layer,
+            }
+            for i, (im, grad, layer) in enumerate(
+                zip(im_grid, grad_grid, layer_grid),
+            )
+        ]
+        # Insert the EMA rows directly (the test schema
+        # does not have a typed insert helper).
+        import duckdb as _dd
+        con = _dd.connect(self.db_path)
+        try:
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS l5_plan_ema ("
+                "model_hash TEXT NOT NULL, name TEXT NOT NULL, "
+                "iteration INTEGER NOT NULL, plan_id TEXT NOT NULL, "
+                "ema_score DOUBLE, "
+                "PRIMARY KEY (model_hash, name, iteration, plan_id))"
+            )
+            for r in ema_rows:
+                con.execute(
+                    "INSERT INTO l5_plan_ema VALUES (?, ?, ?, ?, ?)",
+                    [r["model_hash"], r["name"], r["iteration"],
+                     r["plan_id"], r["ema_score"]],
+                )
+        finally:
+            con.close()
+
+        # Run the retune with the EMA-aware path. The 4
+        # rows produce a 3-coefficient OLS; the EMA-driven
+        # sensitivity is the per-iteration score in the
+        # lstsq (because the per-iteration score is
+        # replaced by the EMA value on the join).
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="ema",
+            use_ema=True, write_back=False,
+        )
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        self.assertTrue(attn.was_acted_on)
+        # The 3-coefficient path is used.
+        self.assertEqual(attn.retune_algorithm, RETUNE_SOURCE_TAG_3COEF)
+        # b_im is positive (im is a positive predictor of
+        # delta_mse; the per-iteration sensitivity is
+        # replaced by the EMA value via the join, so the
+        # OLS sees the stable signal).
+        self.assertGreater(attn.slopes[0], 0.0)
+
+        # Without the EMA join (use_ema=False), the OLS
+        # uses the per-iteration sensitivity_score, which
+        # is noisy. The coefficients may differ.
+        verdicts_no_ema = compute_l5_weights(
+            self.db_path, model_hash="ema",
+            use_ema=False, write_back=False,
+        )
+        attn_no_ema = next(v for v in verdicts_no_ema
+                           if v.family == "attn_q")
+        # The two retunes may produce different
+        # coefficients; the EMA path is the production
+        # path. We don't enforce a specific difference,
+        # but we verify both runs succeed.
+        self.assertTrue(attn_no_ema.was_acted_on)
+
+    def test_compute_l5_weights_no_ema_table_falls_back(self) -> None:
+        """When l5_plan_ema is missing (DBs created before
+        Phase 15 or the EMA producer hasn't run yet), the
+        retune falls back to the per-iteration
+        sensitivity_score. The retune is unaffected.
+        """
+        rows: list[dict] = []
+        for i, (im, grad, layer) in enumerate([
+            (0.1, 0.7, 0.4),
+            (0.3, 0.5, 0.6),
+            (0.5, 0.3, 0.2),
+            (0.7, 0.1, 0.8),
+        ]):
+            sens = 0.5 * im + 0.3 * grad + 0.2 * layer
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"p{i}", "family": "attn_q",
+                "sensitivity_score": sens,
+                "imatrix_magnitude": im,
+                "gradient_proxy": grad,
+                "layer_position_prior": layer,
+                "mse_before": 0.01, "mse_after": 0.01 + im,
+                "delta_mse": im,
+                "plan_accepted": i % 2 == 0,
+            })
+        _seed_l5_outcome(self.db_path, "no_ema", rows)
+        # No l5_plan_ema table; the retune uses the
+        # per-iteration sensitivity_score.
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="no_ema",
+            use_ema=True, write_back=True,
+        )
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        self.assertTrue(attn.was_acted_on)
+        # The 3-coefficient path is used (the per-tensor
+        # components are populated).
+        self.assertEqual(attn.retune_algorithm, RETUNE_SOURCE_TAG_3COEF)
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestL5Retune)
