@@ -1,5 +1,8 @@
 import { ToolSource } from '$lib/enums/tools.enums';
 
+/** HTTP header carrying the working directory a tool call runs in. The server resolves relative paths against it; the model cannot override it. */
+export const X_TOOL_CWD_HEADER = 'x-tool-cwd';
+
 export const TOOL_GROUP_LABELS = {
 	[ToolSource.BUILTIN]: 'Built-in',
 	[ToolSource.CUSTOM]: 'JSON Schema',

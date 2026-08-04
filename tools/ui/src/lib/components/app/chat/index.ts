@@ -273,6 +273,16 @@ export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResou
 export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
 
 /**
+ * Working directory selector for agent mode. Renders a chip below the chat
+ * form; clicking it opens a popover with a directory picker backed by the
+ * server's `file_glob_search` built-in tool (POST /tools). The picked
+ * directory is exposed via `bind:directory`; changing it records a
+ * synthetic "Set working directory to ..." user message into chat history
+ * and is enforced on tool calls via the `x-tool-cwd` request header.
+ */
+export { default as ChatFormWorkingDirectory } from './ChatForm/ChatFormWorkingDirectory.svelte';
+
+/**
  * **ChatFormPickerMcpPrompts** - MCP prompt selection interface
  *
  * Floating picker for browsing and selecting MCP Server Prompts.
@@ -556,6 +566,22 @@ export { default as ChatMessageStatisticsBadge } from './ChatMessages/ChatMessag
  * content preview. Stored in message.extra as DatabaseMessageExtraMcpPrompt.
  */
 export { default as ChatMessageMcpPrompt } from './ChatMessages/ChatMessage/ChatMessageMcpPrompt/ChatMessageMcpPrompt.svelte';
+
+/**
+ * Synthetic working-directory-change message. Rendered in place of a user
+ * bubble when the message content parses as a cwd message (see
+ * parseCwdMessage); shows the new cwd with the same folder-row treatment
+ * the tool-call UI used.
+ */
+export { default as ChatMessageCwdChange } from './ChatMessages/ChatMessage/ChatMessageCwdChange.svelte';
+
+/**
+ * Generic wrapper for UI-generated (synthetic) messages. Routes the
+ * working-directory change to ChatMessageCwdChange and renders a muted
+ * fallback for any other synthetic text, so no synthetic message ever
+ * surfaces as a user bubble.
+ */
+export { default as ChatMessageSynthetic } from './ChatMessages/ChatMessage/ChatMessageSynthetic.svelte';
 
 /**
  * Formatted content display for MCP prompt messages. Renders the full prompt
