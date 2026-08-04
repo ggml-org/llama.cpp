@@ -20,11 +20,10 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 
 #if defined(_WIN32)
 #include <windows.h>
-#else
-#include <stdatomic.h>
 #endif
 
 void ggml_compute_forward_mul_mat_id_cold(
