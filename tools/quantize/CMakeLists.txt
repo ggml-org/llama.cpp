@@ -332,6 +332,25 @@ if(LLAMA_BUILD_TESTS)
     endif()
     add_test(NAME ${TARGET} COMMAND ${TARGET})
 
+    # Phase 16.7: per-component (model_role, name) covering
+    # index + migration audit sidecar. Verifies the 7
+    # CREATE INDEX IF NOT EXISTS lines land on a fresh open
+    # and survive re-opens, runs a smoke benchmark on the
+    # per-component query, and confirms the model_role
+    # migration writes the sidecar next to the duckdb file.
+    set(TARGET test-tessera-db-indexes)
+    add_executable(${TARGET} tessera/test_tessera_db_indexes.cpp
+                                  tessera/tessera-quantize-db.cpp
+                                  tessera/tessera-db-buffer.cpp)
+    target_link_libraries(${TARGET} PRIVATE
+        llama-common ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    if(TS_DUCKDB_AVAILABLE)
+        target_sources(${TARGET} PRIVATE $<TARGET_OBJECTS:duckdb-amalgamation>)
+        target_link_libraries(${TARGET} PRIVATE duckdb-amalgamation)
+    endif()
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+
     # Per-table write buffer: parallel producer threads, single flusher
     # thread, count + time + explicit flush triggers, sync-on-exit. Standalone
     # test that builds against the DuckDB amalgamation + the buffer module.

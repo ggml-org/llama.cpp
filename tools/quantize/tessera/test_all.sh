@@ -12,6 +12,7 @@ T=tools/quantize/tessera
 C=common/tessera-debug
 BIN=/tmp/tessera_test_bin
 CXX="clang++ -std=c++17 -O2"
+TS_DUCKDB_DIR=third-party/duckdb
 
 mkdir -p "$BIN"
 
@@ -173,6 +174,15 @@ compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I
 # L1 sidecar writer end-to-end (needs a stub tessera-build-info.h)
 printf '#pragma once\n#define TESSERA_KERNEL_VERSION "test"\n#define TESSERA_MAIN_TIP "test"\n' > "$BIN/tessera-build-info.h"
 compile_and_run l1_sidecar  $T/test_l1_sidecar.cpp  $C/tessera-debug.cpp $C/tessera-sidecar-v3.cpp -I $C -I "$BIN"
+
+# --- Phase 16.7: per-component (model_role, name) covering index + audit sidecar ---
+# 7 CREATE INDEX IF NOT EXISTS lines on open; smoke benchmark; the
+# model_role_migration.json sidecar written when a pre-Phase-16 DB is
+# opened. Standalone DuckDB test (no GGUF, no dispatch). Links the
+# duckdb amalgamation directly.
+compile_and_run tessera_db_indexes $T/test_tessera_db_indexes.cpp \
+    $T/tessera-quantize-db.cpp $T/tessera-db-buffer.cpp \
+    $TS_DUCKDB_DIR/duckdb.cpp -I $TS_DUCKDB_DIR -I $T -w
 
 # --- CoreML bridge (builder pulls in the MIL + telemetry modules) ---
 compile_and_run coreml_bridge $T/test_coreml_bridge.cpp $T/tessera-coreml.cpp $T/tessera-coreml-builder.cpp $T/tessera-coreml-metadata.cpp $T/tessera-coreml-mil.cpp $T/tessera-coreml-telemetry.cpp -I ggml/include
