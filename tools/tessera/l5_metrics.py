@@ -171,6 +171,48 @@ def combine(
     return out
 
 
+def decompose(
+    combined_score: float,
+    weights: tuple[float, float, float] = DEFAULT_WEIGHTS,
+) -> tuple[float, float, float]:
+    """Best-effort inversion of :func:`combine` for a single tensor.
+
+    Given a combined ``sensitivity_score`` and the weights that
+    produced it, recover the per-component contributions
+    ``(im, grad, layer)`` such that
+    ``w_im * im + w_grad * grad + w_layer * layer = combined_score``
+    and ``im == grad == layer`` (the uniform-spread assumption).
+
+    This is the same decomposition the orchestrator's
+    :class:`SensitivityScorer` uses when storing the per-component
+    components on the l5_plan_summary / l5_outcome rows. The
+    retune reads those rows; this helper exists for diagnostics
+    and for any consumer that has only the combined score and
+    wants the (uniform) per-component spread.
+
+    The function is not a true inverse (there are infinitely many
+    ``(im, grad, layer)`` triples that produce a given combined
+    score); the uniform-spread assumption is the most reasonable
+    one when the per-tensor components are not available.
+
+    Edge cases:
+      * If all weights are zero (degenerate), returns
+        ``(0.0, 0.0, 0.0)``. The SensitivityScorer's
+        rebalance-when-imatrix-missing path can land in this
+        state.
+      * If only one weight is non-zero, the entire ``combined_score``
+        is attributed to that component.
+    """
+    w_im, w_grad, w_layer = weights
+    s = float(combined_score)
+    # Uniform spread: each component is s / sum(weights). When
+    # all weights are equal (the default), this is s.
+    total = float(w_im) + float(w_grad) + float(w_layer)
+    if total <= 0.0:
+        return (0.0, 0.0, 0.0)
+    return (s * w_im / total, s * w_grad / total, s * w_layer / total)
+
+
 # -- EMA tracker ------------------------------------------------------------
 
 

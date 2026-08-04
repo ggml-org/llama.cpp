@@ -219,8 +219,18 @@ class RequantAction:
     to_qtype: str
     expected_mse_delta: float
     sensitivity: float
-    reason: str
-    storage_delta_bits: int
+    # Phase 15: the per-tensor sensitivity component values at
+    # the iteration the action was emitted. These are the values
+    # the retune reads to fit a 3-coefficient OLS that decomposes
+    # which component is miscalibrated per (model, family).
+    # ``None`` for any field means the scorer could not produce
+    # the component (e.g. the imatrix was missing and the
+    # rebalance path collapsed one of the components to 0).
+    imatrix_magnitude: float | None = None
+    gradient_proxy: float | None = None
+    layer_position_prior: float | None = None
+    reason: str = ""
+    storage_delta_bits: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -229,6 +239,9 @@ class RequantAction:
             "to": self.to_qtype,
             "expected_mse_delta": self.expected_mse_delta,
             "sensitivity": self.sensitivity,
+            "imatrix_magnitude": self.imatrix_magnitude,
+            "gradient_proxy": self.gradient_proxy,
+            "layer_position_prior": self.layer_position_prior,
             "reason": self.reason,
             "storage_delta_bits": self.storage_delta_bits,
         }
@@ -518,12 +531,27 @@ class RequantPlanner:
         # computations are scalar and the polars overhead would
         # exceed the gain. The resulting ``iter_rows`` projection is
         # the per-tensor view the rest of the planner consumes.
+        #
+        # Phase 15: include the per-tensor sensitivity components
+        # (imatrix_magnitude, gradient_proxy, layer_position_prior)
+        # in the projection so the action builder can populate
+        # them on each RequantAction. The retune reads them on
+        # the l5_plan_summary / l5_outcome side.
         n = df.height
+        # The component columns are only present after a scorer
+        # pass. On the first iteration of a brand-new loop the
+        # orchestrator calls planner.plan() before scorer.score()
+        # (the no-op / termination check); include the columns
+        # defensively with .get() downstream.
+        rank_cols = [
+            "tensor", "current_qtype", "mse", "n_weights",
+            "sensitivity_ema",
+            "imatrix_magnitude", "gradient_proxy",
+            "layer_position_prior",
+        ]
+        rank_cols = [c for c in rank_cols if c in df.columns]
         ranked_records = sorted(
-            df.select(
-                "tensor", "current_qtype", "mse", "n_weights",
-                "sensitivity_ema",
-            ).iter_rows(named=True),
+            df.select(rank_cols).iter_rows(named=True),
             key=lambda r: float(r["sensitivity_ema"] or 0.0),
             reverse=True,
         )
@@ -611,6 +639,21 @@ class RequantPlanner:
                     to_qtype=target,
                     expected_mse_delta=expected_delta,
                     sensitivity=sens,
+                    imatrix_magnitude=(
+                        float(tensor["imatrix_magnitude"])
+                        if tensor.get("imatrix_magnitude") is not None
+                        else None
+                    ),
+                    gradient_proxy=(
+                        float(tensor["gradient_proxy"])
+                        if tensor.get("gradient_proxy") is not None
+                        else None
+                    ),
+                    layer_position_prior=(
+                        float(tensor["layer_position_prior"])
+                        if tensor.get("layer_position_prior") is not None
+                        else None
+                    ),
                     reason="top-fraction",
                     storage_delta_bits=bits_after - bits_before,
                 )
@@ -660,6 +703,21 @@ class RequantPlanner:
                     to_qtype=target,
                     expected_mse_delta=expected_delta,
                     sensitivity=sens,
+                    imatrix_magnitude=(
+                        float(tensor["imatrix_magnitude"])
+                        if tensor.get("imatrix_magnitude") is not None
+                        else None
+                    ),
+                    gradient_proxy=(
+                        float(tensor["gradient_proxy"])
+                        if tensor.get("gradient_proxy") is not None
+                        else None
+                    ),
+                    layer_position_prior=(
+                        float(tensor["layer_position_prior"])
+                        if tensor.get("layer_position_prior") is not None
+                        else None
+                    ),
                     reason="bottom-fraction",
                     storage_delta_bits=bits_after - bits_before,
                 )
@@ -1034,9 +1092,19 @@ class OrchestratorLoop:
                     "delta_bits":      int(action.storage_delta_bits),
                     "sensitivity_score": float(action.sensitivity),
                     "delta_quality":   float(action.expected_mse_delta),
-                    "imatrix_magnitude":  float("nan"),
-                    "gradient_proxy":     float("nan"),
-                    "layer_position_prior": float("nan"),
+                    # Phase 15: populate the per-tensor sensitivity
+                    # components from the RequantAction (captured at
+                    # plan-emit time by the planner). ``None`` values
+                    # (e.g. the imatrix was missing and the scorer
+                    # collapsed one of the components) are written as
+                    # ``null`` (the polars-canonical null marker) so
+                    # the retune's 3-coefficient OLS can detect the
+                    # missing-component case and fall back to the
+                    # 2-coefficient OLS on the combined
+                    # sensitivity_score for that row.
+                    "imatrix_magnitude":  action.imatrix_magnitude,
+                    "gradient_proxy":     action.gradient_proxy,
+                    "layer_position_prior": action.layer_position_prior,
                     "plan_id":         "",
                     "iteration":       int(plan.iteration),
                     "kernel_version":  kernel_version,
