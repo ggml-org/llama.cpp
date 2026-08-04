@@ -1,5 +1,6 @@
 #include "llama.h"
 
+#include "arg.h"
 #include "build-info.h"
 #include "common.h"
 #include "imatrix-loader.h"
@@ -839,7 +840,7 @@ int llama_quantize(int argc, char ** argv) {
             }
         } else {
             std::string terr;
-            const int n = common_tessera_parse_one(argc, argv, arg_idx, terr);
+            const int n = common_arg_dispatch_tessera(argc, argv, arg_idx, terr);
             if (n < 0) {
                 fprintf(stderr, "%s", terr.c_str());
                 usage(argv[0]);

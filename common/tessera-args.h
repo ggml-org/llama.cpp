@@ -100,9 +100,3 @@ struct common_tessera_params {
 };
 
 const common_tessera_params & common_get_tessera_params();
-
-// Parse one --tessera-* / --calib-* flag at argv[i] into the shared Tessera
-// params (for tools that hand-roll their arg loop). Returns argv slots consumed
-// (1 = switch, 2 = valued), 0 if argv[i] is not a Tessera flag, or -1 on a
-// validation error (message written to err).
-int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err);

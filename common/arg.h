@@ -131,6 +131,15 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
 // see: https://github.com/ggml-org/llama.cpp/issues/18163
 void common_params_add_preset_options(std::vector<common_arg> & args);
 
+// Dispatch a single Tessera-flavored arg (--tessera-*, --calib-*,
+// --progress-file, --quantize-db) at argv[i] to the handler registered
+// in common_params_parse_ex via the add_opt path. Intended for tools
+// (llama-quantize) that hand-roll their arg loop instead of calling
+// common_params_parse.
+// Returns argv slots consumed (1 = switch, 2 = valued), 0 if argv[i] is
+// not a Tessera flag, or -1 on a validation error (message written to err).
+int common_arg_dispatch_tessera(int argc, char ** argv, int i, std::string & err);
+
 struct common_models_handler {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;

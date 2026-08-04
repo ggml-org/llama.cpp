@@ -71,44 +71,19 @@ const common_tessera_params & common_get_tessera_params() {
     return tessera_params;
 }
 
-// Forward declarations for the add_opt-backed dispatch path used by
-// common_tessera_parse_one. Defined further down in this file.
+// Forward declaration for the add_opt-backed dispatch path used by
+// common_arg_dispatch_tessera. Defined further down in this file.
 static const std::vector<common_arg> & get_common_arg_defs();
-static int common_arg_dispatch_one(int argc, char ** argv, int i, std::string & err);
-
-// Parse one --tessera-* / --calib-* flag at argv[i] into tessera_params, for
-// tools (llama-quantize) that hand-roll their arg loop instead of calling
-// common_params_parse. Mirrors the --tessera-* add_opt validators below; both
-// paths write the same tessera_params and must stay in sync.
-// Returns argv slots consumed (1 = switch, 2 = valued), 0 if argv[i] is not a
-// Tessera flag, or -1 on a validation error (message written to err).
-int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
-    const std::string arg = argv[i];
-    const bool        has_val = (i + 1 < argc);
-    const std::string val = has_val ? argv[i + 1] : "";
-
-    auto require_val = [&](const char * name) -> bool {
-        if (!has_val) {
-            err = string_format("error: %s requires a value\n", name);
-            return false;
-        }
-        return true;
-    };
-
-    // Everything above is legacy hand-rolled if/else that has now been
-    // migrated. The function body is intentionally just the dispatcher.
-    return common_arg_dispatch_one(argc, argv, i, err);
-}
 
 // Dispatch a single Tessera-flavored arg (--tessera-*, --calib-*,
-// --progress-file, --quantize-db) through the common_arg registered via
-// the add_opt path in common_params_parse_ex. Returns 1 for a switch,
-// 2 for a valued flag, 0 if argv[i] is not a Tessera flag, or -1 on a
-// validation error. This is the single source of truth: the registered
+// --progress-file, --quantize-db) at argv[i] to the handler registered
+// in common_params_parse_ex via the add_opt path. The registered
 // common_arg's handler owns the side effect, the type coercion, and the
 // validation message; we only translate the throw into the (err, return)
-// contract common_tessera_parse_one advertises.
-static int common_arg_dispatch_one(int argc, char ** argv, int i, std::string & err) {
+// contract advertised in common/arg.h. This is the single source of truth
+// for --tessera-* flag parsing; the hand-rolled common_tessera_parse_one
+// if/else chain that previously lived in this file has been removed.
+int common_arg_dispatch_tessera(int argc, char ** argv, int i, std::string & err) {
     const std::string arg = argv[i];
 
     // Restrict to Tessera-flavored names so we never accidentally consume a
