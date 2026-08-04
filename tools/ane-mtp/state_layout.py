@@ -63,6 +63,15 @@ ROLE_SYNC = "sync"
 ROLE_RESET = "reset"
 ROLE_MATMUL = "matmul"
 
+# Core ML model type. Determines whether MLModelConfiguration.functionName
+# is settable at load time. The W0 spike's matmul is a NeuralNetwork
+# spec (functionName MUST be nil), while the multifunction prefill/MTP/
+# DFlash bundles are ML Program specs (functionName required to pick
+# which named function to bind). The conversion tool sets this on
+# manifest emit and the runtime reads it to pick the load path.
+MODEL_TYPE_NEURAL_NETWORK = "neural_network"
+MODEL_TYPE_ML_PROGRAM = "ml_program"
+
 
 @dataclass
 class StateSlot:
@@ -151,6 +160,7 @@ class StateLayout:
     version: int
     bundle_name: str
     state_size_bytes: int
+    model_type: str = MODEL_TYPE_NEURAL_NETWORK
     slots: List[StateSlot] = field(default_factory=list)
     functions: List[FunctionSpec] = field(default_factory=list)
     dependencies: List[Dependency] = field(default_factory=list)
@@ -188,6 +198,7 @@ class StateLayout:
             version=SCHEMA_VERSION,
             bundle_name=bundle_name,
             state_size_bytes=ANE_MIN_ALLOC_BYTES,
+            model_type=MODEL_TYPE_NEURAL_NETWORK,
             slots=[x_slot, y_slot],
             functions=[FunctionSpec(
                 name="main",
@@ -211,6 +222,10 @@ class StateLayout:
                 f"expected {SCHEMA_VERSION}")
         if not self.bundle_name:
             raise ValueError("bundle_name is required")
+        if self.model_type not in (MODEL_TYPE_NEURAL_NETWORK, MODEL_TYPE_ML_PROGRAM):
+            raise ValueError(
+                f"model_type {self.model_type!r} not in "
+                f"({MODEL_TYPE_NEURAL_NETWORK!r}, {MODEL_TYPE_ML_PROGRAM!r})")
         if self.state_size_bytes < ANE_MIN_ALLOC_BYTES:
             raise ValueError(
                 f"state_size_bytes {self.state_size_bytes} < ANE minimum "
@@ -262,6 +277,7 @@ class StateLayout:
             "version": self.version,
             "bundle_name": self.bundle_name,
             "state_size_bytes": self.state_size_bytes,
+            "model_type": self.model_type,
             "slots": [
                 {
                     "name": s.name,
@@ -303,6 +319,7 @@ class StateLayout:
 
     @classmethod
     def from_dict(cls, d: dict) -> "StateLayout":
+        model_type = d.get("model_type", MODEL_TYPE_NEURAL_NETWORK)
         slots = [
             StateSlot(
                 name=s["name"],
@@ -339,6 +356,7 @@ class StateLayout:
             version=d["version"],
             bundle_name=d["bundle_name"],
             state_size_bytes=d["state_size_bytes"],
+            model_type=model_type,
             slots=slots,
             functions=functions,
             dependencies=dependencies,

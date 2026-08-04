@@ -14,11 +14,23 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+// ane-state.h lives in common/ (the llama.cpp-side runtime) and is
+// shared with the conversion tool's manifest schema. ggml-ane is a
+// leaf backend and does not link common/, so we include the header
+// by relative path from ggml/src/ggml-ane/. The manifest is the
+// contract between the conversion tool (tools/ane-mtp/) and the
+// runtime (ggml-ane + common/ane-mtp.mm + the future
+// common/ane-pump.mm); see tools/ane-mtp/state_layout.py for the
+// JSON side and tools/ane-mtp/test_state_layout.py for the
+// 24-test unit suite.
+#include "../../../common/ane-state.h"
 
 #define GGML_ANE_NAME "ANE"
 
@@ -312,6 +324,9 @@ static size_t ggml_ane_shape_count(NSArray<NSNumber *> * shape) {
 // Flat host-mapped arena slot. IOSurface backing satisfies the ANE 64-byte
 // alignment and 49 KB floor (Orion constraints #4 and #20). Reuses the
 // reserve-on-grow policy from common_ane_mtp_arena_buffer.
+//
+// (Kept for the elementwise/Accelerate path in graph_compute; the bundle
+// dispatch path uses the pinned-slot state below.)
 struct ggml_ane_arena_slot {
     IOSurfaceRef surface = nullptr;
     void *       data    = nullptr;
@@ -365,119 +380,483 @@ struct ggml_ane_arena_slot {
     }
 };
 
+// Multifunction IOSurface-mapped stateful ANE program.
+//
+// The .mlmodelc is loaded as a stateless Core ML model. All "state"
+// lives in a single IOSurface (the state_buffer below) whose layout
+// is described by the ane_state_layout_v1 manifest emitted by the
+// conversion tool. Each declared slot is pinned at load to a
+// deterministic offset in that IOSurface as an MLMultiArray with
+// deallocator:nil (zero-copy, see common/ane-mtp.mm's wrap_multi_array
+// for the canonical pattern). The dispatch path uses Core ML's
+// MLPredictionOptions.outputBackings to make Core ML write outputs
+// directly into our pinned slots, skipping the result memcpy entirely.
+//
+// This replaces the per-function MLState + keepalive_state + 5s re-warm
+// timer pattern of common/ane-mtp.mm (lines 842-880 in the multifunction
+// case) and makes the state visible to Metal and CPU (zero-copy) so
+// the E-core pump can coordinate ANE-Metal handoffs through the same
+// canonical memory. See the architecture call in the session
+// "proceed to implement it in full": one IOSurface, many readers,
+// lock-free coordination via MTLSharedEvent.
 struct ggml_backend_ane_program {
-    // Objective-C objects are stored as raw pointers because this file is
-    // compiled under MRC (no -fobjc-arc). The destructor explicitly releases
-    // each one, and load() retains them when storing. The reason this is
-    // necessary: +[MLModel modelWithContentsOfURL:config:error:] returns an
-    // autoreleased object, so a raw pointer copy into `model` would dangle
-    // the moment the surrounding @autoreleasepool drains. The dispatch queue
-    // and the state are both +1 from their creators, so they also need
-    // matching release calls.
+    // The Core ML model. Loaded stateless; state is in state_buffer
+    // below. Retained in load(), released in the destructor (the
+    // autoreleased-return + MRC + @autoreleasepool-drain dance that
+    // the W1 commit fixed).
     MLModel *          model        = nil;
-    MLState *          state        = nil;
+
+    // One serial dispatch queue per program. The multifunction case
+    // (multiple functions in one .mlmodelc) will replace this with
+    // per-function queues when the E-core pump lands; the W0/W1
+    // single-function case keeps one queue at the program level.
     dispatch_queue_t   queue        = nullptr;
+
+    // The parsed manifest. Owned by the program; freed in the
+    // destructor. The manifest is the source of truth for the
+    // IOSurface size, slot offsets, and which slots the bound
+    // function reads/writes.
+    ane_state_layout_v1_t layout;
+    // True once the manifest has been parsed and validated.
+    bool                  layout_loaded = false;
+
+    // The single state IOSurface. All pinned slots live inside
+    // this surface. Released by the destructor. We allocate via
+    // ggml_backend_ane_iosurface_buffer_alloc (the existing
+    // cross-backend IOSurface primitive) so the same surface can
+    // be shared with Metal later.
+    ggml_backend_buffer_t state_buffer = nullptr;
+    void *                state_base   = nullptr;
+    size_t                state_size   = 0;
+
+    // Pinned MLMultiArray wrappers, one per manifest slot, at the
+    // slot's offset inside state_buffer. Each wraps an IOSurface
+    // subregion with deallocator:nil so Core ML reads/writes
+    // through the same IOSurface pages the host uses. Index =
+    // slot_id from the manifest; pinned_slots[i] corresponds to
+    // layout.slots[i]. Released in the destructor.
+    MLMultiArray *        pinned_slots[ANE_STATE_SLOTS_MAX] = {};
+
+    // The bound function (index into layout.functions[]). The load
+    // call's function_name parameter selects which manifest function
+    // is bound; for the W0 single-function case it's "main".
+    uint32_t              active_function_id = UINT32_MAX;
+
+    // Scratch buffer for warmup inputs (zeroed, allocated once, freed
+    // in the destructor). We allocate fresh IOSurface memory for
+    // the warmup inputs so the pinned state slots stay zeroed from
+    // before-load (the first real dispatch will overwrite them).
+    void *                warmup_scratch  = nullptr;
+    size_t                warmup_scratch_size = 0;
+
     std::string        source_path;
     std::string        function_name;
     std::atomic<bool>  warm         {false};
-    std::mutex         arena_mutex;
-    std::unordered_map<std::string, std::unique_ptr<ggml_ane_arena_slot>> arena;
 
     ~ggml_backend_ane_program() {
-        // MRC release path. Order does not matter (model/state/queue do not
-        // retain each other), but we release the queue last because
-        // dispatch_release on a serial queue waits for in-flight blocks; the
-        // program handle outlives the last in-flight prediction only if no
-        // prediction is currently using the queue.
+        // Release the pinned MLMultiArrays first; they reference the
+        // IOSurface so they must be released before the buffer.
+        for (uint32_t i = 0; i < layout.n_slots; ++i) {
+            if (pinned_slots[i] != nil) {
+                [pinned_slots[i] release];
+                pinned_slots[i] = nil;
+            }
+        }
+        // Free the state IOSurface (releases the IOSurface ref and
+        // any internal MTLBuffer / CFObjectRef state).
+        if (state_buffer != nullptr) {
+            ggml_backend_buffer_free(state_buffer);
+            state_buffer = nullptr;
+        }
+        state_base = nullptr;
+        state_size = 0;
+        // Free the warmup scratch.
+        if (warmup_scratch != nullptr) {
+            std::free(warmup_scratch);
+            warmup_scratch = nullptr;
+        }
+        warmup_scratch_size = 0;
+        // MRC release path. Order does not matter (model and queue
+        // do not retain each other), but we release the queue last
+        // because dispatch_release on a serial queue waits for
+        // in-flight blocks; the program handle outlives the last
+        // in-flight prediction only if no prediction is currently
+        // using the queue.
         if (queue) {
             dispatch_release(queue);
             queue = nullptr;
-        }
-        if (state) {
-            [state release];
-            state = nil;
         }
         if (model) {
             [model release];
             model = nil;
         }
     }
-
-    // Get (creating if needed) an arena slot of the right byte size, wrapped
-    // as a zero-copy MLMultiArray. The arena is reused across calls; only the
-    // first call for a given (name, shape, dtype) pays the IOSurface cost.
-    MLMultiArray * array_for(const std::string & name,
-                             NSArray<NSNumber *> * shape,
-                             MLMultiArrayDataType type,
-                             NSError ** error) {
-        const size_t esize = ggml_ane_multi_array_element_size(type);
-        if (esize == 0) {
-            return nil;
-        }
-        const size_t bytes = ggml_ane_shape_count(shape) * esize;
-        std::lock_guard<std::mutex> lock(arena_mutex);
-        auto & slot = arena[name];
-        if (!slot) {
-            slot = std::make_unique<ggml_ane_arena_slot>();
-        }
-        if (!slot->reserve(bytes)) {
-            return nil;
-        }
-        return [[MLMultiArray alloc]
-            initWithDataPointer:slot->data
-                          shape:shape
-                       dataType:type
-                        strides:ggml_ane_contiguous_strides(shape)
-                    deallocator:nil
-                          error:error];
-    }
 };
 
-// Warm the loaded function with zeroed inputs sized from the model's own
-// input description. Mirrors warm_model() in common/ane-mtp.mm. A failed
-// warmup means the bundle cannot run on this host (wrong OS, ANE missing,
-// or a Core ML compile error) and the program must not be advertised.
+// Read the ane_state_layout.v1 manifest from a JSON file into the
+// C struct. The manifest is the contract between the conversion tool
+// (tools/ane-mtp/state_layout.py) and the runtime; see the Python
+// file for the schema and tools/ane-mtp/test_state_layout.py for
+// the 24-test unit suite. The reader uses NSJSONSerialization
+// (already in Foundation) and maps the JSON to the C struct.
+//
+// Returns true on success. On failure, logs the specific reason and
+// returns false; the caller must not use the layout.
+static bool ggml_ane_read_manifest(const char * path, ane_state_layout_v1_t * layout) {
+    std::memset(layout, 0, sizeof(*layout));
+    NSError * error = nil;
+    NSString * ns_path = [NSString stringWithUTF8String:path];
+    NSData * data = [NSData dataWithContentsOfFile:ns_path];
+    if (data == nil) {
+        GGML_LOG_ERROR("ane: manifest not found: %s\n", path);
+        return false;
+    }
+    id obj = [NSJSONSerialization JSONObjectWithData:data
+                                              options:0
+                                                error:&error];
+    if (obj == nil || ![obj isKindOfClass:[NSDictionary class]]) {
+        GGML_LOG_ERROR("ane: manifest %s is not a JSON object: %s\n",
+                       path, error.localizedDescription.UTF8String ?: "unknown");
+        return false;
+    }
+    NSDictionary * root = (NSDictionary *) obj;
+
+    // version (required, must be 1)
+    NSNumber * version = root[@"version"];
+    if (version == nil || version.unsignedIntValue != ANE_STATE_LAYOUT_VERSION) {
+        GGML_LOG_ERROR("ane: manifest version mismatch (got %s, expected %u)\n",
+                       version ? version.stringValue.UTF8String : "missing",
+                       ANE_STATE_LAYOUT_VERSION);
+        return false;
+    }
+    layout->version = version.unsignedIntValue;
+
+    // bundle_name
+    NSString * bundle_name = root[@"bundle_name"];
+    if (bundle_name == nil) {
+        GGML_LOG_ERROR("ane: manifest missing bundle_name\n");
+        return false;
+    }
+    const char * bn = bundle_name.UTF8String;
+    if (bn == nullptr) {
+        GGML_LOG_ERROR("ane: manifest bundle_name is not UTF-8\n");
+        return false;
+    }
+    std::strncpy(layout->bundle_name, bn, sizeof(layout->bundle_name) - 1);
+
+    // state_size_bytes
+    NSNumber * state_size = root[@"state_size_bytes"];
+    if (state_size == nil) {
+        GGML_LOG_ERROR("ane: manifest missing state_size_bytes\n");
+        return false;
+    }
+    layout->state_size_bytes = (size_t) state_size.unsignedLongLongValue;
+
+    // model_type (default neural_network for back-compat with v1
+    // manifests emitted before this field was added)
+    NSString * mt = root[@"model_type"];
+    if (mt == nil || [mt isEqualToString:@"neural_network"]) {
+        layout->model_type = ANE_MODEL_TYPE_NEURAL_NETWORK;
+    } else if ([mt isEqualToString:@"ml_program"]) {
+        layout->model_type = ANE_MODEL_TYPE_ML_PROGRAM;
+    } else {
+        GGML_LOG_ERROR("ane: manifest model_type %s unknown\n",
+                       mt.UTF8String ?: "nil");
+        return false;
+    }
+
+    // slots
+    NSArray * slots_arr = root[@"slots"];
+    if (slots_arr == nil || ![slots_arr isKindOfClass:[NSArray class]]) {
+        GGML_LOG_ERROR("ane: manifest missing or bad slots\n");
+        return false;
+    }
+    if (slots_arr.count > ANE_STATE_SLOTS_MAX) {
+        GGML_LOG_ERROR("ane: manifest has %lu slots, max is %d\n",
+                       (unsigned long) slots_arr.count, ANE_STATE_SLOTS_MAX);
+        return false;
+    }
+    for (NSUInteger i = 0; i < slots_arr.count; ++i) {
+        NSDictionary * s = slots_arr[i];
+        ane_slot_v1_t * out = &layout->slots[i];
+        std::memset(out, 0, sizeof(*out));
+        NSString * name = s[@"name"];
+        if (name == nullptr) {
+            GGML_LOG_ERROR("ane: slot %lu has no name\n", (unsigned long) i);
+            return false;
+        }
+        std::strncpy(out->name, name.UTF8String, sizeof(out->name) - 1);
+        NSString * kind = s[@"kind"];
+        if ([kind isEqualToString:@"input"])        out->kind = ANE_SLOT_KIND_INPUT;
+        else if ([kind isEqualToString:@"output"])  out->kind = ANE_SLOT_KIND_OUTPUT;
+        else if ([kind isEqualToString:@"state"])   out->kind = ANE_SLOT_KIND_STATE;
+        else if ([kind isEqualToString:@"scratch"]) out->kind = ANE_SLOT_KIND_SCRATCH;
+        else {
+            GGML_LOG_ERROR("ane: slot %s has bad kind %s\n",
+                           out->name, kind.UTF8String ?: "nil");
+            return false;
+        }
+        NSString * dtype = s[@"dtype"];
+        if ([dtype isEqualToString:@"f32"])      out->dtype = ANE_DTYPE_F32;
+        else if ([dtype isEqualToString:@"f16"]) out->dtype = ANE_DTYPE_F16;
+        else if ([dtype isEqualToString:@"i32"]) out->dtype = ANE_DTYPE_I32;
+        else {
+            GGML_LOG_ERROR("ane: slot %s has bad dtype %s\n",
+                           out->name, dtype.UTF8String ?: "nil");
+            return false;
+        }
+        NSArray * shape = s[@"shape"];
+        if (shape == nil || shape.count < 1 || shape.count > 4) {
+            GGML_LOG_ERROR("ane: slot %s shape must be 1-4 dims\n", out->name);
+            return false;
+        }
+        out->n_dim = (uint32_t) shape.count;
+        for (NSUInteger j = 0; j < shape.count; ++j) {
+            out->shape[j] = (uint32_t) [shape[j] unsignedIntValue];
+        }
+        out->offset = (size_t) [s[@"offset"] unsignedLongLongValue];
+        out->size_bytes = (size_t) [s[@"size_bytes"] unsignedLongLongValue];
+    }
+    layout->n_slots = (uint32_t) slots_arr.count;
+
+    // functions
+    NSArray * funcs_arr = root[@"functions"];
+    if (funcs_arr == nil || ![funcs_arr isKindOfClass:[NSArray class]]) {
+        GGML_LOG_ERROR("ane: manifest missing or bad functions\n");
+        return false;
+    }
+    if (funcs_arr.count > ANE_STATE_FUNCTIONS_MAX) {
+        GGML_LOG_ERROR("ane: manifest has %lu functions, max is %d\n",
+                       (unsigned long) funcs_arr.count, ANE_STATE_FUNCTIONS_MAX);
+        return false;
+    }
+    for (NSUInteger i = 0; i < funcs_arr.count; ++i) {
+        NSDictionary * f = funcs_arr[i];
+        ane_function_v1_t * out = &layout->functions[i];
+        std::memset(out, 0, sizeof(*out));
+        NSString * name = f[@"name"];
+        if (name == nullptr) {
+            GGML_LOG_ERROR("ane: function %lu has no name\n", (unsigned long) i);
+            return false;
+        }
+        std::strncpy(out->name, name.UTF8String, sizeof(out->name) - 1);
+        NSString * role = f[@"role"];
+        if ([role isEqualToString:@"prefill"]) out->role = ANE_ROLE_PREFILL;
+        else if ([role isEqualToString:@"mtp"])     out->role = ANE_ROLE_MTP;
+        else if ([role isEqualToString:@"dflash"])  out->role = ANE_ROLE_DFLASH;
+        else if ([role isEqualToString:@"hybrid"])  out->role = ANE_ROLE_HYBRID;
+        else if ([role isEqualToString:@"sync"])    out->role = ANE_ROLE_SYNC;
+        else if ([role isEqualToString:@"reset"])   out->role = ANE_ROLE_RESET;
+        else if ([role isEqualToString:@"matmul"])  out->role = ANE_ROLE_MATMUL;
+        else                                       out->role = ANE_ROLE_UNKNOWN;
+        out->bucket = (uint32_t) [f[@"bucket"] unsignedIntValue];
+        out->stateful = [f[@"stateful"] boolValue];
+        out->use_ane = [f[@"use_ane"] boolValue];
+        NSString * cm_name = f[@"core_ml_function_name"];
+        if (cm_name != nullptr) {
+            std::strncpy(out->core_ml_function_name, cm_name.UTF8String,
+                         sizeof(out->core_ml_function_name) - 1);
+        }
+        NSArray * ins = f[@"input_slots"];
+        if (ins != nil) {
+            out->n_inputs = (uint32_t) std::min((NSUInteger) ANE_STATE_SLOT_IO_MAX,
+                                                ins.count);
+            for (NSUInteger j = 0; j < out->n_inputs; ++j) {
+                NSString * sname = ins[j];
+                uint32_t slot_id = UINT32_MAX;
+                for (uint32_t k = 0; k < layout->n_slots; ++k) {
+                    if (std::strcmp(layout->slots[k].name, sname.UTF8String) == 0) {
+                        slot_id = k;
+                        break;
+                    }
+                }
+                if (slot_id == UINT32_MAX) {
+                    GGML_LOG_ERROR("ane: function %s references unknown input slot %s\n",
+                                   out->name, sname.UTF8String ?: "nil");
+                    return false;
+                }
+                out->input_slot_ids[j] = slot_id;
+            }
+        }
+        NSArray * outs = f[@"output_slots"];
+        if (outs != nil) {
+            out->n_outputs = (uint32_t) std::min((NSUInteger) ANE_STATE_SLOT_IO_MAX,
+                                                 outs.count);
+            for (NSUInteger j = 0; j < out->n_outputs; ++j) {
+                NSString * sname = outs[j];
+                uint32_t slot_id = UINT32_MAX;
+                for (uint32_t k = 0; k < layout->n_slots; ++k) {
+                    if (std::strcmp(layout->slots[k].name, sname.UTF8String) == 0) {
+                        slot_id = k;
+                        break;
+                    }
+                }
+                if (slot_id == UINT32_MAX) {
+                    GGML_LOG_ERROR("ane: function %s references unknown output slot %s\n",
+                                   out->name, sname.UTF8String ?: "nil");
+                    return false;
+                }
+                out->output_slot_ids[j] = slot_id;
+            }
+        }
+    }
+    layout->n_functions = (uint32_t) funcs_arr.count;
+
+    // dependencies (best-effort; the W0 case has none and the
+    // multifunction case will use it for the E-core pump's per-
+    // slot state machine. We store the producer/consumer strings
+    // for now and resolve them in a later pump commit; the W0
+    // load path doesn't use this field.)
+    NSArray * deps_arr = root[@"dependencies"];
+    if (deps_arr != nil && [deps_arr isKindOfClass:[NSArray class]]) {
+        if (deps_arr.count > ANE_STATE_DEPS_MAX) {
+            GGML_LOG_ERROR("ane: manifest has %lu deps, max is %d\n",
+                           (unsigned long) deps_arr.count, ANE_STATE_DEPS_MAX);
+            return false;
+        }
+        for (NSUInteger i = 0; i < deps_arr.count; ++i) {
+            NSDictionary * d = deps_arr[i];
+            ane_function_dep_t * out = &layout->deps[i];
+            std::memset(out, 0, sizeof(*out));
+            NSString * producer = d[@"producer"];
+            if (producer == nullptr) {
+                continue;
+            }
+            // Resolve producer name to function id.
+            for (uint32_t k = 0; k < layout->n_functions; ++k) {
+                if (std::strcmp(layout->functions[k].name, producer.UTF8String) == 0) {
+                    out->producer_function_id = k;
+                    break;
+                }
+            }
+            NSString * slot = d[@"slot"];
+            if (slot == nullptr) {
+                continue;
+            }
+            for (uint32_t k = 0; k < layout->n_slots; ++k) {
+                if (std::strcmp(layout->slots[k].name, slot.UTF8String) == 0) {
+                    out->slot_id = k;
+                    break;
+                }
+            }
+            NSArray * consumers = d[@"consumers"];
+            if (consumers != nil) {
+                out->n_consumers = (uint32_t) std::min(
+                    (NSUInteger) ANE_STATE_FUNCTIONS_MAX, consumers.count);
+                for (NSUInteger j = 0; j < out->n_consumers; ++j) {
+                    NSString * cn = consumers[j];
+                    for (uint32_t k = 0; k < layout->n_functions; ++k) {
+                        if (std::strcmp(layout->functions[k].name, cn.UTF8String) == 0) {
+                            out->consumer_function_ids[j] = k;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        layout->n_deps = (uint32_t) deps_arr.count;
+    }
+
+    return true;
+}
+
+// Wrap one IOSurface-backed slot as an MLMultiArray with deallocator:nil
+// (zero-copy, see common/ane-mtp.mm:wrap_multi_array for the canonical
+// pattern). The MLMultiArray's data pointer is state_base + slot.offset;
+// its shape and dtype come from the manifest. The returned array is
+// owned by the caller and must be released in the program's destructor.
+static MLMultiArray * ggml_ane_pin_slot(void * state_base,
+                                        const ane_slot_v1_t * slot) {
+    NSError * error = nil;
+    NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:slot->n_dim];
+    for (uint32_t i = 0; i < slot->n_dim; ++i) {
+        [shape addObject:@(slot->shape[i])];
+    }
+    NSArray<NSNumber *> * strides = ggml_ane_contiguous_strides(shape);
+    MLMultiArrayDataType dtype = MLMultiArrayDataTypeFloat32;
+    switch (slot->dtype) {
+        case ANE_DTYPE_F32: dtype = MLMultiArrayDataTypeFloat32; break;
+        case ANE_DTYPE_F16: dtype = MLMultiArrayDataTypeFloat16; break;
+        case ANE_DTYPE_I32: dtype = MLMultiArrayDataTypeInt32;   break;
+    }
+    void * slot_base = (char *) state_base + slot->offset;
+    return [[MLMultiArray alloc]
+        initWithDataPointer:slot_base
+                      shape:shape
+                   dataType:dtype
+                    strides:strides
+                deallocator:nil
+                      error:&error];
+}
+
+// Warm the loaded function with zeroed inputs sized from the manifest.
+// Mirrors warm_model() in common/ane-mtp.mm but uses the pinned state
+// slots for inputs (zeroed) and discards the warmup output. A failed
+// warmup means the bundle cannot run on this host (wrong OS, ANE
+// missing, or a Core ML compile error) and the program must not be
+// advertised. This is the only point where we send a Core ML
+// prediction through; per-iter dispatch lives in ggml_ane_program_run.
 static bool ggml_ane_program_warm(ggml_backend_ane_program * program) {
     @autoreleasepool {
+        const ane_function_v1_t * func = &program->layout.functions[program->active_function_id];
         NSError * error = nil;
         NSMutableDictionary<NSString *, MLFeatureValue *> * values = [NSMutableDictionary dictionary];
-        for (NSString * name in program->model.modelDescription.inputDescriptionsByName) {
-            MLFeatureDescription * desc = program->model.modelDescription.inputDescriptionsByName[name];
-            if (desc.type != MLFeatureTypeMultiArray) {
-                return false;
-            }
-            MLMultiArrayConstraint * c = desc.multiArrayConstraint;
-            MLMultiArray * array = [[MLMultiArray alloc] initWithShape:c.shape
-                                                              dataType:c.dataType
-                                                                 error:&error];
-            if (!array) {
-                return false;
-            }
-            size_t esize = ggml_ane_multi_array_element_size(c.dataType);
+        for (uint32_t i = 0; i < func->n_inputs; ++i) {
+            const uint32_t slot_id = func->input_slot_ids[i];
+            const ane_slot_v1_t * slot = &program->layout.slots[slot_id];
+            // The pinned slot is the live state. For warmup we want to
+            // send a zeroed copy so the real first dispatch isn't
+            // polluted by a prior warmup result. We allocate a fresh
+            // MLMultiArray for the warmup input (its data is zeroed
+            // here; pinned state stays untouched until first real
+            // dispatch).
+            const size_t esize = ggml_ane_multi_array_element_size(
+                program->pinned_slots[slot_id].dataType);
             if (esize == 0) {
                 return false;
             }
-            std::memset(array.dataPointer, 0, (size_t) array.count * esize);
-            values[name] = [MLFeatureValue featureValueWithMultiArray:array];
+            if (program->warmup_scratch_size < slot->size_bytes) {
+                if (program->warmup_scratch != nullptr) {
+                    std::free(program->warmup_scratch);
+                }
+                program->warmup_scratch = std::malloc(slot->size_bytes);
+                program->warmup_scratch_size = slot->size_bytes;
+            }
+            std::memset(program->warmup_scratch, 0, slot->size_bytes);
+            NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:slot->n_dim];
+            for (uint32_t j = 0; j < slot->n_dim; ++j) {
+                [shape addObject:@(slot->shape[j])];
+            }
+            NSArray<NSNumber *> * strides = ggml_ane_contiguous_strides(shape);
+            MLMultiArray * warmup_input = [[MLMultiArray alloc]
+                initWithDataPointer:program->warmup_scratch
+                              shape:shape
+                           dataType:program->pinned_slots[slot_id].dataType
+                            strides:strides
+                        deallocator:nil
+                              error:&error];
+            if (warmup_input == nil) {
+                return false;
+            }
+            values[[NSString stringWithUTF8String:slot->name]] =
+                [MLFeatureValue featureValueWithMultiArray:warmup_input];
         }
         MLDictionaryFeatureProvider * inputs =
             [[MLDictionaryFeatureProvider alloc] initWithDictionary:values error:&error];
-        if (!inputs) {
+        if (inputs == nil) {
+            GGML_LOG_ERROR("ane: warmup input provider build failed: %s\n",
+                           error.localizedDescription.UTF8String ?: "unknown");
             return false;
         }
         MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-        id<MLFeatureProvider> output;
-        if (program->state) {
-            output = [program->model predictionFromFeatures:inputs
-                                                  usingState:program->state
-                                                     options:options
-                                                       error:&error];
-        } else {
-            output = [program->model predictionFromFeatures:inputs
-                                                    options:options
-                                                      error:&error];
-        }
-        if (!output) {
+        // The warmup doesn't write to our pinned state slots (we
+        // discard the output); the model's internal allocator gives
+        // us a throwaway result. Real dispatches use outputBackings.
+        id<MLFeatureProvider> output = [program->model
+            predictionFromFeatures:inputs
+                           options:options
+                             error:&error];
+        if (output == nil) {
             GGML_LOG_ERROR("ane: warmup prediction failed: %s\n",
                            error.localizedDescription.UTF8String ?: "unknown error");
             return false;
@@ -497,49 +876,120 @@ static ggml_backend_ane_program * ggml_ane_program_load(const char * mlmodelc_di
             GGML_LOG_ERROR("ane: mlmodelc dir not found: %s\n", mlmodelc_dir);
             return nullptr;
         }
-        MLModelConfiguration * config = [[MLModelConfiguration alloc] init];
-        // CPUAndNeuralEngine is a preference, not a command (deep-study Section
-        // 1.1). The Core ML scheduler may still fall a specific op to GPU/CPU.
-        config.computeUnits = MLComputeUnitsCPUAndNeuralEngine;
-        if (function_name && function_name[0] != '\0') {
-            config.functionName = [NSString stringWithUTF8String:function_name];
-        }
-        NSError * error = nil;
-        MLModel * model = [MLModel modelWithContentsOfURL:[NSURL fileURLWithPath:dir]
-                                            configuration:config
-                                                    error:&error];
-        if (!model) {
-            GGML_LOG_ERROR("ane: failed to load %s: %s\n", mlmodelc_dir,
-                           error.localizedDescription.UTF8String ?: "unknown error");
+        // Resolve the manifest path. The convention is
+        // <bundle-stem>.ane_state.v1.json in the same directory as
+        // the .mlmodelc. The bundle stem is the .mlmodelc's
+        // directory name (e.g., w0-256x256.mlmodelc -> "w0-256x256").
+        NSString * dir_name = [dir lastPathComponent];
+        NSString * parent = [dir stringByDeletingLastPathComponent];
+        NSString * bundle_stem = [dir_name stringByDeletingPathExtension];
+        NSString * manifest_path = [parent
+            stringByAppendingPathComponent:
+                [NSString stringWithFormat:@"%@.ane_state.v1.json", bundle_stem]];
+
+        // Load the manifest. The manifest is REQUIRED (the design
+        // is locked: stateless at the Core ML level, stateful via
+        // the IOSurface). A missing or bad manifest is a load
+        // failure.
+        auto * program = new ggml_backend_ane_program;
+        if (!ggml_ane_read_manifest(manifest_path.UTF8String,
+                                    &program->layout)) {
+            GGML_LOG_ERROR("ane: failed to load manifest at %s\n",
+                           manifest_path.UTF8String);
+            delete program;
             return nullptr;
         }
-        auto * program = new ggml_backend_ane_program;
-        // Retain the model: +[MLModel modelWithContentsOfURL:config:error:]
-        // returns an autoreleased object, so the raw-pointer copy would
-        // dangle the moment the surrounding @autoreleasepool drains and the
-        // MLModel deallocates. The struct's destructor releases it. This
-        // fixes the W1 crash where graph_compute saw program->model pointing
-        // at a dispatch_mach (the original MLModel's memory had been reused
-        // for an internal Core ML dispatch queue).
-        program->model  = [model retain];
-        // Only allocate an MLState for stateful models. Calling
-        // [model newState] on a stateless model throws
-        // NSInternalInconsistencyException ("doesn't support
-        // stateful predictions"); the warm path and the dispatch
-        // both fall back to the stateless predict API when state is
-        // nil. The W0 spike's bundle is a stateless matmul; the MTP
-        // / prefill bundles in common/ane-mtp.mm are stateful and
-        // hit the stateful path.
-        if (model.modelDescription.stateDescriptionsByName.count > 0) {
-            // [model newState] is a +1 method (the "new" prefix), so the
-            // state object is owned by program->state and released in the
-            // destructor.
-            program->state  = [model newState];
-        }
-        program->queue  = dispatch_queue_create("org.ggml.ane.backend", DISPATCH_QUEUE_SERIAL);
-        program->source_path    = mlmodelc_dir;
-        program->function_name  = function_name ? function_name : "";
+        program->layout_loaded = true;
 
+        // Resolve the bound function by name. function_name == null
+        // or "" means: pick the first function (the W0 single-
+        // function case). For multifunction bundles, the caller
+        // must specify which function to bind.
+        const std::string desired = (function_name != nullptr && function_name[0] != '\0')
+            ? std::string(function_name) : std::string();
+        for (uint32_t i = 0; i < program->layout.n_functions; ++i) {
+            const std::string fname(program->layout.functions[i].name);
+            if (desired.empty() || fname == desired) {
+                program->active_function_id = i;
+                program->function_name = fname;
+                break;
+            }
+        }
+        if (program->active_function_id == UINT32_MAX) {
+            GGML_LOG_ERROR("ane: no function matching %s in manifest\n",
+                           function_name ? function_name : "(default)");
+            delete program;
+            return nullptr;
+        }
+
+        // Allocate the state IOSurface. One buffer of
+        // state_size_bytes; every pinned slot lives inside it.
+        program->state_buffer = ggml_backend_ane_iosurface_buffer_alloc(
+            program->layout.state_size_bytes);
+        if (program->state_buffer == nullptr) {
+            GGML_LOG_ERROR("ane: failed to allocate state IOSurface (%zu bytes)\n",
+                           program->layout.state_size_bytes);
+            delete program;
+            return nullptr;
+        }
+        program->state_base = ggml_backend_buffer_get_base(program->state_buffer);
+        program->state_size = program->layout.state_size_bytes;
+
+        // Pin each declared slot at its manifest offset as an
+        // MLMultiArray wrapping the IOSurface with deallocator:nil.
+        // Core ML reads/writes through these arrays; the host
+        // (E-core pump, ggml dispatch, Metal via MTLBuffer) reads/
+        // writes the same physical pages.
+        for (uint32_t i = 0; i < program->layout.n_slots; ++i) {
+            program->pinned_slots[i] = ggml_ane_pin_slot(
+                program->state_base, &program->layout.slots[i]);
+            if (program->pinned_slots[i] == nil) {
+                GGML_LOG_ERROR("ane: failed to pin slot %s\n",
+                               program->layout.slots[i].name);
+                delete program;
+                return nullptr;
+            }
+        }
+
+        // Load the Core ML model. We do this AFTER the manifest
+        // and state_buffer so a manifest failure doesn't leave
+        // an autoreleased MLModel to dangle. Same MRC retain as
+        // before (the W1 commit's fix).
+        MLModelConfiguration * config = [[MLModelConfiguration alloc] init];
+        config.computeUnits = MLComputeUnitsCPUAndNeuralEngine;
+        const ane_function_v1_t * func =
+            &program->layout.functions[program->active_function_id];
+        // functionName is only legal for ML Program models. The
+        // W0 spike's matmul is NeuralNetwork; setting functionName
+        // there returns "must be nil unless the model type is ML
+        // Program" at load time. We gate on the manifest's
+        // model_type.
+        if (program->layout.model_type == ANE_MODEL_TYPE_ML_PROGRAM &&
+                func->core_ml_function_name[0] != '\0') {
+            config.functionName =
+                [NSString stringWithUTF8String:func->core_ml_function_name];
+        }
+        NSError * error = nil;
+        MLModel * model = [MLModel modelWithContentsOfURL:
+            [NSURL fileURLWithPath:dir]
+                              configuration:config
+                                      error:&error];
+        if (model == nil) {
+            GGML_LOG_ERROR("ane: failed to load %s: %s\n", mlmodelc_dir,
+                           error.localizedDescription.UTF8String ?: "unknown error");
+            delete program;
+            return nullptr;
+        }
+        program->model = [model retain];
+
+        program->queue = dispatch_queue_create(
+            "org.ggml.ane.backend", DISPATCH_QUEUE_SERIAL);
+        program->source_path = mlmodelc_dir;
+
+        // Warm. We send zeroed inputs through the bound function
+        // to compile it on the ANE; the result is discarded. The
+        // pinned state slots are not modified by the warm (we use
+        // a fresh warmup_scratch buffer for warm inputs).
         __block bool ok = false;
         dispatch_sync(program->queue, ^{
             ok = ggml_ane_program_warm(program);
@@ -581,95 +1031,127 @@ static void ggml_ane_write_array_fp32(const float * src, MLMultiArray * array, s
     }
 }
 
-// Run the bound program: feed `inputs` (by model-declared name) and read back
-// `outputs` (by model-declared name). Inputs/outputs are fp32 host buffers of
-// the model-declared element count; conversions to/from fp16 are handled here.
-// Returns false (with a logged warning) when Core ML returns nil; the caller
-// is responsible for falling back to Metal/CPU.
+// Run the bound program: feed inputs from the host into the pinned
+// state slots, dispatch the bound function with outputBackings set so
+// Core ML writes outputs directly into our pinned slots, and read
+// the outputs back from those same slots (zero-copy, no result
+// memcpy). The function is the one bound at load (program-
+// >active_function_id); the inputs/outputs maps are by model-
+// declared name and must match the manifest's slot names for the
+// bound function. Returns false (with a logged warning) when Core
+// ML returns nil; the caller is responsible for falling back to
+// Metal/CPU.
 static bool ggml_ane_program_run(ggml_backend_ane_program * program,
                                  const std::unordered_map<std::string, const float *> & inputs,
                                  const std::vector<std::string> & output_names,
                                  const std::unordered_map<std::string, float *> & outputs) {
-    if (!program || !program->warm.load()) {
+    if (!program || !program->warm.load() || !program->layout_loaded) {
         return false;
     }
+    const ane_function_v1_t * func =
+        &program->layout.functions[program->active_function_id];
+
     __block bool ok = false;
     dispatch_sync(program->queue, ^{
         @autoreleasepool {
             NSError * error = nil;
-            NSMutableDictionary<NSString *, MLFeatureValue *> * features = [NSMutableDictionary dictionary];
-            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
-                program->model.modelDescription.inputDescriptionsByName;
-            for (NSString * name in inputs_desc) {
-                MLFeatureDescription * desc = inputs_desc[name];
-                if (desc.type != MLFeatureTypeMultiArray) {
-                    GGML_LOG_ERROR("ane: non-multiarray input %s unsupported\n", name.UTF8String);
+
+            // Build the input feature dict from the bound function's
+            // manifest input slots. Each pinned slot is the
+            // IOSurface-backed MLMultiArray; we memcpy the host
+            // fp32 input into the IOSurface bytes directly (the
+            // pinned slot's dataType is what the .mlmodelc expects,
+            // so the fp32 host data may need a one-shot dtype
+            // conversion; the simple W0 case is fp32 -> fp32 which
+            // is a straight memcpy).
+            NSMutableDictionary<NSString *, MLFeatureValue *> * features =
+                [NSMutableDictionary dictionary];
+            for (uint32_t i = 0; i < func->n_inputs; ++i) {
+                const uint32_t slot_id = func->input_slot_ids[i];
+                const ane_slot_v1_t * slot = &program->layout.slots[slot_id];
+                MLMultiArray * pinned = program->pinned_slots[slot_id];
+                if (pinned == nil) {
+                    GGML_LOG_ERROR("ane: input slot %s not pinned\n", slot->name);
                     return;
                 }
-                MLMultiArrayConstraint * c = desc.multiArrayConstraint;
-                MLMultiArrayDataType type = c.dataType;
-                if (type != MLMultiArrayDataTypeFloat16 && type != MLMultiArrayDataTypeFloat32) {
-                    GGML_LOG_ERROR("ane: input %s dtype %ld unsupported\n", name.UTF8String, (long) type);
-                    return;
-                }
-                NSArray<NSNumber *> * shape = c.shape;
-                // Resolve any dynamic (<=0) dimension to 1 to get a concrete size.
-                NSMutableArray<NSNumber *> * fixed = [shape mutableCopy];
-                for (NSUInteger i = 0; i < fixed.count; ++i) {
-                    if (fixed[i].integerValue <= 0) {
-                        fixed[i] = @1;
+                const size_t count = (size_t) pinned.count;
+                auto it = inputs.find(slot->name);
+                if (it != inputs.end() && it->second) {
+                    ggml_ane_write_array_fp32(it->second, pinned, count);
+                } else {
+                    // No host-side data: leave the slot as-is. The
+                    // caller is responsible for ensuring prior calls
+                    // have populated STATE-kind slots; for INPUT-kind
+                    // slots without a host value, we zero so the
+                    // first real dispatch isn't polluted.
+                    if (slot->kind == ANE_SLOT_KIND_INPUT) {
+                        std::memset(pinned.dataPointer, 0,
+                                    count * ggml_ane_multi_array_element_size(
+                                        pinned.dataType));
                     }
                 }
-                const size_t count = ggml_ane_shape_count(fixed);
-                MLMultiArray * array = program->array_for(name.UTF8String, fixed, type, &error);
-                if (!array) {
-                    GGML_LOG_ERROR("ane: arena wrap for input %s failed: %s\n", name.UTF8String,
-                                   error.localizedDescription.UTF8String ?: "unknown");
-                    return;
-                }
-                auto it = inputs.find(name.UTF8String);
-                if (it != inputs.end() && it->second) {
-                    ggml_ane_write_array_fp32(it->second, array, count);
-                } else {
-                    // Input not provided: leave the arena zeroed from the prior
-                    // call's memset so the prediction still runs.
-                    std::memset(array.dataPointer, 0, count * ggml_ane_multi_array_element_size(type));
-                }
-                features[name] = [MLFeatureValue featureValueWithMultiArray:array];
+                features[[NSString stringWithUTF8String:slot->name]] =
+                    [MLFeatureValue featureValueWithMultiArray:pinned];
             }
 
             MLDictionaryFeatureProvider * provider =
-                [[MLDictionaryFeatureProvider alloc] initWithDictionary:features error:&error];
-            if (!provider) {
+                [[MLDictionaryFeatureProvider alloc]
+                    initWithDictionary:features error:&error];
+            if (provider == nil) {
                 GGML_LOG_ERROR("ane: input provider build failed: %s\n",
                                error.localizedDescription.UTF8String ?: "unknown");
                 return;
             }
+
+            // Build MLPredictionOptions with outputBackings = pinned
+            // output slots. Core ML writes outputs directly into
+            // our IOSurface bytes; the result provider's MLMultiArray
+            // for each output name will be the SAME pointer as our
+            // pinned slot (zero-copy, no result memcpy).
             MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            id<MLFeatureProvider> output;
-            if (program->state) {
-                output = [program->model predictionFromFeatures:provider
-                                                      usingState:program->state
-                                                         options:options
-                                                           error:&error];
-            } else {
-                output = [program->model predictionFromFeatures:provider
-                                                        options:options
-                                                          error:&error];
+            NSMutableDictionary<NSString *, MLMultiArray *> * backings =
+                [NSMutableDictionary dictionary];
+            for (uint32_t i = 0; i < func->n_outputs; ++i) {
+                const uint32_t slot_id = func->output_slot_ids[i];
+                const ane_slot_v1_t * slot = &program->layout.slots[slot_id];
+                MLMultiArray * pinned = program->pinned_slots[slot_id];
+                if (pinned == nil) {
+                    GGML_LOG_ERROR("ane: output slot %s not pinned\n", slot->name);
+                    return;
+                }
+                backings[[NSString stringWithUTF8String:slot->name]] = pinned;
             }
-            if (!output) {
-                // F1 failure mode: prediction-nil means Core ML could not run
-                // the function on ANE (or CPU fallback). Caller must retry on
-                // another backend. Surface the model error verbatim.
+            options.outputBackings = backings;
+
+            // Stateless dispatch. No usingState: — the design is
+            // locked: state lives in our IOSurface, not in Core ML's
+            // opaque MLState. If the bundle declares itself
+            // stateful (e.g., a multifunction prefill with K/V
+            // input slots), those slots are still read/written
+            // through the IOSurface, not through an MLState.
+            id<MLFeatureProvider> output = [program->model
+                predictionFromFeatures:provider
+                               options:options
+                                 error:&error];
+            if (output == nil) {
+                // F1 failure mode: prediction-nil means Core ML
+                // could not run the function on ANE (or CPU
+                // fallback). Caller must retry on another backend.
+                // Surface the model error verbatim.
                 GGML_LOG_ERROR("ane: Core ML prediction returned nil for %s: %s\n",
                                program->function_name.c_str(),
                                error.localizedDescription.UTF8String ?: "unknown error");
                 return;
             }
+            // The result's MLMultiArrays are the same pointers as
+            // our pinned output slots (outputBackings contract).
+            // The outputs map (host dst) is by model-declared name;
+            // we copy fp32 host dst out of the pinned slot's bytes
+            // (with dtype conversion if the slot is fp16).
             for (const std::string & out_name : output_names) {
                 MLMultiArray * arr = [output featureValueForName:
                     [NSString stringWithUTF8String:out_name.c_str()]].multiArrayValue;
-                if (!arr) {
+                if (arr == nil) {
                     GGML_LOG_ERROR("ane: output %s missing from prediction\n", out_name.c_str());
                     return;
                 }

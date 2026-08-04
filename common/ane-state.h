@@ -103,6 +103,18 @@ typedef enum {
     ANE_ROLE_MATMUL   = 7,
 } ane_role_t;
 
+// Core ML model spec type. Determines whether
+// MLModelConfiguration.functionName is settable at load time.
+// The W0 spike's matmul is NeuralNetwork (functionName MUST be
+// nil); the multifunction prefill/MTP/DFlash bundles are ML
+// Program (functionName required to pick which named function
+// to bind). The conversion tool sets this on manifest emit and
+// the runtime reads it to pick the load path.
+typedef enum {
+    ANE_MODEL_TYPE_NEURAL_NETWORK = 0,
+    ANE_MODEL_TYPE_ML_PROGRAM     = 1,
+} ane_model_type_t;
+
 typedef struct {
     char            name[ANE_STATE_SLOT_NAME_MAX];
     ane_slot_kind_t kind;
@@ -169,6 +181,11 @@ typedef struct {
     // allocates one IOSurface of this size at load and pins
     // all slots inside it.
     size_t             state_size_bytes;
+    // Core ML spec type of the underlying .mlmodelc. The
+    // runtime uses this to decide whether to set
+    // MLModelConfiguration.functionName at load (only legal
+    // for ANE_MODEL_TYPE_ML_PROGRAM).
+    ane_model_type_t   model_type;
     uint32_t           n_slots;
     ane_slot_v1_t      slots[ANE_STATE_SLOTS_MAX];
     uint32_t           n_functions;

@@ -2,6 +2,7 @@
   "version": 1,
   "bundle_name": "w0-256x256",
   "state_size_bytes": 65536,
+  "model_type": "neural_network",
   "slots": [
     {
       "name": "x",
