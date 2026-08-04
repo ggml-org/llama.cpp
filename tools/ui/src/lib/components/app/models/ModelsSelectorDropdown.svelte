@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
+	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
+	import { MODEL_SELECTOR_ICON } from '$lib/constants';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
 	import { modelLoadFraction } from '$lib/utils';
@@ -35,7 +36,7 @@
 	}: Props = $props();
 
 	let isOpen = $state(false);
-	let highlightedIndex = $state<number>(-1);
+	let highlightedId = $state<string | null>(null);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -43,14 +44,90 @@
 		onModelChange: () => onModelChange,
 		onOpenChange: (open) => {
 			isOpen = open;
-			highlightedIndex = -1;
+			highlightedId = null;
 		}
 	});
 
 	$effect(() => {
 		void ms.searchTerm;
-		highlightedIndex = -1;
+		highlightedId = null;
 	});
+
+	// Flatten grouped options into the visual render order (loaded -> favorites -> available) so
+	// keyboard navigation follows the on-screen order of the rows, not the flat option list order.
+	let visualOrder = $derived.by(() => {
+		const order: string[] = [];
+
+		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
+		for (const item of ms.groupedFilteredOptions.favorites) order.push(item.option.id);
+		for (const group of ms.groupedFilteredOptions.available) {
+			for (const item of group.items) order.push(item.option.id);
+		}
+
+		return order;
+	});
+
+	// Index of the currently highlighted model within visualOrder, or -1 when none.
+	let highlightedIndex = $derived(highlightedId ? visualOrder.indexOf(highlightedId) : -1);
+
+	// Move highlight to the previous/next row in visual order.
+	function moveHighlight(direction: 1 | -1) {
+		const len = visualOrder.length;
+		if (len === 0) {
+			highlightedId = null;
+			return;
+		}
+
+		let index = highlightedIndex;
+		if (index === -1) {
+			index = direction === 1 ? 0 : len - 1;
+		} else {
+			index = (index + direction + len) % len;
+		}
+
+		highlightedId = visualOrder[index];
+	}
+
+	// Load or unload the given model based on its current status.
+	// Returns the pending operation, or null when it's a no-op (already loading).
+	function toggleModelLoad(modelId: string): Promise<void> | null {
+		const model = routerModels().find((m) => m.id === modelId);
+		const status = model?.status?.value as ServerModelStatus | undefined;
+
+		if (status === ServerModelStatus.LOADING) return null;
+
+		const isLoaded = status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
+
+		if (isLoaded) {
+			return modelsStore.unloadModel(modelId);
+		}
+
+		return modelsStore.loadModel(modelId);
+	}
+
+	// Load/unload a model, then once the operation settles close the dropdown
+	// and return focus to the chat input. On failure the dropdown stays open
+	// (the error is already surfaced via toast).
+	async function loadAndDismiss(modelId: string) {
+		const op = toggleModelLoad(modelId);
+		if (!op) return;
+
+		try {
+			await op;
+		} catch {
+			return;
+		}
+
+		ms.handleOpenChange(false);
+
+		requestAnimationFrame(() => {
+			const input = document.querySelector<HTMLElement>(
+				'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]'
+			);
+
+			input?.focus({ preventScroll: true });
+		});
+	}
 
 	export function open() {
 		ms.handleOpenChange(true);
@@ -61,33 +138,17 @@
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
-
-			if (ms.filteredOptions.length === 0) return;
-
-			if (highlightedIndex === -1 || highlightedIndex === ms.filteredOptions.length - 1) {
-				highlightedIndex = 0;
-			} else {
-				highlightedIndex += 1;
-			}
+			moveHighlight(1);
 		} else if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
-
-			if (ms.filteredOptions.length === 0) return;
-
-			if (highlightedIndex === -1 || highlightedIndex === 0) {
-				highlightedIndex = ms.filteredOptions.length - 1;
-			} else {
-				highlightedIndex -= 1;
-			}
+			moveHighlight(-1);
 		} else if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
 
-			if (highlightedIndex >= 0 && highlightedIndex < ms.filteredOptions.length) {
-				const option = ms.filteredOptions[highlightedIndex];
-
-				ms.handleSelect(option.id);
-			} else if (ms.filteredOptions.length > 0) {
-				highlightedIndex = 0;
+			if (highlightedId) {
+				void loadAndDismiss(highlightedId);
+			} else if (visualOrder.length > 0) {
+				highlightedId = visualOrder[0];
 			}
 		}
 	}
@@ -109,7 +170,7 @@
 				]}
 				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
-				<Package class="h-3.5 w-3.5 shrink-0" />
+				<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -150,7 +211,7 @@
 								]}
 								disabled={disabled || ms.updating}
 							>
-								<Package class="h-3.5 w-3.5 shrink-0" />
+								<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 
 								{#if selectedOption}
 									<ModelId
@@ -217,9 +278,9 @@
 							{/if}
 
 							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
-								{@const { option, flatIndex } = item}
+								{@const { option } = item}
 								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
-								{@const isHighlighted = flatIndex === highlightedIndex}
+								{@const isHighlighted = option.id === highlightedId}
 								{@const isFav = ms.isFavorite(option.model)}
 
 								<ModelsSelectorOption
@@ -230,11 +291,11 @@
 									{hideOrgName}
 									onSelect={ms.handleSelect}
 									onInfoClick={ms.handleInfoClick}
-									onMouseEnter={() => (highlightedIndex = flatIndex)}
+									onMouseEnter={() => (highlightedId = option.id)}
 									onKeyDown={(event) => {
 										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
 											event.preventDefault();
-											ms.handleSelect(option.id);
+											void loadAndDismiss(option.id);
 										}
 									}}
 								/>
@@ -275,7 +336,7 @@
 							onclick={() => ms.handleOpenChange(true)}
 							disabled={disabled || ms.updating}
 						>
-							<Package class="h-3.5 w-3.5 shrink-0" />
+							<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 
 							{#if selectedOption}
 								<ModelId

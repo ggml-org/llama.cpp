@@ -139,11 +139,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			handleOpenChange(false);
 
 			requestAnimationFrame(() => {
-				const textarea = document.querySelector<HTMLTextAreaElement>(
-					'[data-slot="chat-form"] textarea'
+				const input = document.querySelector<HTMLElement>(
+					'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]'
 				);
 
-				textarea?.focus({ preventScroll: true });
+				input?.focus({ preventScroll: true });
 			});
 		}
 
