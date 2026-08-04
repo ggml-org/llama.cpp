@@ -57,17 +57,17 @@ model-dependent equivalence gate:
 ```bash
 cmake --build build --target test-state-restore-equivalence -j 12
 scripts/dsv4-rocm/run-state-restore-equivalence.sh --dry-run
-DSV4_LABEL=state-restore-equivalence \
+DSV4_STATE_API=context DSV4_LABEL=context-state-equivalence \
   scripts/dsv4-rocm/run-state-restore-equivalence.sh
 ```
 
 The gate computes a deterministic fresh prefix at 2K, 3K, and 16K by default,
-saves sequence 0 with `llama_state_seq_get_data`, and runs four greedy target
+saves either sequence-only or full context state, and runs four greedy target
 steps while retaining every full-vocabulary logit. It then clears memory and
 recomputes the same prefix/continuation as a fresh-repeat control before a
-second clear, `llama_state_seq_set_data` restore, and exact-input replay. It
-requires all three argmax paths to match and both the original-vs-fresh-repeat
-and fresh-repeat-vs-restored full-logit comparisons to satisfy
+second clear, state restore, and exact-input replay. It requires all three
+argmax paths to match and both the original-vs-fresh-repeat and
+fresh-repeat-vs-restored full-logit comparisons to satisfy
 `abs_diff <= 1e-5 + 1e-5*max(abs(a),abs(b))`. Exact prefix/input/argmax
 token IDs, state/logit hashes, byte counts, manifests, DSOs, and telemetry are
 preserved under `$HOME/llama-jobs/dsv4-rocm-state-equivalence/`.
@@ -78,6 +78,13 @@ so llama-bench restores the saved state only for repetitions 2-6 inside the
 same context; the next instance has a different depth and performs fresh setup.
 The greedy path is a semantic state-equivalence test, not a literal reproduction
 of llama-bench's random timing inputs.
+
+On DSV4, sequence-only `llama_state_seq_get/set_data` restoration is rejected:
+fresh re-prefill is bit-identical, but restored full-vocabulary logits diverge.
+Full `llama_state_get/set_data` context restoration is bit-identical at all
+three gate depths. Consequently `run-tg.sh` requires
+`LLAMA_BENCH_DEPTH_STATE_API=context`; overriding it back to sequence fails
+closed.
 
 After a GPU window is confirmed and this gate passes:
 

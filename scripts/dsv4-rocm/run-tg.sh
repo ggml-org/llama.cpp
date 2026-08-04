@@ -7,6 +7,7 @@ MODEL=${DSV4_MODEL:-/home/edwin/models/DeepSeek-V4-Flash-0731-GGUF/UD-IQ2_M/Deep
 BENCH=${DSV4_BENCH:-$ROOT_DIR/build/bin/llama-bench}
 OUTPUT_ROOT=${DSV4_TG_OUTPUT_ROOT:-$HOME/llama-jobs/dsv4-rocm-tg}
 MODE=${DSV4_TG_MODE:-performance}
+DEPTH_STATE_API=${DSV4_TG_DEPTH_STATE_API:-context}
 DEPTHS=${DSV4_TG_DEPTHS:-0,2048,3072,4096,8192,16384,32768,65536}
 N_GEN=${DSV4_TG_N_GEN:-32}
 RAW_REPS=${DSV4_TG_REPS:-6}
@@ -47,6 +48,8 @@ Important overrides:
   DSV4_TG_SAMPLE_TIMEOUT    cap for each generation sample (300 seconds)
   DSV4_TG_SETUP_TIMEOUT     cap reset for model/context/depth setup (1800 seconds)
   DSV4_TG_STABILITY_LIMIT   MAD/median acceptance threshold (0.03)
+  DSV4_TG_DEPTH_STATE_API  must remain context; sequence restore failed DSV4
+                           full-logit equivalence (default: context)
   DSV4_TG_OUTPUT_ROOT       default $HOME/llama-jobs/dsv4-rocm-tg
   DSV4_LABEL                safe run label
   DSV4_HASH_MODE=full       hash all GGUF shards; metadata is default
@@ -55,8 +58,8 @@ Important overrides:
 
 The command has no draft-model or speculative option. llama-bench supplies
 exactly n_gen target evaluations with deterministic process-local std::rand
-input tokens; there is no sampler or EOS early stop. Depth setup/state restore
-is outside samples_ns. Performance and residency are separate runs so verbose
+input tokens; there is no sampler or EOS early stop. Depth setup and attested
+full-context restore are outside samples_ns. Performance and residency are separate runs so verbose
 scheduler logging does not perturb accepted TG.
 USAGE
 }
@@ -76,6 +79,7 @@ done
 
 [[ "$LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "invalid DSV4_LABEL: $LABEL"
 [[ "$MODE" == performance || "$MODE" == residency ]] || fail "DSV4_TG_MODE must be performance or residency"
+[[ "$DEPTH_STATE_API" == context ]] || fail "DSV4_TG_DEPTH_STATE_API must be context; sequence restore failed the DSV4 equivalence gate"
 for pair in \
     "DSV4_TG_N_GEN:$N_GEN" "DSV4_TG_REPS:$RAW_REPS" \
     "DSV4_TG_SAMPLE_TIMEOUT:$SAMPLE_TIMEOUT_S" "DSV4_TG_SETUP_TIMEOUT:$SETUP_TIMEOUT_S" \
@@ -139,6 +143,7 @@ export GGML_CUDA_P2P=${GGML_CUDA_P2P:-1}
 export GGML_HIP_GRAPHS=${GGML_HIP_GRAPHS:-1}
 export HSA_NO_SCRATCH_RECLAIM=${HSA_NO_SCRATCH_RECLAIM:-1}
 export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
+export LLAMA_BENCH_DEPTH_STATE_API="$DEPTH_STATE_API"
 if [[ "$MODE" == residency ]]; then
     export GGML_SCHED_DEBUG=2
 else
@@ -172,8 +177,8 @@ printf 'Mode: %s\n' "$MODE"
 printf 'Planned command:'
 printf ' %q' "${bench_cmd[@]}"
 printf '\n'
-printf 'Environment: GGML_SCHED_DEBUG=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q\n' \
-    "$GGML_SCHED_DEBUG" "$GGML_HIP_RDNA2_MMQ_J" "$GGML_HIP_RDNA2_HC_MIXES" "$GGML_HIP_RDNA2_LID_SUBWAVE"
+printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q\n' \
+    "$GGML_SCHED_DEBUG" "$LLAMA_BENCH_DEPTH_STATE_API" "$GGML_HIP_RDNA2_MMQ_J" "$GGML_HIP_RDNA2_HC_MIXES" "$GGML_HIP_RDNA2_LID_SUBWAVE"
 printf 'Per-sample cap: %ss; per-setup cap: %ss\n' "$SAMPLE_TIMEOUT_S" "$SETUP_TIMEOUT_S"
 if [[ "$DRY_RUN" == 1 ]]; then
     echo "Dry run only; no ROCm query, model load, or benchmark process was started."
@@ -232,13 +237,16 @@ Path(sys.argv[1]).write_text(
 )
 PY
 
-printf '%q ' "${bench_cmd[@]}" > "$run_dir/command.sh"
+printf 'env LLAMA_BENCH_DEPTH_STATE_API=%q ' "$LLAMA_BENCH_DEPTH_STATE_API" > "$run_dir/command.sh"
+printf '%q ' "${bench_cmd[@]}" >> "$run_dir/command.sh"
 printf '\n' >> "$run_dir/command.sh"
 cp "$run_dir/command.sh" "$run_dir/executed-command.sh"
 chmod +x "$run_dir/command.sh" "$run_dir/executed-command.sh"
 
 {
     printf 'DSV4_TG_MODE=%q\n' "$MODE"
+    printf 'DSV4_TG_DEPTH_STATE_API=%q\n' "$DEPTH_STATE_API"
+    printf 'LLAMA_BENCH_DEPTH_STATE_API=%q\n' "$LLAMA_BENCH_DEPTH_STATE_API"
     printf 'DSV4_MODEL=%q\n' "$MODEL"
     printf 'DSV4_BENCH=%q\n' "$BENCH"
     printf 'DSV4_TG_DEPTHS=%q\n' "$DEPTHS"
@@ -265,9 +273,9 @@ chmod +x "$run_dir/command.sh" "$run_dir/executed-command.sh"
     printf 'LD_LIBRARY_PATH=%q\n' "$LD_LIBRARY_PATH"
 } > "$run_dir/effective-settings.sh"
 
-python3 - "$run_dir/contract.json" "$MODE" "$DEPTHS" "$N_GEN" "$RAW_REPS" "$DISCARD_FIRST" "${bench_cmd[@]}" <<'PY'
+python3 - "$run_dir/contract.json" "$MODE" "$DEPTHS" "$N_GEN" "$RAW_REPS" "$DISCARD_FIRST" "$DEPTH_STATE_API" "${bench_cmd[@]}" <<'PY'
 import json, pathlib, sys
-out, mode, depths, n_gen, reps, discard, *command = sys.argv[1:]
+out, mode, depths, n_gen, reps, discard, depth_state_api, *command = sys.argv[1:]
 forbidden = ("--model-draft", "-md", "--spec-type", "--spec-draft", "dspark")
 hits = [arg for arg in command if any(token in arg.lower() for token in forbidden)]
 if hits:
@@ -282,8 +290,9 @@ pathlib.Path(out).write_text(json.dumps({
     "raw_repetitions": int(reps),
     "discard_first": int(discard),
     "accepted_repetitions": int(reps) - int(discard),
+    "depth_state_api": depth_state_api,
     "token_contract": "llama-bench test_gen: exactly n_gen target llama_decode calls; BOS then deterministic process-local std::rand tokens; no sampler or EOS",
-    "depth_contract": "llama-bench n_depth setup occurs outside samples_ns; later repetitions restore the saved target-only sequence state",
+    "depth_contract": "llama-bench n_depth setup occurs outside samples_ns; later repetitions restore the attested full context state; sequence-only restore is forbidden for DSV4",
     "command_argv": command,
 }, indent=2) + "\n")
 PY
