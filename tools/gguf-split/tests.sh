@@ -85,11 +85,11 @@ $MAIN -no-cnv --model $WORK_PATH/ggml-model-split-500M-00001-of-00002.gguf -p "I
 echo PASS
 echo
 
-# 7. Merge with delete files
+# 7. Merge with delete splits
 for i in $(seq -w 1 11); do
     cp "$WORK_PATH/ggml-model-split-32-tensors-000${i}-of-00011.gguf" "$WORK_PATH/ggml-model-split-32-tensors-copy-000${i}-of-00011.gguf"
 done
-$SPLIT --merge --delete-files $WORK_PATH/ggml-model-split-32-tensors-copy-00001-of-00011.gguf $WORK_PATH/ggml-model-merge-3.gguf
+$SPLIT --merge --delete-splits $WORK_PATH/ggml-model-split-32-tensors-copy-00001-of-00011.gguf $WORK_PATH/ggml-model-merge-3.gguf
 echo PASS
 echo
 
