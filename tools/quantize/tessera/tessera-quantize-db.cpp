@@ -31,6 +31,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <vector>
 
 // SHA-256 implementation (self-contained, public domain style). We avoid
 // pulling OpenSSL just for fingerprinting the GGUF head/tail. The reference
@@ -447,6 +448,45 @@ static const char * TS_QDB_SCHEMA_SQL =
     "CREATE INDEX IF NOT EXISTS idx_l5_weights_model\n"
     "    ON l5_weights(model_hash);\n";
 
+// Phase 16.7: per-component (model_role, name) covering index
+// statements. Kept as a separate constant from TS_QDB_SCHEMA_SQL
+// because the (model_role, name) columns are added by the
+// in-place migration, not by the CREATE TABLE statements. On a
+// fresh DB the columns are present from the start, so the
+// indexes can be created immediately after the schema setup;
+// on a pre-Phase-16 DB the migration has to add the columns
+// first. The cleanest place to run this is AFTER
+// ts_tessera_db_migrate_model_role in ts_tessera_db_open; see
+// the open path.
+//
+// The composite PKs include model_role but the per-component
+// query pattern ("give me all `attn_q` rows for role=`dflash`")
+// scans the PK left-to-right and would still walk every
+// (model_hash, model_role, name) tuple. A secondary index on
+// (model_role, name) lets DuckDB satisfy
+// "WHERE model_role = ? AND name = ?" with an index seek
+// without reading the full PK. Idempotent: CREATE INDEX IF
+// NOT EXISTS is a no-op on re-open.
+//
+// l5_weights is the one outlier: it has no `name` column (the
+// row is per family), so the covering index is on
+// (model_role, family).
+static const char * TS_QDB_PHASE_16_7_INDEXES_SQL =
+    "CREATE INDEX IF NOT EXISTS idx_tensor_stats_role_name\n"
+    "    ON tensor_stats(model_role, name);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l3_outlier_role_name\n"
+    "    ON l3_outlier_summary(model_role, name);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l4_probe_role_name\n"
+    "    ON l4_probe_summary(model_role, name);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l5_plan_role_name\n"
+    "    ON l5_plan_summary(model_role, name);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l4_outcome_role_name\n"
+    "    ON l4_plan_outcome(model_role, name);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l5_outcome_role_name\n"
+    "    ON l5_outcome(model_role, name);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l5_weights_role_family\n"
+    "    ON l5_weights(model_role, family);\n";
+
 // DuckDB escapes single quotes by doubling them. Sufficient for run_id,
 // model_path, family, etc. (no LIKE / backslash semantics in DuckDB strings).
 std::string sql_escape(const std::string & s) {
@@ -502,6 +542,7 @@ ts_tessera_db * ts_tessera_db_open(const std::string & path,
     try {
         // DBConfig defaults: read/write, create on open. We pass a DBInstance
         // to the connection so the DuckDB object outlives the open scope.
+        wrap->db_path = path;
         wrap->db.reset(new duckdb::DuckDB(path));
         wrap->conn.reset(new duckdb::Connection(*wrap->db));
         // Note: DuckDB 1.5+ moved CURRENT_TIMESTAMP / NOW() into the
@@ -521,9 +562,27 @@ ts_tessera_db * ts_tessera_db_open(const std::string & path,
         // adds model_role to a pre-Phase-16 DB. Idempotent: a
         // fresh DB has the column already, so the migration
         // short-circuits to a no-op.
+        //
+        // Must run BEFORE the Phase 16.7 index creation: the
+        // indexes reference the model_role column, which the
+        // migration is what adds on a pre-Phase-16 DB.
         if (ts_tessera_db_migrate_model_role(wrap, err) != 0) {
             delete wrap;
             return nullptr;
+        }
+        // Phase 16.7: per-component (model_role, name) covering
+        // indexes. Run after the migration so the (model_role,
+        // name) columns exist on every table. Idempotent on
+        // re-open (CREATE INDEX IF NOT EXISTS is a no-op when
+        // the index is already present).
+        {
+            auto idx_res = wrap->conn->Query(TS_QDB_PHASE_16_7_INDEXES_SQL);
+            if (idx_res->HasError()) {
+                if (err) *err = "phase 16.7 index setup failed: " +
+                                idx_res->GetError();
+                delete wrap;
+                return nullptr;
+            }
         }
     } catch (const std::exception & e) {
         if (err) *err = std::string("duckdb open failed: ") + e.what();
@@ -1570,13 +1629,41 @@ int exec_simple(duckdb::Connection & conn,
 // TABLE for the new (Phase 16) schema; the `insert_select_sql` is
 // the INSERT ... SELECT that backfills model_role='trunk' for
 // existing rows.
+//
+// Phase 16.7: `n_rows_out` (when non-null) reports the row count
+// backfilled into the new model_role column. -1 means "no
+// migration happened" (already migrated or fresh table) and 0+
+// means "rows backfilled with model_role='trunk'". The audit
+// sidecar (model_role_migration.json) keys on this distinction
+// to avoid noisy re-runs.
 int migrate_one_table(duckdb::Connection & conn,
                        const std::string & table_name,
                        const std::string & create_new_sql,
                        const std::string & insert_select_sql,
+                       int64_t * n_rows_out,
                        std::string * err) {
+    if (n_rows_out) *n_rows_out = -1;  // sentinel: no migration
     if (table_has_model_role(conn, table_name, err)) {
         return 0;   // already migrated (fresh DB or re-open)
+    }
+    // Phase 16.7: capture the row count BEFORE the rebuild. The
+    // count after the rebuild is 0 (we just dropped the old
+    // table). The pre-rebuild count is the "n_rows backfilled"
+    // value the audit sidecar records.
+    int64_t n_rows = 0;
+    {
+        const std::string cq = "SELECT COUNT(*) FROM " + table_name;
+        try {
+            auto cres = conn.Query(cq);
+            if (!cres->HasError() && cres->RowCount() > 0) {
+                n_rows = cres->GetValue(0, 0).GetValue<int64_t>();
+            }
+        } catch (...) {
+            // non-fatal: a count failure should not block the
+            // migration. The sidecar will record 0 for the
+            // count in this corner case.
+            n_rows = 0;
+        }
     }
     const std::string tmp = table_name + "__p16_new";
     // 1. CREATE TABLE <name>__p16_new (..., model_role, PRIMARY KEY (...))
@@ -1598,6 +1685,104 @@ int migrate_one_table(duckdb::Connection & conn,
     // 4. ALTER TABLE <name>__p16_new RENAME TO <name>
     if (exec_simple(conn, "ALTER TABLE " + tmp + " RENAME TO " + table_name,
                     "RENAME " + tmp, err) != 0) return 1;
+    if (n_rows_out) *n_rows_out = n_rows;
+    return 0;
+}
+
+// Phase 16.7: write a JSON sidecar describing the migration that
+// just happened. The sidecar is written next to the duckdb file
+// (same directory, same basename + ".model_role_migration.json"
+// suffix) and is the only audit trail of what Phase 16 did to a
+// pre-Phase-16 DB. The format is a small hand-rolled JSON
+// (deliberately not a JSON library - the sidecar is debug-only
+// and we want zero new deps); the keys are stable.
+//
+// The function is a no-op when the db_path is empty (in-memory
+// DB) or when the migration log is empty (every table was
+// already migrated; re-open is a no-op). It writes atomically
+// (write to "<sidecar>.tmp", then rename) so a crash mid-write
+// cannot leave a half-written sidecar.
+int write_migration_sidecar(const std::string & db_path,
+                             const std::vector<std::pair<std::string, int64_t>> & rows,
+                             std::string * err) {
+    if (db_path.empty() || db_path == ":memory:") return 0;
+    if (rows.empty()) return 0;   // no migration happened
+    // Build the sidecar path: foo.duckdb -> foo.model_role_migration.json
+    std::string sidecar = db_path;
+    auto slash = sidecar.find_last_of("/\\");
+    auto dot   = sidecar.find_last_of('.');
+    // Only treat the final dot-after-slash as the extension
+    // separator. "/path/foo.tar.gz" -> split at the last dot
+    // -> stem = "/path/foo.tar", ext = "gz". The stem keeps the
+    // directory; the extension is the duckdb suffix.
+    std::string stem, ext;
+    if (dot != std::string::npos &&
+        (slash == std::string::npos || dot > slash)) {
+        stem = sidecar.substr(0, dot);
+        ext  = sidecar.substr(dot);
+    } else {
+        stem = sidecar;
+        ext  = "";
+    }
+    const std::string final_sidecar = stem + ".model_role_migration.json";
+    const std::string tmp_sidecar    = final_sidecar + ".tmp";
+    // Build the JSON body. The format is intentionally minimal:
+    //   {
+    //     "db_path": "<path>",
+    //     "model_role": "trunk",
+    //     "ts": "YYYY-MM-DD HH:MM:SS",
+    //     "tables": [
+    //       {"name": "tensor_stats", "n_rows_at_migration": 42},
+    //       ...
+    //     ]
+    //   }
+    //
+    // JSON requires double quotes and ASCII; we strip control
+    // characters from db_path defensively (a Windows path with
+    // backslashes is fine; the only thing that would break the
+    // JSON is a literal " in the path, which is not a valid
+    // path character on any supported platform).
+    std::string safe_path;
+    safe_path.reserve(db_path.size());
+    for (char c : db_path) {
+        if (c == '"' || c == '\\') {
+            safe_path += '\\';
+        }
+        safe_path += c;
+    }
+    std::ostringstream body;
+    body << "{\n"
+         << "  \"db_path\": \"" << safe_path << "\",\n"
+         << "  \"model_role\": \"trunk\",\n"
+         << "  \"ts\": \"" << ts_now_ts() << "\",\n"
+         << "  \"tables\": [\n";
+    for (size_t i = 0; i < rows.size(); i++) {
+        body << "    {\"name\": \"" << rows[i].first
+             << "\", \"n_rows_at_migration\": " << rows[i].second << "}";
+        if (i + 1 < rows.size()) body << ",";
+        body << "\n";
+    }
+    body << "  ]\n"
+         << "}\n";
+    // Atomic write: tmp -> rename. std::rename is atomic on
+    // POSIX (the rename(2) syscall is atomic within a
+    // filesystem) and best-effort on Windows.
+    {
+        std::ofstream f(tmp_sidecar, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            if (err) *err = "sidecar open failed: " + tmp_sidecar;
+            return 1;
+        }
+        f << body.str();
+        if (!f) {
+            if (err) *err = "sidecar write failed: " + tmp_sidecar;
+            return 1;
+        }
+    }
+    if (std::rename(tmp_sidecar.c_str(), final_sidecar.c_str()) != 0) {
+        if (err) *err = "sidecar rename failed: " + tmp_sidecar + " -> " + final_sidecar;
+        return 1;
+    }
     return 0;
 }
 
@@ -1828,12 +2013,37 @@ int ts_tessera_db_migrate_model_role(ts_tessera_db * db,
             "FROM l5_weights",
         }},
     };
+    // Phase 16.7: per-table migration log. One entry per table
+    // that actually needed the migration; the audit sidecar is
+    // emitted only when at least one table was migrated.
+    std::vector<std::pair<std::string, int64_t>> migrated;
     for (const auto & kv : tables) {
         const std::string & tname = kv.first;
         const std::string & create_sql  = kv.second.first;
         const std::string & insert_sql  = kv.second.second;
-        if (migrate_one_table(*db->conn, tname, create_sql, insert_sql, err) != 0) {
+        int64_t n_rows = -1;
+        if (migrate_one_table(*db->conn, tname, create_sql, insert_sql, &n_rows, err) != 0) {
             return 1;
+        }
+        // Phase 16.7: record the migration for the audit
+        // sidecar. n_rows is -1 on no-op (already migrated or
+        // fresh DB) and 0+ on an actual migration. We only
+        // emit the sidecar for the actual-migration case.
+        if (n_rows >= 0) {
+            migrated.emplace_back(tname, n_rows);
+        }
+    }
+    // Phase 16.7: write the audit sidecar. No-op when
+    // `migrated` is empty (a re-open of an already-migrated
+    // DB, the common case).
+    if (!migrated.empty()) {
+        std::string sidecar_err;
+        if (write_migration_sidecar(db->db_path, migrated, &sidecar_err) != 0) {
+            // Sidecar is informational, not load-bearing. Log
+            // the failure but do not fail the migration: the
+            // schema is correct, only the audit trail is
+            // missing.
+            if (err) *err = "migration sidecar write failed: " + sidecar_err;
         }
     }
     return 0;

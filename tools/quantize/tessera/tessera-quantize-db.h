@@ -36,6 +36,13 @@ namespace duckdb { class DuckDB; class Connection; }
 struct ts_tessera_db {
     std::unique_ptr<duckdb::DuckDB>     db;
     std::unique_ptr<duckdb::Connection> conn;
+    // Phase 16.7: stores the on-disk path passed to
+    // ts_tessera_db_open (or "" for ":memory:"). Used by
+    // ts_tessera_db_migrate_model_role to write the
+    // model_role_migration.json sidecar next to the duckdb
+    // file. The C++ struct used to discard the path; the
+    // sidecar needs it.
+    std::string                        db_path;
 
     ts_tessera_db() = default;
     ~ts_tessera_db();
