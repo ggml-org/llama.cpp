@@ -3271,6 +3271,11 @@ private:
                             }
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
+                            const int n_past_lcp = n_past;
+
+                            const bool state_exact =
+                                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS;
 
                             // ref: https://github.com/ggml-org/llama.cpp/pull/24110
                             const bool has_new_tokens = (n_past < slot.task->n_tokens());
@@ -3330,21 +3335,30 @@ private:
 
                                 if (pos_min >= pos_min_thold) {
                                     // search for a context checkpoint
-                                    const auto it = std::find_if(
-                                        slot.prompt.checkpoints.rbegin(),
-                                        slot.prompt.checkpoints.rend(),
-                                        [&](const auto & cur) {
-                                            // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
-                                            SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
-                                            // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
-                                            if (cur.pos_max > pos_next) {
-                                                return false;
+                                    server_prompt::const_checkpoint_iterator it = slot.prompt.checkpoints.cend();
+                                    if (state_exact) {
+                                        it = slot.prompt.find_reusable_checkpoint(n_past_lcp, slot.task->n_tokens());
+                                    } else {
+                                        const auto rit = std::find_if(
+                                            slot.prompt.checkpoints.rbegin(),
+                                            slot.prompt.checkpoints.rend(),
+                                            [&](const auto & cur) {
+                                                // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
+                                                SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
+                                                // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
+                                                if (cur.pos_max > pos_next) {
+                                                    return false;
+                                                }
+                                                return cur.pos_min < pos_min_thold || cur.pos_min == 0;
                                             }
-                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                                        );
+                                        if (rit != slot.prompt.checkpoints.rend()) {
+                                            it = rit.base();
+                                            --it;
                                         }
-                                    );
+                                    }
 
-                                    bool do_reset = it == slot.prompt.checkpoints.rend();
+                                    bool do_reset = it == slot.prompt.checkpoints.cend();
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
@@ -3368,10 +3382,11 @@ private:
                             }
 
                             {
-                                // erase any checkpoints with pos_max > pos_next
+                                // Exact recurrent states must not outlive the shared token prefix.
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
-                                    if (cur.pos_max > pos_next) {
+                                    const bool invalid = state_exact ? cur.n_tokens > n_past_lcp : cur.pos_max > pos_next;
+                                    if (invalid) {
                                         SLT_TRC(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
                                         it = slot.prompt.checkpoints.erase(it);
                                     } else {

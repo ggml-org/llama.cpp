@@ -589,6 +589,10 @@ struct server_prompt {
 
     std::list<common_prompt_checkpoint> checkpoints;
 
+    using const_checkpoint_iterator = std::list<common_prompt_checkpoint>::const_iterator;
+
+    const_checkpoint_iterator find_reusable_checkpoint(int64_t n_tokens_lcp, int64_t n_tokens_new) const;
+
     void clear() {
         tokens.clear();
         checkpoints.clear();

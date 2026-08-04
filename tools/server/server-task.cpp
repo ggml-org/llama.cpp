@@ -1636,6 +1636,22 @@ json server_task_result_apply_lora::to_json() {
 //
 // server_prompt_cache
 //
+server_prompt::const_checkpoint_iterator server_prompt::find_reusable_checkpoint(
+        int64_t n_tokens_lcp,
+        int64_t n_tokens_new) const {
+    const auto it = std::find_if(checkpoints.rbegin(), checkpoints.rend(), [&](const auto & checkpoint) {
+        return checkpoint.n_tokens <= n_tokens_lcp && checkpoint.n_tokens < n_tokens_new;
+    });
+
+    if (it == checkpoints.rend()) {
+        return checkpoints.end();
+    }
+
+    auto result = it.base();
+    --result;
+    return result;
+}
+
 size_t server_prompt_cache::size() const {
     size_t res = 0;
 
