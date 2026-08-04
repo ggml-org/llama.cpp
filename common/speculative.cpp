@@ -2350,6 +2350,23 @@ common_speculative_init_result::common_speculative_init_result(
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     }
 
+    // TODO(embedded-drafter, Workstream A, device placement):
+    //   mparams above is a single common_params_model that carries
+    //   one devices[] list and one n_gpu_layers value.  For a target
+    //   GGUF that embeds 4 drafters (Workstream A's destination
+    //   state), the architect will need a per-drafter split: one Metal
+    //   device per drafter for memory pressure isolation, or a shared
+    //   device with per-drafter n_gpu_layers for low-end hardware.
+    //   The plug-in point is here, where mparams is built from the
+    //   (still single) common_params.  The follow-up will replace
+    //   `mparams` with a vector<common_params_model> (or a small
+    //   struct carrying one per drafter) and the load loop further
+    //   down will iterate it.  For Workstream A this is a single
+    //   drafter per GGUF, so the current single-mparams form is
+    //   correct - the TODO is here so the Workstream A author (or
+    //   whoever lands the multi-drafter case) does not have to
+    //   rediscover the spot.
+
     // note: for small models maybe we can set this to the maximum possible draft from all speculative types
     //       the extra memory for small models is likely negligible?
     cparams.n_rs_seq  = 0;
