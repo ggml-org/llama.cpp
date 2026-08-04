@@ -122,6 +122,18 @@ L5_WEIGHTS_COLS: tuple[str, ...] = (
     # keep at base. Nullable / additive: existing rows in the
     # table are unaffected.
     "top_fraction",
+    # Retune follow-ups: cross-component coupling score. Pearson
+    # correlation of the per-layer hit_rate between the trunk's
+    # role and the dflash encoder's role for the same family. A
+    # high score means the two roles' miscalibration moves
+    # together across layers; a low score means they are
+    # independent. The retune surfaces this as a new column on
+    # l5_weights so the consumer can see whether a single
+    # retune covers both roles. NULL when the family has only
+    # one role's rows (e.g. a pre-Phase-16 retune that did not
+    # partition by role) or when the per-role per-layer hit
+    # rates have zero variance (the correlation is undefined).
+    "coupling_score",
     "retune_source", "updated_at",
 )
 PER_LAYER_ERROR_COLS: tuple[str, ...] = (
@@ -727,14 +739,16 @@ class TesseraDB:
         # the model_role column exists. We add model_role BEFORE
         # the upsert (rather than relying on the table's CREATE
         # TABLE) so legacy DBs that pre-date Phase 16's
-        # CREATE TABLE migration also work.
+        # CREATE TABLE migration also work. Retune follow-ups:
+        # the coupling_score column is also added by
+        # _ensure_l5_weights_columns.
         self._ensure_l5_weights_columns()
         sql = (
             "INSERT INTO l5_weights ("
             "  model_hash, model_role, family, w_imatrix, w_gradient, w_layer, "
             "  bias, n_samples, in_sample_loss, hit_rate, "
-            "  top_fraction, retune_source, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "  top_fraction, coupling_score, retune_source, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
             "  w_imatrix       = excluded.w_imatrix, "
             "  w_gradient      = excluded.w_gradient, "
@@ -744,6 +758,7 @@ class TesseraDB:
             "  in_sample_loss  = excluded.in_sample_loss, "
             "  hit_rate        = excluded.hit_rate, "
             "  top_fraction    = excluded.top_fraction, "
+            "  coupling_score  = excluded.coupling_score, "
             "  retune_source   = excluded.retune_source, "
             "  updated_at      = excluded.updated_at"
         )
@@ -764,8 +779,8 @@ class TesseraDB:
                 "  model_hash, model_role, family, "
                 "  w_imatrix, w_gradient, w_layer, "
                 "  bias, n_samples, in_sample_loss, hit_rate, "
-                "  top_fraction, retune_source, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "  top_fraction, coupling_score, retune_source, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
                 "  w_imatrix       = excluded.w_imatrix, "
                 "  w_gradient      = excluded.w_gradient, "
@@ -775,6 +790,7 @@ class TesseraDB:
                 "  in_sample_loss  = excluded.in_sample_loss, "
                 "  hit_rate        = excluded.hit_rate, "
                 "  top_fraction    = excluded.top_fraction, "
+                "  coupling_score  = excluded.coupling_score, "
                 "  retune_source   = excluded.retune_source, "
                 "  updated_at      = excluded.updated_at"
             )
@@ -791,8 +807,8 @@ class TesseraDB:
                 "  model_hash, model_role, family, "
                 "  w_imatrix, w_gradient, w_layer, "
                 "  bias, n_samples, in_sample_loss, hit_rate, "
-                "  top_fraction, retune_source, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "  top_fraction, coupling_score, retune_source, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (model_hash, family) DO UPDATE SET "
                 "  w_imatrix       = excluded.w_imatrix, "
                 "  w_gradient      = excluded.w_gradient, "
@@ -802,6 +818,7 @@ class TesseraDB:
                 "  in_sample_loss  = excluded.in_sample_loss, "
                 "  hit_rate        = excluded.hit_rate, "
                 "  top_fraction    = excluded.top_fraction, "
+                "  coupling_score  = excluded.coupling_score, "
                 "  retune_source   = excluded.retune_source, "
                 "  model_role      = excluded.model_role, "
                 "  updated_at      = excluded.updated_at"
@@ -822,6 +839,7 @@ class TesseraDB:
                     r.get("in_sample_loss"),
                     r.get("hit_rate"),
                     r.get("top_fraction"),
+                    r.get("coupling_score"),
                     r.get("retune_source", "ols_slope_v1"),
                     r.get("updated_at", now),
                 ])
@@ -882,6 +900,21 @@ class TesseraDB:
             sys.stderr.write(
                 f"tessera-db: ALTER TABLE l5_weights "
                 f"ADD COLUMN top_fraction failed: {e}\n"
+            )
+        # Retune follow-ups: cross-component coupling score
+        # column. DOUBLE, nullable. The retune populates this
+        # when the family has rows for both trunk and dflash;
+        # a legacy (single-role) retune leaves it NULL. Same
+        # idempotent ALTER pattern as the other columns.
+        try:
+            self._conn.execute(
+                "ALTER TABLE l5_weights "
+                "ADD COLUMN IF NOT EXISTS coupling_score DOUBLE"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE l5_weights "
+                f"ADD COLUMN coupling_score failed: {e}\n"
             )
         # Phase 16: model_role column. TEXT with default
         # 'trunk' for backward compat.

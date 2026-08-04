@@ -203,6 +203,20 @@ class FamilyWeights:
                          the cross-model path). The
                          orchestrator's --per-family-top-fraction
                          reads this.
+      coupling_score:    the per-(model, family) cross-component
+                         coupling score. Pearson correlation
+                         of the per-layer hit_rate between the
+                         trunk's role and the dflash encoder's
+                         role for the same family. A high score
+                         means the two roles' miscalibration
+                         moves together across layers; a low
+                         score means they are independent.
+                         ``None`` when the family has only one
+                         role's rows (e.g. a single-role
+                         retune) or when the per-role per-layer
+                         hit rates have zero variance (the
+                         correlation is undefined). NULL is
+                         written to the l5_weights row.
       retune_algorithm:  one of ``RETUNE_SOURCE_TAG_3COEF`` /
                          ``RETUNE_SOURCE_TAG_2COEF`` /
                          ``RETUNE_SOURCE_TAG_CROSSMODEL``.
@@ -220,6 +234,7 @@ class FamilyWeights:
     in_sample_loss: float
     hit_rate: float
     top_fraction: float | None
+    coupling_score: float | None
     retune_algorithm: str
     was_acted_on: bool
 
@@ -242,6 +257,10 @@ class FamilyWeights:
             "hit_rate":         float(self.hit_rate),
             "top_fraction":     (
                 float(self.top_fraction) if self.top_fraction is not None
+                else None
+            ),
+            "coupling_score":   (
+                float(self.coupling_score) if self.coupling_score is not None
                 else None
             ),
             "retune_source":    (self.retune_algorithm
@@ -421,6 +440,119 @@ def _compute_top_fraction(
     return max(0.0, min(1.0, val))
 
 
+# Retune follow-ups: the per-(model, family) cross-component
+# coupling score. A high score means the trunk's per-layer
+# hit_rate and the dflash encoder's per-layer hit_rate move
+# together (a tensor that is miscalibrated in the trunk is
+# also miscalibrated in the dflash, by the same per-layer
+# factor). A low (or negative) score means the two roles'
+# miscalibration is independent.
+#
+# The retune surfaces the score on the l5_weights row so the
+# consumer can see whether a single retune covers both roles.
+# The retune's shift rule does not depend on the score (the
+# OLS already accounts for per-(model, model_role, family)
+# effects), so the score is informational, not action-bound.
+COUPLING_DEFAULT_ROLE_A: str = "trunk"
+COUPLING_DEFAULT_ROLE_B: str = "dflash"
+# Minimum per-role per-layer point count for the score to be
+# well-defined. Below this the correlation is too noisy.
+COUPLING_MIN_LAYERS: int = 2
+
+
+def _compute_coupling_score(
+    df: pl.DataFrame,
+    *,
+    model_hash: str,
+    family: str,
+    role_a: str = COUPLING_DEFAULT_ROLE_A,
+    role_b: str = COUPLING_DEFAULT_ROLE_B,
+    min_layers: int = COUPLING_MIN_LAYERS,
+) -> float | None:
+    """Cross-component coupling score for one (model, family).
+
+    For the (model_hash, family), gather the l5_outcome rows
+    for both ``role_a`` and ``role_b`` (default trunk /
+    dflash). For each role, group by ``layer`` and compute
+    the per-layer hit_rate (the mean of ``plan_accepted``).
+    The score is the Pearson correlation between the two
+    roles' per-layer hit rates, computed on the inner join
+    of the per-layer tables (a layer present in only one
+    role is dropped; we don't synthesise a hit rate from a
+    missing role).
+
+    Returns ``None`` when:
+      - the family has rows for only one of the two roles
+        (correlation is undefined for a single series).
+      - either role has fewer than ``min_layers`` distinct
+        layers (the correlation is too noisy to act on; the
+        rule of thumb is at least 2-3 distinct points).
+      - either role's per-layer hit rates have zero variance
+        (the correlation is mathematically undefined; the
+        result is NaN which is surfaced as ``None`` to keep
+        the SQL column clean).
+
+    The helper is called at the (model, family) level, not
+    per role: the same score is shared by the
+    (model, role_a, family) and (model, role_b, family)
+    verdicts in a multi-role retune (a high score means
+    "a single retune covers both roles"; a low score means
+    "the two roles need independent retune").
+
+    Args:
+      df: the polars DataFrame the retune is reading from
+        (must carry ``model_hash``, ``model_role``,
+        ``layer``, ``family``, ``plan_accepted``).
+      model_hash: the model the score is for.
+      family: the family the score is for.
+      role_a: the first role (default ``"trunk"``).
+      role_b: the second role (default ``"dflash"``).
+      min_layers: minimum per-role distinct layer count.
+
+    Returns:
+      The Pearson correlation in ``[-1.0, 1.0]``, or
+      ``None`` when undefined.
+    """
+    sub = df.filter(
+        (pl.col("model_hash") == model_hash)
+        & (pl.col("family") == family)
+        & pl.col("model_role").is_in([role_a, role_b])
+        & pl.col("layer").is_not_null()
+        & pl.col("plan_accepted").is_not_null()
+    )
+    if sub.height == 0:
+        return None
+    # The retune only knows about the per-(model, family)
+    # group when the partition has rows for both roles. A
+    # single-role partition returns None.
+    roles_present = set(sub["model_role"].unique().to_list())
+    if role_a not in roles_present or role_b not in roles_present:
+        return None
+    per_layer = sub.group_by(["model_role", "layer"]).agg(
+        pl.col("plan_accepted").cast(pl.Float64).mean().alias("hit_rate")
+    )
+    a = per_layer.filter(pl.col("model_role") == role_a).sort("layer")
+    b = per_layer.filter(pl.col("model_role") == role_b).sort("layer")
+    # Inner-join on layer: only the layers both roles saw.
+    aligned = a.join(
+        b.select([pl.col("layer"), pl.col("hit_rate").alias("hit_rate_b")]),
+        on="layer", how="inner",
+    )
+    if aligned.height < min_layers:
+        return None
+    import numpy as np
+    a_vals = aligned["hit_rate"].to_numpy()
+    b_vals = aligned["hit_rate_b"].to_numpy()
+    if a_vals.std() == 0.0 or b_vals.std() == 0.0:
+        return None
+    # np.corrcoef returns the 2x2 matrix; the [0, 1] entry
+    # is the correlation between the two series.
+    corr = float(np.corrcoef(a_vals, b_vals)[0, 1])
+    if corr != corr:  # NaN guard (defensive)
+        return None
+    return corr
+
+
 def _confidence_weight(
     n_samples: int, in_sample_loss: float, max_n_samples: int,
     loss_scale: float = DEFAULT_LOSS_SCALE,
@@ -482,6 +614,7 @@ def _retune_family(
     alpha: float = DEFAULT_ALPHA,
     min_samples: int = DEFAULT_MIN_SAMPLES,
     model_role: str = "trunk",
+    coupling_score: float | None = None,
 ) -> FamilyWeights:
     """Retune one (model, model_role, family) group.
 
@@ -501,6 +634,16 @@ def _retune_family(
     encoder consumes trunk hidden states; its calibration
     is independent). Defaults to ``"trunk"`` for backward
     compat with Phase 15 callers.
+
+    Retune follow-ups: the ``coupling_score`` is the
+    Pearson correlation of the per-layer hit_rate between
+    the trunk's role and the dflash encoder's role for the
+    same family. The caller computes the score at the
+    (model_hash, family) level (so the same score is
+    shared by the trunk/attn_q and dflash/attn_q verdicts
+    in a multi-role retune) and passes the value through.
+    The verdict stores the score; the l5_weights row
+    surfaces it for the consumer.
 
     The shift rule (3-coefficient path):
         shift = alpha * (b_im, b_grad, b_layer) * (1 - hit_rate)
@@ -526,7 +669,7 @@ def _retune_family(
             weights=base_weights,
             bias=0.0, slopes=(0.0, 0.0, 0.0),
             n_samples=0, in_sample_loss=0.0, hit_rate=0.0,
-            top_fraction=None,
+            top_fraction=None, coupling_score=coupling_score,
             retune_algorithm=RETUNE_SOURCE_TAG_2COEF,
             was_acted_on=False,
         )
@@ -538,7 +681,7 @@ def _retune_family(
             weights=base_weights,
             bias=0.0, slopes=(0.0, 0.0, 0.0),
             n_samples=n, in_sample_loss=0.0, hit_rate=hit_rate,
-            top_fraction=None,
+            top_fraction=None, coupling_score=coupling_score,
             retune_algorithm=RETUNE_SOURCE_TAG_2COEF,
             was_acted_on=False,
         )
@@ -626,6 +769,7 @@ def _retune_family(
             top_fraction=_compute_top_fraction(
                 base_top_fraction, dominant_slope, hit_rate,
             ),
+            coupling_score=coupling_score,
             retune_algorithm=RETUNE_SOURCE_TAG_3COEF,
             was_acted_on=True,
         )
@@ -652,6 +796,7 @@ def _retune_family(
         top_fraction=_compute_top_fraction(
             base_top_fraction, abs(b), hit_rate,
         ),
+        coupling_score=coupling_score,
         retune_algorithm=RETUNE_SOURCE_TAG_2COEF,
         was_acted_on=True,
     )
@@ -781,7 +926,7 @@ def compute_l5_weights(
         )
         col_list = (
             "model_hash, family, sensitivity_score, "
-            "delta_mse, plan_accepted"
+            "delta_mse, plan_accepted, layer"
             + (", imatrix_magnitude" if has_im else "")
             + (", gradient_proxy" if has_grad else "")
             + (", layer_position_prior" if has_layer else "")
@@ -858,6 +1003,27 @@ def compute_l5_weights(
 
     if df.height == 0:
         return []
+
+    # Retune follow-ups: per-(model_hash, family) cross-component
+    # coupling score. The score is the Pearson correlation of
+    # the per-layer hit_rate between the trunk's role and the
+    # dflash encoder's role for the same family. The same
+    # score is shared by both roles' verdicts in a multi-role
+    # retune; a single-role retune has score = None (no
+    # correlation possible). The score is computed at the
+    # (model_hash, family) level, NOT at the
+    # (model_hash, model_role, family) level.
+    coupling_scores: dict[tuple[str, str], float | None] = {}
+    if df.height > 0:
+        for mh_val in df["model_hash"].unique().to_list():
+            mh_str = str(mh_val)
+            for fam_val in df.filter(pl.col("model_hash") == mh_str)[
+                "family"
+            ].unique().to_list():
+                fam_str = str(fam_val)
+                coupling_scores[(mh_str, fam_str)] = _compute_coupling_score(
+                    df, model_hash=mh_str, family=fam_str,
+                )
 
     # Per-(model, model_role, family) retune. partition_by is
     # stable in polars 0.20+, so the output is in
@@ -937,6 +1103,15 @@ def compute_l5_weights(
         # weight is then uniform within a family; the
         # in_sample_loss term still varies per row.
         n_samples_per_row = [len(sens)] * len(sens)
+        # Retune follow-ups: lookup the coupling score for
+        # this (model, family) group. The same score is
+        # shared by the trunk's and dflash's verdicts (the
+        # score is per (model, family), not per
+        # (model, model_role, family)). A missing key
+        # (which can happen on a single-role retune) maps
+        # to None; the verdict stores None and the
+        # l5_weights column is NULL.
+        coupling = coupling_scores.get((mh, fam))
         verdicts.append(_retune_family(
             model_hash=mh, family=fam,
             model_role=role,
@@ -948,6 +1123,7 @@ def compute_l5_weights(
             base_weights=base_weights,
             base_top_fraction=base_top_fraction,
             alpha=alpha, min_samples=min_samples,
+            coupling_score=coupling,
         ))
 
     if write_back and verdicts:
@@ -1171,6 +1347,12 @@ def write_cross_model_aggregate(
             in_sample_loss=float(row["in_sample_loss"]),
             hit_rate=agg_hit_rate,
             top_fraction=top_frac_out,
+            # Retune follow-ups: cross-model aggregates do
+            # not carry a per-model coupling score (the
+            # score is per-(model_hash, family), and the
+            # cross-model row has model_hash = "*"). The
+            # column is left NULL.
+            coupling_score=None,
             retune_algorithm=RETUNE_SOURCE_TAG_CROSSMODEL,
             was_acted_on=True,
         ))
@@ -1520,7 +1702,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _format_table(verdicts: list[FamilyWeights]) -> str:
     rows = ["model_hash,model_role,family,w_imatrix,w_gradient,w_layer,"
             "b_im,b_grad,b_layer,slope,hit_rate,n_samples,"
-            "top_fraction,retune_source,was_acted_on"]
+            "top_fraction,coupling_score,retune_source,was_acted_on"]
     for v in verdicts:
         rows.append(
             f"{v.model_hash},{v.model_role},{v.family},"
@@ -1529,6 +1711,7 @@ def _format_table(verdicts: list[FamilyWeights]) -> str:
             f"{v.slopes[1]:+.6f},{v.hit_rate:.3f},"
             f"{v.n_samples},"
             f"{v.top_fraction if v.top_fraction is not None else ''},"
+            f"{v.coupling_score if v.coupling_score is not None else ''},"
             f"{v.retune_algorithm},"
             f"{int(v.was_acted_on)}"
         )
