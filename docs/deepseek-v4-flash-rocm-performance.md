@@ -932,6 +932,12 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Treat large HIP TOP_K work as conditional, not presumed missing. | Current branch enables HIP hipCUB, uses rocPRIM top-k for DSV4 large rows, and advertises TOP_K support; scheduler residency must still be attested in raw decode. | selected diagnostic |
 | 2026-08-04 | Invalidate old percentage profiles for target selection after >3% whole-model gains. | Accepted J16/HC/LID/T128 changes materially altered Amdahl shares; LID alone changed 16K PP by +10.18%. | final rule |
 | 2026-08-04 | Keep MTP/DSpark outside raw-decode baselines and kernel selection. | Exact-greedy MTP state diverges; speculative acceptance/checkpoint behavior is a separate workstream. | final |
+| 2026-08-04 | Exclude in-band `rocm-smi` telemetry from accepted TG samples. | First full sweep showed 32K/64K MAD 13.7%/12.2% while polling every 1s inside 1.5-3s samples; with setup-only telemetry the same long points re-measure 0.33-3.97% and 64K stabilizes at 0.33%. Telemetry now samples setup + the discarded first repetition only. | accepted fix `81b072481` |
+| 2026-08-04 | Raw-TG residency is attested at the composite backend, not per-GPU. | Scheduler exposes one `Meta(ROCm0..ROCm3)` backend; independent review: top-level split/copy counts cannot prove per-GPU execution or copies. | final caveat |
+| 2026-08-04 | Residency parser counts real TOP_K/LIGHTNING_INDEXER ops only, with exact expected counts enforced. | Parser previously counted CONT/SET_ROWS consumers of `lid_top_k`, inflating 21 real nodes to 63; exact-op reparse of the preserved log requires and confirms exactly 21 TOP_K + 21 LID per measured graph at every depth 2048-65536, all on `Meta(ROCm0..ROCm3)`, zero CPU/unknown. Depth 0 has neither op. | accepted fix `4936a8673` |
+| 2026-08-04 | Evidence runs require full GGUF shard hashes, all-resolved-DSO hashes, and recorded power/performance policy. | Independent review: metadata-only hashing and absent power profile failed strict identity attestation; added `DSV4_HASH_MODE=full` plus expanded rocm-smi policy snapshot. | accepted fix `4936a8673` |
+| 2026-08-04 | Reject the fully-hashed 16-rep full sweep: 4K/8K over the stability gate. | MAD/median 4K=3.80%, 8K=3.15% with ordered warm-to-steady regime shift; 15 accepted at every depth; identities fully hashed (3 GGUF shard + ~40 ROCm/system DSO hashes, perf level auto, no power cap set). Remedy per policy: more tg32 repetitions. | rejected; full31 launched |
+| 2026-08-04 | Pause all GPU work at user direction; full31 sweep aborted cleanly. | Job terminated (no KFD PIDs, lock released, no result). Raw TG remains pending; CSA undecided; next action on resume recorded below. | paused |
 
 ## 10. Closed decisions and open questions
 
@@ -1115,25 +1121,29 @@ Repository implementation/evidence chain:
   3d23fff4a (restore-equivalence gate) ->
   400c47cd6 (fresh-repeat control) ->
   5d80b8662 (full-context diagnostic) ->
-  f97f5cdb0 (llama-bench/run-tg full-context integration)
+  f97f5cdb0 (llama-bench/run-tg full-context integration) ->
+  3a2ab230f (iteration-2 master sync) ->
+  0b0c8e4cf (launch telemetry race fix) ->
+  81b072481 (telemetry excluded from accepted TG) ->
+  4936a8673 (evidence provenance hardening: exact-node parser counts, full hashes, power policy)
 
 Raw-decode Ralph log:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
 Raw-decode Ralph state:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.state.json
 Raw-decode Ralph status:
-  active, iteration 1/50; started 2026-08-04T03:47:49Z
+  active, iteration 3/50, PAUSED by user 2026-08-04; started 2026-08-04T03:47:49Z
 Revised roadmap / loop-registration commits:
   5df30a53e / 0376a55aa
 M5.0 harness / corrected depth-state commits:
   1e5519bf1 / f97f5cdb0
 M5.0 static-validation artifacts:
   $HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/
-Current next action:
-  Recheck GPU ownership, then run the full context-state-backed raw TG
-  performance sweep and separate scheduler-residency audit. Accept no baseline
-  unless all required depths have five stable tg32 samples; 32K/64K remain
-  mandatory and incomplete points cannot decide CSA.
+Current next action (PAUSED; no GPU work until directed):
+  On resume: run one accepted full-depth tg32 sweep (31 raw / 30 accepted
+  repetitions was in flight when paused and was aborted cleanly), re-run the
+  residency audit at the hardened parser commit `4936a8673`, then M5.1/M5.3
+  classification. No baseline accepted yet; CSA undecided.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
@@ -1141,6 +1151,19 @@ Purpose:
   current decisions, and the next action; every Ralph iteration must update
   and commit it before advancing.
 ```
+
+### Iteration 3 checkpoint (PAUSED by user 2026-08-04; no GPU work)
+
+- Fixed a launch telemetry race (`0b0c8e4cf`): sampler/watchdog liveness now checks leader PID in addition to process group; background consumers close the lock-bearing fd (`9>&-`) so `flock` on `$HOME/llama-jobs/gpu.lock` releases synchronously. Static matrix re-passed all six exit cases; rebuilt `llama-bench` at clean HEAD.
+- First real full sweep (continuous telemetry) REJECTED: 0-16K stable (MAD <=1.1%, ~22.5-24.2 t/s) but 32K/64K MAD 13.7%/12.2% from 1s in-band `rocm-smi` polling inside 1.5-3s samples. Fix `81b072481` restricts telemetry to setup + discarded first repetition (`TELEMETRY_SCOPE=setup-and-discarded-first-repetition`); static validation re-passed.
+- Accepted composite performance observations (same build `81b072481`, setup-only telemetry, tg32, context-state API):
+  - 0-16K: `20260804T054358.914659309Z-raw-tg-baseline-short-performance-81b072481f7a-18833` (5 accepted each): medians 24.030 / 24.168 / 23.809 / 23.855 / 23.552 / 22.522 t/s, MAD/median <=1.06%.
+  - 32K: `20260804T053717.265093462Z-raw-tg-32k-stability-16-performance-81b072481f7a-13173` (15 accepted): median 20.311 t/s, 49.235 ms/token, MAD/median 1.23%.
+  - 64K: retained from `20260804T051715.402695167Z-raw-tg-stability-11-performance-81b072481f7a-14164` (10 accepted): median 18.398 t/s, 54.355 ms/token, MAD/median 0.33%; that joint job is globally rejected (32K row 3.97%) and must not be cited as accepted.
+- Residency audit at `81b072481` (`20260804T054747.800048172Z-raw-tg-residency-residency-81b072481f7a-2297`, rc=0): every depth has 1 decode graph; split #0 is a CPU empty-input split (token embedding GET_ROWS), split #1 is the Meta graph with 22-25 inputs. Re-run at `4936a8673` with the hardened exact-op parser: exactly 21 TOP_K + 21 LIGHTNING_INDEXER per measured graph at 2048-65536 on `Meta(ROCm0..ROCm3)`, zero CPU/unknown; depth 0 has neither op. Per-GPU execution/copy counts are NOT provable from the top-level Meta log. `scheduler-summary.pre-4936a8673.{json,tsv}` backups, the parser command (`scheduler-parser-command.sh`) and commit (`scheduler-parser-commit.txt`) are preserved in the run dir.
+- Independent reviewer findings repaired at `4936a8673` (see decision log): parser consumer-count inflation (63 vs 21), metadata-only hashing, missing DSO hashes/power policy. `manifest.sh` now hashes every resolved DSO and records `--showperflevel --showprofile --showmaxpower --showoverdrive --showmemoverdrive`; `run-tg.sh` gains `DSV4_HASH_MODE` (metadata default, full for evidence runs), `DSV4_EXPECTED_DSV4_NODES=21` wiring, and final policy snapshot.
+- Fully-hashed 16-rep sweep REJECTED: `20260804T062521.895434970Z-raw-tg-baseline-full-performance-4936a8673daf-11900` (15 accepted/depth; 4K MAD 3.80%, 8K 3.15%; ordered warm-to-steady regime; 3 GGUF shard hashes + ~40 ROCm/system DSO hashes; perf level auto, no power cap set). Full31 sweep (31 raw/30 accepted, `DSV4_HASH_MODE=full DSV4_TG_REPS=31 DSV4_LABEL=raw-tg-baseline-full31`) was launched and ABORTED by the user pause; no result.
+- No accepted raw-TG baseline exists; CSA remains undecided. GPUs idle, lock free, repo clean at `4936a8673` at pause time.
 
 Planned final record:
 
