@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
+#include <iostream>
 
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
@@ -516,6 +517,162 @@ void ggml_gemv_mxfp4_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     UNUSED(nb);
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+    if (svcntb() == 32) {
+        // std::cout<<"SVE 256 Called"<<std::endl;
+        // The lower 128-bit segment holds low-nibble MXFP4 values and
+        // the upper segment holds high-nibble values. SVDOT's indexed
+        // operand selects the corresponding four-byte Q8 group within
+        // each 128-bit segment, producing four column sums per segment.
+        const svbool_t pg16 = svptrue_pat_b8(SV_VL16);
+        const svbool_t pg4  = svptrue_pat_b32(SV_VL4);
+        const svbool_t pgb  = svptrue_b8();
+        const svuint8_t m4b = svdup_n_u8(0x0f);
+        const svuint8_t values = svld1_u8(pg16, (const uint8_t *) kvalues_mxfp4);
+
+        const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
+        float * res_ptr = s;
+
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_mxfp4x4 * b_ptr = (const block_mxfp4x4 *) vx + (x * nb);
+            svfloat32_t sumf = svdup_n_f32(0.0f);
+
+            for (int l = 0; l < nb; l++) {
+                const svint8_t q8 = svld1_s8(pgb, a_ptr[l].qs);
+                svint32_t sumi = svdup_n_s32(0);
+
+                const svuint8_t qbytes0 = svld1_u8(pg16, b_ptr[l].qs + 0);
+                const svuint8_t qlo0 = svtbl_u8(values, svand_u8_x(pgb, qbytes0, m4b));
+                const svuint8_t qhi0 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes0, 4));
+                const svuint8_t q0 = svorr_u8_x(pgb, qlo0, svext_u8(qhi0, qhi0, 16));
+                sumi = svdot_lane_s32(sumi, svreinterpret_s8_u8(q0), q8, 0);
+
+                const svuint8_t qbytes1 = svld1_u8(pg16, b_ptr[l].qs + 16);
+                const svuint8_t qlo1 = svtbl_u8(values, svand_u8_x(pgb, qbytes1, m4b));
+                const svuint8_t qhi1 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes1, 4));
+                const svuint8_t q1 = svorr_u8_x(pgb, qlo1, svext_u8(qhi1, qhi1, 16));
+                sumi = svdot_lane_s32(sumi, svreinterpret_s8_u8(q1), q8, 1);
+
+                const svuint8_t qbytes2 = svld1_u8(pg16, b_ptr[l].qs + 32);
+                const svuint8_t qlo2 = svtbl_u8(values, svand_u8_x(pgb, qbytes2, m4b));
+                const svuint8_t qhi2 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes2, 4));
+                const svuint8_t q2 = svorr_u8_x(pgb, qlo2, svext_u8(qhi2, qhi2, 16));
+                sumi = svdot_lane_s32(sumi, svreinterpret_s8_u8(q2), q8, 2);
+
+                const svuint8_t qbytes3 = svld1_u8(pg16, b_ptr[l].qs + 48);
+                const svuint8_t qlo3 = svtbl_u8(values, svand_u8_x(pgb, qbytes3, m4b));
+                const svuint8_t qhi3 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes3, 4));
+                const svuint8_t q3 = svorr_u8_x(pgb, qlo3, svext_u8(qhi3, qhi3, 16));
+                sumi = svdot_lane_s32(sumi, svreinterpret_s8_u8(q3), q8, 3);
+
+                const svint32_t sumi_cols = svadd_s32_z(
+                    pg4, sumi, svext_s32(sumi, sumi, 4));
+
+                // Vector form of GGML_CPU_E8M0_TO_FP32_HALF for e[0..3].
+                // The selected uint32 bit patterns are reinterpreted as FP32.
+                const svuint32_t e_u32 = svld1ub_u32(pg4, b_ptr[l].e);
+                const svbool_t e_is_denormal = svcmplt_n_u32(pg4, e_u32, 2);
+                const svuint32_t e_denormal_bits = svlsl_u32_x(
+                    pg4, svdup_n_u32(0x00200000), e_u32);
+                const svuint32_t e_normal_bits = svlsl_n_u32_x(
+                    pg4, svsub_n_u32_x(pg4, e_u32, 1), 23);
+                const svuint32_t e_bits = svsel_u32(
+                    e_is_denormal, e_denormal_bits, e_normal_bits);
+                const svfloat16_t d_f16 = svreinterpret_f16_u16(
+                    svdup_n_u16(a_ptr[l].d));
+                const svfloat32_t d_f32 = svcvt_f32_f16_x(pg4, d_f16);
+                const svfloat32_t scale = svmul_f32_x(
+                    pg4, svreinterpret_f32_u32(e_bits), d_f32);
+
+                sumf = svmla_f32_m(pg4, sumf,
+                    svcvt_f32_s32_m(svdup_n_f32(0.0f), pg4, sumi_cols), scale);
+            }
+
+            svst1_f32(pg4, res_ptr + x * 4, sumf);
+        }
+        return;
+    }
+#endif // defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+
+// #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+//     if (svcntb() == 32) {
+//         // The lower 128-bit segment holds low-nibble MXFP4 values and
+//         // the upper segment holds high-nibble values. SVDOT's indexed
+//         // operand selects the corresponding four-byte Q8 group within
+//         // each 128-bit segment, producing four column sums per segment.
+//         const svbool_t pg16 = svptrue_pat_b8(SV_VL16);
+//         const svbool_t pg4  = svptrue_pat_b32(SV_VL4);
+//         const svbool_t pgb  = svptrue_b8();
+//         const svbool_t pgw  = svptrue_b32();
+//         const svuint8_t m4b = svdup_n_u8(0x0f);
+//         const svuint8_t values = svld1_u8(pg16, (const uint8_t *) kvalues_mxfp4);
+
+//         const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
+//         float * res_ptr = s;
+
+//         for (int x = 0; x < nc / ncols_interleaved; x++) {
+//             const block_mxfp4x4 * b_ptr = (const block_mxfp4x4 *) vx + (x * nb);
+//             svfloat32_t sumf = svdup_n_f32(0.0f);
+
+//             for (int l = 0; l < nb; l++) {
+//                 const svint8_t q8 = svld1_s8(pgb, a_ptr[l].qs);
+//                 svint32_t sumi02 = svdup_n_s32(0);
+//                 svint32_t sumi13 = svdup_n_s32(0);
+
+//                 const svuint8_t qbytes0 = svld1_u8(pg16, b_ptr[l].qs + 0);
+//                 const svuint8_t qlo0 = svtbl_u8(values, svand_u8_x(pgb, qbytes0, m4b));
+//                 const svuint8_t qhi0 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes0, 4));
+//                 const svuint8_t q0 = svsplice_u8(pg16, qlo0, qhi0);
+//                 sumi02 = svdot_lane_s32(sumi02, svreinterpret_s8_u8(q0), q8, 0);
+
+//                 const svuint8_t qbytes1 = svld1_u8(pg16, b_ptr[l].qs + 16);
+//                 const svuint8_t qlo1 = svtbl_u8(values, svand_u8_x(pgb, qbytes1, m4b));
+//                 const svuint8_t qhi1 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes1, 4));
+//                 const svuint8_t q1 = svsplice_u8(pg16, qlo1, qhi1);
+//                 sumi13 = svdot_lane_s32(sumi13, svreinterpret_s8_u8(q1), q8, 1);
+
+//                 const svuint8_t qbytes2 = svld1_u8(pg16, b_ptr[l].qs + 32);
+//                 const svuint8_t qlo2 = svtbl_u8(values, svand_u8_x(pgb, qbytes2, m4b));
+//                 const svuint8_t qhi2 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes2, 4));
+//                 const svuint8_t q2 = svsplice_u8(pg16, qlo2, qhi2);
+//                 sumi02 = svdot_lane_s32(sumi02, svreinterpret_s8_u8(q2), q8, 2);
+
+//                 const svuint8_t qbytes3 = svld1_u8(pg16, b_ptr[l].qs + 48);
+//                 const svuint8_t qlo3 = svtbl_u8(values, svand_u8_x(pgb, qbytes3, m4b));
+//                 const svuint8_t qhi3 = svtbl_u8(values, svlsr_n_u8_x(pgb, qbytes3, 4));
+//                 const svuint8_t q3 = svsplice_u8(pg16, qlo3, qhi3);
+//                 sumi13 = svdot_lane_s32(sumi13, svreinterpret_s8_u8(q3), q8, 3);
+
+//                 const svint32_t sumi = svadd_s32_x(pgw, sumi02, sumi13);
+//                 const svint32_t sumi_cols = svadd_s32_z(
+//                     pg4, sumi, svext_s32(sumi, sumi, 4));
+
+//                 // Vector form of GGML_CPU_E8M0_TO_FP32_HALF for e[0..3].
+//                 // The selected uint32 bit patterns are reinterpreted as FP32.
+//                 const svuint32_t e_u32 = svld1ub_u32(pg4, b_ptr[l].e);
+//                 const svbool_t e_is_denormal = svcmplt_n_u32(pg4, e_u32, 2);
+//                 const svuint32_t e_denormal_bits = svlsl_u32_x(
+//                     pg4, svdup_n_u32(0x00200000), e_u32);
+//                 const svuint32_t e_normal_bits = svlsl_n_u32_x(
+//                     pg4, svsub_n_u32_x(pg4, e_u32, 1), 23);
+//                 const svuint32_t e_bits = svsel_u32(
+//                     e_is_denormal, e_denormal_bits, e_normal_bits);
+//                 const svfloat16_t d_f16 = svreinterpret_f16_u16(
+//                     svdup_n_u16(a_ptr[l].d));
+//                 const svfloat32_t d_f32 = svcvt_f32_f16_x(pg4, d_f16);
+//                 const svfloat32_t scale = svmul_f32_x(
+//                     pg4, svreinterpret_f32_u32(e_bits), d_f32);
+
+//                 sumf = svmla_f32_m(pg4, sumf,
+//                     svcvt_f32_s32_m(svdup_n_f32(0.0f), pg4, sumi_cols), scale);
+//             }
+
+//             svst1_f32(pg4, res_ptr + x * 4, sumf);
+//         }
+//         return;
+//     }
+// #endif // defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
 
 #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     const int8x16_t kvalues = vld1q_s8(kvalues_mxfp4);
