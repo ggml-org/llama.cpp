@@ -1516,6 +1516,19 @@ struct clip_model_loader {
                         hparams.set_limit_image_tokens(8, 576);
                         hparams.set_warmup_n_tokens(16*16);
                     } break;
+                case PROJECTOR_TYPE_ONYX:
+                    {
+                        hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
+                        hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_ONYX_DOWNSAMPLE,     hparams.n_merge,             false);
+                        get_f32(KEY_ONYX_ROPE_THETA,     hparams.rope_theta,          false);
+                        get_u32(KEY_ONYX_PATCH_TEMPORAL, hparams.onyx_patch_temporal, false);
+                        get_u32(KEY_ONYX_SPARSE_FACTOR,  hparams.onyx_sparse_factor,  false);
+                        get_u32(KEY_ONYX_POS_GRID,       hparams.onyx_pos_grid,       false);
+                        hparams.set_limit_image_tokens(1, 4096);
+                        hparams.set_warmup_n_tokens(32*32);
+                    } break;
                 case PROJECTOR_TYPE_MIMOVL:
                     {
                         hparams.n_merge = 2; // spatial_merge_size
@@ -2217,6 +2230,13 @@ struct clip_model_loader {
                     model.mm_merger_fc1_b = get_tensor(string_format(TN_MM_MERGER_FC1, "bias"));
                     model.mm_merger_fc2_w = get_tensor(string_format(TN_MM_MERGER_FC2, "weight"));
                     model.mm_merger_fc2_b = get_tensor(string_format(TN_MM_MERGER_FC2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_ONYX:
+                {
+                    // 3-linear MLP: fc -> erf-GELU -> proj -> erf-GELU -> vision_proj (into LLM residual dim)
+                    model.mm_adapter_fc   = get_tensor(string_format(TN_MM_ADAPTER_FC,   "weight"));
+                    model.mm_adapter_proj = get_tensor(string_format(TN_MM_ADAPTER_PROJ, "weight"));
+                    model.mm_vision_proj  = get_tensor(string_format(TN_MM_VISION_PROJ,  "weight"));
                 } break;
             case PROJECTOR_TYPE_STEP3VL:
                 {
@@ -3498,6 +3518,7 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_ONYX:
             return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
             return img->nx() / (params.patch_size * params.n_merge);
@@ -3523,6 +3544,7 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_ONYX:
             return (img->ny() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
             return img->ny() / (params.patch_size * params.n_merge);
@@ -3602,6 +3624,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_MINIMAX_M3:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_ONYX:
             {
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx() / (params.patch_size * 2);
