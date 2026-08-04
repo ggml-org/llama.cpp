@@ -441,6 +441,11 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
+        // dflash drafters are small, mirror them on every device: no reduction boundaries,
+        // and the target hidden-state handoff stays within the same backends
+        if (ud->model->arch == LLM_ARCH_DFLASH) {
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+        }
         if (ud->model->arch == LLM_ARCH_DEEPSEEK4) {
             if (std::regex_match(tensor_name, pattern_kv_cache) ||
                     std::regex_match(tensor_name, pattern_dsv4_state)) {

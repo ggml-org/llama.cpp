@@ -2184,6 +2184,14 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 cgraph_ij->uid = ggml_graph_next_uid();
             }
         }
+
+        // Aux graph contents are rewritten on every compute but are identical across calls while the subgraphs are reused,
+        // so they can get stable uids on rebuild. Only safe without a comm backend, where the fallback usage is deterministic.
+        if (backend_ctx->comm_ctx == nullptr) {
+            for (ggml_cgraph * cgraph_aux : backend_ctx->cgraphs_aux) {
+                cgraph_aux->uid = ggml_graph_next_uid();
+            }
+        }
     }
 
     size_t iga = 0; // i graph aux
