@@ -71,6 +71,23 @@ struct common_tessera_params {
     std::string dpace_out;
     float       dpace_alpha = 0.1f;
     float       dpace_gamma = 3.0f;
+    // Phase 16 unified GGUF writer (unified-writer subcommand).
+    // 4-5 per-component GGUFs are merged into a single
+    // gemma4-assistant GGUF using the per-tensor calibration
+    // policy (sidecar JSON via --policy, OR the dispatch's
+    // tessera_db via --tessera-db). At least one --{component}
+    // flag is required. --out is the destination path.
+    // The hparams come from a sibling JSON via --hparams, OR from
+    // the first source GGUF's metadata (when --hparams is empty).
+    std::string unified_out;
+    std::string unified_policy;
+    std::string unified_hparams;
+    std::string unified_trunk;
+    std::string unified_dflash;
+    std::string unified_dspark;
+    std::string unified_mtp;
+    std::string unified_shared_embd;
+    std::string unified_arch = "gemma4-assistant";   // currently only gemma4-assistant is supported
     // Structured progress reporting for the quantize pipeline. When
     // progress_file is non-empty, the dispatch writes one NDJSON event per
     // tick to that path for the Studio UI to tail.

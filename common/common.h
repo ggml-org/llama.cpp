@@ -139,6 +139,7 @@ enum tessera_subcommand {
     TESSERA_SC_POLICY,
     TESSERA_SC_RUNTIME_PROBE,
     TESSERA_SC_THROUGHPUT,
+    TESSERA_SC_UNIFIED_WRITER,   // Phase 16: --write-unified-gguf CLI
     TESSERA_SC_W4A4,
 
     TESSERA_SC_COUNT,
