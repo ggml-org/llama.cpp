@@ -119,6 +119,42 @@ static int entry_depth(const std::string & rel) {
     return 1 + (int) std::count(rel.begin(), rel.end(), '/');
 }
 
+#if defined(_WIN32)
+// std::filesystem reports a junction as a plain directory, so a junction
+// pointing back at an ancestor would be walked forever. Read the reparse tag
+// and treat a symlink and a mount point as links, leaving any other reparse
+// point (a cloud placeholder, a dedup stub) walkable.
+static bool is_dir_link(const fs::path & p) {
+    WIN32_FIND_DATAW data;
+    const HANDLE h = FindFirstFileW(p.c_str(), &data);
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    FindClose(h);
+
+    if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+        return false;
+    }
+    return data.dwReserved0 == IO_REPARSE_TAG_SYMLINK || data.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT;
+}
+
+// NTFS is case insensitive, so a directory named Build is the same junk as build
+static std::string junk_lookup_name(const std::string & fname) {
+    std::string lowered = fname;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return (char) std::tolower(c); });
+    return lowered;
+}
+#else
+static bool is_dir_link(const fs::path &) {
+    return false;
+}
+
+static std::string junk_lookup_name(const std::string & fname) {
+    return fname;
+}
+#endif
+
 class tools_io {
 public:
     struct exec_result {
@@ -366,10 +402,11 @@ private:
                     }
                     // junk directories stay selectable but are never walked: they
                     // hold nothing worth searching and can be enormous
-                    if (junk_dir_names().count(fname) > 0) continue;
-                    // do not descend into symlinks: a link can point back to an
+                    if (junk_dir_names().count(junk_lookup_name(fname)) > 0) continue;
+                    // do not descend into a link: it can point back to an
                     // ancestor and loop forever
-                    if (!entry.is_symlink(tec) && (max_depth == 0 || depth + 1 < max_depth)) {
+                    if (!entry.is_symlink(tec) && !is_dir_link(entry.path()) &&
+                        (max_depth == 0 || depth + 1 < max_depth)) {
                         stack.emplace_back(entry.path(), rel_dir / fname, depth + 1);
                     }
                 } else if (entry.is_regular_file(tec)) {
