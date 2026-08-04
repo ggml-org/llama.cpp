@@ -11,6 +11,7 @@ N_GEN=${DSV4_STATE_N_GEN:-4}
 SEED=${DSV4_STATE_SEED:-12345}
 ABS_TOL=${DSV4_STATE_ABS_TOL:-1e-5}
 REL_TOL=${DSV4_STATE_REL_TOL:-1e-5}
+STATE_API=${DSV4_STATE_API:-sequence}
 TIMEOUT_S=${DSV4_STATE_TIMEOUT:-1800}
 THREADS=${DSV4_THREADS:-12}
 BATCH=${DSV4_BATCH:-512}
@@ -41,6 +42,7 @@ Defaults:
   DSV4_STATE_SEED=12345
   DSV4_STATE_ABS_TOL=1e-5
   DSV4_STATE_REL_TOL=1e-5
+  DSV4_STATE_API=sequence      sequence or full context state
   DSV4_STATE_TIMEOUT=1800
 
 No draft model, sampler, DSpark, MTP, or speculative path is used. Raw JSON
@@ -64,6 +66,7 @@ for pair in "DSV4_STATE_N_GEN:$N_GEN" "DSV4_STATE_TIMEOUT:$TIMEOUT_S" "DSV4_THRE
 done
 [[ "$SEED" =~ ^[0-9]+$ ]] || fail "DSV4_STATE_SEED must be a non-negative integer"
 [[ "$ALLOW_BUSY" == 0 || "$ALLOW_BUSY" == 1 ]] || fail "DSV4_ALLOW_BUSY_GPUS must be 0 or 1"
+[[ "$STATE_API" == sequence || "$STATE_API" == context ]] || fail "DSV4_STATE_API must be sequence or context"
 (( UBATCH <= BATCH )) || fail "ubatch $UBATCH exceeds batch $BATCH"
 if ! python3 - "$DEPTHS" "$ABS_TOL" "$REL_TOL" <<'PY'
 import sys
@@ -101,6 +104,7 @@ export DSV4_STATE_N_GEN="$N_GEN"
 export DSV4_STATE_SEED="$SEED"
 export DSV4_STATE_ABS_TOL="$ABS_TOL"
 export DSV4_STATE_REL_TOL="$REL_TOL"
+export DSV4_STATE_API="$STATE_API"
 
 command=(
     "$BINARY"
@@ -118,8 +122,8 @@ command=(
 )
 
 printf 'Planned command:'; printf ' %q' "${command[@]}"; printf '\n'
-printf 'Environment: DSV4_STATE_DEPTHS=%q DSV4_STATE_N_GEN=%q DSV4_STATE_SEED=%q DSV4_STATE_ABS_TOL=%q DSV4_STATE_REL_TOL=%q\n' \
-    "$DEPTHS" "$N_GEN" "$SEED" "$ABS_TOL" "$REL_TOL"
+printf 'Environment: DSV4_STATE_DEPTHS=%q DSV4_STATE_N_GEN=%q DSV4_STATE_SEED=%q DSV4_STATE_ABS_TOL=%q DSV4_STATE_REL_TOL=%q DSV4_STATE_API=%q\n' \
+    "$DEPTHS" "$N_GEN" "$SEED" "$ABS_TOL" "$REL_TOL" "$STATE_API"
 if [[ "$DRY_RUN" == 1 ]]; then
     echo "Dry run only; no ROCm query, model load, or test process was started."
     exit 0
@@ -155,8 +159,8 @@ run_id="$(date -u +%Y%m%dT%H%M%S.%NZ)-${LABEL}-${commit}-$RANDOM"
 run_dir="$OUTPUT_ROOT/$run_id"
 mkdir "$run_dir"
 
-printf 'env DSV4_STATE_DEPTHS=%q DSV4_STATE_N_GEN=%q DSV4_STATE_SEED=%q DSV4_STATE_ABS_TOL=%q DSV4_STATE_REL_TOL=%q ' \
-    "$DEPTHS" "$N_GEN" "$SEED" "$ABS_TOL" "$REL_TOL" > "$run_dir/command.sh"
+printf 'env DSV4_STATE_DEPTHS=%q DSV4_STATE_N_GEN=%q DSV4_STATE_SEED=%q DSV4_STATE_ABS_TOL=%q DSV4_STATE_REL_TOL=%q DSV4_STATE_API=%q ' \
+    "$DEPTHS" "$N_GEN" "$SEED" "$ABS_TOL" "$REL_TOL" "$STATE_API" > "$run_dir/command.sh"
 printf '%q ' "${command[@]}" >> "$run_dir/command.sh"
 printf '\n' >> "$run_dir/command.sh"
 chmod +x "$run_dir/command.sh"
@@ -166,6 +170,7 @@ chmod +x "$run_dir/command.sh"
     printf 'DSV4_STATE_SEED=%q\n' "$SEED"
     printf 'DSV4_STATE_ABS_TOL=%q\n' "$ABS_TOL"
     printf 'DSV4_STATE_REL_TOL=%q\n' "$REL_TOL"
+    printf 'DSV4_STATE_API=%q\n' "$STATE_API"
     printf 'DSV4_STATE_TIMEOUT=%q\n' "$TIMEOUT_S"
     printf 'DSV4_BATCH=%q\n' "$BATCH"
     printf 'DSV4_UBATCH=%q\n' "$UBATCH"
@@ -237,9 +242,9 @@ if [[ ! -s "$run_dir/result.json" ]]; then
 fi
 set +e
 python3 - "$run_dir/result.json" "$run_dir/summary.json" "$run_dir/summary.tsv" \
-    "$DEPTHS" "$N_GEN" "$SEED" "$ABS_TOL" "$REL_TOL" "$BATCH" "$UBATCH" <<'PY'
+    "$DEPTHS" "$N_GEN" "$SEED" "$ABS_TOL" "$REL_TOL" "$BATCH" "$UBATCH" "$STATE_API" <<'PY'
 import json, math, pathlib, re, sys
-raw, summary_path, tsv_path, expected, n_gen_text, seed_text, abs_text, rel_text, batch_text, ubatch_text = sys.argv[1:]
+raw, summary_path, tsv_path, expected, n_gen_text, seed_text, abs_text, rel_text, batch_text, ubatch_text, state_api = sys.argv[1:]
 def reject_constant(text):
     raise ValueError(f'non-standard JSON constant: {text}')
 with open(raw) as handle:
@@ -257,6 +262,7 @@ exact_bool(value, 'accepted')
 exact_bool(value, 'target_only')
 for key, expected_value in (
     ('state_restore_scope', 'same_context_same_benchmark_instance'),
+    ('state_api', state_api),
     ('n_gen', n_gen), ('seed', seed), ('n_batch', batch), ('n_ubatch', ubatch),
     ('cache_type_k', 'f16'), ('cache_type_v', 'f16'), ('flash_attn', 'enabled'),
 ):
@@ -328,6 +334,7 @@ summary = {
     'expected_depths': expected_depths,
     'seen_depths': seen,
     'state_restore_scope': value.get('state_restore_scope'),
+    'state_api': value.get('state_api'),
     'continuation_contract': value.get('continuation_contract'),
     'n_gen': value.get('n_gen'),
     'seed': value.get('seed'),

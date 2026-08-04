@@ -203,7 +203,8 @@ static depth_result check_depth(
         int n_gen,
         uint32_t seed,
         double abs_tol,
-        double rel_tol) {
+        double rel_tol,
+        bool context_state) {
     depth_result result;
     result.depth = depth;
 
@@ -251,13 +252,14 @@ static depth_result check_depth(
         return result;
     }
 
-    result.state_bytes = llama_state_seq_get_size(ctx.get(), 0);
+    result.state_bytes = context_state ? llama_state_get_size(ctx.get()) : llama_state_seq_get_size(ctx.get(), 0);
     if (result.state_bytes == 0) {
         std::fprintf(stderr, "depth %d: sequence state size is zero\n", depth);
         return result;
     }
     std::vector<uint8_t> state(result.state_bytes);
-    const size_t copied = llama_state_seq_get_data(ctx.get(), state.data(), state.size(), 0);
+    const size_t copied = context_state ? llama_state_get_data(ctx.get(), state.data(), state.size())
+                                        : llama_state_seq_get_data(ctx.get(), state.data(), state.size(), 0);
     if (copied != state.size()) {
         std::fprintf(stderr, "depth %d: saved %zu state bytes, expected %zu\n", depth, copied, state.size());
         return result;
@@ -288,12 +290,14 @@ static depth_result check_depth(
     if (!decode_many(ctx.get(), result.prefix_tokens, params.n_batch)) {
         return result;
     }
-    if (llama_state_seq_get_size(ctx.get(), 0) != result.state_bytes) {
+    const size_t reprefill_size = context_state ? llama_state_get_size(ctx.get()) : llama_state_seq_get_size(ctx.get(), 0);
+    if (reprefill_size != result.state_bytes) {
         std::fprintf(stderr, "depth %d: re-prefill state size changed\n", depth);
         return result;
     }
     std::vector<uint8_t> reprefill_state(result.state_bytes);
-    const size_t recopied = llama_state_seq_get_data(ctx.get(), reprefill_state.data(), reprefill_state.size(), 0);
+    const size_t recopied = context_state ? llama_state_get_data(ctx.get(), reprefill_state.data(), reprefill_state.size())
+                                          : llama_state_seq_get_data(ctx.get(), reprefill_state.data(), reprefill_state.size(), 0);
     if (recopied != reprefill_state.size()) {
         std::fprintf(stderr, "depth %d: re-prefill saved %zu state bytes, expected %zu\n", depth, recopied, reprefill_state.size());
         return result;
@@ -318,7 +322,8 @@ static depth_result check_depth(
     result.repeatability = compare_logits(original, fresh, abs_tol, rel_tol);
 
     llama_memory_clear(llama_get_memory(ctx.get()), false);
-    const size_t restored = llama_state_seq_set_data(ctx.get(), state.data(), state.size(), 0);
+    const size_t restored = context_state ? llama_state_set_data(ctx.get(), state.data(), state.size())
+                                          : llama_state_seq_set_data(ctx.get(), state.data(), state.size(), 0);
     if (restored != state.size()) {
         std::fprintf(stderr, "depth %d: restored %zu state bytes, expected %zu\n", depth, restored, state.size());
         return result;
@@ -424,6 +429,12 @@ int main(int argc, char ** argv) {
             return 2;
         }
     }
+    const std::string state_api = std::getenv("DSV4_STATE_API") ? std::getenv("DSV4_STATE_API") : "sequence";
+    if (state_api != "sequence" && state_api != "context") {
+        std::fprintf(stderr, "invalid DSV4_STATE_API=%s\n", state_api.c_str());
+        return 2;
+    }
+    const bool context_state = state_api == "context";
 
     ggml_backend_load_all();
     auto init = common_init_from_params(params, true);
@@ -436,7 +447,7 @@ int main(int argc, char ** argv) {
     std::vector<depth_result> results;
     bool accepted = true;
     for (int depth : depths) {
-        depth_result result = check_depth(model, params, depth, n_gen, seed, abs_tol, rel_tol);
+        depth_result result = check_depth(model, params, depth, n_gen, seed, abs_tol, rel_tol, context_state);
         accepted = accepted && result.complete && result.accepted;
         results.push_back(std::move(result));
     }
@@ -446,6 +457,7 @@ int main(int argc, char ** argv) {
     std::printf("  \"accepted\": %s,\n", accepted ? "true" : "false");
     std::printf("  \"target_only\": true,\n");
     std::printf("  \"state_restore_scope\": \"same_context_same_benchmark_instance\",\n");
+    std::printf("  \"state_api\": \"%s\",\n", state_api.c_str());
     std::printf("  \"continuation_contract\": \"greedy replay; semantic state equivalence, not llama-bench random-token timing input\",\n");
     std::printf("  \"n_gen\": %d,\n", n_gen);
     std::printf("  \"n_batch\": %d,\n", params.n_batch);
