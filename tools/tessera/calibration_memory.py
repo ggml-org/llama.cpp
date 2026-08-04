@@ -593,6 +593,291 @@ class CalibPipeline:
         self.close()
 
 
+def open_calib_pipeline(layer_paths, depth: int = 2, keys=None, async_io: str = "auto"):
+    """Open the right ``CalibPipeline`` for this host.
+
+    The ``async_io`` argument is one of:
+      * ``"auto"`` (default): use the dispatch_io_t path
+        when available, fall back to the legacy
+        ``CalibPipeline`` otherwise.
+      * ``"on"``: force the dispatch_io_t path.  Raises
+        ``RuntimeError`` on platforms where the bridge
+        is unavailable.
+      * ``"off"``: force the legacy ``CalibPipeline`` on
+        all platforms (the dispatch_io_t path is not
+        used even when available).
+
+    On macOS (and when the dispatch_io_t bridge builds
+    successfully), the async path returns a
+    ``CalibPipelineAsync``; the producer is a
+    libdispatch ``dispatch_io_t`` read that overlaps the
+    next layer's mmap with the current layer's compute.
+    On Linux/Windows (or when the bridge fails to
+    build), the async path returns the legacy threaded
+    ``CalibPipeline``.  The two classes share the same
+    ``__iter__`` / ``__next__`` contract so the caller
+    can iterate either.
+
+    The async path uses ``io.BytesIO`` (in-RAM) instead
+    of ``np.load(mmap_mode="r")`` (mmap); the trade-off
+    is more peak RSS (one layer's bytes are in memory at
+    a time) for the I/O overlap.  For the 12B shape at
+    16384x4096 the per-layer working set is bounded to
+    ~256 MB; the legacy threaded path uses OS paged mmap
+    which is more memory-efficient but does not overlap
+    I/O with compute.
+    """
+    default_keys = (
+        "weight", "train_activations", "heldout_activations",
+        "in_sum2", "counts", "name", "family",
+    )
+    keys = keys or default_keys
+    backend = _load_async_io_backend()
+    if async_io == "off":
+        return CalibPipeline(layer_paths, depth=depth, keys=keys)
+    if async_io == "on":
+        if backend is None:
+            raise RuntimeError(
+                "open_calib_pipeline(async_io='on'): the dispatch_io_t "
+                "bridge is not available on this platform"
+            )
+        return CalibPipelineAsync(layer_paths, depth=depth, keys=keys)
+    # async_io == "auto"
+    if backend is None:
+        return CalibPipeline(layer_paths, depth=depth, keys=keys)
+    return CalibPipelineAsync(layer_paths, depth=depth, keys=keys)
+#
+# The legacy ``CalibPipeline`` uses a Python producer thread
+# that calls ``np.load(mmap_mode="r")`` synchronously.  On
+# macOS the ``CalibPipelineAsync`` variant issues the read
+# via libdispatch's ``dispatch_io_t`` instead, so the
+# consumer's compute overlaps with the next layer's read on
+# a GCD background queue.  The contract is identical to
+# ``CalibPipeline`` (same ``__iter__`` / ``__next__`` API);
+# the only difference is the producer.
+#
+# Construction: ``CalibPipelineAsync(paths, depth=2, ...)``
+# returns a ``CalibPipelineAsync`` instance if the
+# ``dispatch_io_t`` backend is available (macOS + clang++),
+# or a ``CalibPipeline`` instance otherwise.  The caller
+# doesn't need to know which it got; the iteration API is
+# the same.
+#
+# The bytes returned by the async read are a full copy of
+# the .npz file in memory.  For a 12B FFN gate at
+# 16384x4096 (256 MB F32, ~128 MB F16), this is a few
+# hundred MB per layer.  The async I/O overlap wins the
+# wall-time back at large layer counts; the cost is the
+# extra RAM (the threaded mmap was lazy and OS-paged).  The
+# ``CalibPipelineAsync`` is the right choice for the
+# production 12B run; ``CalibPipeline`` is the right choice
+# for the small (1024x256) CI variant where the bytes-per-
+# layer is small and the mmap-on-demand is the
+# memory-efficient path.
+
+
+def _load_async_io_backend():
+    """Import the macOS async I/O backend (or return None).
+
+    The import is fail-safe: if the
+    ``calibration_async_io`` module can't be imported (e.g.
+    on Linux/Windows), the function returns ``None`` and
+    ``CalibPipelineAsync`` falls back to the legacy
+    ``CalibPipeline``.  This is the same fail-safe pattern
+    as the matmul dispatch in ``calibration_metal.py``.
+    """
+    try:
+        from . import calibration_async_io
+    except ImportError:  # pragma: no cover - script-mode import
+        try:
+            import calibration_async_io  # type: ignore[no-redef]
+        except ImportError:
+            return None
+    return calibration_async_io.create_async_io_backend()
+
+
+class CalibPipelineAsync:
+    """macOS async-I/O CalibPipeline (dispatch_io_t-backed).
+
+    The same ``__iter__`` / ``__next__`` contract as
+    ``CalibPipeline``: the consumer pulls the next
+    ``(path, mmap_data)`` pair on each iteration.  The
+    producer is a libdispatch-backed read on a GCD queue;
+    the consumer thread polls the GCD completion queues
+    via a Python ``queue.Queue`` (delivered by the
+    backend).
+
+    On non-macOS hosts (or when the dispatch_io_t bridge
+    fails to build), the constructor falls back to the
+    legacy ``CalibPipeline`` (the threaded path).  The
+    caller doesn't need to know which it got; the
+    iteration API is the same.
+
+    Parameters
+    ----------
+    layer_paths : sequence of path-like
+        The list of ``.npz`` bundles to process.
+    depth : int
+        The pipeline depth.  ``1`` is the legacy
+        single-thread path (no overlap); ``2`` is the
+        default double-buffered path.  ``3+`` keeps
+        more tensors in flight on slow I/O at the cost
+        of more peak RSS.
+    keys : sequence of str
+        The keys to extract per bundle.  Default mirrors
+        ``CalibPipeline`` / ``mmap_layer``.
+    """
+
+    def __init__(
+        self,
+        layer_paths,
+        depth: int = 2,
+        keys: Sequence[str] = (
+            "weight",
+            "train_activations",
+            "heldout_activations",
+            "in_sum2",
+            "counts",
+            "name",
+            "family",
+        ),
+    ) -> None:
+        import queue as _queue
+        self._layer_paths = list(layer_paths)
+        self._depth = min(int(depth), max(1, len(self._layer_paths)))
+        self._keys = tuple(keys)
+        self._backend = _load_async_io_backend()
+        # On non-macOS or when the bridge fails to build,
+        # fall back to the legacy ``CalibPipeline``.  The
+        # consumer can iterate the result the same way.
+        if self._backend is None:
+            self._fallback = CalibPipeline(
+                self._layer_paths, depth=self._depth, keys=self._keys,
+            )
+            self._async = False
+        else:
+            self._fallback = None
+            self._async = True
+            self._ready_queue: "_queue.Queue" = _queue.Queue()
+            self._issued_count = 0
+            self._closed = False
+            self._dispatchers: list[threading.Thread] = []
+            # Pre-queue ``depth`` reads.  Each read's
+            # completion callback is a thread that
+            # converts the bytes to a numpy mmap view
+            # and pushes to ``_ready_queue``; the
+            # consumer thread pulls from there.  The
+            # threads are tracked so ``close()`` can
+            # join them deterministically (the temp
+            # dir cleanup is blocked on the dispatchers
+            # finishing the in-flight reads).
+            for path in self._layer_paths[: self._depth]:
+                self._issue_read(Path(path))
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> tuple[Path, dict[str, np.ndarray]]:
+        if self._fallback is not None:
+            return next(self._fallback)
+        if not self._layer_paths:
+            # Empty pipeline: raise StopIteration so the
+            # for-loop terminates.
+            raise StopIteration
+        item = self._ready_queue.get()
+        kind = item[0]
+        if kind == "error":
+            _, path, exc = item
+            raise IOError(f"CalibPipelineAsync: read of {path} failed: {exc}")
+        path, data = item
+        return path, data
+
+    def _issue_read(self, path: Path) -> None:
+        """Issue a single async read; the result lands in ``_ready_queue``.
+
+        The GCD callback fires on a GCD background queue;
+        we use a Python thread to convert the bytes to
+        a numpy view (np.load is not thread-safe for the
+        same file path) and push to ``_ready_queue``.
+        When the consumer pulls the result, the next
+        read is issued (the producer is implicit).
+        """
+        import io
+        import threading
+        if self._closed:
+            return
+        self._issued_count += 1
+
+        def _dispatcher():
+            try:
+                per_call_q = self._backend.read(path)
+                data, error = per_call_q.get()
+                if error:
+                    self._ready_queue.put(("error", path, RuntimeError(error)))
+                    return
+                if not data:
+                    self._ready_queue.put(("error", path, RuntimeError("empty data")))
+                    return
+                with np.load(io.BytesIO(data), allow_pickle=False) as npz:
+                    out = {k: npz[k] for k in self._keys if k in npz.files}
+                self._ready_queue.put((path, out))
+                # Issue the next read (if any).  The
+                # ``_issued_count`` increment happens
+                # here so we don't issue more than the
+                # total path count.
+                if not self._closed:
+                    next_idx = self._issued_count
+                    if next_idx < len(self._layer_paths):
+                        self._issue_read(Path(self._layer_paths[next_idx]))
+            except Exception as exc:
+                self._ready_queue.put(("error", path, exc))
+
+        t = threading.Thread(target=_dispatcher, daemon=True)
+        self._dispatchers.append(t)
+        t.start()
+
+    def close(self) -> None:
+        """Stop the pipeline (idempotent).
+
+        On the async path, the ``_closed`` flag tells
+        the dispatcher threads to stop issuing new
+        reads.  ``close()`` then joins the in-flight
+        dispatchers with a short timeout so the
+        caller's ``tearDown`` can deterministically
+        remove the temp dir without blocking on
+        open file handles.
+
+        The GCD reads that the dispatchers issued are
+        not cancelled (libdispatch has no API for
+        that).  When ``close()`` returns, the
+        in-flight reads may still be running on the
+        GCD background queue; the test is responsible
+        for the temp dir lifetime.  In production
+        (the per-tensor calibration loop), the
+        ``__exit__`` happens at the end of the run,
+        after the consumer has drained the queue.
+        """
+        if self._fallback is not None:
+            self._fallback.close()
+        if self._async:
+            self._closed = True
+            # Join the in-flight dispatchers.  Each one
+            # is daemonic and will eventually exit; we
+            # give them a short timeout so ``close()``
+            # is fast (the tests assert the close is
+            # idempotent; production has no tight
+            # latency constraint on close).
+            for t in self._dispatchers:
+                if t.is_alive():
+                    t.join(timeout=0.1)
+
+    def __enter__(self) -> "CalibPipelineAsync":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+
 # ---------------------------------------------------------------------------
 # House-keeping: a public entry that bundles the utilities for ``help()``
 # and pydoc-style introspection.  The CLI flag list lives in
@@ -610,4 +895,6 @@ __all__ = [
     "extract_layer_index",
     "SPATIAL_ROLES",
     "CalibPipeline",
+    "CalibPipelineAsync",
+    "open_calib_pipeline",
 ]

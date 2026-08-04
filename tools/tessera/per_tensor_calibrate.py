@@ -60,6 +60,7 @@ try:
     from .calibration_memory import (
         SPATIAL_ROLES,
         CalibPipeline,
+        CalibPipelineAsync,
         ChunkSpec,
         chunked_iter,
         chunked_process,
@@ -67,6 +68,7 @@ try:
         interleave_components,
         mmap_layer,
         mmap_tensor,
+        open_calib_pipeline,
     )
     from .calibration_residency import (
         ResidencyTracker,
@@ -90,6 +92,7 @@ except ImportError:  # pragma: no cover - script-mode import
     from tools.tessera.calibration_memory import (  # type: ignore[no-redef]
         SPATIAL_ROLES,
         CalibPipeline,
+        CalibPipelineAsync,
         ChunkSpec,
         chunked_iter,
         chunked_process,
@@ -97,6 +100,7 @@ except ImportError:  # pragma: no cover - script-mode import
         interleave_components,
         mmap_layer,
         mmap_tensor,
+        open_calib_pipeline,
     )
     from tools.tessera.calibration_residency import (  # type: ignore[no-redef]
         ResidencyTracker,
@@ -2026,7 +2030,15 @@ def _run_lrq_with_residency(
         # The mmap view comes back as a dict; we convert
         # it to a ``Layer`` (the per-tensor training API
         # takes a ``Layer``, not a raw mmap dict).
-        with CalibPipeline(layers, depth=depth) as pipe:
+        # Phase 16.5 (memopt-metal-dispatch): the
+        # ``open_calib_pipeline`` helper picks
+        # ``CalibPipelineAsync`` (macOS dispatch_io_t) when
+        # available, falls back to ``CalibPipeline`` (the
+        # threaded path) otherwise.  The ``--async-io``
+        # CLI flag controls the choice.
+        pipe_factory = open_calib_pipeline
+        async_io = getattr(args, "async_io", "auto")
+        with pipe_factory(layers, depth=depth, async_io=async_io) as pipe:
             for path, data in pipe:
                 tracker.check(str(path))
                 layer = _layer_from_mmap_data(path, data, max_tokens=args.max_tokens)
@@ -2299,7 +2311,11 @@ def run_components_lrq(
     paths = [path for _, path in order]
     out: list[tuple[Layer, LRQResult, str]] = []
     if depth > 1:
-        with CalibPipeline(paths, depth=depth) as pipe:
+        # Phase 16.5: dispatch_io_t on macOS, threaded
+        # CalibPipeline otherwise.  See the docstring on
+        # ``open_calib_pipeline`` for the trade-off.
+        async_io = getattr(args, "async_io", "auto")
+        with open_calib_pipeline(paths, depth=depth, async_io=async_io) as pipe:
             for path, data in pipe:
                 tracker.check(str(path))
                 layer = _layer_from_mmap_data(path, data, max_tokens=args.max_tokens)
@@ -2873,6 +2889,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Phase 16 temporal pipeline depth "
             "(default 2 = double-buffered; 1 = legacy single-thread)."
+        ),
+    )
+    # Phase 16.5 (memopt-metal-dispatch).  The macOS
+    # async I/O via dispatch_io_t.  ``--async-io on``
+    # forces the dispatch_io_t path on macOS; ``off``
+    # forces the legacy threaded ``CalibPipeline``.
+    # ``auto`` (default) uses the dispatch_io_t path
+    # when available, falls back to the threaded path
+    # otherwise.  The async path uses in-RAM bytes
+    # (one layer at a time) instead of mmap; the
+    # trade-off is more peak RSS for the I/O overlap.
+    parser.add_argument(
+        "--async-io",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help=(
+            "Phase 16.5 async I/O mode: 'auto' (default) "
+            "uses dispatch_io_t on macOS, falls back to "
+            "the legacy threaded CalibPipeline otherwise; "
+            "'on' forces the async path (errors on non-macOS); "
+            "'off' forces the legacy threaded path on all platforms."
         ),
     )
     parser.add_argument(

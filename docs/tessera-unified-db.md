@@ -1083,6 +1083,193 @@ variant (default) needs ~0.5 GB and ~2-10 s.
   needs ~30 GB free disk. The default small variant
   is fast and validates the property; the 12B variant
   is the production validation.
+
+## Phase 16.5: Apple Metal / Accelerate dispatch + macOS async I/O (this branch)
+
+Phase 16 left two open follow-ups: the per-chunk LRQ / FLRQ
+matmul was still pure numpy, and the `CalibPipeline`
+producer was a synchronous mmap.  Phase 16.5 lands both
+extensions in a single branch:
+
+* **Apple Metal / Accelerate dispatch on the per-chunk
+  matmul**.  The new
+  `tools/tessera/calibration_metal.py` module
+  (plus the `apple_metal_matmul.mm` Objective-C++
+  bridge and the `apple_accelerate_matmul.cpp` C++
+  bridge) wraps the per-chunk GEMM through
+  Apple-first-party libraries.  Priority: Metal
+  Performance Shaders (MPS, GPU on Apple Silicon
+  unified memory) > Accelerate (`cblas_sgemm`,
+  AMX/NEON SIMD on Apple Silicon, AVX-512 SIMD on
+  Intel Mac) > numpy.  On Linux/Windows the dispatch
+  is a no-op; the per-chunk matmul stays on numpy.
+* **macOS async I/O via `dispatch_io_t` (GCD)**.  The
+  new `CalibPipelineAsync` (and the
+  `apple_dispatch_io.mm` Objective-C++ bridge) issues
+  the per-layer read on a libdispatch background
+  queue, so the next layer's read overlaps the current
+  layer's compute.  This is the macOS counterpart to
+  the threaded `CalibPipeline`; the two share the
+  same `__iter__` / `__next__` contract.
+
+The Linux/Windows behaviour is unchanged.  The dispatch
+is at the call site (the `chunked_matmul` free function
+and the `open_calib_pipeline` factory) so the user can
+override the choice via `--matmul-backend` and
+`--async-io` CLI flags (the test affordance uses
+`force_backend` and direct construction).
+
+### 16.5.1: The matmul dispatch
+
+The per-chunk matmul call sites in
+`tools/tessera/per_tensor_calibrate.py` (the LRQ
+training loop, the LRQ aggregate-scale helper, and
+the FLRQ R1-Sketch) now go through
+`chunked_matmul(a, b)`.  The dispatch:
+
+1. **Detects** the fastest available backend at
+   process start (cached singleton).  Detection
+   is platform + import-availability aware: macOS
+   builds and loads the C bridge on first call
+   (the `.dylib` is cached under
+   `tools/tessera/.build/`); Linux/Windows
+   fall through to numpy.
+2. **Dispatches** the call at the call site.  The
+   Metal path is `tessera_metal_sgemm_f32` (FP32
+   via `MPSMatrixMultiplication`); the Accelerate
+   path is `tessera_accelerate_sgemm_f32` (FP32
+   via `cblas_sgemm`); the numpy path is `a @ b`.
+   Transposed matmuls fall back to numpy (the
+   current bridge doesn't support transpose; the
+   per-chunk LRQ / FLRQ shapes are all
+   non-transposed in practice).
+3. **Validates** the result.  The
+   `test_calibration_metal.py` test suite asserts
+   all three backends agree on a representative
+   (64, 64) square within float32 epsilon
+   (rtol=1e-4, atol=1e-4).  On macOS all three
+   are exercised; on Linux/Windows the
+   backend-specific tests skip.
+
+Why the C bridge: there is no Python `pip` binding
+for Metal or Accelerate.  PyObjC ships `objc` but
+the `Accelerate` binding is missing on recent
+macOS releases, and the existing
+`tools/tessera/apple_accelerate.py` is a
+function-specific wrapper (not a matmul).  The
+cheapest path is the existing pattern (the
+`apple_accelerate.cpp` shim that
+`apple_accelerate.py` already loads): a small
+Objective-C++ / C++ wrapper compiled on demand to
+a `.dylib` and loaded via ctypes.
+
+The Metal bridge pins one `MTLCommandQueue` per
+process via `dispatch_once`.  The naive
+allocation-per-call pattern would cause Metal's
+internal command buffer pool to grow unbounded;
+the test `test_metal_stable_across_200_calls`
+in `test_calibration_metal.py` pins the regression
+by running 200 consecutive Metal matmul calls
+and asserting the result is always the same.
+
+### 16.5.2: The macOS async I/O
+
+The new `CalibPipelineAsync` in
+`tools/tessera/calibration_memory.py` is the macOS
+async-I/O variant of `CalibPipeline`.  The
+producer is a `dispatch_io_t` read issued on a
+process-wide libdispatch queue; the result is
+delivered to a Python `queue.Queue` via a
+ctypes-callback bridge.  The consumer thread
+pulls from the queue; the producer is implicit
+(the dispatcher re-issues the next read as soon
+as the consumer pulls a result).
+
+Construction:
+
+* `CalibPipelineAsync(paths, depth=2)` on macOS
+  builds an async pipeline if the
+  `dispatch_io_t` bridge is available; on
+  Linux/Windows it falls back to the legacy
+  threaded `CalibPipeline`.  The two classes
+  share the same `__iter__` / `__next__`
+  contract; the caller doesn't need to know
+  which it got.
+* `open_calib_pipeline(paths, depth=2,
+  async_io="auto")` is the public factory.  The
+  `async_io` argument is one of
+  `"auto"` (default; dispatch_io_t on macOS,
+  threaded path otherwise), `"on"` (force
+  dispatch_io_t; raise on non-macOS), or
+  `"off"` (force threaded path on all
+  platforms).
+
+CLI flag: `--async-io {auto,on,off}` on
+`per_tensor_calibrate.py`.  The default is
+`auto`; the explicit `off` is for tests and
+for hosts where the dispatch_io_t build
+fails (the bridge build is fallible: missing
+clang, missing Foundation framework, etc.).
+
+Trade-off vs. the threaded mmap path: the
+async path uses `io.BytesIO` (in-RAM bytes
+of one layer at a time) instead of
+`np.load(mmap_mode="r")` (mmap).  For a 12B
+FFN gate at 16384x4096 (F32) the per-layer
+working set is bounded to ~256 MB; the
+legacy threaded path uses OS paged mmap
+which is more memory-efficient but does not
+overlap I/O with compute.  The async path
+wins wall-time at large layer counts; the
+threaded path wins memory at the cost of
+wall-time.
+
+### 16.5.3: Tests
+
+* `test_calibration_metal.py` (new): 21 tests
+  covering the dispatch selection, the
+  numpy/Accelerate/Metal correctness, the
+  backend equivalence (all three backends
+  agree within float32 epsilon), the
+  queue-reuse regression (200 consecutive
+  Metal calls), and the test affordance
+  (`force_backend`).
+* `test_calibration_memory.py`: 9 new tests
+  for `CalibPipelineAsync` and
+  `open_calib_pipeline`.  The existing 41
+  tests are unchanged.
+* `test_per_tensor_calibrate_memory.py`: the
+  E2E 200-tensor budget-bounded test exercises
+  the chunked matmul dispatch via
+  `chunked_matmul`; the test still passes.
+  The Metal path is the default on macOS; the
+  legacy numpy path is the fallback on
+  Linux/Windows.
+
+### 16.5.4: Open follow-ups (after this commit)
+
+* **BLC chunked (FLRQ)**: the FLRQ BLC step
+  still needs the full weight (it iterates
+  `W - U @ V`); the chunked sketch is the
+  only FLRQ chunking Phase 16 ships.  A
+  chunked BLC would cap the FLRQ peak to the
+  chunked-sketch peak (~64 MB) instead of the
+  full BLC peak (~200 MB).
+* **Metal transpose support**: the current
+  C bridge only supports non-transposed
+  matmuls.  The per-chunk LRQ / FLRQ shapes
+  are all non-transposed in practice, so
+  this is a follow-up if a future caller
+  needs transposed shapes.
+* **12B-shape E2E test in CI**: the
+  `TESSERA_E2E_FULL=1` variant is opt-in
+  because it needs ~30 GB free disk.  The
+  default small variant is fast and
+  validates the property; the 12B variant is
+  the production validation.  The Phase 16.5
+  dispatch + async I/O is the production
+  path; the 12B E2E test would assert the
+  wall-time speedup.
 ||||||| 1a5d56ca2
 
 ## Phase 16: unified GGUF writer (C++ side)

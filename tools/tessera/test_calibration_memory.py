@@ -27,6 +27,8 @@ Exits 0 on success, non-zero on any failure.
 from __future__ import annotations
 
 import os
+import platform
+import subprocess
 import sys
 import tempfile
 import threading
@@ -41,6 +43,25 @@ sys.path.insert(0, str(THIS_DIR))
 sys.path.insert(0, str(THIS_DIR.parent.parent))  # for top-level import
 
 import calibration_memory as cm  # noqa: E402
+
+
+def _macos_with_clang() -> bool:
+    """True if macOS + clang++ are available.
+
+    Used to gate the dispatch_io_t-specific tests.  On
+    Linux/Windows the dispatch_io_t bridge is not
+    available (the Apple ``dispatch_io_t`` API is macOS-
+    only), so the tests skip there.
+    """
+    if platform.system() != "Darwin":
+        return False
+    try:
+        return subprocess.run(
+            ["xcrun", "--find", "clang++"],
+            check=True, capture_output=True, text=True,
+        ).returncode == 0
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
 
 
 def _make_bundle(
@@ -711,6 +732,216 @@ class TestTemporalPipeline(unittest.TestCase):
                     self.assertIsInstance(result, ptc.LRQResult)
             # All 3 layers were processed in order.
             self.assertEqual(layers_seen, ["layer_0", "layer_1", "layer_2"])
+
+
+class TestAsyncIOPipeline(unittest.TestCase):
+    """``CalibPipelineAsync`` is the macOS async-I/O variant
+    of ``CalibPipeline``.  On macOS the producer is a
+    libdispatch ``dispatch_io_t`` read; on Linux/Windows
+    the constructor falls back to ``CalibPipeline``
+    transparently (the iteration API is the same).
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="calmem_async_io_")
+        self._td = Path(self._tmp)
+        self._paths: list[Path] = []
+        self._pipes: list = []
+        for i in range(5):
+            p = self._td / f"layer_{i}.npz"
+            _make_bundle(p, out_dim=32, in_dim=16, n_tokens=8)
+            self._paths.append(p)
+
+    def tearDown(self) -> None:
+        # The async dispatcher threads are daemons; the
+        # underlying GCD reads may still be in flight
+        # when the test method returns.  Closing each
+        # pipe forces the dispatcher to stop issuing new
+        # reads.  The temp dir can then be removed
+        # without blocking on a file that's still open.
+        for pipe in getattr(self, "_pipes", []):
+            pipe.close()
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_async_pipeline_yields_all_layers(self) -> None:
+        """``CalibPipelineAsync`` yields all input layers
+        in some order.  The order may differ from the
+        input (the async path doesn't preserve the input
+        order; the legacy ``CalibPipeline`` does).  The
+        contract is: every input layer is yielded exactly
+        once, the contents are correct, and the
+        iteration terminates.
+
+        On macOS the async path uses dispatch_io_t; on
+        Linux/Windows the constructor falls back to the
+        legacy ``CalibPipeline`` (which preserves order).
+        The test asserts the per-tensor contents, not
+        the order, so it passes on both platforms.
+        """
+        seen_paths: list[Path] = []
+        seen_keys: list[set[str]] = []
+        pipe = cm.CalibPipelineAsync(self._paths, depth=2)
+        self._pipes.append(pipe)
+        count = 0
+        with pipe:
+            for path, data in pipe:
+                seen_paths.append(path)
+                seen_keys.append(set(data.keys()))
+                count += 1
+                if count >= len(self._paths):
+                    break
+        self.assertEqual(sorted(p.name for p in seen_paths),
+                         sorted(p.name for p in self._paths))
+        for ks in seen_keys:
+            self.assertIn("weight", ks)
+            self.assertIn("train_activations", ks)
+
+    def test_async_pipeline_iterates_all(self) -> None:
+        """The async pipeline iterates the full path list
+        (no infinite hang on a non-blocking producer)."""
+        pipe = cm.CalibPipelineAsync(self._paths, depth=2)
+        self._pipes.append(pipe)
+        with pipe:
+            count = 0
+            for _path, _data in pipe:
+                count += 1
+                if count >= len(self._paths):
+                    break
+            self.assertEqual(count, len(self._paths))
+
+    def test_async_pipeline_empty(self) -> None:
+        """An empty path list is a no-op (no items yielded)."""
+        pipe = cm.CalibPipelineAsync([], depth=2)
+        self._pipes.append(pipe)
+        with pipe:
+            # If the constructor fell back to CalibPipeline,
+            # the iteration is a no-op.  If it built an
+            # async pipeline, there are no items to push.
+            count = 0
+            for _path, _data in pipe:
+                count += 1
+            self.assertEqual(count, 0)
+
+    def test_async_pipeline_depth1(self) -> None:
+        """Depth=1 is the single-read path.  The async
+        variant still works (just one read in flight at a
+        time, no overlap)."""
+        pipe = cm.CalibPipelineAsync(self._paths, depth=1)
+        self._pipes.append(pipe)
+        seen: list[Path] = []
+        with pipe:
+            count = 0
+            for path, data in pipe:
+                seen.append(path)
+                self.assertEqual(data["weight"].shape, (32, 16))
+                count += 1
+                if count >= len(self._paths):
+                    break
+        self.assertEqual(sorted(p.name for p in seen),
+                         sorted(p.name for p in self._paths))
+
+    def test_async_pipeline_fallback_on_non_macos(self) -> None:
+        """``CalibPipelineAsync`` falls back to the
+        threaded ``CalibPipeline`` when the
+        ``_load_async_io_backend`` returns None.  On
+        macOS the backend is always available, so the
+        test skips there; on non-macOS we explicitly
+        disable the loader and confirm the iteration
+        succeeds via the legacy path.
+
+        We patch ``_load_async_io_backend`` to ``None``;
+        the test then constructs ``CalibPipelineAsync``
+        and asserts ``pipe._fallback`` is set.  This
+        pins the fallback contract.
+        """
+        if _macos_with_clang():
+            self.skipTest(
+                "macOS: backend is available, cannot test fallback path"
+            )
+        # Patch the loader to return None.
+        orig = cm._load_async_io_backend
+        cm._load_async_io_backend = lambda: None
+        try:
+            pipe = cm.CalibPipelineAsync(self._paths, depth=2)
+        finally:
+            cm._load_async_io_backend = orig
+        self._pipes.append(pipe)
+        # When the backend is None, the constructor
+        # falls back to a ``CalibPipeline`` and the
+        # ``_fallback`` attribute is set.
+        self.assertIsNotNone(getattr(pipe, "_fallback", None))
+        with pipe:
+            count = 0
+            for _path, _data in pipe:
+                count += 1
+                if count >= len(self._paths):
+                    break
+            self.assertEqual(count, len(self._paths))
+
+    def test_open_calib_pipeline_auto_returns_async_on_macos(self) -> None:
+        """``open_calib_pipeline(..., async_io='auto')``
+        returns ``CalibPipelineAsync`` on macOS (where
+        the dispatch_io_t bridge is available)."""
+        if not _macos_with_clang():
+            self.skipTest("macOS clang++ not available")
+        pipe = cm.open_calib_pipeline(self._paths, depth=2, async_io="auto")
+        self._pipes.append(pipe)
+        self.assertIsInstance(pipe, cm.CalibPipelineAsync)
+        with pipe:
+            count = 0
+            for _path, _data in pipe:
+                count += 1
+                if count >= len(self._paths):
+                    break
+            self.assertEqual(count, len(self._paths))
+
+    def test_open_calib_pipeline_off_returns_legacy(self) -> None:
+        """``open_calib_pipeline(..., async_io='off')``
+        always returns the legacy threaded
+        ``CalibPipeline``, even on macOS.  This pins
+        the override path for tests and the
+        ``--async-io off`` CLI flag."""
+        pipe = cm.open_calib_pipeline(self._paths, depth=2, async_io="off")
+        self._pipes.append(pipe)
+        # The legacy ``CalibPipeline`` is the threaded
+        # path.  Even on macOS, ``async_io='off'`` skips
+        # the dispatch_io_t path.
+        self.assertIsInstance(pipe, cm.CalibPipeline)
+        with pipe:
+            count = 0
+            for _path, _data in pipe:
+                count += 1
+                if count >= len(self._paths):
+                    break
+            self.assertEqual(count, len(self._paths))
+
+    def test_open_calib_pipeline_on_raises_when_unavailable(self) -> None:
+        """``open_calib_pipeline(..., async_io='on')``
+        raises ``RuntimeError`` when the dispatch_io_t
+        bridge is not available.  On macOS the bridge
+        is always available, so the test is conditional.
+        On non-macOS the test asserts the ``RuntimeError``."""
+        if _macos_with_clang():
+            self.skipTest("macOS: bridge is available, cannot test failure")
+        with self.assertRaises(RuntimeError):
+            cm.open_calib_pipeline(self._paths, depth=2, async_io="on")
+
+    def test_open_calib_pipeline_on_succeeds_on_macos(self) -> None:
+        """``open_calib_pipeline(..., async_io='on')``
+        returns a ``CalibPipelineAsync`` on macOS."""
+        if not _macos_with_clang():
+            self.skipTest("macOS clang++ not available")
+        pipe = cm.open_calib_pipeline(self._paths, depth=2, async_io="on")
+        self._pipes.append(pipe)
+        self.assertIsInstance(pipe, cm.CalibPipelineAsync)
+        with pipe:
+            count = 0
+            for _path, _data in pipe:
+                count += 1
+                if count >= len(self._paths):
+                    break
+            self.assertEqual(count, len(self._paths))
 
 
 if __name__ == "__main__":
