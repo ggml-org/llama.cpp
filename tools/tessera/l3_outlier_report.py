@@ -154,6 +154,12 @@ class TensorOutlier:
     threshold: float
     skipped: bool = False
     skip_reason: str = ""
+    # Provenance: which reader produced the count. "dequant" for
+    # the sidecar-based reader (default, accurate); "tensor_stats_estimate"
+    # for the --tessera-db fast path (approximate, derived from
+    # tail_ratio). Consumers can filter on this to require an
+    # accurate count.
+    source: str = "dequant"
     per_row_counts: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32), repr=False)
 
 
@@ -266,6 +272,7 @@ def build_group(labeled: LabeledDir, default_threshold: float) -> SidecarGroup:
             outlier_count=count,
             outlier_fraction=fraction,
             threshold=threshold,
+            source="dequant",
             per_row_counts=per_row,
         ))
     g.tensors.sort(key=lambda t: t.outlier_fraction, reverse=True)
@@ -362,6 +369,7 @@ def write_ndjson(groups: list[SidecarGroup],
                 "threshold":       t.threshold,
                 "skipped":         t.skipped,
                 "skip_reason":     t.skip_reason,
+                "source":          getattr(t, "source", "dequant"),
                 "kernel_version":  kernel_version,
                 "created_at":      created_at,
                 "tessera_main_tip": main_tip,
@@ -382,6 +390,7 @@ def write_ndjson(groups: list[SidecarGroup],
                 "threshold":       0.0,
                 "skipped":         True,
                 "skip_reason":     reason,
+                "source":          "dequant",
                 "kernel_version":  kernel_version,
                 "created_at":      created_at,
                 "tessera_main_tip": main_tip,
@@ -569,7 +578,103 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress the console report (still writes --out / --plot-dir).",
     )
+    p.add_argument(
+        "--tessera-db",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the unified tessera.duckdb. When set, the report "
+            "uses the per-tensor rms / tail_ratio / kurtosis from the "
+            "tensor_stats table as a fast-path approximation of the "
+            "outlier count, instead of reading the dequant sidecar "
+            "files. The output NDJSON rows are tagged with "
+            "source='tensor_stats_estimate' so the consumer knows "
+            "the count is approximate. The default (no --tessera-db) "
+            "reads the dequant sidecar for the exact count "
+            "(source='dequant'). The fast path is useful when the "
+            "sidecar files are unavailable (e.g. calibration was run "
+            "on a different machine) or when you only need a rough "
+            "estimate to gate the heavy path."
+        ),
+    )
+    p.add_argument(
+        "--model-hash",
+        default=None,
+        help=(
+            "Model hash to filter the tensor_stats query (only used "
+            "with --tessera-db). Default: any model. Set this to "
+            "the same model_hash the C++ dispatch wrote if you "
+            "want a specific model's stats."
+        ),
+    )
     return p
+
+
+def build_tensor_stats_group(
+    label: str,
+    db_path: Path,
+    *,
+    threshold: float,
+    model_hash: str | None = None,
+) -> SidecarGroup:
+    """Fast-path SidecarGroup built from the tensor_stats table.
+
+    Reads ``SELECT name, family, layer_depth, n_elements, rms,
+    mean_abs, tail_ratio, kurtosis FROM tensor_stats`` (filtered by
+    model_hash when given) and produces a per-tensor approximation
+    of the outlier count. The approximation is conservative: when
+    the tensor's tail_ratio is below the threshold * 1.0, the count
+    is 0; when above, the count is 1 (just the max). The
+    outlier_fraction is the count / n_elements when n_elements >
+    0, else 0. The provenance ``source`` is set to
+    ``tensor_stats_estimate`` so the consumer knows the value is
+    approximate.
+
+    This is the fast path the unified-DB design described: read
+    the per-tensor summary instead of the per-tensor dequant
+    sidecar, at the cost of an approximate count. The dequant
+    sidecar path remains the default and produces the exact count.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from tessera_db import TesseraDB
+    db_path = Path(db_path) if not isinstance(db_path, Path) else db_path
+    g = SidecarGroup(label=label, path=str(db_path))
+    if not db_path.is_file():
+        return g
+    with TesseraDB.open(str(db_path), read_only=True) as db:
+        where = ""
+        if model_hash:
+            where = f" WHERE model_hash = '{model_hash}'"
+        df = db.query(
+            f"SELECT name, family, layer_depth, n_elements, rms, "
+            f"mean_abs, tail_ratio, kurtosis FROM tensor_stats{where}"
+        )
+    for row in df.to_dicts():
+        n_elements = int(row.get("n_elements") or 0)
+        rms = float(row.get("rms") or 0.0)
+        tail_ratio = float(row.get("tail_ratio") or 0.0)
+        layer_depth = int(row.get("layer_depth") or 0)
+        # The fast-path outlier count: 1 if tail_ratio > threshold,
+        # else 0. This is a conservative "is there at least one
+        # likely outlier" signal. The dequant sidecar is the
+        # accurate count.
+        count = 1 if tail_ratio > threshold else 0
+        fraction = (count / n_elements) if n_elements > 0 else 0.0
+        tensor = TensorOutlier(
+            name=row.get("name", ""),
+            layer=f"blk.{layer_depth}",
+            rows=0,             # unknown without dequant read
+            cols=0,
+            total_elements=n_elements,
+            outlier_count=count,
+            outlier_fraction=fraction,
+            threshold=threshold,
+            skipped=False,
+            skip_reason="",
+            source="tensor_stats_estimate",
+        )
+        g.tensors.append(tensor)
+    return g
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -577,9 +682,36 @@ def main(argv: list[str] | None = None) -> int:
 
     groups: list[SidecarGroup] = []
     sidecar_dirs: dict[str, str] = {}
-    for labeled in args.sidecar_dir:
-        groups.append(build_group(labeled, default_threshold=args.threshold))
-        sidecar_dirs[labeled.label] = str(labeled.path)
+    if args.tessera_db is not None:
+        # Fast path: read tensor_stats, skip the dequant sidecar.
+        # Each --sidecar-dir entry becomes a labeled group sourced
+        # from the same DB (the LABEL is reused so the output is
+        # shaped the same as the sidecar-based run). When --sidecar-dir
+        # is not given, the fast path is still useful: a single
+        # unlabeled group with all the tensor_stats rows.
+        if args.sidecar_dir:
+            for labeled in args.sidecar_dir:
+                groups.append(build_tensor_stats_group(
+                    labeled.label, args.tessera_db,
+                    threshold=args.threshold,
+                    model_hash=args.model_hash,
+                ))
+                sidecar_dirs[labeled.label] = str(args.tessera_db)
+        else:
+            groups.append(build_tensor_stats_group(
+                "tensor_stats", args.tessera_db,
+                threshold=args.threshold,
+                model_hash=args.model_hash,
+            ))
+            sidecar_dirs["tensor_stats"] = str(args.tessera_db)
+        sys.stderr.write(
+            f"l3_outlier: --tessera-db fast path: {sum(g.total_elements for g in groups)} "
+            f"elements across {sum(len(g.tensors) for g in groups)} tensors\n"
+        )
+    else:
+        for labeled in args.sidecar_dir:
+            groups.append(build_group(labeled, default_threshold=args.threshold))
+            sidecar_dirs[labeled.label] = str(labeled.path)
 
     if not args.quiet:
         print(render_console(groups, top_k=args.top_k, ceiling=args.ceiling))

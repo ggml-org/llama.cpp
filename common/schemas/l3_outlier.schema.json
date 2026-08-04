@@ -26,6 +26,7 @@
         "threshold": "Float32",
         "skipped": "Boolean",
         "skip_reason": "String",
+        "source": "String",
         "kernel_version": "String",
         "created_at": "String",
         "tessera_main_tip": "String"
