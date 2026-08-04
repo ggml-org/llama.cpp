@@ -402,6 +402,17 @@ if (APPLE)
                               "-framework Metal"
                               "-framework IOSurface")
     endif()
+    # Shared ane_state_layout.v1 reader test. Exercises the
+    # C++ side of the manifest contract from
+    # common/ane-state-layout.h. The Python side has its own
+    # 24-test suite in tools/ane-mtp/test_state_layout.py.
+    # .mm because ane-state-layout.h imports Foundation.
+    llama_build_and_test(test-ane-state-layout.mm)
+    if (TARGET test-ane-state-layout)
+        target_link_libraries(test-ane-state-layout PRIVATE
+                              llama-common
+                              "-framework Foundation")
+    endif()
     # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
     llama_build(test-ane-matmul-w1-dispatch.cpp)
     if (TARGET test-ane-matmul-w1-dispatch)
