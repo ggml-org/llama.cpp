@@ -560,16 +560,17 @@ static void gguf_merge(const split_params & split_params) {
         ggml_free(ctx_meta);
         f_input.close();
         fprintf(stderr, "\033[3Ddone\n");
-    }
 
-    if (!split_params.dry_run && split_params.delete_splits) {
-        int delete_result = std::remove(split_path);
-        if (delete_result != 0) {
-            merge_error = true;
-            fprintf(stderr, "error: failed to delete %s\n", split_path);
-        } else {
-            fprintf(stderr, "%s: deleted file %s\n", __func__, split_path);
+        if (!split_params.dry_run && split_params.delete_splits) {
+            int delete_result = std::remove(split_path);
+            if (delete_result != 0) {
+                merge_error = true;
+                fprintf(stderr, "error: failed to delete %s\n", split_path);
+            } else {
+                fprintf(stderr, "%s: deleted file %s\n", __func__, split_path);
+            }
         }
+
     }
 
     if (!split_params.dry_run) {
