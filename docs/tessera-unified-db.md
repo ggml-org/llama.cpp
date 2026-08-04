@@ -1662,6 +1662,117 @@ destination with all 6+ sub-tensors intact).
 * `ts_tessera_db_read_unified_policy` returns the correct rows
   for `(model_hash, "")`, `(model_hash, "trunk")`, etc.
 
+## Phase 16.7: Indexes + migration audit
+
+Phase 16's `model_role` column is part of every affected table's
+composite primary key, but the per-component query pattern
+("give me all `attn_q` rows for role=`dflash`") would still
+walk every `(model_hash, model_role, name)` tuple when reading
+through the PK alone. Phase 16.7 adds a secondary covering
+index on `(model_role, name)` (or `(model_role, family)` for
+`l5_weights`, which is per-family) on the 7 affected tables so
+the per-component query is an index seek rather than a PK
+scan. It also adds an audit sidecar so the `model_role`
+migration that runs on every `ts_tessera_db_open` leaves a
+trail of what it actually did.
+
+### The 7 covering indexes
+
+```
+idx_tensor_stats_role_name      ON tensor_stats      (model_role, name)
+idx_l3_outlier_role_name        ON l3_outlier_summary(model_role, name)
+idx_l4_probe_role_name          ON l4_probe_summary  (model_role, name)
+idx_l5_plan_role_name           ON l5_plan_summary   (model_role, name)
+idx_l4_outcome_role_name        ON l4_plan_outcome   (model_role, name)
+idx_l5_outcome_role_name        ON l5_outcome        (model_role, name)
+idx_l5_weights_role_family      ON l5_weights        (model_role, family)
+```
+
+Created via `CREATE INDEX IF NOT EXISTS` on every
+`ts_tessera_db_open()` (C++ side) and every `TesseraDB.open()`
+(Python side). The `IF NOT EXISTS` makes the statements
+idempotent; on a re-open the round-trip is a no-op, and the
+C++ and Python sides can apply them in any order without
+colliding. The Python side caches the success on the
+`TesseraDB` instance (`_unified_indexes_ensured` flag) so a
+long-running process pays the round-trip once per open, not
+once per insert.
+
+`l5_weights` is the one outlier: it has no `name` column (the
+row is per family), so the covering index is on
+`(model_role, family)`. The C++ and Python sides agree on the
+index name (`idx_l5_weights_role_family`) so the `IF NOT
+EXISTS` short-circuits cleanly when the other side got there
+first.
+
+### The migration audit sidecar
+
+`ts_tessera_db_migrate_model_role()` (and the Python
+`migrate_model_role.migrate()` mirror) are destructive: they
+rebuild each affected table with a new PK to add the
+`model_role` column. Before Phase 16.7, a legacy DB being
+migrated had no audit trail of what the migration did; the
+user only saw "it works now" with no way to confirm what was
+backfilled.
+
+Phase 16.7 adds a `model_role_migration.json` sidecar next to
+the duckdb file (e.g. `tessera.duckdb` ->
+`tessera.model_role_migration.json`). The sidecar is written
+only when at least one table was actually migrated (a fresh
+DB or a re-open of an already-migrated DB is a no-op; no
+sidecar is written or rewritten). The format is a small
+stable JSON:
+
+```
+{
+    "db_path": "/path/to/tessera.duckdb",
+    "model_role": "trunk",
+    "ts": "2026-08-04 12:34:56",
+    "tables": [
+        {"name": "tensor_stats",       "n_rows_at_migration": 254},
+        {"name": "l3_outlier_summary", "n_rows_at_migration": 0},
+        ...
+    ]
+}
+```
+
+The C++ and Python sides produce identical JSON for the same
+DB; the file is the canonical audit trail regardless of
+which side ran the migration. The C++ side writes the file
+atomically (`<sidecar>.tmp` -> `os.replace` / `rename(2)`)
+so a crash mid-write cannot leave a half-written file. A
+sidecar write failure is logged to `*err` (C++) or stderr
+(Python) but does not fail the migration: the schema is
+correct, only the audit trail is missing.
+
+### Tests
+
+`test-tessera-db-indexes` (`tools/quantize/tessera/test_tessera_db_indexes.cpp`):
+* 7 indexes are present on a fresh open (one per affected table)
+* the 7 indexes are present after a re-open (idempotent)
+* seed 100k rows with mixed roles, run the per-component
+  `WHERE model_role = 'dflash' AND name = 'blk.0.attn_q.weight'`
+  query with the index in place and after a `DROP INDEX`,
+  confirm the indexed path is at least within 5x of the
+  no-index path (the gain is the whole point of the index;
+  100k rows is small enough that DuckDB's vectorized scan can
+  match the seek in wall time, so the assertion is loose)
+* a pre-Phase-16 DB opened via `ts_tessera_db_open` writes
+  the sidecar with the correct per-table row counts
+* a re-open of the already-migrated DB does NOT re-write the
+  sidecar (the migration is a no-op)
+
+### Files
+
+| File | Role |
+|---|---|
+| `tools/quantize/tessera/tessera-quantize-db.cpp` | The 7 `CREATE INDEX IF NOT EXISTS` lines appended to `TS_QDB_SCHEMA_SQL`; the new `write_migration_sidecar` helper; the per-table `n_rows` capture in `migrate_one_table`; the `db_path` field on `ts_tessera_db`. |
+| `tools/quantize/tessera/tessera-quantize-db.h` | The new `db_path` field on `ts_tessera_db` (used by `ts_tessera_db_migrate_model_role` to compute the sidecar path). |
+| `tools/quantize/tessera/test_tessera_db_indexes.cpp` | New test target. 7 indexes present, idempotent re-open, smoke benchmark, sidecar presence + contents. |
+| `tools/quantize/CMakeLists.txt` | New `test-tessera-db-indexes` target. |
+| `tools/tessera/tessera_db.py` | New `_ensure_unified_indexes` method on `TesseraDB`; the 7 `CREATE INDEX IF NOT EXISTS` lines mirror the C++ side. |
+| `tools/tessera/migrate_model_role.py` | New `_write_migration_sidecar` helper; the per-table migration log surfaced as a JSON file next to the duckdb. |
+
 ### Files
 
 | File | Role |
