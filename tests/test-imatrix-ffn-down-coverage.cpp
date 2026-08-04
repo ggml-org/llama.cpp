@@ -311,7 +311,7 @@ static int test_with_model(
         const std::string & model_path,
         const std::string & prompt,
         const std::string & imatrix_out,
-        const std::string & llama_imatrix_bin) {
+        const std::filesystem::path & llama_imatrix_bin) {
     // Build the command. The CLI is llama-imatrix from this build. We
     // do not need warmup or full PPL; we just need enough chunks to
     // populate the ffn_down statistics.
