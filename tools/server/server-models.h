@@ -200,6 +200,9 @@ private:
     // queue of requests waiting for a models_max slot
     std::unique_ptr<lru_sched> sched;
 
+    // if true, add some delay to simulate works (useful for testing)
+    bool debug_fake_timing = false;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached

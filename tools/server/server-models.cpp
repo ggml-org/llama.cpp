@@ -424,6 +424,7 @@ server_models::server_models(
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
     load_models();
+    debug_fake_timing = !common_get_env("LLAMA_DEBUG_FAKE_TIMING").empty();
 }
 
 server_models::~server_models() = default;
@@ -924,6 +925,11 @@ void server_models::load(const std::string & name) {
 }
 
 void server_models::load(const std::string & name, const load_options & opts) {
+    if (debug_fake_timing) {
+        // do not hold the mutex here, other requests must keep making progress
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
     if (!opts.custom_meta.has_value()) {
         if (!has_model(name)) {
             throw std::runtime_error("model name=" + name + " is not found");
@@ -1426,7 +1432,7 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
                 continue;
             }
 
-            cv.wait_for(lk, std::chrono::milliseconds(500));
+            cv.wait_for(lk, std::chrono::milliseconds(200));
         }
     } catch (...) {
         leave_queue();
@@ -1451,6 +1457,10 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             mapping[name].meta.last_used = ggml_time_ms();
         }
         mapping[name].req_count++;
+    }
+    if (debug_fake_timing) {
+        // sleep after req_count++, so the model counts as busy while we wait here
+        std::this_thread::sleep_for(std::chrono::seconds(2));
     }
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
