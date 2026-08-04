@@ -689,43 +689,33 @@ class DFlashModel(Qwen3Model):
         return super().filter_tensors((name, gen))
 
 
-@ModelBase.register("Qwen3DSparkModel")
+@ModelBase.register("Qwen3DSparkModel", "DSparkDraftModel", "DSparkSpeculator")
 class DSparkModel(DFlashModel):
-    # DSpark = DFlash + a semi-autoregressive Markov head
-    model_arch = gguf.MODEL_ARCH.DFLASH
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # normalize the flat DeepSpec schema to DFlash's nested dflash_config
-        self.hparams.setdefault("dflash_config", {
-            k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
-        })
-
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
-        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
-            return None
-        return super().filter_tensors((name, gen))
-
-
-@ModelBase.register("DSparkDraftModel", "DSparkSpeculator")
-class DSparkSpeculatorsModel(DFlashModel):
-    # speculators-format (SpecForge) DSpark: 1+N bonus-anchor block, optional d2t-reduced draft vocab
+    # DSpark = DFlash + a semi-autoregressive Markov head.
     model_arch = gguf.MODEL_ARCH.DFLASH
 
     def __init__(self, dir_model, *args, **kwargs):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, False)
-        if "transformer_layer_config" in hparams:
+
+        # only the arch name separates the SpecForge drafts from the DeepSpec ones
+        self._is_specforge = hparams["architectures"][0] in ("DSparkDraftModel", "DSparkSpeculator")
+        if "transformer_layer_config" in hparams:  # speculators nests the backbone hparams
             hparams = {**hparams, **hparams["transformer_layer_config"]}
-        if "aux_hidden_state_layer_ids" in hparams:
-            hparams.setdefault("dflash_config", {
-                "mask_token_id": hparams.get("mask_token_id"),
-                "target_layer_ids": [i - 1 for i in hparams["aux_hidden_state_layer_ids"]],
-            })
+
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+        # normalize both schemas to DFlash's nested dflash_config
+        if "aux_hidden_state_layer_ids" in self.hparams:
+            self.hparams.setdefault("dflash_config", {
+                "mask_token_id": self.hparams.get("mask_token_id"),
+                "target_layer_ids": [i - 1 for i in self.hparams["aux_hidden_state_layer_ids"]],
+            })
+        else:
+            self.hparams.setdefault("dflash_config", {
+                k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
+            })
 
         if (markov_head_type := self.hparams.get("markov_head_type", "vanilla")) != "vanilla":
             raise ValueError(f"unsupported markov_head_type {markov_head_type!r} (only 'vanilla' is supported)")
@@ -739,13 +729,13 @@ class DSparkSpeculatorsModel(DFlashModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        # 1+N fill-in block: the anchor slot is a bonus token, not a prediction slot
-        # (newer speculators exports carry the layout explicitly as sample_from_anchor)
-        self.gguf_writer.add_bonus_anchor(not self.hparams.get("sample_from_anchor", False))
+        if self._is_specforge:
+            # 1+N fill-in block: the anchor slot is a bonus token, not a prediction slot
+            self.gguf_writer.add_bonus_anchor(not self.hparams.get("sample_from_anchor", False))
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
+        name = item[0]
         if name == "t2d":  # training-only target->draft mask
             return None
         if name == "d2t" or name.startswith("lm_head."):
@@ -775,6 +765,10 @@ class DSparkSpeculatorsModel(DFlashModel):
             pending, self._pending_reduced = self._pending_reduced, []
             for pending_name, pending_data in pending:
                 yield from self._expand_reduced_vocab(pending_data, pending_name)
+            return
+
+        if not self._is_specforge and name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            # DeepSpec drafts share the target's embeddings and head via ctx_other
             return
 
         is_reduced = self._n_vocab_draft < self.hparams["vocab_size"] \

@@ -240,9 +240,10 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     const int64_t block_size = std::stoi(it->second);
     GGML_ASSERT(block_size > 0);
 
-    // bonus anchor (speculators exports): position 0 is not a prediction slot, drafting starts at the first mask
+    // bonus anchor (SpecForge exports): slot 0 holds a bonus token, not a prediction slot
     const auto it_ba = model.gguf_kv.find("dflash.bonus_anchor");
-    const int64_t i0 = it_ba != model.gguf_kv.end() && it_ba->second == "true" ? 1 : 0;
+    const bool    bonus_anchor  = it_ba != model.gguf_kv.end() && it_ba->second == "true";
+    const int64_t i_first_pred  = bonus_anchor ? 1 : 0;
 
     const int64_t n_blocks = g.ubatch.n_seqs_unq;
     GGML_ASSERT(n_blocks > 0 && n_tok % n_blocks == 0 && "DSpark markov head requires equal-size blocks");
@@ -265,7 +266,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * cat      = nullptr;
     ggml_tensor * cat_conf = nullptr;
 
-    if (i0 > 0) {
+    if (bonus_anchor) {
         // bonus anchor slot: pass the logits through unbiased, pad the (unread) confidence column
         cat      = ggml_cont(ctx0, ggml_view_2d(ctx0, base, n_vocab, n_blocks, base_stride, 0));
         cat_conf = ggml_sigmoid(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0)));
@@ -273,7 +274,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
 
     // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
     //       token pick, not the Markov conditioning path
-    for (int64_t i = i0; i < block_drafts; ++i) {
+    for (int64_t i = i_first_pred; i < block_drafts; ++i) {
         ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);   // [R, n_blocks]
         ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab, n_blocks]
 

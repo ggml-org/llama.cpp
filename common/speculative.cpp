@@ -1193,8 +1193,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 // DSpark: read from the first prediction slot, truncate below the confidence threshold
                 const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
                 // bonus-anchor drafts read the mask positions only, like DFlash
-                const int32_t i0 = bonus_anchor ? 1 : 0;
-                for (int32_t i = i0; i < n_block_tokens; ++i) {
+                const int32_t i_first_pred = bonus_anchor ? 1 : 0;
+                for (int32_t i = i_first_pred; i < n_block_tokens; ++i) {
                     const int32_t idx = beg + i;
 
                     if (conf && conf[(size_t) idx * n_embd_dec] < params.p_min) {
