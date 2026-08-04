@@ -130,6 +130,7 @@ struct ts_unified_writer::impl {
     ts_unified_hparams                hparams;
     ts_unified_dflash_hparams         dflash_hparams;
     ts_unified_dspark_hparams         dspark_hparams;
+    ts_unified_mmproj_hparams         mmproj_hparams;   // Phase M0a
     ts_unified_meta                   meta;
 
     // Phase 16.8: budget relaxation/enforcement evidence recorded by
@@ -150,10 +151,12 @@ struct ts_unified_writer::impl {
          const ts_unified_hparams & hparams_,
          const ts_unified_dflash_hparams & dflash_hparams_,
          const ts_unified_dspark_hparams & dspark_hparams_,
+         const ts_unified_mmproj_hparams & mmproj_hparams_,
          const ts_unified_meta & meta_)
         : dst_path(dst_path_), components(components_), policy(policy_),
           hparams(hparams_), dflash_hparams(dflash_hparams_),
-          dspark_hparams(dspark_hparams_), meta(meta_) {
+          dspark_hparams(dspark_hparams_), mmproj_hparams(mmproj_hparams_),
+          meta(meta_) {
         sources.resize(components.size());
         for (size_t i = 0; i < components.size(); i++) {
             sources[i].path = components[i].path;
@@ -656,9 +659,10 @@ ts_unified_writer::ts_unified_writer(const std::string & dst_path,
                                      const ts_unified_hparams & hparams,
                                      const ts_unified_dflash_hparams & dflash_hparams,
                                      const ts_unified_dspark_hparams & dspark_hparams,
+                                     const ts_unified_mmproj_hparams & mmproj_hparams,
                                      const ts_unified_meta & meta,
                                      std::string * err)
-    : p_(new impl(dst_path, components, policy, hparams, dflash_hparams, dspark_hparams, meta)) {
+    : p_(new impl(dst_path, components, policy, hparams, dflash_hparams, dspark_hparams, mmproj_hparams, meta)) {
     if (hparams.n_layer == 0) {
         if (err) *err = "ts_unified_writer: hparams.n_layer must be > 0";
         return;
@@ -751,6 +755,33 @@ ts_unified_writer::ts_unified_writer(const std::string & dst_path,
     if (p_->hparams.n_embd_out > 0) {
         gguf_set_val_u32(p_->dst, "gemma4-assistant.embedding_length_out", p_->hparams.n_embd_out);
     }
+    // Phase M0a: multimodal-projector hparams. All values are
+    // additive -- the destination's loader treats absence of these
+    // keys as "no mmproj in this GGUF" and falls back to the
+    // non-multimodal gemma4-assistant build. The keys follow the
+    // gemma4 mtmd companion's naming convention; the values come
+    // from the CLI's --mmproj-hparams JSON (or a default-constructed
+    // ts_unified_mmproj_hparams when no mmproj is in this run).
+    if (p_->mmproj_hparams.vision_n_embd > 0) {
+        gguf_set_val_u32(p_->dst, "gemma4-assistant.vision.embedding_length",
+                         (uint32_t)p_->mmproj_hparams.vision_n_embd);
+    }
+    if (!p_->mmproj_hparams.vision_arch.empty()) {
+        gguf_set_val_str(p_->dst, "gemma4-assistant.vision.architecture",
+                         p_->mmproj_hparams.vision_arch.c_str());
+    }
+    if (p_->mmproj_hparams.audio_n_embd > 0) {
+        gguf_set_val_u32(p_->dst, "gemma4-assistant.audio.embedding_length",
+                         (uint32_t)p_->mmproj_hparams.audio_n_embd);
+    }
+    if (!p_->mmproj_hparams.audio_arch.empty()) {
+        gguf_set_val_str(p_->dst, "gemma4-assistant.audio.architecture",
+                         p_->mmproj_hparams.audio_arch.c_str());
+    }
+    if (p_->mmproj_hparams.projector_dim > 0) {
+        gguf_set_val_u32(p_->dst, "gemma4-assistant.mm.projector_dim",
+                         (uint32_t)p_->mmproj_hparams.projector_dim);
+    }
     // Tessera provenance
     if (!p_->meta.build_info.empty()) {
         gguf_set_val_str(p_->dst, "tessera.provenance.build_info", p_->meta.build_info.c_str());
@@ -792,6 +823,29 @@ ts_unified_writer::~ts_unified_writer() {
 //                   blk.{i}.nextn.* with unique suffixes.
 //   * shared_embd:  copy as-is. The shared embeddings
 //                   (token_embd, output) are unique.
+//   * vision_tower: copy as-is. Source tensors already carry the
+//                   "v." prefix per tools/mtmd/clip.cpp:1831
+//                   ("a" / "v" prefix is set on the source side
+//                   based on modality). The writer does NOT add
+//                   a second prefix; a "v.patch_embd.weight" in
+//                   the source becomes "v.patch_embd.weight" in
+//                   the destination.
+//   * audio_tower:  copy as-is. Same convention as vision_tower;
+//                   source tensors are already "a.*".
+//   * mm_projector: copy as-is. Source tensors are already "mm.*"
+//                   (multi_modal_projector weights per
+//                   tools/mtmd/clip.cpp:2594+). If a "mm.*" tensor
+//                   appears in BOTH vision_tower and mm_projector
+//                   components (rare but possible for shared
+//                   projector weights), the writer's name-based
+//                   worst-of qtype lookup (qtype_for_tensor) treats
+//                   it the same way token_embd.weight is treated
+//                   across trunk / dflash / shared_embd -- the
+//                   per-role verdicts reconcile, last-write-wins
+//                   for the data pointer (the mm_projector
+//                   component wins by component order; the writer
+//                   does not error on the conflict, matching the
+//                   pre-M0a shared_embd contract).
 //
 // Returns "" for tensors the writer does not route. The writer
 // skips "" silently (the tensor is in the source but the unified
@@ -801,7 +855,11 @@ static std::string route_destination_name(const std::string & component_role,
     if (component_role == "dflash") {
         return "dflash." + src_name;
     }
-    // All other components: copy as-is.
+    // trunk / dspark / mtp_nextn / shared_embd / vision_tower /
+    // audio_tower / mm_projector: copy as-is. The mmproj source
+    // GGUFs already namespace their tensors with "v.", "a.", and
+    // "mm." prefixes (see the per-component comment above), so the
+    // destination names are byte-identical to the source names.
     return src_name;
 }
 
@@ -1088,11 +1146,14 @@ int ts_unified_writer::write_all(std::string * err) {
                 n_copied++;
             }
 
-            if      (comp.model_role == "trunk")       stats_.n_tensors_trunk++;
-            else if (comp.model_role == "dflash")      stats_.n_tensors_dflash++;
-            else if (comp.model_role == "dspark")      stats_.n_tensors_dspark++;
-            else if (comp.model_role == "mtp_nextn")   stats_.n_tensors_mtp_nextn++;
-            else if (comp.model_role == "shared_embd") stats_.n_tensors_shared_embd++;
+            if      (comp.model_role == "trunk")        stats_.n_tensors_trunk++;
+            else if (comp.model_role == "dflash")       stats_.n_tensors_dflash++;
+            else if (comp.model_role == "dspark")       stats_.n_tensors_dspark++;
+            else if (comp.model_role == "mtp_nextn")    stats_.n_tensors_mtp_nextn++;
+            else if (comp.model_role == "shared_embd")  stats_.n_tensors_shared_embd++;
+            else if (comp.model_role == "vision_tower") stats_.n_tensors_vision_tower++;
+            else if (comp.model_role == "audio_tower")  stats_.n_tensors_audio_tower++;
+            else if (comp.model_role == "mm_projector") stats_.n_tensors_mm_projector++;
         }
     }
     stats_.n_tensors_skipped = n_skipped;

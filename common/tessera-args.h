@@ -88,6 +88,19 @@ struct common_tessera_params {
     std::string unified_mtp;
     std::string unified_shared_embd;
     std::string unified_arch = "gemma4-assistant";   // currently only gemma4-assistant is supported
+    // Phase M0a: multimodal-projector components. Each is a separate
+    // per-component source GGUF that the unified writer absorbs into
+    // the destination gemma4-assistant GGUF. Source tensors already
+    // carry the v.* / a.* / mm.* prefix (tools/mtmd/clip.cpp:1831,
+    // 2594+); the writer does not add a second prefix.
+    std::string unified_vision_tower;
+    std::string unified_audio_tower;
+    std::string unified_mm_projector;
+    // Optional mmproj-side hparams. Empty = the writer uses zero
+    // defaults and the destination's loader treats the absence of
+    // gemma4-assistant.vision.* / .audio.* / .mm.* KV keys as
+    // "no mmproj in this GGUF" (the pre-M0a contract).
+    std::string unified_mmproj_hparams;
     // Structured progress reporting for the quantize pipeline. When
     // progress_file is non-empty, the dispatch writes one NDJSON event per
     // tick to that path for the Studio UI to tail.

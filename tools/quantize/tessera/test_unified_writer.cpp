@@ -438,7 +438,8 @@ int main(int argc, char ** argv) {
     };
     {
         std::string err;
-        ts_unified_writer w(unified_path, comps, policy, hparams, dh, ds, meta, &err);
+        ts_unified_mmproj_hparams mp{};   // pre-M0a: zero defaults
+        ts_unified_writer w(unified_path, comps, policy, hparams, dh, ds, mp, meta, &err);
         if (err.empty()) {
             int rc = w.write_all(&err);
             check(rc == 0, "write_all");
@@ -565,7 +566,8 @@ int main(int argc, char ** argv) {
         std::string err;
         ts_unified_hparams bad_hp = hparams;
         bad_hp.n_layer = 0;  // invalid
-        ts_unified_writer w(unified_path, comps, policy, bad_hp, dh, ds, meta, &err);
+        ts_unified_mmproj_hparams bad_mp{};   // pre-M0a: zero defaults
+        ts_unified_writer w(unified_path, comps, policy, bad_hp, dh, ds, bad_mp, meta, &err);
         check(!err.empty(), "invalid hparams rejected");
     }
 
@@ -678,7 +680,8 @@ int main(int argc, char ** argv) {
                 {worst_of_src, "shared_embd"},
             };
             std::string err;
-            ts_unified_writer w(worst_of_dst, wo_comps, pol, wo_hp, wo_dh, wo_ds, wo_meta, &err);
+            ts_unified_mmproj_hparams wo_mp{};   // pre-M0a: zero defaults
+            ts_unified_writer w(worst_of_dst, wo_comps, pol, wo_hp, wo_dh, wo_ds, wo_mp, wo_meta, &err);
             int rc = w.write_all(&err);
             check(rc == 0, ("worst-of write_all " + tag + (err.empty() ? "" : ": " + err)).c_str());
             if (rc != 0) {
@@ -913,7 +916,8 @@ int main(int argc, char ** argv) {
             std::remove(bud_dst.c_str());
             std::vector<ts_unified_component> comps = { {bud_src, "shared_embd"} };
             std::string err;
-            ts_unified_writer w(bud_dst, comps, pol, b_hp, b_dh, b_ds, b_meta, &err);
+            ts_unified_mmproj_hparams b_mp{};   // pre-M0a: zero defaults
+            ts_unified_writer w(bud_dst, comps, pol, b_hp, b_dh, b_ds, b_mp, b_meta, &err);
             int rc = w.write_all(&err);
             check(rc == 0, ("budget write_all " + tag + (err.empty() ? "" : ": " + err)).c_str());
             if (rc != 0) return;
@@ -1011,6 +1015,411 @@ int main(int argc, char ** argv) {
                       q.role_budgets[1].budget_bits == -1 &&
                       q.role_budgets[1].weight == 2.5,
                       "budget policy round-trip dflash entry");
+            }
+        }
+    }
+
+    // ---- Test 9: Phase M0a vision_tower + mm_projector end-to-end ----
+    //
+    // The unified Gemma4 mmproj pipeline absorbs 3 new per-component
+    // source GGUFs (vision_tower / audio_tower / mm_projector) into
+    // the destination gemma4-assistant GGUF. The source tensors are
+    // already namespaced with v.* / a.* / mm.* prefixes (per
+    // tools/mtmd/clip.cpp:1831, 2594+); the writer does NOT add a
+    // second prefix. This test covers:
+    //
+    //   9.1: a vision_tower source GGUF with v.* tensors lands in
+    //        the destination with original names.
+    //   9.2: an mm_projector source GGUF with mm.* tensors lands with
+    //        original names.
+    //   9.3: stats counters n_tensors_vision_tower / n_tensors_mm_projector
+    //        match the input.
+    //   9.4: a shared "mm.*" tensor across vision_tower + mm_projector
+    //        uses the same name-based worst-of qtype resolution that
+    //        token_embd.weight uses across trunk / dflash /
+    //        shared_embd (qtype = max(bits) across matching entries).
+    //   9.5: a "mm.*" role_budget in the policy applies the
+    //        budget-aware cross-role reconciliation rule to a
+    //        shared mm.* tensor (relaxed / enforced events recorded).
+    //   9.6: the second component's "mm.*" data is dropped (first
+    //        writer wins) when both components contribute the same
+    //        name -- matching the pre-M0a shared_embd contract.
+    {
+        // 9.1 + 9.2 + 9.3 + 9.6 baseline: build tiny vision_tower
+        // and mm_projector source GGUFs, run them through the writer,
+        // verify tensor names + stats + first-writer-wins.
+        const std::string vt_src = std::string(tmpdir) + "/test_unified_writer_vt_src.gguf";
+        const std::string mp_src = std::string(tmpdir) + "/test_unified_writer_mp_src.gguf";
+        const std::string vt_dst = std::string(tmpdir) + "/test_unified_writer_vt_dst.gguf";
+        for (const auto & p : {vt_src, mp_src, vt_dst}) std::remove(p.c_str());
+
+        // vision_tower: v.patch_embd, v.blk.0.attn_q.weight,
+        // v.blk.0.ffn_gate.weight. All F16, 2D 256x4 (in_dim=256 so
+        // a future Q4_K override is block-aligned).
+        {
+            std::vector<synth_tensor> ts;
+            std::vector<int64_t> ne = {256, 4};
+            size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+            std::vector<uint8_t> data(n);
+            for (size_t i = 0; i < n; i++) data[i] = (uint8_t)((i * 31 + 7) & 0xFF);
+            ts.push_back({"v.patch_embd",          GGML_TYPE_F16, ne, data});
+            ts.push_back({"v.blk.0.attn_q.weight", GGML_TYPE_F16, ne, data});
+            ts.push_back({"v.blk.0.ffn_gate.weight", GGML_TYPE_F16, ne, data});
+            std::string err;
+            check(write_synth_gguf(vt_src, "clip", {}, ts, &err) == 0,
+                  ("9.1 write vt: " + err).c_str());
+        }
+        // mm_projector: mm.0.weight. F16, 2D 256x4.
+        {
+            std::vector<synth_tensor> ts;
+            std::vector<int64_t> ne = {256, 4};
+            size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+            std::vector<uint8_t> data(n);
+            for (size_t i = 0; i < n; i++) data[i] = (uint8_t)(0x5A + (i & 0x0F));
+            ts.push_back({"mm.0.weight", GGML_TYPE_F16, ne, data});
+            std::string err;
+            check(write_synth_gguf(mp_src, "clip", {}, ts, &err) == 0,
+                  ("9.2 write mp: " + err).c_str());
+        }
+
+        // The hparams / dflash / dspark / mmproj / meta for these
+        // tests: zero mmproj hparams (we test those in Test 10).
+        ts_unified_hparams vt_hp = hparams;
+        vt_hp.n_layer = 1;
+        ts_unified_dflash_hparams vt_dh{};
+        vt_dh.n_layer = 1; vt_dh.n_embd = 256; vt_dh.n_vocab = 4;
+        ts_unified_dspark_hparams vt_ds{};
+        vt_ds.markov_rank = 4;
+        ts_unified_mmproj_hparams vt_mp_hp{};   // zero defaults: no mmproj KV
+        ts_unified_meta vt_meta{"tessera-unified-writer mmproj test", "test_tip"};
+        ts_unified_policy vt_pol;   // empty policy: no overrides
+
+        std::vector<ts_unified_component> vt_comps = {
+            {vt_src, "vision_tower"},
+            {mp_src, "mm_projector"},
+        };
+        {
+            std::string err;
+            ts_unified_writer w(vt_dst, vt_comps, vt_pol,
+                                vt_hp, vt_dh, vt_ds, vt_mp_hp, vt_meta, &err);
+            int rc = w.write_all(&err);
+            check(rc == 0, ("9 write_all " + err).c_str());
+            if (rc != 0) std::printf("  writer err: %s\n", err.c_str());
+            const auto & s = w.get_stats();
+            check(s.n_tensors_vision_tower == 3, "9 stats n_tensors_vision_tower == 3");
+            check(s.n_tensors_mm_projector == 1, "9 stats n_tensors_mm_projector == 1");
+            check(s.n_tensors_trunk       == 0, "9 stats n_tensors_trunk == 0");
+            check(s.n_tensors_dflash      == 0, "9 stats n_tensors_dflash == 0");
+            check(s.n_tensors_dspark      == 0, "9 stats n_tensors_dspark == 0");
+            check(s.n_tensors_mtp_nextn   == 0, "9 stats n_tensors_mtp_nextn == 0");
+            check(s.n_tensors_shared_embd == 0, "9 stats n_tensors_shared_embd == 0");
+            check(s.n_tensors_audio_tower == 0, "9 stats n_tensors_audio_tower == 0");
+            // Reopen and verify tensor names landed unchanged.
+            ggml_context * rin_ctx = nullptr;
+            gguf_init_params ip = { /*no_alloc=*/ false, /*ctx=*/ &rin_ctx };
+            gguf_context * rin = gguf_init_from_file(vt_dst.c_str(), ip);
+            check(rin != nullptr, "9 reopen dst");
+            if (rin != nullptr) {
+                check(gguf_find_tensor(rin, "v.patch_embd") >= 0,
+                      "9 v.patch_embd present (no prefix added)");
+                check(gguf_find_tensor(rin, "v.blk.0.attn_q.weight") >= 0,
+                      "9 v.blk.0.attn_q.weight present (no prefix added)");
+                check(gguf_find_tensor(rin, "v.blk.0.ffn_gate.weight") >= 0,
+                      "9 v.blk.0.ffn_gate.weight present (no prefix added)");
+                check(gguf_find_tensor(rin, "mm.0.weight") >= 0,
+                      "9 mm.0.weight present (no prefix added)");
+                // No second prefix: the v.* names do NOT get a
+                // "vision_tower." or "v_" prefix, and the mm.* names
+                // do NOT get a "mm_projector." prefix.
+                check(gguf_find_tensor(rin, "vision_tower.v.patch_embd") < 0,
+                      "9 no second prefix on vision_tower tensor");
+                check(gguf_find_tensor(rin, "mm_projector.mm.0.weight") < 0,
+                      "9 no second prefix on mm_projector tensor");
+                // No mmproj KV metadata when hparams are zero
+                // (the pre-M0a contract).
+                check(gguf_find_key(rin, "gemma4-assistant.vision.embedding_length") < 0,
+                      "9 no mmproj KV (vision_n_embd == 0)");
+                check(gguf_find_key(rin, "gemma4-assistant.mm.projector_dim") < 0,
+                      "9 no mmproj KV (projector_dim == 0)");
+                // arch should still be gemma4-assistant.
+                int64_t ak = gguf_find_key(rin, "general.architecture");
+                if (ak >= 0) {
+                    check(gguf_get_val_str(rin, ak) == std::string("gemma4-assistant"),
+                          "9 arch is gemma4-assistant");
+                }
+                gguf_free(rin);
+            }
+        }
+
+        // 9.4: shared "mm.*" tensor between vision_tower and
+        // mm_projector -> name-based worst-of across the two
+        // components' calibration verdicts.
+        {
+            // Both sources carry the same "mm.shared.weight" name.
+            const std::string vt_shared_src = std::string(tmpdir) + "/test_unified_writer_vt_shared_src.gguf";
+            const std::string mp_shared_src = std::string(tmpdir) + "/test_unified_writer_mp_shared_src.gguf";
+            const std::string shared_dst    = std::string(tmpdir) + "/test_unified_writer_shared_dst.gguf";
+            for (const auto & p : {vt_shared_src, mp_shared_src, shared_dst}) std::remove(p.c_str());
+            {
+                std::vector<synth_tensor> ts;
+                std::vector<int64_t> ne = {256, 4};
+                size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+                std::vector<uint8_t> data(n, 0xA0);
+                ts.push_back({"mm.shared.weight", GGML_TYPE_F16, ne, data});
+                std::string err;
+                check(write_synth_gguf(vt_shared_src, "clip", {}, ts, &err) == 0,
+                      ("9.4 write vt shared: " + err).c_str());
+            }
+            {
+                std::vector<synth_tensor> ts;
+                std::vector<int64_t> ne = {256, 4};
+                size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+                std::vector<uint8_t> data(n, 0xB0);
+                ts.push_back({"mm.shared.weight", GGML_TYPE_F16, ne, data});
+                std::string err;
+                check(write_synth_gguf(mp_shared_src, "clip", {}, ts, &err) == 0,
+                      ("9.4 write mp shared: " + err).c_str());
+            }
+            // Policy: vision_tower wants Q4_K, mm_projector wants
+            // Q6_K. Worst-of (max bits) -> Q6_K is the resolved
+            // qtype. This mirrors the trunk=Q4_K + dflash=Q6_K
+            // test 7 case 1.
+            ts_unified_policy pol;
+            pol.entries.push_back({"vision_tower", "mm.shared.weight", "Q4_K"});
+            pol.entries.push_back({"mm_projector", "mm.shared.weight", "Q6_K"});
+            std::vector<ts_unified_component> comps = {
+                {vt_shared_src, "vision_tower"},
+                {mp_shared_src, "mm_projector"},
+            };
+            std::string err;
+            ts_unified_writer w(shared_dst, comps, pol,
+                                vt_hp, vt_dh, vt_ds, vt_mp_hp, vt_meta, &err);
+            int rc = w.write_all(&err);
+            check(rc == 0, ("9.4 write_all " + err).c_str());
+            if (rc == 0) {
+                const auto & s = w.get_stats();
+                check(s.n_tensors_vision_tower == 1, "9.4 stats vt == 1");
+                check(s.n_tensors_mm_projector == 0,
+                      "9.4 stats mp == 0 (second writer's data dropped: first-writer-wins)");
+                check(s.n_tensors_skipped == 1,
+                      "9.4 n_tensors_skipped == 1 (duplicate dst name)");
+                ggml_context * rin_ctx = nullptr;
+                gguf_init_params ip = { /*no_alloc=*/ false, /*ctx=*/ &rin_ctx };
+                gguf_context * rin = gguf_init_from_file(shared_dst.c_str(), ip);
+                if (rin != nullptr) {
+                    int64_t tid = gguf_find_tensor(rin, "mm.shared.weight");
+                    check(tid >= 0, "9.4 mm.shared.weight present");
+                    if (tid >= 0) {
+                        int qtype = (int)gguf_get_tensor_type(rin, tid);
+                        check(qtype == (int)GGML_TYPE_Q6_K,
+                              "9.4 mm.shared.weight qtype == Q6_K (worst-of vision_tower Q4_K + mm_projector Q6_K)");
+                    }
+                    gguf_free(rin);
+                }
+            }
+        }
+
+        // 9.5: a "mm.*" role_budget applies the budget-aware
+        // cross-role reconciliation rule. The mm_projector role
+        // is the "constrained" role with a tight budget; the
+        // vision_tower role is the "protector" with a heavier
+        // weight and demands Q6_K. The writer should RELAX
+        // mm_projector's constraint and keep Q6_K (the
+        // conservative verdict).
+        {
+            const std::string bud_src_v = std::string(tmpdir) + "/test_unified_writer_bud_vt.gguf";
+            const std::string bud_src_m = std::string(tmpdir) + "/test_unified_writer_bud_mp.gguf";
+            const std::string bud_dst_9 = std::string(tmpdir) + "/test_unified_writer_bud_dst_9.gguf";
+            for (const auto & p : {bud_src_v, bud_src_m, bud_dst_9}) std::remove(p.c_str());
+            {
+                std::vector<synth_tensor> ts;
+                std::vector<int64_t> ne = {256, 4};
+                size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+                std::vector<uint8_t> data(n, 0xC0);
+                ts.push_back({"mm.budgeted.weight", GGML_TYPE_F16, ne, data});
+                std::string err;
+                check(write_synth_gguf(bud_src_v, "clip", {}, ts, &err) == 0,
+                      ("9.5 write bud vt: " + err).c_str());
+            }
+            {
+                std::vector<synth_tensor> ts;
+                std::vector<int64_t> ne = {256, 4};
+                size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+                std::vector<uint8_t> data(n, 0xD0);
+                ts.push_back({"mm.budgeted.weight", GGML_TYPE_F16, ne, data});
+                std::string err;
+                check(write_synth_gguf(bud_src_m, "clip", {}, ts, &err) == 0,
+                      ("9.5 write bud mp: " + err).c_str());
+            }
+            // Policy: vision_tower = Q6_K (protector), mm_projector
+            // = Q4_K. mm_projector's role_budget is 4 bits/elem
+            // (it would be over budget if Q6_K is enforced), and
+            // vision_tower's weight (2.0) outweighs mm_projector's
+            // (1.0) -> relaxed, Q6_K kept.
+            ts_unified_policy pol;
+            pol.entries.push_back({"vision_tower", "mm.budgeted.weight", "Q6_K"});
+            pol.entries.push_back({"mm_projector", "mm.budgeted.weight", "Q4_K"});
+            pol.role_budgets.push_back({"mm_projector",  4, 1.0});
+            pol.role_budgets.push_back({"vision_tower", -1, 2.0});
+            std::vector<ts_unified_component> comps = {
+                {bud_src_v, "vision_tower"},
+                {bud_src_m, "mm_projector"},
+            };
+            std::string err;
+            ts_unified_writer w(bud_dst_9, comps, pol,
+                                vt_hp, vt_dh, vt_ds, vt_mp_hp, vt_meta, &err);
+            int rc = w.write_all(&err);
+            check(rc == 0, ("9.5 write_all " + err).c_str());
+            if (rc == 0) {
+                const auto & s = w.get_stats();
+                check(s.n_budget_relaxed  == 1, "9.5 n_budget_relaxed == 1");
+                check(s.n_budget_enforced == 0, "9.5 n_budget_enforced == 0");
+                const auto & events = w.get_budget_events();
+                check(events.size() == 1, "9.5 events.size() == 1");
+                if (events.size() == 1) {
+                    check(events[0].tensor == "mm.budgeted.weight",
+                          "9.5 event.tensor == mm.budgeted.weight");
+                    check(events[0].role == "mm_projector",
+                          "9.5 event.role == mm_projector (constrained)");
+                    check(events[0].other_role == "vision_tower",
+                          "9.5 event.other_role == vision_tower (protector)");
+                }
+                ggml_context * rin_ctx = nullptr;
+                gguf_init_params ip = { /*no_alloc=*/ false, /*ctx=*/ &rin_ctx };
+                gguf_context * rin = gguf_init_from_file(bud_dst_9.c_str(), ip);
+                if (rin != nullptr) {
+                    int64_t tid = gguf_find_tensor(rin, "mm.budgeted.weight");
+                    if (tid >= 0) {
+                        int qtype = (int)gguf_get_tensor_type(rin, tid);
+                        check(qtype == (int)GGML_TYPE_Q6_K,
+                              "9.5 mm.budgeted.weight qtype == Q6_K (relaxed)");
+                    }
+                    // budget_events metadata key present.
+                    check(gguf_find_key(rin, "tessera.unified.budget_events") >= 0,
+                          "9.5 budget_events metadata key present");
+                    gguf_free(rin);
+                }
+            }
+        }
+    }
+
+    // ---- Test 10: Phase M0a mmproj hparams land in destination KV ----
+    //
+    // When the writer is constructed with a non-zero
+    // ts_unified_mmproj_hparams, the destination gemma4-assistant
+    // GGUF must carry the 5 KV keys (gemma4-assistant.vision.*,
+    // gemma4-assistant.audio.*, gemma4-assistant.mm.*) at the
+    // expected values. Default-constructed (all zero) emits none
+    // of them, which the Test 9 9.1 sub-test already verified.
+    {
+        ts_unified_mmproj_hparams mp;
+        mp.vision_n_embd = 1152;
+        mp.audio_n_embd  = 768;
+        mp.projector_dim = 2048;
+        mp.vision_arch   = "siglip-so400m";
+        mp.audio_arch    = "gemma4-audio-conformer";
+
+        // Build a single vision_tower source so the writer has at
+        // least one component to open.
+        const std::string vt_only_src = std::string(tmpdir) + "/test_unified_writer_vt_only.gguf";
+        const std::string vt_only_dst = std::string(tmpdir) + "/test_unified_writer_vt_only_dst.gguf";
+        std::remove(vt_only_src.c_str());
+        std::remove(vt_only_dst.c_str());
+        {
+            std::vector<synth_tensor> ts;
+            std::vector<int64_t> ne = {256, 4};
+            size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+            std::vector<uint8_t> data(n, 0xE0);
+            ts.push_back({"v.patch_embd", GGML_TYPE_F16, ne, data});
+            std::string err;
+            check(write_synth_gguf(vt_only_src, "clip", {}, ts, &err) == 0,
+                  ("10 write vt: " + err).c_str());
+        }
+        ts_unified_hparams mp_hp = hparams;
+        mp_hp.n_layer = 1;
+        ts_unified_dflash_hparams mp_dh{};
+        mp_dh.n_layer = 1; mp_dh.n_embd = 256; mp_dh.n_vocab = 4;
+        ts_unified_dspark_hparams mp_ds{};
+        mp_ds.markov_rank = 4;
+        ts_unified_meta mp_meta{"tessera-unified-writer mmproj hparams test", "test_tip"};
+        std::vector<ts_unified_component> comps = {
+            {vt_only_src, "vision_tower"},
+        };
+        std::string err;
+        ts_unified_writer w(vt_only_dst, comps, /*pol=*/{},
+                            mp_hp, mp_dh, mp_ds, mp, mp_meta, &err);
+        int rc = w.write_all(&err);
+        check(rc == 0, ("10 write_all " + err).c_str());
+        if (rc == 0) {
+            ggml_context * rin_ctx = nullptr;
+            gguf_init_params ip = { /*no_alloc=*/ false, /*ctx=*/ &rin_ctx };
+            gguf_context * rin = gguf_init_from_file(vt_only_dst.c_str(), ip);
+            check(rin != nullptr, "10 reopen dst");
+            if (rin != nullptr) {
+                int64_t k_v_n = gguf_find_key(rin, "gemma4-assistant.vision.embedding_length");
+                check(k_v_n >= 0, "10 vision.embedding_length key present");
+                if (k_v_n >= 0) {
+                    check(gguf_get_val_u32(rin, k_v_n) == 1152u,
+                          "10 vision.embedding_length == 1152");
+                }
+                int64_t k_v_a = gguf_find_key(rin, "gemma4-assistant.vision.architecture");
+                check(k_v_a >= 0, "10 vision.architecture key present");
+                if (k_v_a >= 0) {
+                    std::string arch = gguf_get_val_str(rin, k_v_a);
+                    check(arch == "siglip-so400m",
+                          "10 vision.architecture == siglip-so400m");
+                }
+                int64_t k_a_n = gguf_find_key(rin, "gemma4-assistant.audio.embedding_length");
+                check(k_a_n >= 0, "10 audio.embedding_length key present");
+                if (k_a_n >= 0) {
+                    check(gguf_get_val_u32(rin, k_a_n) == 768u,
+                          "10 audio.embedding_length == 768");
+                }
+                int64_t k_a_a = gguf_find_key(rin, "gemma4-assistant.audio.architecture");
+                check(k_a_a >= 0, "10 audio.architecture key present");
+                if (k_a_a >= 0) {
+                    std::string arch = gguf_get_val_str(rin, k_a_a);
+                    check(arch == "gemma4-audio-conformer",
+                          "10 audio.architecture == gemma4-audio-conformer");
+                }
+                int64_t k_p_d = gguf_find_key(rin, "gemma4-assistant.mm.projector_dim");
+                check(k_p_d >= 0, "10 mm.projector_dim key present");
+                if (k_p_d >= 0) {
+                    check(gguf_get_val_u32(rin, k_p_d) == 2048u,
+                          "10 mm.projector_dim == 2048");
+                }
+                gguf_free(rin);
+            }
+        }
+
+        // 10 negative test: zero mmproj_hparams -> NO mmproj KV keys
+        // emitted (the pre-M0a contract). We use a separate dst
+        // path so the negative assertion is independent of the
+        // positive test above.
+        ts_unified_mmproj_hparams zero_mp{};
+        const std::string zero_dst = std::string(tmpdir) + "/test_unified_writer_zero_mp_dst.gguf";
+        std::remove(zero_dst.c_str());
+        std::string err2;
+        ts_unified_writer zw(zero_dst, comps, /*pol=*/{},
+                             mp_hp, mp_dh, mp_ds, zero_mp, mp_meta, &err2);
+        int zrc = zw.write_all(&err2);
+        check(zrc == 0, "10 zero write_all");
+        if (zrc == 0) {
+            ggml_context * zin_ctx = nullptr;
+            gguf_init_params zip = { /*no_alloc=*/ false, /*ctx=*/ &zin_ctx };
+            gguf_context * zin = gguf_init_from_file(zero_dst.c_str(), zip);
+            if (zin != nullptr) {
+                check(gguf_find_key(zin, "gemma4-assistant.vision.embedding_length") < 0,
+                      "10 zero: no vision.embedding_length");
+                check(gguf_find_key(zin, "gemma4-assistant.vision.architecture") < 0,
+                      "10 zero: no vision.architecture");
+                check(gguf_find_key(zin, "gemma4-assistant.audio.embedding_length") < 0,
+                      "10 zero: no audio.embedding_length");
+                check(gguf_find_key(zin, "gemma4-assistant.audio.architecture") < 0,
+                      "10 zero: no audio.architecture");
+                check(gguf_find_key(zin, "gemma4-assistant.mm.projector_dim") < 0,
+                      "10 zero: no mm.projector_dim");
+                gguf_free(zin);
             }
         }
     }

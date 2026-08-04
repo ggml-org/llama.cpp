@@ -4558,6 +4558,51 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             tessera_params.unified_shared_embd = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    // Phase M0a: multimodal-projector source GGUFs. The vision /
+    // audio / mm_projector source GGUFs are mtmd-style per-modality
+    // GGUFs whose tensors are already namespaced with "v.*" / "a.*"
+    // / "mm.*" prefixes (see tools/mtmd/clip.cpp:1831, 2594+). The
+    // unified writer copies them into the destination gemma4-assistant
+    // GGUF without adding a second prefix; the destination's mtmd
+    // loader (Phase M1's territory) reads them by their original
+    // names.
+    add_opt(common_arg(
+        {"--vision-tower"}, "PATH",
+        "Tessera (M0a): path to the vision tower's per-component GGUF.\n"
+        "Source tensors are already namespaced 'v.*' (clip.cpp:1831);\n"
+        "the writer copies them as-is.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_vision_tower = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--audio-tower"}, "PATH",
+        "Tessera (M0a): path to the audio tower's per-component GGUF.\n"
+        "Source tensors are already namespaced 'a.*'.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_audio_tower = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--mm-projector"}, "PATH",
+        "Tessera (M0a): path to the multimodal-projector's per-component\n"
+        "GGUF (multi_modal_projector / mm.* weights). Source tensors are\n"
+        "already namespaced 'mm.*'.",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_mm_projector = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
+    add_opt(common_arg(
+        {"--mmproj-hparams"}, "PATH",
+        "Tessera (M0a): JSON file with the multimodal-projector hparams\n"
+        "(vision_n_embd, audio_n_embd, projector_dim, vision_arch,\n"
+        "audio_arch). When omitted, the writer emits no mmproj KV\n"
+        "metadata and the destination's loader treats this GGUF as\n"
+        "non-multimodal (the pre-M0a contract).",
+        [](common_params &, const std::string & value) {
+            tessera_params.unified_mmproj_hparams = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}).set_tessera_sc({TESSERA_SC_UNIFIED_WRITER}));
 
     // ----- `evolve` subcommand -----
     add_opt(common_arg(

@@ -54,11 +54,38 @@ struct ggml_tensor;
 // matches the model_role column in tensor_stats; see
 // ts_tessera_db_unified_policy_entry.model_role.
 //
+// The 8 recognized values are:
+//   * "trunk"        - the gemma4-12B trunk (the dominant compute).
+//   * "dflash"       - the dflash drafter (EAGLE-style feature-conditioned
+//                      block drafter). The writer prefixes tensors with
+//                      "dflash." to disambiguate from identically-named
+//                      trunk tensors (the drafter is loaded as ctx_other
+//                      at runtime; the prefix is forward-looking for the
+//                      case where the drafter reads from the same
+//                      unified GGUF).
+//   * "dspark"       - the DSPark heads (markov_w1 / markov_w2 /
+//                      conf_proj.*) read off the dflash drafter.
+//   * "mtp_nextn"    - the MTP nextn_predict_layers' blk.{i}.nextn.*.
+//   * "shared_embd"  - shared token_embd / output across trunk + dflash.
+//   * "vision_tower" - the multimodal vision encoder (gemma4-assistant
+//                      mtmd companion). Source tensors already carry
+//                      the "v." prefix per tools/mtmd/clip.cpp:1831;
+//                      the writer does not add a second prefix.
+//   * "audio_tower"  - the multimodal audio encoder. Source tensors
+//                      already carry the "a." prefix.
+//   * "mm_projector" - the multimodal projector (multi_modal_projector /
+//                      mm.* weights). Source tensors already carry
+//                      the "mm." prefix. A "mm.*" tensor appearing in
+//                      BOTH vision_tower and mm_projector components
+//                      uses the same name-based worst-of lookup that
+//                      token_embd.weight uses across trunk / dflash /
+//                      shared_embd.
+//
 // The path is the path to a GGUF on disk. The writer opens it via
 // gguf_init_from_file and reads its tensors by data pointer.
 struct ts_unified_component {
     std::string path;
-    std::string model_role;   // "trunk" / "dflash" / "dspark" / "mtp_nextn" / "shared_embd"
+    std::string model_role;
 };
 
 // Per-tensor qtype override from the calibration policy. The map is
@@ -174,6 +201,21 @@ struct ts_unified_dspark_hparams {
     int32_t     markov_rank = 0;   // -1 when not present
 };
 
+// Optional multimodal-projector hparams. When non-zero, the writer
+// emits the corresponding gemma4-assistant.vision.* /
+// gemma4-assistant.audio.* / gemma4-assistant.mm.* KV pairs into the
+// destination GGUF. Default-constructed (all zero / empty) = no
+// mmproj metadata, which is the pre-M0a contract. The vision / audio
+// hparams are independent so a vision-only or audio-only
+// configuration is supported (the absent side stays at the default).
+struct ts_unified_mmproj_hparams {
+    int32_t     vision_n_embd    = 0;   // vision tower embedding dim
+    int32_t     audio_n_embd     = 0;   // audio tower embedding dim
+    int32_t     projector_dim    = 0;   // mm_projector output dim (== n_embd)
+    std::string vision_arch;            // e.g. "clip" / "siglip" / "gemma4-vision"
+    std::string audio_arch;             // e.g. "whisper" / "gemma4-audio-conformer"
+};
+
 // The destination metadata written by the writer (beyond the
 // per-tensor qtype). The keys match the loader's get_key calls in
 // gemma4-assistant.cpp:41-60.
@@ -211,6 +253,7 @@ public:
                       const ts_unified_hparams & hparams,
                       const ts_unified_dflash_hparams & dflash_hparams,
                       const ts_unified_dspark_hparams & dspark_hparams,
+                      const ts_unified_mmproj_hparams & mmproj_hparams,
                       const ts_unified_meta & meta,
                       std::string * err);
     ~ts_unified_writer();
@@ -241,16 +284,19 @@ public:
     // Stats on what was written. Populated by write_all; useful
     // for the CLI's stderr summary.
     struct stats {
-        int32_t  n_tensors_trunk       = 0;
-        int32_t  n_tensors_dflash      = 0;
-        int32_t  n_tensors_dspark      = 0;
-        int32_t  n_tensors_mtp_nextn   = 0;
-        int32_t  n_tensors_shared_embd = 0;
-        int32_t  n_tensors_skipped     = 0;   // unknown / unsupported names
-        int32_t  n_qtype_overrides     = 0;   // policy changed source qtype
-        int32_t  n_budget_relaxed      = 0;   // Phase 16.8: constraints relaxed
-        int32_t  n_budget_enforced     = 0;   // Phase 16.8: budgets capped qtype
-        int64_t  total_bytes           = 0;
+        int32_t  n_tensors_trunk        = 0;
+        int32_t  n_tensors_dflash       = 0;
+        int32_t  n_tensors_dspark       = 0;
+        int32_t  n_tensors_mtp_nextn    = 0;
+        int32_t  n_tensors_shared_embd  = 0;
+        int32_t  n_tensors_vision_tower = 0;   // Phase M0a: multimodal
+        int32_t  n_tensors_audio_tower  = 0;   // Phase M0a: multimodal
+        int32_t  n_tensors_mm_projector = 0;   // Phase M0a: multimodal
+        int32_t  n_tensors_skipped      = 0;   // unknown / unsupported names
+        int32_t  n_qtype_overrides      = 0;   // policy changed source qtype
+        int32_t  n_budget_relaxed       = 0;   // Phase 16.8: constraints relaxed
+        int32_t  n_budget_enforced      = 0;   // Phase 16.8: budgets capped qtype
+        int64_t  total_bytes            = 0;
     };
     const stats & get_stats() const { return stats_; }
 

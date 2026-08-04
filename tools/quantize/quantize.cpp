@@ -799,13 +799,20 @@ static int ts_cli_unified_writer(const common_tessera_params & tp) {
         c.model_role = role;
         components.push_back(std::move(c));
     };
-    add_component(tp.unified_trunk,      "trunk");
-    add_component(tp.unified_dflash,     "dflash");
-    add_component(tp.unified_dspark,     "dspark");
-    add_component(tp.unified_mtp,        "mtp_nextn");
-    add_component(tp.unified_shared_embd, "shared_embd");
+    add_component(tp.unified_trunk,        "trunk");
+    add_component(tp.unified_dflash,       "dflash");
+    add_component(tp.unified_dspark,       "dspark");
+    add_component(tp.unified_mtp,          "mtp_nextn");
+    add_component(tp.unified_shared_embd,  "shared_embd");
+    // Phase M0a: multimodal-projector components. The order is
+    // significant for shared mm.* names (first writer wins; the
+    // convention is vision_tower before mm_projector so the
+    // mm_projector's authored data is the canonical one).
+    add_component(tp.unified_vision_tower, "vision_tower");
+    add_component(tp.unified_audio_tower,  "audio_tower");
+    add_component(tp.unified_mm_projector, "mm_projector");
     if (components.empty()) {
-        fprintf(stderr, "error: `unified-writer` requires at least one --{trunk,dflash,dspark,mtp,shared-embd} flag\n");
+        fprintf(stderr, "error: `unified-writer` requires at least one --{trunk,dflash,dspark,mtp,shared-embd,vision-tower,audio-tower,mm-projector} flag\n");
         return 1;
     }
 
@@ -932,6 +939,36 @@ static int ts_cli_unified_writer(const common_tessera_params & tp) {
     ts_unified_dflash_hparams dflash_hp{};
     ts_unified_dspark_hparams dspark_hp{};
 
+    // Phase M0a: mmproj hparams (optional). When --mmproj-hparams is
+    // empty, the writer uses zero defaults and the destination's
+    // loader treats the absence of gemma4-assistant.vision.* /
+    // .audio.* / .mm.* KV keys as "no mmproj in this GGUF" (the
+    // pre-M0a contract). The JSON shape mirrors the C++ struct
+    // field names; vision_arch / audio_arch are plain strings.
+    ts_unified_mmproj_hparams mmproj_hp{};
+    if (!tp.unified_mmproj_hparams.empty()) {
+        std::ifstream f(tp.unified_mmproj_hparams);
+        if (!f) {
+            fprintf(stderr, "error: --mmproj-hparams: cannot read: %s\n", tp.unified_mmproj_hparams.c_str());
+            return 1;
+        }
+        nlohmann::json j;
+        try {
+            f >> j;
+        } catch (const std::exception & e) {
+            fprintf(stderr, "error: --mmproj-hparams: parse error: %s\n", e.what());
+            return 1;
+        }
+        auto get_i = [&](const char * k) -> int32_t {
+            return j.contains(k) ? j[k].get<int32_t>() : 0;
+        };
+        mmproj_hp.vision_n_embd = get_i("vision_n_embd");
+        mmproj_hp.audio_n_embd  = get_i("audio_n_embd");
+        mmproj_hp.projector_dim = get_i("projector_dim");
+        if (j.contains("vision_arch")) mmproj_hp.vision_arch = j["vision_arch"].get<std::string>();
+        if (j.contains("audio_arch"))  mmproj_hp.audio_arch  = j["audio_arch"].get<std::string>();
+    }
+
     // Tessera provenance: best-effort. The build info is the
     // llama-tessera commit + build-info; the main_tip is a TODO
     // (we'd need to read the .git/HEAD on the user's filesystem).
@@ -943,7 +980,7 @@ static int ts_cli_unified_writer(const common_tessera_params & tp) {
     // Construct the writer and emit the unified GGUF.
     std::string err;
     ts_unified_writer w(tp.unified_out, components, policy,
-                         hparams, dflash_hp, dspark_hp, meta, &err);
+                         hparams, dflash_hp, dspark_hp, mmproj_hp, meta, &err);
     if (!err.empty()) {
         fprintf(stderr, "error: unified-writer: %s\n", err.c_str());
         return 1;
@@ -959,6 +996,14 @@ static int ts_cli_unified_writer(const common_tessera_params & tp) {
     printf("  tensors: trunk=%d dflash=%d dspark=%d mtp_nextn=%d shared_embd=%d\n",
            s.n_tensors_trunk, s.n_tensors_dflash, s.n_tensors_dspark,
            s.n_tensors_mtp_nextn, s.n_tensors_shared_embd);
+    // Phase M0a: include the three new mmproj counters in the
+    // summary so the CLI consumer (operator or a downstream log
+    // scraper) can confirm the multimodal component was actually
+    // absorbed. Zero values are still printed (the operator is
+    // expected to know whether they passed --vision-tower / etc.).
+    printf("  tensors (M0a mmproj): vision_tower=%d audio_tower=%d mm_projector=%d\n",
+           s.n_tensors_vision_tower, s.n_tensors_audio_tower,
+           s.n_tensors_mm_projector);
     printf("  qtype overrides: %d (per-tensor calibration policy)\n",
            s.n_qtype_overrides);
     if (s.n_budget_relaxed > 0 || s.n_budget_enforced > 0) {
