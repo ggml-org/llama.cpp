@@ -3,7 +3,7 @@
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
 #ifdef USE_CUB
-#include <cub/cub.cuh>
+#include "cub-compat.cuh"
 using namespace cub;
 #endif // USE_CUB
 

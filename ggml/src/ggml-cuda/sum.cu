@@ -2,7 +2,7 @@
 #include "sumrows.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#include <cub/cub.cuh>
+#include "cub-compat.cuh"
 using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
 

@@ -2,7 +2,8 @@
 #include "top-k.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#    include <cub/cub.cuh>
+#    include "cub-compat.cuh"
+// hipCUB has no DeviceTopK and does not define CCCL_*, so this stays disabled on HIP
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
 #        define CUB_TOP_K_AVAILABLE
 #        include <cuda/iterator>

@@ -1,11 +1,12 @@
 #include "argsort.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#    include <cub/cub.cuh>
+#    include "cub-compat.cuh"
+// CCCL_* are not defined for hipCUB, so these stay disabled on HIP
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 1)
 #        define STRIDED_ITERATOR_AVAILABLE
 #        include <cuda/iterator>
-#    endif
+#    endif  // CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 1
 using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
 
