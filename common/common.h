@@ -387,8 +387,15 @@ struct common_params_speculative {
 
     common_params_speculative_ngram_cache ngram_cache;
 
+    // True when a drafter model needs to be loaded.  Two sources:
+    //   1. draft.mparams non-empty -> a separate drafter GGUF on disk.
+    //   2. draft.target_model_path non-empty -> the drafter is embedded
+    //      in the target GGUF; common_speculative_init_from_params will
+    //      open the target GGUF and pull the drafter tensors out of
+    //      it (see common/speculative.cpp ctor for the embedded branch
+    //      and the convention used to group the per-drafter tensors).
     bool has_dft() const {
-        return !draft.mparams.empty();
+        return !draft.mparams.empty() || !draft.target_model_path.empty();
     }
 
     uint32_t need_n_rs_seq() const {
