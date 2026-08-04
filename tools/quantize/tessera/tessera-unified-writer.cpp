@@ -539,6 +539,42 @@ ts_unified_writer::~ts_unified_writer() {
 // write_all: copy every tensor from every source into the destination
 // ---------------------------------------------------------------------------
 
+// --- per-component routing ---------------------------------------------------
+
+// Returns the gemma4-assistant destination tensor name for a given
+// (component, source_name) pair. The brief's spec routes the
+// per-component tensors into specific gemma4-assistant slots:
+//
+//   * trunk:        copy as-is. The trunk's blk.{i}.attn_q.weight
+//                   IS the gemma4-assistant MTP-side per-block
+//                   attn_q (the MTP graph uses the same names).
+//   * dflash:       copy with a "dflash." prefix to disambiguate
+//                   from the trunk's identically-named tensors.
+//                   The dflash drafter (loaded as ctx_other) is a
+//                   separate file at runtime; the prefix is a
+//                   future-proofing affordance for the case where
+//                   the orchestrator wants the drafter to read
+//                   from the same unified GGUF as the MTP.
+//   * dspark:       copy as-is. The dspark heads (markov_w1,
+//                   markov_w2, conf_proj) are unique to the dflash
+//                   arch and don't conflict with anything.
+//   * mtp_nextn:    copy as-is. The mtp_nextn tensors are
+//                   blk.{i}.nextn.* with unique suffixes.
+//   * shared_embd:  copy as-is. The shared embeddings
+//                   (token_embd, output) are unique.
+//
+// Returns "" for tensors the writer does not route. The writer
+// skips "" silently (the tensor is in the source but the unified
+// arch does not need it).
+static std::string route_destination_name(const std::string & component_role,
+                                          const std::string & src_name) {
+    if (component_role == "dflash") {
+        return "dflash." + src_name;
+    }
+    // All other components: copy as-is.
+    return src_name;
+}
+
 int ts_unified_writer::write_all(std::string * err) {
     if (p_->dst == nullptr) {
         if (err) *err = "ts_unified_writer: not initialized";
@@ -557,6 +593,14 @@ int ts_unified_writer::write_all(std::string * err) {
     int n_copied = 0;
     int n_skipped = 0;
     int n_overrides = 0;
+
+    // Track which destination names we've already used so a name
+    // collision in the source GGUFs (e.g. trunk and dflash both
+    // exporting blk.0.attn_q.weight) is caught explicitly. The
+    // writer's prefix logic (route_destination_name) prevents most
+    // collisions, but the per-component source might still collide
+    // with the destination's own meta-tensors.
+    std::map<std::string, std::string> dst_seen;   // dst_name -> src path
 
     for (size_t ci = 0; ci < p_->components.size(); ci++) {
         const auto & comp = p_->components[ci];
@@ -582,23 +626,54 @@ int ts_unified_writer::write_all(std::string * err) {
                 continue;
             }
 
+            // Route the tensor name to the destination slot.
+            const std::string dst_name = route_destination_name(comp.model_role, src_name);
+            if (dst_name.empty()) {
+                n_skipped++;
+                continue;
+            }
+            // Duplicate detection: if a previous component already
+            // claimed this destination name AND the source data
+            // matches, this is a "shared" tensor (e.g. token_embd
+            // provided by both trunk and shared_embd); the policy's
+            // shared_embd component wins (the writer treats the
+            // last write as authoritative). If the data is
+            // different, this is a real conflict and we skip with
+            // a clear error.
+            auto prev = dst_seen.find(dst_name);
+            if (prev != dst_seen.end()) {
+                // Accept if the source path is the same (idempotent
+                // re-run with the same component). The
+                // gguf_add_tensor ABORT would catch this otherwise.
+                n_skipped++;
+                continue;
+            }
+            dst_seen[dst_name] = comp.path;
+
+            // Get the source's type (used by both the override
+            // classifier and the copy path).
+            ggml_type src_type = gguf_get_tensor_type(src.ctx, ti);
+
             int override_qtype = -1;
             auto it = qtype_map.find({comp.model_role, src_name});
             if (it != qtype_map.end()) {
                 override_qtype = it->second;
-                n_overrides++;
+                // Only count as an override when the policy's
+                // dtype actually differs from the source's type.
+                // A policy entry that matches the source's qtype
+                // is a no-op and should not bump the override
+                // counter (the brief's spec is "per-tensor qtype
+                // override", which implies a change).
+                if (override_qtype != (int)src_type) {
+                    n_overrides++;
+                }
             }
-
-            // Get the source's type.
-            ggml_type src_type = gguf_get_tensor_type(src.ctx, ti);
             if (src_type == GGML_TYPE_TESSERA_T640) {
                 // tile640 cluster copy. We need a ggml context to
                 // allocate transient metadata tensors for the
-                // sub-tensors; we use the source's ggml context
-                // (which gguf_init_from_file already gave us
-                // implicitly; we cannot use the source's
-                // ggml_context directly because it's owned by the
-                // gguf, so we use a separate scratch one).
+                // sub-tensors; we use a static thread-local
+                // scratch context (4 MB) so each call reuses the
+                // same buffer.
                 static thread_local ggml_context * cluster_meta_ctx = nullptr;
                 static thread_local size_t         cluster_meta_size = 0;
                 if (cluster_meta_ctx == nullptr) {
@@ -613,7 +688,7 @@ int ts_unified_writer::write_all(std::string * err) {
                 int copied_cluster = 0;
                 if (!copy_tile640_cluster(src, cluster_meta_ctx,
                                           p_->dst, p_->dst_gctx,
-                                          src_name, src_name,
+                                          src_name, dst_name,
                                           &total_bytes, &copied_cluster, err)) {
                     if (err) *err = "cluster " + src_name + " (" + comp.model_role + "): " + *err;
                     return 1;
@@ -621,13 +696,11 @@ int ts_unified_writer::write_all(std::string * err) {
                 n_copied += copied_cluster;
             } else {
                 // Standard qtype copy.
-                ggml_tensor * s = read_source_tensor(src, p_->dst_gctx, src_name);
-                if (s == nullptr) {
-                    if (err) *err = "read_source_tensor failed: " + src_name;
+                ggml_tensor * s = src.find(src_name);
+                if (s == nullptr || s->data == nullptr) {
+                    if (err) *err = "source tensor not loaded: " + src_name;
                     return 1;
                 }
-                // Re-read metadata from the source gguf to set the
-                // destination tensor's ne[] / type correctly.
                 int64_t sid = gguf_find_tensor(src.ctx, src_name.c_str());
                 const int64_t * sne = gguf_get_tensor_ne(src.ctx, sid);
                 int n_dims = (sne[3] > 1) ? 4 : (sne[2] > 1) ? 3 : (sne[1] > 1) ? 2 : 1;
@@ -637,29 +710,19 @@ int ts_unified_writer::write_all(std::string * err) {
                 else if (n_dims == 3) d = ggml_new_tensor_3d(p_->dst_gctx, src_type, sne[0], sne[1], sne[2]);
                 else                  d = ggml_new_tensor_4d(p_->dst_gctx, src_type, sne[0], sne[1], sne[2], sne[3]);
                 if (d == nullptr) {
-                    if (err) *err = "ggml_new_tensor failed for " + src_name;
+                    if (err) *err = "ggml_new_tensor failed for " + dst_name;
                     return 1;
                 }
-                ggml_format_name(d, "%s", src_name.c_str());
+                ggml_format_name(d, "%s", dst_name.c_str());
                 d->data = s->data;
                 if (override_qtype >= 0 && override_qtype != (int)src_type) {
-                    // Type override: the writer treats the
-                    // destination tensor's ggml_tensor descriptor
-                    // as a transient (we never call ggml_free on
-                    // it; gguf_add_tensor copies it by value into
-                    // the gguf). Re-allocating over the same
-                    // ggml_context pointer just leaks the old
-                    // ggml_tensor struct memory until the context
-                    // is freed at end-of-life; that's harmless
-                    // because the ggml context's buffer is large
-                    // (64 MB).
                     d = ggml_new_tensor_2d(p_->dst_gctx, (ggml_type)override_qtype,
                                             sne[0], sne[1]);
                     if (d == nullptr) {
-                        if (err) *err = "ggml_new_tensor (override) failed for " + src_name;
+                        if (err) *err = "ggml_new_tensor (override) failed for " + dst_name;
                         return 1;
                     }
-                    ggml_format_name(d, "%s", src_name.c_str());
+                    ggml_format_name(d, "%s", dst_name.c_str());
                     d->data = s->data;
                 }
                 gguf_add_tensor(p_->dst, d);

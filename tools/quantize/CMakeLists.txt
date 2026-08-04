@@ -368,4 +368,14 @@ if(LLAMA_BUILD_TESTS)
     target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
     add_test(NAME ${TARGET} COMMAND ${TARGET})
+
+    # Unified GGUF writer (Phase 16): round-trip + CLI flow for the
+    # gemma4-assistant arch. Builds against llama-quantize-impl
+    # (which transitively brings in the writer + the DuckDB-backed
+    # per-component qtype reader).
+    set(TARGET test-unified-writer)
+    add_executable(${TARGET} tessera/test_unified_writer.cpp)
+    target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
 endif()
