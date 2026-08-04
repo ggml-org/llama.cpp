@@ -95,22 +95,8 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         return true;
     };
 
-    // --tessera-l5-* numeric knobs for the L5 adaptive requantize loop
-    if (arg == "--tessera-adapt-epsilon") {
-        if (!require_val("--tessera-adapt-epsilon")) return -1;
-        double d;
-        try { d = std::stod(val); }
-        catch (...) { err = string_format("error: invalid value for --tessera-adapt-epsilon: '%s'\n", val.c_str()); return -1; }
-        if (d < 0.0) { err = string_format("error: --tessera-adapt-epsilon must be >= 0, got %f\n", d); return -1; }
-        tessera_params.adapt_epsilon = d;
-        return 2;
-    }
-
-    // Anything below here is reserved for flags that have already been
-    // migrated to the add_opt path in common_params_parse_ex. The if/else
-    // chain above still owns unmigrated flags; once their line is removed
-    // from this function, the dispatch loop below picks them up via the
-    // same registered common_arg that llama-cli / llama-imatrix see.
+    // Everything above is legacy hand-rolled if/else that has now been
+    // migrated. The function body is intentionally just the dispatcher.
     return common_arg_dispatch_one(argc, argv, i, err);
 }
 
