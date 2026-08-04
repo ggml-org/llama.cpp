@@ -119,11 +119,20 @@ class OutcomeSummary:
 
 # Pre-Phase-15 l5_plan_summary schema (no per-tensor component
 # columns). Used by the read fallback when the column projection
-# fails against a DB that was created before this commit.
+# fails against a DB that was created before this commit. ``updated_at``
+# is preserved here even though it is not strictly required for
+# the verdict: the join's drop/rename logic in
+# :py:func:`compute_l5_outcome` assumes both sides carry
+# ``updated_at`` (so the join's ``_outcome`` suffix is in effect
+# and the post-drop rename actually finds a ``updated_at_outcome``
+# to promote). Without ``updated_at`` on the plan side the
+# outcome's ``updated_at`` is left as ``updated_at`` (no conflict
+# to suffix) and the post-drop step removes it instead of the
+# plan's, breaking the final select.
 L5_PLAN_PRE_PHASE15_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer", "iteration", "plan_id",
     "sensitivity_score", "recommended_qtype", "recommended_alpha",
-    "recommended_clip",
+    "recommended_clip", "updated_at",
 )
 
 
