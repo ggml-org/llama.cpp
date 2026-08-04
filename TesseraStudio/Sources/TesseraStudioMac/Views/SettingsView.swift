@@ -44,6 +44,8 @@ struct SettingsView: View {
     @State private var yoloNote: String?
     @State private var netWarm = false
     @State private var netNote: String?
+    @State private var confirmResetGrants = false
+    @State private var confirmPurge = false
 
     var body: some View {
         TabView {
@@ -332,13 +334,31 @@ struct SettingsView: View {
     private var autonomyGlobalSection: some View {
         Section {
             Button("Reset all grants") {
+                confirmResetGrants = true
+            }
+            Button("Purge all learning data", role: .destructive) {
+                confirmPurge = true
+            }
+        }
+        // HIG 14.1 / 13.5: both actions fire only after an explicit
+        // confirmation; the destructive button is never the default.
+        .confirmationDialog("Reset all grants?", isPresented: $confirmResetGrants,
+                            titleVisibility: .visible) {
+            Button("Reset all grants", role: .destructive) {
                 TesseraLearningCenter.shared.autonomy.resetAll()
                 loadAutonomy()
             }
+        } message: {
+            Text("All learned permission grants will be removed; Tessera will ask again before running those actions.")
+        }
+        .confirmationDialog("Purge all learning data?", isPresented: $confirmPurge,
+                            titleVisibility: .visible) {
             Button("Purge all learning data", role: .destructive) {
                 _ = try? TesseraLearningCenter.shared.purgeAll()
                 loadAutonomy()
             }
+        } message: {
+            Text("All stored learning records will be permanently deleted. This cannot be undone.")
         }
     }
 
