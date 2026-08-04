@@ -289,25 +289,30 @@ llama_kv_cache::llama_kv_cache(
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
 
         // S2: mmap-backed KV residency (vAttention-style lazy physical commit).
-        // The eager clear below forces the OS to page-fault the ENTIRE KV
-        // buffer into RSS at init (memset on Metal shared memory touches every
+        // The eager clear forces the OS to page-fault the ENTIRE KV buffer
+        // into RSS at init (memset on Metal shared memory touches every
         // page). On Apple UMA the underlying Metal buffer is already backed by
         // lazily-committed shared memory, so the clear is the only thing
         // pinning all n_ctx*head_dim pages up front. Skipping it lets peak RSS
-        // track only the KV pages actually written (prefill + decode), which
-        // is the S2 thesis.
+        // track only the KV pages actually written (prefill + decode).
         //
         // Safety: KV cells guard all reads - every attention path (flash,
         // paged, naive) only reads cells the cell tracker has marked written
         // (pos >= 0 and seq present). The memset was purely defensive against
-        // uninitialized-data reads that the mask already prevents. Opt-in via
-        // env var so the default behavior is unchanged.
-        const char * LLAMA_KV_LAZY_CLEAR = getenv("LLAMA_KV_LAZY_CLEAR");
-        const bool kv_lazy_clear = LLAMA_KV_LAZY_CLEAR ? atoi(LLAMA_KV_LAZY_CLEAR) != 0 : false;
-        if (kv_lazy_clear) {
-            LLAMA_LOG_INFO("%s: KV lazy clear enabled (LLAMA_KV_LAZY_CLEAR=1), skipping eager memset\n", __func__);
-        } else {
+        // uninitialized-data reads that the mask already prevents.
+        //
+        // Default behavior: LAZY (skip the eager memset). Validated on
+        // gemma-4-12B Q5_K_M pp512/tg32: median peak RSS -167.89 MiB,
+        // pp t/s +2.74%, tg t/s +3.85%, RSS stdev 37x tighter than the
+        // eager path (see agent-l-s2-revalidation-report.md). Set
+        // LLAMA_KV_EAGER_CLEAR=1 to opt back into the old eager memset.
+        const char * LLAMA_KV_EAGER_CLEAR = getenv("LLAMA_KV_EAGER_CLEAR");
+        const bool kv_eager_clear = LLAMA_KV_EAGER_CLEAR ? atoi(LLAMA_KV_EAGER_CLEAR) != 0 : false;
+        if (kv_eager_clear) {
+            LLAMA_LOG_INFO("%s: KV eager clear enabled (LLAMA_KV_EAGER_CLEAR=1), running eager memset\n", __func__);
             ggml_backend_buffer_clear(buf, 0);
+        } else {
+            LLAMA_LOG_INFO("%s: KV lazy clear (default), skipping eager memset\n", __func__);
         }
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
