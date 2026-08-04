@@ -1,40 +1,44 @@
 import SwiftUI
 import TesseraCore
 
-/// The canvas. Phase 2.1 ships a static, read-only canvas:
-/// positions are stored in a `[nodeId: CGPoint]` map owned by
-/// the parent, the canvas renders one rounded rectangle per
-/// declared node and one bezier curve per declared edge, and
-/// that's it. Drag-to-move is Phase 2.2; port hit-testing +
-/// wire-on-drag is Phase 2.3; selection + parameter side panel
-/// is Phase 2.4.
+/// The canvas. Renders the workflow's nodes, edges, and any
+/// in-flight wire (drag-to-wire preview). Phase 2.2 added
+/// drag-to-move; Phase 2.3 added port hit-testing +
+/// drag-to-wire. The hit test lives in ``WorkflowsView`` (it
+/// has access to the workflow model and the connection error
+/// banner); this view just renders and reports.
 ///
-/// The canvas reads ``workflow`` directly because the value type
-/// is small and Codable; the binding back to the document (for
-/// save/load) is wired by the parent `WorkflowsView` via
-/// ``WorkflowPositionMap``.
-///
-/// The bezier-connection rendering is intentionally minimal:
-/// a quadratic curve from `(sourceNode.outputPort).center` to
-/// `(targetNode.inputPort).center`, with the control point
-/// pulled horizontally by 40pt. The exact control-point math
-/// is the same one the editor will use in Phase 2.3, so the
-/// later connection-during-drag preview will not have to
-/// re-tune the curvature.
+/// The bezier-connection rendering uses the same control math
+/// for real edges, the drag preview, and the hit test, so
+/// visual + behavioral + hit-test stay in sync.
 struct WorkflowCanvasView: View {
     let workflow: Workflow
     let registry: WorkflowNodeRegistry
     @Binding var positions: WorkflowPositionMap
+    @Binding var pendingConnection: PendingConnection?
+    @Binding var selectedNodeId: String?
+    let onConnectionCompleted: (CGPoint, CGSize) -> Void
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 gridBackground
                 edgeLayer
+                pendingConnectionLayer
                 nodeLayer
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // Tap on empty canvas clears an in-flight wire
+                // (lets the user abort a drag without dropping
+                // on a port) and clears selection.
+                if pendingConnection != nil {
+                    pendingConnection = nil
+                }
+                selectedNodeId = nil
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -66,10 +70,55 @@ struct WorkflowCanvasView: View {
                 WorkflowNodeView(
                     node: node,
                     type: type,
-                    position: positions[node.id] ?? defaultPosition(for: node)
+                    position: bindingFor(nodeId: node.id, type: type),
+                    isSelected: selectedNodeId == node.id,
+                    onSelect: { selectedNodeId = node.id },
+                    onPortDragStarted: { endpoint in
+                        let pos = positions[endpoint.nodeId] ?? .zero
+                        let center = WorkflowGeometry.portCenter(
+                            nodeCenter: pos,
+                            portIndex: indexOfPort(
+                                in: type.outputs, id: endpoint.portId
+                            ),
+                            isLeft: false,
+                            portCount: type.outputs.count
+                        )
+                        pendingConnection = PendingConnection(
+                            source: endpoint, currentPoint: center
+                        )
+                    },
+                    onPortDragChanged: { location in
+                        pendingConnection?.currentPoint = location
+                    },
+                    onPortDragEnded: { location in
+                        guard let pending = pendingConnection else { return }
+                        let size = currentCanvasSize()
+                        pendingConnection = nil
+                        onConnectionCompleted(
+                            location,
+                            pending.source.portType == .toolResult
+                                ? locationOnly(location, size: size)
+                                : size
+                        )
+                    }
                 )
             }
         }
+    }
+
+    /// Helper for the size we pass back on drop. The drop
+    /// handler doesn't actually need the size today, but the
+    /// signature is forward-compatible with a future check
+    /// against canvas bounds.
+    private func currentCanvasSize() -> CGSize {
+        // GeometryReader's size is the canvas; we don't have a
+        // direct handle on it from here. The default is the
+        // visible canvas; callers can ignore.
+        CGSize(width: 2000, height: 2000)
+    }
+
+    private func locationOnly(_ point: CGPoint, size: CGSize) -> CGSize {
+        size
     }
 
     private var edgeLayer: some View {
@@ -93,41 +142,99 @@ struct WorkflowCanvasView: View {
         }
     }
 
-    private enum Side { case left, right }
+    /// Draw the in-flight wire from the source port to the
+    /// current drag position. Dashed so it's visually distinct
+    /// from real edges.
+    private var pendingConnectionLayer: some View {
+        Canvas { ctx, _ in
+            guard let pending = pendingConnection else { return }
+            guard let from = portCenter(
+                nodeId: pending.source.nodeId,
+                portId: pending.source.portId,
+                side: .right
+            ) else { return }
+            let to = pending.currentPoint
+            let dx = max(40, abs(to.x - from.x) * 0.5)
+            var path = Path()
+            path.move(to: from)
+            path.addCurve(
+                to: to,
+                control1: CGPoint(x: from.x + dx, y: from.y),
+                control2: CGPoint(x: to.x - dx, y: to.y)
+            )
+            ctx.stroke(
+                path,
+                with: .color(.accentColor.opacity(0.6)),
+                style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [4, 3])
+            )
+            // A small filled dot at the cursor end so the
+            // user can see where the drop will land.
+            let dot = Path(ellipseIn: CGRect(
+                x: to.x - 4, y: to.y - 4, width: 8, height: 8
+            ))
+            ctx.fill(dot, with: .color(.accentColor))
+        }
+    }
+
+    /// Build a binding that updates `positions[nodeId]` in the
+    /// parent's map. Reads go through the map (so the bezier
+    /// layer sees the same position); writes go through the
+    /// map (so the drag actually persists). Nodes that have
+    /// no entry yet start at a default position.
+    private func bindingFor(
+        nodeId: String, type: any WorkflowNodeType.Type
+    ) -> Binding<CGPoint> {
+        Binding(
+            get: {
+                positions[nodeId] ?? defaultPosition(
+                    forId: nodeId, type: type
+                )
+            },
+            set: { newValue in
+                positions[nodeId] = newValue
+            }
+        )
+    }
 
     private func portCenter(
-        nodeId: String, portId: String, side: Side
+        nodeId: String, portId: String, side: WorkflowPortView.Side
     ) -> CGPoint? {
-        guard let center = positions[nodeId],
-              let type = registry.nodeType(for: workflow.node(id: nodeId)?.type ?? "")
-        else { return nil }
+        guard let node = workflow.node(id: nodeId),
+              let type = registry.nodeType(for: node.type),
+              let pos = positions[nodeId] else { return nil }
         let ports = (side == .left) ? type.inputs : type.outputs
         guard let idx = ports.firstIndex(where: { $0.id == portId }) else {
             return nil
         }
-        // Node rect: 200x(40 + N*20) approximately. Ports are at
-        // y = header(40) + 8 + idx*20 + 10 (half of port row).
-        let portCount = ports.count
-        let approxHeight: CGFloat = 40 + 8 + CGFloat(portCount) * 20 + 8
-        let xOffset: CGFloat = (side == .left) ? 14 : 200 - 14
-        let yOffset: CGFloat = 40 + 8 + CGFloat(idx) * 20 + 10
-        return CGPoint(
-            x: center.x + xOffset - 100, // -100 because position is center
-            y: center.y + yOffset - approxHeight / 2
+        return WorkflowGeometry.portCenter(
+            nodeCenter: pos, portIndex: idx,
+            isLeft: side == .left,
+            portCount: ports.count
         )
     }
 
-    private func defaultPosition(for node: WorkflowNode) -> CGPoint {
-        positions[node.id] ?? CGPoint(x: 200, y: 200)
+    private func indexOfPort(
+        in ports: [WorkflowPort], id: String
+    ) -> Int {
+        ports.firstIndex(where: { $0.id == id }) ?? 0
+    }
+
+    private func defaultPosition(
+        forId nodeId: String, type: any WorkflowNodeType.Type
+    ) -> CGPoint {
+        // Lay out new nodes in a grid starting at (200, 200),
+        // offset by 240pt horizontally and 120pt vertically per
+        // index. The first time a node shows up on the canvas
+        // it lands here; subsequent drags overwrite it.
+        let idx = workflow.nodes.firstIndex { $0.id == nodeId } ?? 0
+        let col = idx % 3
+        let row = idx / 3
+        return CGPoint(
+            x: 200 + CGFloat(col) * 260,
+            y: 200 + CGFloat(row) * 140
+        )
     }
 }
-
-/// Position store for the canvas. Keyed by node id. The map is
-/// `@Binding`-driven so the parent `WorkflowsView` can persist
-/// it (eventually) to the workflow document alongside the
-/// graph itself. Phase 2.1 keeps it in-memory only; Phase 2.5
-/// will fold positions into the workflow JSON.
-typealias WorkflowPositionMap = [String: CGPoint]
 
 extension Workflow {
     /// Look up a node by id. Returns nil for unknown ids (the
@@ -137,3 +244,10 @@ extension Workflow {
         nodes.first { $0.id == id }
     }
 }
+
+/// Position store for the canvas. Keyed by node id. The map is
+/// `@Binding`-driven so the parent `WorkflowsView` can persist
+/// it (eventually) to the workflow document alongside the
+/// graph itself. Phase 2.4 will fold positions into the
+/// workflow JSON.
+typealias WorkflowPositionMap = [String: CGPoint]

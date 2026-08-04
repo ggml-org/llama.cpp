@@ -1,26 +1,18 @@
 import SwiftUI
 
 /// The toolbar across the top of the Workflows surface.
-/// Phase 2.1 ships the four buttons with stubs (disabled where
-/// the behaviour lands in a later sub-step):
-///
-/// - **New**: clears the document, generates a new id.
-/// - **Open**: presents an NSOpenPanel for `.tessera-workflow`
-///   (added in 2.4 alongside the document type).
-/// - **Save**: serialises the current workflow + positions to
-///   JSON and presents an NSSavePanel (2.4).
-/// - **Run**: validates and runs the workflow through
-///   ``WorkflowExecutor.run`` (2.5).
-///
-/// The toolbar's action closures are owned by the parent
-/// `WorkflowsView`; this view is a pure layout primitive so
-/// unit tests can render it without spinning up a
-/// `WorkflowExecutor`.
+/// Phase 2.5 enables all four buttons: New / Open / Save
+/// (through ``WorkflowDocument``) and Run (through
+/// ``WorkflowExecutor``). The toolbar's action closures are
+/// owned by the parent `WorkflowsView`; this view is a pure
+/// layout primitive so unit tests can render it without
+/// spinning up an executor.
 struct WorkflowToolbarView: View {
     let onNew: () -> Void
     let onOpen: () -> Void
     let onSave: () -> Void
     let onRun: () -> Void
+    let isRunning: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -28,26 +20,33 @@ struct WorkflowToolbarView: View {
                 Label("New", systemImage: "doc.badge.plus")
             }
             .help("New workflow")
+            .disabled(isRunning)
 
             Button(action: onOpen) {
                 Label("Open", systemImage: "folder")
             }
             .help("Open workflow from disk")
-            .disabled(true) // Phase 2.4
+            .disabled(isRunning)
 
             Button(action: onSave) {
                 Label("Save", systemImage: "square.and.arrow.down")
             }
             .help("Save workflow to disk")
-            .disabled(true) // Phase 2.4
+            .disabled(isRunning)
 
             Spacer()
+
+            if isRunning {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.trailing, 4)
+            }
 
             Button(action: onRun) {
                 Label("Run", systemImage: "play.fill")
             }
             .help("Run workflow")
-            .disabled(true) // Phase 2.5
+            .disabled(isRunning)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
