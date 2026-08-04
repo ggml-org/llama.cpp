@@ -739,7 +739,7 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
 
-`speaker_ref_b64`: Base64-encoded reference WAV to clone the speaker's voice. Optional.
+`speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) — if both are provided, the uploaded file takes precedence.
 
 `top_k`, `top_p`: Sampling params for the acoustic code predictor. Optional, model-dependent defaults apply.
 
@@ -756,9 +756,18 @@ Note: it's highly recommended to always provide a speaker reference voice; other
 *Examples:*
 
 ```shell
-curl -X POST http://127.0.0.1:8012/tts \
+curl -X POST http://127.0.0.1:9931/tts \
     -H "Content-Type: application/json" \
     -d '{"input": "Hello, this is a test."}' \
+    -o output.wav
+```
+
+With a speaker reference uploaded as a file (`multipart/form-data`), instead of base64-encoding it into the JSON body:
+
+```shell
+curl -X POST http://127.0.0.1:9931/tts \
+    -F "input=Hello, this is a test." \
+    -F "speaker_ref=@/path/to/speaker-reference.wav;type=audio/wav" \
     -o output.wav
 ```
 

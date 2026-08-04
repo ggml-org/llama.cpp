@@ -401,7 +401,7 @@ private:
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no speaker/audio encoder\n");
             return false;
         }
-        const std::string  marker = mtmd_default_marker();
+        const std::string  marker = mtmd_get_marker(mctx);
         mtmd_input_text     text{ marker.c_str(), marker.size(), false, true };
         mtmd_input_chunks * chunks = mtmd_input_chunks_init();
         const mtmd_bitmap * bptr = bitmap;

@@ -5237,8 +5237,6 @@ void server_routes::init_routes() {
         task.params.stream    = stream;
         task.params.n_predict = json_value(body, "n_predict", -1);
         task.params.sampling  = params.sampling; // baseline defaults, then apply overrides below
-        // codec token streams need repetition penalty over the whole generation, or the
-        // backbone loops and re-generates the same utterance (see LLAMA_EXAMPLE_TTS in arg.cpp)
         task.params.sampling.penalty_repeat  = json_value(body, "repeat_penalty", 1.05f);
         task.params.sampling.penalty_last_n  = -1;
         if (task.tts_inp.data.top_k > 0) {
@@ -5248,15 +5246,33 @@ void server_routes::init_routes() {
             task.params.sampling.top_p = task.tts_inp.data.top_p;
         }
 
-        std::string speaker_ref_b64 = json_value(body, "speaker_ref_b64", std::string());
-        if (!speaker_ref_b64.empty()) {
-            std::string bytes = base64::decode(speaker_ref_b64);
-            auto wrapper = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, (const unsigned char *) bytes.data(), bytes.size(), false);
+        // speaker reference: either an uploaded form file ("speaker_ref") or a base64 JSON field ("speaker_ref_b64")
+        const unsigned char * speaker_ref_data = nullptr;
+        size_t speaker_ref_len  = 0;
+        std::string speaker_ref_b64_decoded;
+
+        auto speaker_ref_file = req.files.find("speaker_ref");
+        if (speaker_ref_file != req.files.end()) {
+            speaker_ref_data = speaker_ref_file->second.data.data();
+            speaker_ref_len  = speaker_ref_file->second.data.size();
+        } else {
+            std::string speaker_ref_b64 = json_value(body, "speaker_ref_b64", std::string());
+            if (!speaker_ref_b64.empty()) {
+                speaker_ref_b64_decoded = base64::decode(speaker_ref_b64);
+                speaker_ref_data = (const unsigned char *) speaker_ref_b64_decoded.data();
+                speaker_ref_len  = speaker_ref_b64_decoded.size();
+            }
+        }
+
+        if (speaker_ref_len > 0) {
+            auto wrapper = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, speaker_ref_data, speaker_ref_len, false);
             if (!wrapper.bitmap) {
-                res->error(format_error_response("failed to decode \"speaker_ref_b64\"", ERROR_TYPE_INVALID_REQUEST));
+                res->error(format_error_response("failed to decode \"speaker_ref\"", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
             task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
+        } else {
+            SRV_WRN("no speaker reference provided, the model may behave randomly\n");
         }
 
         auto & rd = res->rd;
