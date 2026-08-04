@@ -158,13 +158,23 @@ class TesseraDB:
         model_hash: str,
         rows: Sequence[dict],
     ) -> int:
-        """Upsert per-tensor stats. ``rows`` is a list of dicts with
-        the ``tensor_stats`` schema. The ``model_hash`` is stamped
-        on every row. The ``source`` and ``updated_at`` columns are
-        auto-populated (``source='py_cal'``).
+        """Buffered write of per-tensor stats into ``tensor_stats``.
 
-        Returns the number of rows accepted (length of ``rows``).
-        Returns 0 on read-only or after close.
+        Bypasses the buffer and uses a direct INSERT ... ON CONFLICT
+        DO UPDATE because the table has a primary key on
+        (model_hash, name); the buffer's plain INSERT would fail on
+        a duplicate. The C++ side has the same primary key and the
+        same upsert pattern (see ``tessera-quantize-db.cpp::
+        ts_quantize_db_upsert_tensor_stat``).
+
+        Per-side writes are non-destructive across columns: the
+        C++ side writes kurtosis / eff_rank / dtype (source =
+        'cpp_quant'); the Python side writes rms / mean_abs /
+        tail_ratio (source = 'py_cal'). The upsert preserves
+        whichever side's columns are not overwritten by the
+        other side's NULL-pass.
+
+        Returns the number of rows upserted.
         """
         if not rows:
             return 0
@@ -173,27 +183,62 @@ class TesseraDB:
                 "tessera-db: insert_tensor_stats on read-only connection ignored\n"
             )
             return 0
-        buf = self._buffer_for("tensor_stats", TENSOR_STATS_COLS)
         now = _now_iso()
         for r in rows:
-            row = (
-                model_hash,
-                r.get("name", ""),
-                r.get("family", ""),
-                r.get("layer_depth"),
-                r.get("out_dim"),
-                r.get("in_dim"),
-                r.get("n_elements"),
-                r.get("dtype", ""),
-                r.get("kurtosis"),
-                r.get("eff_rank"),
-                r.get("rms"),
-                r.get("mean_abs"),
-                r.get("tail_ratio"),
-                r.get("source", "py_cal"),
-                r.get("updated_at", now),
+            # Build one upsert per row. Per-row is fine because
+            # the upsert is not on the hot path; the C++ side's
+            # GA-prep walk also does per-row writes.
+            sql = (
+                "INSERT INTO tensor_stats ("
+                "  model_hash, name, family, layer_depth, "
+                "  out_dim, in_dim, n_elements, dtype, "
+                "  kurtosis, eff_rank, rms, mean_abs, tail_ratio, "
+                "  source, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (model_hash, name) DO UPDATE SET "
+                "  family        = COALESCE(excluded.family,        tensor_stats.family), "
+                "  layer_depth   = COALESCE(excluded.layer_depth,   tensor_stats.layer_depth), "
+                "  out_dim       = COALESCE(excluded.out_dim,       tensor_stats.out_dim), "
+                "  in_dim        = COALESCE(excluded.in_dim,        tensor_stats.in_dim), "
+                "  n_elements    = COALESCE(excluded.n_elements,    tensor_stats.n_elements), "
+                "  dtype         = COALESCE(excluded.dtype,         tensor_stats.dtype), "
+                "  kurtosis      = COALESCE(excluded.kurtosis,      tensor_stats.kurtosis), "
+                "  eff_rank      = COALESCE(excluded.eff_rank,      tensor_stats.eff_rank), "
+                "  rms           = COALESCE(excluded.rms,           tensor_stats.rms), "
+                "  mean_abs      = COALESCE(excluded.mean_abs,      tensor_stats.mean_abs), "
+                "  tail_ratio    = COALESCE(excluded.tail_ratio,    tensor_stats.tail_ratio), "
+                "  source        = excluded.source, "
+                "  updated_at    = excluded.updated_at"
             )
-            buf.append(row)
+            # COALESCE on the UPDATE means: if the new write's
+            # column is NULL, keep the existing value (the other
+            # side's contribution). If the new write has a value,
+            # it wins. This is how the C++ kurtosis / eff_rank
+            # survives a Python rms / mean_abs / tail_ratio
+            # upsert (and vice versa).
+            try:
+                self._conn.execute(sql, [
+                    model_hash,
+                    r.get("name", ""),
+                    r.get("family"),
+                    r.get("layer_depth"),
+                    r.get("out_dim"),
+                    r.get("in_dim"),
+                    r.get("n_elements"),
+                    r.get("dtype"),
+                    r.get("kurtosis"),
+                    r.get("eff_rank"),
+                    r.get("rms"),
+                    r.get("mean_abs"),
+                    r.get("tail_ratio"),
+                    r.get("source", "py_cal"),
+                    r.get("updated_at", now),
+                ])
+            except Exception as e:
+                sys.stderr.write(
+                    f"tessera-db: insert_tensor_stats on "
+                    f"({model_hash}, {r.get('name', '')}) failed: {e}\n"
+                )
         return len(rows)
 
     # ---- write API: per-source summary tables ------------------------

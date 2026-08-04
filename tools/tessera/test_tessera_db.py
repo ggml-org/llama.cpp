@@ -221,16 +221,15 @@ class TestTesseraDB(unittest.TestCase):
     def test_query_returns_polars_dataframe(self) -> None:
         path = self._fresh(3)
         with TesseraDB.open(path) as db:
+            # insert_tensor_stats uses direct INSERT ... ON CONFLICT
+            # (bypasses the per-table buffer because the table has a
+            # primary key), so the rows are visible immediately.
             db.insert_tensor_stats(model_hash="m", rows=[
                 {"name": f"tensor_{i}", "family": "attn_q",
                  "layer_depth": i, "kurtosis": 3.0 + i * 0.1,
                  "eff_rank": 0.9 - i * 0.01}
                 for i in range(10)
             ])
-            # Force a flush so the rows are visible to the subsequent
-            # query. Without this, the buffer's count (65536) + time
-            # (1 sec) triggers haven't fired, and the query sees 0 rows.
-            db._buffers["tensor_stats"].flush_now()
             df = db.query(
                 "SELECT name, kurtosis FROM tensor_stats "
                 "WHERE model_hash = 'm' ORDER BY kurtosis DESC LIMIT 3"
@@ -292,17 +291,21 @@ class TestTesseraDB(unittest.TestCase):
     # ---- 6. Buffer stats: per-table counters reflect work -----------
 
     def test_buffer_stats_reflect_work(self) -> None:
+        """Buffer stats reflect per-table work. l3_outlier_summary
+        uses the buffered path (no primary key on the table), so the
+        appended / flushed_rows counters track the writes."""
         path = self._fresh(6)
         with TesseraDB.open(path) as db:
-            db.insert_tensor_stats(model_hash="s", rows=[
-                {"name": f"t_{i}", "family": "f"} for i in range(100)
+            db.insert_l3_outlier(model_hash="s", rows=[
+                {"name": f"t_{i}", "layer": 0, "sidecar_label": "ckpt",
+                 "outlier_count": 1, "outlier_fraction": 0.001}
+                for i in range(100)
             ])
             # Force a flush so the counter is updated.
-            for buf in [db._buffers["tensor_stats"]]:
-                buf.flush_now()
+            db._buffers["l3_outlier_summary"].flush_now()
             stats = db.buffer_stats()
-        self.assertIn("tensor_stats", stats)
-        s = stats["tensor_stats"]
+        self.assertIn("l3_outlier_summary", stats)
+        s = stats["l3_outlier_summary"]
         self.assertEqual(s.appended, 100)
         self.assertEqual(s.flushed_rows, 100)
         self.assertEqual(s.rows_dropped, 0)
