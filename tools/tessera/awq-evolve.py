@@ -38,6 +38,12 @@ FAMILIES = (
     "attention", "ffn", "router", "routed_expert", "shared_expert",
     "fusion", "output_embedding",
 )
+# Phase 16: model_role mirrors the per_tensor_calibrate.py enum.
+# The default 'trunk' preserves the pre-Phase-16 single-component
+# behaviour; per_tensor_calibrate.py's --fitness awq path forwards
+# the user-supplied role to this script via --model-role.
+MODEL_ROLES = ("trunk", "dflash", "dspark", "mtp_nextn", "shared_embd")
+DEFAULT_MODEL_ROLE = "trunk"
 MATCHES = {
     "attention": ["attn_q", "attn_k", "attn_v", "attn_output"],
     "ffn": ["ffn_gate", "ffn_up", "ffn_down"],
@@ -909,10 +915,15 @@ def _list_to_tuple(value):
     return value
 
 
-def policy_entry(matches: list[str], candidate: Candidate) -> dict:
+def policy_entry(matches: list[str], candidate: Candidate, model_role: str = DEFAULT_MODEL_ROLE) -> dict:
+    if model_role not in MODEL_ROLES:
+        raise ValueError(
+            f"model_role {model_role!r} not in {MODEL_ROLES!r}"
+        )
     return {
         "match": matches,
         "exact": False,
+        "model_role": model_role,
         "awq_alpha": candidate.alpha,
         "awq_clip": candidate.clip,
         "outlier_fraction": candidate.outlier_fraction,
@@ -922,11 +933,16 @@ def policy_entry(matches: list[str], candidate: Candidate) -> dict:
 
 
 def build_policy(results: dict[str, tuple[Candidate, Score]], provenance: dict, base: dict | None = None,
-                 overrides: dict[str, tuple[Candidate, Score]] | None = None) -> dict:
+                 overrides: dict[str, tuple[Candidate, Score]] | None = None,
+                 model_role: str = DEFAULT_MODEL_ROLE) -> dict:
+    if model_role not in MODEL_ROLES:
+        raise ValueError(
+            f"model_role {model_role!r} not in {MODEL_ROLES!r}"
+        )
     families = {}
     moe_layers: dict[str, dict] = {}
     for name, (candidate, _) in (overrides or {}).items():
-        families[f"override:{name}"] = policy_entry([name], candidate)
+        families[f"override:{name}"] = policy_entry([name], candidate, model_role=model_role)
         match = re.fullmatch(
             r"blk\.(\d+)\.(.+)\.expert-(\d+)",
             name,
@@ -942,14 +958,16 @@ def build_policy(results: dict[str, tuple[Candidate, Score]], provenance: dict, 
             }
     families.update(dict((base or {}).get("tensor_families", {})))
     families.update({
-        "norm": {"match": ["norm"], "exact": True, "awq_alpha": 0.0, "outlier_fraction": 1.0},
+        "norm": {"match": ["norm"], "exact": True, "model_role": model_role,
+                 "awq_alpha": 0.0, "outlier_fraction": 1.0},
     })
     for family, (candidate, _) in results.items():
-        families[family] = policy_entry(MATCHES[family], candidate)
+        families[family] = policy_entry(MATCHES[family], candidate, model_role=model_role)
     policy = dict(base or {})
     policy.update({
         "schema": POLICY_SCHEMA,
         "search_schema": SCHEMA,
+        "model_role": model_role,
         "tensor_families": families,
         "evolution": provenance,
     })
@@ -958,6 +976,7 @@ def build_policy(results: dict[str, tuple[Candidate, Score]], provenance: dict, 
         existing = dict(policy.get("moe_residual_allocation", {}))
         existing.update({
             "schema": "llama.tessera.moe-residual-policy.v1",
+            "model_role": model_role,
             "layers": moe_layers,
         })
         policy["moe_residual_allocation"] = existing
@@ -1006,6 +1025,20 @@ def main() -> None:
     parser.add_argument(
         "--candidate-batch-size", type=int, default=4,
         help="maximum candidate matrices per MLX activation-projection wave",
+    )
+    parser.add_argument(
+        "--model-role",
+        choices=MODEL_ROLES,
+        default=DEFAULT_MODEL_ROLE,
+        help=(
+            "Component role for this AWQ evolution pass. The value is "
+            "stamped on every per-family and per-override entry in the "
+            "output policy so the unified consumer can route per-role. "
+            "The default is 'trunk' which is the legacy single-model "
+            "behaviour. The unified_calibrate.py driver invokes "
+            "per_tensor_calibrate.py (which forwards --model-role to "
+            "awq-evolve.py) once per component with the appropriate role."
+        ),
     )
     args = parser.parse_args()
     if args.generations < 1 or args.population < 4 or args.islands < 1:
@@ -1186,11 +1219,16 @@ def main() -> None:
         base_policy = json.loads(Path(args.base_policy).read_text(encoding="utf-8"))
         if base_policy.get("schema") != POLICY_SCHEMA:
             raise ValueError(f"{args.base_policy}: unsupported base policy schema")
-    policy = build_policy(results, provenance, base_policy, overrides)
+    policy = build_policy(results, provenance, base_policy, overrides,
+                          model_role=args.model_role)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {output} with {len(results)} evolved tensor families", file=sys.stderr)
+    print(
+        f"wrote {output} with {len(results)} evolved tensor families "
+        f"(role={args.model_role})",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

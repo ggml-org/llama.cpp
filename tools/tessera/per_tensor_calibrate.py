@@ -1960,13 +1960,23 @@ def run_awq_subprocess(
     generations: int,
     population: int,
     extra: Iterable[str] = (),
+    model_role: str = DEFAULT_MODEL_ROLE,
 ) -> dict:
     """Run ``awq-evolve.py`` and return the parsed policy JSON.
 
     The GA search is heavyweight; LRQ is a lightweight complement, not a
     replacement. Subprocess keeps the two implementations isolated and lets
     the ``compare`` flow fail soft if awq-evolve.py is missing.
+
+    ``model_role`` (Phase 16) is forwarded to ``awq-evolve.py`` as
+    ``--model-role`` so the GA output policy carries the role on every
+    per-family and per-override entry. Default 'trunk' preserves the
+    pre-Phase-16 single-component contract.
     """
+    if model_role not in MODEL_ROLES:
+        raise ValueError(
+            f"model_role {model_role!r} not in {MODEL_ROLES!r}"
+        )
     tool = Path(__file__).resolve().parent / "awq-evolve.py"
     if not tool.is_file():
         raise FileNotFoundError(f"awq-evolve.py not found at {tool}")
@@ -1978,6 +1988,7 @@ def run_awq_subprocess(
         "--seed", str(seed),
         "--generations", str(generations),
         "--population", str(population),
+        "--model-role", model_role,
     ]
     cmd.extend(extra)
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
@@ -3084,26 +3095,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.fitness == "awq":
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
-        # awq-evolve.py does not (yet) accept --model-role; the per-role
-        # tagging is added by per_tensor_calibrate.py on the returned
-        # policy so the unified consumer's contract (top-level
-        # model_role + per-entry model_role) is consistent across
-        # fitness modes.
+        # Phase 16: awq-evolve.py now accepts --model-role natively
+        # and stamps the role on every per-family and per-override
+        # entry, plus the top-level policy["model_role"]. The
+        # subprocess is the authoritative source of the role tag.
         policy = run_awq_subprocess(
             args.layers,
             output,
             seed=args.seed,
             generations=args.awq_generations,
             population=args.awq_population,
+            model_role=args.model_role,
         )
         print(f"wrote {output} via awq-evolve.py", file=sys.stderr)
         print(f"residency: {tracker.report()}", file=sys.stderr)
-        print(f"wrote {output} via awq-evolve.py", file=sys.stderr)
         if isinstance(policy, dict):
-            policy["model_role"] = args.model_role
+            # Belt-and-braces: confirm the subprocess stamped the role
+            # on every entry. If a future awq-evolve.py change drops
+            # the role from one path, this re-stamps the missing
+            # entries so the unified contract (top-level + per-entry
+            # model_role) is still consistent.
+            policy.setdefault("model_role", args.model_role)
             for entry in policy.get("tensor_families", {}).values():
-                if isinstance(entry, dict) and "model_role" not in entry:
-                    entry["model_role"] = args.model_role
+                if isinstance(entry, dict):
+                    entry.setdefault("model_role", args.model_role)
+            moe_block = policy.get("moe_residual_allocation")
+            if isinstance(moe_block, dict):
+                moe_block.setdefault("model_role", args.model_role)
             # Re-write so the on-disk artifact matches the in-memory
             # policy the rest of the unified driver sees.
             output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
