@@ -459,6 +459,16 @@ if (APPLE)
         target_link_libraries(test-ane-pump PRIVATE
                               llama-common)
     endif()
+    # F4.1/F4.2/F4.3 follow-up tests: focused assertions on the
+    # pump's routing (F4.1), monotonic counter (F4.2), and
+    # QOS background affinity (F4.3). Additive to test-ane-pump;
+    # no real .mlmodelc required (the no-op submit callback
+    # doesn't dereference program/instance pointers).
+    llama_build_and_test(test-ane-pump-followups.cpp)
+    if (TARGET test-ane-pump-followups)
+        target_link_libraries(test-ane-pump-followups PRIVATE
+                              llama-common)
+    endif()
     # W7 MTLSharedEvent handoff per state slot. Validates that
     # the per-slot events are signaled by the dispatch path on
     # OUTPUT_READY and that a consumer thread can wait on the
