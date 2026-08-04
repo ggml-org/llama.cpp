@@ -51,6 +51,39 @@ from typing import Iterable
 
 import numpy as np
 
+# Memory-bound / spatial-temporal utilities.  These were added in
+# Phase 16 (calibration memopt); see ``calibration_memory.py`` for
+# the per-category docs.  ``calibration_residency.py`` is the
+# peak-RSS budgeting side; it is imported lazily in ``main()`` so
+# the import is only paid when the budget knob is used.
+try:
+    from .calibration_memory import (
+        SPATIAL_ROLES,
+        CalibPipeline,
+        ChunkSpec,
+        chunked_iter,
+        chunked_process,
+        extract_layer_index,
+        interleave_components,
+        mmap_layer,
+        mmap_tensor,
+    )
+except ImportError:  # pragma: no cover - script-mode import
+    _REPO_ROOT = Path(__file__).resolve().parents[2]
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from tools.tessera.calibration_memory import (  # type: ignore[no-redef]
+        SPATIAL_ROLES,
+        CalibPipeline,
+        ChunkSpec,
+        chunked_iter,
+        chunked_process,
+        extract_layer_index,
+        interleave_components,
+        mmap_layer,
+        mmap_tensor,
+    )
+
 
 SCHEMA = "llama.speculative.calibration-policy.v1"
 LRQ_SCHEMA = "llama.tessera.lrq-policy.v1"
@@ -145,39 +178,63 @@ def _scalar_string(value: object, default: str) -> str:
 
 
 def load_layer(path: Path, max_tokens: int = 256) -> Layer:
-    with np.load(path, allow_pickle=False) as data:
-        weight = np.asarray(data["weight"], dtype=np.float32)
+    """Load a layer bundle as a ``Layer`` of mmap-backed views.
+
+    Phase 16 (calibration memopt): the bundle is opened with
+    ``mmap_mode="r"`` so the OS pages in each tensor on demand
+    rather than reading the whole file into RAM.  Peak RSS for
+    a single tensor is bounded to ``max(weight, activations,
+    observer)`` instead of ``sum(all_tensors_in_turn)``.
+
+    The mmap views share memory with the zip mmap, not with the
+    python process.  When the caller drops the ``Layer``, the
+    OS reclaims the pages lazily.  Downstream training code
+    (LRQ, DartQuant) calls ``.astype(np.float32)`` on the
+    weight, which materialises a single owning copy; that is
+    the intended pattern: the mmap view is the read-only
+    intermediate, the F32 copy is the working set.
+    """
+    with mmap_layer(path) as data:
+        if "weight" not in data:
+            raise ValueError(f"{path}: missing required 'weight' key")
+        weight = data["weight"]
         if weight.ndim != 2:
             raise ValueError(f"{path}: weight must be two-dimensional")
-        train = (
-            np.asarray(data["train_activations"], dtype=np.float32)
-            if "train_activations" in data
-            else None
-        )
-        heldout = (
-            np.asarray(data["heldout_activations"], dtype=np.float32)
-            if "heldout_activations" in data
-            else None
-        )
-        in_sum2 = (
-            np.asarray(data["in_sum2"], dtype=np.float32).reshape(-1)
-            if "in_sum2" in data
-            else None
-        )
+        train_raw = data.get("train_activations")
+        heldout_raw = data.get("heldout_activations")
+        in_sum2_raw = data.get("in_sum2")
         in_count = int(np.asarray(data["counts"]).reshape(()).item()) if "counts" in data else 0
-        name = _scalar_string(data["name"] if "name" in data else None, path.stem)
-        family = _scalar_string(data["family"] if "family" in data else None, "ffn")
-        for label, acts in (("train", train), ("heldout", heldout)):
+        name = _scalar_string(data.get("name"), path.stem)
+        family = _scalar_string(data.get("family"), "ffn")
+        # Apply the max_tokens sub-sample.  Subsampling requires
+        # materialising the activation rows; once subsampled, the
+        # result is an owning F32 array and the mmap is no longer
+        # needed for the activations.
+        train: np.ndarray | None = None
+        heldout: np.ndarray | None = None
+        for label, acts, sink in (
+            ("train", train_raw, "train"),
+            ("heldout", heldout_raw, "heldout"),
+        ):
             if acts is None:
                 continue
             if acts.ndim != 2 or acts.shape[1] != weight.shape[1]:
-                raise ValueError(f"{path}: {label} activation shape {acts.shape} does not match weight {weight.shape}")
+                raise ValueError(
+                    f"{path}: {label} activation shape {acts.shape} "
+                    f"does not match weight {weight.shape}"
+                )
             if max_tokens > 0 and acts.shape[0] > max_tokens:
                 idx = np.linspace(0, acts.shape[0] - 1, max_tokens, dtype=np.int64)
-                if label == "train":
-                    train = acts[idx]
-                else:
-                    heldout = acts[idx]
+                sub = np.asarray(acts[idx], dtype=np.float32)
+            else:
+                sub = np.asarray(acts, dtype=np.float32)
+            if sink == "train":
+                train = sub
+            else:
+                heldout = sub
+        in_sum2: np.ndarray | None = None
+        if in_sum2_raw is not None:
+            in_sum2 = np.asarray(in_sum2_raw, dtype=np.float32).reshape(-1)
     if train is None and in_sum2 is None:
         raise ValueError(f"{path}: requires train_activations or in_sum2")
     return Layer(
