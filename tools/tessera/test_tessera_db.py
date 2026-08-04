@@ -49,21 +49,22 @@ SCHEMA_SQL = """
         status TEXT DEFAULT 'running'
     );
     CREATE TABLE IF NOT EXISTS tensor_stats (
-        model_hash   TEXT NOT NULL,
-        name         TEXT NOT NULL,
-        family       TEXT,
-        layer_depth  INTEGER,
-        out_dim      BIGINT,
-        in_dim       BIGINT,
-        n_elements   BIGINT,
-        dtype        TEXT,
-        kurtosis     DOUBLE,
-        eff_rank     DOUBLE,
-        rms          DOUBLE,
-        mean_abs     DOUBLE,
-        tail_ratio   DOUBLE,
-        source       TEXT,
-        updated_at   TIMESTAMP,
+        model_hash         TEXT NOT NULL,
+        name               TEXT NOT NULL,
+        family             TEXT,
+        layer_depth        INTEGER,
+        out_dim            BIGINT,
+        in_dim             BIGINT,
+        n_elements         BIGINT,
+        dtype              TEXT,
+        kurtosis           DOUBLE,
+        eff_rank           DOUBLE,
+        rms                DOUBLE,
+        mean_abs           DOUBLE,
+        tail_ratio         DOUBLE,
+        source             TEXT,
+        recommended_action TEXT,
+        updated_at         TIMESTAMP,
         PRIMARY KEY (model_hash, name)
     );
     CREATE TABLE IF NOT EXISTS l3_outlier_summary (
@@ -322,6 +323,102 @@ class TestTesseraDB(unittest.TestCase):
         }
         self.assertTrue(expected_tables.issubset(set(names)),
                         f"missing tables: {expected_tables - set(names)}")
+
+    # ---- 8. insert_tensor_stats with recommended_action ----------------
+
+    def test_insert_tensor_stats_with_recommended_action(self) -> None:
+        """The recommended_action column is upserted on the Python
+        side. The COALESCE preservation rule means: if a row was
+        written with a recommended_action and a subsequent write
+        omits the column (None), the prior value is preserved."""
+        path = self._fresh(8)
+        with TesseraDB.open(path) as db:
+            # First write: set recommended_action = "protect".
+            n = db.insert_tensor_stats(
+                model_hash="m",
+                rows=[{
+                    "name": "blk.0.attn_q.weight", "family": "attn_q",
+                    "layer_depth": 0, "kurtosis": 3.2, "eff_rank": 0.85,
+                    "rms": 0.12, "mean_abs": 0.10, "tail_ratio": 4.5,
+                    "dtype": "f16", "out_dim": 4096, "in_dim": 4096,
+                    "n_elements": 16_777_216,
+                    "recommended_action": "protect",
+                }],
+            )
+            self.assertEqual(n, 1)
+            df = db.query(
+                "SELECT recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm'"
+            )
+            self.assertEqual(df.height, 1)
+            self.assertEqual(df["recommended_action"].to_list()[0], "protect")
+
+            # Second write on the same row: same key, no
+            # recommended_action. COALESCE keeps the prior value.
+            n = db.insert_tensor_stats(
+                model_hash="m",
+                rows=[{
+                    "name": "blk.0.attn_q.weight", "family": "attn_q",
+                    "layer_depth": 0, "kurtosis": 9.9,  # updated
+                    "rms": 0.20,  # updated
+                }],
+            )
+            self.assertEqual(n, 1)
+            df = db.query(
+                "SELECT kurtosis, rms, recommended_action "
+                "FROM tensor_stats WHERE model_hash = 'm'"
+            )
+            row = df.row(0, named=True)
+            # Updated columns took the new values.
+            self.assertAlmostEqual(row["kurtosis"], 9.9, places=4)
+            self.assertAlmostEqual(row["rms"], 0.20, places=4)
+            # recommended_action preserved (Python side's prior
+            # value survived the second write's NULL-pass).
+            self.assertEqual(row["recommended_action"], "protect")
+
+    def test_insert_tensor_stats_recommended_action_overwrite(self) -> None:
+        """When the new write carries a recommended_action, it
+        overwrites the prior value (the Python side is the
+        authoritative writer for this column; same rule as rms /
+        mean_abs / tail_ratio when both sides are Python)."""
+        path = self._fresh(9)
+        with TesseraDB.open(path) as db:
+            db.insert_tensor_stats(model_hash="m", rows=[{
+                "name": "blk.0.attn_q.weight", "family": "attn_q",
+                "rms": 0.10,
+                "recommended_action": "monitor",
+            }])
+            # Second write with a different recommended_action.
+            db.insert_tensor_stats(model_hash="m", rows=[{
+                "name": "blk.0.attn_q.weight", "family": "attn_q",
+                "rms": 0.20,
+                "recommended_action": "requant_up",
+            }])
+            df = db.query(
+                "SELECT rms, recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm'"
+            )
+            row = df.row(0, named=True)
+            self.assertAlmostEqual(row["rms"], 0.20, places=4)
+            self.assertEqual(row["recommended_action"], "requant_up")
+
+    def test_insert_tensor_stats_recommended_action_none_on_fresh(self) -> None:
+        """A fresh row written without recommended_action is NULL
+        (the Python side has not produced a verdict for this tensor
+        yet)."""
+        path = self._fresh(10)
+        with TesseraDB.open(path) as db:
+            db.insert_tensor_stats(model_hash="m", rows=[{
+                "name": "blk.0.attn_q.weight", "family": "attn_q",
+                "rms": 0.10,
+            }])
+            df = db.query(
+                "SELECT recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm'"
+            )
+            self.assertEqual(df.height, 1)
+            # recommended_action is NULL when not provided.
+            self.assertIsNone(df["recommended_action"].to_list()[0])
 
 
 if __name__ == "__main__":

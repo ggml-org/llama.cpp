@@ -7,6 +7,12 @@ C++ dispatch already writes kurtosis / eff_rank (source =
 parquet. The upsert is on (model_hash, name) so the two
 sides' writes coexist on the same row.
 
+Phase 13 also writes ``recommended_action`` for tensors whose
+(model_hash, family) has a row in ``l5_weights`` (the
+l5_retune.py output). The verdict is derived from the l5_action
+rules. A missing l5_weights row -> recommended_action is NULL
+on the upsert (the per-family feedback loop hasn't fired yet).
+
 Run as a unittest module. Exit 0 on success, non-zero on
 failure.
 """
@@ -32,22 +38,65 @@ from tessera_db import TENSOR_STATS_COLS, TesseraDB
 # schema so the script can write to it.
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS tensor_stats (
-        model_hash   TEXT NOT NULL,
-        name         TEXT NOT NULL,
-        family       TEXT,
-        layer_depth  INTEGER,
-        out_dim      BIGINT,
-        in_dim       BIGINT,
-        n_elements   BIGINT,
-        dtype        TEXT,
-        kurtosis     DOUBLE,
-        eff_rank     DOUBLE,
-        rms          DOUBLE,
-        mean_abs     DOUBLE,
-        tail_ratio   DOUBLE,
-        source       TEXT,
-        updated_at   TIMESTAMP,
+        model_hash         TEXT NOT NULL,
+        name               TEXT NOT NULL,
+        family             TEXT,
+        layer_depth        INTEGER,
+        out_dim            BIGINT,
+        in_dim             BIGINT,
+        n_elements         BIGINT,
+        dtype              TEXT,
+        kurtosis           DOUBLE,
+        eff_rank           DOUBLE,
+        rms                DOUBLE,
+        mean_abs           DOUBLE,
+        tail_ratio         DOUBLE,
+        source             TEXT,
+        recommended_action TEXT,
+        updated_at         TIMESTAMP,
         PRIMARY KEY (model_hash, name)
+    );
+"""
+
+
+# Mirror of the l5_weights + l5_outcome tables the calibration
+# side reads to derive recommended_action. The columns match
+# the C++ CREATE TABLE in tessera-quantize-db.cpp.
+L5_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS l5_weights (
+        model_hash      TEXT NOT NULL,
+        family          TEXT NOT NULL,
+        w_imatrix       DOUBLE NOT NULL,
+        w_gradient      DOUBLE NOT NULL,
+        w_layer         DOUBLE NOT NULL,
+        bias            DOUBLE,
+        slope           DOUBLE,
+        n_samples       INTEGER,
+        in_sample_loss  DOUBLE,
+        hit_rate        DOUBLE,
+        retune_source   TEXT,
+        updated_at      TIMESTAMP,
+        PRIMARY KEY (model_hash, family)
+    );
+    CREATE TABLE IF NOT EXISTS l5_outcome (
+        model_hash        TEXT NOT NULL,
+        name              TEXT NOT NULL,
+        layer             INTEGER,
+        iteration         INTEGER NOT NULL,
+        plan_id           TEXT NOT NULL,
+        family            TEXT,
+        sensitivity_score DOUBLE,
+        recommended_alpha DOUBLE,
+        recommended_clip  DOUBLE,
+        mse_before        DOUBLE,
+        mse_after         DOUBLE,
+        delta_mse         DOUBLE,
+        delta_frob        DOUBLE,
+        plan_accepted     BOOLEAN,
+        accept_threshold  DOUBLE,
+        residual          DOUBLE,
+        updated_at        TIMESTAMP,
+        PRIMARY KEY (model_hash, name, iteration, plan_id)
     );
 """
 
@@ -56,7 +105,7 @@ def _create_fresh_db(path: str) -> None:
     import duckdb
     con = duckdb.connect(path)
     try:
-        for stmt in SCHEMA_SQL.strip().split(";"):
+        for stmt in (SCHEMA_SQL + L5_SCHEMA_SQL).strip().split(";"):
             s = stmt.strip()
             if s:
                 con.execute(s)
@@ -109,6 +158,85 @@ class TestCalibrationToTensorStats(unittest.TestCase):
         os.makedirs(f"{d}/observer", exist_ok=True)
         self.evidence_stores.append(d)
         return d
+
+    def _seed_l5_weights(
+        self, db_path: str, model_hash: str,
+        rows: list[dict],
+    ) -> None:
+        """Insert rows into l5_weights. The (model_hash, family)
+        primary key mirrors what l5_retune.py writes. slope is the
+        OLS coefficient on sensitivity_score; hit_rate is the
+        fraction of accepted plans in the group."""
+        import duckdb
+        con = duckdb.connect(db_path)
+        try:
+            for r in rows:
+                con.execute(
+                    "INSERT INTO l5_weights (model_hash, family, "
+                    "w_imatrix, w_gradient, w_layer, bias, slope, "
+                    "n_samples, in_sample_loss, hit_rate, "
+                    "retune_source, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        model_hash,
+                        r["family"],
+                        r.get("w_imatrix", 0.5),
+                        r.get("w_gradient", 0.3),
+                        r.get("w_layer", 0.2),
+                        r.get("bias"),
+                        r.get("slope"),
+                        r.get("n_samples", 0),
+                        r.get("in_sample_loss"),
+                        r.get("hit_rate"),
+                        r.get("retune_source", "ols_slope_v1"),
+                        "2026-08-04 00:00:00",
+                    ],
+                )
+        finally:
+            con.close()
+
+    def _seed_l5_outcome(
+        self, db_path: str, model_hash: str,
+        rows: list[dict],
+    ) -> None:
+        """Insert rows into l5_outcome. One row per
+        (name, iteration, plan_id). The calibration side picks
+        the most recent per name (highest iteration, then
+        plan_id)."""
+        import duckdb
+        con = duckdb.connect(db_path)
+        try:
+            for r in rows:
+                con.execute(
+                    "INSERT INTO l5_outcome (model_hash, name, layer, "
+                    "iteration, plan_id, family, sensitivity_score, "
+                    "recommended_alpha, recommended_clip, mse_before, "
+                    "mse_after, delta_mse, delta_frob, plan_accepted, "
+                    "accept_threshold, residual, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "?, ?, ?, ?)",
+                    [
+                        model_hash,
+                        r["name"],
+                        r.get("layer", 0),
+                        r["iteration"],
+                        r["plan_id"],
+                        r.get("family", ""),
+                        r.get("sensitivity_score"),
+                        r.get("recommended_alpha"),
+                        r.get("recommended_clip"),
+                        r.get("mse_before"),
+                        r.get("mse_after"),
+                        r.get("delta_mse"),
+                        r.get("delta_frob"),
+                        r.get("plan_accepted"),
+                        r.get("accept_threshold", 0.0),
+                        r.get("residual"),
+                        "2026-08-04 00:00:00",
+                    ],
+                )
+        finally:
+            con.close()
 
     def _write_observer(self, store: str, rows: list[dict]) -> None:
         """Write one observer/part-*.parquet under the given
@@ -279,6 +407,188 @@ class TestCalibrationToTensorStats(unittest.TestCase):
             by_name["model.embed_tokens.weight"]["layer_depth"], 0
         )
         self.assertEqual(by_name["blk.99.attn_v.weight"]["layer_depth"], 99)
+
+    # ---- 4. recommended_action from l5_weights (the l5_action contract) ----
+
+    def test_recommended_action_protect(self) -> None:
+        """A family with high miscalibration_score and low hit_rate
+        produces recommended_action = 'protect' on every tensor
+        in that family."""
+        db_path = self._fresh(4)
+        store = self._evidence_store(4)
+        # Seed l5_weights with the protect rule: slope > 0.5, hit_rate < 0.5.
+        self._seed_l5_weights(db_path, "m", rows=[{
+            "family": "attn_q",
+            "slope": 0.6,  # > PROTECT_MISCALIBRATION_THRESHOLD
+            "hit_rate": 0.3,  # < PROTECT_HIT_RATE_MAX
+        }])
+        # Two attn_q tensors (one matched, one not seen in
+        # l5_outcome — still gets 'protect' because the rule is
+        # per family).
+        self._write_observer(store, [
+            {"tensor": "blk.0.attn_q.weight", "channel": 0,
+             "rms": 0.10, "mean_abs": 0.08, "tail_ratio": 4.0},
+            {"tensor": "blk.1.attn_q.weight", "channel": 0,
+             "rms": 0.11, "mean_abs": 0.09, "tail_ratio": 4.1},
+            # ffn_gate family has no l5_weights row -> NULL action.
+            {"tensor": "blk.0.ffn_gate.weight", "channel": 0,
+             "rms": 0.05, "mean_abs": 0.04, "tail_ratio": 8.0},
+        ])
+        n = c2t.run(
+            db_path=Path(db_path),
+            model_hash="m",
+            evidence_store=Path(store),
+        )
+        self.assertEqual(n, 3)
+        with TesseraDB.open(db_path, read_only=True) as db:
+            df = db.query(
+                "SELECT name, family, recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm' ORDER BY name"
+            )
+        by_name = {row["name"]: row for row in df.to_dicts()}
+        self.assertEqual(by_name["blk.0.attn_q.weight"]["recommended_action"],
+                         "protect")
+        self.assertEqual(by_name["blk.1.attn_q.weight"]["recommended_action"],
+                         "protect")
+        # No l5_weights row for ffn_gate -> NULL.
+        self.assertIsNone(
+            by_name["blk.0.ffn_gate.weight"]["recommended_action"])
+
+    def test_recommended_action_no_l5_weights(self) -> None:
+        """No l5_weights row -> recommended_action is NULL on the
+        upsert (the feedback loop has not produced a verdict yet)."""
+        db_path = self._fresh(5)
+        store = self._evidence_store(5)
+        self._write_observer(store, [
+            {"tensor": "blk.0.attn_q.weight", "channel": 0,
+             "rms": 0.10, "mean_abs": 0.08, "tail_ratio": 4.0},
+        ])
+        c2t.run(
+            db_path=Path(db_path),
+            model_hash="m",
+            evidence_store=Path(store),
+        )
+        with TesseraDB.open(db_path, read_only=True) as db:
+            df = db.query(
+                "SELECT name, recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm'"
+            )
+        self.assertEqual(df.height, 1)
+        self.assertIsNone(df["recommended_action"].to_list()[0])
+
+    def test_recommended_action_uses_recent_l5_outcome(self) -> None:
+        """The most recent (delta_mse, plan_accepted) per
+        (model_hash, name) is used. Older rows for the same
+        tensor are ignored. This is the per-tensor
+        'most-recent-plan-wins' contract."""
+        db_path = self._fresh(6)
+        store = self._evidence_store(6)
+        # Seed l5_weights: mild positive slope, middling hit rate.
+        # The "monitor" rule needs miscal < -0.2; the "protect"
+        # rule needs miscal > 0.5 + hit_rate < 0.5. We're between
+        # the two, so the rule that fires is requant_up /
+        # requant_down / noop.
+        self._seed_l5_weights(db_path, "m", rows=[{
+            "family": "attn_q",
+            "slope": 0.1,
+            "hit_rate": 0.6,
+        }])
+        # Two l5_outcome rows for the same name: an older
+        # rejected one and a newer accepted one. The newer one
+        # wins (highest iteration). The newer is plan_accepted=True
+        # + hit_rate > 0.9? No (hit_rate is 0.6). The newer is
+        # plan_accepted=False + delta_mse > 0.001? No. So -> noop.
+        # Then verify with a more aggressive setup.
+        self._seed_l5_outcome(db_path, "m", rows=[
+            {"name": "blk.0.attn_q.weight", "iteration": 0,
+             "plan_id": "old", "family": "attn_q",
+             "delta_mse": 0.05, "plan_accepted": False},
+            {"name": "blk.0.attn_q.weight", "iteration": 1,
+             "plan_id": "new", "family": "attn_q",
+             "delta_mse": -0.001, "plan_accepted": True},
+        ])
+        self._write_observer(store, [
+            {"tensor": "blk.0.attn_q.weight", "channel": 0,
+             "rms": 0.10, "mean_abs": 0.08, "tail_ratio": 4.0},
+        ])
+        c2t.run(
+            db_path=Path(db_path),
+            model_hash="m",
+            evidence_store=Path(store),
+        )
+        with TesseraDB.open(db_path, read_only=True) as db:
+            df = db.query(
+                "SELECT name, recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm'"
+            )
+        # The newer row (plan_accepted=True, delta_mse=-0.001) is
+        # the most recent. With slope=0.1, hit_rate=0.6: not
+        # protect, not monitor, not requant_up (plan_accepted=True),
+        # not requant_down (hit_rate=0.6 < 0.9). -> noop.
+        self.assertEqual(df["recommended_action"].to_list()[0], "noop")
+
+    def test_recommended_action_requant_up(self) -> None:
+        """plan_accepted=False + delta_mse > 0.001 -> requant_up."""
+        db_path = self._fresh(7)
+        store = self._evidence_store(7)
+        self._seed_l5_weights(db_path, "m", rows=[{
+            "family": "ffn_gate", "slope": 0.0, "hit_rate": 0.5,
+        }])
+        self._seed_l5_outcome(db_path, "m", rows=[{
+            "name": "blk.0.ffn_gate.weight", "iteration": 0,
+            "plan_id": "p0", "family": "ffn_gate",
+            "delta_mse": 0.01, "plan_accepted": False,
+        }])
+        self._write_observer(store, [
+            {"tensor": "blk.0.ffn_gate.weight", "channel": 0,
+             "rms": 0.05, "mean_abs": 0.04, "tail_ratio": 8.0},
+        ])
+        c2t.run(
+            db_path=Path(db_path),
+            model_hash="m",
+            evidence_store=Path(store),
+        )
+        with TesseraDB.open(db_path, read_only=True) as db:
+            df = db.query(
+                "SELECT recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm'"
+            )
+        self.assertEqual(df["recommended_action"].to_list()[0], "requant_up")
+
+    def test_recommended_action_preserved_on_re_upsert(self) -> None:
+        """Re-running the calibration script with the same
+        model_hash + name keeps the recommended_action the
+        calibration side set. (The same row, same key, same
+        action; the action derives from l5_weights, which
+        didn't change, so the value is stable.)"""
+        db_path = self._fresh(8)
+        store = self._evidence_store(8)
+        self._seed_l5_weights(db_path, "m", rows=[{
+            "family": "attn_q", "slope": 0.6, "hit_rate": 0.3,
+        }])
+        self._write_observer(store, [
+            {"tensor": "blk.0.attn_q.weight", "channel": 0,
+             "rms": 0.10, "mean_abs": 0.08, "tail_ratio": 4.0},
+        ])
+        c2t.run(
+            db_path=Path(db_path),
+            model_hash="m",
+            evidence_store=Path(store),
+        )
+        # Second run with new observer data: action is still
+        # 'protect' because the l5_weights row is unchanged.
+        c2t.run(
+            db_path=Path(db_path),
+            model_hash="m",
+            evidence_store=Path(store),
+        )
+        with TesseraDB.open(db_path, read_only=True) as db:
+            df = db.query(
+                "SELECT recommended_action FROM tensor_stats "
+                "WHERE model_hash = 'm'"
+            )
+        self.assertEqual(df.height, 1)
+        self.assertEqual(df["recommended_action"].to_list()[0], "protect")
 
 
 if __name__ == "__main__":

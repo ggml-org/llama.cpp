@@ -138,6 +138,18 @@ int ts_tessera_db_insert_l5_fixup(ts_tessera_db * db,
 // The `source` field records which pipeline last wrote the row
 // ("cpp_quant" for the C++ side, "py_cal" for Python). It is
 // informational; the upsert overwrites regardless.
+//
+// `recommended_action` is the per-tensor verdict produced by the
+// calibration side (see tools/tessera/l5_action.py). It is a
+// derived string ("protect" / "requant_up" / "requant_down" /
+// "monitor" / "noop") that summarizes how the calibration pipeline
+// should treat this tensor given the orchestrator's feedback
+// (miscalibration_score, hit_rate, plan_accepted, delta_mse) for
+// its (model, family). The C++ side does not write this field;
+// the Python calibration_to_tensor_stats.py upserts it from
+// l5_weights via the rules in l5_action.py. The COALESCE
+// preservation in the upsert makes this a one-way Python write
+// without disturbing the C++ side's other columns.
 struct ts_tessera_db_tensor_stat {
     std::string  model_hash;
     std::string  name;
@@ -153,6 +165,9 @@ struct ts_tessera_db_tensor_stat {
     double       mean_abs    = 0.0;
     double       tail_ratio  = 0.0;
     std::string  source;      // "cpp_quant" / "py_cal"
+    std::string  recommended_action;  // "protect" / "requant_up" /
+                                      // "requant_down" / "monitor" / "noop"
+                                      // (Python-side only; default empty)
 };
 int ts_tessera_db_upsert_tensor_stat(ts_tessera_db * db,
                                      const ts_tessera_db_tensor_stat & row,

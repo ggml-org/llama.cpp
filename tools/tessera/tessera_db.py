@@ -47,7 +47,7 @@ TENSOR_STATS_COLS: tuple[str, ...] = (
     "model_hash", "name", "family", "layer_depth",
     "out_dim", "in_dim", "n_elements", "dtype",
     "kurtosis", "eff_rank", "rms", "mean_abs", "tail_ratio",
-    "source", "updated_at",
+    "source", "recommended_action", "updated_at",
 )
 L3_OUTLIER_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer", "sidecar_label",
@@ -199,29 +199,32 @@ class TesseraDB:
                 "  model_hash, name, family, layer_depth, "
                 "  out_dim, in_dim, n_elements, dtype, "
                 "  kurtosis, eff_rank, rms, mean_abs, tail_ratio, "
-                "  source, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "  source, recommended_action, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (model_hash, name) DO UPDATE SET "
-                "  family        = COALESCE(excluded.family,        tensor_stats.family), "
-                "  layer_depth   = COALESCE(excluded.layer_depth,   tensor_stats.layer_depth), "
-                "  out_dim       = COALESCE(excluded.out_dim,       tensor_stats.out_dim), "
-                "  in_dim        = COALESCE(excluded.in_dim,        tensor_stats.in_dim), "
-                "  n_elements    = COALESCE(excluded.n_elements,    tensor_stats.n_elements), "
-                "  dtype         = COALESCE(excluded.dtype,         tensor_stats.dtype), "
-                "  kurtosis      = COALESCE(excluded.kurtosis,      tensor_stats.kurtosis), "
-                "  eff_rank      = COALESCE(excluded.eff_rank,      tensor_stats.eff_rank), "
-                "  rms           = COALESCE(excluded.rms,           tensor_stats.rms), "
-                "  mean_abs      = COALESCE(excluded.mean_abs,      tensor_stats.mean_abs), "
-                "  tail_ratio    = COALESCE(excluded.tail_ratio,    tensor_stats.tail_ratio), "
-                "  source        = excluded.source, "
-                "  updated_at    = excluded.updated_at"
+                "  family             = COALESCE(excluded.family,             tensor_stats.family), "
+                "  layer_depth        = COALESCE(excluded.layer_depth,        tensor_stats.layer_depth), "
+                "  out_dim            = COALESCE(excluded.out_dim,            tensor_stats.out_dim), "
+                "  in_dim             = COALESCE(excluded.in_dim,             tensor_stats.in_dim), "
+                "  n_elements         = COALESCE(excluded.n_elements,         tensor_stats.n_elements), "
+                "  dtype              = COALESCE(excluded.dtype,              tensor_stats.dtype), "
+                "  kurtosis           = COALESCE(excluded.kurtosis,           tensor_stats.kurtosis), "
+                "  eff_rank           = COALESCE(excluded.eff_rank,           tensor_stats.eff_rank), "
+                "  rms                = COALESCE(excluded.rms,                tensor_stats.rms), "
+                "  mean_abs           = COALESCE(excluded.mean_abs,           tensor_stats.mean_abs), "
+                "  tail_ratio         = COALESCE(excluded.tail_ratio,         tensor_stats.tail_ratio), "
+                "  source             = excluded.source, "
+                "  recommended_action = COALESCE(excluded.recommended_action, tensor_stats.recommended_action), "
+                "  updated_at         = excluded.updated_at"
             )
             # COALESCE on the UPDATE means: if the new write's
             # column is NULL, keep the existing value (the other
             # side's contribution). If the new write has a value,
             # it wins. This is how the C++ kurtosis / eff_rank
             # survives a Python rms / mean_abs / tail_ratio
-            # upsert (and vice versa).
+            # upsert (and vice versa); the same convention applies
+            # to recommended_action (the calibration side's
+            # l5_action verdict; the C++ side never writes it).
             try:
                 self._conn.execute(sql, [
                     model_hash,
@@ -238,6 +241,7 @@ class TesseraDB:
                     r.get("mean_abs"),
                     r.get("tail_ratio"),
                     r.get("source", "py_cal"),
+                    r.get("recommended_action"),
                     r.get("updated_at", now),
                 ])
             except Exception as e:
