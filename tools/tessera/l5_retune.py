@@ -148,6 +148,49 @@ RETUNE_SOURCE_TAG: str = RETUNE_SOURCE_TAG_2COEF
 # (default 0.10).
 DEFAULT_BASE_TOP_FRACTION: float = 0.10
 
+# Default base budget fraction for the per-family
+# requant_budget_bits recommendation:
+#   budget_bits = family_storage_bits * (1 - hit_rate) * fraction
+# family_storage_bits is the family's reference footprint
+# (sum of n_elements * dtype_bits over the family's
+# tensor_stats rows), so the budget is expressed relative to
+# the source-dtype size: fraction=1.0 lets a fully
+# miscalibrated family (hit_rate=0) spend up to its full
+# reference footprint, while a converged family (hit_rate->1)
+# gets budget->0 (no new bits). The deployment knob for a
+# memory-bound target (e.g. an M1 laptop) is --budget-fraction:
+# 0.25 means no family may exceed 25% of its reference
+# footprint scaled by its remaining miscalibration.
+DEFAULT_BASE_BUDGET_FRACTION: float = 1.0
+
+# Nominal bits per element for the dtype strings that appear in
+# tensor_stats.dtype. Mirrors the integer ordering of the C++
+# writer's ts_unified_writer_qtype_bits (the single source of
+# truth on the C++ side): no block-overhead accounting, integer
+# bits only, so the producer's budget and the consumer's
+# bit-cost arithmetic agree. Unknown dtypes map to None and are
+# skipped by the storage aggregation (they contribute no bits
+# rather than poison the sum).
+DTYPE_BITS: dict[str, int] = {
+    "f32": 32, "f16": 16, "bf16": 16,
+    "q8_0": 8, "q8_k": 8,
+    "q6_k": 6,
+    "q5_0": 5, "q5_1": 5, "q5_k": 5,
+    "q4_0": 4, "q4_1": 4, "q4_k": 4,
+    "q3_k": 3, "q2_k": 2,
+}
+
+
+def _dtype_bits(dtype: str | None) -> int | None:
+    """Nominal bits per element for a tensor_stats.dtype string.
+
+    Returns None for unknown/NULL dtypes; the caller skips
+    those rows.
+    """
+    if not dtype:
+        return None
+    return DTYPE_BITS.get(str(dtype).strip().lower())
+
 # The retune's sample-weight formula (Phase 15):
 #   weight = 1 / (1 + in_sample_loss * 100) * sqrt(n_samples / max_n_samples)
 # The in_sample_loss term damps rows whose post-fit loss is
@@ -217,6 +260,21 @@ class FamilyWeights:
                          hit rates have zero variance (the
                          correlation is undefined). NULL is
                          written to the l5_weights row.
+      requant_budget_bits: the per-(model, model_role, family)
+                         dispatch-side bit budget for the next
+                         requant pass. Computed as
+                         ``family_storage_bits * (1 - hit_rate)
+                         * base_budget_fraction`` where
+                         family_storage_bits is the family's
+                         reference footprint from tensor_stats
+                         (sum of n_elements * dtype_bits). NULL
+                         when the retune was skipped (too few
+                         samples) or the family has no
+                         tensor_stats storage rows; the consumer
+                         treats NULL as "no budget constraint".
+                         The dispatch's L5 loop applies it as a
+                         Lagrangian penalty on the per-family
+                         A/B fitness.
       retune_algorithm:  one of ``RETUNE_SOURCE_TAG_3COEF`` /
                          ``RETUNE_SOURCE_TAG_2COEF`` /
                          ``RETUNE_SOURCE_TAG_CROSSMODEL``.
@@ -235,6 +293,7 @@ class FamilyWeights:
     hit_rate: float
     top_fraction: float | None
     coupling_score: float | None
+    requant_budget_bits: int | None
     retune_algorithm: str
     was_acted_on: bool
 
@@ -261,6 +320,11 @@ class FamilyWeights:
             ),
             "coupling_score":   (
                 float(self.coupling_score) if self.coupling_score is not None
+                else None
+            ),
+            "requant_budget_bits": (
+                int(self.requant_budget_bits)
+                if self.requant_budget_bits is not None
                 else None
             ),
             "retune_source":    (self.retune_algorithm
@@ -438,6 +502,74 @@ def _compute_top_fraction(
     delta = math.tanh(2.0 * float(slope)) * gate
     val = float(base) * (1.0 + delta)
     return max(0.0, min(1.0, val))
+
+
+def _compute_requant_budget(
+    family_storage_bits: int | None,
+    hit_rate: float,
+    base_budget_fraction: float,
+) -> int | None:
+    """Per-(model, model_role, family) dispatch-side bit budget.
+
+    The rule:
+        budget = family_storage_bits * (1 - hit_rate) * fraction
+
+    ``family_storage_bits`` is the family's reference footprint
+    from tensor_stats (sum of n_elements * dtype_bits). The
+    ``1 - hit_rate`` gate is the same "don't fix what isn't
+    broken" guard as the shift and top_fraction rules: a
+    converged family (hit_rate -> 1) gets budget -> 0 (the next
+    requant pass should not grow it); a fully miscalibrated
+    family (hit_rate = 0) may spend up to ``fraction`` of its
+    reference footprint. Returns None (the consumer treats it as
+    "no budget constraint") when the family has no tensor_stats
+    storage rows (family_storage_bits is None) or the fraction
+    is non-positive. The result is floored at 0 and truncated to
+    an integer bit count.
+    """
+    if family_storage_bits is None:
+        return None
+    if base_budget_fraction <= 0.0:
+        return None
+    gate = max(0.0, min(1.0, 1.0 - hit_rate))
+    budget = float(family_storage_bits) * gate * float(base_budget_fraction)
+    return max(0, int(budget))
+
+
+def _family_storage_bits_from_stats(
+    db: "TesseraDB",
+    model_hash: str,
+    model_role: str,
+    family: str,
+) -> int | None:
+    """Sum n_elements * dtype_bits over a family's tensor_stats rows.
+
+    Returns None when the family has no tensor_stats rows (or no
+    rows with a recognized dtype), so the caller emits a NULL
+    budget rather than a spurious 0. dtype strings that are not
+    in DTYPE_BITS are skipped rather than poisoning the sum.
+    """
+    try:
+        con = db._conn
+        res = con.execute(
+            "SELECT n_elements, dtype FROM tensor_stats "
+            "WHERE model_hash = ? AND model_role = ? AND family = ?",
+            [model_hash, model_role, family],
+        ).fetchall()
+    except Exception:
+        # tensor_stats may be missing or pre-date the family
+        # column on older DBs; a NULL budget is the safe
+        # fallback (the consumer treats it as unconstrained).
+        return None
+    total = 0
+    saw_any = False
+    for n_elements, dtype in res:
+        bpe = _dtype_bits(dtype)
+        if bpe is None or n_elements is None:
+            continue
+        total += int(n_elements) * int(bpe)
+        saw_any = True
+    return total if saw_any else None
 
 
 # Retune follow-ups: the per-(model, family) cross-component
@@ -864,6 +996,8 @@ def _retune_family(
     min_samples: int = DEFAULT_MIN_SAMPLES,
     model_role: str = "trunk",
     coupling_score: float | None = None,
+    family_storage_bits: int | None = None,
+    base_budget_fraction: float = DEFAULT_BASE_BUDGET_FRACTION,
 ) -> FamilyWeights:
     """Retune one (model, model_role, family) group.
 
@@ -919,6 +1053,7 @@ def _retune_family(
             bias=0.0, slopes=(0.0, 0.0, 0.0),
             n_samples=0, in_sample_loss=0.0, hit_rate=0.0,
             top_fraction=None, coupling_score=coupling_score,
+            requant_budget_bits=None,
             retune_algorithm=RETUNE_SOURCE_TAG_2COEF,
             was_acted_on=False,
         )
@@ -931,6 +1066,7 @@ def _retune_family(
             bias=0.0, slopes=(0.0, 0.0, 0.0),
             n_samples=n, in_sample_loss=0.0, hit_rate=hit_rate,
             top_fraction=None, coupling_score=coupling_score,
+            requant_budget_bits=None,
             retune_algorithm=RETUNE_SOURCE_TAG_2COEF,
             was_acted_on=False,
         )
@@ -1019,6 +1155,9 @@ def _retune_family(
                 base_top_fraction, dominant_slope, hit_rate,
             ),
             coupling_score=coupling_score,
+            requant_budget_bits=_compute_requant_budget(
+                family_storage_bits, hit_rate, base_budget_fraction,
+            ),
             retune_algorithm=RETUNE_SOURCE_TAG_3COEF,
             was_acted_on=True,
         )
@@ -1046,6 +1185,9 @@ def _retune_family(
             base_top_fraction, abs(b), hit_rate,
         ),
         coupling_score=coupling_score,
+        requant_budget_bits=_compute_requant_budget(
+            family_storage_bits, hit_rate, base_budget_fraction,
+        ),
         retune_algorithm=RETUNE_SOURCE_TAG_2COEF,
         was_acted_on=True,
     )
@@ -1058,6 +1200,7 @@ def compute_l5_weights(
     model_role: str | None = None,
     base_weights: tuple[float, float, float] = DEFAULT_BASE_WEIGHTS,
     base_top_fraction: float = DEFAULT_BASE_TOP_FRACTION,
+    base_budget_fraction: float = DEFAULT_BASE_BUDGET_FRACTION,
     alpha: float = DEFAULT_ALPHA,
     min_samples: int = DEFAULT_MIN_SAMPLES,
     use_ema: bool = True,
@@ -1250,6 +1393,48 @@ def compute_l5_weights(
                     f"{str(e)[:200]})\n"
                 )
 
+        # requant_budget_bits producer: the per-(model, role,
+        # family) reference storage footprint from
+        # tensor_stats (sum of n_elements * dtype_bits). The
+        # retune multiplies it by (1 - hit_rate) *
+        # base_budget_fraction per group in _retune_family.
+        # Missing table / columns / rows degrade to an empty
+        # map -> NULL budgets (the consumer treats NULL as
+        # "no budget constraint").
+        storage_map: dict[tuple[str, str, str], int] = {}
+        if ("tensor_stats" in names
+                and _table_has_column(db, "tensor_stats", "n_elements")
+                and _table_has_column(db, "tensor_stats", "dtype")
+                and _table_has_column(db, "tensor_stats", "family")):
+            try:
+                stats_df = db.query(
+                    "SELECT model_hash, model_role, family, "
+                    "n_elements, dtype FROM tensor_stats"
+                    + (f" WHERE model_hash = '{sql_escape(model_hash)}'"
+                       if model_hash else "")
+                )
+                for row in stats_df.iter_rows(named=True):
+                    bpe = _dtype_bits(row.get("dtype"))
+                    n_el = row.get("n_elements")
+                    fam_val = row.get("family")
+                    if bpe is None or n_el is None or fam_val is None:
+                        continue
+                    key = (
+                        str(row["model_hash"]),
+                        str(row.get("model_role") or "trunk"),
+                        str(fam_val),
+                    )
+                    storage_map[key] = (
+                        storage_map.get(key, 0) + int(n_el) * int(bpe)
+                    )
+            except Exception as e:
+                sys.stderr.write(
+                    f"l5_retune: tensor_stats storage aggregation "
+                    f"failed; requant budgets will be NULL "
+                    f"({e.__class__.__name__}: {str(e)[:200]})\n"
+                )
+                storage_map = {}
+
     if df.height == 0:
         return []
 
@@ -1361,6 +1546,11 @@ def compute_l5_weights(
         # to None; the verdict stores None and the
         # l5_weights column is NULL.
         coupling = coupling_scores.get((mh, fam))
+        # requant_budget_bits producer input: the family's
+        # reference storage footprint (from the tensor_stats
+        # aggregation above). A missing key (no tensor_stats
+        # rows for the family) maps to None -> NULL budget.
+        storage_bits = storage_map.get((mh, role, fam))
         verdicts.append(_retune_family(
             model_hash=mh, family=fam,
             model_role=role,
@@ -1373,6 +1563,8 @@ def compute_l5_weights(
             base_top_fraction=base_top_fraction,
             alpha=alpha, min_samples=min_samples,
             coupling_score=coupling,
+            family_storage_bits=storage_bits,
+            base_budget_fraction=base_budget_fraction,
         ))
 
     if write_back and verdicts:
@@ -1495,11 +1687,18 @@ def write_cross_model_aggregate(
         has_model_role_col = _table_has_column(
             db, "l5_weights", "model_role",
         )
+        # requant_budget_bits is a Phase-14 column; probe it so
+        # pre-Phase-14 DBs (which pre-date the column) still
+        # aggregate. When absent the aggregate's budget is NULL.
+        has_budget_col = _table_has_column(
+            db, "l5_weights", "requant_budget_bits",
+        )
         cols = (
             "model_hash, family, w_imatrix, w_gradient, "
             "w_layer, bias, n_samples, in_sample_loss, hit_rate, "
             "top_fraction"
             + (", model_role" if has_model_role_col else "")
+            + (", requant_budget_bits" if has_budget_col else "")
         )
         df = db.query(
             f"SELECT {cols} FROM l5_weights "
@@ -1508,6 +1707,12 @@ def write_cross_model_aggregate(
         if "model_role" not in df.columns:
             df = df.with_columns(
                 pl.lit("trunk", dtype=pl.Utf8).alias("model_role")
+            )
+        if "requant_budget_bits" not in df.columns:
+            # Pre-Phase-14 DB: no budget column. Backfill NULL
+            # so the aggregate's budget is NULL (no constraint).
+            df = df.with_columns(
+                pl.lit(None, dtype=pl.Int64).alias("requant_budget_bits")
             )
     if df.height == 0:
         return []
@@ -1552,6 +1757,21 @@ def write_cross_model_aggregate(
     aggregated = aggregated.join(
         top_frac_df, on=["model_role", "family"], how="left",
     )
+    # requant_budget_bits: n_samples-weighted mean over the rows
+    # that have a non-NULL budget (same NULL-skipping treatment
+    # as top_fraction). When none of the per-model rows carry a
+    # budget the aggregate's budget is NULL (unconstrained).
+    budget_df = (
+        df.filter(pl.col("requant_budget_bits").is_not_null())
+          .group_by(["model_role", "family"])
+          .agg(
+              ((pl.col("requant_budget_bits") * pl.col("n_samples")).sum()
+               / pl.col("n_samples").sum()).alias("requant_budget_bits")
+          )
+    )
+    aggregated = aggregated.join(
+        budget_df, on=["model_role", "family"], how="left",
+    )
     # Filter by min_samples (total n across models).
     aggregated = aggregated.filter(pl.col("total_n") >= min_samples)
 
@@ -1587,6 +1807,11 @@ def write_cross_model_aggregate(
             top_frac_out = base_top_fraction
         else:
             top_frac_out = float(top_frac_val)
+        # requant_budget_bits: the n_samples-weighted mean of
+        # the per-model budgets (None when no per-model row
+        # carried a budget). Truncated to an integer bit count.
+        budget_val = row.get("requant_budget_bits")
+        budget_out = int(budget_val) if budget_val is not None else None
         verdicts.append(FamilyWeights(
             model_hash="*", model_role=role, family=fam,
             weights=projected,
@@ -1602,6 +1827,7 @@ def write_cross_model_aggregate(
             # cross-model row has model_hash = "*"). The
             # column is left NULL.
             coupling_score=None,
+            requant_budget_bits=budget_out,
             retune_algorithm=RETUNE_SOURCE_TAG_CROSSMODEL,
             was_acted_on=True,
         ))
@@ -1617,6 +1843,7 @@ def write_cross_model_aggregate(
             "in_sample_loss":  float(row["in_sample_loss"]),
             "hit_rate":        agg_hit_rate,
             "top_fraction":    top_frac_out,
+            "requant_budget_bits": budget_out,
             "retune_source":   RETUNE_SOURCE_TAG_CROSSMODEL,
         })
 
@@ -2129,6 +2356,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "orchestrator's --top-fraction default)",
     )
     p.add_argument(
+        "--budget-fraction", type=float,
+        default=DEFAULT_BASE_BUDGET_FRACTION,
+        help="Base fraction for the per-family requant_budget_bits "
+             "recommendation: budget = family_storage_bits * "
+             "(1 - hit_rate) * fraction, where family_storage_bits "
+             "is the family's reference footprint from tensor_stats "
+             "(default 1.0; 0 disables budgets -> NULL). The "
+             "deployment knob for a memory-bound target.",
+    )
+    p.add_argument(
         "--retune-cross-model", action="store_true",
         help="After the per-model retune, write a per-family "
              "aggregate row with model_hash='*' (n_samples-weighted "
@@ -2159,7 +2396,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _format_table(verdicts: list[FamilyWeights]) -> str:
     rows = ["model_hash,model_role,family,w_imatrix,w_gradient,w_layer,"
             "b_im,b_grad,b_layer,slope,hit_rate,n_samples,"
-            "top_fraction,coupling_score,retune_source,was_acted_on"]
+            "top_fraction,coupling_score,requant_budget_bits,"
+            "retune_source,was_acted_on"]
     for v in verdicts:
         rows.append(
             f"{v.model_hash},{v.model_role},{v.family},"
@@ -2169,6 +2407,7 @@ def _format_table(verdicts: list[FamilyWeights]) -> str:
             f"{v.n_samples},"
             f"{v.top_fraction if v.top_fraction is not None else ''},"
             f"{v.coupling_score if v.coupling_score is not None else ''},"
+            f"{v.requant_budget_bits if v.requant_budget_bits is not None else ''},"
             f"{v.retune_algorithm},"
             f"{int(v.was_acted_on)}"
         )
@@ -2183,6 +2422,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         model_role=args.model_role,
         base_weights=DEFAULT_BASE_WEIGHTS,
         base_top_fraction=args.base_top_fraction,
+        base_budget_fraction=args.budget_fraction,
         alpha=args.alpha,
         min_samples=args.min_samples,
         use_ema=not args.no_ema,

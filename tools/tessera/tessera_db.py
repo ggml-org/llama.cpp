@@ -708,7 +708,11 @@ class TesseraDB:
         ``rows`` is a list of dicts with keys: model_hash,
         model_role (Phase 16), family, w_imatrix, w_gradient,
         w_layer, bias, n_samples, in_sample_loss, hit_rate,
-        top_fraction (nullable, Phase 15), retune_source. The
+        top_fraction (nullable, Phase 15), coupling_score
+        (nullable), requant_budget_bits (nullable BIGINT, the
+        dispatch-side bit budget the retune recommends for the
+        family's next requant pass; NULL = unconstrained),
+        retune_source. The
         retune is the consumer-side half of the "did this
         requant plan reduce error?" feedback loop:
         ``tools/tessera/l5_retune.py`` fits a per-(model,
@@ -759,8 +763,9 @@ class TesseraDB:
             "INSERT INTO l5_weights ("
             "  model_hash, model_role, family, w_imatrix, w_gradient, w_layer, "
             "  bias, n_samples, in_sample_loss, hit_rate, "
-            "  top_fraction, coupling_score, retune_source, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "  top_fraction, coupling_score, requant_budget_bits, "
+            "  retune_source, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
             "  w_imatrix       = excluded.w_imatrix, "
             "  w_gradient      = excluded.w_gradient, "
@@ -771,6 +776,7 @@ class TesseraDB:
             "  hit_rate        = excluded.hit_rate, "
             "  top_fraction    = excluded.top_fraction, "
             "  coupling_score  = excluded.coupling_score, "
+            "  requant_budget_bits = excluded.requant_budget_bits, "
             "  retune_source   = excluded.retune_source, "
             "  updated_at      = excluded.updated_at"
         )
@@ -791,8 +797,9 @@ class TesseraDB:
                 "  model_hash, model_role, family, "
                 "  w_imatrix, w_gradient, w_layer, "
                 "  bias, n_samples, in_sample_loss, hit_rate, "
-                "  top_fraction, coupling_score, retune_source, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "  top_fraction, coupling_score, requant_budget_bits, "
+                "  retune_source, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
                 "  w_imatrix       = excluded.w_imatrix, "
                 "  w_gradient      = excluded.w_gradient, "
@@ -803,6 +810,7 @@ class TesseraDB:
                 "  hit_rate        = excluded.hit_rate, "
                 "  top_fraction    = excluded.top_fraction, "
                 "  coupling_score  = excluded.coupling_score, "
+                "  requant_budget_bits = excluded.requant_budget_bits, "
                 "  retune_source   = excluded.retune_source, "
                 "  updated_at      = excluded.updated_at"
             )
@@ -819,8 +827,9 @@ class TesseraDB:
                 "  model_hash, model_role, family, "
                 "  w_imatrix, w_gradient, w_layer, "
                 "  bias, n_samples, in_sample_loss, hit_rate, "
-                "  top_fraction, coupling_score, retune_source, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "  top_fraction, coupling_score, requant_budget_bits, "
+                "  retune_source, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (model_hash, family) DO UPDATE SET "
                 "  w_imatrix       = excluded.w_imatrix, "
                 "  w_gradient      = excluded.w_gradient, "
@@ -831,6 +840,7 @@ class TesseraDB:
                 "  hit_rate        = excluded.hit_rate, "
                 "  top_fraction    = excluded.top_fraction, "
                 "  coupling_score  = excluded.coupling_score, "
+                "  requant_budget_bits = excluded.requant_budget_bits, "
                 "  retune_source   = excluded.retune_source, "
                 "  model_role      = excluded.model_role, "
                 "  updated_at      = excluded.updated_at"
@@ -852,6 +862,7 @@ class TesseraDB:
                     r.get("hit_rate"),
                     r.get("top_fraction"),
                     r.get("coupling_score"),
+                    r.get("requant_budget_bits"),
                     r.get("retune_source", "ols_slope_v1"),
                     r.get("updated_at", now),
                 ])
@@ -939,6 +950,21 @@ class TesseraDB:
             sys.stderr.write(
                 f"tessera-db: ALTER TABLE l5_weights "
                 f"ADD COLUMN model_role failed: {e}\n"
+            )
+        # requant_budget_bits column. BIGINT, nullable. The
+        # canonical CREATE TABLE (both the C++ side's and the
+        # Python migration) carries it since Phase 14, but a
+        # DB created by an older Python path may pre-date it;
+        # the upsert lists the column, so ensure it exists.
+        try:
+            self._conn.execute(
+                "ALTER TABLE l5_weights "
+                "ADD COLUMN IF NOT EXISTS requant_budget_bits BIGINT"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE l5_weights "
+                f"ADD COLUMN requant_budget_bits failed: {e}\n"
             )
         # Drop the cached PK shape so the next insert
         # re-probes the actual PK. (The PK may have been

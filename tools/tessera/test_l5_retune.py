@@ -119,6 +119,7 @@ SCHEMA_SQL = """
         hit_rate              DOUBLE,
         top_fraction          DOUBLE,
         coupling_score        DOUBLE,
+        requant_budget_bits   BIGINT,
         retune_source         TEXT,
         updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, model_role, family)
@@ -2512,8 +2513,202 @@ class TestL5Retune(unittest.TestCase):
         )
 
 
+class TestRequantBudgetProducer(unittest.TestCase):
+    """The requant_budget_bits producer: the retune computes
+    budget = family_storage_bits * (1 - hit_rate) * fraction
+    from tensor_stats and persists it on the l5_weights row.
+    """
+
+    def setUp(self) -> None:
+        self._td = Path(tempfile.mkdtemp(prefix="l5_budget_test_"))
+        self.db_path = str(self._td / "tessera.duckdb")
+        _create_fresh_db(self.db_path)
+
+    def tearDown(self) -> None:
+        import shutil
+        shutil.rmtree(self._td, ignore_errors=True)
+
+    def _seed_outcome(
+        self, model_hash: str, family: str, n: int, hit_rate: float,
+        role: str = "trunk",
+    ) -> None:
+        """Seed n l5_outcome rows with a controlled hit_rate
+        (the first round(hit_rate*n) plans are accepted) and a
+        clean positive slope so the OLS acts on the group."""
+        n_accepted = int(round(hit_rate * n))
+        rows = []
+        for i in range(n):
+            rows.append({
+                "name": f"blk.{i}.{family}.weight",
+                "layer": i,
+                "iteration": 0,
+                "plan_id": f"p{i}",
+                "family": family,
+                "model_role": role,
+                "sensitivity_score": 0.1 * (i + 1),
+                "mse_before": 0.01,
+                "mse_after": 0.01 + 0.001 * (i + 1),
+                "delta_mse": 0.001 * (i + 1),
+                "plan_accepted": i < n_accepted,
+                "accept_threshold": 0.0,
+            })
+        _seed_l5_outcome(self.db_path, model_hash, rows)
+
+    def _seed_stats(
+        self, model_hash: str, family: str, tensors: list[tuple[int, str]],
+        role: str = "trunk",
+    ) -> None:
+        """Seed tensor_stats rows: (n_elements, dtype) per tensor."""
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_tensor_stats(model_hash=model_hash, rows=[
+                {
+                    "name": f"blk.{i}.{family}.weight",
+                    "family": family,
+                    "model_role": role,
+                    "layer_depth": i,
+                    "out_dim": 1, "in_dim": n_el, "n_elements": n_el,
+                    "dtype": dtype,
+                    "source": "cpp_quant",
+                }
+                for i, (n_el, dtype) in enumerate(tensors)
+            ])
+
+    def test_budget_from_storage_and_hit_rate(self) -> None:
+        # storage = 1000*16 + 1000*16 = 32000 bits; hit_rate=0.5,
+        # fraction=1.0 -> budget = 16000.
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5)
+        self._seed_stats("m", "attn_q", [(1000, "f16"), (1000, "f16")])
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+        )
+        v = next(v for v in verdicts if v.family == "attn_q")
+        self.assertAlmostEqual(v.hit_rate, 0.5, places=6)
+        self.assertEqual(v.requant_budget_bits, 16000)
+
+    def test_budget_null_without_tensor_stats(self) -> None:
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5)
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+        )
+        v = next(v for v in verdicts if v.family == "attn_q")
+        self.assertTrue(v.was_acted_on)
+        self.assertIsNone(v.requant_budget_bits)
+
+    def test_budget_null_when_too_few_samples(self) -> None:
+        self._seed_outcome("m", "attn_q", n=2, hit_rate=0.5)
+        self._seed_stats("m", "attn_q", [(1000, "f16")])
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+        )
+        v = next(v for v in verdicts if v.family == "attn_q")
+        self.assertFalse(v.was_acted_on)
+        self.assertIsNone(v.requant_budget_bits)
+
+    def test_budget_fraction_scaling(self) -> None:
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5)
+        self._seed_stats("m", "attn_q", [(1000, "f16"), (1000, "f16")])
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+            base_budget_fraction=0.25,
+        )
+        v = next(v for v in verdicts if v.family == "attn_q")
+        # 32000 * 0.5 * 0.25 = 4000
+        self.assertEqual(v.requant_budget_bits, 4000)
+
+    def test_budget_disabled_with_zero_fraction(self) -> None:
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5)
+        self._seed_stats("m", "attn_q", [(1000, "f16")])
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+            base_budget_fraction=0.0,
+        )
+        v = next(v for v in verdicts if v.family == "attn_q")
+        self.assertIsNone(v.requant_budget_bits)
+
+    def test_budget_zero_at_hit_rate_one(self) -> None:
+        # A converged family (all plans accepted) gets budget 0:
+        # the next requant pass should not grow it.
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=1.0)
+        self._seed_stats("m", "attn_q", [(1000, "f16")])
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+        )
+        v = next(v for v in verdicts if v.family == "attn_q")
+        self.assertEqual(v.requant_budget_bits, 0)
+
+    def test_budget_persisted_to_l5_weights(self) -> None:
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5)
+        self._seed_stats("m", "attn_q", [(1000, "f16"), (1000, "f16")])
+        compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+        )
+        import duckdb as _dd
+        con = _dd.connect(self.db_path, read_only=True)
+        try:
+            rows = con.execute(
+                "SELECT requant_budget_bits FROM l5_weights "
+                "WHERE model_hash = 'm' AND family = 'attn_q'"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], 16000)
+
+    def test_budget_role_independent_storage(self) -> None:
+        # The same family in two roles has different storage
+        # footprints; each role's budget is computed from its
+        # own tensor_stats rows.
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5, role="trunk")
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5, role="dflash")
+        self._seed_stats("m", "attn_q", [(1000, "f16")], role="trunk")
+        self._seed_stats("m", "attn_q", [(500, "f16")], role="dflash")
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+        )
+        trunk = next(v for v in verdicts
+                     if v.model_role == "trunk" and v.family == "attn_q")
+        dflash = next(v for v in verdicts
+                      if v.model_role == "dflash" and v.family == "attn_q")
+        # trunk: 1000*16 * 0.5 = 8000; dflash: 500*16 * 0.5 = 4000
+        self.assertEqual(trunk.requant_budget_bits, 8000)
+        self.assertEqual(dflash.requant_budget_bits, 4000)
+
+    def test_budget_unknown_dtype_skipped(self) -> None:
+        # Rows with an unrecognized dtype contribute nothing;
+        # the known rows still sum.
+        self._seed_outcome("m", "attn_q", n=4, hit_rate=0.5)
+        self._seed_stats(
+            "m", "attn_q",
+            [(1000, "f16"), (9999, "mystery_dtype")],
+        )
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="m", write_back=True,
+        )
+        v = next(v for v in verdicts if v.family == "attn_q")
+        # 1000*16 * 0.5 = 8000 (the mystery row is skipped)
+        self.assertEqual(v.requant_budget_bits, 8000)
+
+    def test_cross_model_budget_weighted_mean(self) -> None:
+        # Two models, same (role, family), equal n_samples:
+        # the cross-model budget is the mean of the per-model
+        # budgets.
+        for mh, n_el in (("m1", 1000), ("m2", 3000)):
+            self._seed_outcome(mh, "attn_q", n=4, hit_rate=0.5)
+            self._seed_stats(mh, "attn_q", [(n_el, "f16")])
+        compute_l5_weights(self.db_path, write_back=True)
+        cross = write_cross_model_aggregate(self.db_path)
+        v = next(v for v in cross
+                 if v.model_role == "trunk" and v.family == "attn_q")
+        # m1 budget = 1000*16*0.5 = 8000; m2 = 3000*16*0.5 = 24000;
+        # equal n_samples -> mean = 16000.
+        self.assertEqual(v.requant_budget_bits, 16000)
+
+
 if __name__ == "__main__":
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestL5Retune)
+    loader = unittest.defaultTestLoader
+    suite = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestL5Retune))
+    suite.addTests(loader.loadTestsFromTestCase(TestRequantBudgetProducer))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     sys.exit(0 if result.wasSuccessful() else 1)
