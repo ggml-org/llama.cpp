@@ -15003,7 +15003,18 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     if (n_q == 1 && is_mixed && d_head_q == d_head_v &&
         (d_head_q == 512 || d_head_q == 256) && n_head_kv > 0) {
         const int gqa = n_head / n_head_kv;
-        if (gqa == 4 || gqa == 8) {
+        // gqa == 2 is gemma-4-26B's SWA shape (n_head 16 / n_head_kv 8, 25 of its
+        // 30 layers). Without it those layers take the per-query-head kernel and
+        // re-read the KV cache twice; measured on the X2-90 that is the whole of
+        // the model's -fa 1 regression. Opt-in while it is characterised: only two
+        // query heads amortise each KV read here, a quarter of the gqa 8 sharing,
+        // so this is expected to reach parity with the unfused path rather than
+        // beat it. GGML_OPENCL_FA_MQN_GQA2=1.
+        static const bool mqn_gqa2 = []{
+            const char * e = getenv("GGML_OPENCL_FA_MQN_GQA2");
+            return e != NULL && e[0] != '0';
+        }();
+        if (gqa == 4 || gqa == 8 || (gqa == 2 && mqn_gqa2)) {
             // hs/nsg defaults are per-shape measurements on the X2-90; the env
             // knobs exist to re-tune them elsewhere. DK=256 gqa=8 must stay at
             // a 128-thread workgroup - the stock 192-thread g8 kernel is what
