@@ -472,7 +472,10 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_ONYX:
                 {
-                    // Follow transformers Onyx processing: <|patch|>*N, no delimiters
+                    // NOTE: transformers no longer uses delimiters (just <|patch|>*N),
+                    // but we get subpar generations if we don't.
+                    img_beg = "<|image_start|>";
+                    img_end = "<|image_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_onyx>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_YOUTUVL:
