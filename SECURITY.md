@@ -25,8 +25,6 @@ A team of volunteers on a reasonable-effort basis maintains this project. As suc
 
 llama.cpp has an AI security scanner that scans the code periodically. The full prompts and tool set can be found in [ggml-org/security-scan-prompt](https://github.com/ggml-org/security-scan-prompt).
 
-If you are a researcher reporting bugs or vulnerabilities to llama.cpp, please note that findings produced using this repository will not qualify as valid reports.
-
 We greatly appreciate reports that reflect genuine research effort, and we are happy to spend our time reviewing them. Findings that an autonomous AI agent can surface on its own add little on top of the scans we already run.
 
 ### Requirements
