@@ -237,8 +237,13 @@ public enum TesseraSettings {
         UserDefaults.standard.string(forKey: TesseraSettingsKey.remoteAPIBaseURL) ?? TesseraSettingsDefault.remoteAPIBaseURL
     }
 
+    /// The remote LLM provider API key. Lives in the Keychain,
+    /// not UserDefaults (see ``TesseraSecretStore``); the getter
+    /// also performs the one-shot migration of any legacy
+    /// UserDefaults value left by pre-Keychain builds.
     public static var remoteAPIKey: String {
-        UserDefaults.standard.string(forKey: TesseraSettingsKey.remoteAPIKey) ?? TesseraSettingsDefault.remoteAPIKey
+        TesseraSecretStore.secret(account: TesseraSecretStore.remoteAPIKeyAccount)
+            ?? TesseraSettingsDefault.remoteAPIKey
     }
 
     public static var remoteModelName: String {

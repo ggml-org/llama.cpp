@@ -18,8 +18,12 @@ struct SettingsView: View {
     // LLM provider
     @AppStorage(TesseraSettingsKey.llmProviderType) private var llmProviderType = TesseraSettingsDefault.llmProviderType
     @AppStorage(TesseraSettingsKey.remoteAPIBaseURL) private var remoteAPIBaseURL = TesseraSettingsDefault.remoteAPIBaseURL
-    @AppStorage(TesseraSettingsKey.remoteAPIKey) private var remoteAPIKey = TesseraSettingsDefault.remoteAPIKey
     @AppStorage(TesseraSettingsKey.remoteModelName) private var remoteModelName = TesseraSettingsDefault.remoteModelName
+    // The API key is NOT @AppStorage: it lives in the Keychain.
+    // `apiKeyDraft` is only the in-flight editing copy; the UI
+    // otherwise sees a stored/missing state, never the secret.
+    @State private var apiKeyDraft = ""
+    @State private var apiKeyState: TesseraSecretState = .missing
     @AppStorage(TesseraSettingsKey.remoteUseStreaming) private var remoteUseStreaming = TesseraSettingsDefault.remoteUseStreaming
     @AppStorage(TesseraSettingsKey.onDeviceModelPath) private var onDeviceModelPath = TesseraSettingsDefault.onDeviceModelPath
     @AppStorage(TesseraSettingsKey.onDeviceLibraryPath) private var onDeviceLibraryPath = TesseraSettingsDefault.onDeviceLibraryPath
@@ -54,6 +58,7 @@ struct SettingsView: View {
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
         .frame(width: 520, height: 420)
+        .onAppear { loadAPIKey() }
     }
 
     private var generalTab: some View {
@@ -96,7 +101,11 @@ struct SettingsView: View {
             if llmProviderType == TesseraLLMProviderType.remoteAPI.rawValue {
                 Section("Remote API") {
                     TextField("Base URL", text: $remoteAPIBaseURL)
-                    SecureField("API key", text: $remoteAPIKey)
+                    SecureField("API key", text: $apiKeyDraft)
+                        .onSubmit { commitAPIKey() }
+                        .onDisappear { commitAPIKey() }
+                        .accessibilityHint("Stored in the macOS Keychain, not preferences")
+                    apiKeyStateRow
                     TextField("Model name", text: $remoteModelName)
                     Toggle("Stream responses (SSE)", isOn: $remoteUseStreaming)
                 }
@@ -118,6 +127,48 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    /// The Keychain state line under the API key field. Pairs a
+    /// symbol with the text so the state is not color-only.
+    @ViewBuilder
+    private var apiKeyStateRow: some View {
+        switch apiKeyState {
+        case .stored:
+            Label("Key stored in the Keychain", systemImage: "lock.shield")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .missing:
+            Label("No key stored yet", systemImage: "key.slash")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func loadAPIKey() {
+        apiKeyDraft = TesseraSecretStore.secret(
+            account: TesseraSecretStore.remoteAPIKeyAccount
+        ) ?? ""
+        apiKeyState = TesseraSecretStore.state(
+            account: TesseraSecretStore.remoteAPIKeyAccount
+        )
+    }
+
+    /// Write the editing copy to the Keychain. An empty field
+    /// deletes the stored secret. Runs on submit and when the
+    /// field disappears (tab switch / provider change / window
+    /// close), so there is no explicit "Save key" button to
+    /// forget.
+    private func commitAPIKey() {
+        let stored = TesseraSecretStore.setSecret(
+            apiKeyDraft.isEmpty ? nil : apiKeyDraft,
+            account: TesseraSecretStore.remoteAPIKeyAccount
+        )
+        if stored {
+            apiKeyState = TesseraSecretStore.state(
+                account: TesseraSecretStore.remoteAPIKeyAccount
+            )
+        }
     }
 
     // MARK: Autonomy tab (autonomy-calibration-design.md 9, 10, 11, 13)
