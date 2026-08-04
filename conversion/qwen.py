@@ -764,3 +764,54 @@ class DSparkModel(DFlashModel):
         if name.endswith(("embed_tokens.weight", "lm_head.weight")):
             return None
         return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("Gemma4DSparkModel")
+class Gemma4DSparkModel(DSparkModel):
+    # Gemma-4 dspark drafter: a 5-layer (12 + DSpark head) model that targets
+    # the 48-layer unified Gemma-4 trunk. Borrows embed_tokens + lm_head from
+    # the target at runtime (the same way the Qwen-3 dspark does). The Markov
+    # head is a rank-256 "vanilla" projection that contributes the
+    # confidence_head_with_markov signal used by the hybrid arbiter.
+    #
+    # The conversion inherits DSparkModel wholesale: same dflash_config
+    # normalization, same embed_tokens / lm_head filter. The Gemma-4 specific
+    # bits are:
+    #  - per-layer layer_scalar (renamed to layer_scalar.weight so the
+    #    tensor map can find it; the GGUF tensor is LAYER_OUT_SCALE =
+    #    blk.{bid}.layer_output_scale, declared in the DFLASH arch's
+    #    tensor list alongside the dspark heads)
+    #  - markov_rank / markov_head_type / confidence_head_with_markov
+    #    hparams (carried in the safetensors; not yet exposed as GGUF
+    #    metadata keys — the tensors themselves are the canonical carrier)
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hparams.setdefault("markov_rank", self.hparams.get("markov_rank", 0))
+        self.hparams.setdefault("markov_head_type", self.hparams.get("markov_head_type", "vanilla"))
+        self.hparams.setdefault("confidence_head_with_markov",
+                                self.hparams.get("confidence_head_with_markov", False))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        # Gemma-4 dspark carries per-layer layer_scalar as a bare name (no
+        # .weight suffix). The tensor map needs layer_scalar.weight; the
+        # rename matches Gemma4Model's pattern. All other filtering is
+        # inherited from DSparkModel (drop embed_tokens + lm_head, prepend
+        # model. if missing).
+        name, gen = item
+        if name.endswith("layer_scalar") and not name.endswith("layer_scalar.weight"):
+            name = name + ".weight"
+        # The dspark declares BOTH post_attention_layernorm (Qwen-3
+        # convention, FFN_NORM) and pre_feedforward_layernorm (Gemma-4
+        # convention, FFN_PRE_NORM). They would collide in the GGUF
+        # because both map to blk.{bid}.ffn_norm.weight. The dspark
+        # runtime uses pre_feedforward_layernorm (gemma-2/gemma-4
+        # norm pattern); post_attention_layernorm is unused here, so
+        # we drop it. The arch's FFN_NORM still exists in the tensor
+        # list for Qwen-3 drafters; the Gemma-4 dspark just doesn't
+        # use it.
+        if name.endswith("post_attention_layernorm.weight"):
+            return None
+        return super().filter_tensors((name, gen))
