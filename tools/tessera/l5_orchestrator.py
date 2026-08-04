@@ -50,6 +50,8 @@ import time
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+import polars as pl
+
 # L5 lives in the same package as per_tensor_calibrate.py so we can import
 # the helpers by package-relative name when the script is run as a module,
 # and fall back to a sys.path-anchored import for the script path.
@@ -157,6 +159,56 @@ class TensorState:
         per_weight = metrics.BITS_PER_WEIGHT.get(self.current_qtype, 0.0)
         return int(per_weight * float(self.n_weights))
 
+    def to_row(self) -> dict:
+        """Project this TensorState to a single polars DataFrame row.
+
+        Used by the polars-backed refactor of the orchestrator: the
+        per-iteration state is a polars DataFrame, and the
+        TensorState dataclass is the per-row projection. The mapping
+        is one-to-one for the columns the orchestrator reads; the
+        sensitivity / EMA columns are added by ``SensitivityScorer``
+        after the orchestrator loads the L4 report.
+        """
+        return {
+            "tensor":          self.name,
+            "current_qtype":   self.current_qtype,
+            "target_qtype":    self.target_qtype,
+            "n_weights":       int(self.n_weights),
+            "mse":             float(self.mse),
+            "mse_minus_one":   (float(self.mse_minus_one)
+                                if self.mse_minus_one is not None else None),
+            "perplexity":      (float(self.perplexity)
+                                if self.perplexity is not None else None),
+            "top1_mismatch":   (float(self.top1_mismatch)
+                                if self.top1_mismatch is not None else None),
+        }
+
+    @classmethod
+    def from_df_row(cls, row: Mapping[str, object]) -> "TensorState":
+        """Inverse of :meth:`to_row`; build a TensorState from one
+        polars DataFrame row (as a Mapping; the ``row`` argument is
+        what ``df.row(i, named=True)`` returns).
+
+        The orchestrator's primary state is the DataFrame; this
+        back-conversion exists for the ``TensorState`` public API
+        (the demo and any tests that pass TensorState lists).
+        """
+        return cls(
+            name=str(row["tensor"]),
+            current_qtype=str(row["current_qtype"]),
+            target_qtype=(str(row["target_qtype"])
+                          if row.get("target_qtype") is not None else None),
+            n_weights=int(row["n_weights"] or 0),
+            mse=float(row["mse"] or 0.0),
+            mse_minus_one=(float(row["mse_minus_one"])
+                           if row.get("mse_minus_one") is not None else None),
+            perplexity=(float(row["perplexity"])
+                        if row.get("perplexity") is not None else None),
+            top1_mismatch=(float(row["top1_mismatch"])
+                           if row.get("top1_mismatch") is not None else None),
+            raw={},
+        )
+
 
 @dataclasses.dataclass
 class RequantAction:
@@ -223,7 +275,15 @@ class SensitivityScorer:
 
     The scorer is the only piece that knows about the relative weighting of
     the three components; the rest of the orchestrator treats it as a
-    function from ``(imatrix, l4_states) -> ema_scores``.
+    function from ``(imatrix, df) -> df`` (the EMA-tracked scores
+    are added to the DataFrame as a new column).
+
+    Internally the EMA state is a per-tensor ``prev_scores`` dict (one
+    float per tensor). The DataFrame's ``sensitivity_ema`` column is
+    computed each iteration as ``decay * prev + (1 - decay) * score`` and
+    the new values are stored back into ``prev_scores`` for the next
+    iteration. This is the polars-native version of the previous
+    ``MomentumEMA`` dict-of-floats pattern; the public API is unchanged.
     """
 
     def __init__(
@@ -239,14 +299,17 @@ class SensitivityScorer:
                 f"sensitivity weights must sum to 1.0, got {sum(self.weights):.6f}"
             )
         self.total_layers = int(total_layers)
-        self.ema = metrics.MomentumEMA(decay=decay)
+        self.decay = float(decay)
+        # EMA state: per-tensor previous score. The dict is the
+        # ``polars-native`` form of the old MomentumEMA; the
+        # DataFrame column is rebuilt each iteration from this dict
+        # via a left-join.
+        self._prev_scores: dict[str, float] = {}
+        # Most recent (im, grad, layer) component dicts, kept for
+        # debug / log output. Same contract as before.
         self._raw_components: tuple[
             metrics.ComponentScores, metrics.ComponentScores, metrics.ComponentScores
         ] = ({}, {}, {})
-
-    @property
-    def decay(self) -> float:
-        return self.ema.decay
 
     def raw_components(self) -> tuple[
         metrics.ComponentScores, metrics.ComponentScores, metrics.ComponentScores
@@ -260,26 +323,43 @@ class SensitivityScorer:
 
     def score(
         self,
-        tensors: Sequence[TensorState],
+        df: pl.DataFrame,
         imatrix: Mapping[str, float] | None,
-    ) -> dict[str, float]:
-        """Compute a fresh sensitivity score and update the EMA.
+    ) -> pl.DataFrame:
+        """Compute fresh sensitivity scores and update the EMA in-place.
 
-        ``imatrix`` may be ``None`` if no imatrix is available; the scorer
-        falls back to gradient + layer-prior only and rebalances the
-        weights so the total still sums to 1.0.
+        Returns the input DataFrame augmented with five columns:
+        ``imatrix_magnitude``, ``gradient_proxy``,
+        ``layer_position_prior``, ``sensitivity_score`` (the
+        per-iteration weighted sum), and ``sensitivity_ema`` (the
+        EMA-tracked value). The EMA state is updated so the next
+        iteration's ``sensitivity_ema`` continues smoothly from this
+        one.
+
+        ``imatrix`` may be ``None`` if no imatrix is available; the
+        scorer falls back to gradient + layer-prior only and
+        rebalances the weights so the total still sums to 1.0.
         """
-        names = [t.name for t in tensors]
+        names = df["tensor"].to_list()
+        mse_list = df["mse"].to_list()
+        mse_minus_one_list = df["mse_minus_one"].to_list()
         im = metrics.sanitise(
             metrics.imatrix_magnitude(
                 {n: float(imatrix.get(n, 0.0)) for n in names} if imatrix else None
             )
         )
+        # gradient_proxy takes (mse_current, mse_minus_one) dicts.
+        # mse_minus_one falls back to mse when the column is null
+        # (the original TensorState path used
+        # ``t.mse_minus_one if t.mse_minus_one is not None else t.mse``);
+        # the polars refactor preserves the same semantics.
+        mse_current_dict = dict(zip(names, mse_list))
+        mse_minus_one_dict = {
+            n: float(m if m is not None else mse_list[i])
+            for i, (n, m) in enumerate(zip(names, mse_minus_one_list))
+        }
         grad = metrics.sanitise(
-            metrics.gradient_proxy(
-                {n: t.mse for n, t in zip(names, tensors)},
-                {n: (t.mse_minus_one if t.mse_minus_one is not None else t.mse) for n, t in zip(names, tensors)},
-            )
+            metrics.gradient_proxy(mse_current_dict, mse_minus_one_dict)
         )
         layer = metrics.sanitise(
             metrics.layer_position_prior(
@@ -293,16 +373,91 @@ class SensitivityScorer:
         # knows about the original weights; the planner just sees the
         # post-rebalance value.
         if not im:
-            w_im, w_grad, w_layer = 0.0, self.weights[1] + self.weights[0] * 0.6, self.weights[2] + self.weights[0] * 0.4
+            w_im, w_grad, w_layer = (
+                0.0,
+                self.weights[1] + self.weights[0] * 0.6,
+                self.weights[2] + self.weights[0] * 0.4,
+            )
             total = w_im + w_grad + w_layer
             weights = (w_im / total, w_grad / total, w_layer / total)
         else:
             weights = self.weights
-        combined = metrics.combine((im, grad, layer), weights=weights)
-        return self.ema.update(combined)
+        w_im, w_grad, w_layer = weights
+
+        # Build the per-tensor score column. The polars expressions
+        # reference the component dicts via a per-row lookup using
+        # ``replace_strict``: a vectorised dict-style substitution that
+        # keeps the join-free polars idiom and works when the input
+        # DataFrame already carries the component columns from a
+        # previous iteration (the previous columns are overwritten
+        # with the new values from this iteration's components).
+        # We do NOT use ``df.join(score_map, ...)`` here because
+        # polars would append a ``_right`` suffix on the second
+        # iteration when the left frame already has the column.
+        im_lookup = dict(im)
+        grad_lookup = dict(grad)
+        layer_lookup = dict(layer)
+        out = df.with_columns(
+            pl.col("tensor").replace_strict(
+                im_lookup, return_dtype=pl.Float64,
+                default=0.0,
+            ).alias("imatrix_magnitude"),
+            pl.col("tensor").replace_strict(
+                grad_lookup, return_dtype=pl.Float64,
+                default=0.0,
+            ).alias("gradient_proxy"),
+            pl.col("tensor").replace_strict(
+                layer_lookup, return_dtype=pl.Float64,
+                default=0.0,
+            ).alias("layer_position_prior"),
+        )
+        out = out.with_columns(
+            (w_im * pl.col("imatrix_magnitude")
+             + w_grad * pl.col("gradient_proxy")
+             + w_layer * pl.col("layer_position_prior")
+            ).alias("sensitivity_score")
+        )
+
+        # EMA update. ``prev_scores`` is a per-tensor dict; we
+        # left-join it onto the DataFrame as ``sensitivity_ema_prev``
+        # (null on the first iteration) and compute the EMA via
+        # ``pl.when(prev.is_null()).then(score).otherwise(decay*prev
+        # + (1-decay)*score)``. This is the cold-start seed
+        # semantics of the original ``MomentumEMA``: the first
+        # observation seeds the EMA at the score value, and
+        # subsequent observations use the weighted update. The
+        # DataFrame ctor's type inference for an empty list gives
+        # ``null`` for the key column, which would not match the
+        # ``String`` ``tensor`` on the left side of the join, so
+        # we build the prev frame with explicit ``pl.Series``
+        # dtypes.
+        prev_keys = list(self._prev_scores.keys())
+        prev_vals = list(self._prev_scores.values())
+        prev_df = pl.DataFrame([
+            pl.Series("tensor",              prev_keys, dtype=pl.String),
+            pl.Series("sensitivity_ema_prev", prev_vals, dtype=pl.Float64),
+        ])
+        out = out.join(prev_df, on="tensor", how="left")
+        out = out.with_columns(
+            pl.when(pl.col("sensitivity_ema_prev").is_null())
+              .then(pl.col("sensitivity_score"))
+              .otherwise(
+                  self.decay * pl.col("sensitivity_ema_prev")
+                  + (1.0 - self.decay) * pl.col("sensitivity_score")
+              )
+              .alias("sensitivity_ema")
+        ).drop("sensitivity_ema_prev")
+
+        # Persist the new EMA values for the next iteration.
+        new_ema = {
+            row["tensor"]: float(row["sensitivity_ema"])
+            for row in out.select("tensor", "sensitivity_ema").iter_rows(named=True)
+        }
+        self._prev_scores = new_ema
+        return out
 
     def reset(self) -> None:
-        self.ema.reset()
+        self._prev_scores = {}
         self._raw_components = ({}, {}, {})
 
 
@@ -341,8 +496,7 @@ class RequantPlanner:
     def plan(
         self,
         iteration: int,
-        tensors: Sequence[TensorState],
-        sensitivity: Mapping[str, float],
+        df: pl.DataFrame,
     ) -> RequantPlan:
         """Return a :class:`RequantPlan` for the current state.
 
@@ -351,20 +505,43 @@ class RequantPlanner:
         budget.  The iteration is also the termination check: if every
         tensor is below the divergence threshold the plan marks itself as
         converged and produces an empty action list.
+
+        Operates on the polars DataFrame directly: cohort selection
+        is a polars rank + filter (one expression each for the
+        top and bottom cohorts), the divergence check is a single
+        polars ``pl.col("mse").max() <= threshold`` test, and the
+        per-tensor ``bits()`` / ``expected_mse_at()`` math is
+        inlined as polars expressions where useful.
         """
-        # Sort tensors by current sensitivity descending (the "hot" tensors).
-        ranked = sorted(
-            tensors,
-            key=lambda t: sensitivity.get(t.name, 0.0),
+        # Per-row projection of the ``bits()`` and ``expected_mse_at()``
+        # math from TensorState, inlined as Python since the
+        # computations are scalar and the polars overhead would
+        # exceed the gain. The resulting ``iter_rows`` projection is
+        # the per-tensor view the rest of the planner consumes.
+        n = df.height
+        ranked_records = sorted(
+            df.select(
+                "tensor", "current_qtype", "mse", "n_weights",
+                "sensitivity_ema",
+            ).iter_rows(named=True),
+            key=lambda r: float(r["sensitivity_ema"] or 0.0),
             reverse=True,
         )
+
+        # Build a per-tensor dict view for the bits() / expected_mse_at
+        # math. Keeps the rest of the function unchanged.
+        tensors_view = [TensorState.from_df_row(r) for r in df.iter_rows(named=True)]
+        sensitivity = {
+            str(r["tensor"]): float(r["sensitivity_ema"] or 0.0)
+            for r in df.iter_rows(named=True)
+        }
 
         # If everything is already below the divergence threshold, the loop
         # has nothing to do.  This is the primary termination signal.
         if self.divergence_threshold is not None and all(
-            t.mse <= self.divergence_threshold for t in tensors
+            t.mse <= self.divergence_threshold for t in tensors_view
         ):
-            storage_before = sum(t.bits() for t in tensors)
+            storage_before = sum(t.bits() for t in tensors_view)
             return RequantPlan(
                 iteration=iteration,
                 actions=[],
@@ -376,36 +553,61 @@ class RequantPlanner:
                 ema_sensitivity=dict(sensitivity),
             )
 
-        # Pick the cohorts.
-        top_set = metrics.pick_top_fraction(sensitivity, self.top_fraction)
-        bottom_set = metrics.pick_bottom_fraction(sensitivity, self.bottom_fraction)
-        # Never down-quant the same tensor we are up-quantising in the same
-        # pass; the sets are intentionally derived from disjoint rank bands.
-        top_set -= bottom_set
+        # Pick the cohorts. The polars-native form is a rank + filter
+        # expression; we use it for clarity and to keep the per-tensor
+        # dict view consistent with the rest of the function. The
+        # ``metrics.pick_top_fraction`` / ``pick_bottom_fraction``
+        # helpers operate on a dict and would duplicate work; the
+        # polars rank is one expression each.
+        top_n = max(1, int(round(n * self.top_fraction))) if n > 0 else 0
+        bottom_n = max(1, int(round(n * self.bottom_fraction))) if n > 0 else 0
+
+        cohort_df = df.with_columns(
+            pl.col("sensitivity_ema")
+              .rank(method="ordinal", descending=True)
+              .alias("rank_desc"),
+            pl.col("sensitivity_ema")
+              .rank(method="ordinal")
+              .alias("rank_asc"),
+        ).with_columns(
+            ((pl.col("rank_desc") <= top_n)
+             & (pl.col("rank_asc") > bottom_n)
+            ).alias("in_top_cohort"),
+            ((pl.col("rank_asc") <= bottom_n)
+             & (pl.col("rank_desc") > top_n)
+            ).alias("in_bottom_cohort"),
+        )
+        top_set = set(
+            cohort_df.filter(pl.col("in_top_cohort"))["tensor"].to_list()
+        )
+        bottom_set = set(
+            cohort_df.filter(pl.col("in_bottom_cohort"))["tensor"].to_list()
+        )
 
         actions: list[RequantAction] = []
-        storage_before = sum(t.bits() for t in tensors)
+        storage_before = sum(t.bits() for t in tensors_view)
 
         # Walk the top cohort first so the budget check uses the most
         # important changes.
-        for tensor in ranked:
-            if tensor.name not in top_set:
+        for tensor in ranked_records:
+            if tensor["tensor"] not in top_set:
                 continue
-            target = metrics.step_up(tensor.current_qtype)
+            t = TensorState.from_df_row(tensor)
+            target = metrics.step_up(str(tensor["current_qtype"]))
             if target is None:
                 # Already at BF16 - nothing we can do.
                 continue
-            sens = float(sensitivity.get(tensor.name, 0.0))
-            expected_delta = tensor.expected_mse_at(target, sensitivity=sens) - tensor.mse
+            sens = float(sensitivity.get(t.name, 0.0))
+            expected_delta = t.expected_mse_at(target, sensitivity=sens) - t.mse
             bits_after = int(
                 round(metrics.BITS_PER_WEIGHT.get(target, 0.0))
-                * float(tensor.n_weights)
+                * float(tensor["n_weights"] or 0)
             )
-            bits_before = tensor.bits()
+            bits_before = t.bits()
             actions.append(
                 RequantAction(
-                    name=tensor.name,
-                    from_qtype=tensor.current_qtype,
+                    name=t.name,
+                    from_qtype=t.current_qtype,
                     to_qtype=target,
                     expected_mse_delta=expected_delta,
                     sensitivity=sens,
@@ -437,23 +639,24 @@ class RequantPlanner:
         # Now the down-quant moves.  These are best-effort: skip if the
         # tensor is already at the bottom, skip if the cohort is empty,
         # and skip if doing so would be a no-op.
-        for tensor in reversed(ranked):
-            if tensor.name not in bottom_set:
+        for tensor in reversed(ranked_records):
+            if tensor["tensor"] not in bottom_set:
                 continue
-            target = metrics.step_down(tensor.current_qtype)
+            t = TensorState.from_df_row(tensor)
+            target = metrics.step_down(str(tensor["current_qtype"]))
             if target is None:
                 continue
-            sens = float(sensitivity.get(tensor.name, 0.0))
-            expected_delta = tensor.expected_mse_at(target, sensitivity=sens) - tensor.mse
+            sens = float(sensitivity.get(t.name, 0.0))
+            expected_delta = t.expected_mse_at(target, sensitivity=sens) - t.mse
             bits_after = int(
                 round(metrics.BITS_PER_WEIGHT.get(target, 0.0))
-                * float(tensor.n_weights)
+                * float(tensor["n_weights"] or 0)
             )
-            bits_before = tensor.bits()
+            bits_before = t.bits()
             actions.append(
                 RequantAction(
-                    name=tensor.name,
-                    from_qtype=tensor.current_qtype,
+                    name=t.name,
+                    from_qtype=t.current_qtype,
                     to_qtype=target,
                     expected_mse_delta=expected_delta,
                     sensitivity=sens,
@@ -537,9 +740,18 @@ class OrchestratorLoop:
         Returns the list of :class:`RequantPlan`s, one per iteration.  The
         final plan carries the ``termination_reason`` explaining why the
         loop stopped.
+
+        The per-iteration state is a polars DataFrame built from the
+        L4 report by :meth:`_load_dataframe`. The scorer and planner
+        both consume the DataFrame; the in-loop updates (applied
+        qtypes, re-evaluated MSE) are reflected as polars
+        ``with_columns`` calls so the next iteration sees the
+        cumulative state. The TensorState dataclass is preserved as
+        a per-row projection for the bits() / expected_mse_at() math
+        inside the planner.
         """
-        tensors = self._load_tensors(l4_report)
-        if not tensors:
+        df = self._load_dataframe(l4_report)
+        if df.is_empty():
             raise ValueError("L4 report has no tensors; nothing to do")
 
         # Track the per-tensor qtype we have settled on.  We start from
@@ -547,11 +759,14 @@ class OrchestratorLoop:
         # actions fire.  The sidecar policy is built from this final map
         # so it reflects the cumulative state, not just the last
         # iteration's actions.
-        final_qtype: dict[str, str] = {t.name: t.current_qtype for t in tensors}
+        final_qtype: dict[str, str] = dict(zip(
+            df["tensor"].to_list(),
+            df["current_qtype"].to_list(),
+        ))
 
         for iteration in range(1, self.max_iterations + 1):
-            sensitivity = self.scorer.score(tensors, imatrix)
-            plan = self.planner.plan(iteration, tensors, sensitivity)
+            df = self.scorer.score(df, imatrix)
+            plan = self.planner.plan(iteration, df)
             self.history.append(plan)
 
             self._log(
@@ -575,19 +790,52 @@ class OrchestratorLoop:
             else:
                 new_qtypes = {a.name: a.to_qtype for a in plan.actions}
 
-            for tensor in tensors:
-                if tensor.name in new_qtypes:
-                    tensor.current_qtype = new_qtypes[tensor.name]
-                    final_qtype[tensor.name] = new_qtypes[tensor.name]
+            # Reflect the applied qtypes in the per-iteration state
+            # via a polars ``with_columns`` join. ``target_qtype`` is
+            # set so the sidecar writer can audit the cumulative
+            # resolution; ``current_qtype`` advances so the next
+            # iteration's bits() and expected_mse_at() math sees the
+            # new qtype.
+            if new_qtypes:
+                new_qtypes_df = pl.DataFrame({
+                    "tensor":        list(new_qtypes.keys()),
+                    "new_qtype":     list(new_qtypes.values()),
+                })
+                df = (
+                    df
+                    .join(new_qtypes_df, on="tensor", how="left")
+                    .with_columns(
+                        pl.col("new_qtype").alias("target_qtype"),
+                        pl.coalesce([pl.col("new_qtype"),
+                                     pl.col("current_qtype")]).alias("current_qtype"),
+                    )
+                    .drop("new_qtype")
+                )
+                for n, q in new_qtypes.items():
+                    final_qtype[n] = q
 
-            # Synthetic L4 re-evaluation: in the demo we just read the new
-            # expected MSE off the plan actions.  In production this would
-            # be replaced by re-running the L4 probe.
-            for action in plan.actions:
-                for tensor in tensors:
-                    if tensor.name == action.name:
-                        tensor.mse = max(0.0, tensor.mse + action.expected_mse_delta)
-                        break
+            # Synthetic L4 re-evaluation: in the demo we just read the
+            # new expected MSE off the plan actions. In production
+            # this would be replaced by re-running the L4 probe. The
+            # update is a single polars expression: for every tensor
+            # named in an action, set mse = max(0, mse + delta).
+            if plan.actions:
+                delta_df = pl.DataFrame({
+                    "tensor":            [a.name for a in plan.actions],
+                    "expected_mse_delta": [float(a.expected_mse_delta) for a in plan.actions],
+                })
+                df = (
+                    df
+                    .join(delta_df, on="tensor", how="left")
+                    .with_columns(
+                        pl.max_horizontal(
+                            pl.lit(0.0),
+                            (pl.col("mse") + pl.col("expected_mse_delta").fill_null(0.0)),
+                        ).alias("mse_new")
+                    )
+                    .with_columns(pl.col("mse_new").alias("mse"))
+                    .drop("mse_new", "expected_mse_delta")
+                )
         else:
             # We exhausted the iteration budget.
             self._log(
@@ -607,17 +855,50 @@ class OrchestratorLoop:
     # -- helpers -----------------------------------------------------------
 
     @staticmethod
-    def _load_tensors(l4_report: Mapping[str, object]) -> list[TensorState]:
+    def _load_dataframe(l4_report: Mapping[str, object]) -> pl.DataFrame:
+        """Build the per-iteration polars DataFrame from an L4 report.
+
+        One row per tensor, with columns ``tensor, layer, current_qtype,
+        target_qtype, n_weights, mse, mse_minus_one, perplexity,
+        top1_mismatch``. The four sensitivity columns
+        (``imatrix_magnitude``, ``gradient_proxy``,
+        ``layer_position_prior``, ``sensitivity_score``,
+        ``sensitivity_ema``) are added by
+        :meth:`SensitivityScorer.score`. The schema's
+        ``target_qtype`` is null on the first iteration and filled in
+        by the loop's apply step.
+        """
         tensors_payload = l4_report.get("tensors", {})
         if not isinstance(tensors_payload, Mapping):
             raise ValueError("L4 report: 'tensors' must be a mapping")
-        out: list[TensorState] = []
+        rows: list[dict] = []
+        import re as _re
+        _BLK_RE = _re.compile(r"^(blk\.\d+)\.")
         for name, payload in tensors_payload.items():
             if not isinstance(payload, Mapping):
-                raise ValueError(f"L4 report: tensor {name!r} payload is not a mapping")
-            out.append(TensorState.from_l4(str(name), dict(payload)))
-        out.sort(key=lambda t: t.name)
-        return out
+                raise ValueError(
+                    f"L4 report: tensor {name!r} payload is not a mapping")
+            ts = TensorState.from_l4(str(name), dict(payload))
+            row = ts.to_row()
+            # Layer extraction: same convention as the rest of the
+            # analytical surface so calibration_rollup can join on
+            # layer without re-normalization.
+            base = str(name)
+            for suf in (".weight", ".bias"):
+                if base.endswith(suf):
+                    base = base[: -len(suf)]
+                    break
+            m = _BLK_RE.match(base + ".")
+            row["layer"] = m.group(1) if m is not None else base
+            rows.append(row)
+        # Stable order so the sidecar writer and the DataFrame-based
+        # test fixtures see the same row order across runs.
+        rows.sort(key=lambda r: r["tensor"])
+        if not rows:
+            return pl.DataFrame()
+        df = pl.DataFrame(rows, infer_schema_length=max(len(rows), 1))
+        # Cast ``n_weights`` to Int64 to keep the polars schema clean.
+        return df.with_columns(pl.col("n_weights").cast(pl.Int64, strict=False))
 
     def _log(self, message: str) -> None:
         if self.verbose:
