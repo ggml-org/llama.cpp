@@ -3206,6 +3206,10 @@ private:
                                     n_past = std::min(n_past, slot.alora_invocation_start - 1);
                                 }
 
+                                // Keep the actual shared prefix: cache-reuse below can extend n_past
+                                // with matching chunks from after the first mismatch.
+                                const int n_past_lcp = n_past;
+
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;
 
                                 const bool can_cache_reuse =
@@ -3271,7 +3275,6 @@ private:
                             }
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
-                            const int n_past_lcp = n_past;
 
                             const bool state_exact =
                                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
