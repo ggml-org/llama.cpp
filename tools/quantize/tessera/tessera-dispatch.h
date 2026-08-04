@@ -164,11 +164,18 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 // drive it directly. refine_map is keyed by tensor name; in_ctx/ggml_ctx are
 // the input GGUF (for re-reading source weights) and out_ggml_ctx is the
 // output descriptor context (refreshed via ts_gguf_repoint_tensor_cluster).
+//
+// db_wrap is optional. When non-null and its l4_outcome_buffer is
+// non-null, the loop writes one l4_plan_outcome row per (tensor, gen)
+// via ts_quantize_db_append_l4_outcome (the L5 feedback loop). The
+// integration test passes nullptr.
 struct ts_dispatch_refine_entry;
+struct ts_dispatch_db;
 int ts_dispatch_run_l5_loop(
     const ts_dispatch_params * params,
     ts_dispatch_result * result,
     struct gguf_context * in_ctx,
     struct ggml_context * ggml_ctx,
     struct ggml_context * out_ggml_ctx,
-    std::unordered_map<std::string, ts_dispatch_refine_entry> & refine_map);
+    std::unordered_map<std::string, ts_dispatch_refine_entry> & refine_map,
+    ts_dispatch_db * db_wrap);

@@ -519,11 +519,16 @@ static std::string ts_join(const std::vector<std::string> & parts,
 // DuckDB store plumbing
 //
 // ts_dispatch_db is the per-run state threaded through the GA hooks. It owns
-// the open ts_quantize_db plus a single ts_db_buffer for the ga_evaluations
-// table (the GA hot path; up to 1.6M rows per run). The buffer replaces the
-// previous per-tensor DuckDB Appender sharded map: a single MPSC queue with
-// a dedicated flusher thread, 65536-row batches, 1-second time flush, and
-// sync-on-exit via the unique_ptr deleter. See tessera-db-buffer.h.
+// the open ts_quantize_db plus per-table write buffers. The buffers replace
+// the previous per-tensor DuckDB Appender sharded map: each one is a single
+// MPSC queue with a dedicated flusher thread, 65536-row batches, 1-second
+// time flush, and sync-on-exit via the unique_ptr deleter. See
+// tessera-db-buffer.h.
+//
+// Two buffers are owned:
+//   eval_buffer       — ga_evaluations (the GA hot path; ~1.6M rows per run).
+//   l4_outcome_buffer — l4_plan_outcome (the L5 feedback loop; one row per
+//                       (tensor, iteration) in the adaptive_requantize loop).
 //
 // All DB calls are best-effort: a failure logs a one-line warning and the
 // pipeline continues. The DB is a recording/warm-start aid, not a correctness
@@ -535,10 +540,9 @@ struct ts_dispatch_db {
     // Resume set: tensor names with a converged result for this run_id.
     // Populated at startup; the layer_skip_lookup callback checks membership.
     std::unordered_set<std::string> converged;
-    // Single buffer for the ga_evaluations table. Replaces the
-    // per-tensor Appender sharded map. The buffer is null when --quantize-db
-    // is unset; eval_recorder checks for null and returns early.
-    ts_db_buffer *   eval_buffer = nullptr;
+    // Per-table write buffers. Both null when --quantize-db is unset.
+    ts_db_buffer *   eval_buffer       = nullptr;
+    ts_db_buffer *   l4_outcome_buffer = nullptr;
 };
 
 // Open the store and begin a run. Returns a heap-allocated ts_dispatch_db
@@ -625,6 +629,31 @@ static ts_dispatch_db * ts_dispatch_db_open(
                             "(eval logging disabled; run_lifecycle still works)\n");
         }
     }
+    // Open the l4_plan_outcome buffer (the L5 feedback loop). Same
+    // shape as the eval buffer but with a smaller threshold (1024
+    // rows): the L5 loop writes at most one row per (tensor, gen),
+    // and max_generations is typically 3-5 with ~100 flagged tensors
+    // per gen, so the total is ~1500 rows. A 1-second time flush
+    // keeps the outcome visible to the Python l5_outcome.py consumer
+    // while the dispatch is still running (the Python side can read
+    // the partial table mid-dispatch if needed).
+    {
+        std::vector<std::string> l4_cols = {
+            "model_hash", "name", "layer", "iteration", "plan_id", "strategy",
+            "alpha_before", "alpha_after", "clip_before", "clip_after",
+            "outlier_thresh_before", "outlier_thresh_after",
+            "mse_before", "mse_after", "frob_before", "frob_after",
+            "family", "updated_at",
+        };
+        wrap->l4_outcome_buffer = ts_db_buffer_open(
+            wrap->db, "l4_plan_outcome", l4_cols,
+            /*flush_threshold=*/1024,
+            std::chrono::milliseconds(1000));
+        if (wrap->l4_outcome_buffer == nullptr) {
+            fprintf(stderr, "tessera-dispatch: warning: l4_outcome buffer open failed "
+                            "(feedback loop disabled; run_lifecycle still works)\n");
+        }
+    }
     return wrap;
 }
 
@@ -649,6 +678,18 @@ static void ts_dispatch_db_close(ts_dispatch_db * wrap, const char * status) {
         ts_db_buffer_close(&wrap->eval_buffer);
         if (s.rows_dropped > 0) {
             fprintf(stderr, "tessera-dispatch: warning: %llu GA eval rows dropped "
+                            "(DB buffer flush failures)\n",
+                    (unsigned long long)s.rows_dropped);
+        }
+    }
+    // Close the L4-outcome buffer. Same sync-on-exit contract; the
+    // L5 feedback loop's per-iteration rows land before the run is
+    // marked complete.
+    if (wrap->l4_outcome_buffer != nullptr) {
+        ts_db_buffer_stats s = ts_db_buffer_stats_get(wrap->l4_outcome_buffer);
+        ts_db_buffer_close(&wrap->l4_outcome_buffer);
+        if (s.rows_dropped > 0) {
+            fprintf(stderr, "tessera-dispatch: warning: %llu L4 outcome rows dropped "
                             "(DB buffer flush failures)\n",
                     (unsigned long long)s.rows_dropped);
         }
@@ -770,13 +811,19 @@ static bool ts_dispatch_layer_skip(const ts_awq_layer * layer,
 // Declared non-static so the integration test in test_l5_dispatch.cpp can
 // drive it directly with a constructed refine_map (the test fixture builds
 // the in-memory state without going through the full GGUF walk).
+//
+// db_wrap is optional. When non-null and its l4_outcome_buffer is
+// non-null, the loop writes one l4_plan_outcome row per (tensor, gen)
+// via ts_quantize_db_append_l4_outcome. The integration test passes
+// nullptr (it does not have a DuckDB store wired up).
 int ts_dispatch_run_l5_loop(
     const ts_dispatch_params * params,
     ts_dispatch_result * result,
     struct gguf_context * in_ctx,
     struct ggml_context * ggml_ctx,
     struct ggml_context * out_ggml_ctx,
-    std::unordered_map<std::string, ts_dispatch_refine_entry> & refine_map) {
+    std::unordered_map<std::string, ts_dispatch_refine_entry> & refine_map,
+    ts_dispatch_db * db_wrap) {
 
     if (refine_map.empty()) {
         return 0;
@@ -990,6 +1037,39 @@ int ts_dispatch_run_l5_loop(
                 }
 
                 deltas.push_back(std::make_tuple(e.name, fam, before, after));
+
+                // Feedback loop: write one l4_plan_outcome row per
+                // (tensor, gen). The Python l5_outcome.py consumer
+                // joins this with l5_plan_summary on (model_hash,
+                // name, iteration, plan_id) to compute delta_mse and
+                // the accept verdict. The plan_id is synthesized
+                // from the C++ iteration index + the stage that won
+                // (A or B); the "cpp_quant" prefix disambiguates from
+                // the Python orchestrator's plan_ids.
+                if (db_wrap != nullptr && db_wrap->l4_outcome_buffer != nullptr) {
+                    ts_quantize_db_l4_outcome out_row;
+                    out_row.model_hash   = db_wrap->model_hash;
+                    out_row.name         = e.name;
+                    out_row.layer        = ts_quantize_db_layer_depth(e.name);
+                    out_row.iteration    = gen;
+                    out_row.plan_id      = std::string("cpp_quant_gen")
+                                           + std::to_string(gen)
+                                           + (stage_b_wins ? "_stageB" : "_stageA");
+                    out_row.strategy     = stage_b_wins ? "B" : "A";
+                    out_row.alpha_before = e.tqp.alpha;
+                    out_row.alpha_after  = tightened.alpha;
+                    out_row.clip_before  = e.tqp.clip;
+                    out_row.clip_after   = tightened.clip;
+                    out_row.outlier_thresh_before = e.tqp.outlier_thresh;
+                    out_row.outlier_thresh_after  = tightened.outlier_thresh;
+                    out_row.mse_before   = before;
+                    out_row.mse_after    = after;
+                    out_row.frob_before  = before;   // rel_frob is already normalized
+                    out_row.frob_after   = after;
+                    out_row.family       = fam;
+                    ts_quantize_db_append_l4_outcome(
+                        db_wrap->l4_outcome_buffer, out_row);
+                }
             }
         }
 
@@ -2370,7 +2450,8 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // tensors in place (refreshing the GGUF descriptors via
     // ts_gguf_repoint_tensor_cluster) and emits an l5-loop.json report.
     if (params->adaptive_requantize) {
-        ts_dispatch_run_l5_loop(params, result, in_ctx, ggml_ctx, out_ggml_ctx, refine_map);
+        ts_dispatch_run_l5_loop(params, result, in_ctx, ggml_ctx, out_ggml_ctx, refine_map,
+                                 db_wrap);
     }
 
     // --- step 7b: G6 acceptance gate ---
