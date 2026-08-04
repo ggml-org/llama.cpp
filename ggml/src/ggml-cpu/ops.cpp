@@ -9644,11 +9644,13 @@ static void ggml_compute_forward_ssm_scan_f32(
     const int64_t ng = src4->ne[1];
     const int64_t nt = src1->ne[2]; // number of tokens per sequence
     const int64_t ns = src1->ne[3]; // number of sequences in the batch
+    const int32_t K_param = ggml_get_op_params_i32(dst, 0);
+    const int64_t K = K_param > 0 ? K_param : 1;
 
     // can't use ggml_nbytes because src1 is not necessarily contiguous
     const int64_t s_off = ggml_nelements(src1) * ggml_element_size(src1);
 
-    GGML_ASSERT(ggml_nelements(src1) + nc*nr*nh*ns == ggml_nelements(dst));
+    GGML_ASSERT(ggml_nelements(src1) + K*nc*nr*nh*ns == ggml_nelements(dst));
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
     GGML_ASSERT(src2->nb[0] == sizeof(float));
@@ -9657,6 +9659,7 @@ static void ggml_compute_forward_ssm_scan_f32(
     GGML_ASSERT(src5->nb[0] == sizeof(float));
     GGML_ASSERT(src6->nb[0] == sizeof(int32_t));
     GGML_ASSERT(nh % ng == 0);
+    GGML_ASSERT(src3->ne[0] == 1 || K == 1);
 
     // heads per thread
     const int dh = (nh + nth - 1)/nth;
@@ -9678,6 +9681,8 @@ static void ggml_compute_forward_ssm_scan_f32(
             const float * B  = (const float *) ((const char *) src4->data + i2*(src4->nb[2]) + i3*(src4->nb[3])); // {d_state, ng, nt, ns}
             const float * C  = (const float *) ((const char *) src5->data + i2*(src5->nb[2]) + i3*(src5->nb[3])); // {d_state, ng, nt, ns}
                   float * y  = (      float *) ((      char *) dst->data + i2*(nh*nr*sizeof(float)) + i3*(nt*nh*nr*sizeof(float))); // {dim, nh, nt, ns}
+            const int64_t slot = nt - 1 - i2;
+                  float * s_snapshot = slot < K ? (float *) ((char *) dst->data + s_off + (slot*ns + i3)*(src0->nb[3])) : nullptr;
 
             if (src3->ne[0] == 1) {
                 // Mamba-2 has a scalar decay factor per head; dA can be outside the state-wise loop
@@ -9721,6 +9726,9 @@ static void ggml_compute_forward_ssm_scan_f32(
                                 sum = GGML_F32_VEC_FMA(sum, t0, t2);
 
                                 GGML_F32_VEC_STORE(s + i + j*ggml_f32_epr + ii*nc, t0);
+                                if (s_snapshot && s_snapshot != s) {
+                                    GGML_F32_VEC_STORE(s_snapshot + i + j*ggml_f32_epr + ii*nc, t0);
+                                }
                             }
                         }
 
@@ -9754,6 +9762,9 @@ static void ggml_compute_forward_ssm_scan_f32(
                                 sum[j] = GGML_F32_VEC_FMA(sum[j], ax[j], az[j]);
 
                                 GGML_F32_VEC_STORE(s + i + j*GGML_F32_EPR + ii*nc, ax[j]);
+                                if (s_snapshot && s_snapshot != s) {
+                                    GGML_F32_VEC_STORE(s_snapshot + i + j*GGML_F32_EPR + ii*nc, ax[j]);
+                                }
                             }
                         }
 
@@ -9772,6 +9783,9 @@ static void ggml_compute_forward_ssm_scan_f32(
                             // y = rowwise_dotprod(state, C)
                             sumf += state * C[ig];
                             s[i] = state;
+                            if (s_snapshot && s_snapshot != s) {
+                                s_snapshot[i] = state;
+                            }
                         }
                         y[ii] = sumf;
                     }
