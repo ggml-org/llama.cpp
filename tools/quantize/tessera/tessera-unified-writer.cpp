@@ -226,6 +226,67 @@ std::string ts_unified_qtype_to_string(int qtype) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 16.6: worst-of-trunk-and-dflash qtype resolution
+//
+// See the header for the rationale. The bit-cost table below is the
+// single source of truth for the "more conservative" ordering: a
+// higher bit cost means less precision loss. The worst_of helper
+// picks max(bits), which is the architect's "take the more
+// conservative qtype" rule.
+// ---------------------------------------------------------------------------
+
+int ts_unified_writer_qtype_bits(int qtype) {
+    // GGML_TYPE_* are an int enum, not strictly ordered by bits.
+    // F32 = 0 (anchor: no quantization), F16 = 16 (anchor: fully
+    // unquantized), Q2_K..Q8_0 are 2..8 bits per element.
+    //
+    // F32 and F16 are anchors at the extremes (0 and 16). F32
+    // is the "no compression" floor -- worst_of(F32, anything) =
+    // anything (any real qtype is more conservative than F32).
+    // F16 is the "full precision" ceiling -- worst_of(F16,
+    // anything) = F16 (F16 is always the most conservative).
+    //
+    // Unknown qtypes return 0; this degrades safely in worst_of
+    // (an unknown qtype is treated as the lowest-precision
+    // anchor, so the known partner wins).
+    switch (qtype) {
+        case GGML_TYPE_F32:  return 0;
+        case GGML_TYPE_F16:  return 16;
+        case GGML_TYPE_BF16: return 16;
+        case GGML_TYPE_Q2_K: return 2;
+        case GGML_TYPE_Q3_K: return 3;
+        case GGML_TYPE_Q4_K: return 4;
+        case GGML_TYPE_Q5_K: return 5;
+        case GGML_TYPE_Q6_K: return 6;
+        case GGML_TYPE_Q8_0: return 8;
+        case GGML_TYPE_Q4_0: return 4;
+        case GGML_TYPE_Q4_1: return 4;
+        case GGML_TYPE_Q5_0: return 5;
+        case GGML_TYPE_Q5_1: return 5;
+        case GGML_TYPE_Q8_K: return 8;
+        case GGML_TYPE_IQ2_XXS: return 2;
+        case GGML_TYPE_IQ2_XS:  return 2;
+        case GGML_TYPE_IQ2_S:   return 2;
+        case GGML_TYPE_IQ3_XXS: return 3;
+        case GGML_TYPE_IQ3_S:   return 3;
+        case GGML_TYPE_IQ4_NL:  return 4;
+        case GGML_TYPE_IQ4_XS:  return 4;
+        case GGML_TYPE_IQ1_S:   return 1;
+        case GGML_TYPE_IQ1_M:   return 1;
+        default: return 0;
+    }
+}
+
+int ts_unified_writer_worst_of(int a, int b) {
+    // The architect's rule: pick the more conservative of the two
+    // (max(bits)). When equal, return either (we return `a` for
+    // determinism). qtype_bits is the single source of truth for
+    // the bit cost ordering; the helper handles unknown qtypes
+    // (which degrade to 0 bits, so the known partner wins).
+    return (ts_unified_writer_qtype_bits(a) >= ts_unified_writer_qtype_bits(b)) ? a : b;
+}
+
 int ts_unified_policy_load_json(const std::string & path,
                                  ts_unified_policy * out,
                                  std::string * err) {

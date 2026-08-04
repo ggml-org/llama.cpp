@@ -178,6 +178,51 @@ int main(int argc, char ** argv) {
     check(ts_unified_qtype_from_string("UNKNOWN") == GGML_TYPE_COUNT, "unknown qtype -> COUNT");
     check(ts_unified_qtype_to_string(GGML_TYPE_COUNT) == "", "to_string(COUNT) is empty");
 
+    // ---- Test 1b: Phase 16.6 worst-of helpers ----
+    //
+    // qtype_bits returns the bit cost for the worst-of ordering.
+    // F32 = 0 (no quantization anchor); F16 = BF16 = 16 (full
+    // precision anchor); Q2_K..Q8_0 = 2..8 bits per element.
+    // The "worst-of" rule picks max(bits) when both trunk and
+    // dflash have entries for the same shared tensor.
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_F32)  == 0,  "qtype_bits(F32) == 0");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_F16)  == 16, "qtype_bits(F16) == 16");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_BF16) == 16, "qtype_bits(BF16) == 16");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_Q2_K) == 2,  "qtype_bits(Q2_K) == 2");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_Q3_K) == 3,  "qtype_bits(Q3_K) == 3");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_Q4_K) == 4,  "qtype_bits(Q4_K) == 4");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_Q5_K) == 5,  "qtype_bits(Q5_K) == 5");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_Q6_K) == 6,  "qtype_bits(Q6_K) == 6");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_Q8_0) == 8,  "qtype_bits(Q8_0) == 8");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_IQ2_XXS) == 2, "qtype_bits(IQ2_XXS) == 2");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_IQ3_S) == 3,   "qtype_bits(IQ3_S) == 3");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_IQ4_NL) == 4,  "qtype_bits(IQ4_NL) == 4");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_IQ1_S) == 1,   "qtype_bits(IQ1_S) == 1");
+    check(ts_unified_writer_qtype_bits(GGML_TYPE_COUNT) == 0,   "qtype_bits(COUNT) == 0 (unknown degrades to F32 anchor)");
+    // worst_of picks the more conservative (max bits) of two qtypes.
+    check(ts_unified_writer_worst_of(GGML_TYPE_F32, GGML_TYPE_F32) == GGML_TYPE_F32,
+          "worst_of(F32, F32) == F32");
+    check(ts_unified_writer_worst_of(GGML_TYPE_F32, GGML_TYPE_Q4_K) == GGML_TYPE_Q4_K,
+          "worst_of(F32, Q4_K) == Q4_K (F32 has fewer bits)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_Q4_K, GGML_TYPE_F32) == GGML_TYPE_Q4_K,
+          "worst_of(Q4_K, F32) == Q4_K (commutative)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_Q4_K, GGML_TYPE_Q6_K) == GGML_TYPE_Q6_K,
+          "worst_of(Q4_K, Q6_K) == Q6_K (trunk + dflash primary case)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_Q6_K, GGML_TYPE_Q4_K) == GGML_TYPE_Q6_K,
+          "worst_of(Q6_K, Q4_K) == Q6_K (commutative)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_F16, GGML_TYPE_Q4_K) == GGML_TYPE_F16,
+          "worst_of(F16, Q4_K) == F16 (F16 has more bits)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_Q4_K, GGML_TYPE_F16) == GGML_TYPE_F16,
+          "worst_of(Q4_K, F16) == F16 (commutative)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_Q5_K, GGML_TYPE_Q5_K) == GGML_TYPE_Q5_K,
+          "worst_of(Q5_K, Q5_K) == Q5_K (equal)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_F32, GGML_TYPE_F16) == GGML_TYPE_F16,
+          "worst_of(F32, F16) == F16 (extreme anchors)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_F16, GGML_TYPE_F32) == GGML_TYPE_F16,
+          "worst_of(F16, F32) == F16 (commutative)");
+    check(ts_unified_writer_worst_of(GGML_TYPE_Q2_K, GGML_TYPE_Q8_0) == GGML_TYPE_Q8_0,
+          "worst_of(Q2_K, Q8_0) == Q8_0 (extreme K-quant spread)");
+
     // ---- Test 2: policy JSON round-trip ----
     ts_unified_policy pol_in;
     pol_in.entries.push_back({"trunk",     "blk.0.attn_q.weight",  "Q4_K"});

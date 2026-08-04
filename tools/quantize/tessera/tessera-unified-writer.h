@@ -227,6 +227,42 @@ int ts_unified_qtype_from_string(const std::string & s);
 // exists for log/diagnostic output).
 std::string ts_unified_qtype_to_string(int qtype);
 
+// --- Phase 16.6: worst-of-trunk-and-dflash qtype resolution ---
+//
+// The unified Gemma4 12B + dspark + dflash + MTP arch has shared
+// token_embd / output tensors between the trunk and the dflash
+// drafter (the drafter borrows them via ctx_other, frozen at
+// train time; see tessera-train-dflash.cpp:72). When the per-
+// component calibration runs, the trunk's and dflash's verdicts
+// can disagree on the same shared tensor. The writer must pick
+// ONE qtype per tensor. The architect's call: take the MORE
+// CONSERVATIVE option (the qtype with more bits = less
+// precision loss). The drafter is more sensitive to the
+// embedding than the trunk, so when in doubt, use more bits.
+
+// Bit cost of a ggml_type for the worst-of ordering. F32 is the
+// "no quantization" anchor (0 bits quantized); F16 / BF16 are
+// the "fully unquantized" anchors at 16 bits per element.
+// Q2_K..Q8_0 are 2..8 bits per element.
+//
+// The qtype is passed as an int (matching the
+// ts_unified_qtype_from_string convention) so the header
+// does not need to drag ggml.h into every TU.
+//
+// Returns 0 for unknown / unsupported qtypes; the worst_of
+// caller treats 0 as the lowest precision (F32 anchor), so an
+// unknown qtype in the policy degrades safely to the more
+// conservative partner.
+int ts_unified_writer_qtype_bits(int qtype);
+
+// Returns the more conservative of two qtypes (max(bits)).
+// When both qtypes are equal, returns `a`. When one is unknown
+// (bits == 0), the other is always more conservative and is
+// returned. GGML_TYPE_COUNT is NOT handled here; the caller's
+// sentinel for "no entry" is GGML_TYPE_COUNT and must be
+// checked before calling worst_of.
+int ts_unified_writer_worst_of(int a, int b);
+
 // Read a calibration policy from a sidecar JSON file. The JSON
 // shape mirrors unified_calibrate.py's output: a top-level
 // "tensor_families" array of {model_role, name, dtype} triples.
