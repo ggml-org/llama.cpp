@@ -1907,6 +1907,14 @@ def _run_lrq_with_residency(
     the top of each iteration catches the over-budget state
     before the OS kills the process.
 
+    Phase 16 (calibration memopt) Cat 5: when
+    ``--temporal-pipeline-depth > 1`` is set, the next
+    tensor's mmap is in flight on a producer thread while
+    the current tensor's compute runs on the consumer.  The
+    mmap overhead (one OS syscall per .npz file) is
+    overlapped with the per-tensor training's matmul-heavy
+    compute.
+
     The loop dispatches to ``train_lrq_chunked`` when
     ``args.chunk_rows > 0`` and the tensor's n_rows exceeds
     ``args.chunk_rows``; the legacy ``train_lrq`` is used
@@ -1917,7 +1925,30 @@ def _run_lrq_with_residency(
     side).
     """
     chunked_train = getattr(args, "chunk_rows", 0) > 0
+    depth = int(getattr(args, "temporal_pipeline_depth", 1) or 1)
     results: list[tuple[Layer, LRQResult]] = []
+    if depth > 1:
+        # Phase 16 Cat 5: the per-tensor loop is driven by
+        # a ``CalibPipeline`` which overlaps the next
+        # tensor's mmap with the current tensor's compute.
+        # The mmap view comes back as a dict; we convert
+        # it to a ``Layer`` (the per-tensor training API
+        # takes a ``Layer``, not a raw mmap dict).
+        with CalibPipeline(layers, depth=depth) as pipe:
+            for path, data in pipe:
+                tracker.check(str(path))
+                layer = _layer_from_mmap_data(path, data, max_tokens=args.max_tokens)
+                results.append(
+                    (layer, _train_one_lrq(layer, args, chunked_train))
+                )
+                if args.verbose:
+                    result = results[-1][1]
+                    print(
+                        f"lrq[{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                        f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                        file=sys.stderr,
+                    )
+        return results
     for path in layers:
         # Phase 16 Cat 3: the budget check fires at the top
         # of each per-tensor iteration, before load_layer.
@@ -1925,36 +1956,123 @@ def _run_lrq_with_residency(
         # over-budget state before the OS kills the process.
         tracker.check(str(path))
         layer = load_layer(path, max_tokens=args.max_tokens)
-        use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
-        if use_chunked:
-            result = train_lrq_chunked(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                chunk_rows=args.chunk_rows,
-                verbose=args.verbose,
-            )
-        else:
-            result = train_lrq(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                verbose=args.verbose,
-            )
-        results.append((layer, result))
+        results.append((layer, _train_one_lrq(layer, args, chunked_train)))
         if args.verbose:
+            result = results[-1][1]
             print(
                 f"lrq[{layer.name}]: initial_mse={result.initial_mse:.4e} "
                 f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
                 file=sys.stderr,
             )
     return results
+
+
+def _train_one_lrq(
+    layer: Layer,
+    args: argparse.Namespace,
+    chunked_train: bool,
+) -> LRQResult:
+    """Run a single LRQ training step (chunked or legacy).
+
+    Phase 16 (calibration memopt) Cat 2/5.  The chunked path
+    is used when ``chunk_rows > 0`` and the tensor's n_rows
+    exceeds ``args.chunk_rows``; the legacy single-shot
+    path is used otherwise.  This helper is the one place
+    where the dispatch lives, so ``_run_lrq_with_residency``
+    and ``run_components_lrq`` can share the same logic.
+    """
+    use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
+    if use_chunked:
+        return train_lrq_chunked(
+            layer,
+            rank=args.lrq_rank,
+            iterations=args.lrq_iterations,
+            lr=args.lr,
+            seed=args.seed,
+            aggregation=args.lrq_agg,
+            chunk_rows=args.chunk_rows,
+            verbose=args.verbose,
+        )
+    return train_lrq(
+        layer,
+        rank=args.lrq_rank,
+        iterations=args.lrq_iterations,
+        lr=args.lr,
+        seed=args.seed,
+        aggregation=args.lrq_agg,
+        verbose=args.verbose,
+    )
+
+
+def _layer_from_mmap_data(
+    path: Path,
+    data: dict,
+    max_tokens: int = 256,
+) -> Layer:
+    """Build a ``Layer`` from the dict returned by ``CalibPipeline``.
+
+    Phase 16 (calibration memopt) Cat 5.  The
+    ``CalibPipeline`` returns a dict of mmap-backed views
+    (the heavy keys: weight, train_activations, etc.).  The
+    per-tensor training API takes a ``Layer`` dataclass;
+    this helper bridges the two.
+
+    The subsampling step is the same as ``load_layer``'s:
+    if ``max_tokens > 0`` and the activations have more
+    rows than that, take a ``np.linspace``-spaced subset.
+    The subsample step materialises a small F32 array; the
+    mmap view of the unsubsampled activations is still
+    alive (the OS keeps the zip mmap) but is no longer
+    referenced from the ``Layer`` (Python releases the
+    reference).
+    """
+    if "weight" not in data:
+        raise ValueError(f"{path}: missing required 'weight' key")
+    weight = data["weight"]
+    if weight.ndim != 2:
+        raise ValueError(f"{path}: weight must be two-dimensional")
+    train_raw = data.get("train_activations")
+    heldout_raw = data.get("heldout_activations")
+    in_sum2_raw = data.get("in_sum2")
+    in_count = int(np.asarray(data["counts"]).reshape(()).item()) if "counts" in data else 0
+    name = _scalar_string(data.get("name"), path.stem)
+    family = _scalar_string(data.get("family"), "ffn")
+    train: np.ndarray | None = None
+    heldout: np.ndarray | None = None
+    for label, acts, sink in (
+        ("train", train_raw, "train"),
+        ("heldout", heldout_raw, "heldout"),
+    ):
+        if acts is None:
+            continue
+        if acts.ndim != 2 or acts.shape[1] != weight.shape[1]:
+            raise ValueError(
+                f"{path}: {label} activation shape {acts.shape} "
+                f"does not match weight {weight.shape}"
+            )
+        if max_tokens > 0 and acts.shape[0] > max_tokens:
+            idx = np.linspace(0, acts.shape[0] - 1, max_tokens, dtype=np.int64)
+            sub = np.asarray(acts[idx], dtype=np.float32)
+        else:
+            sub = np.asarray(acts, dtype=np.float32)
+        if sink == "train":
+            train = sub
+        else:
+            heldout = sub
+    in_sum2: np.ndarray | None = None
+    if in_sum2_raw is not None:
+        in_sum2 = np.asarray(in_sum2_raw, dtype=np.float32).reshape(-1)
+    if train is None and in_sum2 is None:
+        raise ValueError(f"{path}: requires train_activations or in_sum2")
+    return Layer(
+        name=name,
+        family=family,
+        weight=weight,
+        train_activations=train,
+        heldout_activations=heldout,
+        in_sum2=in_sum2,
+        in_count=in_count,
+    )
 
 
 def compute_spatial_order(
@@ -2048,6 +2166,14 @@ def run_components_lrq(
     tagged with the model_role so the unified policy can
     be assembled downstream.
 
+    Phase 16 (calibration memopt) Cat 5: when
+    ``--temporal-pipeline-depth > 1`` is set, the next
+    tensor's mmap is in flight on a producer thread while
+    the current tensor's compute runs on the consumer.  The
+    shell-out flattens the per-component order into a
+    single list and drives the pipeline; the model_role
+    tag is re-attached from the original components dict.
+
     The shell-out is in-process (no subprocess), which is
     faster than the per-component subprocess for the
     ``--fitness lrq`` mode.  The ``--fitness awq`` mode
@@ -2076,32 +2202,29 @@ def run_components_lrq(
     counts: dict[str, int] = {role: len(paths) for role, paths in components.items()}
     order = compute_spatial_order(components, getattr(args, "spatial_occupancy", "interleaved"))
     chunked_train = getattr(args, "chunk_rows", 0) > 0
+    depth = int(getattr(args, "temporal_pipeline_depth", 1) or 1)
+    role_by_path: dict[Path, str] = {path: role for role, path in order}
+    paths = [path for _, path in order]
     out: list[tuple[Layer, LRQResult, str]] = []
+    if depth > 1:
+        with CalibPipeline(paths, depth=depth) as pipe:
+            for path, data in pipe:
+                tracker.check(str(path))
+                layer = _layer_from_mmap_data(path, data, max_tokens=args.max_tokens)
+                result = _train_one_lrq(layer, args, chunked_train)
+                role = role_by_path.get(path, "trunk")
+                out.append((layer, result, role))
+                if args.verbose:
+                    print(
+                        f"lrq[{role}:{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                        f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                        file=sys.stderr,
+                    )
+        return out, counts
     for role, path in order:
         tracker.check(str(path))
         layer = load_layer(path, max_tokens=args.max_tokens)
-        use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
-        if use_chunked:
-            result = train_lrq_chunked(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                chunk_rows=args.chunk_rows,
-                verbose=args.verbose,
-            )
-        else:
-            result = train_lrq(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                verbose=args.verbose,
-            )
+        result = _train_one_lrq(layer, args, chunked_train)
         out.append((layer, result, role))
         if args.verbose:
             print(
@@ -2641,6 +2764,24 @@ def _build_parser() -> argparse.ArgumentParser:
                 f"component (Phase 16 multi-component shell-out)."
             ),
         )
+    # Phase 16 (calibration memopt) Cat 5: temporal
+    # pipeline depth.  ``> 1`` enables the
+    # ``CalibPipeline`` double-buffer (or N-buffer) that
+    # overlaps the next tensor's mmap with the current
+    # tensor's compute.  ``1`` is the legacy single-thread
+    # path (no overlap).  Default 2 (double-buffered);
+    # 3+ keeps more tensors in flight on slow I/O at the
+    # cost of more peak RSS (working set is bounded by
+    # ``depth * max_tensor_bytes``).
+    parser.add_argument(
+        "--temporal-pipeline-depth",
+        type=int,
+        default=2,
+        help=(
+            "Phase 16 temporal pipeline depth "
+            "(default 2 = double-buffered; 1 = legacy single-thread)."
+        ),
+    )
     return parser
 
 

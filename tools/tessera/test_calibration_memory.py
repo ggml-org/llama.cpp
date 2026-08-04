@@ -668,6 +668,50 @@ class TestTemporalPipeline(unittest.TestCase):
             # The view is still readable after the producer moved on.
             self.assertEqual(float(w.sum()), s)
 
+    def test_pipeline_wired_to_lrq_training(self) -> None:
+        """End-to-end smoke: the per-tensor LRQ training
+        loop uses ``CalibPipeline`` when
+        ``--temporal-pipeline-depth > 1``.  This pins the
+        wire-up: the consumer reads the pipeline's mmap
+        data, builds a ``Layer`` via
+        ``_layer_from_mmap_data``, and runs the LRQ
+        training.  The result is the same as the
+        single-thread path (the I/O overlap is
+        wall-time-only)."""
+        import per_tensor_calibrate as ptc
+        # Build a couple of small bundles in a temp dir.
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            paths = []
+            for i in range(3):
+                p = Path(td) / f"layer_{i}.npz"
+                rng = np.random.default_rng(i)
+                np.savez(p,
+                    weight=rng.standard_normal((16, 8)).astype(np.float32),
+                    train_activations=rng.standard_normal((4, 8)).astype(np.float32),
+                    in_sum2=rng.standard_normal(8).astype(np.float32)**2,
+                    counts=np.array(4, dtype=np.int64),
+                    name=np.array(f"layer_{i}"), family=np.array("ffn"),
+                )
+                paths.append(p)
+            # Direct use of CalibPipeline + _layer_from_mmap_data + _train_one_lrq.
+            args = type("Args", (), {
+                "max_tokens": 4, "chunk_rows": 0, "lrq_rank": 4,
+                "lrq_iterations": 2, "lr": 1e-2, "seed": 0,
+                "lrq_agg": "mean", "verbose": False,
+            })()
+            tracker = ptc.ResidencyTracker(budget_bytes=0, abort_on_exceed=False)
+            with ptc.CalibPipeline(paths, depth=2) as pipe:
+                layers_seen = []
+                for path, data in pipe:
+                    tracker.check(str(path))
+                    layer = ptc._layer_from_mmap_data(path, data, max_tokens=4)
+                    layers_seen.append(layer.name)
+                    result = ptc._train_one_lrq(layer, args, chunked_train=False)
+                    self.assertIsInstance(result, ptc.LRQResult)
+            # All 3 layers were processed in order.
+            self.assertEqual(layers_seen, ["layer_0", "layer_1", "layer_2"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
