@@ -15004,15 +15004,39 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         (d_head_q == 512 || d_head_q == 256) && n_head_kv > 0) {
         const int gqa = n_head / n_head_kv;
         // gqa == 2 is gemma-4-26B's SWA shape (n_head 16 / n_head_kv 8, 25 of its
-        // 30 layers). Without it those layers take the per-query-head kernel and
-        // re-read the KV cache twice; measured on the X2-90 that is the whole of
-        // the model's -fa 1 regression. Opt-in while it is characterised: only two
-        // query heads amortise each KV read here, a quarter of the gqa 8 sharing,
-        // so this is expected to reach parity with the unfused path rather than
-        // beat it. GGML_OPENCL_FA_MQN_GQA2=1.
+        // 30 layers). Without this arm those layers take the per-query-head
+        // kernel and re-read the KV cache twice, which is the whole of that
+        // model's -fa 1 decode regression.
+        //
+        // On by default; GGML_OPENCL_FA_MQN_GQA2=0 opts out. It was opt-in while
+        // the expectation was that only two query heads per KV read -- a quarter
+        // of the gqa 8 sharing -- could not amortise it well enough to beat the
+        // unfused path. Measurement says otherwise, so that reasoning is removed
+        // rather than left standing next to a default it argues against.
+        // X2-90, gemma-4-26B q4_0, tg128, one binary, this arm off -> on:
+        //
+        //   d0     36.16 -> 35.76    -1.1%   (inside run-to-run spread)
+        //   d1024  27.55 -> 32.31   +17.3%
+        //   d2048  26.56 -> 31.85   +19.9%
+        //   d4096  25.81 -> 30.60   +18.6%
+        //
+        // A separate build of the same commit reproduces this to within 2%.
+        //
+        // and on the 840 (A8X) +4.7% at d0, +21.2% at d2048. Two generations, no
+        // inversion at any depth measured. This only ever changes which decode
+        // kernel is picked, so d0 parity is the floor rather than a risk.
+        //
+        // No device predicate, matching the gqa 4 and 8 arms it sits beside.
+        // X1E is the one generation with no perf number, and it is deliberately
+        // not gated out rather than silently included: this is the only gqa == 2
+        // model on the fleet, and an X1-class per-context allocation cap (~6 GB)
+        // stops it loading at full offload there, so the shape is unreachable on
+        // X1E in practice rather than untested-and-risky. FLASH_ATTN_EXT coverage
+        // does run there. A7X and E17 never reach this function at all --
+        // supports_op declines f16-KV flash attention on both.
         static const bool mqn_gqa2 = []{
             const char * e = getenv("GGML_OPENCL_FA_MQN_GQA2");
-            return e != NULL && e[0] != '0';
+            return e == NULL || e[0] != '0';
         }();
         if (gqa == 4 || gqa == 8 || (gqa == 2 && mqn_gqa2)) {
             // hs/nsg defaults are per-shape measurements on the X2-90; the env
