@@ -47,7 +47,7 @@ USING (model_hash, name)` instead of three hand-written parsers.
 | **`l4_plan_outcome`** | 1 per (tensor, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
 | **`l5_plan_summary`** | 1 per (tensor, iteration, plan_id) | Python (l5_orchestrator) | L5 requant plan (sensitivity_score, recommended_alpha, recommended_clip). |
 | **`l5_outcome`** | 1 per (tensor, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score (a running measure of how well the orchestrator's sensitivity scoring predicts the actual error delta). Phase 14: also carries the per-tensor components `imatrix_magnitude`, `gradient_proxy`, `layer_position_prior` (all nullable) so a future retune can fit a 3-coefficient model. |
-| **`l5_weights`** | 1 per (model, model_role, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, model_role, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, model_role, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db --model-role R`, closing the loop. Phase 16 (retune follow-ups): also carries `coupling_score` (nullable) — the per-(model, family) Pearson correlation of the per-layer hit_rate between the trunk and dflash roles, a measure of how coupled the two roles' miscalibration is. Phase 16: the `model_role` dimension lets the same family in different architectural roles (trunk / dflash / dspark / mtp_nextn / shared_embd) get independent retune verdicts. Phase 15: also carries `top_fraction` (nullable) — the per-family requant aggressiveness recommendation. Phase 14: also carries `requant_budget_bits` (nullable) — the dispatch-side budget the retune recommends for the next requant pass. |
+| **`l5_weights`** | 1 per (model, model_role, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, model_role, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, model_role, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db --model-role R`, closing the loop. Phase 16 (retune follow-ups): also carries `coupling_score` (nullable) - the per-(model, family) Pearson correlation of the per-layer hit_rate between the trunk and dflash roles, a measure of how coupled the two roles' miscalibration is. Phase 16: the `model_role` dimension lets the same family in different architectural roles (trunk / dflash / dspark / mtp_nextn / shared_embd) get independent retune verdicts. Phase 15: also carries `top_fraction` (nullable) - the per-family requant aggressiveness recommendation. Phase 14: also carries `requant_budget_bits` (nullable) - the dispatch-side budget the retune recommends for the next requant pass. |
 | **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. |
 
 The 7 bolded tables are the additions on top of the existing
@@ -864,13 +864,13 @@ moves the l5_weights PK from 2-tuple to 3-tuple):
 42 retune tests + 12 outcome tests + 19 db tests + 7
 dataframe tests = 80 tests pass.
 
-## Phase 16 (this branch): retune follow-ups — coupling score + cross-model dedup + cache
+## Phase 16 (this branch): retune follow-ups - coupling score + cross-model dedup + cache
 
 Three incremental retune improvements on top of Phase 16's
 role propagation. All additive; legacy rows are
 unaffected.
 
-### F3.1 — Cross-component coupling score
+### F3.1 - Cross-component coupling score
 
 The retune's per-(model, model_role, family) verdict
 fits a 3-coefficient OLS for each role. A natural
@@ -901,7 +901,7 @@ the same value on the trunk/attn_q and dflash/attn_q
 rows). The score is informational: the retune's shift
 rule does not depend on it. NULL on legacy rows.
 
-### F3.2 — Cross-model hash dedup
+### F3.2 - Cross-model hash dedup
 
 `--retune-from-db --model-hash <hash>` looks up
 `l5_weights` for the requested model. When the model
@@ -932,7 +932,7 @@ on a multi-model DB is bounded. The dedup is off by
 default; the consumer-side default is to fall back to
 the `--w-*` flag values.
 
-### F3.3 — `--retune-from-db` cache layer
+### F3.3 - `--retune-from-db` cache layer
 
 The orchestrator's 3-tier lookup chain (per-model +
 per-role -> cross-model + per-role -> per-model
