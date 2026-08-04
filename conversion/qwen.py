@@ -688,6 +688,12 @@ class DFlashModel(Qwen3Model):
             name = "model." + name
         return super().filter_tensors((name, gen))
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.embed_tokens.weight" and not self.hparams.get("train_embed_tokens", True):
+            return []
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
 
 @ModelBase.register("Qwen3DSparkModel")
 class DSparkModel(DFlashModel):
