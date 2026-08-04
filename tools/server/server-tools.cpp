@@ -37,16 +37,33 @@ json server_tool::to_json() const {
 
 static constexpr size_t SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT = 8 * 1024 * 1024; // 8 MB
 static constexpr int SERVER_TOOL_GIT_LS_FILES_TIMEOUT = 15; // seconds
+static constexpr int SERVER_TOOL_FILE_SEARCH_TIMEOUT = 5; // seconds
+
+// entry kinds a directory listing may return
+enum class list_kind {
+    files, // regular files only
+    dirs,  // directories only
+    all,   // both
+};
+
+// home directory, read once at first use (getenv is not thread safe against setenv)
+static const std::string & home_dir() {
+    static const std::string home = [] {
+        const char * h = getenv("HOME");
+#ifdef _WIN32
+        if (h == nullptr) h = getenv("USERPROFILE");
+#endif
+        return h ? std::string(h) : std::string();
+    }();
+    return home;
+}
 
 static std::string expand_home(const std::string & path) {
     if (path.empty() || path[0] != '~') return path;
     if (path.size() > 1 && path[1] != '/' && path[1] != '\\') return path;
-    const char * home = getenv("HOME");
-#ifdef _WIN32
-    if (home == nullptr) home = getenv("USERPROFILE");
-#endif
-    if (home == nullptr) return path;
-    return std::string(home) + path.substr(1);
+    const std::string & home = home_dir();
+    if (home.empty()) return path;
+    return home + path.substr(1);
 }
 
 // depth of a '/'-separated relative path: "a/b/c" is 3
@@ -77,7 +94,9 @@ public:
     };
     // entries relative to `base`; sets `err` if `base` isn't a directory
     // max_depth == 0 means unlimited, 1 means direct children of `base` only
-    virtual std::vector<list_entry> list_entries(const std::string & base, int max_depth, bool include_dirs, std::string & err) const = 0;
+    // `base` must already be resolved (absolute); `caller_path` is the path the
+    // caller passed, used only for error messages
+    virtual std::vector<list_entry> list_entries(const std::string & base, const std::string & caller_path, int max_depth, list_kind kind, std::string & err, bool & truncated) const = 0;
     // on_chunk, if set, is called with each chunk of output as it is read (before truncation cuts in);
     // returning false terminates the process early (e.g. the client disconnected)
     virtual exec_result run(
@@ -92,12 +111,20 @@ public:
     // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
     explicit tools_io_basic(std::string cwd = "") : cwd(std::move(cwd)) {}
 
-    // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged
+    // expands a leading `~`, then resolves `path` against `cwd` (or the server
+    // working directory when `cwd` is unset); the result is always absolute
     std::string resolve(const std::string & path) const override {
-        if (cwd.empty() || fs::path(path).is_absolute()) {
-            return path;
+        std::string p = expand_home(path);
+        if (fs::path(p).is_absolute()) {
+            return p;
         }
-        return (fs::path(cwd) / path).string();
+        if (cwd.empty()) {
+            std::error_code ec;
+            fs::path cur = fs::current_path(ec);
+            if (ec) return p;
+            return (cur / p).string();
+        }
+        return (fs::path(cwd) / p).string();
     }
 
     bool is_directory(const std::string & path) const override {
@@ -138,18 +165,19 @@ public:
         return (bool) f;
     }
 
-    std::vector<list_entry> list_entries(const std::string & base, int max_depth, bool include_dirs, std::string & err) const override {
+    std::vector<list_entry> list_entries(const std::string & base, const std::string & caller_path, int max_depth, list_kind kind, std::string & err, bool & truncated) const override {
         err.clear();
-        const std::string abs_base = resolve(base);
-        if (!is_directory(abs_base)) {
-            err = "path does not exist or is not a directory: " + abs_base;
+        truncated = false;
+        std::error_code ec;
+        if (!fs::is_directory(base, ec) || ec) {
+            err = "path does not exist or is not a directory: " + caller_path;
             return {};
         }
 
         // git ls-files cannot list directories; use the walker when they are requested
-        if (!include_dirs) {
+        if (kind == list_kind::files) {
             auto res = run(
-                {"git", "-C", abs_base, "ls-files", "--cached", "--others", "--exclude-standard"},
+                {"git", "-C", base, "ls-files", "--cached", "--others", "--exclude-standard"},
                 SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, SERVER_TOOL_GIT_LS_FILES_TIMEOUT);
 
             if (res.exit_code == 0 && !res.timed_out) {
@@ -161,7 +189,7 @@ public:
                     if (line.empty()) continue;
                     std::replace(line.begin(), line.end(), '\\', '/');
                     if (max_depth > 0 && entry_depth(line) > max_depth) continue;
-                    if (is_regular_file((fs::path(abs_base) / line).string())) {
+                    if (is_regular_file((fs::path(base) / line).string())) {
                         result.push_back({line, false});
                     }
                 }
@@ -169,7 +197,7 @@ public:
             }
         }
 
-        return list_entries_fallback(abs_base, max_depth, include_dirs);
+        return list_entries_fallback(base, max_depth, kind, truncated);
     }
 
     exec_result run(
@@ -256,9 +284,11 @@ private:
         return names;
     }
 
-    std::vector<list_entry> list_entries_fallback(const std::string & base, int max_depth, bool include_dirs) const {
+    std::vector<list_entry> list_entries_fallback(const std::string & base, int max_depth, list_kind kind, bool & truncated) const {
         std::vector<list_entry> result;
         std::error_code ec;
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(SERVER_TOOL_FILE_SEARCH_TIMEOUT);
 
         std::vector<std::tuple<fs::path, fs::path, int>> stack;
         stack.emplace_back(fs::path(base), fs::path(), 0);
@@ -269,22 +299,31 @@ private:
 
             for (const auto & entry : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec)) {
                 if (ec) break;
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    truncated = true;
+                    return result;
+                }
                 std::string fname = entry.path().filename().string();
                 std::error_code tec;
+                bool is_symlink = entry.is_symlink(tec);
                 if (entry.is_directory(tec)) {
                     if (junk_dir_names().count(fname) > 0) continue;
                     std::string rel = (rel_dir / fname).string();
                     std::replace(rel.begin(), rel.end(), '\\', '/');
-                    if (include_dirs) {
+                    if (kind == list_kind::dirs || kind == list_kind::all) {
                         result.push_back({rel, true});
                     }
-                    if (max_depth == 0 || depth + 1 < max_depth) {
+                    // do not descend into symlinks: a link can point back to an
+                    // ancestor and loop forever
+                    if (!is_symlink && (max_depth == 0 || depth + 1 < max_depth)) {
                         stack.emplace_back(entry.path(), rel_dir / fname, depth + 1);
                     }
                 } else if (entry.is_regular_file(tec)) {
                     std::string rel = (rel_dir / fname).string();
                     std::replace(rel.begin(), rel.end(), '\\', '/');
-                    result.push_back({rel, false});
+                    if (kind == list_kind::files || kind == list_kind::all) {
+                        result.push_back({rel, false});
+                    }
                 }
             }
         }
@@ -399,6 +438,9 @@ struct server_tool_read_file : server_tool {
 //
 
 static constexpr size_t SERVER_TOOL_FILE_SEARCH_MAX_RESULTS = 100;
+static constexpr const char * SERVER_TOOL_FILE_SEARCH_TYPE_FILE = "file";
+static constexpr const char * SERVER_TOOL_FILE_SEARCH_TYPE_DIR  = "dir";
+static constexpr const char * SERVER_TOOL_FILE_SEARCH_TYPE_ALL  = "all";
 
 struct server_tool_file_glob_search : server_tool {
     server_tool_file_glob_search() {
@@ -429,7 +471,7 @@ struct server_tool_file_glob_search : server_tool {
                         {"exclude",   {{"type", "string"},  {"description", "Glob pattern for files to exclude"}}},
                         {"type",      {{"type", "string"},  {"description", "Entry type to return: \"file\" (default), \"dir\" or \"all\""}}},
                         {"max_depth", {{"type", "integer"}, {"description", "Maximum depth to descend into subdirectories (default: 0 = unlimited; 1 = direct children only)"}}},
-                        {"limit",     {{"type", "integer"}, {"description", string_format("Maximum number of results to return (default %zu)", SERVER_TOOL_FILE_SEARCH_MAX_RESULTS)}}},
+                        {"limit",     {{"type", "integer"}, {"description", string_format("Maximum number of results to return (default %zu; values below 1 fall back to the default)", SERVER_TOOL_FILE_SEARCH_MAX_RESULTS)}}},
                     }},
                     {"required", json::array({"path"})},
                 }},
@@ -440,38 +482,45 @@ struct server_tool_file_glob_search : server_tool {
     json invoke(json params, server_tool::stream *) const override {
         auto io = make_tools_io(params);
 
-        std::string base      = io->resolve(expand_home(params.at("path").get<std::string>()));
+        std::string base      = io->resolve(params.at("path").get<std::string>());
+        // normalize to forward slashes so the web UI (which assumes '/') can
+        // join the relative entries into absolute paths on Windows too
+        std::replace(base.begin(), base.end(), '\\', '/');
         std::string include   = json_value(params, "include", std::string("**"));
         std::string exclude   = json_value(params, "exclude", std::string(""));
         std::string type      = json_value(params, "type",    std::string("file"));
         int         max_depth = std::max(0, json_value(params, "max_depth", 0));
-        size_t      limit     = (size_t) std::min(
-            std::max(0, json_value(params, "limit", (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS)),
-            (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
+        int         limit     = json_value(params, "limit", (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
+        if (limit < 1) limit = SERVER_TOOL_FILE_SEARCH_MAX_RESULTS;
+        limit = std::min(limit, (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
 
-        if (type != "file" && type != "dir" && type != "all") {
+        list_kind kind;
+        if (type == SERVER_TOOL_FILE_SEARCH_TYPE_FILE) {
+            kind = list_kind::files;
+        } else if (type == SERVER_TOOL_FILE_SEARCH_TYPE_DIR) {
+            kind = list_kind::dirs;
+        } else if (type == SERVER_TOOL_FILE_SEARCH_TYPE_ALL) {
+            kind = list_kind::all;
+        } else {
             return {{"error", "invalid type: " + type + " (expected \"file\", \"dir\" or \"all\")"}};
-        }
-        if (limit == 0) {
-            limit = SERVER_TOOL_FILE_SEARCH_MAX_RESULTS;
         }
 
         std::string err;
-        auto entries = io->list_entries(base, max_depth, type != "file", err);
+        bool truncated = false;
+        auto entries = io->list_entries(base, params.at("path").get<std::string>(), max_depth, kind, err, truncated);
         if (!err.empty()) {
             return {{"error", err}};
         }
 
         std::vector<tools_io::list_entry> matches;
         for (const auto & entry : entries) {
-            if (type == "dir" && !entry.is_dir) continue;
             if (!path_glob_match(include, entry.rel)) continue;
             if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
             matches.push_back(entry);
         }
 
         size_t total = matches.size();
-        size_t shown = std::min(total, limit);
+        size_t shown = std::min(total, (size_t) limit);
 
         std::ostringstream output_text;
         json entries_json = json::array();
@@ -489,9 +538,15 @@ struct server_tool_file_glob_search : server_tool {
                 "[%zu results limit reached (%zu total matches). Refine the glob pattern to narrow the search.]\n",
                 shown, total);
         }
+        if (truncated) {
+            output_text << "[search timed out, results truncated]\n";
+        }
 
-        // `base` lets API clients (e.g. the web UI picker) join the relative
-        // entries into absolute paths
+        // `base` is always absolute (resolve falls back to the server cwd), so
+        // API clients (e.g. the web UI picker) can join the relative entries
+        // into absolute paths. `plain_text_response` is what the model sees;
+        // `entries` is the same data as structured JSON for the UI picker,
+        // which reads `entries`/`base` instead of re-parsing the text.
         return {{"plain_text_response", output_text.str()}, {"entries", entries_json}, {"base", base}};
     }
 };
@@ -575,18 +630,20 @@ struct server_tool_grep_search : server_tool {
         // collect (absolute_path, display_path) pairs to search
         std::vector<std::pair<std::string, std::string>> files;
 
-        if (io->is_regular_file(path)) {
-            files.emplace_back(path, path);
-        } else if (io->is_directory(path)) {
+        const std::string abs_path = io->resolve(path);
+        if (io->is_regular_file(abs_path)) {
+            files.emplace_back(abs_path, path);
+        } else if (io->is_directory(abs_path)) {
             std::string err;
-            auto candidates = io->list_entries(path, 0, false, err);
+            bool truncated = false;
+            auto candidates = io->list_entries(abs_path, path, 0, list_kind::files, err, truncated);
             if (!err.empty()) {
                 return {{"error", err}};
             }
             for (const auto & entry : candidates) {
                 if (!path_glob_match(include, entry.rel)) continue;
                 if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
-                files.emplace_back((fs::path(path) / entry.rel).string(), entry.rel);
+                files.emplace_back((fs::path(abs_path) / entry.rel).string(), entry.rel);
             }
         } else {
             return {{"error", "path does not exist: " + path}};
