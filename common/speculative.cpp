@@ -2149,6 +2149,445 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     }
 };
 
+// Workstream B: ADAPTIVE muxer (common_speculative_type_draft_adaptive).
+//
+// Per the architect's spec:
+//   "Interleaved, collected, verified at once" -> all 4 drafter forward
+//   passes run per step; all 4 candidate token streams are presented to the
+//   verifier; the verifier accepts/rejects; the system takes the longest
+//   accepted prefix across the 4 streams.
+//
+// The 4 drafters are orchestrated in the fixed order [MTP, DFlash, DSPark,
+// Eagle3] (matches the tie-break order in the spec).  Each drafter is
+// represented by a child common_speculative_impl that owns its own ctx_dft.
+// The muxer itself holds the verifier (ctx_tgt) and runs the 4 trial
+// verifier forwards to predict each candidate's accepted prefix length.
+//
+// VERIFIER BATCHING
+// -----------------
+// First cut: 4 separate llama_decode forwards on the verifier, one per
+// candidate.  Each trial is a [last_sampled, c0, c1, ...] batch at positions
+// [P+1, P+2, ...] where P is the position of the last accepted token in
+// the verifier's KV.  After each trial the KV is rolled back to P via
+// llama_memory_seq_rm(verifier, seq_id, P+1, -1) so the next trial starts
+// from the same baseline.  Tree-attention (Medusa-style: one verifier
+// forward validating all 4 streams in parallel) is a future optimization
+// and not implemented in this cut; the 4 trial forwards are the documented
+// "B first cut" cost.
+//
+// KV BOOKKEEPING (the tricky part)
+// --------------------------------
+// Per step, for one seq_id, the muxer does:
+//   1. record P = llama_memory_seq_pos_max(verifier, seq_id)
+//   2. for each child in [mtp, dflash, dspark, eagle3]:
+//        a. run child->draft() into a per-child scratch vector
+//        b. llama_decode(verifier, [last_sampled, c0, c1, ...]) -- the
+//           candidate tokens are at positions [P+1, P+2, ...]
+//        c. for i in [0, len(candidate)): compare candidate[i] to
+//           argmax(logits at P+1+i); first mismatch stops the count
+//        d. llama_memory_seq_rm(verifier, seq_id, P+1, -1) -- roll back
+//           the trial so the next trial starts from P
+//   3. pick the winner (longest n_accepted, first-tied-index wins)
+//   4. set dparams[seq_id].result = winning full draft (so the main loop's
+//      normal verification does the real commit; the muxer only predicts)
+//
+// The muxer NEVER commits the trial forward to the verifier's KV.  This
+// keeps the main loop's standard speculative-decoding bookkeeping
+// (rejection sampling + bonus token + per-position accept rates) in
+// charge of the final commit, which is the same code path the existing
+// single-drafter types use.
+//
+// PER-DRAFTER STATS
+// -----------------
+// The base-class stats (n_gen_drafts, n_acc_drafts, n_gen_tokens, n_acc_tokens)
+// track the muxer as a whole (one call per step).  The 4 per-drafter arrays
+// below track the predicted acceptance (n_accepted from the trial verify):
+//   n_gen_drafts_per_drafter[i] -- times child i generated a non-empty draft
+//   n_acc_drafts_per_drafter[i] -- times child i was the winner with n_accepted > 0
+//   n_acc_tokens_per_drafter[i] -- sum of n_accepted values when child i won
+// These are printed via SPC_TRC in common_speculative_print_stats below.
+struct common_speculative_impl_draft_adaptive : public common_speculative_impl {
+    static constexpr size_t N_CHILDREN = 4;
+
+    common_params_speculative_draft params;
+
+    // The 4 child impls, in the order [MTP, DFlash, DSPark, Eagle3].  The
+    // ctor takes ownership of these.  Children with ctx_dft==nullptr are
+    // skipped (the muxer still works with 1, 2, or 3 active drafters for
+    // incremental bring-up).
+    std::array<std::unique_ptr<common_speculative_impl>, N_CHILDREN> children;
+    std::array<common_speculative_type, N_CHILDREN>               child_types = {
+        COMMON_SPECULATIVE_TYPE_DRAFT_MTP,
+        COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,
+        COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,
+        COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,
+    };
+    std::array<bool, N_CHILDREN> child_active = { false, false, false, false };
+
+    // Per-seq, per-child candidate draft (result of child->draft()).
+    std::vector<std::array<llama_tokens, N_CHILDREN>> candidate_drafts;
+
+    // Per-seq, per-child n_accepted from the trial verifier forward.
+    std::vector<std::array<uint16_t, N_CHILDREN>>     candidate_accepted;
+
+    // Per-drafter aggregate stats.  See struct comment for semantics.
+    std::array<uint64_t, N_CHILDREN> n_gen_drafts_per_drafter = {};
+    std::array<uint64_t, N_CHILDREN> n_acc_drafts_per_drafter = {};
+    std::array<uint64_t, N_CHILDREN> n_acc_tokens_per_drafter = {};
+
+    // Scratch batch for the trial verifier forward.  We build it once in
+    // the ctor with the maximum size we will ever need (1 + n_max across
+    // the 4 children).
+    llama_batch trial_batch;
+
+    common_speculative_impl_draft_adaptive(
+            const common_params_speculative & params,
+            uint32_t n_seq,
+            std::array<std::unique_ptr<common_speculative_impl>, N_CHILDREN> children_in)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE, n_seq)
+        , params(params.draft)
+        , children(std::move(children_in))
+    {
+        auto * ctx_tgt = this->params.ctx_tgt;
+        GGML_ASSERT(ctx_tgt && "ADAPTIVE muxer requires ctx_tgt to be set (the verifier)");
+
+        // Activate only the children whose pointer is non-null.  This lets
+        // callers bring up the muxer incrementally (e.g. MTP-only first,
+        // then add DFlash, then DSPark, then Eagle3) without rewriting
+        // the ctor.  The architect's spec says all 4 are required for
+        // production, but the muxer degrades gracefully if some are
+        // missing (the selection is just over the active subset).
+        size_t n_active = 0;
+        for (size_t i = 0; i < N_CHILDREN; ++i) {
+            child_active[i] = (children[i] != nullptr);
+            if (child_active[i]) {
+                n_active++;
+            }
+        }
+        GGML_ASSERT(n_active > 0 && "ADAPTIVE muxer needs at least one active drafter child");
+
+        // The child impls are expected to have been constructed with
+        // ctx_tgt (the verifier) and their own ctx_dft set, plus any
+        // model-specific setup (embeddings extraction, etc.).  The
+        // factory in common_speculative_init does this.  We do not
+        // re-validate here because the children don't expose a
+        // getter for their internal params and we don't want to add
+        // a virtual hook just for this sanity check.
+
+        // Per-seq scratch.
+        candidate_drafts.assign(n_seq, {});
+        candidate_accepted.assign(n_seq, {});
+
+        // The trial batch needs at most 1 + max(n_max_i) slots, where n_max_i
+        // is the per-drafter n_max.  Use the worst-case from the
+        // common_params_speculative_draft::n_max for now; the actual
+        // per-drafter cap is enforced by the drafter itself.
+        const int32_t n_max = this->params.n_max > 0 ? this->params.n_max : 8;
+        const int32_t n_b = (int32_t) llama_n_batch(ctx_tgt);
+        const int32_t n_trial = std::min<int32_t>(n_b, 1 + n_max);
+        trial_batch = llama_batch_init(n_trial, 0, 1);
+
+        SPC_TRC("%s", "adding speculative implementation 'draft-adaptive' "
+                "(4 drafter children, verifier-side arbitration)\n");
+        SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_active_children=%zu\n",
+                this->params.n_max, this->params.n_min, this->params.p_min, n_active);
+        for (size_t i = 0; i < N_CHILDREN; ++i) {
+            if (child_active[i]) {
+                SPC_TRC("  - child[%zu] = %s\n", i,
+                        common_speculative_type_to_str(child_types[i]).c_str());
+            }
+        }
+    }
+
+    ~common_speculative_impl_draft_adaptive() override {
+        llama_batch_free(trial_batch);
+    }
+
+    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
+        for (size_t i = 0; i < N_CHILDREN; ++i) {
+            if (child_active[i]) {
+                children[i]->begin(seq_id, prompt);
+                children[i]->n_call_begin++;
+            }
+        }
+    }
+
+    bool process(const llama_batch & batch) override {
+        bool result = true;
+        for (size_t i = 0; i < N_CHILDREN; ++i) {
+            if (child_active[i]) {
+                result = result && children[i]->process(batch);
+            }
+        }
+        return result;
+    }
+
+    // Run a single trial verifier forward for one candidate and roll back.
+    //
+    // The trial batch is [last_sampled, c0, c1, ...] at positions
+    // [P+1, P+2, ...] where P is the position of the last accepted token
+    // in the verifier's KV.  After the decode, the KV is rolled back to P
+    // via llama_memory_seq_rm so subsequent trials start from the same
+    // baseline.  Returns the number of leading candidate tokens that the
+    // verifier's argmax agrees with at the corresponding positions.
+    //
+    // Returns 0 if the candidate is empty, the KV is empty, or the
+    // decode fails.  Never commits to the verifier's KV.
+    uint16_t trial_verify_one(
+            llama_context * ctx_tgt,
+            llama_seq_id  seq_id,
+            llama_token    last_sampled,
+            const llama_tokens & candidate) {
+        if (candidate.empty()) {
+            return 0;
+        }
+
+        auto * mem = llama_get_memory(ctx_tgt);
+        if (mem == nullptr) {
+            return 0;
+        }
+        const llama_pos P = llama_memory_seq_pos_max(mem, seq_id);
+        if (P < 0) {
+            return 0;
+        }
+
+        common_batch_clear(trial_batch);
+        // first token is last_sampled at position P+1
+        common_batch_add(trial_batch, last_sampled, P + 1, { seq_id }, true);
+        // remaining tokens are the candidate at positions P+2, P+3, ...
+        for (size_t i = 0; i < candidate.size(); ++i) {
+            common_batch_add(trial_batch, candidate[i], P + 1 + (llama_pos) (i + 1), { seq_id }, true);
+        }
+
+        const int ret = llama_decode(ctx_tgt, trial_batch);
+        if (ret != 0) {
+            SPC_ERR("trial_verify: llama_decode returned %d; rolling back partial KV\n", ret);
+            llama_memory_seq_rm(mem, seq_id, P + 1, -1);
+            return 0;
+        }
+
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_tgt)));
+        uint16_t n_accepted = 0;
+        for (size_t i = 0; i < candidate.size(); ++i) {
+            // logits at position P+1+i correspond to i_batch = i (because
+            // the first batch entry is last_sampled, the rest is the
+            // candidate; logits are stored contiguously for the entries
+            // with logits=true).
+            const float * pos_logits = llama_get_logits_ith(ctx_tgt, (int32_t) i);
+            if (pos_logits == nullptr) {
+                break;
+            }
+            int argmax = 0;
+            float max_val = pos_logits[0];
+            for (int v = 1; v < n_vocab; ++v) {
+                if (pos_logits[v] > max_val) {
+                    max_val = pos_logits[v];
+                    argmax = v;
+                }
+            }
+            if ((llama_token) argmax == candidate[i]) {
+                n_accepted++;
+            } else {
+                break;
+            }
+        }
+
+        // Roll back: remove the trial positions P+1..P+len (the positions
+        // we just wrote).  The entry at P (last_sampled's existing KV
+        // position) is preserved.
+        if (!llama_memory_seq_rm(mem, seq_id, P + 1, -1)) {
+            SPC_WRN("%s", "trial_verify: KV rollback failed; verifier state may be corrupt\n");
+        }
+
+        return n_accepted;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        common_time_meas tm(this->t_draft_us, !this->gen_perf);
+        this->n_call_draft++;
+
+        auto * ctx_tgt = this->params.ctx_tgt;
+
+        // Identify which seq_ids are drafting this step (the main loop
+        // sets drafting=true on the ones it wants a draft for).
+        std::vector<bool> drafting(n_seq, false);
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            drafting[seq_id] = dparams[seq_id].drafting;
+        }
+
+        // Per-seq processing: run all 4 children + trial-verify + pick
+        // the winner.
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (!drafting[seq_id]) {
+                continue;
+            }
+            GGML_ASSERT(dparams[seq_id].result->empty() && "draft() called on non-empty result");
+
+            const llama_token last_sampled = dparams[seq_id].id_last;
+
+            // Build per-child dparams that points to the per-child scratch
+            // vector.  The children share the prompt and n_past; only the
+            // result target differs.
+            std::vector<common_speculative_draft_params> child_dparams(n_seq);
+            for (llama_seq_id s = 0; s < (llama_seq_id) n_seq; ++s) {
+                child_dparams[s] = dparams[s];
+                child_dparams[s].result = nullptr;
+            }
+            child_dparams[seq_id].drafting = true;
+            child_dparams[seq_id].result = &candidate_drafts[seq_id][0]; // placeholder, replaced below
+            // (the placeholder is needed so the array-init below compiles)
+
+            // Build (n_accepted, draft_tokens) pairs in the fixed order.
+            std::vector<std::pair<uint16_t, llama_tokens>> drafts_with_accepted;
+            drafts_with_accepted.reserve(N_CHILDREN);
+
+            for (size_t i = 0; i < N_CHILDREN; ++i) {
+                if (!child_active[i]) {
+                    continue;
+                }
+                // Set this child's scratch as the result target.
+                llama_tokens & scratch = candidate_drafts[seq_id][i];
+                scratch.clear();
+                child_dparams[seq_id].result = &scratch;
+
+                {
+                    common_time_meas tm_child(children[i]->t_draft_us, !children[i]->gen_perf);
+                    children[i]->n_call_draft++;
+                    children[i]->draft(child_dparams);
+                }
+
+                if (scratch.empty()) {
+                    drafts_with_accepted.emplace_back(0, llama_tokens{});
+                    continue;
+                }
+                n_gen_drafts_per_drafter[i]++;
+                children[i]->n_gen_drafts++;
+                children[i]->n_gen_tokens += scratch.size();
+
+                // Trial verify
+                const uint16_t n_acc = trial_verify_one(ctx_tgt, seq_id, last_sampled, scratch);
+                drafts_with_accepted.emplace_back(n_acc, scratch);
+                candidate_accepted[seq_id][i] = n_acc;
+            }
+
+            if (drafts_with_accepted.empty()) {
+                // No active child produced a draft; fall through and let
+                // the main loop sample a single token.
+                dparams[seq_id].drafting = false;
+                continue;
+            }
+
+            // Pick the winner.
+            const size_t win_idx = common_speculative_pick_best_accepted_idx(drafts_with_accepted);
+            const uint16_t win_n  = drafts_with_accepted[win_idx].first;
+
+            // Map the win_idx back to a child index (because we skipped
+            // inactive children, win_idx is an index into
+            // drafts_with_accepted, not into N_CHILDREN).
+            size_t win_child = 0;
+            {
+                size_t k = 0;
+                for (size_t i = 0; i < N_CHILDREN; ++i) {
+                    if (!child_active[i]) {
+                        continue;
+                    }
+                    if (k == win_idx) {
+                        win_child = i;
+                        break;
+                    }
+                    k++;
+                }
+            }
+
+            // Update per-drafter stats.  The base-class stats
+            // (n_gen_drafts, n_gen_tokens, n_acc_drafts, n_acc_tokens)
+            // are tracked by common_speculative_draft / _accept AFTER
+            // our draft() returns and after the main loop commits, so
+            // we do not touch them here -- that would double-count.
+            // We only update the per-drafter breakdown.
+            n_acc_drafts_per_drafter[win_child]++;
+            n_acc_tokens_per_drafter[win_child] += win_n;
+            // Forward the children's internal bookkeeping (EAGLE3's
+            // pending_g_last, MTP's pending_h, etc.) too.  The children
+            // are not in spec->impls, so they don't get a primary accept
+            // call from common_speculative_accept -- but they need to
+            // know about the acceptance so their next draft() sees the
+            // post-accept state.  Use the predicted n_accepted here;
+            // if the actual differs (non-greedy sampling), the child's
+            // own accept() call from the main loop's pass-through
+            // (with is_other=true) will reconcile.
+            children[win_child]->accept(seq_id, win_n, /*is_other=*/false);
+
+            // Set the main dparams[seq_id].result to the winning full
+            // draft.  The main loop's normal verification will run on
+            // this draft, determine the actual n_accepted (which should
+            // match the muxer for greedy sampling), and accept the prefix.
+            //
+            // If the winner's predicted n_accepted is 0, we still set the
+            // draft -- the main loop will see n_accepted=0 and just
+            // sample a bonus token.  This is better than returning empty
+            // (which would force the main loop to sample without any
+            // drafter context).
+            *dparams[seq_id].result = drafts_with_accepted[win_idx].second;
+            dparams[seq_id].drafting = false;
+        }
+    }
+
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
+        // The main loop's common_speculative_accept() calls us with
+        // is_other=false because the muxer is the impl_last.  We forward
+        // to the children:
+        //   - winner (the child whose predicted n_accepted was largest
+        //     in this seq's draft() call) -> accept(..., is_other=false)
+        //   - everyone else                  -> accept(..., is_other=true)
+        // This mirrors the main loop's own "primary vs other" pattern
+        // for the top-level impls in spec->impls.
+        //
+        // If is_other is true (we are being called from another impl's
+        // chain, which can happen if DRAFT_ADAPTIVE is mixed with another
+        // type in spec->types), forward to all children as is_other=true.
+        size_t win_child = 0;
+        bool have_winner = false;
+        if (!is_other && (size_t) seq_id < candidate_accepted.size()) {
+            uint16_t best_n = 0;
+            for (size_t i = 0; i < N_CHILDREN; ++i) {
+                if (child_active[i] && candidate_accepted[seq_id][i] > best_n) {
+                    best_n = candidate_accepted[seq_id][i];
+                    win_child = i;
+                    have_winner = true;
+                }
+            }
+        }
+        for (size_t i = 0; i < N_CHILDREN; ++i) {
+            if (!child_active[i]) {
+                continue;
+            }
+            const bool child_is_other = is_other || !have_winner || (i != win_child);
+            children[i]->accept(seq_id, n_accepted, child_is_other);
+        }
+    }
+
+    bool need_embd() const override {
+        // true if ANY child needs embeddings.  EAGLE3, MTP need them; the
+        // dflash/dspark need them too (for the encoder injection).
+        for (size_t i = 0; i < N_CHILDREN; ++i) {
+            if (child_active[i] && children[i]->need_embd()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool need_embd_nextn() const override {
+        for (size_t i = 0; i < N_CHILDREN; ++i) {
+            if (child_active[i] && children[i]->need_embd_nextn()) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 struct common_speculative {
     common_speculative_draft_params_vec dparams;
 
@@ -2502,6 +2941,57 @@ common_speculative_init_result_ptr common_speculative_init_from_params(common_pa
     return std::make_unique<common_speculative_init_result>(params, model_tgt, ctx_tgt);
 }
 
+// Workstream B: build the 4 child impls for the ADAPTIVE muxer from the
+// per-drafter ctx slots in params.adaptive.  Returns 4 unique_ptr<impl> in
+// the fixed order [MTP, DFlash, DSPark, Eagle3].  Slots whose ctx_dft is
+// null are returned as nullptr; the muxer skips them.
+//
+// The 4 child impls are constructed using copies of params with
+// params.draft.ctx_dft set to the appropriate slot.  Other draft params
+// (n_max, p_min, cache types, devices, etc.) come from the original
+// params so a single --spec-* setting propagates to all 4 drafters.
+//
+// Per-drafter n_max override is applied: if params.adaptive.n_max_xxx > 0,
+// the child's n_max is set to that value; otherwise it falls back to
+// params.draft.n_max.
+static std::array<std::unique_ptr<common_speculative_impl>, 4>
+common_speculative_make_adaptive_children(const common_params_speculative & params, uint32_t n_seq) {
+    std::array<std::unique_ptr<common_speculative_impl>, 4> children = {};
+
+    auto build_params_for = [&](llama_context * ctx_dft, int32_t n_max_override) {
+        common_params_speculative p = params;
+        p.draft.ctx_dft = ctx_dft;
+        if (n_max_override > 0) {
+            p.draft.n_max = n_max_override;
+        }
+        return p;
+    };
+
+    if (params.adaptive.ctx_dft_mtp != nullptr) {
+        children[0] = std::make_unique<common_speculative_impl_draft_mtp>(
+                build_params_for(params.adaptive.ctx_dft_mtp, params.adaptive.n_max_mtp),
+                n_seq);
+    }
+    if (params.adaptive.ctx_dft_dflash != nullptr) {
+        children[1] = std::make_unique<common_speculative_impl_draft_dflash>(
+                build_params_for(params.adaptive.ctx_dft_dflash, params.adaptive.n_max_dflash),
+                n_seq,
+                COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+    }
+    if (params.adaptive.ctx_dft_dspark != nullptr) {
+        children[2] = std::make_unique<common_speculative_impl_draft_dflash>(
+                build_params_for(params.adaptive.ctx_dft_dspark, params.adaptive.n_max_dspark),
+                n_seq,
+                COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK);
+    }
+    if (params.adaptive.ctx_dft_eagle3 != nullptr) {
+        children[3] = std::make_unique<common_speculative_impl_draft_eagle3>(
+                build_params_for(params.adaptive.ctx_dft_eagle3, params.adaptive.n_max_eagle3),
+                n_seq);
+    }
+    return children;
+}
+
 // initialization of the speculative decoding system
 //
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {
@@ -2562,16 +3052,15 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_draft_dspark) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params));
         }
-        // TODO(adaptive-drafter, Workstream B):
-        //   The block above adds every enabled drafter to `configs` in
-        //   a fixed priority order.  The ADAPTIVE drafter (Workstream B)
-        //   will score the candidates at decode time (acceptance rate,
-        //   per-token latency, draft-length yield) and pick one
-        //   per-step.  The scoring hook plugs in *here* - between the
-        //   build of `configs` and the loop that instantiates
-        //   `impls` further down.  For Workstream A this block is
-        //   untouched; the embedded drafters land in `configs` exactly
-        //   as the standalone path has always done.
+        if (has_draft_adaptive) {
+            // The ADAPTIVE muxer needs the 4 per-drafter ctx slots wired
+            // up.  The factory below constructs the 4 child impls from
+            // params.adaptive.{ctx_dft_mtp, ctx_dft_dflash, ...} and
+            // packs them into the muxer.  If only a subset of the 4
+            // ctx_dft slots are populated (incremental bring-up), the
+            // muxer gracefully degrades to the active subset.
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE, params));
+        }
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
@@ -2599,6 +3088,17 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(
                         config.params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE: {
+                // Build the 4 child impls from the per-drafter ctx slots
+                // in params.adaptive, then wrap them in the ADAPTIVE
+                // muxer.  Slots whose ctx_dft is nullptr are skipped
+                // (the muxer tolerates a subset of drafters for
+                // incremental bring-up).
+                auto children = common_speculative_make_adaptive_children(config.params, n_seq);
+                impls.push_back(std::make_unique<common_speculative_impl_draft_adaptive>(
+                        config.params, n_seq, std::move(children)));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
@@ -2916,6 +3416,25 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 impl->n_acc_tokens,
                 str_stats.c_str(),
                 str_perf.c_str());
+
+        // Workstream B: per-drafter breakdown for the ADAPTIVE muxer.
+        // The base-class stats above cover the muxer as a whole; this
+        // loop prints the predicted-acceptance breakdown across the 4
+        // children so a reader can see which drafter is winning.
+        if (impl->type == COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE) {
+            const auto * muxer = static_cast<const common_speculative_impl_draft_adaptive *>(impl.get());
+            for (size_t i = 0; i < common_speculative_impl_draft_adaptive::N_CHILDREN; ++i) {
+                if (!muxer->child_active[i]) {
+                    continue;
+                }
+                SPC_TRC("  adaptive child[%zu] %16s: #gen = %6" PRIu64 ", #acc = %5" PRIu64 ", #acc_tokens = %6" PRIu64 "\n",
+                        i,
+                        common_speculative_type_to_str(muxer->child_types[i]).c_str(),
+                        muxer->n_gen_drafts_per_drafter[i],
+                        muxer->n_acc_drafts_per_drafter[i],
+                        muxer->n_acc_tokens_per_drafter[i]);
+            }
+        }
     }
 }
 
