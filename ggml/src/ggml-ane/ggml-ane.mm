@@ -7,6 +7,7 @@
 #import <CoreML/CoreML.h>
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
+#import <Metal/Metal.h>
 
 #include <Accelerate/Accelerate.h>
 
@@ -1321,3 +1322,242 @@ ggml_backend_reg_t ggml_backend_ane_reg(void) {
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_ane_reg)
+
+////////////////////////////////////////////////////////////////////////////////
+// Cross-backend IOSurface buffer (the data plane for lock-free CPU/Metal/ANE
+// dispatch). Distinct from `ggml_backend_ane_buffer_context` (above) which
+// is owned by the ANE backend. This buffer is portable across all three
+// backends: ggml_backend_supports_buft returns true for the CPU, Metal, and
+// ANE backends (the latter is via the same buffer type the ANE backend
+// registers; CPU/Metal support it because the base is locked CVPixelBuffer
+// memory and IOSurface-backed MTLBuffer is a public Apple primitive).
+////////////////////////////////////////////////////////////////////////////////
+
+struct ggml_backend_ane_iosurface_buffer_context {
+    IOSurfaceRef surface = nullptr;     // retained; locked for the buffer's lifetime
+    void *       base    = nullptr;     // locked base address (CPU view)
+    size_t       size    = 0;           // requested (rounded) size in bytes
+    void *       mtl_buffer = nullptr;   // lazily-created MTLBuffer (Metal view)
+
+    ~ggml_backend_ane_iosurface_buffer_context() {
+        if (mtl_buffer) {
+            // The MTLBuffer is created via newBufferWithBytesNoCopy so it
+            // shares the IOSurface's memory; we released it but the
+            // IOSurface still owns the bytes. The MTLBuffer's lifetime
+            // is independent of the IOSurface's. We just drop our
+            // reference here; the IOSurface release below stays correct.
+            CFRelease(mtl_buffer);
+            mtl_buffer = nullptr;
+        }
+        if (surface) {
+            IOSurfaceUnlock(surface, 0, nullptr);
+            CFRelease(surface);
+            surface = nullptr;
+        }
+        base = nullptr;
+    }
+};
+
+static void ggml_backend_ane_iosurface_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    auto * ctx = (ggml_backend_ane_iosurface_buffer_context *) buffer->context;
+    delete ctx;
+}
+
+static void * ggml_backend_ane_iosurface_buffer_get_base(ggml_backend_buffer_t buffer) {
+    auto * ctx = (ggml_backend_ane_iosurface_buffer_context *) buffer->context;
+    return ctx->base;
+}
+
+static void ggml_backend_ane_iosurface_buffer_memset_tensor(ggml_backend_buffer_t buffer,
+                                                           ggml_tensor * tensor,
+                                                           uint8_t value, size_t offset, size_t size) {
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+    memset((char *) tensor->data + offset, value, size);
+}
+
+static void ggml_backend_ane_iosurface_buffer_set_tensor(ggml_backend_buffer_t buffer,
+                                                          ggml_tensor * tensor,
+                                                          const void * data, size_t offset, size_t size) {
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+    memcpy((char *) tensor->data + offset, data, size);
+}
+
+static void ggml_backend_ane_iosurface_buffer_get_tensor(ggml_backend_buffer_t buffer,
+                                                          const ggml_tensor * tensor,
+                                                          void * data, size_t offset, size_t size) {
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+    memcpy(data, (const char *) tensor->data + offset, size);
+}
+
+static void ggml_backend_ane_iosurface_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    auto * ctx = (ggml_backend_ane_iosurface_buffer_context *) buffer->context;
+    memset(ctx->base, value, ctx->size);
+}
+
+static size_t ggml_backend_ane_iosurface_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
+    return ggml_nbytes(tensor);
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_i ggml_backend_ane_iosurface_buffer_i = {
+    /* .free_buffer   = */ ggml_backend_ane_iosurface_buffer_free_buffer,
+    /* .get_base      = */ ggml_backend_ane_iosurface_buffer_get_base,
+    /* .init_tensor   = */ NULL,
+    /* .memset_tensor = */ ggml_backend_ane_iosurface_buffer_memset_tensor,
+    /* .set_tensor    = */ ggml_backend_ane_iosurface_buffer_set_tensor,
+    /* .get_tensor    = */ ggml_backend_ane_iosurface_buffer_get_tensor,
+    /* .set_tensor_2d = */ NULL,
+    /* .get_tensor_2d = */ NULL,
+    /* .cpy_tensor    = */ NULL,  // copies go through the CPU view (set/get)
+    /* .clear         = */ ggml_backend_ane_iosurface_buffer_clear,
+    /* .reset         = */ NULL,
+};
+
+static const char * ggml_backend_ane_iosurface_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    return "ANE_IOSURFACE";
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_t ggml_backend_ane_iosurface_buffer_type_alloc_buffer(
+        ggml_backend_buffer_type_t buft, size_t size) {
+    const size_t rounded = ggml_ane_round_size(size);
+
+    NSDictionary * properties = @{
+        (id) kIOSurfaceWidth:          @(rounded),
+        (id) kIOSurfaceHeight:         @1,
+        (id) kIOSurfaceBytesPerElement:@1,
+        (id) kIOSurfaceBytesPerRow:    @(rounded),
+        (id) kIOSurfaceAllocSize:      @(rounded),
+    };
+    IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef) properties);
+    if (!surface) {
+        GGML_LOG_ERROR("%s: IOSurfaceCreate failed for %zu bytes\n", __func__, rounded);
+        return nullptr;
+    }
+    if (IOSurfaceLock(surface, 0, nullptr) != kIOReturnSuccess) {
+        GGML_LOG_ERROR("%s: IOSurfaceLock failed\n", __func__);
+        CFRelease(surface);
+        return nullptr;
+    }
+    void * base = IOSurfaceGetBaseAddress(surface);
+    if (!base) {
+        GGML_LOG_ERROR("%s: IOSurfaceGetBaseAddress returned null\n", __func__);
+        IOSurfaceUnlock(surface, 0, nullptr);
+        CFRelease(surface);
+        return nullptr;
+    }
+
+    auto * ctx = new ggml_backend_ane_iosurface_buffer_context;
+    ctx->surface = surface;
+    ctx->base    = base;
+    ctx->size    = rounded;
+    return ggml_backend_buffer_init(buft, ggml_backend_ane_iosurface_buffer_i, ctx, size);
+}
+
+static size_t ggml_backend_ane_iosurface_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    return GGML_ANE_PAGE;
+
+    GGML_UNUSED(buft);
+}
+
+static size_t ggml_backend_ane_iosurface_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    return SIZE_MAX;
+
+    GGML_UNUSED(buft);
+}
+
+static bool ggml_backend_ane_iosurface_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+    // The IOSurface is process-shared, not strictly host memory. The
+    // scheduler treats it as off-host for placement decisions.
+    return false;
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_ane_iosurface_buffer_type(void) {
+    static ggml_backend_buffer_type buft;
+    static bool initialized = false;
+
+    {
+        static std::mutex mutex;
+        std::lock_guard<std::mutex> lock(mutex);
+
+        if (!initialized) {
+            buft = {
+                /* .iface = */ {
+                    /* .get_name       = */ ggml_backend_ane_iosurface_buffer_type_get_name,
+                    /* .alloc_buffer   = */ ggml_backend_ane_iosurface_buffer_type_alloc_buffer,
+                    /* .get_alignment  = */ ggml_backend_ane_iosurface_buffer_type_get_alignment,
+                    /* .get_max_size   = */ ggml_backend_ane_iosurface_buffer_type_get_max_size,
+                    /* .get_alloc_size = */ ggml_backend_ane_iosurface_buffer_type_get_alloc_size,
+                    /* .is_host        = */ ggml_backend_ane_iosurface_buffer_type_is_host,
+                },
+                /* .device  = */ nullptr, // portable across backends, not device-owned
+                /* .context = */ nullptr,
+            };
+
+            initialized = true;
+        }
+    }
+
+    return &buft;
+}
+
+GGML_BACKEND_API ggml_backend_buffer_t ggml_backend_ane_iosurface_buffer_alloc(size_t bytes) {
+    return ggml_backend_ane_iosurface_buffer_type_alloc_buffer(
+        ggml_backend_ane_iosurface_buffer_type(), bytes);
+}
+
+GGML_BACKEND_API bool ggml_backend_ane_iosurface_buffer_check(ggml_backend_buffer_t buffer) {
+    return buffer && buffer->iface.free_buffer == ggml_backend_ane_iosurface_buffer_free_buffer;
+}
+
+GGML_BACKEND_API void * ggml_backend_ane_iosurface_buffer_get_iosurface(ggml_backend_buffer_t buffer) {
+    if (!ggml_backend_ane_iosurface_buffer_check(buffer)) {
+        return nullptr;
+    }
+    auto * ctx = (ggml_backend_ane_iosurface_buffer_context *) buffer->context;
+    return (void *) ctx->surface;
+}
+
+// Lazily wrap the IOSurface as an MTLBuffer. The wrap uses
+// newBufferWithBytesNoCopy so the MTLBuffer shares memory with the
+// IOSurface (no copy). The deallocator is nil because the IOSurface
+// owns the memory and outlives the MTLBuffer.
+GGML_BACKEND_API void * ggml_backend_ane_iosurface_buffer_get_mtl_buffer(ggml_backend_buffer_t buffer) {
+    if (!ggml_backend_ane_iosurface_buffer_check(buffer)) {
+        return nullptr;
+    }
+    auto * ctx = (ggml_backend_ane_iosurface_buffer_context *) buffer->context;
+    if (ctx->mtl_buffer) {
+        return ctx->mtl_buffer;
+    }
+    // Look up the Metal device. The ggml-ane backend does not own a
+    // Metal device; the dispatch layer hands us one through the
+    // environment (a future commit wires this through ggml_backend_dev_t
+    // discovery). For the lock-free data plane itself, we use the
+    // system default Metal device (MTLCreateSystemDefaultDevice).
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (!device) {
+        GGML_LOG_ERROR("%s: MTLCreateSystemDefaultDevice returned null\n", __func__);
+        return nullptr;
+    }
+    // The IOSurface must remain alive for as long as the MTLBuffer is
+    // live. newBufferWithBytesNoCopy takes a non-retained pointer; we
+    // pass NULL as the deallocator and rely on the buffer's own
+    // destruction to drop the MTLBuffer (which then no longer
+    // references the IOSurface). The IOSurface itself outlives the
+    // MTLBuffer because the buffer holds a reference to both.
+    id<MTLBuffer> mtl_buf = [device newBufferWithBytesNoCopy:ctx->base
+                                                       length:ctx->size
+                                                      options:MTLResourceStorageModeShared
+                                                  deallocator:nil];
+    if (!mtl_buf) {
+        GGML_LOG_ERROR("%s: newBufferWithBytesNoCopy failed\n", __func__);
+        return nullptr;
+    }
+    ctx->mtl_buffer = (void *) CFBridgingRetain(mtl_buf);
+    return ctx->mtl_buffer;
+}

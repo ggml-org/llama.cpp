@@ -7,6 +7,7 @@ endif()
 find_library(FOUNDATION_LIBRARY Foundation  REQUIRED)
 find_library(IO_SURFACE_FRAMEWORK IOSurface  REQUIRED)
 find_library(COREML_FRAMEWORK    CoreML     REQUIRED)
+find_library(METAL_FRAMEWORK     Metal      REQUIRED)
 find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
 
 message(STATUS "ANE (Core ML) backend enabled")
@@ -19,6 +20,7 @@ target_link_libraries(ggml-ane PRIVATE
                       ${FOUNDATION_LIBRARY}
                       ${IO_SURFACE_FRAMEWORK}
                       ${COREML_FRAMEWORK}
+                      ${METAL_FRAMEWORK}
                       ${ACCELERATE_FRAMEWORK}
                       )
 

@@ -54,6 +54,50 @@ GGML_BACKEND_API bool ggml_backend_ane_set_program(
         ggml_backend_t backend,
         struct ggml_backend_ane_program * program);
 
+// Lock-free data plane: a cross-backend IOSurface-backed buffer.
+//
+// Allocates an IOSurface that the CPU, Metal, and ANE backends can all
+// read and write without copies. This is the data-plane primitive for
+// the cross-backend lock-free dispatch (per the prism-engine
+// SharedEventContract / Arena pattern, mapped to llama.cpp / ggml).
+//
+//   bytes: minimum byte count. The actual allocation is rounded up to
+//          the ANE-mandated 16 KB page boundary and clamped to the
+//          64 KB IOSurface minimum (Orion #4).
+//
+// The returned buffer's `get_base()` returns the locked CVPixelBuffer
+// base address (CPU view). The Metal view is exposed via
+// ggml_backend_ane_iosurface_buffer_get_mtl_buffer (lazily created on
+// first access; cached for the buffer's lifetime). The ANE view is
+// the raw IOSurfaceRef via ggml_backend_ane_iosurface_buffer_get_iosurface.
+//
+// Returns nullptr on allocation failure. The caller owns the buffer
+// and must free it via ggml_backend_buffer_free.
+GGML_BACKEND_API ggml_backend_buffer_t ggml_backend_ane_iosurface_buffer_alloc(
+        size_t bytes);
+
+// Returns true if the buffer is an ANE cross-backend IOSurface buffer.
+GGML_BACKEND_API bool ggml_backend_ane_iosurface_buffer_check(
+        ggml_backend_buffer_t buffer);
+
+// Get the raw IOSurfaceRef (ANE view) for the buffer. The IOSurface
+// is locked for the buffer's lifetime; the returned ref is retained
+// by the buffer. Returns NULL if the buffer is not an ANE
+// IOSurface-backed buffer.
+//
+// The IOSurfaceRef can be wrapped as a _ANEIOSurfaceObject (the ANE
+// private framework's IOSurface handle) for direct ANE dispatch.
+GGML_BACKEND_API void * ggml_backend_ane_iosurface_buffer_get_iosurface(
+        ggml_backend_buffer_t buffer);
+
+// Wrap the IOSurface as an MTLBuffer (Metal view). Lazily creates the
+// MTLBuffer on first call and caches it. The MTLBuffer shares memory
+// with the IOSurface (no copy). The returned MTLBuffer is owned by the
+// buffer (released on free). Returns NULL on failure or if the buffer
+// is not an ANE IOSurface buffer.
+GGML_BACKEND_API void * ggml_backend_ane_iosurface_buffer_get_mtl_buffer(
+        ggml_backend_buffer_t buffer);
+
 #ifdef __cplusplus
 }
 #endif

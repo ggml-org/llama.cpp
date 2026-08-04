@@ -363,6 +363,18 @@ if (APPLE)
                               "-framework CoreML"
                               "-framework IOSurface")
     endif()
+    # Data plane test for the cross-backend IOSurface buffer
+    # (ggml_backend_ane_iosurface_buffer_alloc). Lock-free dispatch
+    # foundation; the control plane (MTLSharedEvent) and dispatch API
+    # build on top of this in follow-on commits.
+    llama_build(test-ane-iosurface-buffer.mm)
+    if (TARGET test-ane-iosurface-buffer)
+        target_link_libraries(test-ane-iosurface-buffer PRIVATE
+                              ggml ggml-base
+                              "-framework Foundation"
+                              "-framework IOSurface"
+                              "-framework Metal")
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
