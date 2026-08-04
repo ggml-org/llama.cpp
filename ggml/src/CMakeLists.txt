@@ -200,6 +200,8 @@ add_library(ggml-base
             ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp
+            ggml-backend-auto.cpp
+            ggml-backend-residency.cpp
             ggml-backend-meta.cpp
             ggml-opt.cpp
             ggml-threading.cpp

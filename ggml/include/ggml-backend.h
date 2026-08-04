@@ -348,6 +348,95 @@ extern "C" {
     // The correct way to use this API is to discard the deallocated tensors and create new ones.
     GGML_API void                 ggml_backend_sched_reset(ggml_backend_sched_t sched);
 
+    //
+    // Heuristic-based per-node backend auto-selection (Project B).
+    //
+    // Walks ``graph->nodes`` and, for each node, picks the best
+    // candidate backend from ``candidates`` (filtered by
+    // ``ggml_backend_supports_op``) and applies the choice via
+    // ``ggml_backend_sched_set_tensor_backend``. The heuristic is
+    // shape-aware: layout ops prefer CPU (no-op, fastest),
+    // elementwise ops prefer an ACCEL (ANE) backend when one
+    // supports the op, MUL_MAT picks ACCEL for small shapes
+    // (within ANE-friendly limits) and GPU for large shapes.
+    //
+    // This is the static-graph-time companion to the runtime
+    // dispatch. Once Project A lands (ANE matmul), the heuristic's
+    // ACCEL branch for MUL_MAT will start firing on small matmuls
+    // and free the GPU for the larger matmuls.
+    //
+    // ``candidates`` is typically ``{backend_gpu, backend_accel,
+    // backend_cpu}`` (in priority order). ``n_candidates`` is the
+    // array length. Returns the number of nodes that were
+    // assigned; nodes for which no candidate supports the op are
+    // left at the scheduler's default assignment (the user can
+    // inspect via ``ggml_backend_sched_get_tensor_backend``).
+    //
+    // Phase 1: heuristic only (no warm-up benchmark). Phase 2 (a
+    // follow-up commit) will add a microbenchmark pass that picks
+    // the winner empirically; the heuristic remains the default
+    // for fast graph construction.
+    //
+    // Project B. Companion to Project C (memory residency
+    // tracker, ``ggml_backend_residency_t``).
+    //
+    GGML_API size_t ggml_backend_sched_auto_select(
+            ggml_backend_sched_t sched,
+            struct ggml_cgraph * graph,
+            ggml_backend_t * candidates,
+            size_t n_candidates);
+
+    //
+    // Memory residency tracker (Project C).
+    //
+    // Tracks per-(backend, tensor) last-use iteration so the
+    // scheduler can suggest releasing tensors that have been idle
+    // for N iters. On Apple Silicon's unified memory, idle
+    // backends' heap copies are pure waste; the residency tracker
+    // is the signal the Metal/ANE backends use to free buffers
+    // they are no longer using.
+    //
+    // The tracker is opaque; callers get a handle via
+    // ``ggml_backend_residency_new`` and free it via
+    // ``ggml_backend_residency_free``. ``mark_used`` is called by
+    // ``ggml_backend_sched_graph_compute`` per iter; the
+    // scheduler queries ``suggest_releases`` before each iter to
+    // free tensors whose residency is stale.
+    //
+    // Project C.
+    //
+    typedef struct ggml_backend_residency * ggml_backend_residency_t;
+
+    GGML_API ggml_backend_residency_t ggml_backend_residency_new(void);
+    GGML_API void ggml_backend_residency_free(ggml_backend_residency_t res);
+
+    // Record that ``backend`` used ``tensor`` at iter ``iter``.
+    // Idempotent: a second call with the same iter is a no-op.
+    GGML_API void ggml_backend_residency_mark_used(
+            ggml_backend_residency_t res,
+            ggml_backend_t backend,
+            struct ggml_tensor * tensor,
+            int64_t iter);
+
+    // Return the list of (backend_name, tensor_name, last_used_iter)
+    // triples that have not been used since ``current_iter - idle_threshold``
+    // and are not expected to be used in any pending graph. The
+    // caller owns the returned array and must free it via
+    // ``ggml_backend_residency_free_suggestions``.
+    typedef struct ggml_backend_residency_suggestion {
+        const char * backend_name;
+        const char * tensor_name;
+        int64_t last_used_iter;
+    } ggml_backend_residency_suggestion_t;
+
+    GGML_API ggml_backend_residency_suggestion_t * ggml_backend_residency_suggest_releases(
+            ggml_backend_residency_t res,
+            int64_t current_iter,
+            int64_t idle_threshold,
+            size_t * out_count);
+    GGML_API void ggml_backend_residency_free_suggestions(
+            ggml_backend_residency_suggestion_t * suggestions);
+
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 

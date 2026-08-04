@@ -267,6 +267,13 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   llama_build_and_test(test-opt.cpp)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
+# Project B (auto backend selector) + Project C (memory
+# residency tracker) smoke test. Self-contained (no model
+# fixture); only the CPU backend is registered, the auto-select
+# heuristic's ACCEL-prefer branch is exercised as a no-op
+# fallback in that configuration.
+llama_build(test-backend-auto-and-residency.cpp)
+llama_test(test-backend-auto-and-residency)
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-tessera-kv-block-table.cpp)
