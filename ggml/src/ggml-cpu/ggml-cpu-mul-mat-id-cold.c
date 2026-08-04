@@ -20,10 +20,36 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <stdatomic.h>
 
 #if defined(_WIN32)
+
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+    #define NOMINMAX
+#endif
 #include <windows.h>
+
+#endif // _WIN32
+
+#if defined(_MSC_VER) && !defined(__clang__)
+
+typedef volatile LONG atomic_int;
+
+typedef enum {
+    memory_order_relaxed,
+    memory_order_consume,
+    memory_order_acquire,
+    memory_order_release,
+    memory_order_acq_rel,
+    memory_order_seq_cst
+} memory_order;
+
+static LONG atomic_fetch_add_explicit(atomic_int * ptr, LONG inc, memory_order mo) {
+    return InterlockedExchangeAdd(ptr, inc);
+}
+
+#else // clang
+#include <stdatomic.h>
 #endif
 
 void ggml_compute_forward_mul_mat_id_cold(
