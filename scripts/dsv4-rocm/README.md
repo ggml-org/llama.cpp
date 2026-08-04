@@ -33,7 +33,11 @@ or speculative flag. Default performance mode runs the required depth sweep
 with tg32 and six raw repetitions; it predeclares the first target-depth sample
 as graph-cold and reports the remaining five. `summarize-tg.py` recomputes t/s
 and ms/token from raw nanoseconds, requires exact depth/config/repetition
-coverage, and reports MAD/median stability.
+coverage, and reports MAD/median stability. To keep the mandatory tg32 samples
+unperturbed, the one-second `rocm-smi` loop runs only during each depth's setup;
+any query tail can overlap only repetition 1, which is predeclared/discarded.
+Accepted repetitions 2+ have no in-band telemetry query. Pre/post snapshots,
+setup telemetry, the power policy, and clock behavior remain preserved.
 
 Scheduler logging is deliberately separate so verbose debug output cannot
 perturb accepted TG. Residency mode runs one target evaluation per depth with
@@ -51,8 +55,8 @@ scripts/dsv4-rocm/run-tg.sh --dry-run
 DSV4_TG_MODE=residency scripts/dsv4-rocm/run-tg.sh --dry-run
 ```
 
-Before performance mode may reuse llama-bench's saved sequence state, run the
-model-dependent equivalence gate:
+Before performance mode may reuse llama-bench's saved full context state, run
+the model-dependent equivalence gate:
 
 ```bash
 cmake --build build --target test-state-restore-equivalence -j 12
@@ -336,7 +340,7 @@ Runs are written to collision-resistant directories under
 - `measurement-start.ns`, `result-completed-at.ns`: trace-alignment timestamps;
 - `clock-domain.txt`: run-time realtime-to-monotonic clock mapping and boot ID;
 - `measured-region-summary.{txt,json}`: optional filtered rocprof attribution;
-- `rocm-smi.log`: one-second utilization/memory/power/clock samples;
+- `rocm-smi.log`: one-second utilization/memory/power/clock samples (raw-TG restricts in-band sampling to setup so accepted tg32 repetitions remain unperturbed);
 - `status.txt`: nanosecond timestamps, truncation, and process exit code.
 
 Quick three-sample summaries report median and range. p05/p95 are deliberately

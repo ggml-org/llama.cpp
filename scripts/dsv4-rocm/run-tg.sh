@@ -13,6 +13,7 @@ N_GEN=${DSV4_TG_N_GEN:-32}
 RAW_REPS=${DSV4_TG_REPS:-6}
 DISCARD_FIRST=${DSV4_TG_DISCARD_FIRST:-1}
 STABILITY_LIMIT=${DSV4_TG_STABILITY_LIMIT:-0.03}
+TELEMETRY_SCOPE=setup-and-discarded-first-repetition
 SAMPLE_TIMEOUT_S=${DSV4_TG_SAMPLE_TIMEOUT:-300}
 SETUP_TIMEOUT_S=${DSV4_TG_SETUP_TIMEOUT:-1800}
 TERM_GRACE_S=${DSV4_TERM_GRACE:-2}
@@ -60,7 +61,9 @@ The command has no draft-model or speculative option. llama-bench supplies
 exactly n_gen target evaluations with deterministic process-local std::rand
 input tokens; there is no sampler or EOS early stop. Depth setup and attested
 full-context restore are outside samples_ns. Performance and residency are separate runs so verbose
-scheduler logging does not perturb accepted TG.
+scheduler logging does not perturb accepted TG. The one-second ROCm telemetry
+sampler runs during setup and the discarded first repetition only; accepted
+performance repetitions are never sampled in-band.
 USAGE
 }
 
@@ -254,6 +257,7 @@ chmod +x "$run_dir/command.sh" "$run_dir/executed-command.sh"
     printf 'DSV4_TG_REPS=%q\n' "$RAW_REPS"
     printf 'DSV4_TG_DISCARD_FIRST=%q\n' "$DISCARD_FIRST"
     printf 'DSV4_TG_STABILITY_LIMIT=%q\n' "$STABILITY_LIMIT"
+    printf 'DSV4_TG_TELEMETRY_SCOPE=%q\n' "$TELEMETRY_SCOPE"
     printf 'DSV4_TG_SAMPLE_TIMEOUT=%q\n' "$SAMPLE_TIMEOUT_S"
     printf 'DSV4_TG_SETUP_TIMEOUT=%q\n' "$SETUP_TIMEOUT_S"
     printf 'DSV4_BATCH=%q\n' "$BATCH"
@@ -291,6 +295,7 @@ pathlib.Path(out).write_text(json.dumps({
     "discard_first": int(discard),
     "accepted_repetitions": int(reps) - int(discard),
     "depth_state_api": depth_state_api,
+    "telemetry_scope": "setup-and-discarded-first-repetition",
     "token_contract": "llama-bench test_gen: exactly n_gen target llama_decode calls; BOS then deterministic process-local std::rand tokens; no sampler or EOS",
     "depth_contract": "llama-bench n_depth setup occurs outside samples_ns; later repetitions restore the attested full context state; sequence-only restore is forbidden for DSV4",
     "command_argv": command,
@@ -314,10 +319,20 @@ terminate_group_now() {
 }
 
 sample_smi() {
-    local pgid=$1
+    local pgid=$1 phase_file=$2
+    local event_ns event_phase event_bench event_rep event_total
     while leader_or_group_alive "$pgid"; do
-        printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
-        rocm-smi --showuse --showmemuse --showpower --showclocks --showtemp --csv 2>&1 || true
+        event_ns=""; event_phase=""; event_bench=""; event_rep=""; event_total=""
+        if [[ -s "$phase_file" ]]; then
+            IFS=$'\t' read -r event_ns event_phase event_bench event_rep event_total < "$phase_file" || true
+        fi
+        # rocm-smi queries are intentionally excluded from accepted TG samples.
+        # Continue through initial setup and repetition 1, which is predeclared
+        # graph-cold and discarded. Skip all later generation/restore windows.
+        if [[ -z "$event_phase" || "$event_phase" == setup && "$event_rep" =~ ^[01]$ ]]; then
+            printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+            rocm-smi --showuse --showmemuse --showpower --showclocks --showtemp --csv 2>&1 || true
+        fi
         sleep 1
     done
 }
@@ -427,7 +442,7 @@ printf 'started_at_ns=%s\n' "$(now_ns)" > "$run_dir/status.txt"
 set +e
 setsid "${bench_cmd[@]}" > "$stdout_fifo" 2> "$stderr_fifo" &
 bench_pid=$!; bench_pgid=$bench_pid
-sample_smi "$bench_pgid" > "$run_dir/rocm-smi.log" 9>&- & smi_pid=$!
+sample_smi "$bench_pgid" "$phase_file" > "$run_dir/rocm-smi.log" 9>&- & smi_pid=$!
 watch_group "$bench_pgid" "$phase_file" 9>&- & watchdog_pid=$!
 wait "$bench_pid"; rc=$?
 if group_alive "$bench_pgid"; then terminate_group_now "$bench_pgid"; fi
