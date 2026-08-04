@@ -53,6 +53,11 @@ def pytest_configure(config):  # noqa: ARG001
 # their test_*() functions take positional parameters that pytest
 # would otherwise try to inject as fixtures. They remain runnable
 # as standalone scripts: `python3 tools/tessera/test_l2_forward.py`.
+# Also: test_test_all_sh.py is excluded because it spawns the
+# runner via subprocess; pytest auto-discovering it would create
+# a self-reference (the runner invokes pytest, which discovers
+# the test, which invokes the runner, ...).
 collect_ignore_glob = [
     "tools/tessera/test_l2_forward.py",
+    "tests/test_test_all_sh.py",
 ]

@@ -137,8 +137,15 @@ discover_build_dir() {
             echo "$BUILD_DIR_OVERRIDE"
             return 0
         fi
+        # The user explicitly asked for a specific build dir
+        # but it has no CTestTestfile.cmake. This is a hard
+        # error: silently falling back to discovery would
+        # hide a typo or a stale path. The Python path can
+        # still run, but the C++ surface returns a non-zero
+        # code so the overall exit status reflects the
+        # problem.
         echo "ERROR: --build $BUILD_DIR_OVERRIDE has no CTestTestfile.cmake" >&2
-        return 1
+        return 2
     fi
     local candidates=("build" "build-ane" "build-g0" "build-st")
     local best=""
@@ -182,6 +189,15 @@ discover_build_dir() {
 run_cpp_tests() {
     local build_dir
     if ! build_dir=$(discover_build_dir); then
+        # The user explicitly asked for a specific build dir
+        # via --build but the path is not buildable. This is
+        # a hard error: surface it as a non-zero exit from
+        # this function so the overall runner exits non-zero.
+        if [ -n "$BUILD_DIR_OVERRIDE" ]; then
+            echo "  ctest: ERROR (--build $BUILD_DIR_OVERRIDE not usable)"
+            cpp_rc=2
+            return 2
+        fi
         echo "  ctest: SKIP (no build dir with CTestTestfile.cmake; run cmake -B build first)"
         echo "  C++: skipped"
         return 0
