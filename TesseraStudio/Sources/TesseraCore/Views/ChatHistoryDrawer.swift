@@ -36,6 +36,7 @@ public struct ChatHistoryDrawer: View {
     @State private var dateFilter: HistoryDateFilter = .all
     @State private var renaming: Conversation?
     @State private var renameText = ""
+    @State private var confirmingDelete: Conversation?
 
     public init(
         isPresented: Binding<Bool>,
@@ -74,6 +75,24 @@ public struct ChatHistoryDrawer: View {
             TextField("Title", text: $renameText)
             Button("Cancel", role: .cancel) { renaming = nil }
             Button("Save") { commitRename() }
+        }
+        // HIG 14.1 / 13.5: deleting a conversation is irreversible
+        // user data, so both delete entry points route through this
+        // confirmation instead of firing directly.
+        .confirmationDialog("Delete Conversation?", isPresented: Binding(
+            get: { confirmingDelete != nil },
+            set: { if !$0 { confirmingDelete = nil } }
+        ), titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let convo = confirmingDelete {
+                    delete(convo)
+                }
+                confirmingDelete = nil
+            }
+        } message: {
+            if let convo = confirmingDelete {
+                Text("\"\(convo.title)\" and its messages will be permanently removed.")
+            }
         }
     }
 
@@ -121,7 +140,7 @@ public struct ChatHistoryDrawer: View {
                         .onTapGesture { onRestore(convo) }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
-                                delete(convo)
+                                confirmingDelete = convo
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -139,7 +158,7 @@ public struct ChatHistoryDrawer: View {
                                 Button("JSON") { onExport(convo, .json) }
                             }
                             Divider()
-                            Button("Delete", role: .destructive) { delete(convo) }
+                            Button("Delete", role: .destructive) { confirmingDelete = convo }
                         }
                 }
             }
