@@ -55,7 +55,7 @@ Only vulnerabilities that fall within these parts of the project are considered 
 
 Note that none of the topics under [Using llama.cpp securely](#using-llamacpp-securely) are considered vulnerabilities in LLaMA C++.
 
-Denial-of-Service (DoS) bugs are generally not treated as vulnerabilities. We don't reject them outright, but we look at them case-by-case and only accept those that are genuinely worth fixing and that an AI agent could not have found trivially.
+Denial-of-Service (DoS) bugs are generally not treated as vulnerabilities. We don't reject them outright, but we look at them case-by-case and only accept those that are genuinely worth fixing.
 
 For vulnerabilities that fall within the `vendor` directory, please report them directly to the third-party project.
 
