@@ -1,68 +1,74 @@
 #!/usr/bin/env python3
 """Per-tensor L3 outlier report for the Tessera calibration pipeline.
 
-Reads Tessera Layer 1 dequant sidecar files (``.dequant.f32``) and produces
-a per-tensor outlier report. The sidecar format is described in
-``common/tessera-debug.h``: v1 (header 28 bytes, then F32 data) and v2
-(header 40 bytes with ``outlier_threshold`` and ``outlier_count_total``,
-then a per-row int32 strip, then F32 data). This reader accepts both
-versions.
+Reads Tessera Layer 1 dequant sidecar files (``.dequant.f32``) and
+produces a per-tensor outlier report. The sidecar format is described
+in ``common/tessera-debug.h``: v1 (header 28 bytes, then F32 data),
+v2 (header 40 bytes with ``outlier_threshold`` and
+``outlier_count_total``, then a per-row int32 strip, then F32 data),
+and v3 (the v2 layout plus a per-row 24-byte meta strip). The reader
+used here is the canonical Python reader ``l3_sidecar_v3_reader.py``
+which dispatches on the file version field; this tool only adds the
+cross-sidecar aggregation, the console rendering, and the optional
+PNG scatter plots.
 
-The per-tile outlier count is the L3 signal that closes the loop with the
-LLM.int8() finding: 0.1% of channels in transformer attention/FFN weights
-exceed ~6.0 in absolute value, and those channels dominate the
-quantization loss landscape. Tessera records the count per row (a "tile"
-in the Tile640 sense) so the L3 metric and the L5 IterQuant orchestrator
-can use the per-row breakdown to identify sensitive rows that need
-special handling.
+The per-tile outlier count is the L3 signal that closes the loop with
+the LLM.int8() finding: 0.1% of channels in transformer attention/FFN
+weights exceed ~6.0 in absolute value, and those channels dominate
+the quantization loss landscape. Tessera records the count per row
+(a "tile" in the Tile640 sense) so the L3 metric and the L5
+IterQuant orchestrator can use the per-row breakdown to identify
+sensitive rows that need special handling.
 
-Outputs:
+Output: one NDJSON line per (sidecar_label, tensor) pair, conformant
+to ``common/schemas/l3_outlier.schema.json``. Cross-sidecar rollups
+(``df.pivot("tensor", "sidecar_label", "outlier_fraction")``) are
+the consumer's job; the producer emits one record per
+(sidecar_label, tensor) so the consumer sees every input.
 
-* A JSON report with per-tensor (and aggregate) counts for each sidecar
-  directory passed in.
-* An optional CSV with one row per (tensor, sidecar) for spreadsheet
-  review.
-* An optional scatter plot of per-row outlier count vs row index, useful
-  for spotting whether outliers cluster in the first/last rows of a
-  tensor (a known pathology in some attention-projection weights).
+Also produces:
+  * A console report (default; --quiet to suppress) with the
+    per-tensor outlier fractions and a ceiling-breach warning.
+  * An optional per-row outlier scatter plot (PNG, no matplotlib
+    dependency) for the top-N tensors of each sidecar.
 
 Usage::
 
     python3 tools/tessera/l3_outlier_report.py \\
         --sidecar-dir tile640:/path/to/tile640_dequant \\
         --sidecar-dir q4k:/path/to/q4k_dequant \\
-        --sidecar-dir q6k:/path/to/q6k_dequant \\
-        --output report.json \\
-        --csv report.csv \\
-        --plot-dir plots/
+        --out           report.ndjson \\
+        --plot-dir      plots/
 
-The ``--sidecar-dir`` argument takes ``label:path`` so the report can
-distinguish Tile640, Q4_K, and Q6_K dumps when comparing quant types on
-the same model.
+The ``--sidecar-dir`` argument takes ``label:path`` so the report
+can distinguish Tile640, Q4_K, and Q6_K dumps when comparing quant
+types on the same model.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import json
+import os
+import re
+import struct
+import subprocess
 import sys
+import zlib
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, List, Optional
 
 import numpy as np
+import polars as pl
 
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, THIS_DIR)
+
+import l3_sidecar_v3_reader as reader  # noqa: E402
+from _analytical_io import polars_schema as _schema_polars_types  # noqa: E402
 
 SIDECAR_SUFFIX = ".dequant.f32"
-SIDECAR_MAGIC = b"TDQT"
-# v1: 28-byte header, F32 data immediately after.
-# v2: 40-byte header, per-row int32 strip, then F32 data.
-SIDECAR_HEADER_V1 = 28
-SIDECAR_HEADER_V2 = 40
-DTYPE_F32 = 0
-DTYPE_F16 = 1
-DTYPE_BF16 = 2
 
 # Outlier ceiling for the smoke test and the report's per-tensor sanity
 # check. The LLM.int8() paper reports ~0.1% of channels > 6.0 in
@@ -75,161 +81,122 @@ DEFAULT_OUTLIER_CEILING = 0.05
 # Default |x| > threshold cutoff. Matches the LLM.int8() precedent.
 DEFAULT_THRESHOLD = 6.0
 
+# Layer-name extraction. Mirrors per_layer_error_table.py so a
+# cross-pipeline rollup on `layer` works without normalization.
+_BLK_RE = re.compile(r"^(blk\.\d+)\.")
+
+
+def _layer_from_tensor(tensor_name: str) -> str:
+    """Extract the canonical ``blk.<N>`` layer name from a tensor
+    name, falling back to the full tensor name for tensors that
+    do not match the pattern (embeddings, output, norms)."""
+    base = tensor_name
+    for suf in (".weight", ".bias"):
+        if base.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    m = _BLK_RE.match(base + ".")
+    if m is not None:
+        return m.group(1)
+    return base
+
+
+def _tessera_provenance() -> tuple[str, str, str]:
+    """Return (kernel_version, created_at, tessera_main_tip) by
+    shelling out to git. Mirrors the same convention in
+    per_layer_error_table.py so the provenance fields line up
+    across the four analytical outputs."""
+    kernel_version = "unknown"
+    main_tip = "unknown"
+    try:
+        kv = subprocess.run(
+            ["git", "describe", "--all", "--always"],
+            capture_output=True, text=True, check=False,
+            cwd=os.path.dirname(THIS_DIR))
+        if kv.returncode == 0 and kv.stdout.strip():
+            kernel_version = kv.stdout.strip()
+        mt = subprocess.run(
+            ["git", "rev-parse", "--short", "main"],
+            capture_output=True, text=True, check=False,
+            cwd=os.path.dirname(THIS_DIR))
+        if mt.returncode == 0 and mt.stdout.strip():
+            main_tip = mt.stdout.strip()
+    except FileNotFoundError:
+        pass
+    created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return kernel_version, created_at, main_tip
+
+
+# ---------------------------------------------------------------------------
+# Sidecar aggregation
+# ---------------------------------------------------------------------------
+
 
 @dataclass
-class TensorOutlierReport:
-    """Per-tensor outlier summary from a single sidecar directory."""
+class TensorOutlier:
+    """One per-tensor row destined for the NDJSON writer.
+
+    The ``per_row_counts`` field is kept separately for the PNG
+    plot path; the NDJSON schema does not include per-row
+    breakdowns (consumers can re-read the sidecar to recover them
+    if needed; the L3 signal in the schema is the aggregate
+    count and fraction, which is what the L5 orchestrator and
+    calibration_rollup actually consume).
+    """
 
     name: str
+    layer: str
     rows: int
     cols: int
     total_elements: int
     outlier_count: int
     outlier_fraction: float
     threshold: float
-    # Per-row counts, kept for the optional scatter plot.
-    per_row_counts: np.ndarray = field(repr=False)
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "rows": int(self.rows),
-            "cols": int(self.cols),
-            "total_elements": int(self.total_elements),
-            "outlier_count": int(self.outlier_count),
-            "outlier_fraction": float(self.outlier_fraction),
-            "threshold": float(self.threshold),
-        }
-
-
-# ---------------------------------------------------------------------------
-# Sidecar reader (v1 + v2)
-# ---------------------------------------------------------------------------
+    skipped: bool = False
+    skip_reason: str = ""
+    per_row_counts: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32), repr=False)
 
 
 @dataclass
-class Sidecar:
-    """Parsed L1 dequant sidecar with v1/v2 backward compatibility."""
+class SidecarGroup:
+    """All tensors found in a single sidecar directory."""
 
+    label: str
     path: Path
-    version: int
-    rows: int
-    cols: int
-    dtype: int
-    threshold: float
-    outlier_count_total: int
-    per_row_counts: np.ndarray
-    data_f32: np.ndarray
+    tensors: list[TensorOutlier] = field(default_factory=list)
+    skipped: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def total_elements(self) -> int:
-        return int(self.rows) * int(self.cols)
+        return sum(t.total_elements for t in self.tensors if not t.skipped)
 
     @property
-    def outlier_fraction(self) -> float:
-        if self.total_elements == 0:
+    def total_outliers(self) -> int:
+        return sum(t.outlier_count for t in self.tensors if not t.skipped)
+
+    @property
+    def aggregate_fraction(self) -> float:
+        te = self.total_elements
+        if te == 0:
             return 0.0
-        return float(self.outlier_count_total) / float(self.total_elements)
-
-    def tensor_report(self) -> TensorOutlierReport:
-        return TensorOutlierReport(
-            name=self.path.stem.replace(".dequant", "").replace(".f32", ""),
-            rows=self.rows,
-            cols=self.cols,
-            total_elements=self.total_elements,
-            outlier_count=int(self.outlier_count_total),
-            outlier_fraction=self.outlier_fraction,
-            threshold=self.threshold,
-            per_row_counts=self.per_row_counts,
-        )
+        return float(self.total_outliers) / float(te)
 
 
-def read_sidecar(path: Path) -> Sidecar:
-    """Parse a ``.dequant.f32`` sidecar. Accepts v1 and v2.
+def parse_labeled_dir(arg: str) -> "LabeledDir":
+    if ":" not in arg:
+        raise argparse.ArgumentTypeError(
+            f"--sidecar-dir expects LABEL:PATH, got {arg!r}")
+    label, path = arg.split(":", 1)
+    if not label or not path:
+        raise argparse.ArgumentTypeError(
+            f"--sidecar-dir expects LABEL:PATH with both non-empty, got {arg!r}")
+    return LabeledDir(label=label, path=Path(path))
 
-    v1: 28-byte header (magic[4], version[4], rows[8], cols[8], dtype[4])
-        then F32 data starting at offset 28.
-    v2: 40-byte header (v1 fields + threshold[4] + total[8]) then a
-        per-row int32 strip of length rows*4, then F32 data.
-    """
-    with open(path, "rb") as f:
-        header = f.read(SIDECAR_HEADER_V2)
 
-    if len(header) < SIDECAR_HEADER_V1:
-        raise ValueError(f"{path}: sidecar too short ({len(header)} bytes)")
-
-    if header[:4] != SIDECAR_MAGIC:
-        raise ValueError(
-            f"{path}: bad magic {header[:4]!r} (expected {SIDECAR_MAGIC!r})"
-        )
-
-    version = int(np.frombuffer(header[4:8], dtype="<u4")[0])
-    rows = int(np.frombuffer(header[8:16], dtype="<i8")[0])
-    cols = int(np.frombuffer(header[16:24], dtype="<i8")[0])
-    dtype = int(np.frombuffer(header[24:28], dtype="<u4")[0])
-
-    if dtype != DTYPE_F32:
-        raise ValueError(
-            f"{path}: only DTYPE_F32 ({DTYPE_F32}) is supported, got dtype={dtype}"
-        )
-
-    if version == 1:
-        threshold = float("nan")  # v1 does not record the threshold
-        total = -1  # sentinel: will be recomputed from the F32 data
-        per_row_counts = np.zeros(rows, dtype=np.int32)
-    elif version == 2:
-        threshold = float(np.frombuffer(header[28:32], dtype="<f4")[0])
-        total = int(np.frombuffer(header[32:40], dtype="<i8")[0])
-        with open(path, "rb") as f:
-            f.seek(SIDECAR_HEADER_V2)
-            strip_bytes = f.read(rows * 4)
-        if len(strip_bytes) < rows * 4:
-            raise ValueError(
-                f"{path}: per-row strip truncated (expected {rows*4} bytes, "
-                f"got {len(strip_bytes)})"
-            )
-        per_row_counts = np.frombuffer(strip_bytes, dtype="<i4").astype(np.int32)
-    else:
-        raise ValueError(f"{path}: unsupported sidecar version {version}")
-
-    # F32 data block. v1: starts at offset 28. v2: starts at offset
-    # 40 + rows*4. Recompute the total from the data if v1 or the v2
-    # total looks uninitialized (negative).
-    if version == 1:
-        data_off = SIDECAR_HEADER_V1
-    else:
-        data_off = SIDECAR_HEADER_V2 + rows * 4
-    expected_floats = rows * cols
-    with open(path, "rb") as f:
-        f.seek(data_off)
-        data_bytes = f.read(expected_floats * 4)
-    if len(data_bytes) < expected_floats * 4:
-        raise ValueError(
-            f"{path}: F32 data truncated (expected {expected_floats} floats, "
-            f"got {len(data_bytes) // 4})"
-        )
-    data_f32 = np.frombuffer(data_bytes, dtype="<f4").reshape(rows, cols).copy()
-
-    if total < 0:
-        # v1: no header total; recompute from the F32 data using the
-        # default threshold. v1 files predate the configurable cutoff,
-        # so the default is the only signal we have.
-        total = int(np.sum(np.abs(data_f32) > DEFAULT_THRESHOLD))
-        per_row_counts = np.sum(np.abs(data_f32) > DEFAULT_THRESHOLD, axis=1).astype(np.int32)
-        if np.isnan(threshold):
-            threshold = DEFAULT_THRESHOLD
-
-    return Sidecar(
-        path=path,
-        version=version,
-        rows=rows,
-        cols=cols,
-        dtype=dtype,
-        threshold=threshold,
-        outlier_count_total=total,
-        per_row_counts=per_row_counts,
-        data_f32=data_f32,
-    )
+@dataclass
+class LabeledDir:
+    label: str
+    path: Path
 
 
 def iter_sidecar_paths(d: Path) -> Iterable[Path]:
@@ -241,69 +208,72 @@ def iter_sidecar_paths(d: Path) -> Iterable[Path]:
             yield p
 
 
-# ---------------------------------------------------------------------------
-# Aggregation across sidecar directories
-# ---------------------------------------------------------------------------
+def build_group(labeled: LabeledDir, default_threshold: float) -> SidecarGroup:
+    """Walk a sidecar directory and produce a per-tensor aggregation.
 
-
-@dataclass
-class LabeledDir:
-    label: str
-    path: Path
-
-
-def parse_labeled_dir(arg: str) -> LabeledDir:
-    if ":" not in arg:
-        raise argparse.ArgumentTypeError(
-            f"--sidecar-dir expects LABEL:PATH, got {arg!r}"
-        )
-    label, path = arg.split(":", 1)
-    if not label or not path:
-        raise argparse.ArgumentTypeError(
-            f"--sidecar-dir expects LABEL:PATH with both non-empty, got {arg!r}"
-        )
-    return LabeledDir(label=label, path=Path(path))
-
-
-@dataclass
-class SidecarGroup:
-    """All tensors found in a single sidecar directory."""
-
-    label: str
-    path: Path
-    tensors: list[TensorOutlierReport] = field(default_factory=list)
-    skipped: list[tuple[str, str]] = field(default_factory=list)
-
-    @property
-    def total_elements(self) -> int:
-        return sum(t.total_elements for t in self.tensors)
-
-    @property
-    def total_outliers(self) -> int:
-        return sum(t.outlier_count for t in self.tensors)
-
-    @property
-    def aggregate_fraction(self) -> float:
-        if self.total_elements == 0:
-            return 0.0
-        return float(self.total_outliers) / float(self.total_elements)
-
-
-def build_group(labeled: LabeledDir) -> SidecarGroup:
+    Uses the canonical ``l3_sidecar_v3_reader`` to dispatch on the
+    file version (v1 / v2 / v3). Per-row counts are kept on the
+    TensorOutlier for the PNG plot path.
+    """
     g = SidecarGroup(label=labeled.label, path=labeled.path)
     for p in iter_sidecar_paths(labeled.path):
         try:
-            sc = read_sidecar(p)
-        except (ValueError, OSError) as e:
+            sc = reader.read_sidecar(p, mode="auto", provenance=False)
+        except (reader.SidecarReadError, ValueError, OSError) as e:
             g.skipped.append((p.name, str(e)))
             continue
-        g.tensors.append(sc.tensor_report())
+
+        rows = int(sc["rows"])
+        cols = int(sc["cols"])
+        total = int(rows * cols)
+        threshold = float(sc.get("threshold", 0.0))
+        per_row = np.asarray(sc.get("row_outlier_count", []),
+                             dtype=np.int32)
+        count = int(sc.get("outlier_count_total", -1))
+
+        # v1 files have negative outlier_count_total; recompute
+        # from the F32 data with the default threshold. The
+        # canonical reader does this internally, but only the
+        # default cutoff (it does not consult default_threshold
+        # here). To keep the report self-consistent we re-do
+        # the count when negative, with the user's --threshold
+        # overriding the default. v2/v3 files have the count
+        # already; trust it.
+        if count < 0:
+            data = sc["data"]
+            threshold = default_threshold
+            mask = np.abs(data) > threshold
+            count = int(mask.sum())
+            per_row = mask.sum(axis=1).astype(np.int32)
+        if threshold <= 0.0:
+            threshold = default_threshold
+
+        fraction = float(count) / float(total) if total else 0.0
+        name = p.stem
+        # ``p.stem`` is the filename minus its last suffix. The
+        # sidecar filenames end in ``.f32`` (so stem is
+        # ``<tensor>.dequant``) and the canonical reader returns
+        # the same; strip the ``.dequant`` segment so the
+        # ``tensor`` field is the bare tensor name.
+        if name.endswith(".dequant"):
+            name = name[: -len(".dequant")]
+        g.tensors.append(TensorOutlier(
+            name=name,
+            layer=_layer_from_tensor(name),
+            rows=rows,
+            cols=cols,
+            total_elements=total,
+            outlier_count=count,
+            outlier_fraction=fraction,
+            threshold=threshold,
+            per_row_counts=per_row,
+        ))
     g.tensors.sort(key=lambda t: t.outlier_fraction, reverse=True)
     return g
 
 
 # ---------------------------------------------------------------------------
-# Report rendering
+# Console rendering
 # ---------------------------------------------------------------------------
 
 
@@ -353,58 +323,102 @@ def render_console(groups: list[SidecarGroup], top_k: int, ceiling: float) -> st
     return "\n".join(out)
 
 
-def render_json(groups: list[SidecarGroup], ceiling: float) -> dict:
-    return {
-        "schema": "tessera.l3-outlier-report.v1",
-        "ceiling": ceiling,
-        "groups": [
-            {
-                "label": g.label,
-                "path": str(g.path),
-                "tensor_count": len(g.tensors),
-                "skipped": [{"name": n, "reason": r} for n, r in g.skipped],
-                "aggregate": {
-                    "total_elements": g.total_elements,
-                    "total_outliers": g.total_outliers,
-                    "outlier_fraction": g.aggregate_fraction,
-                },
-                "tensors": [t.to_dict() for t in g.tensors],
-            }
-            for g in groups
-        ],
-    }
+# ---------------------------------------------------------------------------
+# NDJSON writer (per-tensor records, typed per the L3 schema)
+# ---------------------------------------------------------------------------
 
 
-def render_csv(groups: list[SidecarGroup], csv_path: Path) -> None:
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow([
-            "sidecar_label", "tensor", "rows", "cols", "total_elements",
-            "outlier_count", "outlier_fraction", "threshold",
-        ])
-        for g in groups:
-            for t in g.tensors:
-                w.writerow([
-                    g.label, t.name, t.rows, t.cols, t.total_elements,
-                    t.outlier_count, f"{t.outlier_fraction:.6f}",
-                    f"{t.threshold:.4f}",
-                ])
+def write_ndjson(groups: list[SidecarGroup],
+                 out_path: Path,
+                 sidecar_dirs: dict[str, str],
+                 provenance: tuple[str, str, str],
+                 ceiling: float) -> int:
+    """Emit one NDJSON line per (sidecar_label, tensor) row.
+
+    Carries the per-tensor fields plus the sidecar's source dir
+    and the provenance. The schema's polars_schema is the dtype
+    override; consumer reads via ``_analytical_io.read_analytical``.
+    Cross-sidecar rollups (the canonical "where is the Tile640 vs
+    Q4_K outlier rate divergent" table) are the consumer's job:
+    a one-liner ``df.pivot("tensor", "sidecar_label",
+    "outlier_fraction")``.
+
+    Returns the number of records written.
+    """
+    kernel_version, created_at, main_tip = provenance
+    rows: list[dict] = []
+    for g in groups:
+        sidecar_dir = sidecar_dirs.get(g.label, str(g.path))
+        for t in g.tensors:
+            rows.append({
+                "sidecar_label":   g.label,
+                "tensor":          t.name,
+                "layer":           t.layer,
+                "rows":            t.rows,
+                "cols":            t.cols,
+                "total_elements":  t.total_elements,
+                "outlier_count":   t.outlier_count,
+                "outlier_fraction": t.outlier_fraction,
+                "threshold":       t.threshold,
+                "skipped":         t.skipped,
+                "skip_reason":     t.skip_reason,
+                "kernel_version":  kernel_version,
+                "created_at":      created_at,
+                "tessera_main_tip": main_tip,
+            })
+        for fname, reason in g.skipped:
+            # Emit a placeholder row for each skipped file so
+            # the consumer can audit the failure (the row's
+            # counts are zero and skip_reason is set).
+            rows.append({
+                "sidecar_label":   g.label,
+                "tensor":          fname,
+                "layer":           _layer_from_tensor(fname),
+                "rows":            0,
+                "cols":            0,
+                "total_elements":  0,
+                "outlier_count":   0,
+                "outlier_fraction": 0.0,
+                "threshold":       0.0,
+                "skipped":         True,
+                "skip_reason":     reason,
+                "kernel_version":  kernel_version,
+                "created_at":      created_at,
+                "tessera_main_tip": main_tip,
+            })
+    # Pin dtypes per the schema. An empty input (no sidecar
+    # files found in any dir) still emits a zero-row frame with
+    # the schema's column order so downstream readers have the
+    # expected columns.
+    schema_types = _schema_polars_types("l3_outlier")
+    if rows:
+        df = pl.DataFrame(rows, infer_schema_length=max(len(rows), 1))
+    else:
+        df = pl.DataFrame(
+            {col: pl.Series(name=col, values=[], dtype=dtype)
+             for col, dtype in schema_types.items()},
+            schema=schema_types,
+        )
+    for col, dtype in schema_types.items():
+        if col in df.columns and df.schema[col] != dtype:
+            df = df.with_columns(pl.col(col).cast(dtype, strict=False))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_ndjson(out_path)
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# PNG plotting (no matplotlib; per-row outlier scatter)
+# ---------------------------------------------------------------------------
 
 
 def render_plots(groups: list[SidecarGroup], plot_dir: Path, top_n: int) -> list[Path]:
     """Render a per-row outlier scatter for the top-N tensors per group.
 
     Returns the list of plot paths actually written. The plot is a
-    simple PNG (no matplotlib dependency) drawn from scratch with the
-    Python stdlib so the tool stays numpy-only. Each row is a stem:
-    (row_idx, count) marked on a 1x1 PNG canvas.
+    simple PNG (no matplotlib dependency) drawn from scratch with
+    the Python stdlib so the tool stays numpy-only.
     """
-    try:
-        import zlib  # noqa: F401  (stdlib, always available)
-        import struct
-    except ImportError:  # pragma: no cover - stdlib always present
-        return []
     plot_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for g in groups:
@@ -415,7 +429,7 @@ def render_plots(groups: list[SidecarGroup], plot_dir: Path, top_n: int) -> list
     return written
 
 
-def _write_scatter_png(t: TensorOutlierReport, png_path: Path) -> None:
+def _write_scatter_png(t: TensorOutlier, png_path: Path) -> None:
     """Write a minimal PNG of per-row outlier counts (no matplotlib)."""
     counts = t.per_row_counts
     if counts.size == 0:
@@ -428,23 +442,14 @@ def _write_scatter_png(t: TensorOutlierReport, png_path: Path) -> None:
     if max_count <= 0:
         max_count = 1
 
-    # White background row-major RGB.
     pixels = bytearray([255] * (width * height * 3))
-    # Axes (light grey).
-    _hline = lambda y: (_set_pixel(pixels, width, height, x, y, 200, 200, 200)
-                       for x in range(margin_l, width - margin_r))
-    _vline = lambda x: (_set_pixel(pixels, width, height, x, y, 200, 200, 200)
-                       for y in range(margin_t, height - margin_b))
-    for _ in _hline(height - margin_b):
-        pass
-    for _ in _hline(margin_t):
-        pass
-    for _ in _vline(margin_l):
-        pass
-    for _ in _vline(width - margin_r - 1):
-        pass
+    for x in range(margin_l, width - margin_r):
+        _set_pixel(pixels, width, height, x, height - margin_b, 200, 200, 200)
+        _set_pixel(pixels, width, height, x, margin_t, 200, 200, 200)
+    for y in range(margin_t, height - margin_b):
+        _set_pixel(pixels, width, height, margin_l, y, 200, 200, 200)
+        _set_pixel(pixels, width, height, width - margin_r - 1, y, 200, 200, 200)
 
-    # Stems.
     n = counts.size
     for i, c in enumerate(counts):
         if c <= 0:
@@ -452,24 +457,19 @@ def _write_scatter_png(t: TensorOutlierReport, png_path: Path) -> None:
         x = margin_l + int(round(i / max(n - 1, 1) * (plot_w - 1)))
         y_top = margin_t + int(round((1.0 - c / max_count) * (plot_h - 1)))
         y_bot = height - margin_b - 1
-        # Stem line
         for y in range(y_top, y_bot + 1):
             _set_pixel(pixels, width, height, x, y, 60, 110, 200)
-        # Mark at the top.
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 xx, yy = x + dx, y_top + dy
                 if 0 <= xx < width and 0 <= yy < height:
                     _set_pixel(pixels, width, height, xx, yy, 30, 60, 160)
 
-    # PNG encode.
     raw = bytearray()
     stride = width * 3
     for y in range(height):
-        raw.append(0)  # filter type 0 per row
+        raw.append(0)
         raw.extend(pixels[y * stride:(y + 1) * stride])
-    import zlib
-    import struct
     compressed = zlib.compress(bytes(raw), 9)
 
     def chunk(tag: bytes, data: bytes) -> bytes:
@@ -517,16 +517,10 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--output",
+        "--out",
         type=Path,
-        default=None,
-        help="Write the full report as JSON to this path.",
-    )
-    p.add_argument(
-        "--csv",
-        type=Path,
-        default=None,
-        help="Write a flat per-tensor CSV (one row per tensor, all sidecars).",
+        required=True,
+        help="Output NDJSON path (one record per (sidecar_label, tensor)).",
     )
     p.add_argument(
         "--plot-dir",
@@ -555,7 +549,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "Outlier fraction ceiling for the per-tensor sanity check "
             f"(default {DEFAULT_OUTLIER_CEILING * 100:.2f}%%). "
             "Tensors above the ceiling are flagged with '*' in the "
-            "console report."
+            "console report and the CLI exits non-zero so the "
+            "smoke test can gate on it."
         ),
     )
     p.add_argument(
@@ -565,14 +560,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             f"Override the |x| > threshold cutoff used for the v1 fallback "
             f"and the report's sanity bands (default {DEFAULT_THRESHOLD}). "
-            f"v2 sidecar files already record the threshold they were "
+            f"v2 / v3 sidecar files already record the threshold they were "
             f"written with; this flag does not retroactively change them."
         ),
     )
     p.add_argument(
         "--quiet",
         action="store_true",
-        help="Suppress the console report (still writes --output / --csv).",
+        help="Suppress the console report (still writes --out / --plot-dir).",
     )
     return p
 
@@ -581,26 +576,24 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
     groups: list[SidecarGroup] = []
+    sidecar_dirs: dict[str, str] = {}
     for labeled in args.sidecar_dir:
-        groups.append(build_group(labeled))
+        groups.append(build_group(labeled, default_threshold=args.threshold))
+        sidecar_dirs[labeled.label] = str(labeled.path)
 
     if not args.quiet:
         print(render_console(groups, top_k=args.top_k, ceiling=args.ceiling))
 
-    if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        report = render_json(groups, ceiling=args.ceiling)
-        args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(f"wrote {args.output}", file=sys.stderr)
-
-    if args.csv is not None:
-        render_csv(groups, args.csv)
-        print(f"wrote {args.csv}", file=sys.stderr)
+    provenance = _tessera_provenance()
+    n = write_ndjson(groups, args.out, sidecar_dirs, provenance,
+                     ceiling=args.ceiling)
+    sys.stderr.write(f"wrote {n} per-tensor records to {args.out}\n")
 
     if args.plot_dir is not None:
         written = render_plots(groups, args.plot_dir, top_n=args.plot_top_n)
         if written:
-            print(f"wrote {len(written)} plot(s) to {args.plot_dir}", file=sys.stderr)
+            sys.stderr.write(
+                f"wrote {len(written)} plot(s) to {args.plot_dir}\n")
 
     # Exit non-zero if any group has a tensor above the ceiling, unless
     # the user explicitly opts out by passing --ceiling 1.0. The smoke

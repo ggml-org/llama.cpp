@@ -13,6 +13,13 @@ weight distribution, runs ``l3_outlier_report.py`` on it, and checks:
   5% ceiling and the report exits non-zero -- this is the gating
   behaviour the L3 metric and the L5 orchestrator rely on.
 
+Phase B (polars scout) refactor: the producer now writes NDJSON
+(one record per (sidecar_label, tensor) row) instead of a JSON
+document; the test parses the NDJSON via ``_analytical_io.read_analytical``
+and the per-group rollup is computed by the test via polars
+``group_by`` so the test exercises the same consumer pattern
+calibration_rollup will use.
+
 Run::
 
     python3 tools/tessera/l3_outlier_smoke.py
@@ -22,7 +29,6 @@ Exits 0 on success. Non-zero on any failure.
 
 from __future__ import annotations
 
-import json
 import shutil
 import struct
 import subprocess
@@ -31,9 +37,13 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import polars as pl
+
+THIS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(THIS_DIR))
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-REPORT_TOOL = Path(__file__).resolve().parent / "l3_outlier_report.py"
+REPORT_TOOL = THIS_DIR / "l3_outlier_report.py"
 DEFAULT_THRESHOLD = 6.0
 CEILING = 0.05  # matches tools/tessera/l3_outlier_report.py default
 
@@ -120,21 +130,38 @@ def synthetic_pathological(seed: int = 1) -> tuple[str, np.ndarray]:
 # ---------------------------------------------------------------------------
 
 
-def run_report(sidecar_dir: Path, output_path: Path) -> tuple[int, dict]:
-    """Invoke l3_outlier_report.py on `sidecar_dir` and return (rc, parsed)."""
+def run_report(sidecar_dir: Path, output_path: Path) -> tuple[int, "pl.DataFrame"]:
+    """Invoke l3_outlier_report.py on `sidecar_dir` and return (rc, df).
+
+    The producer emits one NDJSON line per (sidecar_label, tensor)
+    row; the test parses via ``_analytical_io.read_analytical`` and
+    uses polars ``group_by`` to recover the per-group rollup the
+    test needs. The cross-sidecar pattern (``df.pivot("tensor",
+    "sidecar_label", "outlier_fraction")``) is the same one
+    calibration_rollup will use.
+    """
+    # Local import so a missing polars surfaces here with a clear
+    # message rather than at module load.
+    from _analytical_io import read_analytical
     cmd = [
         sys.executable,
         str(REPORT_TOOL),
         "--sidecar-dir", f"smoke:{sidecar_dir}",
-        "--output", str(output_path),
+        "--out", str(output_path),
         "--quiet",
         "--ceiling", str(CEILING),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    parsed: dict = {}
-    if output_path.is_file():
-        parsed = json.loads(output_path.read_text(encoding="utf-8"))
-    return proc.returncode, parsed
+    if not output_path.is_file():
+        return proc.returncode, pl.DataFrame()
+    df = read_analytical(output_path, "l3_outlier")
+    return proc.returncode, df
+
+
+def _tensor_row(df: "pl.DataFrame", name: str) -> "pl.DataFrame":
+    """Filter the NDJSON-derived DataFrame to a single tensor
+    (one row per sidecar_label)."""
+    return df.filter(pl.col("tensor") == name)
 
 
 def assert_eq(label: str, got: object, want: object) -> None:
@@ -154,26 +181,24 @@ def main() -> int:
         sidecar_dir.mkdir(parents=True, exist_ok=True)
         name, w = synthetic_healthy()
         write_v2_sidecar(sidecar_dir / f"{name}.dequant.f32", w, DEFAULT_THRESHOLD)
-        out_json = tmp / "healthy.json"
-        rc, parsed = run_report(sidecar_dir, out_json)
+        out_ndjson = tmp / "healthy.ndjson"
+        rc, df = run_report(sidecar_dir, out_ndjson)
         if rc != 0:
             print(f"healthy: report exited {rc} (expected 0)", file=sys.stderr)
             return 1
-        groups = parsed.get("groups", [])
-        assert_eq("healthy group count", len(groups), 1)
-        tensors = groups[0]["tensors"]
-        assert_eq("healthy tensor count", len(tensors), 1)
-        t = tensors[0]
-        assert_eq("healthy name", t["name"], name)
-        assert_eq("healthy rows", t["rows"], w.shape[0])
-        assert_eq("healthy cols", t["cols"], w.shape[1])
-        assert_eq("healthy outlier_count", t["outlier_count"], 0)
-        assert_eq("healthy threshold", t["threshold"], DEFAULT_THRESHOLD)
+        assert_eq("healthy row count", df.height, 1)
+        row = df.row(0, named=True)
+        assert_eq("healthy sidecar_label", row["sidecar_label"], "smoke")
+        assert_eq("healthy name", row["tensor"], name)
+        assert_eq("healthy rows", row["rows"], w.shape[0])
+        assert_eq("healthy cols", row["cols"], w.shape[1])
+        assert_eq("healthy outlier_count", row["outlier_count"], 0)
+        assert_eq("healthy threshold", row["threshold"], DEFAULT_THRESHOLD)
         expected_total = int(np.sum(np.abs(w) > DEFAULT_THRESHOLD))
-        assert_eq("healthy total_elements", t["total_elements"], int(w.size))
-        if t["outlier_count"] != expected_total:
+        assert_eq("healthy total_elements", row["total_elements"], int(w.size))
+        if row["outlier_count"] != expected_total:
             print(
-                f"healthy: outlier_count={t['outlier_count']} but "
+                f"healthy: outlier_count={row['outlier_count']} but "
                 f"analytical total={expected_total}",
                 file=sys.stderr,
             )
@@ -188,16 +213,15 @@ def main() -> int:
             w_p,
             DEFAULT_THRESHOLD,
         )
-        out_json_p = tmp / "pathological.json"
-        rc_p, parsed_p = run_report(sidecar_dir_p, out_json_p)
+        out_ndjson_p = tmp / "pathological.ndjson"
+        rc_p, df_p = run_report(sidecar_dir_p, out_ndjson_p)
         if rc_p != 2:
             print(
                 f"pathological: report exited {rc_p} (expected 2, ceiling breach)",
                 file=sys.stderr,
             )
             return 1
-        tensors_p = parsed_p["groups"][0]["tensors"]
-        t_p = tensors_p[0]
+        t_p = _tensor_row(df_p, name_p).row(0, named=True)
         expected_count = int(np.sum(np.abs(w_p) > DEFAULT_THRESHOLD))
         assert_eq("pathological outlier_count", t_p["outlier_count"], expected_count)
         if t_p["outlier_fraction"] <= CEILING:
@@ -216,12 +240,12 @@ def main() -> int:
         write_v2_sidecar(
             mixed / f"{name_p}.dequant.f32", w_p, DEFAULT_THRESHOLD,
         )
-        out_json_m = tmp / "mixed.json"
-        rc_m, parsed_m = run_report(mixed, out_json_m)
+        out_ndjson_m = tmp / "mixed.ndjson"
+        rc_m, df_m = run_report(mixed, out_ndjson_m)
         if rc_m != 2:
             print(f"mixed: report exited {rc_m} (expected 2)", file=sys.stderr)
             return 1
-        assert_eq("mixed tensor count", len(parsed_m["groups"][0]["tensors"]), 2)
+        assert_eq("mixed tensor count", df_m.height, 2)
 
         print("l3_outlier_smoke: ok "
               "(healthy=0 outliers, pathological=ceiling breach, mixed=2 tensors)")
