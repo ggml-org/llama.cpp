@@ -247,16 +247,17 @@
 
 <style>
 	.exec-wd {
+		--exec-wd-margin: 0.4rem;
 		font-family: var(--font-mono);
 		color: var(--muted-foreground);
-		margin-right: 0.4rem;
+		margin-right: var(--exec-wd-margin);
 	}
 
 	.exec-prompt {
 		font-family: var(--font-mono);
 		color: var(--muted-foreground);
 		opacity: 0.55;
-		margin-right: 0.4rem;
+		margin-right: var(--exec-wd-margin);
 	}
 
 	.terminal-output {

@@ -54,13 +54,18 @@ export function buildCaseInsensitiveGlob(query: string): string {
 }
 
 /** Exact basename first, then prefix, then substring; lower is better. */
+const RANK_EXACT = 0;
+const RANK_PREFIX = 1;
+const RANK_SUBSTRING = 2;
+const RANK_OTHER = 3;
+
 function rankScore(path: string, query: string): number {
 	const name = lastPathSegment(path).toLowerCase();
 	const q = query.toLowerCase();
-	if (name === q) return 0;
-	if (name.startsWith(q)) return 1;
-	if (name.includes(q)) return 2;
-	return 3;
+	if (name === q) return RANK_EXACT;
+	if (name.startsWith(q)) return RANK_PREFIX;
+	if (name.includes(q)) return RANK_SUBSTRING;
+	return RANK_OTHER;
 }
 
 /** Sort entries by relevance, then shorter path, then alphabetically. */

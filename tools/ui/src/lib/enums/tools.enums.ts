@@ -18,6 +18,16 @@ export enum ToolResponseField {
 }
 
 /**
+ * Entry types accepted by the `file_glob_search` tool's `type` parameter.
+ * Mirrors the server-side validation in server-tools.cpp.
+ */
+export enum GlobSearchType {
+	FILE = 'file',
+	DIR = 'dir',
+	ALL = 'all'
+}
+
+/**
  * Wire-format identifiers for built-in and frontend tools. The string
  * value matches what the model emits in tool call names, so comparing
  * against `BuiltInTool.READ_FILE` is equivalent to comparing against the

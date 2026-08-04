@@ -3,7 +3,7 @@
 	import { untrack } from 'svelte';
 	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { BuiltInTool } from '$lib/enums';
+	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import {
 		abbreviateHome,
 		buildCaseInsensitiveGlob,
@@ -18,6 +18,21 @@
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
 	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
+	import {
+		DEFAULT_MOBILE_BREAKPOINT,
+		GLOB_WILDCARD,
+		HOME_TILDE,
+		MAX_RESULTS_SHOWN,
+		NATIVE_LIMIT,
+		NATIVE_MAX_DEPTH,
+		PATH_NAV_MAX_DEPTH,
+		SEARCH_DEBOUNCE_MS,
+		SEARCH_LIMIT,
+		SEARCH_MAX_DEPTH
+	} from '$lib/constants';
+
+	// Microtask delay so the popover's focus scope tears down first.
+	const FOCUS_DELAY_MS = 0;
 
 	interface Props {
 		class?: string;
@@ -72,7 +87,7 @@
 
 	const runSearch = debounce((query: string) => {
 		void doSearch(query);
-	}, 180);
+	}, SEARCH_DEBOUNCE_MS);
 
 	// Resolve home eagerly on mount so the chip can abbreviate before the
 	// user opens the picker. resolveServerHome() is cached, so repeat calls
@@ -87,7 +102,7 @@
 	// use a microtask (0ms setTimeout) after the effect flushes.
 	$effect(() => {
 		if (!isOpen) return;
-		setTimeout(() => searchInputRef?.focus(), 0);
+		setTimeout(() => searchInputRef?.focus(), FOCUS_DELAY_MS);
 	});
 
 	let lastScrollTrigger: number | null = null;
@@ -116,7 +131,7 @@
 	// Effective directory the current search runs against (shown in the
 	// footer); updated by doSearch, including when an exactly-typed
 	// directory is "entered".
-	let searchScope = $state('~');
+	let searchScope = $state(HOME_TILDE);
 
 	async function doSearch(query: string) {
 		const trimmed = query.trim();
@@ -125,7 +140,7 @@
 			searchError = null;
 			isSearching = false;
 			hoveredIndex = -1;
-			searchScope = homeBase ?? '~';
+			searchScope = homeBase ?? HOME_TILDE;
 			return;
 		}
 
@@ -143,15 +158,15 @@
 			const res = await ToolsService.executeToolRaw(
 				BuiltInTool.FILE_GLOB_SEARCH,
 				{
-					path: pathQuery ? pathQuery.parent : (homeBase ?? '~'),
-					type: 'dir',
+					path: pathQuery ? pathQuery.parent : (homeBase ?? HOME_TILDE),
+					type: GlobSearchType.DIR,
 					include: pathQuery
 						? pathQuery.last
 							? buildCaseInsensitiveGlob(pathQuery.last)
-							: '*'
+							: GLOB_WILDCARD
 						: buildCaseInsensitiveGlob(trimmed),
-					max_depth: pathQuery ? 1 : 6,
-					limit: 100
+					max_depth: pathQuery ? PATH_NAV_MAX_DEPTH : SEARCH_MAX_DEPTH,
+					limit: SEARCH_LIMIT
 				},
 				controller.signal
 			);
@@ -166,7 +181,7 @@
 			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
 			const ranked = rankEntries(entries, pathQuery?.last ?? trimmed);
 			let results = ranked.map((e) => joinPath(base, e.path));
-			searchScope = pathQuery ? pathQuery.parent : (homeBase ?? '~');
+			searchScope = pathQuery ? pathQuery.parent : (homeBase ?? HOME_TILDE);
 
 			// An exactly-typed directory is "entered": list its children too,
 			// so path navigation doesn't require a trailing slash.
@@ -178,7 +193,13 @@
 				const exactDir = joinPath(base, exact.path);
 				const childRes = await ToolsService.executeToolRaw(
 					BuiltInTool.FILE_GLOB_SEARCH,
-					{ path: exactDir, type: 'dir', include: '*', max_depth: 1, limit: 100 },
+					{
+						path: exactDir,
+						type: GlobSearchType.DIR,
+						include: GLOB_WILDCARD,
+						max_depth: PATH_NAV_MAX_DEPTH,
+						limit: SEARCH_LIMIT
+					},
 					controller.signal
 				);
 				if (mySeq !== searchSeq) return;
@@ -195,7 +216,7 @@
 				}
 			}
 
-			queryResults = results.slice(0, 20);
+			queryResults = results.slice(0, MAX_RESULTS_SHOWN);
 			hoveredIndex = queryResults.length > 0 ? 0 : -1;
 			// new results: scroll the list back to the top (first item is hovered)
 			if (hoveredIndex === 0) scrollTrigger++;
@@ -237,11 +258,11 @@
 	async function resolveNativeName(name: string): Promise<string> {
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
-				path: homeBase ?? '~',
-				type: 'dir',
+				path: homeBase ?? HOME_TILDE,
+				type: GlobSearchType.DIR,
 				include: buildCaseInsensitiveGlob(name),
-				max_depth: 4,
-				limit: 20
+				max_depth: NATIVE_MAX_DEPTH,
+				limit: NATIVE_LIMIT
 			});
 			const base = typeof res.base === 'string' ? res.base : '';
 			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
@@ -279,7 +300,7 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter') {
+		if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
 			// Commit the highlighted result, falling back to the raw input
 			// only when the query returned no matches.
@@ -288,13 +309,13 @@
 			} else if (queryResults.length === 0) {
 				handleSubmit();
 			}
-		} else if (event.key === 'ArrowDown') {
+		} else if (event.key === KeyboardKey.ARROW_DOWN) {
 			if (queryResults.length > 0) {
 				event.preventDefault();
 				hoveredIndex = (hoveredIndex + 1) % queryResults.length;
 				scrollTrigger++;
 			}
-		} else if (event.key === 'ArrowUp') {
+		} else if (event.key === KeyboardKey.ARROW_UP) {
 			if (queryResults.length > 0) {
 				event.preventDefault();
 				hoveredIndex = hoveredIndex <= 0 ? queryResults.length - 1 : hoveredIndex - 1;
@@ -340,7 +361,7 @@
 			queryResults = [];
 			searchError = null;
 			void toolsStore.resolveServerHome();
-			searchScope = homeBase ?? '~';
+			searchScope = homeBase ?? HOME_TILDE;
 			if (inputValue.trim()) runSearch(inputValue);
 		} else {
 			cancelSearch();
@@ -353,7 +374,7 @@
 	// Tooltips only on wider viewports - hover surfaces get in the way on
 	// touch / narrow layouts. Mirrors the gate used in ActionIcon.
 	let innerWidth = $state(0);
-	const showTooltip = $derived(innerWidth > 768);
+	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
 
 <div
@@ -378,11 +399,11 @@
 			side="top"
 			align="start"
 			sideOffset={4}
-			class="w-[var(--bits-popover-anchor-width)] min-w-md max-w-none rounded-xl border-border/50 p-0 shadow-xl"
+			class="w-3xl min-w-md max-w-none rounded-xl border-border/50 p-0 shadow-xl -translate-2!"
 			onkeydown={handleKeydown}
 			onOpenAutoFocus={(event) => event.preventDefault()}
 		>
-			<div class="p-2">
+			<div class="p-2 min-h-28 flex flex-col justify-between">
 				<SearchInput
 					bind:ref={searchInputRef}
 					bind:value={inputValue}
@@ -419,7 +440,7 @@
 				{#if homeBase}
 					<div class="-mx-2 my-1 h-px bg-border/20" aria-hidden="true"></div>
 
-					<span class="px-2 py-1.5 font-mono text-[10px]">
+					<span class="px-2 py-2 font-mono text-[10px]">
 						Searching in:
 
 						<span class="truncate text-muted-foreground/70" title={searchScope}

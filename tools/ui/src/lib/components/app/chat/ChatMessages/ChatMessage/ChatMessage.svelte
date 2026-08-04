@@ -433,8 +433,9 @@
 	 * once known; 500px sizes messages that have never been rendered.
 	 */
 	.chat-message {
+		--chat-message-intrinsic-size: 500px;
 		content-visibility: auto;
-		contain-intrinsic-size: auto 500px;
+		contain-intrinsic-size: auto var(--chat-message-intrinsic-size);
 	}
 
 	/*
@@ -443,6 +444,7 @@
 	 * auto-scroll offset; the 500px default is for ordinary bubbles.
 	 */
 	.chat-message--synthetic {
-		contain-intrinsic-size: auto 40px;
+		--chat-message-intrinsic-size: 40px;
+		contain-intrinsic-size: auto var(--chat-message-intrinsic-size);
 	}
 </style>

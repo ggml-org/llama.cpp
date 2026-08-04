@@ -4,6 +4,10 @@
 	import { highlightMatch } from '$lib/utils';
 	import { cn } from '$lib/components/ui/utils';
 
+	// Fly-in transition for the results list.
+	const FLY_Y_PX = -4;
+	const FLY_DURATION_MS = 100;
+
 	interface Props {
 		results: string[];
 		hoveredIndex: number;
@@ -29,8 +33,8 @@
 
 <div
 	bind:this={container}
-	class="max-h-48 overflow-y-auto"
-	transition:fly={{ y: -4, duration: 100 }}
+	class="max-h-48 overflow-y-auto py-2"
+	transition:fly={{ y: FLY_Y_PX, duration: FLY_DURATION_MS }}
 >
 	{#if isSearching && results.length === 0}
 		<div class="px-2 py-1.5 text-sm text-muted-foreground">Searching...</div>

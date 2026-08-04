@@ -3,6 +3,7 @@ import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import {
 	BuiltInTool,
+	GlobSearchType,
 	HealthCheckStatus,
 	JsonSchemaType,
 	ToolCallType,
@@ -12,6 +13,7 @@ import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	buildSandboxToolDefinition,
+	HOME_TILDE,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -510,8 +512,8 @@ class ToolsStore {
 		if (this._serverHome !== undefined) return this._serverHome;
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
-				path: '~',
-				type: 'dir',
+				path: HOME_TILDE,
+				type: GlobSearchType.DIR,
 				max_depth: 1,
 				limit: 1
 			});
