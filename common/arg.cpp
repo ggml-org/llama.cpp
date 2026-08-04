@@ -95,28 +95,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         return true;
     };
 
-    // string-valued
-    if (arg == "--tessera-dequant-dir") {
-        if (!require_val("--tessera-dequant-dir")) return -1;
-        tessera_debug::set_dequant_dir(val); return 2;
-    }
-    if (arg == "--tessera-dequant-stride") {
-        if (!require_val("--tessera-dequant-stride")) return -1;
-        tessera_debug::set_dequant_stride((int64_t) atoll(val.c_str())); return 2;
-    }
-    if (arg == "--tessera-matmul-output-dir") {
-        if (!require_val("--tessera-matmul-output-dir")) return -1;
-        tessera_matmul_output::set_matmul_output_dir(val); return 2;
-    }
-    if (arg == "--tessera-matmul-output-stride") {
-        if (!require_val("--tessera-matmul-output-stride")) return -1;
-        tessera_matmul_output::set_matmul_output_stride((int64_t) atoll(val.c_str())); return 2;
-    }
-    if (arg == "--tessera-l15-dtype") {
-        if (!require_val("--tessera-l15-dtype")) return -1;
-        tessera_debug::set_l15_dtype(val); return 2;
-    }
-
     // integer-valued
     if (arg == "--tessera-evolve-seed") {
         if (!require_val("--tessera-evolve-seed")) return -1;
