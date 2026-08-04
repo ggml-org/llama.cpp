@@ -249,6 +249,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,       uint32_t(12));
     ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,      4.0f);
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
+    ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,      -5.0f);
 
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;

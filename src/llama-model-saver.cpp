@@ -320,6 +320,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
+    add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,              hparams.kda_gate_lower_bound);
 
     add_kv(LLM_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);
 
