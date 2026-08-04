@@ -186,8 +186,7 @@ std::string common_params_sampling::print() const {
 
 struct common_sampler * common_sampler_init(
         const struct llama_model * model,
-        struct common_params_sampling & params,
-        int32_t n_ctx) {
+        struct common_params_sampling & params) {
     if (!std::isfinite(params.penalty_repeat) ||
         params.penalty_repeat <= 0.0f ||
         !std::isfinite(1.0f/params.penalty_repeat)) {
@@ -199,10 +198,6 @@ struct common_sampler * common_sampler_init(
     if (!std::isfinite(params.penalty_present)) {
         throw std::invalid_argument("penalty_present must be finite");
     }
-    if (params.penalty_last_n == -1) {
-        params.penalty_last_n = n_ctx > 0 ? n_ctx : llama_model_n_ctx_train(model);
-    }
-
     const llama_vocab * vocab = llama_model_get_vocab(model);
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
 
@@ -355,7 +350,7 @@ struct common_sampler * common_sampler_init(
                         for (const auto & str : params.dry_sequence_breakers) {
                             c_breakers.push_back(str.c_str());
                         }
-                        samplers.push_back(llama_sampler_init_dry(vocab, llama_model_n_ctx_train(model), params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n, c_breakers.data(), c_breakers.size()));
+                        samplers.push_back(llama_sampler_init_dry(vocab, params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n, c_breakers.data(), c_breakers.size()));
                     }
                     break;
                 case COMMON_SAMPLER_TYPE_TOP_K:
