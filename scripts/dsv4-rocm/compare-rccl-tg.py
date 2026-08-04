@@ -60,10 +60,7 @@ def load_run(path: Path) -> dict:
     stdout_lines = [line for line in (path / "bench.stdout.log").read_text().splitlines() if line.strip()]
     stdout_lower = "\n".join(stdout_lines).lower()
     diagnostics_lower = stdout_lower + "\n" + (path / "bench.log").read_text().lower()
-    tuning_markers = (
-        "allreduce:", "threadthreshold:", "rccl channel tuning",
-        "enabled nccl func/proto/algo matrix",
-    )
+    tuning_markers = ("allreduce:", "threadthreshold:", "rccl channel tuning")
     require(not any(marker in diagnostics_lower for marker in tuning_markers), f"{path}: in-band RCCL tuning diagnostics")
     require(status.get("process_exit_code") == "0", f"{path}: process did not exit zero")
     require(status.get("stderr_consumer_exit_code") == "0", f"{path}: stderr capture failed")

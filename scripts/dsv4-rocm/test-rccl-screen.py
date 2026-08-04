@@ -93,6 +93,7 @@ def make_run(root, name, label, medians, digest="a" * 64):
         acknowledgements = [
             f"host:1:2 [0] NCCL INFO NCCL_ALGO set by environment to {algorithm}",
             f"host:1:2 [0] NCCL INFO NCCL_PROTO set by environment to {protocol}",
+            "host:1:2 [0] NCCL INFO Enabled NCCL Func/Proto/Algo Matrix:",
         ]
     write_capture(path, acknowledgements)
     return path

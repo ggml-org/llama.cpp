@@ -164,8 +164,10 @@ is recorded but does not substitute for this build/runtime proof.
 `auto` leaves algorithm/protocol unset; `tree-ll` and `ring-ll` force exactly
 those algorithms with the LL protocol. All use
 `NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=ENV` to retain RCCL's runtime environment
-acknowledgement without enabling per-collective tuning diagnostics. The complete
-raw stream is preserved verbatim in `bench.stdout.log`, while non-JSON lines are
+acknowledgement without enabling per-collective tuning diagnostics. RCCL may
+emit one small setup-time function/protocol/algorithm matrix under this mask;
+the comparator permits it but rejects per-collective AllReduce/channel-tuning
+markers. The complete raw stream is preserved verbatim in `bench.stdout.log`, while non-JSON lines are
 also separated into `bench.stdout-nonjson.log`; only parsed JSON records enter
 `result.jsonl` and the result-completion timestamps. `stdout-classification.json`
 fails closed on malformed JSON-like data, unterminated output, capture errors, or
