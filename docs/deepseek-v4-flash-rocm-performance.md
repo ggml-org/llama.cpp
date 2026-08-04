@@ -86,7 +86,7 @@ No stable, speculation-disabled context-depth TG sweep has been accepted on the 
 
 Required closure: identical target model/quantization/layer split; MTP and DSpark absent; fixed measured generation count; at least five valid repetitions at every required depth, including 32K and 64K; scheduler/backend residency attested; exact command, commit, clocks/power state, and artifacts recorded.
 
-Harness status (2026-08-04): M5.0 tooling and its non-GPU validation are complete, but this does **not** close the evidence gap. `scripts/dsv4-rocm/run-tg.sh` now provides separate performance and residency modes, manifests, phase-aware setup/sample watchdogs, telemetry, exact-depth/repetition summaries, and measured-decode scheduler parsing. Static fixtures and fake-runner tests passed complete, incomplete, unstable, CPU-residency, measured-timeout, and setup-timeout cases. No model was loaded and no GPU timing was produced. Fresh-prefill versus restored target-only state equivalence remains the blocking pre-run gate.
+Harness status (2026-08-04, implementation commit `1e5519bf1`): M5.0 tooling and its non-GPU validation are complete, but this does **not** close the evidence gap. `scripts/dsv4-rocm/run-tg.sh` now provides separate performance and residency modes, manifests, phase-aware setup/sample watchdogs, telemetry, exact-depth/repetition summaries, and measured-decode scheduler parsing. Static fixtures and fake-runner tests passed complete, incomplete, unstable, CPU-residency, measured-timeout, and setup-timeout cases. No model was loaded and no GPU timing was produced. Fresh-prefill versus restored target-only state equivalence remains the blocking pre-run gate.
 
 ## 4. Current DSV4 execution facts
 
@@ -815,7 +815,7 @@ Performance mode uses llama-bench `n_prompt=0`, `n_depth=<sweep>`, `n_gen=32`, a
 
 Residency mode is a separate non-performance run (`n_gen=1`, one repetition, `GGML_SCHED_DEBUG=2 --verbose`). `parse-sched-debug.py` changes phase only on llama-bench progress markers, ignores setup/prefill assignments, and records measured-decode LID/TOP_K backends, CPU/ROCm-meta split counts, and scheduled split-input copies. Separating it prevents verbose scheduler output from perturbing accepted TG. The tensor split is spelled `1/1/1/1` because llama-bench reserves commas for parameter variants; this is its exact four-device equivalent of `1,1,1,1`.
 
-The non-GPU monitor rerun passed at
+The non-GPU monitor rerun passed for the code committed at `1e5519bf1`; its precommit source patch and file hashes are preserved at
 `$HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/`.
 It preserved a reproduced/rejected FIFO notification deadlock: a fast child could exit before a later FIFO event had a reader. The accepted implementation uses an append-only phase log plus an atomically replaced latest-phase file. Expected/observed exits were 0/0 for stable performance and residency, 3/3 for missing depth and measured timeout, 4/4 for instability, and 124/124 for setup timeout. These are tooling results only. Before any real baseline, either attest fresh-prefill versus llama-bench restored-state target logits/tokens or change the harness to fresh equivalent state per repetition.
 
@@ -1087,7 +1087,10 @@ Repository implementation/evidence chain:
   c98197389 (optimization-four acceptance record) ->
   77ef7c2d1 (final PP verification) ->
   3cf35253f (initial 16K/32K PP scaling record; interpretation corrected here) ->
-  925d93700 (indexed-CSA design note, now held by this roadmap)
+  925d93700 (indexed-CSA design note, now held by this roadmap) ->
+  5df30a53e (raw-decode-first roadmap reset) ->
+  0376a55aa (Ralph loop registration) ->
+  1e5519bf1 (M5.0 target-only TG harness + static validation)
 
 Raw-decode Ralph log:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
@@ -1095,8 +1098,10 @@ Raw-decode Ralph state:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.state.json
 Raw-decode Ralph status:
   active, iteration 1/50; started 2026-08-04T03:47:49Z
-Initial synchronized roadmap commit:
-  5df30a53e
+Revised roadmap / loop-registration commits:
+  5df30a53e / 0376a55aa
+M5.0 harness implementation commit:
+  1e5519bf1
 M5.0 static-validation artifacts:
   $HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/
 Current next action:
