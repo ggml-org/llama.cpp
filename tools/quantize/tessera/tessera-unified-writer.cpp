@@ -132,6 +132,10 @@ struct ts_unified_writer::impl {
     ts_unified_dspark_hparams         dspark_hparams;
     ts_unified_meta                   meta;
 
+    // Phase 16.8: budget relaxation/enforcement evidence recorded by
+    // write_all (one event per shared tensor whose budget was applied).
+    std::vector<ts_unified_budget_event> budget_events;
+
     std::vector<source_gguf>          sources;
     gguf_context *                    dst        = nullptr;
     ggml_context *                    dst_gctx   = nullptr;   // owned by us
@@ -287,6 +291,145 @@ int ts_unified_writer_worst_of(int a, int b) {
     return (ts_unified_writer_qtype_bits(a) >= ts_unified_writer_qtype_bits(b)) ? a : b;
 }
 
+// The header stays ggml.h-free and uses TS_UNIFIED_QTYPE_NONE as the
+// "no verdict" sentinel; make sure it still matches the enum.
+static_assert((int)GGML_TYPE_COUNT == TS_UNIFIED_QTYPE_NONE,
+              "TS_UNIFIED_QTYPE_NONE must track GGML_TYPE_COUNT");
+
+// ---------------------------------------------------------------------------
+// Phase 16.8: budget-aware cross-role reconciliation
+//
+// Worst-of is the correctness default, but a role's size budget can be
+// pushed over by another role's more-conservative verdict on a shared
+// tensor. The architect's rule (2026-08-04): relax the CONSTRAINT - not
+// the conservative qtype - when enforcing the budget would compromise a
+// needier role. The decision is weighted dynamically. See the header for
+// the data model; this is the pure algorithm so it is unit-testable.
+// ---------------------------------------------------------------------------
+
+ts_unified_shared_resolution ts_unified_writer_resolve_shared(
+    const std::vector<ts_unified_role_verdict> & verdicts) {
+    ts_unified_shared_resolution res;
+
+    // Drop absent verdicts. This mirrors qtype_for_tensor's filter
+    // (unknown dtype -> GGML_TYPE_COUNT) so the no-budget path below
+    // reproduces plain worst-of exactly.
+    std::vector<const ts_unified_role_verdict *> valid;
+    for (const auto & v : verdicts) {
+        if (v.qtype == GGML_TYPE_COUNT) continue;
+        valid.push_back(&v);
+    }
+    if (valid.empty()) {
+        res.reason = "no valid verdicts";
+        return res;
+    }
+
+    // Conservative default: worst-of across every role's verdict.
+    int W = valid[0]->qtype;
+    for (size_t i = 1; i < valid.size(); i++) {
+        W = ts_unified_writer_worst_of(W, valid[i]->qtype);
+    }
+    res.qtype = W;
+    const int64_t W_bits = ts_unified_writer_qtype_bits(W);
+
+    // No budget configured on any role -> plain worst-of (pre-16.8).
+    bool any_budget = false;
+    for (const auto * v : valid) {
+        if (v->budget_bits >= 0) { any_budget = true; break; }
+    }
+    if (!any_budget) {
+        res.reason = "worst-of (no role budget configured)";
+        return res;
+    }
+    res.budget_applied = true;
+
+    // The protector is the role whose verdict demands the most bits
+    // (== the worst-of winner). Enforcing another role's budget below
+    // protector_bits compromises it.
+    const ts_unified_role_verdict * protector = valid[0];
+    for (const auto * v : valid) {
+        if (ts_unified_writer_qtype_bits(v->qtype) >
+            ts_unified_writer_qtype_bits(protector->qtype)) {
+            protector = v;
+        }
+    }
+    const int64_t protector_bits = ts_unified_writer_qtype_bits(protector->qtype);
+
+    int n_relaxed = 0;
+    int64_t enforced_cap = W_bits;              // tightest enforced cap
+    const ts_unified_role_verdict * enforcer = nullptr;
+    for (const auto * r : valid) {
+        if (r->budget_bits < 0) continue;               // unconstrained role
+        if (W_bits <= r->budget_bits) continue;         // already within budget
+        // Role r is over budget under the worst-of qtype. Enforcing its
+        // budget would cap below protector_bits.
+        if (protector->model_role != r->model_role &&
+            protector_bits > r->budget_bits) {
+            // Enforcement compromises the protector. Weight the decision.
+            if (protector->weight >= r->weight) {
+                // Relax r's constraint; keep the conservative qtype.
+                res.relaxed = true;
+                res.relaxed_role = r->model_role;
+                res.protected_role = protector->model_role;
+                n_relaxed++;
+                continue;
+            }
+        }
+        // Enforce r's budget (it outweighs the protector, or it IS the
+        // protector capping itself). Keep the tightest cap seen.
+        if (r->budget_bits < enforced_cap) {
+            enforced_cap = r->budget_bits;
+            enforcer = r;
+        }
+    }
+
+    if (enforcer != nullptr && enforced_cap < W_bits) {
+        // Cap the qtype at the enforced budget. Pick the largest-bits
+        // verdict that still fits (as conservative as the budget allows).
+        int best = GGML_TYPE_COUNT;
+        int best_bits = -1;
+        for (const auto * v : valid) {
+            const int b = ts_unified_writer_qtype_bits(v->qtype);
+            if ((int64_t)b <= enforced_cap && b > best_bits) {
+                best = v->qtype;
+                best_bits = b;
+            }
+        }
+        if (best == GGML_TYPE_COUNT) {
+            // No verdict fits the cap; fall back to the smallest verdict
+            // (best-effort honor of the budget).
+            best = valid[0]->qtype;
+            for (const auto * v : valid) {
+                if (ts_unified_writer_qtype_bits(v->qtype) <
+                    ts_unified_writer_qtype_bits(best)) {
+                    best = v->qtype;
+                }
+            }
+        }
+        res.qtype = best;
+        res.enforced = true;
+        res.enforced_role = enforcer->model_role;
+    }
+
+    // Evidence line summarizing the effective action.
+    std::string s = "worst_of=" + std::to_string(W_bits) + "bit";
+    if (res.relaxed) {
+        s += "; relaxed " + res.relaxed_role + " budget to protect " +
+             res.protected_role + "(" + std::to_string(protector_bits) + "bit)";
+    }
+    if (res.enforced) {
+        s += "; enforced " + res.enforced_role + " budget cap=" +
+             std::to_string(enforced_cap) + "bit -> " +
+             std::to_string(ts_unified_writer_qtype_bits(res.qtype)) + "bit";
+    }
+    if (!res.relaxed && !res.enforced) {
+        s += "; all roles within budget";
+    }
+    res.reason = s;
+    (void)n_relaxed;
+    return res;
+}
+
 int ts_unified_policy_load_json(const std::string & path,
                                  ts_unified_policy * out,
                                  std::string * err) {
@@ -322,6 +465,20 @@ int ts_unified_policy_load_json(const std::string & path,
         if (p.model_role.empty() || p.name.empty()) continue;  // skip malformed
         out->entries.push_back(std::move(p));
     }
+    // Phase 16.8: optional per-role budgets (additive; absent = the
+    // writer applies plain worst-of everywhere).
+    //   "role_budgets": [{ "model_role": "...", "budget_bits": N,
+    //                      "weight": W }, ...]
+    if (j.contains("role_budgets") && j["role_budgets"].is_array()) {
+        for (const auto & e : j["role_budgets"]) {
+            ts_unified_role_budget rb;
+            if (e.contains("model_role")) rb.model_role = e["model_role"].get<std::string>();
+            if (e.contains("budget_bits")) rb.budget_bits = e["budget_bits"].get<int64_t>();
+            if (e.contains("weight"))      rb.weight      = e["weight"].get<double>();
+            if (rb.model_role.empty()) continue;  // skip malformed
+            out->role_budgets.push_back(std::move(rb));
+        }
+    }
     return 0;
 }
 
@@ -338,6 +495,18 @@ int ts_unified_policy_save_json(const std::string & path,
             {"name",       e.name},
             {"dtype",      e.dtype},
         });
+    }
+    // Phase 16.8: emit role_budgets when present (additive; readers
+    // without 16.8 support ignore the unknown key).
+    if (!policy.role_budgets.empty()) {
+        j["role_budgets"] = json::array();
+        for (const auto & rb : policy.role_budgets) {
+            j["role_budgets"].push_back({
+                {"model_role",  rb.model_role},
+                {"budget_bits", rb.budget_bits},
+                {"weight",      rb.weight},
+            });
+        }
     }
     std::ofstream f(path);
     if (!f) {
@@ -683,6 +852,78 @@ static int qtype_for_tensor(
     return result;
 }
 
+// --- Phase 16.8 budget-aware per-tensor resolution ---------------------------
+//
+// Resolves the qtype for one destination tensor. When the policy carries
+// no role budgets, or the tensor has a single owning role, this is plain
+// worst-of (byte-identical to the pre-16.8 path). Only when >= 2 roles
+// have verdicts on the same name AND role budgets are configured does the
+// budget-aware reconciliation run, appending relaxation/enforcement
+// evidence to *events.
+static int resolve_tensor_qtype(
+    const std::string & name,
+    const ts_unified_policy & policy,
+    std::vector<ts_unified_budget_event> * events) {
+    // Fast path: no budgets -> plain worst-of (pre-16.8 contract).
+    if (policy.role_budgets.empty()) {
+        return qtype_for_tensor(name, policy.entries);
+    }
+    // Collect per-role verdicts, folding duplicates within a role via
+    // worst-of (a role may emit more than one entry for the same name).
+    std::map<std::string, int> role_qtype;
+    for (const auto & e : policy.entries) {
+        if (e.name != name) continue;
+        if (e.dtype.empty()) continue;
+        int q = ts_unified_qtype_from_string(e.dtype);
+        if (q == GGML_TYPE_COUNT) continue;   // unknown dtype, skip
+        auto it = role_qtype.find(e.model_role);
+        if (it == role_qtype.end()) {
+            role_qtype[e.model_role] = q;
+        } else {
+            it->second = ts_unified_writer_worst_of(it->second, q);
+        }
+    }
+    if (role_qtype.empty()) return GGML_TYPE_COUNT;
+    if (role_qtype.size() < 2) {
+        // Single owning role: cross-role budget propagation cannot
+        // happen, so keep the plain worst-of result.
+        return qtype_for_tensor(name, policy.entries);
+    }
+    // Build the verdict list with each role's budget + weight attached.
+    std::vector<ts_unified_role_verdict> verdicts;
+    for (const auto & kv : role_qtype) {
+        ts_unified_role_verdict v;
+        v.model_role = kv.first;
+        v.qtype      = kv.second;
+        for (const auto & rb : policy.role_budgets) {
+            if (rb.model_role == kv.first) {
+                v.budget_bits = rb.budget_bits;
+                v.weight      = rb.weight;
+                break;
+            }
+        }
+        verdicts.push_back(std::move(v));
+    }
+    ts_unified_shared_resolution res = ts_unified_writer_resolve_shared(verdicts);
+    if (events != nullptr) {
+        if (res.relaxed) {
+            ts_unified_budget_event ev;
+            ev.tensor = name; ev.action = "relaxed";
+            ev.role = res.relaxed_role; ev.other_role = res.protected_role;
+            ev.qtype = res.qtype; ev.reason = res.reason;
+            events->push_back(std::move(ev));
+        }
+        if (res.enforced) {
+            ts_unified_budget_event ev;
+            ev.tensor = name; ev.action = "enforced";
+            ev.role = res.enforced_role;
+            ev.qtype = res.qtype; ev.reason = res.reason;
+            events->push_back(std::move(ev));
+        }
+    }
+    return res.qtype;
+}
+
 int ts_unified_writer::write_all(std::string * err) {
     if (p_->dst == nullptr) {
         if (err) *err = "ts_unified_writer: not initialized";
@@ -757,7 +998,8 @@ int ts_unified_writer::write_all(std::string * err) {
             // classifier and the copy path).
             ggml_type src_type = gguf_get_tensor_type(src.ctx, ti);
 
-            int override_qtype = qtype_for_tensor(src_name, p_->policy.entries);
+            int override_qtype = resolve_tensor_qtype(src_name, p_->policy,
+                                                       &p_->budget_events);
             if (override_qtype != GGML_TYPE_COUNT) {
                 // Only count as an override when the policy's
                 // resolved qtype actually differs from the
@@ -856,10 +1098,38 @@ int ts_unified_writer::write_all(std::string * err) {
     stats_.n_tensors_skipped = n_skipped;
     stats_.n_qtype_overrides = n_overrides;
     stats_.total_bytes       = total_bytes;
+    // Phase 16.8: budget relaxation stats + audit trail. The events are
+    // also serialized into the destination GGUF metadata so the
+    // relaxation evidence travels with the artifact.
+    for (const auto & ev : p_->budget_events) {
+        if      (ev.action == "relaxed")  stats_.n_budget_relaxed++;
+        else if (ev.action == "enforced") stats_.n_budget_enforced++;
+    }
+    if (!p_->budget_events.empty()) {
+        std::string ev_json = "[";
+        for (size_t i = 0; i < p_->budget_events.size(); i++) {
+            const auto & ev = p_->budget_events[i];
+            if (i != 0) ev_json += ",";
+            ev_json += "{\"tensor\":\"" + ev.tensor +
+                       "\",\"action\":\"" + ev.action +
+                       "\",\"role\":\"" + ev.role + "\"";
+            if (!ev.other_role.empty()) {
+                ev_json += ",\"other_role\":\"" + ev.other_role + "\"";
+            }
+            ev_json += ",\"qtype\":\"" + ts_unified_qtype_to_string(ev.qtype) +
+                       "\",\"reason\":\"" + ev.reason + "\"}";
+        }
+        ev_json += "]";
+        gguf_set_val_str(p_->dst, "tessera.unified.budget_events", ev_json.c_str());
+    }
     // Flush to disk.
     if (!gguf_write_to_file(p_->dst, p_->dst_path.c_str(), /*only_meta=*/false)) {
         if (err) *err = "gguf_write_to_file failed: " + p_->dst_path;
         return 1;
     }
     return 0;
+}
+
+const std::vector<ts_unified_budget_event> & ts_unified_writer::get_budget_events() const {
+    return p_->budget_events;
 }

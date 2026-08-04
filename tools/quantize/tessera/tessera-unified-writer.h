@@ -77,8 +77,39 @@ struct ts_unified_policy_entry {
     std::string name;
     std::string dtype;
 };
+
+// Phase 16.8: per-role size budget for cross-role relaxation.
+//
+// The "did this requant plan reduce error?" loop's producer
+// (l5_retune.py) computes a requant_budget_bits per (model, role,
+// family). When the writer reconciles a SHARED tensor (token_embd /
+// output) across roles via worst-of, one role's budget can be pushed
+// over by another role's more-conservative verdict. The writer needs
+// the budget expressed as BITS PER ELEMENT (the same unit as
+// ts_unified_writer_qtype_bits) so it is directly comparable to a
+// qtype's bit cost, plus a dynamic weight that says how much that
+// role's constraint/need should be honored in the relaxation decision.
+//
+// budget_bits: max bits/element the role's size envelope allows for a
+//   shared tensor. -1 = unconstrained (no budget). 0 is a valid budget
+//   (forces the lowest-bit verdict).
+// weight: dynamic weighting, >= 0. The Python producer derives it from
+//   n_samples, hit_rate, and coupling_score; the writer only COMPARES
+//   weights. A role whose weight is >= the constrained role's weight
+//   protects its more-conservative verdict (the constraint is relaxed).
+struct ts_unified_role_budget {
+    std::string model_role;
+    int64_t     budget_bits = -1;   // bits/element; -1 = unconstrained
+    double      weight      = 0.0;  // dynamic weighting for relaxation
+};
+
 struct ts_unified_policy {
     std::vector<ts_unified_policy_entry> entries;
+    // Phase 16.8: optional per-role budgets. Empty = the writer applies
+    // plain worst-of everywhere (the pre-16.8 contract). Carried in the
+    // policy sidecar JSON ("role_budgets") and/or built by the CLI from
+    // the dispatch's tessera_db (l5_weights).
+    std::vector<ts_unified_role_budget> role_budgets;
 };
 
 // gemma4-assistant hparams. The writer needs the trunk-only fields
@@ -151,6 +182,19 @@ struct ts_unified_meta {
     std::string main_tip;       // main branch HEAD when this writer was built
 };
 
+// One budget event the writer recorded while writing (Phase 16.8).
+// Surfaced via ts_unified_writer::get_budget_events and mirrored into
+// the destination GGUF metadata (tessera.unified.budget_events) so the
+// relaxation audit trail travels with the artifact.
+struct ts_unified_budget_event {
+    std::string tensor;          // shared tensor name
+    std::string action;          // "relaxed" | "enforced"
+    std::string role;            // the constrained role
+    std::string other_role;      // protected role (relaxed) / "" (enforced)
+    int         qtype = 45;      // resolved qtype (45 == GGML_TYPE_COUNT)
+    std::string reason;          // evidence line
+};
+
 // The writer. Open on the destination path, then call write_all.
 // Errors are reported via the out `err` parameter; the destructor
 // closes the destination GGUF.
@@ -204,9 +248,17 @@ public:
         int32_t  n_tensors_shared_embd = 0;
         int32_t  n_tensors_skipped     = 0;   // unknown / unsupported names
         int32_t  n_qtype_overrides     = 0;   // policy changed source qtype
+        int32_t  n_budget_relaxed      = 0;   // Phase 16.8: constraints relaxed
+        int32_t  n_budget_enforced     = 0;   // Phase 16.8: budgets capped qtype
         int64_t  total_bytes           = 0;
     };
     const stats & get_stats() const { return stats_; }
+
+    // Phase 16.8: the per-shared-tensor budget relaxation/enforcement
+    // evidence recorded by write_all. Empty when the policy carries no
+    // role budgets (or no shared tensor hit a budget). Also serialized
+    // into the destination GGUF metadata (tessera.unified.budget_events).
+    const std::vector<ts_unified_budget_event> & get_budget_events() const;
 
 private:
     struct impl;
@@ -262,6 +314,56 @@ int ts_unified_writer_qtype_bits(int qtype);
 // sentinel for "no entry" is GGML_TYPE_COUNT and must be
 // checked before calling worst_of.
 int ts_unified_writer_worst_of(int a, int b);
+
+// Sentinel for "no qtype verdict" that matches GGML_TYPE_COUNT without
+// dragging ggml.h into this header (the writer's .cpp static_asserts
+// the two agree).
+static const int TS_UNIFIED_QTYPE_NONE = 45;
+
+// --- Phase 16.8: budget-aware cross-role reconciliation --------------
+//
+// Worst-of is the correctness default: a shared tensor (token_embd /
+// output) gets the more conservative qtype across the roles' verdicts.
+// But a role's size budget (ts_unified_role_budget.budget_bits) can be
+// pushed over by another role's more-conservative verdict. The
+// architect's rule: when enforcing the constrained role's budget would
+// compromise a needier role, RELAX THE CONSTRAINT - keep the
+// conservative qtype - rather than drop bits. The decision is weighted
+// dynamically: the constrained role only gets to pull bits down when it
+// outweighs every role it would compromise.
+//
+// ts_unified_writer_resolve_shared implements that rule as a PURE
+// function (no writer / ggml state) so the algorithm is unit-testable
+// in isolation. The writer calls it per shared tensor; everything else
+// falls back to plain worst-of.
+
+// One role's qtype verdict + budget + weight for a single shared
+// tensor. qtype is an int ggml_type (GGML_TYPE_COUNT = no verdict).
+// budget_bits / weight match ts_unified_role_budget for that role
+// (-1 / 0.0 when the role has no budget entry).
+struct ts_unified_role_verdict {
+    std::string model_role;
+    int         qtype       = TS_UNIFIED_QTYPE_NONE;
+    int64_t     budget_bits = -1;
+    double      weight      = 0.0;
+};
+
+// Outcome of budget-aware reconciliation for one shared tensor.
+struct ts_unified_shared_resolution {
+    int         qtype          = TS_UNIFIED_QTYPE_NONE;  // resolved qtype
+    bool        budget_applied = false;  // any budget considered
+    bool        relaxed        = false;  // a constraint was relaxed
+    bool        enforced       = false;  // a budget capped the qtype
+    std::string relaxed_role;            // role whose constraint was relaxed
+    std::string protected_role;          // role protected by the relaxation
+    std::string enforced_role;           // role whose budget capped the qtype
+    std::string reason;                  // human-readable evidence line
+};
+
+// Reconcile one shared tensor across per-role verdicts with budgets.
+// Returns the resolved qtype + relaxation evidence. Pure; no I/O.
+ts_unified_shared_resolution ts_unified_writer_resolve_shared(
+    const std::vector<ts_unified_role_verdict> & verdicts);
 
 // Read a calibration policy from a sidecar JSON file. The JSON
 // shape mirrors unified_calibrate.py's output: a top-level

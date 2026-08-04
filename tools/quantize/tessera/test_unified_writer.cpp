@@ -770,6 +770,251 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // ---- Test 8: Phase 16.8 budget-aware cross-role reconciliation ----
+    //
+    // Worst-of stays the correctness default. When a role's size
+    // budget (bits/element) is pushed over by another role's more
+    // conservative verdict on a shared tensor, the constraint is
+    // RELAXED (keep the conservative qtype) if enforcing it would
+    // compromise a needier role, weighted dynamically. The pure
+    // resolver is unit-tested first; then the writer is exercised
+    // end-to-end with role_budgets in the policy.
+    {
+        using R = ts_unified_shared_resolution;
+        auto mkv = [](const std::string & role, int q, int64_t b, double w) {
+            ts_unified_role_verdict v;
+            v.model_role = role; v.qtype = q; v.budget_bits = b; v.weight = w;
+            return v;
+        };
+
+        // 8a.1: no budgets -> plain worst-of, budget not applied.
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q4_K, -1, 0.0),
+                mkv("dflash", GGML_TYPE_Q6_K, -1, 0.0),
+            });
+            check(r.qtype == GGML_TYPE_Q6_K,          "8a.1 no-budget worst-of=Q6_K");
+            check(!r.budget_applied && !r.relaxed && !r.enforced,
+                  "8a.1 no flags set");
+        }
+        // 8a.2: budgets present but not violated -> worst-of unchanged.
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q4_K, 100, 1.0),
+                mkv("dflash", GGML_TYPE_Q6_K, -1,  1.0),
+            });
+            check(r.qtype == GGML_TYPE_Q6_K,          "8a.2 within-budget worst-of=Q6_K");
+            check(r.budget_applied && !r.relaxed && !r.enforced,
+                  "8a.2 budget_applied only");
+        }
+        // 8a.3: trunk over budget, dflash needs the bits and outweighs
+        // (weight 2.0 >= 1.0) -> constraint relaxed, Q6_K kept.
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q4_K, 4, 1.0),
+                mkv("dflash", GGML_TYPE_Q6_K, -1, 2.0),
+            });
+            check(r.qtype == GGML_TYPE_Q6_K,          "8a.3 relaxed keeps Q6_K");
+            check(r.relaxed && !r.enforced,           "8a.3 relaxed flag");
+            check(r.relaxed_role == "trunk" && r.protected_role == "dflash",
+                  "8a.3 relaxed trunk protects dflash");
+            check(!r.reason.empty(),                  "8a.3 evidence line present");
+        }
+        // 8a.4: equal weights -> relax (conservative bias: protector
+        // wins ties).
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q4_K, 4, 1.0),
+                mkv("dflash", GGML_TYPE_Q6_K, -1, 1.0),
+            });
+            check(r.relaxed && r.qtype == GGML_TYPE_Q6_K,
+                  "8a.4 equal weights relax");
+        }
+        // 8a.5: trunk over budget but OUTWEIGHS dflash (3.0 > 2.0) ->
+        // budget enforced, capped to the largest fitting verdict (Q4_K).
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q4_K, 4, 3.0),
+                mkv("dflash", GGML_TYPE_Q6_K, -1, 2.0),
+            });
+            check(r.qtype == GGML_TYPE_Q4_K,          "8a.5 enforced caps to Q4_K");
+            check(r.enforced && !r.relaxed,           "8a.5 enforced flag");
+            check(r.enforced_role == "trunk",         "8a.5 enforced_role=trunk");
+        }
+        // 8a.6: enforcement that does not compromise the protector
+        // (dflash's own verdict fits the cap) -> enforced, no relax.
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q6_K, 4, 1.0),
+                mkv("dflash", GGML_TYPE_Q4_K, -1, 5.0),
+            });
+            // worst-of = Q6_K (trunk's own verdict is the protector);
+            // trunk's budget caps it; dflash only needs Q4_K (fits).
+            check(r.qtype == GGML_TYPE_Q4_K,          "8a.6 harmless enforcement -> Q4_K");
+            check(r.enforced && !r.relaxed,           "8a.6 enforced only");
+        }
+        // 8a.7: zero budget + protector outweighs -> relaxed (the
+        // conservative qtype is never dropped just because a budget
+        // is tight).
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q4_K, 0, 1.0),
+                mkv("dflash", GGML_TYPE_F16, -1, 2.0),
+            });
+            check(r.qtype == GGML_TYPE_F16 && r.relaxed,
+                  "8a.7 zero budget relaxes when protector outweighs");
+        }
+        // 8a.8: zero budget enforced (outweighs protector) -> no
+        // verdict fits, best-effort falls back to the smallest verdict.
+        {
+            R r = ts_unified_writer_resolve_shared({
+                mkv("trunk",  GGML_TYPE_Q4_K, 0, 9.0),
+                mkv("dflash", GGML_TYPE_Q6_K, -1, 1.0),
+            });
+            check(r.qtype == GGML_TYPE_Q4_K && r.enforced,
+                  "8a.8 zero budget enforced -> smallest verdict");
+        }
+        // 8a.9: no valid verdicts -> no qtype.
+        {
+            R r = ts_unified_writer_resolve_shared({});
+            check(r.qtype == TS_UNIFIED_QTYPE_NONE,   "8a.9 empty verdicts -> none");
+        }
+
+        // 8b: end-to-end through the writer with role_budgets.
+        const std::string bud_src = std::string(tmpdir) + "/test_unified_writer_budget_src.gguf";
+        const std::string bud_dst = std::string(tmpdir) + "/test_unified_writer_budget_dst.gguf";
+        std::remove(bud_src.c_str());
+        {
+            std::vector<synth_tensor> ts;
+            std::vector<int64_t> ne = {256, 4};
+            size_t n = (size_t)nbytes_for(ne, GGML_TYPE_F16);
+            std::vector<uint8_t> data(n);
+            for (size_t i = 0; i < n; i++) data[i] = (uint8_t)(0xC0 + (i & 0x0F));
+            ts.push_back({"token_embd.weight", GGML_TYPE_F16, ne, data});
+            std::string err;
+            check(write_synth_gguf(bud_src, "gemma4", {}, ts, &err) == 0,
+                  ("write budget source: " + err).c_str());
+        }
+        ts_unified_hparams b_hp = hparams;
+        b_hp.n_layer = 1;
+        ts_unified_dflash_hparams b_dh{};
+        b_dh.n_layer = 1; b_dh.n_embd = 256; b_dh.n_vocab = 4;
+        ts_unified_dspark_hparams b_ds{};
+        b_ds.markov_rank = 4;
+        ts_unified_meta b_meta{"tessera-unified-writer budget test", "test_tip"};
+
+        // Helper: run the writer with a policy, return the destination
+        // token_embd.weight qtype + stats + events.
+        auto run_budget_case = [&](const std::string & tag,
+                                   const ts_unified_policy & pol,
+                                   int expected_qtype,
+                                   int expect_relaxed,
+                                   int expect_enforced) {
+            std::remove(bud_dst.c_str());
+            std::vector<ts_unified_component> comps = { {bud_src, "shared_embd"} };
+            std::string err;
+            ts_unified_writer w(bud_dst, comps, pol, b_hp, b_dh, b_ds, b_meta, &err);
+            int rc = w.write_all(&err);
+            check(rc == 0, ("budget write_all " + tag + (err.empty() ? "" : ": " + err)).c_str());
+            if (rc != 0) return;
+            const auto & s = w.get_stats();
+            check(s.n_budget_relaxed  == expect_relaxed,
+                  ("budget stats relaxed " + tag).c_str());
+            check(s.n_budget_enforced == expect_enforced,
+                  ("budget stats enforced " + tag).c_str());
+            const auto & events = w.get_budget_events();
+            check((int)events.size() == expect_relaxed + expect_enforced,
+                  ("budget events count " + tag).c_str());
+            ggml_context * rin_ctx = nullptr;
+            gguf_init_params ip = { /*no_alloc=*/ false, /*ctx=*/ &rin_ctx };
+            gguf_context * rin = gguf_init_from_file(bud_dst.c_str(), ip);
+            check(rin != nullptr, ("budget reopen " + tag).c_str());
+            if (rin != nullptr) {
+                int64_t tid = gguf_find_tensor(rin, "token_embd.weight");
+                check(tid >= 0, ("budget token_embd found " + tag).c_str());
+                if (tid >= 0) {
+                    int qtype = (int)gguf_get_tensor_type(rin, tid);
+                    check(qtype == expected_qtype,
+                          ("budget qtype " +
+                           ts_unified_qtype_to_string(expected_qtype) +
+                           " (got " + ts_unified_qtype_to_string(qtype) + ") " + tag).c_str());
+                }
+                const int kid = gguf_find_key(rin, "tessera.unified.budget_events");
+                check((expect_relaxed + expect_enforced > 0) == (kid >= 0),
+                      ("budget metadata key presence " + tag).c_str());
+                gguf_free(rin);
+            }
+        };
+
+        // Base verdicts used by every case: trunk=Q4_K, dflash=Q6_K.
+        auto base_entries = []() {
+            std::vector<ts_unified_policy_entry> e;
+            e.push_back({"trunk",  "token_embd.weight", "Q4_K"});
+            e.push_back({"dflash", "token_embd.weight", "Q6_K"});
+            return e;
+        };
+
+        // 8b.1: no role_budgets -> plain worst-of Q6_K, no events.
+        {
+            ts_unified_policy p;
+            p.entries = base_entries();
+            run_budget_case("no budgets -> Q6_K", p, GGML_TYPE_Q6_K, 0, 0);
+        }
+        // 8b.2: trunk budget 4 bits/elem, dflash weight dominates ->
+        // relaxed, Q6_K written, one "relaxed" event.
+        {
+            ts_unified_policy p;
+            p.entries = base_entries();
+            p.role_budgets.push_back({"trunk",  4, 1.0});
+            p.role_budgets.push_back({"dflash", -1, 2.0});
+            run_budget_case("relaxed -> Q6_K", p, GGML_TYPE_Q6_K, 1, 0);
+        }
+        // 8b.3: trunk budget 4 bits/elem, trunk weight dominates ->
+        // enforced, Q4_K written, one "enforced" event.
+        {
+            ts_unified_policy p;
+            p.entries = base_entries();
+            p.role_budgets.push_back({"trunk",  4, 3.0});
+            p.role_budgets.push_back({"dflash", -1, 2.0});
+            run_budget_case("enforced -> Q4_K", p, GGML_TYPE_Q4_K, 0, 1);
+        }
+        // 8b.4: budget present but generous -> worst-of Q6_K, no events.
+        {
+            ts_unified_policy p;
+            p.entries = base_entries();
+            p.role_budgets.push_back({"trunk",  100, 1.0});
+            p.role_budgets.push_back({"dflash", 100, 1.0});
+            run_budget_case("generous budgets -> Q6_K", p, GGML_TYPE_Q6_K, 0, 0);
+        }
+
+        // 8c: policy JSON round-trip carries role_budgets.
+        {
+            ts_unified_policy p;
+            p.entries = base_entries();
+            p.role_budgets.push_back({"trunk",  4, 1.5});
+            p.role_budgets.push_back({"dflash", -1, 2.5});
+            const std::string pol_path = std::string(tmpdir) + "/test_unified_writer_budget_policy.json";
+            std::remove(pol_path.c_str());
+            std::string err;
+            check(ts_unified_policy_save_json(pol_path, p, &err) == 0,
+                  ("budget policy save: " + err).c_str());
+            ts_unified_policy q;
+            check(ts_unified_policy_load_json(pol_path, &q, &err) == 0,
+                  ("budget policy load: " + err).c_str());
+            check(q.role_budgets.size() == 2, "budget policy round-trip count");
+            if (q.role_budgets.size() == 2) {
+                check(q.role_budgets[0].model_role == "trunk" &&
+                      q.role_budgets[0].budget_bits == 4 &&
+                      q.role_budgets[0].weight == 1.5,
+                      "budget policy round-trip trunk entry");
+                check(q.role_budgets[1].model_role == "dflash" &&
+                      q.role_budgets[1].budget_bits == -1 &&
+                      q.role_budgets[1].weight == 2.5,
+                      "budget policy round-trip dflash entry");
+            }
+        }
+    }
+
     std::printf("\n%s (%d passed, %d failed)\n", g_fail == 0 ? "PASS" : "FAIL", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
