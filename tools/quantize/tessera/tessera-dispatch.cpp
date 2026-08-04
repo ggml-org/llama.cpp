@@ -1887,6 +1887,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 // in on a subsequent write.
                 ts_tessera_db_tensor_stat tstat;
                 tstat.model_hash = db_wrap->model_hash;
+                tstat.model_role = params->model_role;
                 tstat.name       = name;
                 tstat.family     = desc.family;
                 tstat.layer_depth = layer.layer_depth;

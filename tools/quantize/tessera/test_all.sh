@@ -180,6 +180,27 @@ compile_and_run coreml_bridge $T/test_coreml_bridge.cpp $T/tessera-coreml.cpp $T
 # --- CoreML MIL builder + weight serialization + IOReport telemetry scaffold ---
 compile_and_run coreml_mil $T/test_coreml_mil.cpp $T/tessera-coreml-mil.cpp $T/tessera-coreml-telemetry.cpp $T/tessera-coreml-builder.cpp $T/tessera-coreml.cpp -I ggml/include
 
+# --- Phase 16 follow-up: GA walk model_role plumb-through on tensor_stats ---
+# Standalone DuckDB test (mirrors the existing test_quantize_db
+# build line that CMake uses; the duckdb amalgamation is the
+# slow part so we cache the .o between runs when possible).
+DUCKDB_O="$BIN/duckdb.o"
+if [ ! -f "$DUCKDB_O" ]; then
+    $CXX -DNDEBUG -I third-party/duckdb -c third-party/duckdb/duckdb.cpp -o "$DUCKDB_O" \
+        > /tmp/tessera_build_duckdb.log 2>&1 || {
+            printf "  %-30s" "duckdb_amalgamation"
+            echo "FAIL (compile, see /tmp/tessera_build_duckdb.log)"
+            FAIL=$((FAIL + 1))
+            ERRORS="$ERRORS\n  duckdb_amalgamation: see /tmp/tessera_build_duckdb.log"
+        }
+fi
+if [ -f "$DUCKDB_O" ]; then
+    compile_and_run ga_model_role ../../tests/test-tessera-ga-model-role.cpp $T/tessera-quantize-db.cpp $T/tessera-db-buffer.cpp "$DUCKDB_O" -I third-party/duckdb -I $T -I vendor
+else
+    printf "  %-30s" "ga_model_role"
+    echo "SKIP (duckdb amalgamation build failed)"
+fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 if [ $FAIL -gt 0 ]; then

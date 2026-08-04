@@ -92,6 +92,15 @@ struct ts_dispatch_params {
     // tail_ratio on a subsequent upsert.
     std::string tessera_db_path;            // empty = ephemeral, no DB
     bool        force_requantize = false;
+    // Phase 16 (calibrate-model-role follow-up): the model_role
+    // tag stamped on every tensor_stats upsert from the GA-prep
+    // walk. One of "trunk" / "dflash" / "dspark" / "mtp_nextn" /
+    // "shared_embd". The default "trunk" preserves the pre-Phase-16
+    // single-component contract; the unified_calibrate.py driver
+    // passes the user-supplied role via this field so the per-role
+    // dispatch runs stamp the cross-pipeline tensor_stats table
+    // correctly. Mirrors the awq-evolve.py --model-role arg.
+    std::string model_role;
     // L2 forward-pass differential plumbing (Layer 2 of the runtime-aware
     // pipeline, see docs/runtime-aware-pipeline.md). The dispatch itself
     // does not run the forwards; the tools/tessera/runtime_probe.py

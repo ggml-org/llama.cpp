@@ -357,6 +357,32 @@ if(LLAMA_BUILD_TESTS)
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
     add_test(NAME ${TARGET} COMMAND ${TARGET})
 
+    # Phase 16 follow-up: C++ GA-walk model_role stamp on tensor_stats.
+    # The dispatch's GA-prep walk (tessera-dispatch.cpp) now reads
+    # ts_dispatch_params.model_role and stamps the value on every
+    # ts_tessera_db_upsert_tensor_stat call. This test pins the
+    # contract end-to-end: ts_dispatch_params.model_role defaults
+    # to empty (legacy single-component contract), accepts the
+    # Phase 16 roles (dflash / dspark / mtp_nextn / shared_embd),
+    # and the upsert with each role stamps the corresponding row.
+    # Same (model_hash, name) with two model_role values coexist
+    # on the new (model_hash, model_role, name) PK. Standalone
+    # (no libgguf / libggml needed) so it runs in the standalone
+    # test_all.sh too.
+    set(TARGET test-tessera-ga-model-role)
+    add_executable(${TARGET} ../tests/test-tessera-ga-model-role.cpp
+                                  tessera/tessera-quantize-db.cpp
+                                  tessera/tessera-db-buffer.cpp)
+    target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tessera)
+    target_link_libraries(${TARGET} PRIVATE
+        llama-common ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    if(TS_DUCKDB_AVAILABLE)
+        target_sources(${TARGET} PRIVATE $<TARGET_OBJECTS:duckdb-amalgamation>)
+        target_link_libraries(${TARGET} PRIVATE duckdb-amalgamation)
+    endif()
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+
     # L5 adaptive requantize loop integration test: builds a tiny synthetic
     # GGUF with two 2D weights (attn + FFN), runs the full dispatch pipeline
     # with adaptive_requantize enabled, and asserts the L2->L5->re-quantize
