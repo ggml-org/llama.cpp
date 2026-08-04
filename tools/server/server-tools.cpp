@@ -36,8 +36,8 @@ json server_tool::to_json() const {
 }
 
 static constexpr size_t SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT = 8 * 1024 * 1024; // 8 MB
-static constexpr int SERVER_TOOL_GIT_LS_FILES_TIMEOUT = 15; // seconds
-static constexpr int SERVER_TOOL_FILE_SEARCH_TIMEOUT = 5; // seconds
+// budget for one listing call, shared by the git and walker paths
+static constexpr int SERVER_TOOL_LIST_ENTRIES_TIMEOUT = 15; // seconds
 
 // entry kinds a directory listing may return
 enum class list_kind {
@@ -174,11 +174,13 @@ public:
             return {};
         }
 
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(SERVER_TOOL_LIST_ENTRIES_TIMEOUT);
+
         // git ls-files cannot list directories; use the walker when they are requested
         if (kind == list_kind::files) {
             auto res = run(
                 {"git", "-C", base, "ls-files", "--cached", "--others", "--exclude-standard"},
-                SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, SERVER_TOOL_GIT_LS_FILES_TIMEOUT);
+                SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, SERVER_TOOL_LIST_ENTRIES_TIMEOUT);
 
             if (res.exit_code == 0 && !res.timed_out) {
                 std::vector<list_entry> result;
@@ -197,7 +199,7 @@ public:
             }
         }
 
-        return list_entries_fallback(base, max_depth, kind, truncated);
+        return list_entries_fallback(base, max_depth, kind, deadline, truncated);
     }
 
     exec_result run(
@@ -284,11 +286,10 @@ private:
         return names;
     }
 
-    std::vector<list_entry> list_entries_fallback(const std::string & base, int max_depth, list_kind kind, bool & truncated) const {
+    std::vector<list_entry> list_entries_fallback(const std::string & base, int max_depth, list_kind kind,
+                                                  std::chrono::steady_clock::time_point deadline, bool & truncated) const {
         std::vector<list_entry> result;
         std::error_code ec;
-
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(SERVER_TOOL_FILE_SEARCH_TIMEOUT);
 
         std::vector<std::tuple<fs::path, fs::path, int>> stack;
         stack.emplace_back(fs::path(base), fs::path(), 0);
@@ -297,25 +298,30 @@ private:
             auto [dir, rel_dir, depth] = stack.back();
             stack.pop_back();
 
-            for (const auto & entry : fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec)) {
+            // the throwing increment would escape the tool on a directory that
+            // goes away mid walk, so step the iterator explicitly
+            fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+            for (const fs::directory_iterator end; it != end; it.increment(ec)) {
                 if (ec) break;
                 if (std::chrono::steady_clock::now() >= deadline) {
                     truncated = true;
                     return result;
                 }
+                const fs::directory_entry & entry = *it;
                 std::string fname = entry.path().filename().string();
                 std::error_code tec;
-                bool is_symlink = entry.is_symlink(tec);
                 if (entry.is_directory(tec)) {
-                    if (junk_dir_names().count(fname) > 0) continue;
                     std::string rel = (rel_dir / fname).string();
                     std::replace(rel.begin(), rel.end(), '\\', '/');
                     if (kind == list_kind::dirs || kind == list_kind::all) {
                         result.push_back({rel, true});
                     }
+                    // junk directories stay selectable but are never walked: they
+                    // hold nothing worth searching and can be enormous
+                    if (junk_dir_names().count(fname) > 0) continue;
                     // do not descend into symlinks: a link can point back to an
                     // ancestor and loop forever
-                    if (!is_symlink && (max_depth == 0 || depth + 1 < max_depth)) {
+                    if (!entry.is_symlink(tec) && (max_depth == 0 || depth + 1 < max_depth)) {
                         stack.emplace_back(entry.path(), rel_dir / fname, depth + 1);
                     }
                 } else if (entry.is_regular_file(tec)) {
