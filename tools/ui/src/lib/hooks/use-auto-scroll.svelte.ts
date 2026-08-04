@@ -187,16 +187,9 @@ export class AutoScrollController {
 			this._rafPending = true;
 			requestAnimationFrame(() => {
 				this._rafPending = false;
-				if (!this._autoScrollEnabled || !this._container) return;
-				if (this._scrollInterval) {
-					// streaming owns the pin via its interval
+				if (this._autoScrollEnabled && this._container) {
 					this._container.scrollTop = this._container.scrollHeight;
-					return;
 				}
-				// Discrete injection (e.g. a synthetic cwd-change row): the row
-				// carries an accurate contain-intrinsic-size, so pinning now
-				// does not snap back to a collapsed placeholder.
-				this._container.scrollTop = this._container.scrollHeight;
 			});
 		});
 
