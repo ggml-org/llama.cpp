@@ -443,10 +443,23 @@ that share the RDNA2 config fallback. The change is functionally thread-count
 parametric and exact on the V620, but remains guarded by the existing J16
 specialization decision rather than becoming a new generic J default.
 
-This is local/whole-model promotion, not final deployment acceptance. A fully
-attested natural-proxy equality gate and compact focused dispatch/resource
-proof remain next. Fused top-k, reduced-precision Q, rocWMMA, and device-local
-candidate merging remain deferred.
+Both remaining gates for this candidate pass. The fully attested natural-proxy
+gate at commit `fb2a0c85d` (`20260803-225603-iq3-t128-corpus-fb2a0c85d`, `complete=1`)
+authorized only the committed T128 stack, so its two identical arms serve as a
+determinism/correctness gate: all six responses match in content/tokens/prompts/
+counts, and layer/tensor reference-vs-tensor equality passes; its -0.57%/-0.50%
+first-prompt timings are re-run noise between identical builds, not an A/B.
+A compact rocprof resource proof (`20260804-001910`/`002309` corrected runs via
+`20260804-002602-iq3-t128-dispatch4-fb2a0c85d`) confirms the IQ3_XXS J16 kernel
+dispatches with the 128-thread block: wavefronts 11,264→5,632 versus the IQ2
+256-thread control while 25 hot-routing events/WF counters are recorded, and
+the focused exact-output contract is unchanged. Tree is clean at `fb2a0c85d`.
+
+Optimization four is therefore promoted: repeatable matched PP gain, focused
+dispatch/counters, natural-proxy determinism, whole-model throughput, review,
+and full source/build artifacts are complete, with J16/HC/LID guards intact.
+Fused top-k, reduced-precision Q, rocWMMA, and device-local candidate merging
+remain deferred.
 
 Mapping and screening artifacts:
 
@@ -696,7 +709,7 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Tune the LID vector kernel before considering fused selection. | Lightning indexer is 14.87% while selection is only about 0.31%; exact counters show 74.1% occupancy, 16.5% memory busy, 95.5% L2 hits, no LDS conflicts, and 6,481 VALU instructions/work-item. | selected |
 | 2026-08-03 | Reject simple LID K4/H32 tiling; do not combine or deploy it. | K4 regresses 9.2-10.5% and does not improve occupancy despite fewer VGPRs; H32 is neutral within drift and doubles LDS. Both fail the 10% local promotion gate. | final |
 | 2026-08-03 | Promote same-tree LID subwave-4 as guarded optimization three for the known stack. | Focused exact/path/fallback/counter gates pass; J16+HC-held-constant whole model is +10.18% at 16K with 0.14% control drift and has no >2% short midpoint regression; fully hashed LID-off/on proxy outputs match in all six layer/tensor cases. | accepted guarded |
-| 2026-08-03 | Promote RDNA2 IQ3_XXS J16 128-thread blocks as optimization four pending corpus/dispatch gates. | Exact focused outputs; IQ3 uniform/hot latency -16.08/-16.38%; whole-model +2.11/+2.37/+1.70/+1.69% at 512/2K/8K/16K after excluding graph-cold first-repetition inference. I64 regresses, I256 is unsupported, occupancy 1/3 is neutral. | accepted locally |
+| 2026-08-03 | Promote RDNA2 IQ3_XXS J16 128-thread blocks as optimization four. | Exact focused outputs; IQ3 uniform/hot -16.08/-16.38%; whole-model +2.11/+2.37/+1.70/+1.69% at 512/2K/8K/16K; natural-proxy gate `complete=1` (all six equal); compact rocprof dispatch shows IQ3 wavefronts 11,264→5,632. I64 regresses, I256 unsupported, occupancy 1/3 neutral. | accepted |
 | 2026-08-03 | Reject/defer production MTP for the exact-greedy DSV4 stack. | Production and n-max matrix diverge; rejection-only sequential replay fixes target-only continuation but not continued speculation; even zero-accept target-single advancement with full-state checkpoints later forks. No exact output or TG acceptance exists. | final deferred |
 
 ## 9. Open questions
@@ -771,9 +784,11 @@ for LID. The accepted post-LID attribution trace is
 `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T215054.700650714Z-kernel-trace-j16-hc-lid-16k-fdde31252a63-8573/`;
 the directly comparable pre-LID trace remains
 `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/`.
-These commands are a phase checkpoint, not the project's final completion
-command; production MTP remains blocked and optimization four's routed-MMQ
-mechanism remains to be screened.
+Optimization four is accepted (commits `803a41c37`/`fb2a0c85d`); production
+MTP remains explicitly deferred. These commands are a reproducible verification
+checkpoint, not a claim that every deferred roadmap item is complete: 32K/64K
+full-context A/B and the nonselected CSA/communication/MTP items are recorded
+as deferred elsewhere in this document.
 
 Current production diagnostic, rerunnable from the clean worktree (it is
 expected to exit nonzero while the recorded MTP divergence persists):
