@@ -67,6 +67,8 @@ Companion to ``docs/tessera-unified-db.md`` Phase 16.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from typing import Sequence
 
@@ -357,6 +359,17 @@ def migrate(db_path: str, verbose: bool = False) -> int:
     table's migration short-circuits when ``model_role`` is
     present).
 
+    Phase 16.7: when at least one table was actually migrated
+    (i.e. a pre-Phase-16 DB was opened for the first time),
+    the function also writes a ``<stem>.model_role_migration.json``
+    sidecar next to the duckdb file. The sidecar records
+    ``db_path``, ``model_role`` (always ``"trunk"`` for this
+    migration), ``ts``, and a per-table ``n_rows_at_migration``
+    count. The sidecar is the audit trail of what Phase 16
+    did to a legacy DB. Re-running on an already-migrated DB
+    is a no-op and the sidecar is not re-written (the
+    existing file is left in place).
+
     Parameters
     ----------
     db_path : str
@@ -389,6 +402,12 @@ def migrate(db_path: str, verbose: bool = False) -> int:
     con = duckdb.connect(db_path, read_only=False)
     try:
         total_backfilled = 0
+        # Phase 16.7: per-table migration log. One entry per
+        # table that actually needed the migration; the audit
+        # sidecar is emitted only when at least one entry
+        # lands here. Re-opens (no migration) leave the log
+        # empty and skip the sidecar.
+        migrated: list[tuple[str, int]] = []
         for table_name, create_new_sql, insert_select_sql in _TABLES:
             if not _table_exists(con, table_name):
                 # Fresh DB: the table doesn't exist yet. The
@@ -440,9 +459,99 @@ def migrate(db_path: str, verbose: bool = False) -> int:
             # 4. ALTER TABLE <name>__p16_new RENAME TO <name>.
             con.execute(f"ALTER TABLE {tmp} RENAME TO {table_name}")
             total_backfilled += n_rows
+            migrated.append((table_name, n_rows))
+        if migrated:
+            _write_migration_sidecar(db_path, migrated, verbose=verbose)
         return total_backfilled
     finally:
         con.close()
+
+
+def _sidecar_path(db_path: str) -> str:
+    """Compute the audit sidecar path. ``foo.duckdb`` ->
+    ``foo.model_role_migration.json``. The stem split is
+    Windows / POSIX portable (split at the last dot-after-slash).
+    In-memory ``:memory:`` returns an empty string; callers
+    must short-circuit on it.
+    """
+    if not db_path or db_path == ":memory:":
+        return ""
+    slash = max(db_path.rfind("/"), db_path.rfind("\\"))
+    dot = db_path.rfind(".")
+    if dot > slash and dot != -1:
+        stem = db_path[:dot]
+    else:
+        stem = db_path
+    return stem + ".model_role_migration.json"
+
+
+def _write_migration_sidecar(
+    db_path: str,
+    migrated: Sequence[tuple[str, int]],
+    verbose: bool = False,
+) -> None:
+    """Write the Phase 16.7 audit sidecar next to the duckdb
+    file. Format mirrors the C++ side (same JSON shape) so
+    downstream tools can read either side's output:
+
+        {
+            "db_path": "<path>",
+            "model_role": "trunk",
+            "ts": "YYYY-MM-DD HH:MM:SS",
+            "tables": [
+                {"name": "tensor_stats", "n_rows_at_migration": 42},
+                ...
+            ]
+        }
+
+    Atomic write (write to ``<sidecar>.tmp``, then ``os.replace``
+    onto the final name) so a crash mid-write cannot leave a
+    half-written sidecar on disk.
+    """
+    target = _sidecar_path(db_path)
+    if not target:
+        return
+    body = {
+        "db_path": db_path,
+        "model_role": "trunk",
+        # Use a second-precision UTC stamp; matches the C++
+        # side's ts_now_ts() format.
+        "ts": _now_iso_seconds(),
+        "tables": [
+            {"name": t, "n_rows_at_migration": n}
+            for t, n in migrated
+        ],
+    }
+    tmp = target + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(body, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, target)
+    except OSError as e:
+        # Sidecar is informational, not load-bearing. Log
+        # the failure but do not raise: the migration itself
+        # succeeded; only the audit trail is missing.
+        if verbose:
+            sys.stderr.write(
+                f"migrate_model_role: sidecar write failed "
+                f"({target}): {e}\n"
+            )
+        # Best-effort cleanup of the tmp file.
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _now_iso_seconds() -> str:
+    """UTC timestamp at second precision, matching the C++
+    side's ``ts_now_ts()`` format. Uses ``datetime`` (not
+    the stdlib's lower-level ``time``) so the value is
+    timezone-aware on every platform.
+    """
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _main(argv: Sequence[str]) -> int:

@@ -198,6 +198,18 @@ class TesseraDB:
         self._buffers: dict[str, TesseraDBBuffer] = {}
         self._buffer_lock = threading.Lock()
         self._closed = False
+        # Phase 16.7: per-component (model_role, name) covering
+        # index on the 7 unified tables. The composite PKs include
+        # model_role but the per-component query pattern
+        # ("WHERE model_role = ? AND name = ?") would otherwise
+        # scan the PK left-to-right; a secondary index lets
+        # DuckDB satisfy it with an index seek. The C++ side has
+        # the same statements in TS_QDB_SCHEMA_SQL; on a C++-open
+        # DB the indexes already exist, and the CREATE INDEX IF
+        # NOT EXISTS below is a no-op. Cached on the instance so
+        # we don't repeat the round-trip for every insert.
+        if not read_only:
+            self._ensure_unified_indexes()
 
     @classmethod
     def open(
@@ -1032,6 +1044,142 @@ class TesseraDB:
             buf.append(row)
         return len(rows)
 
+    # ---- Phase 16.7: per-component (model_role, name) covering index ----
+
+    def _ensure_unified_indexes(self) -> None:
+        """Create the 7 per-component covering indexes on the
+        unified-schema tables.
+
+        The composite PKs on the 7 affected tables
+        (``tensor_stats``, ``l3_outlier_summary``,
+        ``l4_probe_summary``, ``l5_plan_summary``,
+        ``l4_plan_outcome``, ``l5_outcome``, ``l5_weights``)
+        include ``model_role``, but the per-component query
+        pattern ("give me all `attn_q` rows for role=`dflash`")
+        would otherwise scan the PK left-to-right and walk every
+        (model_hash, model_role, name) tuple. A secondary index
+        on ``(model_role, name)`` (or ``(model_role, family)``
+        for ``l5_weights``) lets DuckDB satisfy the query with
+        an index seek.
+
+        The C++ side's ``ts_tessera_db_open()`` runs the same
+        ``CREATE INDEX IF NOT EXISTS`` statements on every open;
+        on a C++-created DB the indexes already exist and the
+        statements are no-ops. The mirror on the Python side
+        keeps a Python-only-opened DB on the same schema (e.g.
+        when the calibration pipeline opens a fresh DB before
+        the C++ side has touched it).
+
+        Idempotent and cheap: ``CREATE INDEX IF NOT EXISTS``
+        short-circuits when the index is already present. Cached
+        on the instance so the round-trip is paid once per
+        ``TesseraDB`` lifetime, not once per insert.
+
+        ``l5_weights`` is keyed on ``(model_role, family)`` (not
+        ``name``) because the l5_weights row is the per-family
+        retune verdict, not per-tensor.
+
+        On a fresh Python-only-opened DB, none of the 7 tables
+        exist yet (the C++ side owns the canonical schema
+        creation; the Python side only writes into it). The
+        helper probes ``information_schema.tables`` for each
+        table name and skips the missing ones - a missing
+        table is not an error, just "we will create the index
+        the next time the table is created".
+        """
+        if getattr(self, "_unified_indexes_ensured", False):
+            return
+        if self._read_only:
+            return
+        # (table, columns) pairs. Matches the C++ side's
+        # TS_QDB_SCHEMA_SQL index block. ``l5_weights`` is the
+        # one outlier: it has no `name` column (the row is per
+        # family), so the covering index is on
+        # (model_role, family).
+        index_specs = (
+            ("tensor_stats",       "model_role, name"),
+            ("l3_outlier_summary", "model_role, name"),
+            ("l4_probe_summary",   "model_role, name"),
+            ("l5_plan_summary",    "model_role, name"),
+            ("l4_plan_outcome",    "model_role, name"),
+            ("l5_outcome",         "model_role, name"),
+            ("l5_weights",         "model_role, family"),
+        )
+        # Probe existing tables + columns once. A fresh
+        # Python-only DB has none of the 7 tables; a
+        # pre-Phase-16 DB has the tables but without
+        # ``model_role`` (the migration's job to add). The
+        # helper only creates indexes for tables that have
+        # the indexed columns; missing tables and missing
+        # columns are both silent no-ops. The C++ side runs
+        # the migration as part of ``ts_tessera_db_open``;
+        # the Python side assumes the migration has been run
+        # (via ``migrate_model_role.migrate()``) before the
+        # open.
+        existing_tables = {
+            r[0]
+            for r in self._conn.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        # Probe columns for the existing tables. Cache the
+        # set of (table, column) pairs that exist; the
+        # index loop then asks "are both model_role and
+        # name (or model_role and family for l5_weights)
+        # present?" before issuing the CREATE INDEX.
+        existing_columns: dict[str, set[str]] = {}
+        if existing_tables:
+            placeholders = ", ".join(["?"] * len(existing_tables))
+            rows = self._conn.execute(
+                f"SELECT table_name, column_name FROM "
+                f"information_schema.columns "
+                f"WHERE table_schema = 'main' "
+                f"AND table_name IN ({placeholders})",
+                list(existing_tables),
+            ).fetchall()
+            for tname, cname in rows:
+                existing_columns.setdefault(tname, set()).add(cname)
+        for table, cols in index_specs:
+            if table not in existing_tables:
+                # Table does not exist yet; skip silently.
+                # The C++ side will create the table + index
+                # on the next open, and the next
+                # TesseraDB.open() on this same file will
+                # see the table and create the index.
+                continue
+            # model_role must exist (the migration's job
+            # to add); the other column (name / family)
+            # is part of the canonical schema so it is
+            # always present on a fully-created table.
+            tcols = existing_columns.get(table, set())
+            if "model_role" not in tcols:
+                # Pre-Phase-16 DB: the migration has not
+                # been run. Skip silently; the migration
+                # is a separate, explicit step on the
+                # Python side. Once ``migrate()`` runs and
+                # adds the column, the next TesseraDB.open()
+                # will pick the table up here and create
+                # the index.
+                continue
+            idx_name = _index_name_for(table, cols)
+            try:
+                self._conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} "
+                    f"ON {table}({cols})"
+                )
+            except Exception as e:
+                # Best-effort: log and continue so a single
+                # broken index does not block the whole open.
+                # The query will still work (just slower), and
+                # a subsequent C++ open will retry the index
+                # creation.
+                sys.stderr.write(
+                    f"tessera-db: CREATE INDEX {idx_name} "
+                    f"ON {table}({cols}) failed: {e}\n"
+                )
+        self._unified_indexes_ensured = True
+
     # ---- read API ----------------------------------------------------
 
     def query(self, sql: str) -> pl.DataFrame:
@@ -1124,3 +1272,42 @@ def _now_iso() -> str:
     but as a string DuckDB TIMESTAMP accepts."""
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _index_name_for(table: str, cols: str) -> str:
+    """Return a deterministic index name for a (table, columns) pair.
+
+    The C++ side uses ``TS_QDB_PHASE_16_7_INDEXES_SQL`` (see
+    tessera-quantize-db.cpp) which names the 7 indexes after
+    the table's *short* name. The mapping is fixed (the
+    short names are documented in the C++ side's
+    ``kTableIndex`` test fixture): ``tensor_stats`` ->
+    ``tensor_stats``, ``l3_outlier_summary`` ->
+    ``l3_outlier``, ``l4_probe_summary`` -> ``l4_probe``,
+    ``l5_plan_summary`` -> ``l5_plan``, ``l4_plan_outcome``
+    -> ``l4_outcome`` (NOT ``l4_plan``), ``l5_outcome`` ->
+    ``l5_outcome``, ``l5_weights`` -> ``l5_weights``.
+
+    The mapping is not derivable from a simple suffix-strip
+    rule (``l4_plan_outcome`` strips to ``l4_plan`` not
+    ``l4_outcome``), so the test_helpers use a lookup
+    table. ``l5_weights`` is the one outlier: it has no
+    ``name`` column, so the index is on (model_role,
+    family) and the name is ``idx_l5_weights_role_family``.
+    """
+    if table == "l5_weights":
+        return "idx_l5_weights_role_family"
+    short = {
+        "tensor_stats":       "tensor_stats",
+        "l3_outlier_summary": "l3_outlier",
+        "l4_probe_summary":   "l4_probe",
+        "l5_plan_summary":    "l5_plan",
+        "l4_plan_outcome":    "l4_outcome",
+        "l5_outcome":         "l5_outcome",
+    }.get(table)
+    if short is None:
+        # Unknown table: fall back to the full name. This
+        # is a no-op for the 7 affected tables; the lookup
+        # is here so a future addition is graceful.
+        short = table
+    return f"idx_{short}_role_name"
