@@ -8,6 +8,7 @@ import AppKit
 public struct OnboardingView: View {
     @AppStorage(TesseraSettingsKey.onboardingComplete) private var onboardingComplete = false
     @AppStorage(TesseraSettingsKey.modelDirectory) private var modelDirectory = TesseraSettingsDefault.modelDirectory
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var page = 0
 
     public var onComplete: () -> Void
@@ -170,10 +171,16 @@ public struct OnboardingView: View {
         }
     }
 
+    // HIG 2.7 / 3.6: under Reduce Motion, page turns switch instantly
+    // instead of animating.
+    private var pageTurnAnimation: Animation? {
+        reduceMotion ? nil : .default
+    }
+
     private var controls: some View {
         HStack {
             if page > 0 {
-                Button("Back") { withAnimation { page -= 1 } }
+                Button("Back") { withAnimation(pageTurnAnimation) { page -= 1 } }
                     .buttonStyle(.bordered)
             }
             Spacer()
@@ -185,7 +192,7 @@ public struct OnboardingView: View {
                 if page == pageCount - 1 {
                     finish()
                 } else {
-                    withAnimation { page += 1 }
+                    withAnimation(pageTurnAnimation) { page += 1 }
                 }
             }
             .buttonStyle(.borderedProminent)
