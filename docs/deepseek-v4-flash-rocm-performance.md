@@ -980,7 +980,7 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Use ROCTx selected regions for disk-safe target-only raw-decode profiling. | `35ee01b7e`: authoritative in-process monotonic boundaries surround accepted `test_gen` only; exact full-hash/stack/config contract; CSV kernel/copy/RCCL/HIP domains; fail-closed summarizer. Three independent reviews; selected-region smoke captured exactly 1 of 3 kernels. | accepted tooling |
 | 2026-08-04 | Stabilize profiles by increasing tg32 repetitions only; preserve attribution on unstable exit 4. | Default 5-profiled-rep 16K run missed at 6.385% MAD; 10-profiled-rep retry still missed at 6.511%. `667bc100a` keeps one discard and tg32; `09f575d10` emits scope-valid diagnostic attribution but marks throughput and CSA ineligible. | accepted policy/tooling |
 | 2026-08-04 | Do not select an M5.3 implementation branch from the first two 16K profiles. | Aggregate ranks disagree: quantized matmul 27.446% vs NCCL 23.020% in run A; NCCL 28.871% vs quantized matmul 26.842% in run B. All samples retained; per-repetition ranks are quantized 13/15 and NCCL 2/15. | unresolved; more evidence required |
-| 2026-08-04 | Correct every documented artifact prefix to `$HOME/llama-jobs`. | Final-monitor execution exposed the inherited impossible `$HOME/edwin/llama-jobs` expansion (`/home/edwin/edwin/...`). All 60 canonical occurrences now match the actual preserved directories. | accepted documentation fix |
+| 2026-08-04 | Correct every documented artifact prefix to `$HOME/llama-jobs`. | Final-monitor execution exposed the inherited impossible `$HOME/edwin/llama-jobs` expansion (`/home/edwin/edwin/...`). All 60 canonical occurrences now match the actual preserved directories. | accepted documentation fix `2c8bab656` |
 
 ## 10. Closed decisions and open questions
 
@@ -1203,7 +1203,9 @@ Repository implementation/evidence chain:
   7390b73d0 (M5.0/M5.1 acceptance record) ->
   35ee01b7e (selected-region target-only profile harness) ->
   667bc100a (repetition-only profile stabilization) ->
-  09f575d10 (unstable-attribution preservation + decode MMVQ classification)
+  09f575d10 (unstable-attribution preservation + decode MMVQ classification) ->
+  10ce4d660 (unresolved 16K profile evidence record) ->
+  2c8bab656 (actual `$HOME/llama-jobs` artifact paths)
 
 Raw-decode Ralph log:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
@@ -1267,7 +1269,7 @@ Purpose:
 - First fully hashed clean 16K run (`...T145326...35ee01b7edf9-6030`, five profiled tg32 reps) proved real domain emission and exact boundary scope but exited 4 at 6.385% profiled-wall MAD. Per policy, no tokens/discard changed; `667bc100a` permits repetition-only expansion.
 - The 11-raw/10-profiled retry (`...T150438...667bc100a5cc-32436`) also exited 4 at 6.511% wall MAD. Both runs preserve every sample, three GGUF and 53 DSO hashes, clean source, exact accepted runtime stack, all four trace domains, zero outside-boundary events, and 713,244 dispatches per repetition.
 - Offline classifier/parser `09f575d10` recognizes decode MMVQ and all `dsv4_hc_*` kernels and emits per-repetition ranks. Run A aggregate: other quantized matmul 27.446%, NCCL 23.020%; all five reps rank quantized first. Run B aggregate: NCCL 28.871%, quantized 26.842%; eight reps rank quantized, two rank NCCL due retained stalls. Flash/LID/TOP_K are only 3.3-3.8% / 2.4-2.8% / 1.7-1.9% at 16K.
-- Decision: no M5.3 branch selected. Quantized matvec and communication stay open; profiler throughput and CSA are explicitly ineligible. Exact comparison monitor is preserved in run B and returns the expected unresolved status. GPUs are idle and lock-free after both rejected runs.
+- Decision: no M5.3 branch selected. Quantized matvec and communication stay open; profiler throughput and CSA are explicitly ineligible. Exact comparison monitor is preserved in run B and returns the expected unresolved status. After fixing inherited artifact paths at `2c8bab656`, the exact parser-plus-comparison command, both non-GPU fixture suites, and the dry-run contract reran successfully; output is preserved as `final-monitor-rerun-2c8bab656.txt` in run B. HEAD was clean, no KFD PID existed, and the GPU lock was free.
 
 **Exact accepted GPU commands:**
 
