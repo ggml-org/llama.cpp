@@ -739,6 +739,8 @@ struct common_params {
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
     bool no_alloc = false; // Don't allocate model buffers
+
+    bool is_gen_docs = false; // whether we are running inside llama-gen-docs
 };
 
 // call once at the start of a program if it uses libcommon
@@ -862,6 +864,15 @@ std::string string_from(const struct llama_context * ctx, const std::vector<llam
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
 
 bool glob_match(const std::string & pattern, const std::string & str);
+
+//
+// Environment utils
+//
+
+// portable environment access, an unset variable reads as an empty string
+// and setting an empty value unsets the variable
+std::string common_get_env(const std::string & name);
+void        common_set_env(const std::string & name, const std::string & value);
 
 //
 // Filesystem utils
