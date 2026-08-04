@@ -934,6 +934,15 @@ int ts_tessera_db_list_l5_weights(ts_tessera_db * db,
 // mean_delta_mse and mean_sensitivity are the per-row means over
 // the same set. Empty `family` means "all families"; the caller
 // picks the most-converged one to gate on.
+//
+// Note: the DuckDB amalgamation build used here does NOT load
+// the core_functions extension, so SUM and AVG are unavailable.
+// The aggregate is split into two COUNT(*) FILTER (WHERE ...) calls
+// (FILTER is a SQL standard, built into DuckDB's base parser) and
+// hit_rate is computed in C++ as the ratio. mean_delta_mse /
+// mean_sensitivity are returned as 0 for now; if the dispatch
+// starts to act on them, we can re-introduce the aggregates via
+// a manual sum / count.
 
 int ts_tessera_db_l5_outcome_stats_for(ts_tessera_db * db,
                                        const std::string & model_hash,
@@ -947,10 +956,7 @@ int ts_tessera_db_l5_outcome_stats_for(ts_tessera_db * db,
     std::ostringstream q;
     q << "SELECT "
          "COUNT(*) AS n_rows, "
-         "SUM(CASE WHEN plan_accepted THEN 1 ELSE 0 END) AS n_accepted, "
-         "AVG(CASE WHEN plan_accepted THEN 1.0 ELSE 0.0 END) AS hit_rate, "
-         "AVG(delta_mse) AS mean_delta_mse, "
-         "AVG(sensitivity_score) AS mean_sensitivity "
+         "COUNT(*) FILTER (WHERE plan_accepted) AS n_accepted "
          "FROM l5_outcome WHERE model_hash = '"
       << sql_escape(model_hash) << "'";
     if (!family.empty()) {
@@ -958,18 +964,19 @@ int ts_tessera_db_l5_outcome_stats_for(ts_tessera_db * db,
     }
     try {
         auto res = db->conn->Query(q.str());
-        if (res->HasError()) return 1;
+        if (res->HasError()) {
+            return 1;
+        }
         if (res->RowCount() == 0) return 0;
         out->n_rows = (int32_t) res->GetValue(0, 0).GetValue<int64_t>();
-        // SUM returns NULL when no rows; protect with IsNull check.
         auto na = res->GetValue(1, 0);
         out->n_accepted = na.IsNull() ? 0 : (int32_t) na.GetValue<int64_t>();
-        auto hr = res->GetValue(2, 0);
-        out->hit_rate = hr.IsNull() ? 0.0 : hr.GetValue<double>();
-        auto md = res->GetValue(3, 0);
-        out->mean_delta_mse = md.IsNull() ? 0.0 : md.GetValue<double>();
-        auto ms = res->GetValue(4, 0);
-        out->mean_sensitivity = ms.IsNull() ? 0.0 : ms.GetValue<double>();
+        // hit_rate computed in C++ to avoid the SUM/AVG core_functions
+        // dependency. mean_delta_mse / mean_sensitivity stay 0 here;
+        // the dispatch's converged-fast gate only reads hit_rate.
+        out->hit_rate = (out->n_rows > 0)
+            ? (double) out->n_accepted / (double) out->n_rows
+            : 0.0;
     } catch (...) {
         return 1;
     }

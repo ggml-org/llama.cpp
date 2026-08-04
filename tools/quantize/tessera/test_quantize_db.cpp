@@ -322,6 +322,173 @@ int main(int argc, char ** argv) {
         int64_t n_source = ts_tessera_db_debug_count(
             db, "SELECT COUNT(*) FROM l5_weights WHERE retune_source = 'ols_slope_v1'");
         CHECK(n_source == 2, "retune_source tag is preserved across both rows");
+
+        // ---- requant_budget_bits: round-trip the new BIGINT column ----
+        // Phase 14 contract: C++ writes a budget when l5_retune.py
+        // projects one; the C++ side reads it but does not act on it
+        // yet. The -1 sentinel in the struct maps to NULL in DuckDB;
+        // a real value round-trips as itself.
+        {
+            // First: NULL round-trip via the -1 sentinel.
+            ts_tessera_db_l5_weight null_row = ffn;   // copy the ffn row
+            null_row.family = "ffn_gate";
+            null_row.requant_budget_bits = -1;        // NULL
+            CHECK(ts_tessera_db_upsert_l5_weight(db, null_row, &err) == 0,
+                  ("upsert with NULL budget failed: " + err).c_str());
+            int64_t n_null = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_weights WHERE "
+                    "model_hash = 'hash_weights' AND family = 'ffn_gate' "
+                    "AND requant_budget_bits IS NULL");
+            CHECK(n_null == 1, "ffn_gate requant_budget_bits is NULL after upsert");
+
+            // Second: real value round-trip.
+            null_row.requant_budget_bits = 4096;
+            CHECK(ts_tessera_db_upsert_l5_weight(db, null_row, &err) == 0,
+                  ("upsert with real budget failed: " + err).c_str());
+            int64_t n_val = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_weights WHERE "
+                    "model_hash = 'hash_weights' AND family = 'ffn_gate' "
+                    "AND requant_budget_bits = 4096");
+            CHECK(n_val == 1, "ffn_gate requant_budget_bits = 4096 after upsert");
+
+            // Third: attn_q stays at the second-write (no budget set, NULL).
+            int64_t n_attn_null = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_weights WHERE "
+                    "model_hash = 'hash_weights' AND family = 'attn_q' "
+                    "AND requant_budget_bits IS NULL");
+            CHECK(n_attn_null == 1, "attn_q requant_budget_bits is NULL (untouched)");
+
+            // Fourth: zero is a valid budget (zero-budget edge case),
+            // distinguishable from NULL.
+            null_row.requant_budget_bits = 0;
+            CHECK(ts_tessera_db_upsert_l5_weight(db, null_row, &err) == 0,
+                  "upsert with zero budget");
+            int64_t n_zero = ts_tessera_db_debug_count(
+                db, "SELECT COUNT(*) FROM l5_weights WHERE "
+                    "model_hash = 'hash_weights' AND family = 'ffn_gate' "
+                    "AND requant_budget_bits = 0");
+            CHECK(n_zero == 1, "zero budget is preserved (not collapsed to NULL)");
+        }
+    }
+
+    // ---- ts_tessera_db_list_l5_weights: typed reader for the GA-prep ----
+    // The dispatch's GA-prep walk uses this to bias the GA's initial
+    // (alpha, clip) seed per family. Verifies:
+    //   * empty family arg returns all families for the model
+    //   * non-empty family arg returns just that family
+    //   * entries are ordered by hit_rate DESC
+    //   * requant_budget_bits round-trips (-1 sentinel -> NULL -> -1)
+    //   * unknown model_hash returns an empty list (no rows)
+    {
+        // The ffn_gate row above has requant_budget_bits = 0 (set
+        // just above). Re-upsert both rows with explicit values
+        // for a clean list-ordering assertion.
+        ts_tessera_db_l5_weight a;
+        a.model_hash     = "hash_list";
+        a.family         = "attn_q";
+        a.w_imatrix      = 0.40;
+        a.w_gradient     = 0.40;
+        a.w_layer        = 0.20;
+        a.bias           = -0.0005;
+        a.n_samples      = 100;
+        a.in_sample_loss = 0.0008;
+        a.hit_rate       = 0.85;
+        a.requant_budget_bits = 2048;
+        a.retune_source  = "ols_slope_v1";
+        CHECK(ts_tessera_db_upsert_l5_weight(db, a, &err) == 0, "list upsert a");
+
+        ts_tessera_db_l5_weight b;
+        b.model_hash     = "hash_list";
+        b.family         = "ffn_gate";
+        b.w_imatrix      = 0.50;
+        b.w_gradient     = 0.30;
+        b.w_layer        = 0.20;
+        b.bias           = 0.0010;
+        b.n_samples      = 60;
+        b.in_sample_loss = 0.0012;
+        b.hit_rate       = 0.97;   // higher than attn_q
+        b.requant_budget_bits = -1; // NULL
+        b.retune_source  = "ols_slope_v1";
+        CHECK(ts_tessera_db_upsert_l5_weight(db, b, &err) == 0, "list upsert b");
+
+        // Empty family = all families.
+        ts_tessera_db_l5_weight_list all;
+        CHECK(ts_tessera_db_list_l5_weights(db, "hash_list", "", &all) == 0,
+              "list_l5_weights (all) failed");
+        CHECK(all.entries.size() == 2, "list returns 2 entries");
+        // hit_rate DESC: ffn_gate (0.97) first, attn_q (0.85) second.
+        CHECK(all.entries[0].family == "ffn_gate",
+              "first entry is the higher-hit_rate family");
+        CHECK(all.entries[0].hit_rate > all.entries[1].hit_rate,
+              "ordering is hit_rate DESC");
+        CHECK(all.entries[0].requant_budget_bits == -1,
+              "ffn_gate round-trips NULL -> -1");
+        CHECK(all.entries[1].requant_budget_bits == 2048,
+              "attn_q round-trips 2048");
+        CHECK(all.entries[1].n_samples == 100,
+              "attn_q n_samples round-trips");
+        CHECK(all.entries[1].retune_source == "ols_slope_v1",
+              "attn_q retune_source round-trips");
+
+        // Non-empty family = single entry.
+        ts_tessera_db_l5_weight_list one;
+        CHECK(ts_tessera_db_list_l5_weights(db, "hash_list", "attn_q", &one) == 0,
+              "list_l5_weights (single) failed");
+        CHECK(one.entries.size() == 1, "single-family filter returns 1");
+        CHECK(one.entries[0].family == "attn_q", "filter is exact");
+
+        // Unknown model_hash -> empty.
+        ts_tessera_db_l5_weight_list none;
+        CHECK(ts_tessera_db_list_l5_weights(db, "no_such_model", "", &none) == 0,
+              "list_l5_weights (unknown) failed");
+        CHECK(none.entries.empty(), "unknown model returns 0 entries");
+
+        // Unknown family on a known model -> empty.
+        ts_tessera_db_l5_weight_list none_fam;
+        CHECK(ts_tessera_db_list_l5_weights(db, "hash_list", "router", &none_fam) == 0,
+              "list_l5_weights (unknown family) failed");
+        CHECK(none_fam.entries.empty(), "unknown family on known model -> 0");
+
+        // Empty model_hash is a no-op (returns 0, no error).
+        ts_tessera_db_l5_weight_list empty_mh;
+        CHECK(ts_tessera_db_list_l5_weights(db, "", "", &empty_mh) == 0,
+              "list_l5_weights (empty model_hash) failed");
+        CHECK(empty_mh.entries.empty(), "empty model_hash -> 0 entries");
+    }
+
+    // ---- ts_tessera_db_l5_outcome_stats_for: the converged-fast gate ----
+    // The dispatch's early-exit uses this to ask "does l5_outcome
+    // already say this model converges?" The l5_outcome table is
+    // Python-written (tools/tessera/l5_outcome.py), so this C++
+    // test exercises the production path on a model that has no
+    // l5_outcome rows yet: n_rows=0, n_accepted=0, hit_rate=0.
+    // The non-empty case (hit_rate > 0.95) is covered by
+    // test_tessera_l5_outcome.py on the Python side and by the
+    // new test_l5_dispatch warm-start path.
+    {
+        ts_tessera_db_l5_outcome_stats s;
+        CHECK(ts_tessera_db_l5_outcome_stats_for(db, "no_l5o_yet", "attn_q",
+                                                 &s) == 0,
+              "l5_outcome_stats_for (no rows) failed");
+        CHECK(s.n_rows == 0, "n_rows=0 for empty model");
+        CHECK(s.n_accepted == 0, "n_accepted=0 for empty model");
+        CHECK(s.hit_rate == 0.0, "hit_rate=0 for empty model");
+        CHECK(s.family == "attn_q", "family echo");
+
+        // Empty family = all-families aggregate (still 0 rows).
+        ts_tessera_db_l5_outcome_stats s_all;
+        CHECK(ts_tessera_db_l5_outcome_stats_for(db, "no_l5o_yet", "",
+                                                 &s_all) == 0,
+              "l5_outcome_stats_for (empty family) failed");
+        CHECK(s_all.n_rows == 0, "n_rows=0 across families");
+        CHECK(s_all.family.empty(), "empty family arg echoes empty");
+
+        // Empty model_hash is a no-op (returns 0, no error).
+        ts_tessera_db_l5_outcome_stats s_empty;
+        CHECK(ts_tessera_db_l5_outcome_stats_for(db, "", "attn_q",
+                                                 &s_empty) == 0,
+              "l5_outcome_stats_for (empty model) failed");
+        CHECK(s_empty.n_rows == 0, "empty model -> 0 rows");
     }
 
     if (failures == 0) {
