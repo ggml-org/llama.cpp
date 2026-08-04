@@ -1,0 +1,2880 @@
+commit 45fec50982fd3080450996b74a8c58ed6389ae1e
+Author:     Tessera Track-E Agent <agent@tessera.local>
+AuthorDate: Sun Aug 2 15:21:30 2026 -0700
+Commit:     Tessera Track-E Agent <agent@tessera.local>
+CommitDate: Sun Aug 2 15:21:30 2026 -0700
+
+    evolve-baseline/w3: restore untracked tessera WIP (server + ggml-ane) for buildable tree
+
+diff --git a/ggml/include/ggml-ane.h b/ggml/include/ggml-ane.h
+new file mode 100644
+index 000000000..fd0a38024
+--- /dev/null
++++ b/ggml/include/ggml-ane.h
+@@ -0,0 +1,59 @@
++// ggml-ane: Apple Neural Engine backend (Core ML public path).
++//
++// Backend registration + IOSurface-backed buffer type (slice 1) plus op
++// dispatch and graph compute (slice 2). Composite transformer ops whose
++// decompositions live in pre-compiled .mlmodelc bundles are routed to Core
++// ML; simple element-wise native ops also have a host-mapped fallback path
++// so the backend is exercisable without a bundle bound.
++
++#pragma once
++
++#include "ggml.h"
++#include "ggml-backend.h"
++
++#include <stddef.h>
++#include <stdbool.h>
++
++struct ggml_tensor;
++struct ggml_cgraph;
++struct ggml_backend_ane_program;
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// Registry entry exposed to ggml-backend-reg.cpp. Returns the same singleton
++// reg on every call; resolves to nullptr on non-Apple-Silicon builds.
++GGML_BACKEND_API ggml_backend_reg_t ggml_backend_ane_reg(void);
++
++// True if backend was created by the ANE registry. Mirrors
++// ggml_backend_is_metal so callers can identify ANE backends at runtime.
++GGML_BACKEND_API bool ggml_backend_is_ane(ggml_backend_t backend);
++
++// Load a pre-compiled Core ML program directory (.mlmodelc) and bind it to
++// the ANE backend device. The bundle supplies the composite-op decompositions
++// (RMS norm, RoPE, SDPA, TILE640 dequant) and the matmul kernels; until a
++// program is bound the backend only accepts simple element-wise native ops.
++//
++// `function_name` selects a single entry point from a multifunction bundle
++// (nullptr/"" loads the default function).
++//
++// Returns an opaque program handle (refcounted) or nullptr on load/warmup
++// failure. The handle is independent of any specific ggml_backend_t; attach
++// it to an ANE backend with ggml_backend_ane_set_program.
++GGML_BACKEND_API struct ggml_backend_ane_program * ggml_backend_ane_program_load_from_dir(
++        const char * mlmodelc_dir,
++        const char * function_name);
++
++GGML_BACKEND_API void ggml_backend_ane_program_free(
++        struct ggml_backend_ane_program * program);
++
++// Bind a loaded program to a specific backend instance. Pass nullptr to
++// detach. Returns true on success.
++GGML_BACKEND_API bool ggml_backend_ane_set_program(
++        ggml_backend_t backend,
++        struct ggml_backend_ane_program * program);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/ggml/src/ggml-ane/CMakeLists.txt b/ggml/src/ggml-ane/CMakeLists.txt
+new file mode 100644
+index 000000000..87457d82d
+--- /dev/null
++++ b/ggml/src/ggml-ane/CMakeLists.txt
+@@ -0,0 +1,35 @@
++# The ANE backend targets Apple Silicon only (IOSurface + Core ML). Fail fast
++# if someone enables GGML_ANE on another platform instead of silently dropping it.
++if (NOT APPLE)
++    message(FATAL_ERROR "GGML_ANE requires Apple Silicon (IOSurface / Core ML).")
++endif()
++
++find_library(FOUNDATION_LIBRARY Foundation  REQUIRED)
++find_library(IO_SURFACE_FRAMEWORK IOSurface  REQUIRED)
++find_library(COREML_FRAMEWORK    CoreML     REQUIRED)
++find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
++
++message(STATUS "ANE (Core ML) backend enabled")
++
++ggml_add_backend_library(ggml-ane
++                         ggml-ane.mm
++                        )
++
++target_link_libraries(ggml-ane PRIVATE
++                      ${FOUNDATION_LIBRARY}
++                      ${IO_SURFACE_FRAMEWORK}
++                      ${COREML_FRAMEWORK}
++                      ${ACCELERATE_FRAMEWORK}
++                      )
++
++# Smoke test: builds a tiny graph of supported ops and checks the output
++# against a CPU reference. Also exercises the Core ML program loader when
++# --bundle <mlmodelc dir> is passed.
++if (GGML_ANE_BUILD_TEST)
++    add_executable(test-ggml-ane test-ggml-ane.cpp)
++    # ggml (the loader/registration shim) provides the backend API and the
++    # dynamic loader; ggml-base provides the allocator and tensor helpers.
++    target_link_libraries(test-ggml-ane PRIVATE ggml ggml-base)
++    set_target_properties(test-ggml-ane PROPERTIES
++                          RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
++endif()
+diff --git a/ggml/src/ggml-ane/ggml-ane.mm b/ggml/src/ggml-ane/ggml-ane.mm
+new file mode 100644
+index 000000000..fc6ef6453
+--- /dev/null
++++ b/ggml/src/ggml-ane/ggml-ane.mm
+@@ -0,0 +1,1323 @@
++#include "ggml-ane.h"
++
++#include "ggml.h"
++#include "ggml-impl.h"
++#include "ggml-backend-impl.h"
++
++#import <CoreML/CoreML.h>
++#import <Foundation/Foundation.h>
++#import <IOSurface/IOSurface.h>
++
++#include <Accelerate/Accelerate.h>
++
++#include <atomic>
++#include <cstdlib>
++#include <cstring>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++#define GGML_ANE_NAME "ANE"
++
++// IOSurface page alignment used by common/ane-mtp.mm. All ANE tensor I/O goes
++// through IOSurface shared memory, so every allocation must be a multiple of
++// this page size.
++static const size_t GGML_ANE_PAGE = 16 * 1024;
++
++// Minimum IOSurface allocation. Orion constraint #4: allocations below ~49 KB
++// compile but fail at evaluation (ANE error 0x1d). 64 KB is the next 16 KB
++// page multiple that clears the 49 KB floor, so use it for every buffer.
++static const size_t GGML_ANE_MIN_ALLOC = 64 * 1024;
++
++// Round `size` up to the IOSurface page, then enforce the 64 KB ANE floor.
++static size_t ggml_ane_round_size(size_t size) {
++    size_t rounded = ((size + GGML_ANE_PAGE - 1) / GGML_ANE_PAGE) * GGML_ANE_PAGE;
++    if (rounded < GGML_ANE_MIN_ALLOC) {
++        rounded = GGML_ANE_MIN_ALLOC;
++    }
++    return rounded;
++}
++
++// forward declaration
++static bool ggml_backend_buffer_is_ane(ggml_backend_buffer_t buffer);
++
++////////////////////////////////////////////////////////////////////////////////
++// buffer context: one locked IOSurface per ggml_backend_buffer
++////////////////////////////////////////////////////////////////////////////////
++
++struct ggml_backend_ane_buffer_context {
++    IOSurfaceRef surface = nullptr;
++    void *       base    = nullptr;
++    size_t       size    = 0;
++
++    ~ggml_backend_ane_buffer_context() {
++        if (surface) {
++            IOSurfaceUnlock(surface, 0, nullptr);
++            CFRelease(surface);
++            surface = nullptr;
++        }
++        base = nullptr;
++    }
++};
++
++static ggml_backend_ane_buffer_context * ggml_backend_ane_buffer_context_alloc(size_t size) {
++    size_t rounded = ggml_ane_round_size(size);
++
++    // Flat 1 x rounded IOSurface, matching common/ane-mtp.mm. The ANE reads a
++    // flat allocation as packed [1, C, 1, S] (Orion #20); the host writes
++    // packed data at the buffer start and the ANE compiler manages the rest.
++    NSDictionary * properties = @{
++        (id) kIOSurfaceWidth:          @(rounded),
++        (id) kIOSurfaceHeight:         @1,
++        (id) kIOSurfaceBytesPerElement:@1,
++        (id) kIOSurfaceBytesPerRow:    @(rounded),
++        (id) kIOSurfaceAllocSize:      @(rounded),
++    };
++
++    IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef) properties);
++    if (!surface) {
++        GGML_LOG_ERROR("%s: IOSurfaceCreate failed for %zu bytes\n", __func__, rounded);
++        return nullptr;
++    }
++
++    if (IOSurfaceLock(surface, 0, nullptr) != kIOReturnSuccess) {
++        GGML_LOG_ERROR("%s: IOSurfaceLock failed\n", __func__);
++        CFRelease(surface);
++        return nullptr;
++    }
++
++    void * base = IOSurfaceGetBaseAddress(surface);
++    if (!base) {
++        GGML_LOG_ERROR("%s: IOSurfaceGetBaseAddress returned null\n", __func__);
++        IOSurfaceUnlock(surface, 0, nullptr);
++        CFRelease(surface);
++        return nullptr;
++    }
++
++    auto * ctx = new ggml_backend_ane_buffer_context;
++    ctx->surface = surface;
++    ctx->base    = base;
++    ctx->size    = rounded;
++    return ctx;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// buffer vtable
++////////////////////////////////////////////////////////////////////////////////
++
++static void ggml_backend_ane_buffer_free_buffer(ggml_backend_buffer_t buffer) {
++    ggml_backend_ane_buffer_context * ctx = (ggml_backend_ane_buffer_context *) buffer->context;
++    delete ctx;
++}
++
++static void * ggml_backend_ane_buffer_get_base(ggml_backend_buffer_t buffer) {
++    ggml_backend_ane_buffer_context * ctx = (ggml_backend_ane_buffer_context *) buffer->context;
++    return ctx->base;
++}
++
++static void ggml_backend_ane_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
++    GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
++    GGML_UNUSED(buffer);
++
++    // offset is relative to the tensor, not the buffer. tensor->data already
++    // points at this tensor's slot inside the locked IOSurface, so write there.
++    // The IOSurface stays locked for the buffer lifetime; ordering against ANE
++    // reads is the caller's responsibility (via the event vtable, later).
++    memcpy((char *) tensor->data + offset, data, size);
++}
++
++static void ggml_backend_ane_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
++    GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
++    GGML_UNUSED(buffer);
++
++    memcpy(data, (const char *) tensor->data + offset, size);
++}
++
++static void ggml_backend_ane_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
++    GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
++    GGML_UNUSED(buffer);
++
++    memset((char *) tensor->data + offset, value, size);
++}
++
++static bool ggml_backend_ane_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
++    // Slice 1 only needs the host-visible memcpy path. dst lives in this ANE
++    // buffer; src may be in any buffer type. ANE-to-ANE copies are also served
++    // by this path because both sides are CPU-mapped while locked.
++    GGML_UNUSED(buffer);
++
++    if (!ggml_are_same_shape(src, dst)) {
++        return false;
++    }
++
++    size_t nbytes = ggml_nbytes(src);
++    // ggml_backend_buffer_get_base handles views via the buffer context.
++    memcpy((char *) dst->data, src->data, nbytes);
++    return true;
++}
++
++static void ggml_backend_ane_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
++    ggml_backend_ane_buffer_context * ctx = (ggml_backend_ane_buffer_context *) buffer->context;
++    memset(ctx->base, value, ctx->size);
++}
++
++static ggml_backend_buffer_i ggml_backend_ane_buffer_i = {
++    /* .free_buffer   = */ ggml_backend_ane_buffer_free_buffer,
++    /* .get_base      = */ ggml_backend_ane_buffer_get_base,
++    /* .init_tensor   = */ NULL,
++    /* .memset_tensor = */ ggml_backend_ane_buffer_memset_tensor,
++    /* .set_tensor    = */ ggml_backend_ane_buffer_set_tensor,
++    /* .get_tensor    = */ ggml_backend_ane_buffer_get_tensor,
++    /* .set_tensor_2d = */ NULL,
++    /* .get_tensor_2d = */ NULL,
++    /* .cpy_tensor    = */ ggml_backend_ane_buffer_cpy_tensor,
++    /* .clear         = */ ggml_backend_ane_buffer_clear,
++    /* .reset         = */ NULL,
++};
++
++static bool ggml_backend_buffer_is_ane(ggml_backend_buffer_t buffer) {
++    return buffer->iface.free_buffer == ggml_backend_ane_buffer_free_buffer;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// buffer type
++////////////////////////////////////////////////////////////////////////////////
++
++static const char * ggml_backend_ane_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
++    return GGML_ANE_NAME;
++
++    GGML_UNUSED(buft);
++}
++
++static ggml_backend_buffer_t ggml_backend_ane_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
++    ggml_backend_ane_buffer_context * ctx = ggml_backend_ane_buffer_context_alloc(size);
++    if (!ctx) {
++        return nullptr;
++    }
++
++    // Report the requested size (not the IOSurface-rounded size) so the
++    // allocator bookkeeping matches what callers asked for. The backing store
++    // is always at least GGML_ANE_MIN_ALLOC.
++    return ggml_backend_buffer_init(buft, ggml_backend_ane_buffer_i, ctx, size);
++}
++
++static size_t ggml_backend_ane_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
++    // IOSurface allocations are page aligned and the first tensor in a buffer
++    // is placed at the buffer base, so tensor offsets within a buffer must
++    // also be page aligned.
++    return GGML_ANE_PAGE;
++
++    GGML_UNUSED(buft);
++}
++
++static size_t ggml_backend_ane_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
++    return SIZE_MAX;
++
++    GGML_UNUSED(buft);
++}
++
++static size_t ggml_backend_ane_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
++    // Tensor-local allocation size follows ggml's default (the tensor's byte
++    // footprint). The 64 KB floor and page rounding are applied once when the
++    // containing buffer is allocated.
++    return ggml_nbytes(tensor);
++
++    GGML_UNUSED(buft);
++}
++
++static bool ggml_backend_ane_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
++    // IOSurface backing is not in the standard CPU address space without an
++    // explicit lock/map. Returning false keeps the scheduler from assuming
++    // zero-cost host access (deep-study Section 4.5 recommendation 4).
++    return false;
++
++    GGML_UNUSED(buft);
++}
++
++static ggml_backend_buffer_type_t ggml_backend_ane_buffer_type(void) {
++    static ggml_backend_buffer_type buft;
++    static bool initialized = false;
++
++    {
++        static std::mutex mutex;
++        std::lock_guard<std::mutex> lock(mutex);
++
++        if (!initialized) {
++            buft = {
++                /* .iface = */ {
++                    /* .get_name       = */ ggml_backend_ane_buffer_type_get_name,
++                    /* .alloc_buffer   = */ ggml_backend_ane_buffer_type_alloc_buffer,
++                    /* .get_alignment  = */ ggml_backend_ane_buffer_type_get_alignment,
++                    /* .get_max_size   = */ ggml_backend_ane_buffer_type_get_max_size,
++                    /* .get_alloc_size = */ ggml_backend_ane_buffer_type_get_alloc_size,
++                    /* .is_host        = */ ggml_backend_ane_buffer_type_is_host,
++                },
++                /* .device  = */ nullptr, // wired in during device init
++                /* .context = */ nullptr,
++            };
++
++            initialized = true;
++        }
++    }
++
++    return &buft;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Core ML program runner
++//
++// Self-contained Core ML loader + predictor. It reuses the IOSurface-backed
++// arena and MLMultiArray wrapping patterns from common/ane-mtp.mm but does
++// not call into common_ane_mtp_* because those are coupled to llama_context
++// and GGUF embedding at the wrong layer for a ggml backend. The ggml-ane
++// dylib links only libggml-base and system frameworks (Foundation, IOSurface,
++// CoreML, Accelerate); linking common/llama here would invert the dependency
++// graph (a leaf backend depending on the high-level application libraries).
++//
++// One program = one compiled .mlmodelc directory, one Core ML function, and
++// its own serial dispatch queue for ordering predictions (deep-study Section
++// 4.3.2). Inputs/outputs are materialized in the host-mapped IOSurface arena
++// and wrapped zero-copy into MLMultiArray with a nil deallocator.
++
++static size_t ggml_ane_multi_array_element_size(MLMultiArrayDataType type) {
++    switch (type) {
++        case MLMultiArrayDataTypeFloat16: return sizeof(ggml_fp16_t);
++        case MLMultiArrayDataTypeFloat32: return sizeof(float);
++        case MLMultiArrayDataTypeInt32:   return sizeof(int32_t);
++        default:                          return 0;
++    }
++}
++
++static NSArray<NSNumber *> * ggml_ane_contiguous_strides(NSArray<NSNumber *> * shape) {
++    NSMutableArray<NSNumber *> * result = [NSMutableArray arrayWithCapacity:shape.count];
++    NSUInteger stride = 1;
++    for (NSInteger i = (NSInteger) shape.count - 1; i >= 0; --i) {
++        [result insertObject:@(stride) atIndex:0];
++        stride *= shape[(NSUInteger) i].unsignedIntegerValue;
++    }
++    return result;
++}
++
++static size_t ggml_ane_shape_count(NSArray<NSNumber *> * shape) {
++    size_t count = 1;
++    for (NSNumber * dimension in shape) {
++        count *= dimension.unsignedIntegerValue;
++    }
++    return count;
++}
++
++// Flat host-mapped arena slot. IOSurface backing satisfies the ANE 64-byte
++// alignment and 49 KB floor (Orion constraints #4 and #20). Reuses the
++// reserve-on-grow policy from common_ane_mtp_arena_buffer.
++struct ggml_ane_arena_slot {
++    IOSurfaceRef surface = nullptr;
++    void *       data    = nullptr;
++    size_t       capacity = 0;
++
++    ~ggml_ane_arena_slot() {
++        if (surface) {
++            IOSurfaceUnlock(surface, 0, nullptr);
++            CFRelease(surface);
++            surface = nullptr;
++        }
++        data = nullptr;
++    }
++
++    bool reserve(size_t size) {
++        if (capacity >= size) {
++            return true;
++        }
++        size_t rounded = ((size + GGML_ANE_PAGE - 1) / GGML_ANE_PAGE) * GGML_ANE_PAGE;
++        if (rounded < GGML_ANE_MIN_ALLOC) {
++            rounded = GGML_ANE_MIN_ALLOC;
++        }
++        NSDictionary * properties = @{
++            (id) kIOSurfaceWidth:          @(rounded),
++            (id) kIOSurfaceHeight:         @1,
++            (id) kIOSurfaceBytesPerElement:@1,
++            (id) kIOSurfaceBytesPerRow:    @(rounded),
++            (id) kIOSurfaceAllocSize:      @(rounded),
++        };
++        IOSurfaceRef replacement = IOSurfaceCreate((CFDictionaryRef) properties);
++        if (!replacement || IOSurfaceLock(replacement, 0, nullptr) != kIOReturnSuccess) {
++            if (replacement) {
++                CFRelease(replacement);
++            }
++            return false;
++        }
++        void * replacement_data = IOSurfaceGetBaseAddress(replacement);
++        if (!replacement_data) {
++            IOSurfaceUnlock(replacement, 0, nullptr);
++            CFRelease(replacement);
++            return false;
++        }
++        if (surface) {
++            IOSurfaceUnlock(surface, 0, nullptr);
++            CFRelease(surface);
++        }
++        surface = replacement;
++        data    = replacement_data;
++        capacity = rounded;
++        return true;
++    }
++};
++
++struct ggml_backend_ane_program {
++    MLModel *          model        = nil;
++    MLState *          state        = nil;
++    dispatch_queue_t   queue        = nullptr;
++    std::string        source_path;
++    std::string        function_name;
++    std::atomic<bool>  warm         {false};
++    std::mutex         arena_mutex;
++    std::unordered_map<std::string, std::unique_ptr<ggml_ane_arena_slot>> arena;
++
++    ~ggml_backend_ane_program() {
++        @autoreleasepool {
++            state = nil;
++            model = nil;
++            queue = nullptr;
++        }
++    }
++
++    // Get (creating if needed) an arena slot of the right byte size, wrapped
++    // as a zero-copy MLMultiArray. The arena is reused across calls; only the
++    // first call for a given (name, shape, dtype) pays the IOSurface cost.
++    MLMultiArray * array_for(const std::string & name,
++                             NSArray<NSNumber *> * shape,
++                             MLMultiArrayDataType type,
++                             NSError ** error) {
++        const size_t esize = ggml_ane_multi_array_element_size(type);
++        if (esize == 0) {
++            return nil;
++        }
++        const size_t bytes = ggml_ane_shape_count(shape) * esize;
++        std::lock_guard<std::mutex> lock(arena_mutex);
++        auto & slot = arena[name];
++        if (!slot) {
++            slot = std::make_unique<ggml_ane_arena_slot>();
++        }
++        if (!slot->reserve(bytes)) {
++            return nil;
++        }
++        return [[MLMultiArray alloc]
++            initWithDataPointer:slot->data
++                          shape:shape
++                       dataType:type
++                        strides:ggml_ane_contiguous_strides(shape)
++                    deallocator:nil
++                          error:error];
++    }
++};
++
++// Warm the loaded function with zeroed inputs sized from the model's own
++// input description. Mirrors warm_model() in common/ane-mtp.mm. A failed
++// warmup means the bundle cannot run on this host (wrong OS, ANE missing,
++// or a Core ML compile error) and the program must not be advertised.
++static bool ggml_ane_program_warm(ggml_backend_ane_program * program) {
++    @autoreleasepool {
++        NSError * error = nil;
++        NSMutableDictionary<NSString *, MLFeatureValue *> * values = [NSMutableDictionary dictionary];
++        for (NSString * name in program->model.modelDescription.inputDescriptionsByName) {
++            MLFeatureDescription * desc = program->model.modelDescription.inputDescriptionsByName[name];
++            if (desc.type != MLFeatureTypeMultiArray) {
++                return false;
++            }
++            MLMultiArrayConstraint * c = desc.multiArrayConstraint;
++            MLMultiArray * array = [[MLMultiArray alloc] initWithShape:c.shape
++                                                              dataType:c.dataType
++                                                                 error:&error];
++            if (!array) {
++                return false;
++            }
++            size_t esize = ggml_ane_multi_array_element_size(c.dataType);
++            if (esize == 0) {
++                return false;
++            }
++            std::memset(array.dataPointer, 0, (size_t) array.count * esize);
++            values[name] = [MLFeatureValue featureValueWithMultiArray:array];
++        }
++        MLDictionaryFeatureProvider * inputs =
++            [[MLDictionaryFeatureProvider alloc] initWithDictionary:values error:&error];
++        if (!inputs) {
++            return false;
++        }
++        MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
++        id<MLFeatureProvider> output;
++        if (program->state) {
++            output = [program->model predictionFromFeatures:inputs
++                                                  usingState:program->state
++                                                     options:options
++                                                       error:&error];
++        } else {
++            output = [program->model predictionFromFeatures:inputs
++                                                    options:options
++                                                      error:&error];
++        }
++        if (!output) {
++            GGML_LOG_ERROR("ane: warmup prediction failed: %s\n",
++                           error.localizedDescription.UTF8String ?: "unknown error");
++            return false;
++        }
++        return true;
++    }
++}
++
++static ggml_backend_ane_program * ggml_ane_program_load(const char * mlmodelc_dir,
++                                                        const char * function_name) {
++    if (!mlmodelc_dir || mlmodelc_dir[0] == '\0') {
++        return nullptr;
++    }
++    @autoreleasepool {
++        NSString * dir = [NSString stringWithUTF8String:mlmodelc_dir];
++        if (![[NSFileManager defaultManager] fileExistsAtPath:dir]) {
++            GGML_LOG_ERROR("ane: mlmodelc dir not found: %s\n", mlmodelc_dir);
++            return nullptr;
++        }
++        MLModelConfiguration * config = [[MLModelConfiguration alloc] init];
++        // CPUAndNeuralEngine is a preference, not a command (deep-study Section
++        // 1.1). The Core ML scheduler may still fall a specific op to GPU/CPU.
++        config.computeUnits = MLComputeUnitsCPUAndNeuralEngine;
++        if (function_name && function_name[0] != '\0') {
++            config.functionName = [NSString stringWithUTF8String:function_name];
++        }
++        NSError * error = nil;
++        MLModel * model = [MLModel modelWithContentsOfURL:[NSURL fileURLWithPath:dir]
++                                            configuration:config
++                                                    error:&error];
++        if (!model) {
++            GGML_LOG_ERROR("ane: failed to load %s: %s\n", mlmodelc_dir,
++                           error.localizedDescription.UTF8String ?: "unknown error");
++            return nullptr;
++        }
++        auto * program = new ggml_backend_ane_program;
++        program->model  = model;
++        program->state  = [model newState];
++        program->queue  = dispatch_queue_create("org.ggml.ane.backend", DISPATCH_QUEUE_SERIAL);
++        program->source_path    = mlmodelc_dir;
++        program->function_name  = function_name ? function_name : "";
++
++        __block bool ok = false;
++        dispatch_sync(program->queue, ^{
++            ok = ggml_ane_program_warm(program);
++        });
++        if (!ok) {
++            delete program;
++            return nullptr;
++        }
++        program->warm.store(true);
++        return program;
++    }
++}
++
++GGML_BACKEND_API struct ggml_backend_ane_program * ggml_backend_ane_program_load_from_dir(
++        const char * mlmodelc_dir, const char * function_name) {
++    return ggml_ane_program_load(mlmodelc_dir, function_name);
++}
++
++GGML_BACKEND_API void ggml_backend_ane_program_free(struct ggml_backend_ane_program * program) {
++    delete program;
++}
++
++// Read an MLMultiArray into a host fp32 buffer. The common/ane-mtp.mm variant
++// handles non-contiguous strides; we replicate just the contiguous fast path
++// because every output we materialize lives in our own contiguous arena.
++static void ggml_ane_read_array_fp32(const MLMultiArray * array, float * dst, size_t count) {
++    if (array.dataType == MLMultiArrayDataTypeFloat32) {
++        std::memcpy(dst, array.dataPointer, count * sizeof(float));
++    } else {
++        ggml_fp16_to_fp32_row((const ggml_fp16_t *) array.dataPointer, dst, (int64_t) count);
++    }
++}
++
++static void ggml_ane_write_array_fp32(const float * src, MLMultiArray * array, size_t count) {
++    if (array.dataType == MLMultiArrayDataTypeFloat32) {
++        std::memcpy(array.dataPointer, src, count * sizeof(float));
++    } else {
++        ggml_fp32_to_fp16_row(src, (ggml_fp16_t *) array.dataPointer, (int64_t) count);
++    }
++}
++
++// Run the bound program: feed `inputs` (by model-declared name) and read back
++// `outputs` (by model-declared name). Inputs/outputs are fp32 host buffers of
++// the model-declared element count; conversions to/from fp16 are handled here.
++// Returns false (with a logged warning) when Core ML returns nil; the caller
++// is responsible for falling back to Metal/CPU.
++static bool ggml_ane_program_run(ggml_backend_ane_program * program,
++                                 const std::unordered_map<std::string, const float *> & inputs,
++                                 const std::vector<std::string> & output_names,
++                                 const std::unordered_map<std::string, float *> & outputs) {
++    if (!program || !program->warm.load()) {
++        return false;
++    }
++    __block bool ok = false;
++    dispatch_sync(program->queue, ^{
++        @autoreleasepool {
++            NSError * error = nil;
++            NSMutableDictionary<NSString *, MLFeatureValue *> * features = [NSMutableDictionary dictionary];
++            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
++                program->model.modelDescription.inputDescriptionsByName;
++            for (NSString * name in inputs_desc) {
++                MLFeatureDescription * desc = inputs_desc[name];
++                if (desc.type != MLFeatureTypeMultiArray) {
++                    GGML_LOG_ERROR("ane: non-multiarray input %s unsupported\n", name.UTF8String);
++                    return;
++                }
++                MLMultiArrayConstraint * c = desc.multiArrayConstraint;
++                MLMultiArrayDataType type = c.dataType;
++                if (type != MLMultiArrayDataTypeFloat16 && type != MLMultiArrayDataTypeFloat32) {
++                    GGML_LOG_ERROR("ane: input %s dtype %ld unsupported\n", name.UTF8String, (long) type);
++                    return;
++                }
++                NSArray<NSNumber *> * shape = c.shape;
++                // Resolve any dynamic (<=0) dimension to 1 to get a concrete size.
++                NSMutableArray<NSNumber *> * fixed = [shape mutableCopy];
++                for (NSUInteger i = 0; i < fixed.count; ++i) {
++                    if (fixed[i].integerValue <= 0) {
++                        fixed[i] = @1;
++                    }
++                }
++                const size_t count = ggml_ane_shape_count(fixed);
++                MLMultiArray * array = program->array_for(name.UTF8String, fixed, type, &error);
++                if (!array) {
++                    GGML_LOG_ERROR("ane: arena wrap for input %s failed: %s\n", name.UTF8String,
++                                   error.localizedDescription.UTF8String ?: "unknown");
++                    return;
++                }
++                auto it = inputs.find(name.UTF8String);
++                if (it != inputs.end() && it->second) {
++                    ggml_ane_write_array_fp32(it->second, array, count);
++                } else {
++                    // Input not provided: leave the arena zeroed from the prior
++                    // call's memset so the prediction still runs.
++                    std::memset(array.dataPointer, 0, count * ggml_ane_multi_array_element_size(type));
++                }
++                features[name] = [MLFeatureValue featureValueWithMultiArray:array];
++            }
++
++            MLDictionaryFeatureProvider * provider =
++                [[MLDictionaryFeatureProvider alloc] initWithDictionary:features error:&error];
++            if (!provider) {
++                GGML_LOG_ERROR("ane: input provider build failed: %s\n",
++                               error.localizedDescription.UTF8String ?: "unknown");
++                return;
++            }
++            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
++            id<MLFeatureProvider> output;
++            if (program->state) {
++                output = [program->model predictionFromFeatures:provider
++                                                      usingState:program->state
++                                                         options:options
++                                                           error:&error];
++            } else {
++                output = [program->model predictionFromFeatures:provider
++                                                        options:options
++                                                          error:&error];
++            }
++            if (!output) {
++                // F1 failure mode: prediction-nil means Core ML could not run
++                // the function on ANE (or CPU fallback). Caller must retry on
++                // another backend. Surface the model error verbatim.
++                GGML_LOG_ERROR("ane: Core ML prediction returned nil for %s: %s\n",
++                               program->function_name.c_str(),
++                               error.localizedDescription.UTF8String ?: "unknown error");
++                return;
++            }
++            for (const std::string & out_name : output_names) {
++                MLMultiArray * arr = [output featureValueForName:
++                    [NSString stringWithUTF8String:out_name.c_str()]].multiArrayValue;
++                if (!arr) {
++                    GGML_LOG_ERROR("ane: output %s missing from prediction\n", out_name.c_str());
++                    return;
++                }
++                auto it = outputs.find(out_name);
++                if (it != outputs.end() && it->second) {
++                    ggml_ane_read_array_fp32(arr, it->second, (size_t) arr.count);
++                }
++            }
++            ok = true;
++        }
++    });
++    return ok;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// backend (stream)
++////////////////////////////////////////////////////////////////////////////////
++
++// Per-backend context: holds the program currently bound to this instance.
++// supports_op is declared below; forward-declared here for graph_compute.
++static bool ggml_backend_ane_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op);
++
++struct ggml_backend_ane_context {
++    // Not owned: the caller owns the program handle and must free it after
++    // detaching. Storing a raw pointer keeps the backend struct trivially
++    // destructible and avoids a refcount cycle with the program handle.
++    std::atomic<ggml_backend_ane_program *> program {nullptr};
++};
++
++static const char * ggml_backend_ane_name(ggml_backend_t backend) {
++    return GGML_ANE_NAME;
++
++    GGML_UNUSED(backend);
++}
++
++static void ggml_backend_ane_free(ggml_backend_t backend) {
++    // The bound program (if any) is owned by the caller via the
++    // ggml_backend_ane_program handle, not by the backend struct.
++    auto * ctx = (ggml_backend_ane_context *) backend->context;
++    delete ctx;
++    free(backend);
++}
++
++static void ggml_backend_ane_synchronize(ggml_backend_t backend) {
++    // All compute is dispatched on the per-program serial queue with
++    // dispatch_sync, so graph_compute is already synchronous on return.
++    GGML_UNUSED(backend);
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// element-wise compute on the host-mapped IOSurface arena
++//
++// These ops are ANE-NATIVE per Section 4.1, but routing each one through a
++// Core ML dispatch requires a bundle function that fuses it. When no bundle
++// is bound we still need the backend to be exercisable, so the simple
++// element-wise ops run on Accelerate over the same IOSurface backing that
++// Core ML would read. This matches the deep-study "CPU-GLUE via Accelerate"
++// fallback (Section 4.3.3) for the compute-shaped subset of native ops.
++//
++// Tensors in ANE buffers are CPU-mapped for the buffer lifetime, so a direct
++// fp32/fp16 view is safe. We always compute in fp32 to avoid the fp16
++// overflow failure modes (F10) in norm/activation paths.
++
++static float * ggml_ane_tensor_f32_view(ggml_tensor * tensor, std::vector<float> & scratch) {
++    // Returns either the tensor's own data (when already fp32 contiguous) or
++    // a scratch buffer of fp32-converted data. Callers must hold the result
++    // only across a single op because the scratch is overwritten per call.
++    const size_t n = ggml_nelements(tensor);
++    if (tensor->type == GGML_TYPE_F32 && ggml_is_contiguous(tensor)) {
++        return (float *) tensor->data;
++    }
++    scratch.resize(n);
++    if (tensor->type == GGML_TYPE_F16) {
++        ggml_fp16_to_fp32_row((const ggml_fp16_t *) tensor->data, scratch.data(), (int64_t) n);
++    } else if (tensor->type == GGML_TYPE_F32) {
++        // Non-contiguous fp32: copy elementwise.
++        for (size_t i = 0; i < n; ++i) {
++            scratch[i] = ((const float *) tensor->data)[i];
++        }
++    } else {
++        // Unsupported dtype for the elementwise path; zero-fill so the caller
++        // can still detect a wrong-dtype input via the op result.
++        std::memset(scratch.data(), 0, n * sizeof(float));
++    }
++    return scratch.data();
++}
++
++static void ggml_ane_tensor_write_f32(ggml_tensor * tensor, const float * src) {
++    const size_t n = ggml_nelements(tensor);
++    if (tensor->type == GGML_TYPE_F32) {
++        std::memcpy(tensor->data, src, n * sizeof(float));
++    } else if (tensor->type == GGML_TYPE_F16) {
++        ggml_fp32_to_fp16_row(src, (ggml_fp16_t *) tensor->data, (int64_t) n);
++    }
++}
++
++// Apply an elementwise op on fp32 views of src[0] (and src[1] for binary ops).
++// dst is always written as the destination tensor's dtype.
++static bool ggml_ane_compute_elementwise(ggml_tensor * op) {
++    ggml_tensor * src0 = op->src[0];
++    ggml_tensor * dst  = op;
++    const size_t n = ggml_nelements(dst);
++
++    std::vector<float> a_scratch;
++    float * a = ggml_ane_tensor_f32_view(src0, a_scratch);
++
++    float * b = nullptr;
++    std::vector<float> b_scratch;
++    if (op->src[1] && (size_t) ggml_nelements(op->src[1]) == n) {
++        b = ggml_ane_tensor_f32_view(op->src[1], b_scratch);
++    }
++
++    std::vector<float> out(n);
++
++    switch (op->op) {
++        case GGML_OP_ADD: {
++            if (!b) return false;
++            vDSP_vadd(a, 1, b, 1, out.data(), 1, n);
++        } break;
++        case GGML_OP_MUL: {
++            if (!b) return false;
++            vDSP_vmul(a, 1, b, 1, out.data(), 1, n);
++        } break;
++        case GGML_OP_SCALE: {
++            // ggml_scale stores the scalar in op_params[0].
++            const float s = ggml_get_op_params_f32(op, 0);
++            vDSP_vsmul(a, 1, &s, out.data(), 1, n);
++        } break;
++        case GGML_OP_CLAMP: {
++            // ggml_clamp stores {min, max} in op_params[0..1].
++            const float lo = ggml_get_op_params_f32(op, 0);
++            const float hi = ggml_get_op_params_f32(op, 1);
++            vDSP_vclip(a, 1, &lo, &hi, out.data(), 1, n);
++        } break;
++        case GGML_OP_REPEAT: {
++            // Tile src0 over dst. n_dst must be a whole multiple of n_src.
++            const size_t ns = ggml_nelements(src0);
++            if (ns == 0 || n % ns != 0) {
++                return false;
++            }
++            for (size_t i = 0; i < n; i += ns) {
++                std::memcpy(out.data() + i, a, ns * sizeof(float));
++            }
++        } break;
++        case GGML_OP_LEAKY_RELU: {
++            // ggml_leaky_relu stores negative_slope in op_params[0].
++            const float slope = ggml_get_op_params_f32(op, 0);
++            for (size_t i = 0; i < n; ++i) {
++                out[i] = a[i] < 0.0f ? a[i] * slope : a[i];
++            }
++        } break;
++        case GGML_OP_SQR:
++            vDSP_vsq(a, 1, out.data(), 1, n);
++            break;
++        case GGML_OP_SQRT:
++            vvsqrtf(out.data(), a, (const int *) &n);
++            break;
++        case GGML_OP_LOG:
++            vvlogf(out.data(), a, (const int *) &n);
++            break;
++        case GGML_OP_SIN:
++            vvsinf(out.data(), a, (const int *) &n);
++            break;
++        case GGML_OP_COS:
++            vvcosf(out.data(), a, (const int *) &n);
++            break;
++        case GGML_OP_UNARY: {
++            switch (ggml_get_unary_op(op)) {
++                case GGML_UNARY_OP_SILU:    // x * sigmoid(x)
++                    for (size_t i = 0; i < n; ++i) {
++                        const float s = 1.0f / (1.0f + expf(-a[i]));
++                        out[i] = a[i] * s;
++                    }
++                    break;
++                case GGML_UNARY_OP_SIGMOID:
++                    for (size_t i = 0; i < n; ++i) {
++                        out[i] = 1.0f / (1.0f + expf(-a[i]));
++                    }
++                    break;
++                case GGML_UNARY_OP_TANH:
++                    vvtanhf(out.data(), a, (const int *) &n);
++                    break;
++                case GGML_UNARY_OP_RELU:
++                    for (size_t i = 0; i < n; ++i) {
++                        out[i] = a[i] < 0.0f ? 0.0f : a[i];
++                    }
++                    break;
++                case GGML_UNARY_OP_EXP:
++                    vvexpf(out.data(), a, (const int *) &n);
++                    break;
++                case GGML_UNARY_OP_ABS:
++                    vvfabsf(out.data(), a, (const int *) &n);
++                    break;
++                case GGML_UNARY_OP_NEG:
++                    vDSP_vneg(a, 1, out.data(), 1, n);
++                    break;
++                case GGML_UNARY_OP_STEP:
++                    for (size_t i = 0; i < n; ++i) {
++                        out[i] = a[i] > 0.0f ? 1.0f : 0.0f;
++                    }
++                    break;
++                case GGML_UNARY_OP_SGN:
++                    for (size_t i = 0; i < n; ++i) {
++                        out[i] = a[i] > 0.0f ? 1.0f : (a[i] < 0.0f ? -1.0f : 0.0f);
++                    }
++                    break;
++                // GELU/GELU_ERF/GELU_QUICK/HARDSWISH/HARDSIGMOID/ELU/SOFTPLUS/
++                // EXPM1/FLOOR/CEIL/ROUND/TRUNC/XIELU are ANE-BREAKS or not on
++                // the native list and are not advertised by supports_op.
++                default:
++                    return false;
++            }
++        } break;
++        default:
++            return false;
++    }
++
++    ggml_ane_tensor_write_f32(dst, out.data());
++    return true;
++}
++
++// Copy a leaf tensor's data into `dst` in fp32. Used to feed Core ML inputs.
++static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> & out) {
++    const size_t n = ggml_nelements(tensor);
++    out.resize(n);
++    if (tensor->type == GGML_TYPE_F32) {
++        std::memcpy(out.data(), tensor->data, n * sizeof(float));
++    } else if (tensor->type == GGML_TYPE_F16) {
++        ggml_fp16_to_fp32_row((const ggml_fp16_t *) tensor->data, out.data(), (int64_t) n);
++    } else if (tensor->type == GGML_TYPE_I32) {
++        const int32_t * p = (const int32_t *) tensor->data;
++        for (size_t i = 0; i < n; ++i) {
++            out[i] = (float) p[i];
++        }
++    } else {
++        return false;
++    }
++    return true;
++}
++
++// Resolve the bundle function to dispatch for a given op, by name. The bundle
++// must expose inputs/outputs in the alphabetical binding order mandated by
++// Orion #3/#19; we look up by the model's own declared names, so the export
++// side is responsible for naming. Returns empty if no bundle mapping exists.
++static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
++                                         ggml_tensor * op,
++                                         std::vector<std::string> & out_names) {
++    GGML_UNUSED(out_names);
++    if (!program) {
++        return false;
++    }
++    // Tessera's bundle naming convention (conversion-design Section 4):
++    //   prefill_sN     -> whole-layer slab (token_ids, positions -> h, k, v)
++    //   mtp_predict    -> next-token prediction (h_nextn, token_ids -> tok, conf, h)
++    //   dflash_bN      -> draft block
++    //   hybrid_bN      -> candidate arbitration
++    // A single bound bundle exposes exactly one of these. We do not yet have a
++    // per-tensor-name dispatch table from the conversion tool, so the only op
++    // we route to a bound bundle today is MUL_MAT (via a "matmul"/"linear"
++    // function name). This is documented as the integration point: once the
++    // conversion tool emits a function-name table, the dispatch below grows.
++    switch (op->op) {
++        case GGML_OP_MUL_MAT:
++        case GGML_OP_TILE640_MATMUL:
++            // TODO(ane-bundle): dispatch matmul to the bound bundle's matmul
++            // function once the conversion tool names one. Today the matmul
++            // lives inside the layer-slab function rather than standalone.
++            return false;
++        default:
++            return false;
++    }
++}
++
++static enum ggml_status ggml_backend_ane_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
++    ggml_backend_ane_context * ctx = (ggml_backend_ane_context *) backend->context;
++    ggml_backend_ane_program * program = ctx ? ctx->program.load() : nullptr;
++
++    // F16 thermal telemetry: a serious-or-worse thermal state means the ANE
++    // is throttling and throughput will be unpredictable. We do not auto-
++    // switch to Metal here (the scheduler owns backend selection); this is a
++    // logged signal only, matching the deep-study Slice 4 recommendation.
++    if (@available(macOS 10.15, iOS 11.0, *)) {
++        NSProcessInfoThermalState state = NSProcessInfo.processInfo.thermalState;
++        if (state >= NSProcessInfoThermalStateSerious) {
++            GGML_LOG_WARN("ane: thermal state %ld >= serious; expect ANE throttling\n",
++                           (long) state);
++        }
++    }
++
++    const int n_nodes = cgraph->n_nodes;
++    bool saw_bundle_dispatch = false;
++
++    for (int i = 0; i < n_nodes; ++i) {
++        ggml_tensor * node = cgraph->nodes[i];
++
++        // Validate that we advertised this op; supports_op is the contract.
++        if (!ggml_backend_ane_device_supports_op(backend->device, node)) {
++            GGML_LOG_ERROR("ane: op %s not supported; refusing to run graph "
++                           "(scheduler should have routed it elsewhere)\n",
++                           ggml_op_name(node->op));
++            return GGML_STATUS_FAILED;
++        }
++
++        // First, ask the bound bundle whether it wants this op. Only a small,
++        // explicitly-bundle-mapped set is dispatched through Core ML today.
++        std::vector<std::string> out_names;
++        if (ggml_ane_program_dispatch_op(program, node, out_names)) {
++            saw_bundle_dispatch = true;
++            // TODO(ane-bundle): populate program_run inputs/outputs from the
++            // node's sources and destination once a standalone matmul bundle
++            // function name is exposed by the conversion tool.
++            GGML_LOG_ERROR("ane: bundle dispatch for op %s is stubbed\n",
++                           ggml_op_name(node->op));
++            return GGML_STATUS_FAILED;
++        }
++
++        // No bundle mapping: fall through to the elementwise Accelerate path.
++        // This covers the compute-shaped ANE-NATIVE ops (ADD, MUL, SCALE,
++        // CLAMP, REPEAT, LEAKY_RELU, and the UNARY variants SILU/SIGMOID/
++        // TANH/RELU/EXP/LOG/ABS/NEG/STEP/SQR/SQRT). Layout ops that we
++        // advertise as supported are handled as no-ops over contiguous data.
++        if (node->op == GGML_OP_RESHAPE ||
++            node->op == GGML_OP_VIEW ||
++            node->op == GGML_OP_TRANSPOSE ||
++            node->op == GGML_OP_PERMUTE ||
++            node->op == GGML_OP_CONT) {
++            // ggml tensors carry their own shape/stride metadata; views are
++            // already resolved by the graph builder, so the underlying buffer
++            // is shared and no data movement is needed.
++            continue;
++        }
++
++        if (node->op == GGML_OP_CPY) {
++            // Type/shape conversion copy on the host-mapped arena. CAST is not
++            // a standalone op in this ggml version; it lowers to CPY.
++            std::vector<float> tmp;
++            if (!ggml_ane_gather_input_fp32(node->src[0], tmp)) {
++                GGML_LOG_ERROR("ane: CPY unsupported dtype %s\n",
++                               ggml_type_name(node->src[0]->type));
++                return GGML_STATUS_FAILED;
++            }
++            ggml_ane_tensor_write_f32(node, tmp.data());
++            continue;
++        }
++
++        if (ggml_ane_compute_elementwise(node)) {
++            continue;
++        }
++
++        // Reached an op we advertised but did not implement. This is a logic
++        // error in supports_op; surface it loudly rather than producing
++        // silently-wrong data (F-mode failures are far worse than a crash).
++        GGML_LOG_ERROR("ane: advertised op %s has no compute path\n",
++                       ggml_op_name(node->op));
++        return GGML_STATUS_FAILED;
++    }
++
++    GGML_UNUSED(saw_bundle_dispatch);
++    return GGML_STATUS_SUCCESS;
++}
++
++static ggml_backend_i ggml_backend_ane_i = {
++    /* .get_name                = */ ggml_backend_ane_name,
++    /* .free                    = */ ggml_backend_ane_free,
++    /* .set_tensor_async        = */ NULL,
++    /* .get_tensor_async        = */ NULL,
++    /* .set_tensor_2d_async     = */ NULL,
++    /* .get_tensor_2d_async     = */ NULL,
++    /* .cpy_tensor_async        = */ NULL,
++    /* .synchronize             = */ ggml_backend_ane_synchronize,
++    /* .graph_plan_create       = */ NULL,
++    /* .graph_plan_free         = */ NULL,
++    /* .graph_plan_update       = */ NULL,
++    /* .graph_plan_compute      = */ NULL,
++    /* .graph_compute           = */ ggml_backend_ane_graph_compute,
++    /* .event_record            = */ NULL,
++    /* .event_wait              = */ NULL,
++    /* .graph_optimize          = */ NULL,
++};
++
++static ggml_guid_t ggml_backend_ane_guid(void) {
++    static ggml_guid guid = { 0xa1, 0xe0, 0x4a, 0x1c, 0x7f, 0x92, 0x4d, 0x0e,
++                              0xa6, 0xb3, 0x21, 0x55, 0xc8, 0x07, 0x3e, 0x1a };
++    return &guid;
++}
++
++static ggml_backend_t ggml_backend_ane_alloc(ggml_backend_dev_t dev) {
++    ggml_backend_t backend = (ggml_backend_t) malloc(sizeof(ggml_backend));
++    auto * ctx = new ggml_backend_ane_context;
++
++    *backend = {
++        /* .guid      = */ ggml_backend_ane_guid(),
++        /* .interface = */ ggml_backend_ane_i,
++        /* .device    = */ dev,
++        /* .context   = */ ctx,
++    };
++
++    return backend;
++}
++
++GGML_BACKEND_API bool ggml_backend_ane_set_program(
++        ggml_backend_t backend, struct ggml_backend_ane_program * program) {
++    if (!ggml_backend_is_ane(backend)) {
++        return false;
++    }
++    auto * ctx = (ggml_backend_ane_context *) backend->context;
++    if (!ctx) {
++        return false;
++    }
++    // The previously bound program (if any) is not freed here; ownership stays
++    // with the caller. Only one program may be bound per backend at a time.
++    ctx->program.store(program);
++    return true;
++}
++
++bool ggml_backend_is_ane(ggml_backend_t backend) {
++    return backend != nullptr && ggml_guid_matches(backend->guid, ggml_backend_ane_guid());
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// backend device
++////////////////////////////////////////////////////////////////////////////////
++
++static const char * ggml_backend_ane_device_get_name(ggml_backend_dev_t dev) {
++    return GGML_ANE_NAME;
++
++    GGML_UNUSED(dev);
++}
++
++static const char * ggml_backend_ane_device_get_description(ggml_backend_dev_t dev) {
++    return "CoreML (ANE-first, iOS)";
++
++    GGML_UNUSED(dev);
++}
++
++static void ggml_backend_ane_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
++    // The ANE shares unified memory with the host; we do not yet have an
++    // accurate per-device accounting. Report zeros so the scheduler does not
++    // reserve buffers against a fictitious budget.
++    if (free)  { *free  = 0; }
++    if (total) { *total = 0; }
++
++    GGML_UNUSED(dev);
++}
++
++static enum ggml_backend_dev_type ggml_backend_ane_device_get_type(ggml_backend_dev_t dev) {
++    // Treat the ANE as an accelerator: the backend is intended to run alongside
++    // the CPU backend (weights/tensors copied in/out), not as a standalone GPU.
++    return GGML_BACKEND_DEVICE_TYPE_ACCEL;
++
++    GGML_UNUSED(dev);
++}
++
++static void ggml_backend_ane_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
++    props->name        = ggml_backend_ane_device_get_name(dev);
++    props->description = ggml_backend_ane_device_get_description(dev);
++    props->type        = ggml_backend_ane_device_get_type(dev);
++
++    ggml_backend_ane_device_get_memory(dev, &props->memory_free, &props->memory_total);
++
++    props->device_id = nullptr;
++    props->caps = {
++        /* .async                = */ false,
++        /* .host_buffer          = */ false,
++        /* .buffer_from_host_ptr = */ false,
++        /* .events               = */ false,
++    };
++}
++
++static ggml_backend_t ggml_backend_ane_device_init_backend(ggml_backend_dev_t dev, const char * params) {
++    GGML_UNUSED(params);
++    return ggml_backend_ane_alloc(dev);
++}
++
++static ggml_backend_buffer_type_t ggml_backend_ane_device_get_buffer_type(ggml_backend_dev_t dev) {
++    ggml_backend_buffer_type_t buft = ggml_backend_ane_buffer_type();
++    buft->device = dev;
++    return buft;
++}
++
++static bool ggml_ane_supported_tensor_type(enum ggml_type type) {
++    // The elementwise/Accelerate path and the fp16 IOSurface->MLMultiArray
++    // wrapping both need one of these host-convertible dtypes.
++    switch (type) {
++        case GGML_TYPE_F32:
++        case GGML_TYPE_F16:
++        case GGML_TYPE_I32:
++            return true;
++        default:
++            return false;
++    }
++}
++
++// supports_op per deep-study Section 4.1.
++//
++// The ops we accept must have either a Core ML bundle dispatch (composite
++// transformer ops; today only MUL_MAT-style via the bound bundle, and that
++// path is still gated behind TODO(ane-bundle)) or an Accelerate elementwise
++// implementation (ggml_ane_compute_elementwise). We advertise only ops that
++// also have the elementwise path so the backend is exercisable without a
++// bundle. Composite ANE-NATIVE-C ops (RMS_NORM, ROPE, SOFT_MAX, SDPA,
++// TILE640_*, DIAG_MASK_INF) are NOT advertised yet because their compute
++// lives in a bundle function we do not dispatch today; returning true for
++// them would make graph_compute fail at the "no compute path" assert.
++//
++// GELU decision (Section 4.2.3): the loaded Core ML bundle already bakes in
++// the tanh approximation, so GELU itself stays ANE-BREAKS here and the
++// scheduler routes it to CPU/Metal. When the bundle handles a GELU-bearing
++// graph it does so internally, not via this ggml op.
++static bool ggml_backend_ane_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
++    GGML_UNUSED(dev);
++
++    if (!ggml_ane_supported_tensor_type(op->type)) {
++        return false;
++    }
++    for (size_t i = 0; i < GGML_MAX_SRC; ++i) {
++        if (op->src[i] != nullptr && !ggml_ane_supported_tensor_type(op->src[i]->type)) {
++            return false;
++        }
++    }
++
++    switch (op->op) {
++        // ANE-NATIVE elementwise ops with an Accelerate implementation.
++        case GGML_OP_ADD:
++        case GGML_OP_MUL:
++        case GGML_OP_SCALE:
++        case GGML_OP_CLAMP:
++        case GGML_OP_REPEAT:
++        case GGML_OP_LEAKY_RELU:
++        case GGML_OP_SQR:
++        case GGML_OP_SQRT:
++        case GGML_OP_LOG:
++        case GGML_OP_SIN:
++        case GGML_OP_COS:
++            return true;
++
++        // ANE-NATIVE layout / copy ops. Views and reshapes carry their own
++        // metadata and share the source buffer, so no compute is needed.
++        // CAST is not a standalone op in this ggml version; type conversion is
++        // expressed via CPY and handled on the host-mapped arena.
++        case GGML_OP_RESHAPE:
++        case GGML_OP_VIEW:
++        case GGML_OP_TRANSPOSE:
++        case GGML_OP_PERMUTE:
++        case GGML_OP_CONT:
++        case GGML_OP_CPY:
++            return true;
++
++        // ANE-NATIVE unary ops (silu, sigmoid, tanh, exp, abs, relu, neg,
++        // step, sgn). GELU/GELU_ERF/GELU_QUICK are ANE-BREAKS (handled in the
++        // bundle, not here) so only the safe subset of UNARY is taken.
++        case GGML_OP_UNARY:
++            switch (ggml_get_unary_op(op)) {
++                case GGML_UNARY_OP_SILU:
++                case GGML_UNARY_OP_SIGMOID:
++                case GGML_UNARY_OP_TANH:
++                case GGML_UNARY_OP_RELU:
++                case GGML_UNARY_OP_EXP:
++                case GGML_UNARY_OP_ABS:
++                case GGML_UNARY_OP_NEG:
++                case GGML_UNARY_OP_STEP:
++                case GGML_UNARY_OP_SGN:
++                    return true;
++                default:
++                    return false;
++            }
++
++        // Everything else is ANE-BREAKS or CPU-GLUE per Section 4.1 and is
++        // left for the scheduler to route to CPU/Metal. The notable omissions
++        // by design: MUL_MAT, RMS_NORM, ROPE, SOFT_MAX, CONCAT, GET_ROWS,
++        // FLASH_ATTN_EXT, TESSERA_PAGED_ATTN, TILE640_*, DIAG_MASK_INF,
++        // GELU, ARGSORT, TOP_K, SLICE, PAD, SSM_*, RWKV_*.
++        default:
++            return false;
++    }
++}
++
++static bool ggml_backend_ane_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
++    return buft->device == dev &&
++           buft->iface.get_name == ggml_backend_ane_buffer_type_get_name;
++}
++
++static ggml_backend_device_i ggml_backend_ane_device_i = {
++    /* .get_name             = */ ggml_backend_ane_device_get_name,
++    /* .get_description      = */ ggml_backend_ane_device_get_description,
++    /* .get_memory           = */ ggml_backend_ane_device_get_memory,
++    /* .get_type             = */ ggml_backend_ane_device_get_type,
++    /* .get_props            = */ ggml_backend_ane_device_get_props,
++    /* .init_backend         = */ ggml_backend_ane_device_init_backend,
++    /* .get_buffer_type      = */ ggml_backend_ane_device_get_buffer_type,
++    /* .get_host_buffer_type = */ NULL,
++    /* .buffer_from_host_ptr = */ NULL,
++    /* .supports_op          = */ ggml_backend_ane_device_supports_op,
++    /* .supports_buft        = */ ggml_backend_ane_device_supports_buft,
++    /* .offload_op           = */ NULL,
++    /* .event_new            = */ NULL,
++    /* .event_free           = */ NULL,
++    /* .event_synchronize    = */ NULL,
++};
++
++////////////////////////////////////////////////////////////////////////////////
++// backend registry
++////////////////////////////////////////////////////////////////////////////////
++
++struct ggml_backend_ane_reg {
++    std::vector<ggml_backend_dev_t> devices;
++};
++
++typedef struct ggml_backend_ane_reg * ggml_backend_ane_reg_t;
++
++static ggml_backend_ane_reg_t ggml_backend_ane_reg_init(void) {
++    return new struct ggml_backend_ane_reg;
++}
++
++struct ggml_backend_ane_reg_deleter {
++    void operator()(ggml_backend_ane_reg_t ctx) const {
++        delete ctx;
++    }
++};
++
++typedef std::unique_ptr<struct ggml_backend_ane_reg, ggml_backend_ane_reg_deleter> ggml_backend_ane_reg_ptr;
++
++static const char * ggml_backend_ane_reg_get_name(ggml_backend_reg_t reg) {
++    return GGML_ANE_NAME;
++
++    GGML_UNUSED(reg);
++}
++
++static size_t ggml_backend_ane_reg_device_count(ggml_backend_reg_t reg) {
++    ggml_backend_ane_reg_t ctx = (ggml_backend_ane_reg_t) reg->context;
++    return ctx->devices.size();
++}
++
++static ggml_backend_dev_t ggml_backend_ane_reg_device_get(ggml_backend_reg_t reg, size_t index) {
++    ggml_backend_ane_reg_t ctx = (ggml_backend_ane_reg_t) reg->context;
++    GGML_ASSERT(index < ctx->devices.size());
++    return ctx->devices[index];
++}
++
++static void * ggml_backend_ane_get_proc_address(ggml_backend_reg_t reg, const char * name) {
++    GGML_UNUSED(reg);
++    GGML_UNUSED(name);
++    return nullptr;
++}
++
++static ggml_backend_reg_i ggml_backend_ane_reg_i = {
++    /* .get_name         = */ ggml_backend_ane_reg_get_name,
++    /* .get_device_count = */ ggml_backend_ane_reg_device_count,
++    /* .get_device       = */ ggml_backend_ane_reg_device_get,
++    /* .get_proc_address = */ ggml_backend_ane_get_proc_address,
++};
++
++// Single logical ANE device. The public Core ML path exposes one neural
++// engine; there is no multi-device enumeration the way Metal has.
++static ggml_backend_dev_t ggml_backend_ane_device_init(ggml_backend_reg_t reg) {
++    return new ggml_backend_device {
++        /* .iface   = */ ggml_backend_ane_device_i,
++        /* .reg     = */ reg,
++        /* .context = */ nullptr,
++    };
++}
++
++ggml_backend_reg_t ggml_backend_ane_reg(void) {
++    static ggml_backend_reg reg;
++    static bool initialized = false;
++
++    {
++        static std::mutex mutex;
++        std::lock_guard<std::mutex> lock(mutex);
++
++        if (!initialized) {
++            static ggml_backend_ane_reg_ptr reg_ctx(ggml_backend_ane_reg_init());
++            static std::vector<std::unique_ptr<ggml_backend_device>> devs;
++
++            auto * dev = ggml_backend_ane_device_init(&reg);
++            devs.emplace_back(dev);
++            reg_ctx->devices.push_back(dev);
++
++            reg = {
++                /* .api_version = */ GGML_BACKEND_API_VERSION,
++                /* .iface       = */ ggml_backend_ane_reg_i,
++                /* .context     = */ reg_ctx.get(),
++            };
++        }
++
++        initialized = true;
++    }
++
++    return &reg;
++}
++
++GGML_BACKEND_DL_IMPL(ggml_backend_ane_reg)
+diff --git a/ggml/src/ggml-ane/test-ggml-ane.cpp b/ggml/src/ggml-ane/test-ggml-ane.cpp
+new file mode 100644
+index 000000000..e350fa3ec
+--- /dev/null
++++ b/ggml/src/ggml-ane/test-ggml-ane.cpp
+@@ -0,0 +1,209 @@
++// Smoke test for the ggml-ane backend.
++//
++// Builds a small graph of ops the ANE backend advertises as supported, runs
++// graph_compute on the ANE backend, and checks the output against a CPU
++// reference within fp16 tolerance. Also verifies that a graph containing an
++// unsupported op is rejected with GGML_STATUS_FAILED.
++//
++// If a real .mlmodelc bundle is passed via --bundle <dir>, the test also
++// exercises ggml_backend_ane_program_load_from_dir + warmup.
++
++#include "ggml.h"
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++#include "ggml-ane.h"
++
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <vector>
++
++static int failures = 0;
++
++static void fail(const char * msg) {
++    fprintf(stderr, "FAIL: %s\n", msg);
++    ++failures;
++}
++
++// fp32 reference for: out = silu(a + b) * a  (a, b are 1-D fp32 of length n)
++static void reference_add_silu_mul(const float * a, const float * b, float * out, int n) {
++    for (int i = 0; i < n; ++i) {
++        float s = a[i] + b[i];
++        s = 1.0f / (1.0f + expf(-s));
++        float silu = (a[i] + b[i]) * s;
++        out[i] = silu * a[i];
++    }
++}
++
++static bool approx_eq(float x, float y, float tol) {
++    return fabsf(x - y) <= tol * (1.0f + fabsf(x) + fabsf(y));
++}
++
++int main(int argc, char ** argv) {
++    std::string bundle_dir;
++    for (int i = 1; i < argc; ++i) {
++        std::string a = argv[i];
++        if (a == "--bundle" && i + 1 < argc) {
++            bundle_dir = argv[++i];
++        }
++    }
++
++    ggml_backend_load_all();
++
++    // Locate the ANE device.
++    ggml_backend_dev_t dev = ggml_backend_dev_by_name("ANE");
++    if (!dev) {
++        // Backend not built/discovered: report and exit non-zero so CI sees it,
++        // but only after printing the registered devices for diagnosis.
++        fprintf(stderr, "ANE backend device not found. Registered devices:\n");
++        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
++            ggml_backend_dev_t d = ggml_backend_dev_get(i);
++            ggml_backend_dev_props props;
++            ggml_backend_dev_get_props(d, &props);
++            fprintf(stderr, "  [%zu] %s\n", i, props.name);
++        }
++        fail("ANE device not found");
++        return failures == 0 ? 0 : 1;
++    }
++
++    ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
++    if (!backend) {
++        fail("ggml_backend_dev_init(ANE) returned null");
++        return 1;
++    }
++    fprintf(stderr, "ane: backend initialized: %s\n", ggml_backend_name(backend));
++
++    // Optional: load and warm a real .mlmodelc bundle to exercise the Core ML
++    // runner. This does not feed graphs yet; it just proves load + warmup work.
++    if (!bundle_dir.empty()) {
++        fprintf(stderr, "ane: loading bundle %s\n", bundle_dir.c_str());
++        ggml_backend_ane_program * prog =
++            ggml_backend_ane_program_load_from_dir(bundle_dir.c_str(), nullptr);
++        if (!prog) {
++            fail("ggml_backend_ane_program_load_from_dir returned null");
++        } else {
++            fprintf(stderr, "ane: bundle loaded and warmed successfully\n");
++            if (ggml_backend_is_ane(backend)) {
++                ggml_backend_ane_set_program(backend, prog);
++            }
++            ggml_backend_ane_program_free(prog);
++        }
++    }
++
++    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
++
++    // Build a graph: out = silu(a + b) * a, all supported elementwise ops.
++    const int n = 256;
++    ggml_init_params ip = { /*.mem_size   = */ 64 * 1024 * 1024,
++                            /*.mem_buffer = */ nullptr,
++                            /*.no_alloc   = */ true };
++    ggml_context * ctx = ggml_init(ip);
++    if (!ctx) {
++        fail("ggml_init failed");
++        return 1;
++    }
++
++    ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
++    ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
++    ggml_set_name(a, "a");
++    ggml_set_name(b, "b");
++
++    ggml_tensor * sum  = ggml_add(ctx, a, b);
++    ggml_tensor * act  = ggml_unary(ctx, sum, GGML_UNARY_OP_SILU);
++    ggml_tensor * out  = ggml_mul(ctx, act, a);
++    ggml_set_name(out, "out");
++
++    // Verify supports_op agrees on every node.
++    const ggml_tensor * nodes[] = { sum, act, out };
++    for (const ggml_tensor * t : nodes) {
++        if (!ggml_backend_dev_supports_op(dev, t)) {
++            char buf[128];
++            snprintf(buf, sizeof(buf), "supports_op false for op %s", ggml_op_name(t->op));
++            fail(buf);
++        }
++    }
++
++    // Allocate a, b, out in the ANE buffer type.
++    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
++    if (!buffer) {
++        fail("ggml_backend_alloc_ctx_tensors_from_buft failed");
++        return 1;
++    }
++
++    // Fill a, b with deterministic data.
++    std::vector<float> ha(n), hb(n), href(n);
++    for (int i = 0; i < n; ++i) {
++        ha[i] = 0.1f * (float) (i - n / 2);
++        hb[i] = 0.05f * (float) i - 1.0f;
++    }
++    reference_add_silu_mul(ha.data(), hb.data(), href.data(), n);
++    ggml_backend_tensor_set(a, ha.data(), 0, n * sizeof(float));
++    ggml_backend_tensor_set(b, hb.data(), 0, n * sizeof(float));
++
++    // Debug: read back inputs to confirm the buffer round-trip works.
++    {
++        std::vector<float> chk(n);
++        ggml_backend_tensor_get(a, chk.data(), 0, n * sizeof(float));
++        bool ok = true;
++        for (int i = 0; i < n; ++i) {
++            if (!approx_eq(chk[i], ha[i], 1e-6f)) { ok = false; break; }
++        }
++        fprintf(stderr, "ane: input 'a' round-trip %s\n", ok ? "ok" : "MISMATCH");
++    }
++
++    // Build and run the graph.
++    ggml_cgraph * gf = ggml_new_graph(ctx);
++    ggml_build_forward_expand(gf, out);
++
++    enum ggml_status status = ggml_backend_graph_compute(backend, gf);
++    if (status != GGML_STATUS_SUCCESS) {
++        char buf[128];
++        snprintf(buf, sizeof(buf), "graph_compute returned %d", (int) status);
++        fail(buf);
++    } else {
++        std::vector<float> hout(n);
++        ggml_backend_tensor_get(out, hout.data(), 0, n * sizeof(float));
++        int mism = 0;
++        float worst = 0.0f;
++        const float tol = 1e-3f; // fp32 Accelerate path; tight tolerance
++        for (int i = 0; i < n; ++i) {
++            if (!approx_eq(hout[i], href[i], tol)) {
++                ++mism;
++                worst = fmaxf(worst, fabsf(hout[i] - href[i]));
++            }
++        }
++        if (mism > 0) {
++            char buf[160];
++            snprintf(buf, sizeof(buf),
++                     "output mismatch: %d/%d elements differ, worst delta %.6f",
++                     mism, n, worst);
++            fail(buf);
++        } else {
++            fprintf(stderr, "ane: graph output matches CPU reference (tol %.0e)\n", tol);
++        }
++    }
++
++    // Negative case: a graph with an unsupported op must be rejected.
++    {
++        ggml_tensor * c      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
++        ggml_tensor * d      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
++        // CONCAT is ANE-BREAKS and is not in supports_op.
++        ggml_tensor * concat = ggml_concat(ctx, c, d, 0);
++        if (ggml_backend_dev_supports_op(dev, concat)) {
++            fail("supports_op returned true for CONCAT (should be false)");
++        }
++    }
++
++    ggml_backend_buffer_free(buffer);
++    ggml_free(ctx);
++    ggml_backend_free(backend);
++
++    if (failures == 0) {
++        fprintf(stderr, "ane: all checks passed\n");
++        return 0;
++    }
++    fprintf(stderr, "ane: %d check(s) failed\n", failures);
++    return 1;
++}
+diff --git a/tools/server/server-admission.cpp b/tools/server/server-admission.cpp
+new file mode 100644
+index 000000000..98c52ed0e
+--- /dev/null
++++ b/tools/server/server-admission.cpp
+@@ -0,0 +1,50 @@
++// server-admission.cpp: see server-admission.h.
++//
++// ASCII only. No em-dash, no unicode arrows.
++
++#include "server-admission.h"
++
++#include <algorithm>
++#include <limits>
++
++namespace tessera_admission {
++
++std::optional<int32_t> choose_preempt_victim(
++        const controller_snapshot & snap,
++        int64_t candidate_score,
++        const admission_config & cfg) {
++    // No-op when the controller is disabled or below the soft cap.
++    if (cfg.max_admitted <= 0) {
++        return std::nullopt;
++    }
++    if (snap.n_processing < cfg.max_admitted) {
++        return std::nullopt;
++    }
++    // Find the lowest-scoring preemptable slot. vLLM V1 preempts
++    // max(running, key=(priority, arrival_time)) - i.e. the lowest priority.
++    // Our scheduler score already encodes the same intent (prefix reuse,
++    // age, acceptance, cost) so the lowest score is the natural victim.
++    const slot_snapshot * victim = nullptr;
++    int64_t victim_score = std::numeric_limits<int64_t>::max();
++    for (const auto & s : snap.slots) {
++        if (!s.processing || !s.preemptable) {
++            continue;
++        }
++        if (s.score_milli < victim_score) {
++            victim_score = s.score_milli;
++            victim       = &s;
++        }
++    }
++    if (victim == nullptr) {
++        // Nothing to preempt (all slots non-preemptable). Defer instead.
++        return std::nullopt;
++    }
++    // Only preempt if the candidate clearly outranks the victim. This avoids
++    // thrash when scores are close.
++    if (candidate_score - victim_score < cfg.min_score_advantage_milli) {
++        return std::nullopt;
++    }
++    return victim->id;
++}
++
++} // namespace tessera_admission
+diff --git a/tools/server/server-admission.h b/tools/server/server-admission.h
+new file mode 100644
+index 000000000..b3de43317
+--- /dev/null
++++ b/tools/server/server-admission.h
+@@ -0,0 +1,103 @@
++#pragma once
++
++// server-admission: dynamic admission control + recompute preemption.
++//
++// Closes vLLM concurrency-study gap #3: slot count is fixed at startup and
++// the server cannot over-subscribe or preempt under KV pressure. vLLM V1
++// admits up to a running cap and preempts via recompute (it dropped swap as
++// not worth the complexity).
++//
++// Design notes:
++//
++//   * The admission controller sits *above* get_available_slot(). When a
++//     SERVER_TASK_TYPE_COMPLETION arrives and every slot is busy, the
++//     controller decides whether to (a) defer the task (the existing path),
++//     or (b) preempt the lowest-scoring active request to make room. The
++//     existing scheduler score (1000*prefix + 8*age + 16*acceptance
++//     - 4*suffix_cost) is the victim-selection signal.
++//
++//   * We do NOT raise the number of slots above n_parallel: the slot array
++//     is preallocated and indexed by id, so the "soft admission cap" is
++//     implemented as a configurable *target* on the number of in-flight
++//     requests the controller will allow before it starts preempting. When
++//     the cap is below n_parallel the controller is inert (the existing slot
++//     admission already enforces a smaller bound).
++//
++//   * Preemption is recompute-only (vLLM V1 policy). We discard the victim's
++//     KV and re-queue the task. The radix cache / block-radix prefix cache
++//     will usually re-attach most of the prefix on readmission, so the
++//     recompute cost is far below a full re-prefill.
++//
++//   * This module is policy-only. It returns a decision (preempt slot X, or
++//     defer); server-context.cpp performs the actual KV release and task
++//     re-queue. That keeps the heavy code paths (llama_memory_seq_rm, queue
++//     manipulation) in one place.
++//
++// ASCII only. No em-dash, no unicode arrows.
++
++#include <cstdint>
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace tessera_admission {
++
++struct admission_config {
++    // Soft cap on in-flight (processing) requests. When the number of
++    // processing slots is >= this and a new task arrives, the controller may
++    // preempt. Set to 0 to disable the controller (pure legacy behavior).
++    // Default is high (256) so single-box servers see no behavior change
++    // unless they explicitly enable tighter admission.
++    int32_t max_admitted = 256;
++    // If non-zero, do not preempt more than this many requests per iteration.
++    // Prevents a thundering herd of preemptions when many large prompts
++    // arrive together.
++    int32_t max_preemptions_per_iter = 1;
++    // Minimum scheduler score delta required before we will preempt an active
++    // request to admit a queued one. A new arrival with the same score as the
++    // lowest active request should not thrash; only a clearly higher-scoring
++    // arrival wins. Default is conservative (0 = "strictly greater wins").
++    int64_t min_score_advantage_milli = 0;
++};
++
++// Per-slot snapshot the controller uses to rank victims. Mirrors the fields
++// the existing scheduler score consumes, so the controller's decision is
++// consistent with prefill ordering.
++struct slot_snapshot {
++    int32_t     id                 = -1;
++    bool        processing         = false;
++    // The existing scheduler score, evaluated for this slot. Higher is better.
++    int64_t     score_milli        = 0;
++    // Number of prompt tokens still left to prefill. A slot mid-prefill is a
++    // cheaper preempt target (less work to redo) than one deep into decode,
++    // all else equal - but we let the caller's score decide, not this struct.
++    int32_t     remaining_prefill  = 0;
++    int32_t     decoded_so_far     = 0;
++    // True if the slot is allowed to be preempted at all (e.g. a parent slot
++    // driving parallel sampling children should not be preempted).
++    bool        preemptable        = true;
++};
++
++struct controller_snapshot {
++    std::vector<slot_snapshot> slots;
++    int32_t                     n_processing = 0;
++};
++
++// Pure stateless decision. Returns the id of the slot to preempt, or
++// std::nullopt if the new arrival should just be deferred (no advantage to
++// preempting). candidate_score is the would-be score of the queued arrival
++// being considered for admission.
++//
++// The caller is responsible for actually performing the preempt (KV release
++// + task re-queue). This function only chooses the victim.
++std::optional<int32_t> choose_preempt_victim(
++        const controller_snapshot & snap,
++        int64_t candidate_score,
++        const admission_config & cfg);
++
++// Helper: count processing slots.
++inline int32_t count_processing(const controller_snapshot & snap) {
++    return snap.n_processing;
++}
++
++} // namespace tessera_admission
+diff --git a/tools/server/server-metrics.cpp b/tools/server/server-metrics.cpp
+new file mode 100644
+index 000000000..dc1a6eeee
+--- /dev/null
++++ b/tools/server/server-metrics.cpp
+@@ -0,0 +1,586 @@
++// server-metrics.cpp: see server-metrics.h for the design rationale.
++//
++// ASCII only. No em-dash, no unicode arrows.
++
++#include "server-metrics.h"
++
++#include "log.h"
++
++#include <algorithm>
++#include <array>
++#include <cassert>
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <random>
++
++// We use httplib for the optional OTLP/HTTP export path, matching the rest of
++// the server. It is a header-only dependency already linked by llama-server.
++// To keep server-context (the static lib) free of an httplib link dependency,
++// the network send lives in a weak stub that the server binary overrides; see
++// otel_http_post() below. If the symbol is unresolved we fall back to stderr.
++
++namespace tessera_metrics {
++
++// Bucket upper bounds in microseconds. The shape mirrors the vLLM histogram
++// defaults: roughly a 1.5x ratio between successive bounds, covering
++// sub-millisecond ITL up to ~30s prefill of a 128k prompt.
++static const std::vector<int64_t> & k_default_bounds_us_v() {
++    static const std::vector<int64_t> v = {
++        100,        // 0.1 ms
++        250,
++        500,
++        1000,       // 1 ms
++        2500,
++        5000,
++        10000,      // 10 ms
++        25000,
++        50000,
++        100000,     // 100 ms
++        250000,
++        500000,
++        1000000,    // 1 s
++        2500000,
++        5000000,
++        10000000,   // 10 s
++        30000000,   // 30 s
++    };
++    return v;
++}
++
++const std::vector<int64_t> & default_bucket_bounds_us() {
++    return k_default_bounds_us_v();
++}
++
++// ---------------------------------------------------------------------------
++// latency_histogram
++// ---------------------------------------------------------------------------
++
++latency_histogram::latency_histogram(std::string name,
++                                     std::string help,
++                                     std::vector<int64_t> bucket_bounds_us,
++                                     size_t window_samples)
++    : name_(std::move(name)),
++      help_(std::move(help)),
++      bounds_us_(std::move(bucket_bounds_us)),
++      window_capacity_(window_samples) {
++    std::sort(bounds_us_.begin(), bounds_us_.end());
++    // One counter per finite bound plus one for +Inf. std::atomic is not
++    // movable, so the bucket array is heap-allocated and indexed manually.
++    n_buckets_ = bounds_us_.size() + 1;
++    buckets_   = std::unique_ptr<std::atomic<uint64_t>[]>(
++        new std::atomic<uint64_t>[n_buckets_]);
++    for (size_t i = 0; i < n_buckets_; ++i) {
++        buckets_[i].store(0, std::memory_order_relaxed);
++    }
++    if (window_capacity_ > 0) {
++        window_.reserve(window_capacity_);
++    }
++}
++
++size_t latency_histogram::bucket_index_for(const std::vector<int64_t> & bounds, int64_t v) {
++    // Linear search is fine: bounds is ~17 entries. Keeps the hot path branch-
++    // predictor friendly and avoids a binary-search call.
++    for (size_t i = 0; i < bounds.size(); ++i) {
++        if (v <= bounds[i]) {
++            return i;
++        }
++    }
++    return bounds.size(); // +Inf bucket
++}
++
++void latency_histogram::record(int64_t value_us) noexcept {
++    if (value_us < 0) {
++        value_us = 0;
++    }
++    // Cumulative buckets: every bound >= value gets incremented. We do the
++    // increment lazily at read time (store the raw count in the matching bin,
++    // accumulate forward in take_snapshot) so record() touches exactly one
++    // cache line.
++    const size_t idx = bucket_index_for(bounds_us_, value_us);
++    buckets_[idx].fetch_add(1, std::memory_order_relaxed);
++    count_.fetch_add(1, std::memory_order_relaxed);
++    sum_us_.fetch_add(value_us, std::memory_order_relaxed);
++
++    if (window_capacity_ == 0) {
++        return;
++    }
++    // Sliding window append. The mutex is only taken on the inference thread
++    // (record()) and the rare /metrics read, so contention is negligible.
++    {
++        std::lock_guard<std::mutex> lk(window_mu_);
++        if (window_.size() < window_capacity_) {
++            window_.push_back(value_us);
++        } else {
++            window_[window_head_] = value_us;
++            window_head_ = (window_head_ + 1) % window_capacity_;
++            if (window_head_ == 0) {
++                window_filled_ = true;
++            }
++        }
++    }
++}
++
++static double percentile_from_sorted(std::vector<int64_t> & sorted, double q) {
++    if (sorted.empty()) {
++        return 0.0;
++    }
++    // Nearest-rank percentile (matches what most ops dashboards expect for
++    // small sample sets).
++    const size_t n = sorted.size();
++    if (n == 1) {
++        return (double) sorted[0];
++    }
++    double rank = q * (double) (n - 1);
++    size_t lo = (size_t) rank;
++    size_t hi = lo + 1 < n ? lo + 1 : lo;
++    double frac = rank - (double) lo;
++    return (double) sorted[lo] + frac * ((double) sorted[hi] - (double) sorted[lo]);
++}
++
++latency_histogram::snapshot latency_histogram::take_snapshot() const {
++    snapshot s;
++    s.name = name_;
++    s.help = help_;
++    s.bucket_bounds_us = bounds_us_;
++    // Convert per-bin counts to cumulative counts.
++    s.bucket_counts.resize(n_buckets_, 0);
++    uint64_t running = 0;
++    for (size_t i = 0; i < n_buckets_; ++i) {
++        running += buckets_[i].load(std::memory_order_relaxed);
++        s.bucket_counts[i] = running;
++    }
++    s.count   = count_.load(std::memory_order_relaxed);
++    s.sum_us  = sum_us_.load(std::memory_order_relaxed);
++
++    if (window_capacity_ > 0) {
++        std::vector<int64_t> w;
++        {
++            std::lock_guard<std::mutex> lk(window_mu_);
++            w = window_;
++        }
++        std::sort(w.begin(), w.end());
++        s.p50_us = percentile_from_sorted(w, 0.50);
++        s.p95_us = percentile_from_sorted(w, 0.95);
++        s.p99_us = percentile_from_sorted(w, 0.99);
++    } else {
++        // No window: derive percentiles from cumulative buckets. Coarser but
++        // still useful. Linear-interpolate within the bucket that crosses the
++        // quantile rank.
++        const uint64_t total = s.count;
++        auto pct_from_buckets = [&](double q) -> double {
++            if (total == 0) return 0.0;
++            const double target = q * (double) total;
++            int64_t prev_bound = 0;
++            uint64_t prev_count = 0;
++            for (size_t i = 0; i < bounds_us_.size(); ++i) {
++                if ((double) s.bucket_counts[i] >= target) {
++                    uint64_t in_bucket = s.bucket_counts[i] - prev_count;
++                    if (in_bucket == 0) {
++                        return (double) bounds_us_[i];
++                    }
++                    double frac = (target - (double) prev_count) / (double) in_bucket;
++                    return (double) prev_bound + frac * ((double) bounds_us_[i] - (double) prev_bound);
++                }
++                prev_bound = bounds_us_[i];
++                prev_count = s.bucket_counts[i];
++            }
++            return (double) prev_bound; // landed in +Inf bucket
++        };
++        s.p50_us = pct_from_buckets(0.50);
++        s.p95_us = pct_from_buckets(0.95);
++        s.p99_us = pct_from_buckets(0.99);
++    }
++    return s;
++}
++
++// ---------------------------------------------------------------------------
++// registry
++// ---------------------------------------------------------------------------
++
++registry::registry()
++    : ttft_("time_to_first_token_seconds",
++            "Time from request arrival to first generated token.",
++            default_bucket_bounds_us()),
++      itl_("inter_token_latency_seconds",
++           "Wall time between two consecutive generated tokens for one request.",
++           default_bucket_bounds_us()),
++      e2e_("e2e_request_latency_seconds",
++           "End-to-end request latency, arrival to final token.",
++           default_bucket_bounds_us()),
++      prefill_("request_prefill_time_seconds",
++               "Prompt evaluation wall time per request.",
++               default_bucket_bounds_us()),
++      decode_("request_decode_time_seconds",
++              "Decode iteration wall time.",
++              default_bucket_bounds_us()) {}
++
++registry::snapshots registry::take_snapshots() const {
++    snapshots s;
++    s.ttft    = ttft_.take_snapshot();
++    s.itl     = itl_.take_snapshot();
++    s.e2e     = e2e_.take_snapshot();
++    s.prefill = prefill_.take_snapshot();
++    s.decode  = decode_.take_snapshot();
++    return s;
++}
++
++static void render_one(std::string & out, const latency_histogram::snapshot & s) {
++    // Prometheus histogram exposition format. Metric family name uses the
++    // llamacpp: prefix already adopted by the existing /metrics output so a
++    // single scrape picks up both the old counters and these new histograms.
++    const std::string prefix = "llamacpp:" + s.name;
++    out += "# HELP " + prefix + " " + s.help + "\n";
++    out += "# TYPE " + prefix + " histogram\n";
++    for (size_t i = 0; i < s.bucket_bounds_us.size(); ++i) {
++        char line[128];
++        // bounds are us; published unit is seconds.
++        const double bound_s = (double) s.bucket_bounds_us[i] / 1e6;
++        snprintf(line, sizeof(line), "%s_bucket{le=\"%.6g\"} %llu\n",
++                 prefix.c_str(), bound_s,
++                 (unsigned long long) s.bucket_counts[i]);
++        out += line;
++    }
++    {
++        char line[128];
++        snprintf(line, sizeof(line), "%s_bucket{le=\"+Inf\"} %llu\n",
++                 prefix.c_str(), (unsigned long long) s.bucket_counts.back());
++        out += line;
++    }
++    {
++        char line[128];
++        snprintf(line, sizeof(line), "%s_sum %.6f\n", prefix.c_str(),
++                 (double) s.sum_us / 1e6);
++        out += line;
++    }
++    {
++        char line[128];
++        snprintf(line, sizeof(line), "%s_count %llu\n", prefix.c_str(),
++                 (unsigned long long) s.count);
++        out += line;
++    }
++    // Also publish a P50/P95/P99 gauge alongside the buckets. Operators who
++    // cannot run quantile_estimation_rate on Prometheus still get the numbers
++    // directly. Suffix matches vLLM's "_p50/_p95/_p99" gauge family where one
++    // exists; where vLLM only publishes the histogram, the gauge is additive.
++    auto pct_gauge = [&](const char * suffix, double v_us) {
++        char line[160];
++        snprintf(line, sizeof(line), "llamacpp:%s%s %.6f\n",
++                 s.name.c_str(), suffix, v_us / 1e6);
++        out += line;
++    };
++    pct_gauge("_p50_seconds", s.p50_us);
++    pct_gauge("_p95_seconds", s.p95_us);
++    pct_gauge("_p99_seconds", s.p99_us);
++}
++
++void registry::render_prometheus(std::string & out) const {
++    render_one(out, ttft_.take_snapshot());
++    render_one(out, itl_.take_snapshot());
++    render_one(out, e2e_.take_snapshot());
++    render_one(out, prefill_.take_snapshot());
++    render_one(out, decode_.take_snapshot());
++}
++
++// ---------------------------------------------------------------------------
++// tracer
++// ---------------------------------------------------------------------------
++
++namespace {
++void hex_encode(uint8_t * dst, const uint8_t * src, size_t n) {
++    static const char * k_hex = "0123456789abcdef";
++    for (size_t i = 0; i < n; ++i) {
++        dst[2 * i]     = (uint8_t) k_hex[src[i] >> 4];
++        dst[2 * i + 1] = (uint8_t) k_hex[src[i] & 0x0f];
++    }
++}
++
++bool hex_decode_byte(uint8_t & out, char hi, char lo) {
++    auto nib = [](char c, uint8_t & v) -> bool {
++        if (c >= '0' && c <= '9') { v = (uint8_t)(c - '0');      return true; }
++        if (c >= 'a' && c <= 'f') { v = (uint8_t)(c - 'a' + 10); return true; }
++        if (c >= 'A' && c <= 'F') { v = (uint8_t)(c - 'A' + 10); return true; }
++        return false;
++    };
++    uint8_t h, l;
++    if (!nib(hi, h) || !nib(lo, l)) {
++        return false;
++    }
++    out = (uint8_t)((h << 4) | l);
++    return true;
++}
++} // namespace
++
++tracer::tracer(config cfg) : cfg_(std::move(cfg)) {}
++
++void tracer::random_bytes(uint8_t * buf, size_t n) {
++    // thread_local for cheap draws; the rng is seeded from the clock + address
++    // entropy so two processes started together do not collide.
++    static thread_local std::mt19937_64 rng{
++        (uint64_t) std::chrono::high_resolution_clock::now().time_since_epoch().count()
++        ^ (uint64_t) buf};
++    for (size_t i = 0; i + sizeof(uint64_t) <= n; i += sizeof(uint64_t)) {
++        uint64_t v = rng();
++        std::memcpy(buf + i, &v, sizeof(v));
++    }
++    if (n % sizeof(uint64_t) != 0) {
++        uint64_t v = rng();
++        std::memcpy(buf + (n - (n % sizeof(uint64_t))), &v, n % sizeof(uint64_t));
++    }
++}
++
++bool tracer::sampled() const {
++    if (cfg_.sample_rate >= 1.0) return true;
++    if (cfg_.sample_rate <= 0.0) return false;
++    static thread_local std::mt19937_64 rng{std::random_device{}()};
++    std::uniform_real_distribution<double> dist(0.0, 1.0);
++    return dist(rng) < cfg_.sample_rate;
++}
++
++span_handle tracer::start_root(const std::string & name, uint8_t trace_id_out[16]) {
++    if (!cfg_.enabled || !sampled()) {
++        return span_handle{};
++    }
++    span_descriptor d;
++    d.name      = name;
++    d.start_us  = 0; // filled by the handle
++    d.duration_us = 0;
++    tracer::random_bytes(d.trace_id, 16);
++    tracer::random_bytes(d.span_id, 8);
++    std::memset(d.parent_span_id, 0, 8);
++    if (trace_id_out) {
++        std::memcpy(trace_id_out, d.trace_id, 16);
++    }
++    return span_handle(this, std::move(d), std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::high_resolution_clock::now().time_since_epoch()).count());
++}
++
++span_handle tracer::start_child(const std::string & name, const uint8_t parent_span_id[8]) {
++    if (!cfg_.enabled || !sampled()) {
++        return span_handle{};
++    }
++    span_descriptor d;
++    d.name      = name;
++    std::memset(d.trace_id, 0, 16);
++    tracer::random_bytes(d.trace_id, 16); // a rootless child gets a fresh trace
++    tracer::random_bytes(d.span_id, 8);
++    if (parent_span_id) {
++        std::memcpy(d.parent_span_id, parent_span_id, 8);
++    } else {
++        std::memset(d.parent_span_id, 0, 8);
++    }
++    return span_handle(this, std::move(d), std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::high_resolution_clock::now().time_since_epoch()).count());
++}
++
++span_handle tracer::start_child(const std::string & name,
++                                const uint8_t parent_trace_id[16],
++                                const uint8_t parent_span_id[8]) {
++    if (!cfg_.enabled || !sampled()) {
++        return span_handle{};
++    }
++    span_descriptor d;
++    d.name      = name;
++    if (parent_trace_id) {
++        std::memcpy(d.trace_id, parent_trace_id, 16);
++    } else {
++        tracer::random_bytes(d.trace_id, 16);
++    }
++    tracer::random_bytes(d.span_id, 8);
++    if (parent_span_id) {
++        std::memcpy(d.parent_span_id, parent_span_id, 8);
++    } else {
++        std::memset(d.parent_span_id, 0, 8);
++    }
++    return span_handle(this, std::move(d), std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::high_resolution_clock::now().time_since_epoch()).count());
++}
++
++// Minimal JSON string escape. We only need to handle the characters that show
++// up in span names / attribute values; quotes, backslashes, and control chars.
++static std::string json_escape(const std::string & in) {
++    std::string out;
++    out.reserve(in.size() + 4);
++    for (char c : in) {
++        switch (c) {
++            case '"':  out += "\\\""; break;
++            case '\\': out += "\\\\"; break;
++            case '\b': out += "\\b"; break;
++            case '\f': out += "\\f"; break;
++            case '\n': out += "\\n"; break;
++            case '\r': out += "\\r"; break;
++            case '\t': out += "\\t"; break;
++            default:
++                if ((unsigned char) c < 0x20) {
++                    char buf[8];
++                    snprintf(buf, sizeof(buf), "\\u%04x", c);
++                    out += buf;
++                } else {
++                    out += c;
++                }
++        }
++    }
++    return out;
++}
++
++// Optional weak override point for HTTP export. The default definition here
++// is a no-op that returns false, so emit_locked() falls back to stderr when no
++// override is linked in. A binary that links httplib (e.g. llama-server) may
++// provide a strong definition that actually POSTs to the OTLP/HTTP endpoint;
++// the weak attribute lets that override win at link time without changing the
++// call site. Defining it here (rather than only declaring it) keeps the static
++// library self-contained across all link environments.
++__attribute__((weak)) bool otel_http_post(const std::string & /*endpoint*/,
++                                          const std::string & /*ndjson_payload*/) {
++    return false;
++}
++
++
++void tracer::emit_locked(const span_descriptor & d) {
++    // One JSON object per line, newline-delimited. This is the format the
++    // OpenTelemetry collector's "file" exporter reads, and is easy to forward
++    // to OTLP/HTTP with a sidecar.
++    char trace_hex[33];
++    char span_hex[17];
++    char parent_hex[17];
++    hex_encode((uint8_t *) trace_hex, d.trace_id, 16); trace_hex[32] = 0;
++    hex_encode((uint8_t *) span_hex,  d.span_id,  8);  span_hex[16]  = 0;
++    hex_encode((uint8_t *) parent_hex, d.parent_span_id, 8); parent_hex[16] = 0;
++
++    std::string line;
++    line.reserve(256);
++    line += "{\"name\":\"";
++    line += json_escape(d.name);
++    line += "\",\"traceId\":\"";
++    line += trace_hex;
++    line += "\",\"spanId\":\"";
++    line += span_hex;
++    line += "\",\"parentSpanId\":\"";
++    // OTel convention: all-zero parent span id means "root" and is omitted.
++    bool all_zero = true;
++    for (int i = 0; i < 8; ++i) {
++        if (d.parent_span_id[i] != 0) { all_zero = false; break; }
++    }
++    if (!all_zero) {
++        line += parent_hex;
++    }
++    line += "\",\"startTimeUnixNano\":";
++    char numbuf[32];
++    snprintf(numbuf, sizeof(numbuf), "%llu", (unsigned long long)(d.start_us * 1000ull));
++    line += numbuf;
++    line += ",\"durationNanos\":";
++    snprintf(numbuf, sizeof(numbuf), "%llu", (unsigned long long)(d.duration_us * 1000ull));
++    line += numbuf;
++    line += ",\"resource\":{\"service.name\":\"";
++    line += json_escape(cfg_.service_name);
++    line += "\"}";
++    if (!d.attributes.empty()) {
++        line += ",\"attributes\":[";
++        bool first = true;
++        for (const auto & kv : d.attributes) {
++            if (!first) line += ",";
++            first = false;
++            line += "{\"key\":\"";
++            line += json_escape(kv.first);
++            line += "\",\"value\":{\"stringValue\":\"";
++            line += json_escape(kv.second);
++            line += "\"}}";
++        }
++        line += "]";
++    }
++    line += "}\n";
++
++    if (!cfg_.endpoint.empty() && otel_http_post && otel_http_post(cfg_.endpoint, line)) {
++        return;
++    }
++    // Fallback: stderr, one line per span. Flush so a live `tail -f` works.
++    std::fwrite(line.data(), 1, line.size(), stderr);
++    std::fflush(stderr);
++}
++
++void tracer::emit(span_descriptor d) {
++    if (!cfg_.enabled) return;
++    std::lock_guard<std::mutex> lk(mu_);
++    emit_locked(d);
++}
++
++bool tracer::parse_traceparent(const std::string & header,
++                               uint8_t trace_id[16],
++                               uint8_t parent_span_id[8],
++                               uint8_t & flags) {
++    // Format: "00-<32 hex trace>-<16 hex span>-<2 hex flags>"
++    if (header.size() < 55) return false;
++    if (header[2] != '-' || header[35] != '-' || header[52] != '-') return false;
++    for (int i = 0; i < 16; ++i) {
++        if (!hex_decode_byte(trace_id[i], header[3 + 2 * i], header[3 + 2 * i + 1])) return false;
++    }
++    for (int i = 0; i < 8; ++i) {
++        if (!hex_decode_byte(parent_span_id[i], header[36 + 2 * i], header[36 + 2 * i + 1])) return false;
++    }
++    uint8_t f;
++    if (!hex_decode_byte(f, header[53], header[54])) return false;
++    flags = f;
++    return true;
++}
++
++std::string tracer::format_traceparent(const uint8_t trace_id[16],
++                                       const uint8_t span_id[8],
++                                       uint8_t flags) {
++    char out[56];
++    char trace_hex[33];
++    char span_hex[17];
++    hex_encode((uint8_t *) trace_hex, trace_id, 16); trace_hex[32] = 0;
++    hex_encode((uint8_t *) span_hex,  span_id,  8);  span_hex[16]  = 0;
++    snprintf(out, sizeof(out), "00-%s-%s-%02x", trace_hex, span_hex, flags);
++    return std::string(out);
++}
++
++// ---------------------------------------------------------------------------
++// span_handle
++// ---------------------------------------------------------------------------
++
++span_handle::span_handle(class tracer * o, span_descriptor d, int64_t start_us)
++    : owner_(o), desc_(std::move(d)), start_us_(start_us) {}
++
++span_handle::span_handle(span_handle && o) noexcept
++    : owner_(o.owner_), desc_(std::move(o.desc_)),
++      start_us_(o.start_us_), finished_(o.finished_) {
++    o.owner_   = nullptr;
++    o.finished_ = true;
++}
++
++span_handle & span_handle::operator=(span_handle && o) noexcept {
++    if (this != &o) {
++        emit();
++        owner_    = o.owner_;
++        desc_     = std::move(o.desc_);
++        start_us_ = o.start_us_;
++        finished_ = o.finished_;
++        o.owner_   = nullptr;
++        o.finished_ = true;
++    }
++    return *this;
++}
++
++span_handle::~span_handle() {
++    emit();
++}
++
++void span_handle::emit() {
++    if (finished_) return;
++    finished_ = true;
++    if (!owner_) return;
++    int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::high_resolution_clock::now().time_since_epoch()).count();
++    desc_.start_us    = start_us_;
++    desc_.duration_us = std::max<int64_t>(0, now_us - start_us_);
++    owner_->emit(std::move(desc_));
++    owner_ = nullptr;
++}
++
++void span_handle::set_attribute(const std::string & key, const std::string & value) {
++    if (!owner_) return;
++    desc_.attributes.emplace_back(key, value);
++}
++
++} // namespace tessera_metrics
+diff --git a/tools/server/server-metrics.h b/tools/server/server-metrics.h
+new file mode 100644
+index 000000000..bd81b19af
+--- /dev/null
++++ b/tools/server/server-metrics.h
+@@ -0,0 +1,290 @@
++#pragma once
++
++// server-metrics: latency distributions + OpenTelemetry-compatible tracing.
++//
++// This is the observability layer called out as a secondary gap in the vLLM
++// concurrency study (Section 12). The existing /metrics endpoint exposes
++// Prometheus counters and instantaneous gauges but no latency *distributions*,
++// so P50/P99 TTFT/ITL under load is invisible. vLLM V1 ships Prometheus
++// histograms plus OpenTelemetry tracing.
++//
++// Two pieces live here:
++//
++//   1. latency_histogram - a fixed-bucket cumulative histogram with a sliding
++//      ring of recent samples so percentiles reflect current load, not the
++//      whole process lifetime. Renders as a Prometheus histogram in /metrics.
++//
++//   2. server_tracer - minimal W3C trace-context propagation + structured
++//      JSON span export. We deliberately do NOT pull in the OpenTelemetry
++//      C++ SDK: it is a large dependency (abseil, protobuf, gRPC...) that
++//      conflicts with llama.cpp's single-static-binary portability goal.
++//      Instead we implement the wire-format that OTel collectors accept
++//      (W3C traceparent/tracestate headers + newline-delimited JSON spans)
++//      which gives end-to-end tracing with zero new link-time deps. The
++//      decision is documented in tools/server/README.md.
++//
++// ASCII only. No em-dash, no unicode arrows.
++
++#include <atomic>
++#include <cstdint>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <vector>
++
++namespace tessera_metrics {
++
++// Default histogram boundaries, in microseconds, shared across TTFT / ITL /
++// e2e / prefill / decode. The bucket layout is exponential-ish and matches the
++// shape vLLM publishes (sub-millisecond to ~30s). Values outside the range
++// land in the +Inf bucket.
++//
++// Microseconds (not seconds) keep integer arithmetic exact for ITL, which is
++// routinely a few hundred us on Apple Silicon. The /metrics exporter divides
++// by 1e6 so the published unit is seconds, matching vLLM's metric names.
++const std::vector<int64_t> & default_bucket_bounds_us();
++
++// Cumulative histogram with a sliding sample window.
++//
++// Thread-safety: a single instance is *not* expected to be hit from many
++// threads at high rate (the server drives update_slots on one thread), but
++// /metrics is served from an HTTP worker, so a mutex guards the read path.
++// The write path uses a relaxed atomic count per bucket plus a mutex on the
++// ring buffer append. Keep record() lock-free on the hot path.
++class latency_histogram {
++  public:
++    // window_samples caps how many recent observations the in-memory
++    // percentile estimate uses. 0 = use all samples since init (no sliding
++    // window, pure cumulative like a Prometheus histogram).
++    explicit latency_histogram(std::string name,
++                               std::string help,
++                               std::vector<int64_t> bucket_bounds_us,
++                               size_t window_samples = 4096);
++
++    // Record one observation (microseconds). Cheap: a bucket bin plus an
++    // atomic bump. Ring-buffer append takes a short mutex.
++    void record(int64_t value_us) noexcept;
++
++    struct snapshot {
++        std::string               name;
++        std::string               help;
++        std::vector<int64_t>      bucket_bounds_us;   // upper bounds (sorted)
++        std::vector<uint64_t>     bucket_counts;      // cumulative (# <= bound)
++        uint64_t                  count       = 0;    // cumulative observations
++        int64_t                   sum_us      = 0;    // cumulative sum
++        // Percentiles estimated over the sliding window (or all samples if no
++        // window). These are *not* the cumulative buckets; they are the
++        // near-realtime distribution the operator actually wants.
++        double                    p50_us      = 0.0;
++        double                    p95_us      = 0.0;
++        double                    p99_us      = 0.0;
++    };
++
++    snapshot take_snapshot() const;
++
++    const std::string & name() const { return name_; }
++
++  private:
++    static size_t bucket_index_for(const std::vector<int64_t> & bounds, int64_t v);
++
++    std::string               name_;
++    std::string               help_;
++    std::vector<int64_t>      bounds_us_;        // sorted upper bounds, +Inf implied
++    // Cumulative bucket counts are written from the inference thread and read
++    // from the HTTP thread. Each entry is a distinct atomic so record() never
++    // contends with another writer. Held in a unique_ptr array because
++    // std::atomic is not movable/copyable and so cannot live in a vector.
++    std::unique_ptr<std::atomic<uint64_t>[]> buckets_;
++    size_t                              n_buckets_ = 0;
++    std::atomic<uint64_t>               count_ { 0 };
++    std::atomic<int64_t>                sum_us_ { 0 };
++
++    // Sliding window for percentile estimation. Disabled when capacity_ == 0.
++    const size_t            window_capacity_;
++    mutable std::mutex      window_mu_;
++    std::vector<int64_t>    window_;             // ring buffer
++    size_t                  window_head_ = 0;    // next write position
++    bool                    window_filled_ = false;
++};
++
++// Registry owning the canonical set of histograms. Constructed once by the
++// server context. The /metrics handler pulls snapshots from here.
++class registry {
++  public:
++    registry();
++
++    // Lifecycle hooks called from the inference thread. All take microseconds
++    // measured at the call site.
++    //   TTFT: arrival -> first generated token.
++    //   ITL:  gap between two consecutive generated tokens.
++    //   e2e:  arrival -> final token.
++    //   prefill: prompt evaluation wall time.
++    //   decode:   one decode iteration wall time.
++    void record_ttft(int64_t us)            { ttft_.record(us); }
++    void record_itl(int64_t us)             { itl_.record(us); }
++    void record_e2e(int64_t us)             { e2e_.record(us); }
++    void record_prefill(int64_t us)         { prefill_.record(us); }
++    void record_decode(int64_t us)          { decode_.record(us); }
++
++    struct snapshots {
++        latency_histogram::snapshot ttft;
++        latency_histogram::snapshot itl;
++        latency_histogram::snapshot e2e;
++        latency_histogram::snapshot prefill;
++        latency_histogram::snapshot decode;
++    };
++
++    snapshots take_snapshots() const;
++
++    // Render all histograms in Prometheus exposition format (one block per
++    // histogram: _bucket{le="..."} lines, _sum, _count). Matches vLLM's
++    // metric names (time_to_first_token_seconds, inter_token_latency_seconds,
++    // e2e_request_latency_seconds, request_prefill_time_seconds,
++    // request_decode_time_seconds).
++    void render_prometheus(std::string & out) const;
++
++  private:
++    latency_histogram ttft_;
++    latency_histogram itl_;
++    latency_histogram e2e_;
++    latency_histogram prefill_;
++    latency_histogram decode_;
++};
++
++// ---------------------------------------------------------------------------
++// Tracing
++//
++// Minimal W3C trace-context + newline-delimited JSON span export. See the
++// header comment for why we did not adopt the OTel C++ SDK.
++//
++// A trace is a tree of spans. Each span has:
++//   - 16-byte trace_id (hex), shared by every span in the same request.
++//   - 8-byte span_id (hex).
++//   - 8-byte parent_span_id (hex), or all-zero for a root span.
++//   - name, start_us, duration_us.
++//   - a few string attributes.
++//
++// Spans are emitted to a configurable sink (stderr by default, or an OTLP/HTTP
++// collector when --otel-endpoint is set). The wire format is one JSON object
++// per line so a collector like `otel-collector --file` can ingest directly,
++// or a sidecar can forward to OTLP/HTTP.
++
++struct span_descriptor {
++    std::string name;
++    int64_t     start_us;
++    int64_t     duration_us;
++    uint8_t     trace_id[16];
++    uint8_t     span_id[8];
++    uint8_t     parent_span_id[8];
++    std::vector<std::pair<std::string, std::string>> attributes;
++};
++
++// RAII handle returned by tracer::start_span. On destruction it records the
++// duration and enqueues the span for emission.
++class span_handle {
++  public:
++    span_handle() = default;  // an empty handle is a no-op (move-from or disabled tracer)
++    span_handle(span_handle &&) noexcept;
++    span_handle & operator=(span_handle &&) noexcept;
++    span_handle(const span_handle &)            = delete;
++    span_handle & operator=(const span_handle &) = delete;
++    ~span_handle();
++
++    void set_attribute(const std::string & key, const std::string & value);
++    bool active() const { return owner_ != nullptr; }
++
++  private:
++    friend class tracer;
++    span_handle(class tracer * o, span_descriptor d, int64_t start_us);
++    void emit();
++
++    class tracer *  owner_   = nullptr;
++    span_descriptor desc_;
++    int64_t         start_us_ = 0;
++    bool            finished_ = false;
++};
++
++class tracer {
++  public:
++    struct config {
++        bool        enabled          = false;
++        std::string service_name     = "tessera-server";
++        // OTLP/HTTP endpoint (e.g. "http://collector:4318/v1/traces"). If
++        // empty, spans are written to stderr as newline-delimited JSON.
++        std::string endpoint;
++        // Sampling probability in [0,1]. 1.0 = record everything. Keeps the
++        // hot path cheap when tracing is on but only a sample is needed.
++        double      sample_rate      = 1.0;
++    };
++
++    tracer() = default;
++    explicit tracer(config cfg);
++
++    // Replace the configuration in place. Provided because tracer holds a
++    // mutex and is therefore not copy/move-assignable, so `t = tracer(cfg)`
++    // does not compile.
++    void reconfigure(config cfg) {
++        std::lock_guard<std::mutex> lk(mu_);
++        cfg_ = std::move(cfg);
++    }
++
++    bool enabled() const { return cfg_.enabled; }
++
++    // Start a root span for a new request. Returns an inactive handle if the
++    // tracer is disabled or the request was dropped by sampling. The returned
++    // 16-byte trace id is written into trace_id_out (used to propagate the
++    // W3C traceparent back in the HTTP response, if desired).
++    span_handle start_root(const std::string & name, uint8_t trace_id_out[16]);
++
++    // Start a child span of an existing active span identified by its span id.
++    span_handle start_child(const std::string & name, const uint8_t parent_span_id[8]);
++
++    // Convenience: start a child of the root span whose id we hand out at
++    // request entry. parent_trace_id is the request's trace id; the first
++    // span created with that trace id becomes the implicit parent.
++    span_handle start_child(const std::string & name, const uint8_t parent_trace_id[16],
++                            const uint8_t parent_span_id[8]);
++
++    // Emit a finished span. Called automatically by span_handle's destructor.
++    void emit(span_descriptor d);
++
++    // Parse a W3C traceparent header ("00-<trace_id>-<span_id>-<flags>"). On
++    // success returns true and fills the output buffers; the inbound span_id
++    // becomes the parent of the request's root span. Used so a caller's
++    // trace is continued into the server.
++    static bool parse_traceparent(const std::string & header,
++                                  uint8_t trace_id[16],
++                                  uint8_t parent_span_id[8],
++                                  uint8_t & flags);
++
++    // Format a traceparent header for outbound propagation.
++    static std::string format_traceparent(const uint8_t trace_id[16],
++                                          const uint8_t span_id[8],
++                                          uint8_t flags);
++
++    // Public helpers for callers that construct span descriptors directly
++    // (e.g. to backdate a span to a known arrival time). Each fills the
++    // buffer with cryptographically-random bytes drawn from the same source
++    // the RAII handles use.
++    static void new_trace_id(uint8_t trace_id[16]) { random_bytes(trace_id, 16); }
++    static void new_span_id(uint8_t span_id[8])    { random_bytes(span_id, 8); }
++
++  private:
++    static void random_bytes(uint8_t * buf, size_t n);
++    bool        sampled() const;
++    void        emit_locked(const span_descriptor & d);
++
++    config            cfg_;
++    mutable std::mutex mu_;
++    // Last-resort network send happens under mu_ so concurrent span finishes
++    // do not interleave lines on stderr or clobber a socket.
++};
++
++// Optional override point for OTLP/HTTP span export. The default definition
++// (in server-metrics.cpp) is a weak no-op that returns false, causing the
++// tracer to fall back to stderr. A binary that links an HTTP client may
++// provide a strong definition that actually POSTs the newline-delimited JSON
++// payload to the endpoint; the weak attribute lets that override win.
++bool otel_http_post(const std::string & endpoint, const std::string & ndjson_payload);
++
++} // namespace tessera_metrics
+diff --git a/tools/server/server-prefill-policy.cpp b/tools/server/server-prefill-policy.cpp
+new file mode 100644
+index 000000000..3cb87987c
+--- /dev/null
++++ b/tools/server/server-prefill-policy.cpp
+@@ -0,0 +1,68 @@
++// server-prefill-policy.cpp: see server-prefill-policy.h.
++//
++// ASCII only. No em-dash, no unicode arrows.
++
++#include "server-prefill-policy.h"
++
++#include <algorithm>
++
++namespace tessera_prefill {
++
++void budget_calculator::reset(int32_t n_batch,
++                              int32_t already_in_batch,
++                              int32_t n_decodes_pending) {
++    // Two limits apply simultaneously:
++    //   1. the shared per-iteration prefill cap (cfg_.iteration_cap_tokens)
++    //   2. the physical batch size n_batch
++    // The latter is consumed by both decode tokens (already_in_batch +
++    // n_decodes_pending) and prefill tokens. We must leave at least
++    // decode_floor_tokens of headroom so the decodes already chosen for this
++    // iteration still fit.
++    int32_t batch_room = n_batch - already_in_batch;
++    // Reserve space for the decodes we have not yet added. Clamp at 0: a
++    // negative headroom means the caller already overfilled the batch.
++    batch_room -= std::max<int32_t>(0, n_decodes_pending);
++    batch_room  = std::max<int32_t>(0, batch_room - cfg_.decode_floor_tokens);
++    batch_room_ = batch_room;
++
++    if (cfg_.iteration_cap_tokens > 0) {
++        cap_       = cfg_.iteration_cap_tokens;
++        remaining_ = cap_;
++    } else {
++        // No shared cap: behave like the legacy code, only the batch size
++        // limits prefill.
++        cap_       = 0;
++        remaining_ = std::numeric_limits<int32_t>::max();
++    }
++    capped_any_ = false;
++}
++
++int32_t budget_calculator::request_quantum(int32_t slot_remaining_tokens,
++                                            int32_t forced_quantum) {
++    if (slot_remaining_tokens <= 0) {
++        return 0;
++    }
++    // The per-slot forced quantum already accounts for long-context adaptive
++    // shrinking; we take the min of that and the slot's remaining work.
++    int32_t q = std::min<int32_t>(forced_quantum, slot_remaining_tokens);
++    if (q <= 0) {
++        return 0;
++    }
++    // Then clamp to the shared budget and the batch headroom.
++    int32_t q_before = q;
++    q = std::min<int32_t>(q, remaining_);
++    q = std::min<int32_t>(q, batch_room_);
++    if (q <= 0) {
++        return 0;
++    }
++    if (q < q_before) {
++        capped_any_ = true;
++    }
++    // Reserve the granted tokens. A negative remaining_ here would indicate a
++    // logic bug in the caller; clamp to keep the policy self-correcting.
++    remaining_ -= q;
++    batch_room_ -= q;
++    return q;
++}
++
++} // namespace tessera_prefill
+diff --git a/tools/server/server-prefill-policy.h b/tools/server/server-prefill-policy.h
+new file mode 100644
+index 000000000..b281d3326
+--- /dev/null
++++ b/tools/server/server-prefill-policy.h
+@@ -0,0 +1,89 @@
++#pragma once
++
++// server-prefill-policy: per-iteration shared prefill cap.
++//
++// This closes the vLLM concurrency-study gap #1: llama-server does NOT cap
++// per-request prefill per step, so one long prompt stalls all decodes. vLLM V1
++// defaults to 8192-token chunks (Sarathi-Serve showed up to 10x decode and
++// 1.33x e2e gains). The existing prefill_quantum_for() caps a single slot's
++// contribution when interactive work is pending, but it leaves no *shared*
++// budget across slots: N simultaneous long prefills can still push every
++// decode out of the iteration.
++//
++// This module owns the policy; the integration into pre_decode() lives in
++// server-context.cpp. The policy is a host-side scheduling decision only -
++// no new kernels, composes naturally with the paged KV (each chunk just
++// appends blocks) and the overlap scheduler.
++//
++// Lifecycle: one budget_calculator per server_context_impl. reset() is called
++// at the top of each pre_decode() pass, then each prefill slot calls
++// request_quantum() and consumes the returned number of tokens.
++//
++// ASCII only. No em-dash, no unicode arrows.
++
++#include <cstdint>
++
++namespace tessera_prefill {
++
++struct policy_config {
++    // Shared per-iteration prefill cap, in tokens. Default matches vLLM V1's
++    // long-prefill-token-threshold. 0 disables the cap (legacy behavior).
++    int32_t iteration_cap_tokens = 8192;
++    // Minimum reserved for decode when the batch is mixed. A prefill is
++    // rejected by request_quantum() if granting even one more token would
++    // leave fewer than this many tokens of headroom for the decodes already
++    // queued in the batch. Set to 1 to interleave at the smallest possible
++    // granularity (one decode token of headroom).
++    int32_t decode_floor_tokens  = 1;
++};
++
++// Stateful helper that hands out prefill quanta from a shared per-iteration
++// budget. One instance per server_context_impl; reused across iterations.
++class budget_calculator {
++  public:
++    explicit budget_calculator(policy_config cfg) : cfg_(cfg) {}
++
++    void configure(policy_config cfg) { cfg_ = cfg; }
++    const policy_config & config() const { return cfg_; }
++
++    // Call at the start of each pre_decode(), before any prefill slot is
++    // visited. Records the batch size budget for this iteration.
++    //   n_batch                  : llama_n_batch(ctx_tgt)
++    //   already_in_batch         : tokens already added to the batch this
++    //                              iteration (decodes from generating slots)
++    //   n_decodes_pending        : number of decode tokens we expect to add
++    //                              (slots in SLOT_STATE_GENERATING)
++    void reset(int32_t n_batch, int32_t already_in_batch, int32_t n_decodes_pending);
++
++    // Returns the maximum number of prefill tokens this slot may add to the
++    // batch right now. reduced_from_forced is the value the existing
++    // prefill_quantum_for() would grant for this slot in isolation (it
++    // already folds in long-context adaptive shrinking); the shared budget may
++    // reduce it further.
++    //
++    //   slot_remaining_tokens : how many prompt tokens this slot still needs
++    //                            to ingest
++    //   forced_quantum         : the per-slot quantum from prefill_quantum_for
++    //
++    // The result is >0 as long as both the shared cap and the batch headroom
++    // allow at least one token; otherwise 0 and the slot defers to the next
++    // iteration.
++    int32_t request_quantum(int32_t slot_remaining_tokens, int32_t forced_quantum);
++
++    // How many tokens of the shared cap remain (diagnostic for /metrics).
++    int32_t remaining() const { return remaining_; }
++
++    // True iff the cap reduced at least one slot's quantum since the last
++    // reset(). Used by metrics to count "shared-cap yields" separately from
++    // the existing per-slot adaptive yields.
++    bool capped_any() const { return capped_any_; }
++
++  private:
++    policy_config cfg_;
++    int32_t cap_             = 0;   // effective cap this iteration (0 = off)
++    int32_t remaining_       = 0;   // shared budget still available
++    int32_t batch_room_      = 0;   // headroom in the physical batch
++    bool    capped_any_      = false;
++};
++
++} // namespace tessera_prefill

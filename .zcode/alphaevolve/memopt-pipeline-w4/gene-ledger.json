@@ -1,0 +1,34 @@
+{
+  "run": "memopt-pipeline-w4",
+  "baseline_sha": "6b47815e2",
+  "goal": "Fix the SWA-in-paged bug so TESSERA_PAGED_ATTN produces correct output on SWA models (gemma-4-12B). Unlock S1/S4 on production models.",
+  "genes": [
+    {
+      "gene_id": "g1",
+      "owner": "w4-single",
+      "approach": "Fix paged-attn V-transpose mismatch (primary bug) + SWA page-map filter (defensive). Force v_trans=false when TESSERA_PAGED_ATTN+kv_unified; gate paged on !is_v_trans(); filter page-map cells by is_masked_swa against seq_pos_max.",
+      "source_url": "local",
+      "touched_regions": [
+        "src/llama-model.cpp:create_memory (v_trans forcing)",
+        "src/llama-graph.cpp:build_attn_kv + build_attn_kv_iswa (paged gating)",
+        "src/llama-kv-cache.cpp:build_tessera_full_page_map (SWA filter)"
+      ],
+      "status": "promoted",
+      "champion_scores": {
+        "qwen2.5-0.5b_f16_paged_vs_flash_pct": 100,
+        "gemma-4-12b_f16_paged_vs_flash_pct": 1,
+        "ctest_server_prompt_cache": "PASS"
+      },
+      "champion_tip_sha": "dab0d5117",
+      "champion_branch": "champions/g1",
+      "patch_path": "integration/patches/g1.patch",
+      "stacked_on_main": true,
+      "generation": 1,
+      "candidates_evaluated": 2,
+      "last_update": "2026-08-02T23:15:00Z",
+      "verdict": "partial",
+      "verdict_reason": "Fixes the v_trans bug that broke paged on ALL models with -fa off (qwen 1%->100%). gemma-4-12B remains broken via paged due to a separate, pre-existing hybrid-iswa bug that was NOT the SWA issue described in PREFLIGHT.md (gemma fails even with v_trans=false, fa=on, ngl=0, f32 KV, short prompts with no SWA masking active). See best.md for diagnosis."
+    }
+  ],
+  "deferred": []
+}

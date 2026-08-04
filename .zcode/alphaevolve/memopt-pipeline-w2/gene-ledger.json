@@ -1,0 +1,91 @@
+{
+  "run": "memopt-pipeline-w2",
+  "baseline_sha": "2200c659d4e67e638dab67b43f672a1921bfeb8d",
+  "goal": "reduce peak RSS of inference pipeline on 12B Q5_K_M at pp512/n32 (16GB Apple M1)",
+  "metric": "-peak_RSS_bytes (MAXIMIZE); secondary pp512/tg32 t/s; correctness ctest + logit-diff",
+  "genes": [
+    {
+      "gene_id": "s2",
+      "owner": "w2-single",
+      "approach": "S2: mmap-backed KV residency (lazy physical commit) via LLAMA_KV_LAZY_CLEAR - skip eager ggml_backend_buffer_clear on KV init",
+      "source_url": "https://arxiv.org/abs/2405.04437 (vAttention) + https://github.com/ggml-org/llama.cpp/issues/20757",
+      "touched_regions": ["src/llama-kv-cache.cpp"],
+      "status": "promoted",
+      "stacked_on_main": true,
+      "champion_scores": {
+        "peak_RSS_bytes_5run_median_lazy_ON": 8891891712,
+        "peak_RSS_bytes_5run_median_baseline": 9067905024,
+        "delta_RSS_bytes": -176013312,
+        "delta_RSS_pct": -1.94,
+        "pp512_tps": 68.87,
+        "tg32_tps": 6.45,
+        "correctness_logit_diff_32": 0,
+        "correctness_ctest_server_prompt_cache": "pass"
+      },
+      "champion_tip_sha": "be087a037ff3f8049c6751eb0e65d58bc71aa506",
+      "champion_branch": "champions/s2",
+      "patch_path": "integration/patches/s2.patch",
+      "generation": 1,
+      "last_update": "2026-08-02T15:05Z"
+    },
+    {
+      "gene_id": "s3",
+      "owner": "w2-single",
+      "approach": "S3: sliding-window KV eviction helper (llama_memory_seq_evict_oldest) - opt-in, preserves dense invariant via seq_rm+seq_add shift",
+      "source_url": "https://arxiv.org/abs/2306.14048 (H2O) + https://arxiv.org/abs/2309.17453 (StreamingLLM)",
+      "touched_regions": ["include/llama.h", "src/llama-context.cpp"],
+      "status": "promoted",
+      "stacked_on_main": false,
+      "champion_scores": {
+        "peak_RSS_bytes_3run_median": 9068199936,
+        "delta_RSS_bytes_vs_gen0": -344064,
+        "delta_RSS_pct": -0.004,
+        "verdict": "non-compounding (tie; opt-in helper unused by bench)",
+        "correctness_s3_evict_test": "pass (77->16 dense, idempotent, post-eviction decode ok)",
+        "correctness_ctest_server_prompt_cache": "pass"
+      },
+      "champion_tip_sha": "051b6b69a3e1565193a78aed8349daf06ffdd178",
+      "champion_branch": "champions/s3",
+      "patch_path": "integration/patches/s3.patch",
+      "generation": 1,
+      "last_update": "2026-08-02T15:05Z",
+      "stack_skip_reason": "bench-invisible (opt-in helper, unused at pp512/n32); standalone gain ~= 0 fails compounding threshold. Scaffold retained for long-stream workloads."
+    },
+    {
+      "gene_id": "s7",
+      "owner": "w2-single",
+      "approach": "S7: configurable radix-cache cap (LLAMA_RADIX_MAX_BLOCKS). FINDING: server_kv_block_radix is metadata-only; CacheGen KV compression premise does not apply.",
+      "source_url": "https://arxiv.org/abs/2310.07240 (CacheGen)",
+      "touched_regions": ["tools/server/server-context.cpp"],
+      "status": "promoted",
+      "stacked_on_main": false,
+      "champion_scores": {
+        "peak_RSS_bytes_3run_median": 9067888640,
+        "delta_RSS_bytes_vs_gen0": 1359872,
+        "delta_RSS_pct": 0.015,
+        "verdict": "non-compounding (tie; opt-in cap, bench doesn't hit server radix path)",
+        "correctness_ctest_server_prompt_cache": "pass",
+        "architectural_finding": "server_kv_block_radix stores NO KV tensor data (string-key trie + block positions only); CacheGen-style KV compression would need to target the unified-cache cells via S1's quantized reader (absent in w2 baseline)."
+      },
+      "champion_tip_sha": "69a4eba095289e9a47ae35908ee5f3d726ea1fc7",
+      "champion_branch": "champions/s7",
+      "patch_path": "integration/patches/s7.patch",
+      "generation": 1,
+      "last_update": "2026-08-02T15:05Z",
+      "stack_skip_reason": "bench-invisible (opt-in, server-only path); standalone gain ~= 0 fails compounding threshold. CacheGen premise does not match the metadata-only radix architecture."
+    }
+  ],
+  "deferred": [
+    {"gene_id": "s4", "reason": "later-wave: KIVI 2-bit needs S1 reader which wave-1 did NOT ship into w2 baseline (verified: ops.cpp still asserts F32/F16)"},
+    {"gene_id": "s5", "reason": "later-wave: InfiniGen prefetch depends on S2/S6 host tier"},
+    {"gene_id": "s6", "reason": "skipped: dense workload model, no MoE payoff"},
+    {"gene_id": "s8", "reason": "skipped: dense workload model, no MoE payoff"}
+  ],
+  "stack_state": {
+    "stacked": ["s2"],
+    "stacked_score_peak_RSS_bytes": 8891891712,
+    "head_sha": "15952f3ad4f26bd42886f8b7b8b81c8485557b67"
+  },
+  "review_branch": "evolve-review/memopt-pipeline-w2",
+  "review_branch_base_sha": "2200c659d4e67e638dab67b43f672a1921bfeb8d"
+}

@@ -1,0 +1,56 @@
+{
+  "run": "memopt-pipeline-w1",
+  "baseline_sha": "53752d7738a8d3cfba1e6b9535c541e5b5513188",
+  "goal": "wire q8_0 K/V through GGML_OP_TESSERA_PAGED_ATTN instead of f16 (S1)",
+  "metric": "-peak_RSS (MAXIMIZE), peak RSS in bytes from /usr/bin/time -l",
+  "evaluator": "/usr/bin/time -l ./build/bin/llama-bench -m <model> -p 512 -n 64 [-ctk q8_0 -ctv q8_0 -kvu 1]  (3 runs, median)",
+  "genes": [
+    {
+      "gene_id": "g1",
+      "owner": "wave1-single",
+      "approach": "S1: q8_0 on-the-fly dequant in TESSERA_PAGED_ATTN (CPU + Metal); -kvu plumbing in llama-bench; fix pre-existing broken page_map",
+      "source_url": "https://arxiv.org/abs/2309.06180 (PagedAttention) + https://arxiv.org/abs/2402.02750 (KIVI) + tessera research S1",
+      "touched_regions": [
+        "ggml/src/ggml-cpu/ops.cpp",
+        "ggml/src/ggml-metal/ggml-metal.metal",
+        "ggml/src/ggml-metal/ggml-metal-ops.cpp",
+        "ggml/src/ggml-metal/ggml-metal-device.m",
+        "ggml/src/ggml.c",
+        "src/llama-graph.cpp",
+        "src/llama-kv-cache.cpp",
+        "src/llama-kv-cache.h",
+        "tools/llama-bench/llama-bench.cpp"
+      ],
+      "status": "promoted",
+      "stacked_on_main": true,
+      "champion_scores": {
+        "peak_RSS_bytes_q8_0_paged_median": 599719936,
+        "peak_RSS_MiB_q8_0_paged_median": 571.9,
+        "peak_RSS_bytes_f16_baseline_median": 601899008,
+        "peak_RSS_MiB_f16_baseline_median": 574.3,
+        "delta_RSS_MiB_vs_f16_baseline": -2.4,
+        "tg64_tps_q8_0_paged": 41.0,
+        "tg64_tps_q8_0_fae": 87.3,
+        "tg64_tps_f16_baseline": 94.0,
+        "correctness_f16_paged_vs_f16_ref_token_diff_40": 0,
+        "correctness_q8_0_paged_vs_q8_0_fae_token_diff_40": 0,
+        "correctness_ctest_server_prompt_cache": "pass",
+        "negative_peak_RSS_metric_maximize": -599719936
+      },
+      "champion_tip_sha": "28062fa0ba5a7b009008fcc314237a66e6832c3f",
+      "champion_branch": "champions/g1",
+      "patch_path": "integration/patches/g1.patch",
+      "generation": 2,
+      "last_update": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "deferred": [],
+  "stack_state": {
+    "stacked": ["g1"],
+    "stacked_score_peak_RSS_bytes": 599719936,
+    "head_sha": "28062fa0ba5a7b009008fcc314237a66e6832c3f"
+  },
+  "review_branch": "evolve-review/memopt-pipeline-w1",
+  "review_branch_tip_sha": "c64f2a0e0615b0ffc655484282c8a22899251505",
+  "review_branch_base_sha": "53752d7738a8d3cfba1e6b9535c541e5b5513188"
+}

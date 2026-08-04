@@ -1,0 +1,49 @@
+{
+  "run": "memopt-pipeline-w3",
+  "baseline_sha": "45fec50982fd3080450996b74a8c58ed6389ae1e",
+  "baseline_scores": {
+    "peak_rss_B": 8989589504,
+    "rss_note": "pp512/n32 q8_0 paged, in-session 3-run median. PREFLIGHT measured 8.30 GB in a different env; my env floor was ~8.99 GB. All candidates compared in-session.",
+    "tg32_ts": 4.52
+  },
+  "genes": [
+    {
+      "gene_id": "g1",
+      "source_label": "S4",
+      "owner": "w3-sole",
+      "approach": "Low-bit KV via standard K-quant (q2_K/q4_0/q5_0) with Hadamard rotation, fused element-wise dequant in TESSERA_PAGED_ATTN (CPU + Metal). Extends S1 q8_0 reader. NOTE: not full KIVI per-channel-K/per-token-V (custom layout beyond budget).",
+      "source_url": "arXiv 2402.02750 (KIVI)",
+      "touched_regions": [
+        "ggml/src/ggml-cpu/ops.cpp",
+        "ggml/src/ggml-metal/ggml-metal.metal",
+        "ggml/src/ggml-metal/ggml-metal-ops.cpp",
+        "ggml/src/ggml.c",
+        "src/llama-graph.cpp",
+        "common/arg.cpp",
+        "tools/llama-bench/llama-bench.cpp"
+      ],
+      "status": "promoted",
+      "champion_scores": {
+        "q4_0_peak_rss_B": 8946450432,
+        "q4_0_tg32_ts": 5.72,
+        "q4_0_vs_q8_0_rss_delta_B": -43139136,
+        "correctness_flash_q4_0_token_match_pct": 100.0,
+        "paged_path_bug_all_types": true
+      },
+      "champion_tip_sha": "602d795311ca647dc8480aa3246328a41ee1887d",
+      "champion_branch": "evolve-review/memopt-pipeline-w3",
+      "review_branch_sha": "6b47815e2",
+      "patch_path": "integration/patches/g1.patch",
+      "stacked_on_main": false,
+      "stacked_on_main_reason": "single gene; promoted directly to review branch. win small (-0.48pct RSS) and end-to-end paged path broken on this model (SWA bug)",
+      "generation": 1,
+      "verdict": "partial",
+      "last_update": "2026-08-01T16:05:00Z"
+    }
+  ],
+  "deferred": [
+    {"label": "S5", "reason": "later-wave: needs host-tier KV cache, S2 did not ship"},
+    {"label": "S6", "reason": "later-wave: dense model, no MoE payoff"},
+    {"label": "S8", "reason": "later-wave: extends S6"}
+  ]
+}

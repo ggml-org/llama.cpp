@@ -1,0 +1,6 @@
+# memopt-pipeline-w5 changes.md
+
+[2026-08-03T00:05:00Z] agent=w5-single gene=g1 gen=0 baseline scores: gemma-4-12B f16 paged=3.8pct vs flash (80 tok, seed=0), qwen2.5-0.5B=NA (model not yet downloaded), ctest=PASS verdict=baseline reason=baseline-floor-before-fix-(wave4-tip-bbfc3493d)
+[2026-08-03T00:20:00Z] agent=w5-single gene=g1 gen=1 candidate=diagnostic-instrumentation (TESSERA_PAGED_DUMP env in cpu kernel: dump Q/K/V shapes + v_trans_inferred) scores: gemma_paged=3.8pct (unchanged, instrumentation only) verdict=pruned reason=diagnostic-only-no-fix;-identified-root-cause:-v_trans_inferred=1-on-SWA-layers-where-head_dim(256)==n_kv(256)-but-cache-stores-V-non-transposed
+[2026-08-03T00:40:00Z] agent=w5-single gene=g1 gen=2 candidate=explicit-v_trans-param (thread v_trans through ggml_tessera_paged_attn; caller passes mctx_cur->is_v_trans()) scores: gemma_paged=100pct(80/80) gemma_paged_alt_prompt=100pct(60/60,seed=7) qwen_paged=100pct(80/80) ctest=PASS backend_ops=PASS verdict=live reason=root-cause-fixed;-shape-based-v_trans-inference-removed;-byte-identical-greedy-decode-on-hybrid-and-non-hybrid
+[2026-08-03T00:50:00Z] agent=w5-single gene=g1 freeze champion=30b692672 verdict=promoted stacked_on_main=true reason=full-fix-shipped-(gemma-3.8pct->100pct)

@@ -1,0 +1,37 @@
+{
+  "run": "memopt-pipeline-w5",
+  "baseline_sha": "bbfc3493d",
+  "goal": "Fix the gemma-4-12B hybrid-iswa paged-attn bug so the paged path produces correct output on hybrid models (base/SWA split with different head dims). Wave 4 fixed non-hybrid (qwen 3%->100%); gemma (hybrid) was still 1-3%.",
+  "genes": [
+    {
+      "gene_id": "g1",
+      "owner": "w5-single",
+      "approach": "Pass v_trans explicitly to ggml_tessera_paged_attn instead of inferring it from tensor shapes. The shape inference (v->ne[0] == k->ne[2]) is ambiguous when the V head dimension equals the KV arena size, which is exactly the case for the gemma SWA cache (head_dim=256, padded n_kv=256): the op wrongly picked the transposed-V access pattern while the cache stores V non-transposed, reading V at wrong offsets and producing garbage from decode step 1.",
+      "source_url": "local",
+      "touched_regions": [
+        "ggml/include/ggml.h:ggml_tessera_paged_attn signature (add v_trans param)",
+        "ggml/src/ggml.c:ggml_tessera_paged_attn (drop shape inference, use caller param)",
+        "src/llama-graph.cpp:build_attn (both call sites pass mctx_cur->is_v_trans())",
+        "tests/test-backend-ops.cpp:tessera_paged_attn case (pass v_trans member)"
+      ],
+      "status": "promoted",
+      "champion_scores": {
+        "gemma-4-12b_f16_paged_vs_flash_pct": 100,
+        "gemma-4-12b_f16_paged_vs_flash_pct_alt_prompt": 100,
+        "qwen2.5-0.5b_f16_paged_vs_flash_pct": 100,
+        "ctest_server_prompt_cache": "PASS",
+        "test-backend-ops_TESSERA_PAGED_ATTN": "PASS"
+      },
+      "champion_tip_sha": "30b692672",
+      "champion_branch": "champions/g1-w5",
+      "patch_path": "integration/patches/g1.patch",
+      "stacked_on_main": true,
+      "generation": 1,
+      "candidates_evaluated": 2,
+      "last_update": "2026-08-03T00:45:00Z",
+      "verdict": "full",
+      "verdict_reason": "Root-caused and fixed the hybrid-iswa paged bug. gemma-4-12B f16 paged now matches flash_attn_ext byte-identically (3.8pct -> 100pct, two prompts/seeds). qwen2.5-0.5B (non-hybrid) stays 100pct. ctest + backend op tests pass. The fix is a one-line semantic change (thread v_trans explicitly) that removes a fundamentally broken shape-based inference; it cannot regress non-hybrid models because for them head_dim != n_kv so the old inference happened to be correct, and the new path uses the same authoritative value the caller already had."
+    }
+  ],
+  "deferred": []
+}

@@ -1,0 +1,27 @@
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 45f54338b..3a89702d6 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1428,7 +1428,21 @@ private:
+                 // slot after it has been reassigned.
+                 kv_block_radix.release(id_slot);
+                 publish_slot_kv_blocks(slots[id_slot]);
+-                kv_block_radix.evict(std::max<size_t>(1, n_ctx / 32));
++                // S7: configurable radix-cache cap. The default (n_ctx/32) bounds
++                // the trie to roughly one context's worth of 32-token blocks.
++                // LLAMA_RADIX_MAX_BLOCKS lets the operator shrink the prefix-cache
++                // metadata footprint (trading hit rate for RSS) on memory-tight
++                // hosts. The radix structure itself stores only block metadata
++                // (no KV tensor data - that lives in the unified KV cache), so the
++                // RSS effect is proportional to (n_blocks * sizeof(block)).
++                static const int RADIX_MAX_BLOCKS_ENV = [] {
++                    const char * e = getenv("LLAMA_RADIX_MAX_BLOCKS");
++                    return e ? atoi(e) : 0;
++                }();
++                size_t max_blocks = RADIX_MAX_BLOCKS_ENV > 0
++                    ? (size_t) RADIX_MAX_BLOCKS_ENV
++                    : std::max<size_t>(1, n_ctx / 32);
++                kv_block_radix.evict(max_blocks);
+                 queue_tasks.pop_deferred_task(id_slot);
+             };
+ 

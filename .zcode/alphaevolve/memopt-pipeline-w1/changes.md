@@ -1,0 +1,10 @@
+# changes.md - run: memopt-pipeline-w1 (single-gene wave 1)
+
+One line per evaluated candidate. Format:
+[iso8601] agent=<id> gene=<id> gen=<n> scores=<...> verdict=live|pruned reason=<...>
+
+[2026-08-01T13:20Z] agent=wave1-single gene=g1 gen=0 scores=baseline_f16_RSS_median=574.3MiB q8_0_fae_RSS_median=571.9MiB verdict=live reason="baseline anchors established: f16 KV (flash path) and q8_0 KV (flash path) both measured; q8_0 already 2.4 MiB under f16 via existing flash_attn_ext"
+[2026-08-01T13:30Z] agent=wave1-single gene=g1 gen=1 scores=build=ok q8_0_paged=ABORT verdict=pruned reason="gen1: -kvu plumbing + relax type checks + CPU/Metal q8_0 dequant. Built clean but q8_0 paged aborted in CPU kernel with GGML_ASSERT(ip>=0 && ip<n_phy): the op fell back to CPU because Metal supports_op rejected q8_0, and the page_map was all-zero (UINT32_MAX) because set_input_tessera_page_map only walked the current ubatch cells."
+[2026-08-01T13:42Z] agent=wave1-single gene=g1 gen=2 scores=q8_0_paged_RSS_median=571.9MiB delta_vs_f16=-2.4MiB f16_paged_vs_f16_ref_diff=0/40 q8_0_paged_vs_q8_0_fae_diff=0/40 ctest=pass tg64=41tps verdict=live reason="gen2 champion: added Metal supports_op q8_0 + kernel_tessera_paged_attn_q8_0; fixed set_input_tessera_page_map to build the FULL logical->physical map via new build_tessera_full_page_map (inverting v_cells). This ALSO fixes the pre-existing f16 paged path which produced garbage output. Correctness perfect on two prompts; RSS matches q8_0 fae (no f16 staging). Decode 2.1x slower than q8_0 fae due to unvectorized per-element dequant (follow-up)."
+[2026-08-01T13:45Z] agent=wave1-single gene=g1 gen=2 scores=champion verdict=frozen reason="stagnation: gen2 is correct and beats f16 baseline on -peak_RSS; freeze and promote."
+[2026-08-01T13:46Z] agent=wave1-single gene=g1 gen=2 scores=promoted verdict=promoted reason="champion branch champions/g1 created off baseline; patch exported to integration/patches/g1.patch; stacked on integration/main (single gene)."

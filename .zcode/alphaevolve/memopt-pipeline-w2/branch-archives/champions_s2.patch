@@ -1,0 +1,50 @@
+commit be087a037ff3f8049c6751eb0e65d58bc71aa506
+Author:     Tessera Track-E Agent <agent@tessera.local>
+AuthorDate: Sun Aug 2 14:32:25 2026 -0700
+Commit:     Tessera Track-E Agent <agent@tessera.local>
+CommitDate: Sun Aug 2 14:32:25 2026 -0700
+
+    s2: gen1 lazy KV clear (LLAMA_KV_LAZY_CLEAR env var, opt-in)
+    
+    Skip the eager ggml_backend_buffer_clear on KV buffer init when
+    LLAMA_KV_LAZY_CLEAR=1. On Metal shared memory this memset pins every
+    KV page up front; skipping it lets peak RSS track only written pages
+    (vAttention-style lazy physical commit). Cells guard all reads so the
+    clear was purely defensive.
+    
+    peak RSS: 8879521792 median (lazy) vs 9068003328 (gen0) = ~178 MiB win
+    correctness: logit_probe 0 diff vs baseline; ctest pass
+
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 132cab7dd..2ac273509 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -288,7 +288,27 @@ llama_kv_cache::llama_kv_cache(
+ 
+         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+ 
+-        ggml_backend_buffer_clear(buf, 0);
++        // S2: mmap-backed KV residency (vAttention-style lazy physical commit).
++        // The eager clear below forces the OS to page-fault the ENTIRE KV
++        // buffer into RSS at init (memset on Metal shared memory touches every
++        // page). On Apple UMA the underlying Metal buffer is already backed by
++        // lazily-committed shared memory, so the clear is the only thing
++        // pinning all n_ctx*head_dim pages up front. Skipping it lets peak RSS
++        // track only the KV pages actually written (prefill + decode), which
++        // is the S2 thesis.
++        //
++        // Safety: KV cells guard all reads - every attention path (flash,
++        // paged, naive) only reads cells the cell tracker has marked written
++        // (pos >= 0 and seq present). The memset was purely defensive against
++        // uninitialized-data reads that the mask already prevents. Opt-in via
++        // env var so the default behavior is unchanged.
++        const char * LLAMA_KV_LAZY_CLEAR = getenv("LLAMA_KV_LAZY_CLEAR");
++        const bool kv_lazy_clear = LLAMA_KV_LAZY_CLEAR ? atoi(LLAMA_KV_LAZY_CLEAR) != 0 : false;
++        if (kv_lazy_clear) {
++            LLAMA_LOG_INFO("%s: KV lazy clear enabled (LLAMA_KV_LAZY_CLEAR=1), skipping eager memset\n", __func__);
++        } else {
++            ggml_backend_buffer_clear(buf, 0);
++        }
+         ctxs_bufs.emplace_back(std::move(ctx), buf);
+     }
+ 

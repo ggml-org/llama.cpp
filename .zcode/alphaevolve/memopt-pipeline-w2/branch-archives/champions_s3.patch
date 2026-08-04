@@ -1,0 +1,105 @@
+commit 051b6b69a3e1565193a78aed8349daf06ffdd178
+Author:     Tessera Track-E Agent <agent@tessera.local>
+AuthorDate: Sun Aug 2 14:54:00 2026 -0700
+Commit:     Tessera Track-E Agent <agent@tessera.local>
+CommitDate: Sun Aug 2 14:54:00 2026 -0700
+
+    s3: gen1 sliding-window KV eviction helper (opt-in)
+    
+    Add llama_memory_seq_evict_oldest(mem, seq, keep_recent): drops the
+    oldest (total - keep_recent) positions and shifts the surviving suffix
+    down so the cache stays DENSE [0, keep_recent-1]. This preserves the
+    seq_pos_min/max dense-range invariant. Idempotent: re-call at floor is
+    a true no-op. Requires llama_memory_can_shift().
+    
+    Sink retention (StreamingLLM) is deliberately NOT implemented: it would
+    break the dense invariant. Documented in the header comment.
+    
+    Helper is opt-in (no caller by default). Bench unaffected: median RSS
+    9068199936B vs gen0 9068544000B (tie, within noise band). ctest pass.
+    Custom probe s3_evict_test confirms: 77->16 positions dense, re-call
+    no-op, post-eviction decode succeeds.
+
+diff --git a/include/llama.h b/include/llama.h
+index f81028a0b..ed3c59e68 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -805,6 +805,26 @@ extern "C" {
+             llama_memory_t mem,
+               llama_seq_id seq_id);
+ 
++    // S3: KV cache sliding-window eviction.
++    // Drops the oldest (pos_max+1 - keep_recent) tokens of seq_id and shifts
++    // the surviving suffix down by that count so the cache stays DENSE
++    // (positions remain a contiguous [0, new_pos_max] range). This preserves
++    // the documented invariant of llama_memory_seq_pos_min/max.
++    //
++    // Sink tokens (StreamingLLM, arXiv:2309.17453) are NOT retained here:
++    // the dense-shift contract forbids keeping non-contiguous positions.
++    // Sink retention is a kernel-level concern (mask reconstruction) that is
++    // out of scope for this opt-in helper. Use llama_memory_seq_rm directly
++    // for non-dense policies and accept the gap invariant yourself.
++    //
++    // No-op (returns 0) when (pos_max+1) <= keep_recent. Requires a memory
++    // that supports shifting (check llama_memory_can_shift). Returns the
++    // number of positions dropped, or 0 if no shift was performed.
++    LLAMA_API size_t llama_memory_seq_evict_oldest(
++            llama_memory_t mem,
++              llama_seq_id seq_id,
++                 uint32_t keep_recent);
++
+     // Check if the memory supports shifting
+     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
+ 
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 9beb54306..49dc5d32d 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -4165,6 +4165,47 @@ llama_pos llama_memory_seq_pos_max(
+     return mem->seq_pos_max(seq_id);
+ }
+ 
++// S3: KV sliding-window eviction. See llama.h for the contract.
++size_t llama_memory_seq_evict_oldest(
++        llama_memory_t mem,
++          llama_seq_id seq_id,
++             uint32_t keep_recent) {
++    if (!mem) {
++        return 0;
++    }
++
++    const llama_pos pos_max = mem->seq_pos_max(seq_id);
++    if (pos_max < 0) {
++        return 0; // empty sequence
++    }
++
++    // Total positions present; cache is dense [0, pos_max] per the API contract.
++    const uint32_t total = (uint32_t) pos_max + 1;
++
++    // No-op when we are already within the keep budget.
++    if (total <= keep_recent) {
++        return 0;
++    }
++
++    // The memory must support shifting (the suffix needs its positions rewritten).
++    if (!mem->get_can_shift()) {
++        return 0;
++    }
++
++    const uint32_t drop_n = total - keep_recent;
++    if (drop_n == 0) {
++        return 0;
++    }
++
++    // 1. Drop the oldest drop_n positions: [0, drop_n).
++    mem->seq_rm(seq_id, 0, (llama_pos) drop_n);
++    // 2. Shift the surviving suffix [drop_n, pos_max] down by drop_n so the
++    //    cache stays dense [0, pos_max - drop_n].
++    mem->seq_add(seq_id, (llama_pos) drop_n, pos_max + 1, -(llama_pos) drop_n);
++
++    return (size_t) drop_n;
++}
++
+ bool llama_memory_can_shift(llama_memory_t mem) {
+     if (!mem) {
+         return false;

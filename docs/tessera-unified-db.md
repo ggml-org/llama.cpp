@@ -635,6 +635,79 @@ python3 tools/tessera/l5_orchestrator.py \
   asserts the peak RSS stays under 1.5 GB.  See
   `docs/tessera-unified-db.md` Phase 16 section for
   the per-category docs.
+||||||| 1a5d56ca2
+- **Phase 16 (this commit):** the per-component
+  calibration driver for the unified Gemma4 12B + DFlash
+  + DSpark + MTP arch. The single-model path in
+  `per_tensor_calibrate.py` was inherited from the
+  Phase 0 setup and calibrates one component at a time.
+  The unified arch needs a single
+  `llama.speculative.calibration-policy.v1` document
+  keyed by `model_role` so the C++
+  `--write-unified-gguf` writer can consume it. The
+  three pieces:
+
+  1. **`per_tensor_calibrate.py --model-role`**
+     (additive). The flag accepts one of
+     `MODEL_ROLES = (trunk, dflash, dspark, mtp_nextn,
+     shared_embd)` and the value is stamped on the
+     policy's top-level `model_role` field and on every
+     per-tensor entry under `tensor_families`. The
+     default is `trunk`, which is the legacy single-model
+     behaviour: the existing test suite and consumers
+     that do not look at the field are unaffected. The
+     `--fitness awq` mode delegates to `awq-evolve.py`
+     (which does not take `--model-role`); the field is
+     stamped on the returned policy + every entry so the
+     contract is consistent across fitness modes.
+  2. **`unified_calibrate.py` driver** (new). Spawns
+     `per_tensor_calibrate.py` once per component
+     (`--trunk-npz` / `--dflash-npz` / `--dspark-npz` /
+     `--mtp-npz` / `--shared-embd-npz`) and merges the
+     per-component policies into a single unified
+     document. The per-tensor entries are disambiguated
+     by a role prefix in `tensor_families` so two
+     components that both produce a `lrq:token_embd.weight`
+     entry (e.g. trunk and shared_embd) coexist. The
+     top-level `model_role` is `None` (multi-component);
+     `components.<role>.{policy, model_role, tensor_count,
+     sub_schema}` carries the per-component metadata.
+     Two execution modes: subprocess (production;
+     isolation) and in-process (test suite; faster,
+     `--fitness lrq` only).
+  3. **`tile640_quantize_v3.py` consumer routing**
+     (additive). When the policy carries per-entry
+     `model_role` metadata, the consumer's `tensor_policy`
+     + `lrq_policy_for` helpers route per-tensor qtype
+     per-role: trunk tensor prefers `model_role=trunk`
+     entry, falls back to `model_role=shared_embd`, then
+     to legacy role-free entries. The legacy single-model
+     path (no `model_role` on any entry) is preserved
+     exactly. The role is inferred from the tensor name
+     via `_infer_tensor_role(name)`: `blk.*` -> trunk,
+     `dflash.*` -> dflash, `markov_*` / `head_*` ->
+     dspark, `*.nextn.*` / `nextn.*` -> mtp_nextn,
+     `token_embd.*` / `output.*` -> shared_embd. Unknown
+     patterns return `None`, which the consumer treats as
+     "no role hint" and falls back to the legacy
+     single-arch behaviour.
+
+  Schema is unchanged at the top level: the unified
+  document is still `llama.speculative.calibration-policy.v1`.
+  The new fields are additive: `model_role` (top-level +
+  per-entry), `components` (top-level), and the per-entry
+  `model_role` is a no-op for consumers that do not look
+  at it. The Python `quantize_v3.py` schema check
+  (`load_calibration_policy`) already accepts the parent
+  schema, so the unified policy passes the existing
+  validation. 19 new test cases in
+  `tools/tessera/test_unified_calibrate.py` cover the
+  per-component `--model-role` flag, the unified driver
+  (in-process + subprocess + subset + missing-path
+  failure modes), and the consumer routing
+  (`_infer_tensor_role`, role-specific vs legacy vs
+  mixed policies, `shared_embd` substring fallback,
+  `lrq_policy_for` precedence).
 
 ## Open follow-ups (after this commit)
 

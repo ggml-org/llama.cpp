@@ -1,0 +1,52 @@
+commit 69a4eba095289e9a47ae35908ee5f3d726ea1fc7
+Author:     Tessera Track-E Agent <agent@tessera.local>
+AuthorDate: Sun Aug 2 14:58:57 2026 -0700
+Commit:     Tessera Track-E Agent <agent@tessera.local>
+CommitDate: Sun Aug 2 14:58:57 2026 -0700
+
+    s7: gen1 configurable radix-cache cap (LLAMA_RADIX_MAX_BLOCKS, opt-in)
+    
+    Make the server_kv_block_radix block cap configurable via
+    LLAMA_RADIX_MAX_BLOCKS env var so operators on memory-tight hosts can
+    shrink the prefix-cache metadata footprint at the cost of hit rate.
+    
+    IMPORTANT finding: the radix cache is METADATA-ONLY (string-key trie +
+    block position records). It stores NO KV tensor data; the actual KV
+    lives in the unified cache. So CacheGen-style KV compression (the S7
+    research premise) does not apply to this structure - it would need to
+    target the unified-cache cells, which requires S1's quantized reader
+    (absent in the w2 baseline). The metadata is already tiny and bounded
+    by evict(max_blocks); this change just makes the bound tunable.
+    
+    Bench unaffected (llama-bench does not use the server radix path; env
+    is opt-in): median RSS 9067888640B vs gen0 9066528768B (tie). ctest
+    test-server-prompt-cache passes (exercises the separate
+    server_prompt_cache structure, not server_kv_block_radix).
+
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 45f54338b..3a89702d6 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1428,7 +1428,21 @@ private:
+                 // slot after it has been reassigned.
+                 kv_block_radix.release(id_slot);
+                 publish_slot_kv_blocks(slots[id_slot]);
+-                kv_block_radix.evict(std::max<size_t>(1, n_ctx / 32));
++                // S7: configurable radix-cache cap. The default (n_ctx/32) bounds
++                // the trie to roughly one context's worth of 32-token blocks.
++                // LLAMA_RADIX_MAX_BLOCKS lets the operator shrink the prefix-cache
++                // metadata footprint (trading hit rate for RSS) on memory-tight
++                // hosts. The radix structure itself stores only block metadata
++                // (no KV tensor data - that lives in the unified KV cache), so the
++                // RSS effect is proportional to (n_blocks * sizeof(block)).
++                static const int RADIX_MAX_BLOCKS_ENV = [] {
++                    const char * e = getenv("LLAMA_RADIX_MAX_BLOCKS");
++                    return e ? atoi(e) : 0;
++                }();
++                size_t max_blocks = RADIX_MAX_BLOCKS_ENV > 0
++                    ? (size_t) RADIX_MAX_BLOCKS_ENV
++                    : std::max<size_t>(1, n_ctx / 32);
++                kv_block_radix.evict(max_blocks);
+                 queue_tasks.pop_deferred_task(id_slot);
+             };
+ 

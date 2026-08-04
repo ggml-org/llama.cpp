@@ -1,0 +1,444 @@
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index ee050a9f4..202b205ae 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -1,7 +1,12 @@
++// Activate the ggml-common.h decl block first so block_q8_0 / QK8_0 are visible
++// for the paged-attn on-the-fly q8_0 dequant path. Must precede any transitive
++// include of ggml-common.h.
++#define GGML_COMMON_DECL_CPP
+ #include "ops.h"
+ 
+ #include "ggml-cpu.h"
+ #include "ggml-impl.h"
++#include "ggml-common.h"
+ #include "binary-ops.h"
+ #include "simd-gemm.h"
+ #include "ggml.h"
+@@ -9250,8 +9255,8 @@ void ggml_compute_forward_tessera_paged_attn(
+     const ggml_tensor * page_map = dst->src[3];
+ 
+     GGML_ASSERT(q->type == GGML_TYPE_F32);
+-    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16);
+-    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16);
++    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0);
++    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_Q8_0);
+     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
+     GGML_ASSERT(q->ne[0] == k->ne[0]);
+     const bool v_trans = ggml_get_op_params_i32(dst, 1) != 0;
+@@ -9279,14 +9284,29 @@ void ggml_compute_forward_tessera_paged_attn(
+     float * out          = (float *) dst->data;
+ 
+     const auto load_k = [k](int64_t i) {
+-        return k->type == GGML_TYPE_F32
+-            ? ((const float *) k->data)[i]
+-            : ggml_fp16_to_fp32(((const ggml_fp16_t *) k->data)[i]);
++        if (k->type == GGML_TYPE_F32) {
++            return ((const float *) k->data)[i];
++        }
++        if (k->type == GGML_TYPE_F16) {
++            return ggml_fp16_to_fp32(((const ggml_fp16_t *) k->data)[i]);
++        }
++        // GGML_TYPE_Q8_0: block { ggml_half d; int8_t qs[QK8_0]; }, QK8_0 == 32.
++        // On-the-fly dequant: value = d * qs[i % QK8_0].
++        const block_q8_0 * blk = (const block_q8_0 *) k->data;
++        const float d = GGML_FP16_TO_FP32(blk[i / QK8_0].d);
++        return d * blk[i / QK8_0].qs[i % QK8_0];
+     };
+     const auto load_v = [v](int64_t i) {
+-        return v->type == GGML_TYPE_F32
+-            ? ((const float *) v->data)[i]
+-            : ggml_fp16_to_fp32(((const ggml_fp16_t *) v->data)[i]);
++        if (v->type == GGML_TYPE_F32) {
++            return ((const float *) v->data)[i];
++        }
++        if (v->type == GGML_TYPE_F16) {
++            return ggml_fp16_to_fp32(((const ggml_fp16_t *) v->data)[i]);
++        }
++        // GGML_TYPE_Q8_0 dequant (same as load_k).
++        const block_q8_0 * blk = (const block_q8_0 *) v->data;
++        const float d = GGML_FP16_TO_FP32(blk[i / QK8_0].d);
++        return d * blk[i / QK8_0].qs[i % QK8_0];
+     };
+ 
+     const int64_t n_rows = nq*hq*ns;
+@@ -9303,7 +9323,11 @@ void ggml_compute_forward_tessera_paged_attn(
+         float max_score = -INFINITY;
+         for (int64_t il = 0; il < n_kv; ++il) {
+             const int32_t ip = map[is*n_kv + il];
+-            GGML_ASSERT(ip >= 0 && ip < n_phy);
++            // Unused logical positions (causal tail / unallocated slots) carry
++            // UINT32_MAX and must not be attended. Treat them as -inf.
++            if (ip < 0 || ip >= n_phy) {
++                continue;
++            }
+             float score = 0.0f;
+             for (int64_t id = 0; id < d; ++id) score += q_row[id]*load_k((((is*n_phy + ip)*hkv + ihkv)*d) + id);
+             max_score = MAX(max_score, score*scale);
+@@ -9314,6 +9338,9 @@ void ggml_compute_forward_tessera_paged_attn(
+         for (int64_t idv = 0; idv < dv; ++idv) out_row[idv] = 0.0f;
+         for (int64_t il = 0; il < n_kv; ++il) {
+             const int32_t ip = map[is*n_kv + il];
++            if (ip < 0 || ip >= n_phy) {
++                continue;
++            }
+             float score = 0.0f;
+             for (int64_t id = 0; id < d; ++id) score += q_row[id]*load_k((((is*n_phy + ip)*hkv + ihkv)*d) + id);
+             const float weight = expf(score*scale - max_score);
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index fc0066d24..3aef595c0 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -1230,7 +1230,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+             return op->type == GGML_TYPE_F32 &&
+                    op->src[0] && op->src[1] && op->src[2] && op->src[3] &&
+                    op->src[0]->type == GGML_TYPE_F32 &&
+-                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
++                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16 ||
++                    op->src[1]->type == GGML_TYPE_Q8_0) &&
+                    op->src[2]->type == op->src[1]->type &&
+                    op->src[3]->type == GGML_TYPE_I32 &&
+                    op->src[0]->ne[2] % op->src[1]->ne[1] == 0 &&
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 12920d65e..a3a0da8de 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -2817,7 +2817,8 @@ int ggml_metal_op_tessera_paged_attn(ggml_metal_op_t ctx, int idx) {
+     ggml_tensor * op = ctx->node(idx);
+     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+     GGML_ASSERT(op->src[1]->type == op->src[2]->type);
+-    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16);
++    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16 ||
++                op->src[1]->type == GGML_TYPE_Q8_0);
+     GGML_ASSERT(op->src[3]->type == GGML_TYPE_I32);
+     const bool v_trans = ggml_get_op_params_i32(op, 1) != 0;
+ 
+@@ -2829,8 +2830,13 @@ int ggml_metal_op_tessera_paged_attn(ggml_metal_op_t ctx, int idx) {
+         (int32_t) op->src[1]->ne[1], (int32_t) op->src[3]->ne[0],
+         (int32_t) op->src[1]->ne[2], (int32_t) op->src[0]->ne[3], (int32_t) v_trans, scale,
+     };
+-    const char * kernel = op->src[1]->type == GGML_TYPE_F16
+-        ? "kernel_tessera_paged_attn_f16" : "kernel_tessera_paged_attn_f32";
++    const char * kernel = nullptr;
++    switch (op->src[1]->type) {
++        case GGML_TYPE_F16:  kernel = "kernel_tessera_paged_attn_f16";  break;
++        case GGML_TYPE_F32:  kernel = "kernel_tessera_paged_attn_f32";  break;
++        case GGML_TYPE_Q8_0: kernel = "kernel_tessera_paged_attn_q8_0"; break;
++        default: GGML_ABORT("tessera_paged_attn: unsupported K/V type");
++    }
+     auto pipeline = ggml_metal_library_get_pipeline(ctx->lib, kernel);
+     if (!pipeline.pipeline) {
+         pipeline = ggml_metal_library_compile_pipeline(ctx->lib, kernel, kernel, nullptr);
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index b20c37ba3..400d001da 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -11257,6 +11257,11 @@ kernel void kernel_tessera_paged_attn(
+     float max_score = -INFINITY;
+     for (uint logical = 0; logical < args.n_kv; ++logical) {
+         const uint physical = page_map[stream*args.n_kv + logical];
++        // Unused logical positions (causal tail / unallocated slots) carry
++        // UINT32_MAX; skip them rather than reading garbage K/V rows.
++        if (physical >= args.n_phy) {
++            continue;
++        }
+         float score = 0.0f;
+         for (uint i = 0; i < args.d; ++i) score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*float(k[((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i]);
+         max_score = max(max_score, score*args.scale);
+@@ -11264,6 +11269,9 @@ kernel void kernel_tessera_paged_attn(
+     float denom = 0.0f, value = 0.0f;
+     for (uint logical = 0; logical < args.n_kv; ++logical) {
+         const uint physical = page_map[stream*args.n_kv + logical];
++        if (physical >= args.n_phy) {
++            continue;
++        }
+         float score = 0.0f;
+         for (uint i = 0; i < args.d; ++i) score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*float(k[((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i]);
+         const float weight = exp(score*args.scale - max_score);
+@@ -11283,6 +11291,63 @@ template [[host_name("kernel_tessera_paged_attn_f16")]] kernel void kernel_tesse
+     constant tessera_paged_attn_args &, device const float *, device const half *, device const half *,
+     device const uint *, device float *, uint);
+ 
++// q8_0 K/V variant. K/V are packed block_q8_0 rows dequantized on the fly:
++//   value(i) = block[i/QK8_0].d * block[i/QK8_0].qs[i%QK8_0].
++// The flat element index matches the f32/f16 kernel so the cache layout
++// ([n_phy, hkv, d] row-major, d a whole number of q8_0 blocks) is read
++// identically. No f16 staging buffer is materialized.
++#define TESSERA_DEQUANT_Q8_0(p, i) ((float)((device const block_q8_0 *)(p))[(i)/QK8_0].qs[(i)%QK8_0] * \
++                                    (float)((device const block_q8_0 *)(p))[(i)/QK8_0].d)
++
++kernel void kernel_tessera_paged_attn_q8_0(
++        constant tessera_paged_attn_args & args [[buffer(0)]],
++        device const float * q        [[buffer(1)]],
++        device const char  * k        [[buffer(2)]],
++        device const char  * v        [[buffer(3)]],
++        device const uint  * page_map [[buffer(4)]],
++        device float * dst            [[buffer(5)]],
++        uint gid [[thread_position_in_grid]]) {
++    if (gid >= args.nq*args.hq*args.n_stream*args.dv) return;
++    const uint out_d = gid % args.dv;
++    const uint row = gid / args.dv;
++    const uint q_head = row % args.hq;
++    const uint query = (row / args.hq) % args.nq;
++    const uint stream = row / (args.hq*args.nq);
++    const uint kv_head = q_head/(args.hq/args.hkv);
++    float max_score = -INFINITY;
++    for (uint logical = 0; logical < args.n_kv; ++logical) {
++        const uint physical = page_map[stream*args.n_kv + logical];
++        if (physical >= args.n_phy) {
++            continue;
++        }
++        float score = 0.0f;
++        for (uint i = 0; i < args.d; ++i) {
++            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
++            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*TESSERA_DEQUANT_Q8_0(k, ki);
++        }
++        max_score = max(max_score, score*args.scale);
++    }
++    float denom = 0.0f, value = 0.0f;
++    for (uint logical = 0; logical < args.n_kv; ++logical) {
++        const uint physical = page_map[stream*args.n_kv + logical];
++        if (physical >= args.n_phy) {
++            continue;
++        }
++        float score = 0.0f;
++        for (uint i = 0; i < args.d; ++i) {
++            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
++            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*TESSERA_DEQUANT_Q8_0(k, ki);
++        }
++        const float weight = exp(score*args.scale - max_score);
++        denom += weight;
++        const uint v_index = args.v_trans
++            ? (((stream*args.dv + out_d)*args.hkv + kv_head)*args.n_phy + physical)
++            : (((stream*args.n_phy + physical)*args.hkv + kv_head)*args.dv + out_d);
++        value += weight*TESSERA_DEQUANT_Q8_0(v, v_index);
++    }
++    dst[gid] = value/denom;
++}
++
+ // ====================== Tile640 ternary matmul (Metal) ======================
+ //
+ // Ported from prism-engine's `templates/ternary_tile640_gemv.metal`. Layout:
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 23735273d..4004f1dc2 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -5477,8 +5477,8 @@ struct ggml_tensor * ggml_tessera_paged_attn(
+         struct ggml_tensor  * page_map,
+         float                 scale) {
+     GGML_ASSERT(q->type == GGML_TYPE_F32);
+-    GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32) &&
+-                (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32));
++    GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_Q8_0) &&
++                (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_Q8_0));
+     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
+     GGML_ASSERT(q->ne[0] == k->ne[0]);
+     const bool v_trans = v->ne[0] == k->ne[2];
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index f5f9d7c62..8a3cdfec4 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -3055,7 +3055,8 @@ ggml_tensor * llm_graph_context::build_attn(
+         inp->get_tessera_page_map() &&
+         !kq_b && !sinks && !v_mla &&
+         q_cur->type == GGML_TYPE_F32 &&
+-        (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32) &&
++        (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
++         mctx_cur->type_k() == GGML_TYPE_Q8_0) &&
+         mctx_cur->type_k() == mctx_cur->type_v();
+ 
+     if (use_tessera_paged) {
+@@ -3330,7 +3331,8 @@ ggml_tensor * llm_graph_context::build_attn(
+     const bool use_tessera_paged = tessera_paged_attn_enabled() && cparams.kv_unified &&
+         cparams.causal_attn && ubatch.n_tokens == 1 && inp->get_tessera_page_map(is_swa) &&
+         !kq_b && !sinks && !v_mla && q_cur->type == GGML_TYPE_F32 &&
+-        (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32) &&
++        (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
++         mctx_cur->type_k() == GGML_TYPE_Q8_0) &&
+         mctx_cur->type_k() == mctx_cur->type_v();
+     ggml_tensor * cur = nullptr;
+     if (use_tessera_paged) {
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 132cab7dd..16f0edfa6 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1304,6 +1304,29 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
+     return result;
+ }
+ 
++std::vector<uint32_t> llama_kv_cache::build_tessera_full_page_map(const slot_info & sinfo, uint32_t n_kv) const {
++    // Invert the cell -> pos mapping for every resident cell of every stream
++    // the slot touches. Each cell holds exactly one logical position (pos[i]);
++    // the inverse lets the paged-attn kernel translate a logical KV index to
++    // the physical cell that stores its K/V row. Unused logical positions stay
++    // UINT32_MAX so the kernel can skip (or assert against) them.
++    std::vector<uint32_t> result(n_kv, std::numeric_limits<uint32_t>::max());
++    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
++        const auto & cells = v_cells[sinfo.strm[s]];
++        const uint32_t n_cells = cells.size();
++        for (uint32_t i = 0; i < n_cells; ++i) {
++            if (cells.is_empty(i)) {
++                continue;
++            }
++            const llama_pos p = cells.pos_get(i);
++            if (p >= 0 && (uint32_t) p < n_kv) {
++                result[(uint32_t) p] = i;
++            }
++        }
++    }
++    return result;
++}
++
+ std::vector<uint32_t> llama_kv_cache::tessera_kv_block_table::make_page_map(size_t stream) const {
+     if (stream >= streams.size()) {
+         throw std::out_of_range("Tessera KV page-map stream index");
+@@ -2773,8 +2796,13 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
+ }
+ 
+ void llama_kv_cache_context::set_input_tessera_page_map(ggml_tensor * dst) const {
+-    const auto table = kv->build_tessera_block_table(sinfos[i_cur], n_kv);
+-    const auto map = table.make_page_map(/* stream = */ 0);
++    // The paged-attn kernel reads K/V via the page map: dst[p] = the physical
++    // cell index holding logical position p. We invert the cell->pos map over
++    // every resident cell so historical positions (not just the current
++    // ubatch) resolve correctly. The previous block-table path only walked
++    // the current ubatch cells, leaving historical slots UINT32_MAX and
++    // producing garbage attention output.
++    const auto map = kv->build_tessera_full_page_map(sinfos[i_cur], n_kv);
+     GGML_ASSERT(dst->type == GGML_TYPE_I32 && dst->ne[0] == (int64_t) map.size());
+     ggml_backend_tensor_set(dst, map.data(), 0, map.size()*sizeof(map[0]));
+ }
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index aeb636250..0760fe06b 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -224,6 +224,13 @@ public:
+ 
+     uint32_t get_n_kv(const slot_info & sinfo) const;
+ 
++    // Build the full logical-position -> physical-cell map for the unified
++    // paged-attention decode path. Returns a vector of length n_kv where
++    // entry p is the physical cell index holding logical position p, or
++    // UINT32_MAX if the position is not resident. Used by TESSERA_PAGED_ATTN
++    // so the kernel can scatter-read the paged arena directly.
++    std::vector<uint32_t> build_tessera_full_page_map(const slot_info & sinfo, uint32_t n_kv) const;
++
+     // get views of the current state of the cache
+     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+diff --git a/tools/llama-bench/llama-bench.cpp b/tools/llama-bench/llama-bench.cpp
+index 29ad352d0..ec1a45c98 100644
+--- a/tools/llama-bench/llama-bench.cpp
++++ b/tools/llama-bench/llama-bench.cpp
+@@ -350,6 +350,7 @@ struct cmd_params {
+     std::vector<bool>                embeddings;
+     std::vector<bool>                no_op_offload;
+     std::vector<bool>                no_host;
++    std::vector<bool>                kv_unified;
+     std::vector<size_t>              fit_params_target;
+     std::vector<uint32_t>            fit_params_min_ctx;
+     ggml_numa_strategy               numa;
+@@ -394,6 +395,7 @@ static const cmd_params cmd_params_defaults = {
+     /* embeddings           */ { false },
+     /* no_op_offload        */ { false },
+     /* no_host              */ { false },
++    /* kv_unified           */ { false },
+     /* fit_params_target    */ { 0 },
+     /* fit_params_min_ctx   */ { 0 },
+     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
+@@ -468,6 +470,7 @@ static void print_usage(int /* argc */, char ** argv) {
+     printf("                                              (default: disabled)\n");
+     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
+     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
++    printf("  -kvu, --kv-unified <0|1>                    (default: %s)\n", join(cmd_params_defaults.kv_unified, ",").c_str());
+     printf("\n");
+     printf(
+         "Multiple values can be given for each parameter by separating them with ','\n"
+@@ -911,6 +914,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
+                 }
+                 auto p = string_split<bool>(argv[i], split_delim);
+                 params.no_host.insert(params.no_host.end(), p.begin(), p.end());
++            } else if (arg == "-kvu" || arg == "--kv-unified") {
++                if (++i >= argc) {
++                    invalid_param = true;
++                    break;
++                }
++                auto p = string_split<bool>(argv[i], split_delim);
++                params.kv_unified.insert(params.kv_unified.end(), p.begin(), p.end());
+             } else if (arg == "-ts" || arg == "--tensor-split") {
+                 if (++i >= argc) {
+                     invalid_param = true;
+@@ -1175,6 +1185,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
+     if (params.no_host.empty()) {
+         params.no_host = cmd_params_defaults.no_host;
+     }
++    if (params.kv_unified.empty()) {
++        params.kv_unified = cmd_params_defaults.kv_unified;
++    }
+     if (params.n_threads.empty()) {
+         params.n_threads = cmd_params_defaults.n_threads;
+     }
+@@ -1223,6 +1236,7 @@ struct cmd_params_instance {
+     bool               embeddings;
+     bool               no_op_offload;
+     bool               no_host;
++    bool               kv_unified;
+     size_t             fit_target;
+     uint32_t           fit_min_ctx;
+ 
+@@ -1299,6 +1313,7 @@ struct cmd_params_instance {
+         cparams.embeddings      = embeddings;
+         cparams.op_offload      = !no_op_offload;
+         cparams.swa_full        = false;
++        cparams.kv_unified      = kv_unified;
+ 
+         return cparams;
+     }
+@@ -1321,6 +1336,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
+     for (const auto & ts : params.tensor_split)
+     for (const auto & ot : params.tensor_buft_overrides)
+     for (const auto & noh : params.no_host)
++    for (const auto & kvu : params.kv_unified)
+     for (const auto & embd : params.embeddings)
+     for (const auto & nopo : params.no_op_offload)
+     for (const auto & nb : params.n_batch)
+@@ -1364,6 +1380,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
+                 /* .embeddings            = */ embd,
+                 /* .no_op_offload         = */ nopo,
+                 /* .no_host               = */ noh,
++                /* .kv_unified            = */ kvu,
+                 /* .fit_target            = */ fpt,
+                 /* .fit_min_ctx           = */ fpc,
+             };
+@@ -1400,6 +1417,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
+                 /* .embeddings            = */ embd,
+                 /* .no_op_offload         = */ nopo,
+                 /* .no_host               = */ noh,
++                /* .kv_unified            = */ kvu,
+                 /* .fit_target            = */ fpt,
+                 /* .fit_min_ctx           = */ fpc,
+             };
+@@ -1436,6 +1454,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
+                 /* .embeddings            = */ embd,
+                 /* .no_op_offload         = */ nopo,
+                 /* .no_host               = */ noh,
++                /* .kv_unified            = */ kvu,
+                 /* .fit_target            = */ fpt,
+                 /* .fit_min_ctx           = */ fpc,
+             };
+@@ -1477,6 +1496,7 @@ struct test {
+     bool                     embeddings;
+     bool                     no_op_offload;
+     bool                     no_host;
++    bool                     kv_unified;
+     size_t                   fit_target;
+     uint32_t                 fit_min_ctx;
+     int                      n_prompt;
+@@ -1516,6 +1536,7 @@ struct test {
+         embeddings     = inst.embeddings;
+         no_op_offload  = inst.no_op_offload;
+         no_host        = inst.no_host;
++        kv_unified     = inst.kv_unified;
+         fit_target     = inst.fit_target;
+         fit_min_ctx    = inst.fit_min_ctx;
+         n_prompt       = inst.n_prompt;

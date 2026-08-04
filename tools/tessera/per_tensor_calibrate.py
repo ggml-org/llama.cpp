@@ -114,6 +114,15 @@ DEFAULT_CHUNK_ROWS = 4096
 # that the existing AWQ path can consume without runtime changes.
 LRQ_AGGREGATIONS = ("mean", "rms")
 
+# Roles for the unified per-component calibration policy. The single-model
+# path keeps the legacy "trunk" default; the unified Calibrate (the
+# ``unified_calibrate.py`` driver) passes one of these flags per component
+# so the consumer (tile640_quantize_v3.py) can route per-tensor entries to
+# the correct lane when the same model is being quantized as a single
+# unified GGUF.
+MODEL_ROLES = ("trunk", "dflash", "dspark", "mtp_nextn", "shared_embd")
+DEFAULT_MODEL_ROLE = "trunk"
+
 # DartQuant defaults. The QR-Orth step size is intentionally small: the
 # Stiefel retraction is a first-order scheme and large steps drift the
 # rotated weight well outside the manifold before QR pulls it back. The
@@ -1177,6 +1186,7 @@ def build_lrq_policy(
     results: list[tuple[Layer, LRQResult]],
     provenance: dict,
     base: dict | None = None,
+    model_role: str = DEFAULT_MODEL_ROLE,
 ) -> dict:
     """Assemble the per-tensor entries into a calibration-policy document.
 
@@ -1185,13 +1195,26 @@ def build_lrq_policy(
     payload lives under ``policy["lrq"]`` with its own sub-schema
     (``llama.tessera.lrq-policy.v1``) for tooling that wants to inspect the
     low-rank factors without parsing the family map.
+
+    ``model_role`` tags every per-tensor entry with one of the ``MODEL_ROLES``
+    (e.g. ``trunk`` / ``dflash`` / ``dspark`` / ``mtp_nextn`` /
+    ``shared_embd``). The same value is mirrored at the policy top level so
+    the consumer can pick a single component out of a unified policy
+    without scanning every entry. The default is ``trunk``, which is the
+    legacy single-model behaviour: the field is additive and ignored by
+    consumers that do not look at it.
     """
+    if model_role not in MODEL_ROLES:
+        raise ValueError(
+            f"model_role {model_role!r} not in {MODEL_ROLES!r}"
+        )
     policy: dict = dict(base or {})
     families = dict(policy.get("tensor_families", {}))
     tensor_records: list[dict] = []
     total_bytes = 0
     for layer, result in results:
         entry = result.policy_entry()
+        entry["model_role"] = model_role
         entry_key = f"lrq:{layer.name}"
         families[entry_key] = entry
         tensor_records.append({
@@ -1207,6 +1230,7 @@ def build_lrq_policy(
 
     policy.update({
         "schema": SCHEMA,
+        "model_role": model_role,
         "lrq": {
             "schema": LRQ_SCHEMA,
             "rank": results[0][1].rank if results else DEFAULT_RANK,
@@ -1228,6 +1252,7 @@ def build_dartquant_policy(
     results: list[tuple[Layer, DartQuantResult]],
     provenance: dict,
     base: dict | None = None,
+    model_role: str = DEFAULT_MODEL_ROLE,
 ) -> dict:
     """Assemble the DartQuant pre-rotation policy.
 
@@ -1237,13 +1262,22 @@ def build_dartquant_policy(
     by ``tile640_quantize_v3.py --dartquant-rotation``: the dequantised
     weight is reconstructed as ``Q(W') @ R.T`` so the original ``W`` is
     recovered exactly (modulo the ternarization error on ``W'``).
+
+    ``model_role`` tags every per-tensor entry with one of the
+    ``MODEL_ROLES`` (see ``build_lrq_policy`` for semantics). Default
+    ``trunk`` preserves the legacy single-model behaviour.
     """
+    if model_role not in MODEL_ROLES:
+        raise ValueError(
+            f"model_role {model_role!r} not in {MODEL_ROLES!r}"
+        )
     policy: dict = dict(base or {})
     families = dict(policy.get("tensor_families", {}))
     tensor_records: list[dict] = []
     total_bytes = 0
     for layer, result in results:
         entry = result.policy_entry()
+        entry["model_role"] = model_role
         entry_key = f"dartquant:{layer.name}"
         families[entry_key] = entry
         tensor_records.append({
@@ -1263,6 +1297,7 @@ def build_dartquant_policy(
 
     policy.update({
         "schema": SCHEMA,
+        "model_role": model_role,
         "dartquant": {
             "schema": DARTQUANT_SCHEMA,
             "iterations": results[0][1].iterations if results else 0,
@@ -1798,6 +1833,7 @@ def build_flrq_policy(
     provenance: dict,
     per_rank: dict[str, dict[int, dict]] | None = None,
     base: dict | None = None,
+    model_role: str = DEFAULT_MODEL_ROLE,
 ) -> dict:
     """Assemble FLRQ results into a calibration-policy document.
 
@@ -1805,7 +1841,15 @@ def build_flrq_policy(
     so downstream consumers do not need a schema change.  The FLRQ
     payload lives under ``policy["flrq"]`` with its own sub-schema
     (``llama.tessera.flrq-policy.v1``).
+
+    ``model_role`` tags every per-tensor entry with one of the
+    ``MODEL_ROLES`` (see ``build_lrq_policy`` for semantics). Default
+    ``trunk`` preserves the legacy single-model behaviour.
     """
+    if model_role not in MODEL_ROLES:
+        raise ValueError(
+            f"model_role {model_role!r} not in {MODEL_ROLES!r}"
+        )
     policy: dict = dict(base or {})
     families = dict(policy.get("tensor_families", {}))
     tensor_records: list[dict] = []
@@ -1813,6 +1857,7 @@ def build_flrq_policy(
     per_rank_out: dict[str, dict[str, dict]] = {}
     for layer, result in results:
         entry = result.policy_entry()
+        entry["model_role"] = model_role
         entry_key = f"flrq:{layer.name}"
         families[entry_key] = entry
         tensor_records.append({
@@ -1836,6 +1881,7 @@ def build_flrq_policy(
 
     policy.update({
         "schema": SCHEMA,
+        "model_role": model_role,
         "flrq": {
             "schema": FLRQ_SCHEMA,
             "rank": results[0][1].rank if results else 0,
@@ -2324,7 +2370,7 @@ def run_compare(args: argparse.Namespace, tracker: ResidencyTracker | None = Non
         "bundle_digests": digests,
         "timestamp": time.time(),
     }
-    policy = build_lrq_policy(lrq_results, provenance)
+    policy = build_lrq_policy(lrq_results, provenance, model_role=args.model_role)
     output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
 
     # AWQ leg (best-effort)
@@ -2411,12 +2457,12 @@ def run_dartquant(args: argparse.Namespace, tracker: ResidencyTracker | None = N
         "bundle_digests": digests,
         "timestamp": time.time(),
     }
-    policy = build_dartquant_policy(results, provenance)
+    policy = build_dartquant_policy(results, provenance, model_role=args.model_role)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
     print(
-        f"wrote {output} with {len(results)} DartQuant tensor entries",
+        f"wrote {output} with {len(results)} DartQuant tensor entries (role={args.model_role})",
         file=sys.stderr,
     )
     return 0
@@ -2541,11 +2587,12 @@ def run_flrq(args: argparse.Namespace, tracker: ResidencyTracker | None = None) 
         "bundle_digests": digests,
         "timestamp": time.time(),
     }
-    policy = build_flrq_policy(flrq_results, provenance, per_rank=per_rank)
+    policy = build_flrq_policy(flrq_results, provenance, per_rank=per_rank, model_role=args.model_role)
     output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
     print(
         f"wrote {output} with {len(flrq_results)} FLRQ tensor entries "
-        f"(total bytes: {sum(r.bytes_used() for _, r in flrq_results)})",
+        f"(total bytes: {sum(r.bytes_used() for _, r in flrq_results)}) "
+        f"(role={args.model_role})",
         file=sys.stderr,
     )
     return 0
@@ -2782,6 +2829,19 @@ def _build_parser() -> argparse.ArgumentParser:
             "(default 2 = double-buffered; 1 = legacy single-thread)."
         ),
     )
+    parser.add_argument(
+        "--model-role",
+        choices=MODEL_ROLES,
+        default=DEFAULT_MODEL_ROLE,
+        help=(
+            "Component role for this calibration pass. The value is stamped "
+            "on every per-tensor entry so the unified consumer can route "
+            "per-role. The default is 'trunk' which is the legacy "
+            "single-model behaviour. The unified_calibrate.py driver "
+            "invokes per_tensor_calibrate.py once per component with the "
+            "appropriate role."
+        ),
+    )
     return parser
 
 
@@ -2929,16 +2989,23 @@ def main(argv: list[str] | None = None) -> int:
             "bundle_digests": digests,
             "timestamp": time.time(),
         }
-        policy = build_lrq_policy(lrq_results, provenance)
+        policy = build_lrq_policy(lrq_results, provenance, model_role=args.model_role)
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {output} with {len(lrq_results)} LRQ tensor entries", file=sys.stderr)
         print(f"residency: {tracker.report()}", file=sys.stderr)
+        print(f"wrote {output} with {len(lrq_results)} LRQ tensor entries", file=sys.stderr)
+        print(f"wrote {output} with {len(lrq_results)} LRQ tensor entries (role={args.model_role})", file=sys.stderr)
         return 0
     if args.fitness == "awq":
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
+        # awq-evolve.py does not (yet) accept --model-role; the per-role
+        # tagging is added by per_tensor_calibrate.py on the returned
+        # policy so the unified consumer's contract (top-level
+        # model_role + per-entry model_role) is consistent across
+        # fitness modes.
         policy = run_awq_subprocess(
             args.layers,
             output,
@@ -2948,6 +3015,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote {output} via awq-evolve.py", file=sys.stderr)
         print(f"residency: {tracker.report()}", file=sys.stderr)
+        print(f"wrote {output} via awq-evolve.py", file=sys.stderr)
+        if isinstance(policy, dict):
+            policy["model_role"] = args.model_role
+            for entry in policy.get("tensor_families", {}).values():
+                if isinstance(entry, dict) and "model_role" not in entry:
+                    entry["model_role"] = args.model_role
+            # Re-write so the on-disk artifact matches the in-memory
+            # policy the rest of the unified driver sees.
+            output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {output} via awq-evolve.py (role={args.model_role})", file=sys.stderr)
         return 0
     if args.fitness == "flrq":
         rc = run_flrq(args, tracker=tracker)

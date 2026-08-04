@@ -1,0 +1,566 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 14cf630b8..25597ae2c 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -540,6 +540,9 @@ const std::vector<ggml_type> kv_cache_types = {
+     GGML_TYPE_IQ4_NL,
+     GGML_TYPE_Q5_0,
+     GGML_TYPE_Q5_1,
++    GGML_TYPE_Q2_K,
++    GGML_TYPE_Q3_K,
++    GGML_TYPE_Q4_K,
+ };
+ 
+ static ggml_type kv_cache_type_from_str(const std::string & s) {
+diff --git a/correctness_capture.py b/correctness_capture.py
+new file mode 100644
+index 000000000..0f61c17b3
+--- /dev/null
++++ b/correctness_capture.py
+@@ -0,0 +1,126 @@
++#!/usr/bin/env python3
++"""
++S4 correctness gate: logit/text comparison vs f16 KV baseline.
++
++Starts llama-server with a given KV cache type, sends a fixed prompt, captures
++greedy decode (temp=0) tokens + per-step top-token logprob. Run once per KV
++type, save the JSON, then compare with compare.py.
++
++Usage:
++  python3 correctness_capture.py <ctk> <label> <out.json> <extra env>
++"""
++import json, os, subprocess, sys, time, urllib.request, urllib.error
++
++MODEL = "/Volumes/Julian T7/models/gemma-4-12B-it-qat-unified-mtp-Q5_K_M-telemetry.gguf"
++ROOT = "/Users/user/Developer/GitHub/tessera/.zcode/alphaevolve/memopt-pipeline-w3/worktrees/g1"
++BIN = os.path.join(ROOT, "build-g1", "bin", "llama-server")
++PORT = 8771
++
++# Substantial prompt: ~90 tokens of factual + reasoning text. The greedy
++# continuation should be stable across small numerical perturbations; total
++# collapse (random tokens, max_abs_delta huge) is the failure mode we gate on.
++PROMPT = (
++    "The history of computing hardware spans many decades. Early mechanical "
++    "calculators gave way to vacuum tube machines, then transistors, and "
++    "finally integrated circuits. A key question for modern systems is: "
++    "when does reducing numerical precision harm results? Explain the "
++    "trade-off between memory savings and accuracy in neural network inference, "
++    "and give one concrete example."
++)
++
++def wait_for_server(timeout=180):
++    t0 = time.time()
++    while time.time() - t0 < timeout:
++        try:
++            with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=3) as r:
++                if r.status == 200:
++                    return True
++        except Exception:
++            time.sleep(2.0)
++    return False
++
++def main():
++    ctk = sys.argv[1]
++    label = sys.argv[2]
++    out_path = sys.argv[3]
++    extra_env = sys.argv[4] if len(sys.argv) > 4 else ""
++    env = os.environ.copy()
++    env["TESSERA_PAGED_ATTN"] = "1"
++    for kv in extra_env.split():
++        if "=" in kv:
++            k, v = kv.split("=", 1)
++            env[k] = v
++    n_predict = 80
++    cmd = [
++        BIN, "-m", MODEL, "-ctk", ctk, "-ctv", ctk, "-kvu",
++        "-ngl", "999", "--port", str(PORT), "--host", "127.0.0.1",
++        "-c", "512", "-np", "1", "-t", "4",
++        "--no-embedded-mtp", "--log-disable",
++    ]
++    print(f"[{label}] starting server ctk={ctk} env={extra_env}", flush=True)
++    logf = open(out_path + ".serverlog", "w")
++    proc = subprocess.Popen(cmd, env=env, stdout=logf, stderr=subprocess.STDOUT)
++    try:
++        if not wait_for_server():
++            print(f"[{label}] SERVER DID NOT START", flush=True)
++            sys.exit(2)
++        body = json.dumps({
++            "prompt": PROMPT,
++            "n_predict": n_predict,
++            "temperature": 0.0,
++            "top_p": 1.0,
++            "logprobs": True,
++            "stream": False,
++            "seed": 12345,
++        }).encode()
++        req = urllib.request.Request(
++            f"http://127.0.0.1:{PORT}/completion",
++            data=body,
++            headers={"Content-Type": "application/json"},
++        )
++        t0 = time.time()
++        with urllib.request.urlopen(req, timeout=180) as r:
++            resp = json.loads(r.read())
++        dt = time.time() - t0
++        # Save raw response for debugging
++        with open(out_path + ".raw.json", "w") as f:
++            json.dump(resp, f, indent=2)
++        # Extract tokens + top logprobs. completion_probabilities is a list
++        # (one entry per generated step), each entry is a list of {tok_str, prob,...}
++        # for the top tokens at that step.
++        toks = []
++        probs = []
++        ce = resp.get("completion_probabilities") or []
++        for step in ce:
++            # Each step is a dict: {id, token, bytes, logprob, top_logprobs}
++            if isinstance(step, dict) and "token" in step:
++                toks.append(step.get("token"))
++                probs.append(step.get("logprob"))
++            elif isinstance(step, list) and step:
++                top = step[0]
++                toks.append(top.get("tok_str") or top.get("token"))
++                probs.append(top.get("prob") or top.get("logprob"))
++        result = {
++            "label": label,
++            "ctk": ctk,
++            "content": resp.get("content", ""),
++            "tokens": toks,
++            "top_probs": probs,
++            "timings_s": dt,
++            "prompt_len_tokens": resp.get("tokens_predicted", -1),
++        }
++        with open(out_path, "w") as f:
++            json.dump(result, f, indent=2)
++        n_match = sum(1 for _ in toks)
++        print(f"[{label}] {n_match} tokens captured in {dt:.1f}s", flush=True)
++        print(f"[{label}] first 12 toks: {toks[:12]}", flush=True)
++    finally:
++        proc.terminate()
++        try:
++            proc.wait(timeout=10)
++        except Exception:
++            proc.kill()
++        logf.close()
++
++if __name__ == "__main__":
++    main()
+diff --git a/correctness_compare.py b/correctness_compare.py
+new file mode 100644
+index 000000000..448d112f6
+--- /dev/null
++++ b/correctness_compare.py
+@@ -0,0 +1,22 @@
++#!/usr/bin/env python3
++"""Compare correctness captures: token agreement + greedy-text similarity."""
++import json, sys, difflib
++
++def load(p):
++    return json.load(open(p))
++
++base = load(sys.argv[1])   # reference (e.g. f16)
++cand = load(sys.argv[2])   # candidate
++btoks = base["tokens"]
++ctoks = cand["tokens"]
++n = min(len(btoks), len(ctoks))
++match = sum(1 for i in range(n) if btoks[i] == ctoks[i])
++# greedy-text similarity (semantically reasonable proxy)
++btext = base["content"]
++ctext = cand["content"]
++text_sim = difflib.SequenceMatcher(None, btext, ctext).ratio()
++print(f"reference: {base['label']} ({base['ctk']})  candidate: {cand['label']} ({cand['ctk']})")
++print(f"token agreement: {match}/{n} = {100.0*match/n:.1f}%")
++print(f"greedy text similarity (ratio): {text_sim:.3f}")
++print(f"ref text[:120]:  {btext[:120]!r}")
++print(f"cand text[:120]: {ctext[:120]!r}")
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index 202b205ae..89a90caa0 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -9246,6 +9246,73 @@ void ggml_compute_forward_flash_attn_ext(
+     }
+ }
+ 
++// Dequantize one element at flat logical index i of a contiguous q2_K row.
++// Mirrors dequantize_row_q2_K in ggml-quants.c. QK_K == 256; a super-block
++// holds 16 sub-blocks of 16 elements. The element layout within a super-block
++// is: 2 outer halves of 128 (n_block = i/128 % 2), each half has 4 sub-blocks
++// (j = (i%128)/32) using bit-shift j*2; within a sub-block the first 16
++// elements come from q[n_block*32 + 0..15], the next 16 from
++// q[n_block*32 + 16..31]. Scales are packed 2-per-byte at is = n_block*8 + j*2.
++static inline float tessera_dequant_q2_k_elem(const block_q2_K * base, int64_t i) {
++    const int64_t sb = i / QK_K;            // super-block index
++    const int      c  = (int)(i - sb*QK_K); // 0..255 within super-block
++    const block_q2_K & blk = base[sb];
++    // d/dmin are the first 4 bytes of the block. block_q2_K exposes them via a
++    // union whose member tag varies with GGML_COMMON_AGGR_* (C vs C++ vs Metal),
++    // so read the raw half storage for portability across compile contexts.
++    const ggml_fp16_t * hd = (const ggml_fp16_t *)&blk;
++    const float d    = GGML_FP16_TO_FP32(hd[0]);
++    const float dmin = GGML_FP16_TO_FP32(hd[1]);
++    const int n_block = c >> 7;             // 0 or 1 (c / 128)
++    const int c_in_n  = c & 127;            // c % 128
++    const int j       = c_in_n >> 5;        // 0..3 (c_in_n / 32)
++    const int c_in_j  = c_in_n & 31;        // 0..31
++    const int is_idx  = (n_block << 3) + (j << 1) + (c_in_j >> 4); // n_block*8 + j*2 + (0|1)
++    const uint8_t sc = blk.scales[is_idx];
++    const float dl = d * (sc & 0xF);
++    const float ml = dmin * (sc >> 4);
++    const uint8_t * q = blk.qs + n_block*32 + (c_in_j & 15) + (c_in_j >> 4)*16;
++    const int shift = j*2;
++    return dl * ((int8_t)((*q >> shift) & 3)) - ml;
++}
++
++// q4_0: block { ggml_half d; uint8_t qs[QK4_0/2]; }, QK4_0 == 32, 4-bit nibbles.
++// Layout (see dequantize_row_q4_0): low nibbles of qs[0..15] -> elements 0..15,
++// high nibbles -> elements 16..31. value = (nibble - 8) * d.
++static inline float tessera_dequant_q4_0_elem(const block_q4_0 * base, int64_t i) {
++    const int64_t sb = i / QK4_0;
++    const int      c  = (int)(i - sb*QK4_0);
++    const block_q4_0 & blk = base[sb];
++    const float d = GGML_FP16_TO_FP32(blk.d);
++    const uint8_t byte = blk.qs[c & 15];
++    const int nibble = (c < 16) ? (byte & 0xF) : (byte >> 4);
++    return (nibble - 8) * d;
++}
++
++// q5_0: block { ggml_half d; uint8_t qh[4]; uint8_t qs[QK5_0/2]; }, QK5_0 == 32.
++// Layout (see dequantize_row_q5_0): low nibble + 5th bit -> elem 0..15,
++// high nibble + 5th bit -> elem 16..31. value = (q5 - 16) * d, where the 5th
++// bit comes from qh treated as a little-endian uint32 (bit j for elem j and
++// bit j+16 for elem j+16). Matches the reference bit extraction.
++static inline float tessera_dequant_q5_0_elem(const block_q5_0 * base, int64_t i) {
++    const int64_t sb = i / QK5_0;
++    const int      c  = (int)(i - sb*QK5_0);
++    const block_q5_0 & blk = base[sb];
++    const float d = GGML_FP16_TO_FP32(blk.d);
++    uint32_t qh;
++    memcpy(&qh, blk.qh, sizeof(qh));
++    const int j = c & 15;
++    const uint8_t byte = blk.qs[j];
++    if (c < 16) {
++        const uint8_t xh = ((qh >> j) << 4) & 0x10;
++        const int q5 = (byte & 0xF) | xh;
++        return (q5 - 16) * d;
++    }
++    const uint8_t xh = (qh >> (j + 12)) & 0x10;
++    const int q5 = (byte >> 4) | xh;
++    return (q5 - 16) * d;
++}
++
+ void ggml_compute_forward_tessera_paged_attn(
+         const ggml_compute_params * params,
+         ggml_tensor * dst) {
+@@ -9253,10 +9320,13 @@ void ggml_compute_forward_tessera_paged_attn(
+     const ggml_tensor * k        = dst->src[1];
+     const ggml_tensor * v        = dst->src[2];
+     const ggml_tensor * page_map = dst->src[3];
+-
+     GGML_ASSERT(q->type == GGML_TYPE_F32);
+-    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0);
+-    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_Q8_0);
++    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16 ||
++                k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q2_K ||
++                k->type == GGML_TYPE_Q4_0 || k->type == GGML_TYPE_Q5_0);
++    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16 ||
++                v->type == GGML_TYPE_Q8_0 || v->type == GGML_TYPE_Q2_K ||
++                v->type == GGML_TYPE_Q4_0 || v->type == GGML_TYPE_Q5_0);
+     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
+     GGML_ASSERT(q->ne[0] == k->ne[0]);
+     const bool v_trans = ggml_get_op_params_i32(dst, 1) != 0;
+@@ -9290,6 +9360,16 @@ void ggml_compute_forward_tessera_paged_attn(
+         if (k->type == GGML_TYPE_F16) {
+             return ggml_fp16_to_fp32(((const ggml_fp16_t *) k->data)[i]);
+         }
++        if (k->type == GGML_TYPE_Q2_K) {
++            // S4: 2-bit K-quant dequant fused into the attention inner loop.
++            return tessera_dequant_q2_k_elem((const block_q2_K *) k->data, i);
++        }
++        if (k->type == GGML_TYPE_Q4_0) {
++            return tessera_dequant_q4_0_elem((const block_q4_0 *) k->data, i);
++        }
++        if (k->type == GGML_TYPE_Q5_0) {
++            return tessera_dequant_q5_0_elem((const block_q5_0 *) k->data, i);
++        }
+         // GGML_TYPE_Q8_0: block { ggml_half d; int8_t qs[QK8_0]; }, QK8_0 == 32.
+         // On-the-fly dequant: value = d * qs[i % QK8_0].
+         const block_q8_0 * blk = (const block_q8_0 *) k->data;
+@@ -9303,6 +9383,15 @@ void ggml_compute_forward_tessera_paged_attn(
+         if (v->type == GGML_TYPE_F16) {
+             return ggml_fp16_to_fp32(((const ggml_fp16_t *) v->data)[i]);
+         }
++        if (v->type == GGML_TYPE_Q2_K) {
++            return tessera_dequant_q2_k_elem((const block_q2_K *) v->data, i);
++        }
++        if (v->type == GGML_TYPE_Q4_0) {
++            return tessera_dequant_q4_0_elem((const block_q4_0 *) v->data, i);
++        }
++        if (v->type == GGML_TYPE_Q5_0) {
++            return tessera_dequant_q5_0_elem((const block_q5_0 *) v->data, i);
++        }
+         // GGML_TYPE_Q8_0 dequant (same as load_k).
+         const block_q8_0 * blk = (const block_q8_0 *) v->data;
+         const float d = GGML_FP16_TO_FP32(blk[i / QK8_0].d);
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index a3a0da8de..c11089415 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -2818,7 +2818,8 @@ int ggml_metal_op_tessera_paged_attn(ggml_metal_op_t ctx, int idx) {
+     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+     GGML_ASSERT(op->src[1]->type == op->src[2]->type);
+     GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16 ||
+-                op->src[1]->type == GGML_TYPE_Q8_0);
++                op->src[1]->type == GGML_TYPE_Q8_0 || op->src[1]->type == GGML_TYPE_Q2_K ||
++                op->src[1]->type == GGML_TYPE_Q4_0 || op->src[1]->type == GGML_TYPE_Q5_0);
+     GGML_ASSERT(op->src[3]->type == GGML_TYPE_I32);
+     const bool v_trans = ggml_get_op_params_i32(op, 1) != 0;
+ 
+@@ -2835,6 +2836,9 @@ int ggml_metal_op_tessera_paged_attn(ggml_metal_op_t ctx, int idx) {
+         case GGML_TYPE_F16:  kernel = "kernel_tessera_paged_attn_f16";  break;
+         case GGML_TYPE_F32:  kernel = "kernel_tessera_paged_attn_f32";  break;
+         case GGML_TYPE_Q8_0: kernel = "kernel_tessera_paged_attn_q8_0"; break;
++        case GGML_TYPE_Q2_K: kernel = "kernel_tessera_paged_attn_q2_K"; break;
++        case GGML_TYPE_Q4_0: kernel = "kernel_tessera_paged_attn_q4_0"; break;
++        case GGML_TYPE_Q5_0: kernel = "kernel_tessera_paged_attn_q5_0"; break;
+         default: GGML_ABORT("tessera_paged_attn: unsupported K/V type");
+     }
+     auto pipeline = ggml_metal_library_get_pipeline(ctx->lib, kernel);
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index 400d001da..b79ddad2e 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -11348,6 +11348,176 @@ kernel void kernel_tessera_paged_attn_q8_0(
+     dst[gid] = value/denom;
+ }
+ 
++// S4: q2_K K/V variant. 2-bit K-quant (2.625 bpw effective) with a 256-element
++// super-block: per-super-block fp16 d/dmin, 16 packed 4-bit sub-scales, and
++// 2-bit weights. Dequant is fused element-wise into the attention inner loop,
++// mirroring the CPU helper in ops.cpp and dequantize_row_q2_K in ggml-quants.c.
++// value = d*(sc&0xF)*((q>>shift)&3) - dmin*(sc>>4).
++// Flat channel c (0..255) within super-block -> n_block=c/128, j=(c%128)/32,
++// is = n_block*8 + j*2 + (c_in_j/16), q offset = n_block*32 + (c&15) + (c/16%2)*16.
++inline float tessera_dequant_q2_k_elem(device const char * p, uint i) {
++    const uint sb = i / QK_K;
++    const uint c  = i - sb*QK_K;
++    device const block_q2_K * blk = (device const block_q2_K *)p + sb;
++    const float d    = blk->d;
++    const float dmin = blk->dmin;
++    const uint n_block = c >> 7;
++    const uint c_in_n  = c & 127;
++    const uint j       = c_in_n >> 5;
++    const uint c_in_j  = c_in_n & 31;
++    const uint is_idx  = (n_block << 3) + (j << 1) + (c_in_j >> 4);
++    const uchar sc = blk->scales[is_idx];
++    const float dl = d * (sc & 0xF);
++    const float ml = dmin * (sc >> 4);
++    const uchar q  = blk->qs[(n_block << 5) + (c_in_j & 15) + (c_in_j >> 4)*16];
++    return (dl * (float)((q >> (j*2)) & 3)) - ml;
++}
++
++kernel void kernel_tessera_paged_attn_q2_K(
++        constant tessera_paged_attn_args & args [[buffer(0)]],
++        device const float * q        [[buffer(1)]],
++        device const char  * k        [[buffer(2)]],
++        device const char  * v        [[buffer(3)]],
++        device const uint  * page_map [[buffer(4)]],
++        device float * dst            [[buffer(5)]],
++        uint gid [[thread_position_in_grid]]) {
++    if (gid >= args.nq*args.hq*args.n_stream*args.dv) return;
++    const uint out_d = gid % args.dv;
++    const uint row = gid / args.dv;
++    const uint q_head = row % args.hq;
++    const uint query = (row / args.hq) % args.nq;
++    const uint stream = row / (args.hq*args.nq);
++    const uint kv_head = q_head/(args.hq/args.hkv);
++    float max_score = -INFINITY;
++    for (uint logical = 0; logical < args.n_kv; ++logical) {
++        const uint physical = page_map[stream*args.n_kv + logical];
++        if (physical >= args.n_phy) {
++            continue;
++        }
++        float score = 0.0f;
++        for (uint i = 0; i < args.d; ++i) {
++            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
++            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*tessera_dequant_q2_k_elem(k, ki);
++        }
++        max_score = max(max_score, score*args.scale);
++    }
++    float denom = 0.0f, value = 0.0f;
++    for (uint logical = 0; logical < args.n_kv; ++logical) {
++        const uint physical = page_map[stream*args.n_kv + logical];
++        if (physical >= args.n_phy) {
++            continue;
++        }
++        float score = 0.0f;
++        for (uint i = 0; i < args.d; ++i) {
++            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
++            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*tessera_dequant_q2_k_elem(k, ki);
++        }
++        const float weight = exp(score*args.scale - max_score);
++        denom += weight;
++        const uint v_index = args.v_trans
++            ? (((stream*args.dv + out_d)*args.hkv + kv_head)*args.n_phy + physical)
++            : (((stream*args.n_phy + physical)*args.hkv + kv_head)*args.dv + out_d);
++        value += weight*tessera_dequant_q2_k_elem(v, v_index);
++    }
++    dst[gid] = value/denom;
++}
++
++// S4: q4_0 K/V variant. 4-bit (4.5 bpw effective), block { half d; uchar qs[16]; }
++// covering 32 elements. Low nibbles -> elem 0..15, high nibbles -> elem 16..31.
++// value = (nibble - 8) * d. q4_0 is the lowest bit-width with full Metal
++// set_rows support (kernel_set_rows_f32_i32_q4_0), so it is the practical
++// low-bit KV point on this backend.
++inline float tessera_dequant_q4_0_elem(device const char * p, uint i) {
++    const uint sb = i / QK4_0;
++    const uint c  = i - sb*QK4_0;
++    device const block_q4_0 * blk = (device const block_q4_0 *)p + sb;
++    const float d = blk->d;
++    const uchar byte = blk->qs[c & 15];
++    const float nibble = (c < 16) ? (byte & 0xF) : (byte >> 4);
++    return (nibble - 8.0f) * d;
++}
++
++// S4: q5_0 K/V variant. 5-bit, block { half d; uchar qh[4]; uchar qs[16]; }.
++// 5th bit comes from qh (LE uint32). Matches dequantize_row_q5_0.
++inline float tessera_dequant_q5_0_elem(device const char * p, uint i) {
++    const uint sb = i / QK5_0;
++    const uint c  = i - sb*QK5_0;
++    device const block_q5_0 * blk = (device const block_q5_0 *)p + sb;
++    const float d = blk->d;
++    device const uint * qhu = (device const uint *)blk->qh;
++    const uint qh = qhu[0];
++    const uint j = c & 15;
++    const uchar byte = blk->qs[j];
++    float q5;
++    if (c < 16) {
++        const uint xh = ((qh >> j) << 4) & 0x10;
++        q5 = (byte & 0xF) | xh;
++    } else {
++        const uint xh = (qh >> (j + 12)) & 0x10;
++        q5 = (byte >> 4) | xh;
++    }
++    return (q5 - 16.0f) * d;
++}
++
++#define TESSERA_PAGED_KERNEL_BODY(LOAD_KV) \
++    if (gid >= args.nq*args.hq*args.n_stream*args.dv) return; \
++    const uint out_d = gid % args.dv; \
++    const uint row = gid / args.dv; \
++    const uint q_head = row % args.hq; \
++    const uint query = (row / args.hq) % args.nq; \
++    const uint stream = row / (args.hq*args.nq); \
++    const uint kv_head = q_head/(args.hq/args.hkv); \
++    float max_score = -INFINITY; \
++    for (uint logical = 0; logical < args.n_kv; ++logical) { \
++        const uint physical = page_map[stream*args.n_kv + logical]; \
++        if (physical >= args.n_phy) { continue; } \
++        float score = 0.0f; \
++        for (uint i = 0; i < args.d; ++i) { \
++            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i; \
++            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*LOAD_KV(k, ki); \
++        } \
++        max_score = max(max_score, score*args.scale); \
++    } \
++    float denom = 0.0f, value = 0.0f; \
++    for (uint logical = 0; logical < args.n_kv; ++logical) { \
++        const uint physical = page_map[stream*args.n_kv + logical]; \
++        if (physical >= args.n_phy) { continue; } \
++        float score = 0.0f; \
++        for (uint i = 0; i < args.d; ++i) { \
++            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i; \
++            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*LOAD_KV(k, ki); \
++        } \
++        const float weight = exp(score*args.scale - max_score); \
++        denom += weight; \
++        const uint v_index = args.v_trans \
++            ? (((stream*args.dv + out_d)*args.hkv + kv_head)*args.n_phy + physical) \
++            : (((stream*args.n_phy + physical)*args.hkv + kv_head)*args.dv + out_d); \
++        value += weight*LOAD_KV(v, v_index); \
++    } \
++    dst[gid] = value/denom;
++
++kernel void kernel_tessera_paged_attn_q4_0(
++        constant tessera_paged_attn_args & args [[buffer(0)]],
++        device const float * q        [[buffer(1)]],
++        device const char  * k        [[buffer(2)]],
++        device const char  * v        [[buffer(3)]],
++        device const uint  * page_map [[buffer(4)]],
++        device float * dst            [[buffer(5)]],
++        uint gid [[thread_position_in_grid]]) {
++    TESSERA_PAGED_KERNEL_BODY(tessera_dequant_q4_0_elem)
++}
++
++kernel void kernel_tessera_paged_attn_q5_0(
++        constant tessera_paged_attn_args & args [[buffer(0)]],
++        device const float * q        [[buffer(1)]],
++        device const char  * k        [[buffer(2)]],
++        device const char  * v        [[buffer(3)]],
++        device const uint  * page_map [[buffer(4)]],
++        device float * dst            [[buffer(5)]],
++        uint gid [[thread_position_in_grid]]) {
++    TESSERA_PAGED_KERNEL_BODY(tessera_dequant_q5_0_elem)
++}
++
+ // ====================== Tile640 ternary matmul (Metal) ======================
+ //
+ // Ported from prism-engine's `templates/ternary_tile640_gemv.metal`. Layout:
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 4004f1dc2..aa5a445f5 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -5477,8 +5477,8 @@ struct ggml_tensor * ggml_tessera_paged_attn(
+         struct ggml_tensor  * page_map,
+         float                 scale) {
+     GGML_ASSERT(q->type == GGML_TYPE_F32);
+-    GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_Q8_0) &&
+-                (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_Q8_0));
++    GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q2_K || k->type == GGML_TYPE_Q4_0 || k->type == GGML_TYPE_Q5_0) &&
++                (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_Q8_0 || v->type == GGML_TYPE_Q2_K || v->type == GGML_TYPE_Q4_0 || v->type == GGML_TYPE_Q5_0));
+     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
+     GGML_ASSERT(q->ne[0] == k->ne[0]);
+     const bool v_trans = v->ne[0] == k->ne[2];
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 8a3cdfec4..9449cc30d 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -3056,7 +3056,8 @@ ggml_tensor * llm_graph_context::build_attn(
+         !kq_b && !sinks && !v_mla &&
+         q_cur->type == GGML_TYPE_F32 &&
+         (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
+-         mctx_cur->type_k() == GGML_TYPE_Q8_0) &&
++         mctx_cur->type_k() == GGML_TYPE_Q8_0 || mctx_cur->type_k() == GGML_TYPE_Q2_K ||
++         mctx_cur->type_k() == GGML_TYPE_Q4_0 || mctx_cur->type_k() == GGML_TYPE_Q5_0) &&
+         mctx_cur->type_k() == mctx_cur->type_v();
+ 
+     if (use_tessera_paged) {
+@@ -3332,7 +3333,8 @@ ggml_tensor * llm_graph_context::build_attn(
+         cparams.causal_attn && ubatch.n_tokens == 1 && inp->get_tessera_page_map(is_swa) &&
+         !kq_b && !sinks && !v_mla && q_cur->type == GGML_TYPE_F32 &&
+         (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
+-         mctx_cur->type_k() == GGML_TYPE_Q8_0) &&
++         mctx_cur->type_k() == GGML_TYPE_Q8_0 || mctx_cur->type_k() == GGML_TYPE_Q2_K ||
++         mctx_cur->type_k() == GGML_TYPE_Q4_0 || mctx_cur->type_k() == GGML_TYPE_Q5_0) &&
+         mctx_cur->type_k() == mctx_cur->type_v();
+     ggml_tensor * cur = nullptr;
+     if (use_tessera_paged) {
+diff --git a/tools/llama-bench/llama-bench.cpp b/tools/llama-bench/llama-bench.cpp
+index ec1a45c98..e328e66ee 100644
+--- a/tools/llama-bench/llama-bench.cpp
++++ b/tools/llama-bench/llama-bench.cpp
+@@ -503,6 +503,15 @@ static ggml_type ggml_type_from_name(const std::string & s) {
+     if (s == "iq4_nl") {
+         return GGML_TYPE_IQ4_NL;
+     }
++    if (s == "q2_K") {
++        return GGML_TYPE_Q2_K;
++    }
++    if (s == "q3_K") {
++        return GGML_TYPE_Q3_K;
++    }
++    if (s == "q4_K") {
++        return GGML_TYPE_Q4_K;
++    }
+ 
+     return GGML_TYPE_COUNT;
+ }

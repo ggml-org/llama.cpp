@@ -2650,10 +2650,25 @@ def lrq_policy_for(
     The matching rule mirrors ``tensor_policy``: the entry's ``match`` list
     is checked as a substring unless ``exact`` is set. The caller should
     prefer this over AWQ when it returns non-None.
+
+    When the policy carries per-entry ``model_role`` tags (the Phase
+    16 unified policy shape), entries are filtered by the tensor's
+    inferred role: a ``trunk`` tensor prefers ``model_role=trunk``
+    entries and falls back to ``shared_embd`` entries. The legacy
+    single-model path (no ``model_role`` metadata) is preserved
+    exactly: the first matching entry wins.
     """
     if policy is None:
         return None
-    for family in policy.get("tensor_families", {}).values():
+    families = policy.get("tensor_families", {})
+    has_role_metadata = any(
+        isinstance(entry, dict) and "model_role" in entry
+        for entry in families.values()
+    )
+    tensor_role = _infer_tensor_role(tensor_name)
+    selected = None
+    selected_rank = (-1, -1, -1)
+    for family in families.values():
         if "lrq_u" not in family or "lrq_v" not in family:
             continue
         matches = family.get("match", [])
@@ -2683,8 +2698,25 @@ def lrq_policy_for(
         agg = str(family.get("lrq_input_scale_agg", "mean"))
         if agg not in ("mean", "rms"):
             agg = "mean"
-        return rank, u, v, agg
-    return None
+        if not has_role_metadata:
+            # Legacy path: return the first valid match.
+            return rank, u, v, agg
+        entry_role = family.get("model_role")
+        if tensor_role is not None and entry_role == tensor_role:
+            role_score = 2
+        elif entry_role == UNIFIED_SHARED_EMBD_ROLE:
+            role_score = 1
+        else:
+            role_score = 0
+        rank_tuple = (
+            role_score,
+            int(exact),
+            max(len(fragment) for fragment in matches),
+        )
+        if rank_tuple > selected_rank:
+            selected = (rank, u, v, agg)
+            selected_rank = rank_tuple
+    return selected
 
 
 def load_pe_qat_policy(path: Optional[str]) -> Optional[dict]:
@@ -2729,6 +2761,149 @@ def pe_qat_policy_for(
     return _pe_qat_policy_for(policy, tensor_name)
 
 
+# Role names that the unified calibration driver stamps on every
+# per-tensor entry. The Python consumer (this file) uses them to
+# route per-tensor qtype to the right lane when a unified policy
+# carries entries for trunk + dflash + dspark + mtp_nextn +
+# shared_embd. The constants are mirrored from
+# tools/tessera/per_tensor_calibrate.py::MODEL_ROLES so this module
+# has no runtime import dependency.
+UNIFIED_MODEL_ROLES = ("trunk", "dflash", "dspark", "mtp_nextn", "shared_embd")
+UNIFIED_SHARED_EMBD_ROLE = "shared_embd"
+
+
+def _infer_tensor_role(tensor_name: str) -> Optional[str]:
+    """Best-effort role inference for a tensor name.
+
+    The unified arch mixes tensors from multiple components in a
+    single safetensors file. The role of a tensor is determined by
+    the naming convention the loader uses, not by the model arch
+    string. The patterns are conservative: anything that does not
+    match returns ``None``, which signals "no role hint" and the
+    consumer falls back to the legacy single-arch behaviour.
+
+    The patterns are ordered most-specific first so the inference
+    does not need to enumerate every MTP / DSparc / dflash variant
+    explicitly. New patterns can be added here when the loader
+    grows a new component.
+    """
+    if not tensor_name:
+        return None
+    # Embedding / output are always shared between trunk and
+    # dflash (the drafter's tokenizer + output head are aliased to
+    # the trunk's). The shared entry is the worst-of calibration
+    # baked at calibration time; the GGUF writer still picks the
+    # worst-of-the-two per the Phase 16 spec.
+    if tensor_name == "token_embd.weight" or tensor_name.startswith("token_embd."):
+        return UNIFIED_SHARED_EMBD_ROLE
+    if tensor_name == "output.weight" or tensor_name.startswith("output."):
+        return UNIFIED_SHARED_EMBD_ROLE
+    if tensor_name.startswith("dflash.") or tensor_name.startswith("dflash_"):
+        return "dflash"
+    # DSpark heads (DeepSeek-style Markov / sparse heads). The
+    # naming convention is `markov_*` and `head_*` (the latter is
+    # the routed-expert head); both share the dspark calibration
+    # lane.
+    if tensor_name.startswith("markov_") or tensor_name.startswith("head_"):
+        return "dspark"
+    # MTP (Multi-Token Prediction) nextn blocks. The nextn tensors
+    # live under `blk.<N>.nextn.*` and the MTP-specific shared
+    # tensors live under `nextn.*`.
+    if ".nextn." in tensor_name or tensor_name.startswith("nextn."):
+        return "mtp_nextn"
+    # Everything else (blk.<N>.* without the nextn branch, and any
+    # tensor not matching a special pattern) is the trunk.
+    if tensor_name.startswith("blk."):
+        return "trunk"
+    return None
+
+
+def _select_family_for_role(
+    families: dict, tensor_name: str, tensor_role: Optional[str]
+) -> Optional[dict]:
+    """Pick the best per-tensor entry, honouring ``model_role`` when present.
+
+    Selection rules:
+
+    1. **No role metadata**: any entry whose ``match`` field hits
+       is a candidate (legacy single-model behaviour). The
+       highest-ranked match wins (exact > substring, longer
+       substring > shorter).
+    2. **Role metadata present**: prefer an entry whose
+       ``model_role`` matches the tensor's inferred role. If no
+       role-specific entry matches, fall back to ``shared_embd``
+       entries (the worst-of-trunk+dflash shared lane). If neither
+       matches, no entry is returned and the caller falls back to
+       the global defaults.
+
+    The function preserves the existing match-ranking logic so
+    pre-Phase-16 policies (no ``model_role`` field) keep behaving
+    exactly as they did before.
+    """
+    has_role_metadata = any(
+        isinstance(entry, dict) and "model_role" in entry
+        for entry in families.values()
+    )
+    if not has_role_metadata:
+        # Legacy path: any match is a candidate.
+        selected = None
+        selected_rank = (-1, -1)
+        for family in families.values():
+            matches = family.get("match", [])
+            if not matches:
+                continue
+            exact = bool(family.get("exact", False))
+            matched = (
+                tensor_name in matches
+                if exact
+                else any(fragment in tensor_name for fragment in matches)
+            )
+            if not matched:
+                continue
+            rank = (int(exact), max(len(fragment) for fragment in matches))
+            if rank > selected_rank:
+                selected, selected_rank = family, rank
+        return selected
+
+    # Role-aware path: collect every matching entry, score by
+    # (role_match, exact, longest_match_fragment). shared_embd is
+    # the cross-arch fallback when no role-specific entry exists.
+    selected = None
+    selected_rank = (-1, -1, -1)
+    for family in families.values():
+        matches = family.get("match", [])
+        if not matches:
+            continue
+        exact = bool(family.get("exact", False))
+        matched = (
+            tensor_name in matches
+            if exact
+            else any(fragment in tensor_name for fragment in matches)
+        )
+        if not matched:
+            continue
+        entry_role = family.get("model_role")
+        # role_score: 2 = exact role match, 1 = shared_embd
+        # fallback, 0 = other (still considered, but ranked
+        # below). The "other" rank keeps the function total so
+        # pre-Phase-16 entries without model_role still get
+        # considered as a last resort.
+        if tensor_role is not None and entry_role == tensor_role:
+            role_score = 2
+        elif entry_role == UNIFIED_SHARED_EMBD_ROLE:
+            role_score = 1
+        else:
+            role_score = 0
+        rank = (
+            role_score,
+            int(exact),
+            max(len(fragment) for fragment in matches),
+        )
+        if rank > selected_rank:
+            selected, selected_rank = family, rank
+    return selected
+
+
 def tensor_policy(policy: Optional[dict], tensor_name: str,
                   default_fraction: float, default_alpha: Optional[float]) -> Tuple[float, Optional[float], float, bool, float]:
     """Return (outlier_fraction, awq_alpha, awq_clip, exact, ternary_threshold)
@@ -2738,23 +2913,21 @@ def tensor_policy(policy: Optional[dict], tensor_name: str,
     {-1, 0, +1} cutoff. Default 1.0 = legacy tessera behaviour. Set to a
     different value (typically in [0.5, 2.0]) by per-tensor calibration
     produced via tools/tessera/per_tensor_calibrate.py.
+
+    When the policy contains per-entry ``model_role`` tags (the
+    Phase 16 unified policy shape), this function filters entries
+    by the tensor's inferred role: prefer the role-specific entry
+    (e.g. ``trunk`` for ``blk.0.attn_q.weight``) and fall back to
+    ``shared_embd`` for cross-arch tensors (``token_embd``,
+    ``output``). The legacy single-model path (no ``model_role``
+    metadata) is preserved exactly: the highest-ranked match wins.
     """
     if policy is None:
         return default_fraction, default_alpha, 1.0, False, 1.0
-    selected = None
-    selected_rank = (-1, -1)
-    for family in policy.get("tensor_families", {}).values():
-        matches = family.get("match", [])
-        if not matches:
-            continue
-        exact = bool(family.get("exact", False))
-        matched = tensor_name in matches if exact else any(
-            fragment in tensor_name for fragment in matches)
-        if not matched:
-            continue
-        rank = (int(exact), max(len(fragment) for fragment in matches))
-        if rank > selected_rank:
-            selected, selected_rank = family, rank
+    tensor_role = _infer_tensor_role(tensor_name)
+    selected = _select_family_for_role(
+        policy.get("tensor_families", {}), tensor_name, tensor_role
+    )
     if selected is not None:
         exact = bool(selected.get("exact", False))
         fraction = 1.0 if exact else float(selected.get("outlier_fraction", default_fraction))

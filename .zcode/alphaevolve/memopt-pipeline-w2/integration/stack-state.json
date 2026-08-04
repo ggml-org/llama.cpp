@@ -1,0 +1,6 @@
+{
+  "stacked": ["s2"],
+  "stacked_score_peak_RSS_bytes": 8891891712,
+  "head_sha": "15952f3ad4f26bd42886f8b7b8b81c8485557b67",
+  "stacked_score_note": "5-run median with LLAMA_KV_LAZY_CLEAR=1; baseline floor 9067905024"
+}
