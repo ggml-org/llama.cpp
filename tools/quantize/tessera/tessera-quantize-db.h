@@ -197,11 +197,77 @@ struct ts_tessera_db_l5_weight {
     int32_t      n_samples    = 0;
     double       in_sample_loss = 0.0;
     double       hit_rate     = 0.0;
+    // requant_budget_bits is the dispatch-side budget the orchestrator's
+    // l5_retune recommends for this family in the next requant pass.
+    // Computed by l5_retune.py as
+    //   budget = total_storage * (1 - hit_rate) * base_budget_fraction
+    // and NULL when the family has too few samples to project a budget.
+    // The dispatch currently reads it for forward-compatibility (the
+    // contract is additive) but does not act on the value; the column
+    // is here so the producer/consumer agree on the schema.
+    int64_t      requant_budget_bits = -1;   // -1 = NULL (sentinel for C++)
     std::string  retune_source;
 };
 int ts_tessera_db_upsert_l5_weight(ts_tessera_db * db,
                                    const ts_tessera_db_l5_weight & row,
                                    std::string * err);
+
+// --- L5 weights typed list reader ---
+//
+// One entry per (model_hash, family) row in l5_weights. Used by the
+// dispatch's GA-prep walk warm-start to bias the GA's (alpha, clip)
+// initial population per family when the orchestrator's retune has
+// already characterized the family. Empty `family` means "all families
+// for this model_hash"; the dispatch passes empty when it wants the
+// full list at open time.
+//
+// Mirrors ts_tessera_db_list_converged_for_model. Returned in hit_rate
+// DESC order so the dispatch sees the most-converged family first.
+struct ts_tessera_db_l5_weight_list_entry {
+    std::string  model_hash;
+    std::string  family;
+    double       w_imatrix    = 0.0;
+    double       w_gradient   = 0.0;
+    double       w_layer      = 0.0;
+    double       bias         = 0.0;
+    int32_t      n_samples    = 0;
+    double       in_sample_loss = 0.0;
+    double       hit_rate     = 0.0;
+    int64_t      requant_budget_bits = -1;   // -1 = NULL
+    std::string  retune_source;
+};
+struct ts_tessera_db_l5_weight_list {
+    std::vector<ts_tessera_db_l5_weight_list_entry> entries;
+};
+int ts_tessera_db_list_l5_weights(ts_tessera_db * db,
+                                  const std::string & model_hash,
+                                  const std::string & family,
+                                  ts_tessera_db_l5_weight_list * out);
+
+// --- L5 outcome stats: per-(model, family) verdict aggregates ---
+//
+// Used by the dispatch's converged-fast early-exit: if a family has
+// hit_rate > 0.95 across prior l5_outcome rows AND the current tensor's
+// MSE is already within epsilon of the expected MSE at the next-rung
+// qtype, skip the requant. The reader aggregates the verdict
+// (plan_accepted) over the (model, family) group: hit_rate is the
+// fraction of l5_outcome rows where plan_accepted = TRUE.
+//
+// Empty `family` means "all families" (caller picks the most-converged
+// one to use as the gate). n_rows = 0 means "no l5_outcome for this
+// model yet"; the dispatch treats that as no-op.
+struct ts_tessera_db_l5_outcome_stats {
+    int32_t      n_rows       = 0;
+    int32_t      n_accepted   = 0;
+    double       hit_rate     = 0.0;
+    double       mean_delta_mse = 0.0;
+    double       mean_sensitivity = 0.0;
+    std::string  family;       // empty when aggregating across families
+};
+int ts_tessera_db_l5_outcome_stats_for(ts_tessera_db * db,
+                                       const std::string & model_hash,
+                                       const std::string & family,
+                                       ts_tessera_db_l5_outcome_stats * out);
 
 // --- L4 plan outcome (the feedback loop audit trail) ---
 //
@@ -334,6 +400,36 @@ bool ts_tessera_db_load_ga_result_for_model(ts_tessera_db * db,
 // Not for production code paths (which should use the typed helpers above).
 int64_t ts_tessera_db_debug_count(ts_tessera_db * db,
                                    const std::string & query);
+
+// Test-only: insert one synthetic l5_outcome row. The l5_outcome
+// table is normally Python-written (tools/tessera/l5_outcome.py),
+// but the C++ converged-fast test in test_l5_dispatch needs a way
+// to populate it. Returns 0 on success, non-zero on error. The
+// row is keyed on (model_hash, name, iteration, plan_id) so the
+// dispatch's ts_tessera_db_l5_outcome_stats_for query can find it.
+struct ts_tessera_db_l5_outcome_row {
+    std::string  model_hash;
+    std::string  name;
+    int32_t      layer          = 0;
+    int32_t      iteration      = 0;
+    std::string  plan_id;
+    std::string  family;
+    double       sensitivity_score = 0.0;
+    double       recommended_alpha = 0.0;
+    double       recommended_clip  = 0.0;
+    double       mse_before        = 0.0;
+    double       mse_after         = 0.0;
+    double       delta_mse         = 0.0;
+    double       delta_frob        = 0.0;
+    bool         plan_accepted     = false;
+    double       accept_threshold  = 0.0;
+    double       residual          = 0.0;
+    double       imatrix_magnitude = 0.0;   // nullable; 0 -> NULL
+    double       gradient_proxy    = 0.0;   // nullable; 0 -> NULL
+    double       layer_position_prior = 0.0; // nullable; 0 -> NULL
+};
+int ts_tessera_db_test_insert_l5_outcome(ts_tessera_db * db,
+                                          const ts_tessera_db_l5_outcome_row & row);
 
 // --- helpers used by the dispatch ---
 
