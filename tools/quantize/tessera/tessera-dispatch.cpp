@@ -540,6 +540,15 @@ struct ts_dispatch_db {
     // Resume set: tensor names with a converged result for this run_id.
     // Populated at startup; the layer_skip_lookup callback checks membership.
     std::unordered_set<std::string> converged;
+    // GA-prep warm-start registry. Populated at open time from
+    // l5_weights (the orchestrator's retune output); the
+    // family_seed_lookup hook prefers entries here over the
+    // legacy ga_results-based seed lookup because l5_weights is
+    // the more recent + orchestrator-scored signal. Keyed by
+    // family; empty when --tessera-db is unset or the model has
+    // no l5_weights rows yet.
+    std::unordered_map<std::string, ts_tessera_db_l5_weight_list_entry>
+        l5_weight_map;
     // Per-table write buffers. Both null when --quantize-db is unset.
     ts_db_buffer *   eval_buffer       = nullptr;
     ts_db_buffer *   l4_outcome_buffer = nullptr;
@@ -598,6 +607,33 @@ static ts_dispatch_db * ts_dispatch_db_open(
                                                     wrap->model_hash,
                                                     &done) == 0) {
             wrap->converged.insert(done.begin(), done.end());
+        }
+    }
+    // GA-prep warm-start: pre-load l5_weights for this model. The
+    // family_seed_lookup hook consults this map first; entries
+    // here bias the GA's (alpha, clip) initial population per
+    // family based on the orchestrator's retune. Empty when
+    // --tessera-db is unset, when force_requantize is set, or when
+    // the model has no l5_weights rows yet (first run).
+    if (!params->force_requantize && !wrap->model_hash.empty()) {
+        ts_tessera_db_l5_weight_list l5_list;
+        if (ts_tessera_db_list_l5_weights(wrap->db, wrap->model_hash, "",
+                                           &l5_list) == 0) {
+            for (auto & e : l5_list.entries) {
+                wrap->l5_weight_map[e.family] = std::move(e);
+            }
+            if (verbose && !wrap->l5_weight_map.empty()) {
+                printf("tessera-dispatch: --tessera-db loaded %zu "
+                       "l5_weight entries (families: ",
+                       wrap->l5_weight_map.size());
+                bool first = true;
+                for (const auto & kv : wrap->l5_weight_map) {
+                    printf("%s%s(%.3f)", first ? "" : ", ",
+                           kv.first.c_str(), kv.second.hit_rate);
+                    first = false;
+                }
+                printf(")\n");
+            }
         }
     }
     if (verbose) {
@@ -744,6 +780,20 @@ static void ts_dispatch_eval_recorder(const ts_awq_layer * layer,
 // Look up a family warm-start seed in the persistent store. Used as the
 // family_seed_lookup hook so the first layer of each family can warm-start
 // from prior runs when the in-memory cache is empty.
+//
+// The dispatch consults two stores in order of preference:
+//   1. l5_weights (the orchestrator's per-(model, family) retune). This is
+//      the "did this plan reduce error?" feedback loop's consumer; the
+//      retune is the more recent + scored signal, so the dispatch uses it
+//      as the primary warm-start source when the family has a row. The
+//      seed is biased by hit_rate: families with hit_rate > 0.5 get
+//      alpha 25% higher and clip 20% higher than the 0.5/0.7 base
+//      (the orchestrator's verdict that this family has headroom).
+//   2. ga_results (the legacy per-run GA result). The first layer of
+//      each family that did NOT show up in l5_weights falls back to
+//      the best-known (alpha, clip) from any prior run. This keeps
+//      cold-start models (no l5_weights yet) and orphan families
+//      (e.g. routed experts) on the existing warm-start path.
 static bool ts_dispatch_family_seed_lookup(const char * family,
                                            ts_awq_candidate * out,
                                            float * out_composite,
@@ -753,6 +803,33 @@ static bool ts_dispatch_family_seed_lookup(const char * family,
         out == nullptr) {
         return false;
     }
+    // 1. Try l5_weights first (pre-loaded at ts_dispatch_db_open).
+    auto l5_it = wrap->l5_weight_map.find(family);
+    if (l5_it != wrap->l5_weight_map.end()) {
+        const auto & rec = l5_it->second;
+        // Bias rule from the design: hit_rate > 0.5 -> alpha/clip
+        // get a hit_rate-weighted bump; otherwise the base. The base
+        // is the existing 0.5 / 0.7 center of the GA's [lo,hi] box;
+        // hit_rate=1.0 -> alpha=0.75, clip=0.9 (a tight, aggressive
+        // seed for a well-characterized family).
+        const float base_alpha = 0.5f;
+        const float base_clip  = 0.7f;
+        const float center_alpha = (rec.hit_rate > 0.5f)
+            ? base_alpha + 0.25f * rec.hit_rate
+            : base_alpha;
+        const float center_clip  = (rec.hit_rate > 0.5f)
+            ? base_clip  + 0.20f * rec.hit_rate
+            : base_clip;
+        out->genes.alpha = center_alpha;
+        out->genes.clip  = center_clip;
+        out->expert_hint = -1;
+        // hit_rate is the best-effort "composite" signal we have for
+        // the l5_weight seed; the GA uses out_composite to weight the
+        // seed in the initial population.
+        if (out_composite) *out_composite = (float) rec.hit_rate;
+        return true;
+    }
+    // 2. Fall back to the legacy ga_results-based seed.
     ts_tessera_db_family_seed seed;
     if (!ts_tessera_db_lookup_family_seed(wrap->db, family, wrap->run_id,
                                            &seed)) {
@@ -858,6 +935,44 @@ int ts_dispatch_run_l5_loop(
     std::sort(names.begin(), names.end());
 
     for (int gen = 0; gen < max_generations; gen++) {
+        // Converged-fast early-exit: the orchestrator's l5_outcome has
+        // already verified this model's requant plans converge with
+        // hit_rate > 0.95 (i.e. the "did this plan reduce error?"
+        // verdict accepted >= 95% of prior plans). In that regime the
+        // adaptive requantize loop is wasteful: each generation spends
+        // the L2 measurement + A/B cost to re-prove something the
+        // orchestrator has already proven. Break out before the L2
+        // measurement on gen >= 1 so the first generation still
+        // produces l4_outcome rows (the loop's audit trail). The
+        // threshold (0.95) and minimum n_rows (1) are the same as the
+        // acceptance criteria in docs/tessera-unified-db.md Phase 14.
+        if (gen >= 1 && db_wrap != nullptr && db_wrap->db != nullptr
+            && !db_wrap->model_hash.empty()) {
+            ts_tessera_db_l5_outcome_stats stats;
+            if (ts_tessera_db_l5_outcome_stats_for(db_wrap->db,
+                                                    db_wrap->model_hash,
+                                                    /*family=*/"",
+                                                    &stats) == 0
+                && stats.n_rows > 0
+                && stats.hit_rate > 0.95f) {
+                if (params->verbose) {
+                    printf("tessera-dispatch: l5_loop converged-fast at gen=%d "
+                           "(hit_rate=%.3f, n_rows=%d); skipping remaining %d gen(s)\n",
+                           gen, stats.hit_rate, stats.n_rows,
+                           max_generations - gen - 1);
+                }
+                if (!first_gen) report_json += ",";
+                first_gen = false;
+                report_json += "{\"generation\":" + std::to_string(gen) +
+                               ",\"n_flagged\":0,\"n_requant\":0,"
+                               "\"converged\":true,"
+                               "\"converged_fast\":true,"
+                               "\"hit_rate\":" + std::to_string(stats.hit_rate) +
+                               ",\"l5_outcome_n_rows\":" +
+                               std::to_string(stats.n_rows) + "}";
+                break;
+            }
+        }
         // (a) L2 measure: pair each tensor's re-read source with its recon.
         std::vector<ts_l2_tensor_input> inputs;
         inputs.reserve(names.size());
