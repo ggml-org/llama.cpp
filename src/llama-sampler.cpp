@@ -589,7 +589,6 @@ static bool llama_sampler_backend_support(
         /*.probs      = */ nullptr,
         /*.sampled    = */ nullptr,
         /*.candidates = */ ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n),
-        /*.n_vocab    = */ n,
     };
 
     ggml_cgraph * gf = ggml_new_graph(ctx);
@@ -2640,6 +2639,7 @@ struct llama_sampler * llama_sampler_init_grammar_lazy_patterns(
 // penalties
 
 struct llama_sampler_penalties : public llama_sampler_backend {
+    const int32_t n_vocab;
     const int32_t penalty_last_n;
     const float   penalty_repeat;
     const float   penalty_freq;
@@ -2655,7 +2655,6 @@ struct llama_sampler_penalties : public llama_sampler_backend {
     ggml_tensor * inp_counts    = nullptr;
 
     // backend helpers
-    int32_t n_vocab = 0;
     int32_t n_max   = 0;
     bool has_candidates = false;
 
@@ -2676,11 +2675,13 @@ struct llama_sampler_penalties : public llama_sampler_backend {
     }
 
     llama_sampler_penalties(
+            int32_t n_vocab,
             int32_t penalty_last_n,
             float   penalty_repeat,
             float   penalty_freq,
             float   penalty_present)
         : llama_sampler_backend("penalties")
+        , n_vocab         (n_vocab)
         , penalty_last_n  (penalty_last_n)
         , penalty_repeat  (penalty_repeat)
         , penalty_freq    (penalty_freq)
@@ -2766,6 +2767,7 @@ static void llama_sampler_penalties_reset(struct llama_sampler * smpl) {
 static struct llama_sampler * llama_sampler_penalties_clone(const struct llama_sampler * smpl) {
     const auto * ctx = (const llama_sampler_penalties *) smpl->ctx;
     auto * result = llama_sampler_init_penalties(
+            ctx->n_vocab,
             ctx->penalty_last_n,
             ctx->penalty_repeat,
             ctx->penalty_freq,
@@ -2811,10 +2813,9 @@ static void llama_sampler_penalties_backend_apply(
         return;
     }
 
-    GGML_ASSERT(data->n_vocab > 0 && data->n_vocab <= INT32_MAX);
+    GGML_ASSERT(sctx->n_vocab > 0);
 
     sctx->has_candidates = data->candidates != nullptr;
-    sctx->n_vocab = (int32_t) data->n_vocab;
     sctx->n_max   = std::min(sctx->penalty_last_n, sctx->n_vocab);
 
     sctx->inp_token_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
@@ -2965,6 +2966,7 @@ static struct llama_sampler_i llama_sampler_penalties_i = {
 };
 
 struct llama_sampler * llama_sampler_init_penalties(
+        int32_t n_vocab,
         int32_t penalty_last_n,
         float penalty_repeat,
         float penalty_freq,
@@ -2979,6 +2981,7 @@ struct llama_sampler * llama_sampler_init_penalties(
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_penalties_i,
         /* .ctx   = */ new llama_sampler_penalties(
+            n_vocab,
             penalty_last_n,
             penalty_repeat,
             penalty_freq,
