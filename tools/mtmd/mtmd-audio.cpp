@@ -556,10 +556,8 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
     }
 
     std::vector<float> smpl;
-    // if input is too short, pad with zeros
-    // this is to avoid potential issues with stage1/2 padding in log_mel_spectrogram
-    // TODO: maybe handle this better
-    size_t min_samples = (size_t) hparams.audio_sample_rate * (hparams.audio_chunk_len + 1);  // +1 second margin
+    // reflection padding needs one sample plus half an FFT window
+    size_t min_samples = (size_t) hparams.audio_n_fft / 2 + 1;
     if (n_samples < min_samples) {
         smpl.resize(min_samples, 0.0f);
         std::memcpy(smpl.data(), samples, n_samples * sizeof(float));
