@@ -28,6 +28,14 @@ import numpy as np
 from coremltools.proto import FeatureTypes_pb2 as ft
 from coremltools.proto import Model_pb2 as model_pb
 
+# Sidecar the ane_state_layout.v1 manifest next to the .mlmodelc.
+# The runtime (common/ane-mtp.mm, ggml/src/ggml-ane/ggml-ane.mm) reads
+# this JSON to allocate the state IOSurface and pin the function's
+# input/output slots. See tools/ane-mtp/state_layout.py for the
+# schema and tools/ane-mtp/test_state_layout.py for the contract.
+sys.path.insert(0, str(Path(__file__).parent))
+from state_layout import StateLayout, manifest_path_for  # noqa: E402
+
 
 def build(n: int, output: Path) -> Path:
     output.mkdir(parents=True, exist_ok=True)
@@ -62,6 +70,17 @@ def build(n: int, output: Path) -> Path:
     weight_path = mlmodelc_dir / f"w0-{n}x{n}.weight.bin"
     weight_path.write_bytes(weight_fp16.astype(np.float32).tobytes())
     print(f"wrote {weight_path}", file=sys.stderr)
+
+    # Emit the ane_state_layout.v1 manifest. The W0 spike is a single-
+    # function matmul: one INPUT slot "x" and one OUTPUT slot "y", no
+    # persistent state, no cross-function dependencies. The runtime
+    # reads the manifest to allocate the state IOSurface and pin
+    # the slots. See tools/ane-mtp/state_layout.py for the schema.
+    bundle_stem = f"w0-{n}x{n}"
+    manifest = StateLayout.for_w0_matmul(bundle_stem, n)
+    manifest.write_json(manifest_path_for(mlmodelc_dir, bundle_stem))
+    manifest_file = manifest_path_for(mlmodelc_dir, bundle_stem)
+    print(f"wrote {manifest_file}", file=sys.stderr)
     return mlmodelc
 
 
