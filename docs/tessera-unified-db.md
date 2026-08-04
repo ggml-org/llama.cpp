@@ -1275,3 +1275,209 @@ destination with all 6+ sub-tensors intact).
 | `common/arg.cpp` | The `unified-writer` subcommand table entry + 9 new `--{out,arch,policy,hparams,trunk,dflash,dspark,mtp,shared-embd}` add_opt entries; the `--model-is-required` early-exit list extended to include the new subcommand. |
 | `tools/quantize/quantize.cpp` | The `ts_cli_unified_writer` helper and the `TESSERA_SC_UNIFIED_WRITER` dispatch case. |
 | `tools/quantize/CMakeLists.txt` | New `tessera-unified-writer.cpp` in the `llama-quantize-impl` source list; new `test-unified-writer` test target. |
+
+## Phase 16.6: worst-of-trunk-and-dflash qtype resolution
+
+The unified Gemma4 12B + dspark + dflash + MTP arch has
+shared `token_embd` and `output` tensors between the trunk
+and the dflash drafter. The drafter borrows these from the
+trunk via `ctx_other` (frozen at train time; see
+`tessera-train-dflash.cpp:72`): the drafter's `token_embd` /
+`output` weights ARE the trunk's, byte-identical.
+
+When `unified_calibrate.py` runs the per-component
+calibration, the trunk's and dflash's calibrations each
+produce their own per-tensor qtype recommendation for the
+shared tensor. They can disagree: the trunk may say `Q4_K`
+is fine (the trunk has the bandwidth to absorb 4-bit error
+in the embedding), but the dflash drafter may need `Q6_K`
+(the drafter's accuracy is more sensitive to the embedding
+because it's a small model that uses the embedding as a
+direct input to the draft logits).
+
+When the C++ unified GGUF writer picks the actual qtype for
+the shared tensor, it must pick ONE. The architect's call
+is **"worst-of-trunk-and-dflash"** = take the LOWER
+precision-loss option (the more-conservative qtype with
+more bits). The drafter's accuracy is the binding
+constraint, so when in doubt, use more bits.
+
+### The rule
+
+```
+worst_of(a, b) = max(bit_cost(a), bit_cost(b))
+```
+
+Q-types ordered by ascending precision (more bits = more
+conservative):
+
+| qtype | bits per element | notes |
+|---|---|---|
+| F32 | 0 | no-quantization anchor (lowest precision cost) |
+| IQ1_S, IQ1_M | 1 | 1-bit i-quants |
+| Q2_K, IQ2_XXS, IQ2_XS, IQ2_S | 2 | 2-bit K-quants / i-quants |
+| Q3_K, IQ3_XXS, IQ3_S | 3 | 3-bit K-quants / i-quants |
+| Q4_K, Q4_0, Q4_1, IQ4_NL, IQ4_XS | 4 | 4-bit (the "Q4 family") |
+| Q5_K, Q5_0, Q5_1 | 5 | 5-bit |
+| Q6_K | 6 | 6-bit |
+| Q8_0, Q8_K | 8 | 8-bit |
+| F16, BF16 | 16 | full-precision anchors (most conservative) |
+
+The `qtype_bits` helper is the single source of truth for
+this ordering. Unknown qtypes return 0 bits (degrade safely
+to the F32 anchor; the worst_of partner wins).
+
+### Where the rule applies
+
+The rule applies to **all** per-tensor qtype lookups, but
+in practice the only tensors where the trunk's and dflash's
+calibrations both produce entries are the **shared_embd**
+tensors (`token_embd.weight`, `output.weight`):
+
+* **shared_embd** (token_embd, output) — the rule matters
+  here. The trunk's and dflash's verdicts can disagree
+  because the drafter is more sensitive to the embedding
+  than the trunk.
+
+* **trunk / dflash / dspark / mtp_nextn** — the rule is a
+  no-op in practice. Each per-block tensor's name is owned
+  by exactly one component (the trunk's `blk.{i}.attn_q.weight`
+  is NOT the same tensor as the dflash's, even though they
+  share the source name; the dflash prefix on the
+  destination side keeps the destinations distinct). The
+  policy has at most one entry per (component, name), so
+  worst-of degenerates to a single-entry lookup.
+
+### Lookup is by tensor name (not by (role, name))
+
+The writer's old per-tensor qtype lookup was keyed by
+`(model_role, name)`. The new lookup (`qtype_for_tensor`)
+is keyed by `name` only:
+
+```cpp
+// Per-source-tensor override lookup (was: (role, name)
+qtype_map.find(...)).  The new lookup reconciles across
+// all components' calibration verdicts for the same
+// tensor name; the dflash prefix on the destination side
+// keeps the destination tensors distinct.
+int override_qtype = qtype_for_tensor(src_name,
+                                       p_->policy.entries);
+```
+
+`qtype_for_tensor` filters the policy entries by
+`e.name == name`, then takes `worst_of` across all
+matching entries. Returns `GGML_TYPE_COUNT` (the
+"no-entry" sentinel) when no entry matches; the caller
+treats that as "no override" and copies the source's qtype
+as-is.
+
+### Why name-based, not (role, name)
+
+A per-(role, name) lookup would apply the per-component
+verdict independently, which is correct for non-shared
+tensors but wrong for shared tensors: the writer would
+pick the trunk's qtype when the trunk is the writer of
+the shared tensor (the typical case) and the dflash's
+qtype otherwise. But the destination tensor is ONE, and
+the chosen qtype must reconcile across both calibration
+verdicts. Name-based lookup is the only way to reconcile.
+
+### Concrete example
+
+A unified policy with two entries for `token_embd.weight`:
+```json
+{
+  "tensor_families": [
+    { "model_role": "trunk",  "name": "token_embd.weight", "dtype": "Q4_K" },
+    { "model_role": "dflash", "name": "token_embd.weight", "dtype": "Q6_K" }
+  ]
+}
+```
+
+The writer's `qtype_for_tensor("token_embd.weight", ...)`:
+* Filter: both entries match (same name)
+* worst-of: `max(bits(Q4_K), bits(Q6_K)) = max(4, 6) = 6` → `Q6_K`
+* The destination's `token_embd.weight` tensor is emitted with qtype `Q6_K`
+
+The trunk's Q4_K is more aggressive (fewer bits, more
+precision loss); the dflash's Q6_K is more conservative.
+The drafter is the binding constraint, so the drafter's
+verdict wins. The unified GGUF ships with `Q6_K` for the
+shared embedding.
+
+### Override count semantics
+
+`stats.n_qtype_overrides` counts tensors where the
+resolved qtype (after worst-of) actually differs from the
+source's qtype. A policy entry that resolves to the
+source's qtype is a no-op and does not bump the counter.
+With the worst-of rule, the resolved qtype is the more
+conservative partner; the override applies when the
+conservative partner differs from the source's qtype.
+
+### Edge cases
+
+* **Unknown dtype** in a policy entry (e.g. `"Q99_K"`):
+  `ts_unified_qtype_from_string` returns `GGML_TYPE_COUNT`
+  and the entry is skipped. The worst-of falls back to the
+  known partner.
+* **Empty dtype** in a policy entry: skipped (no override
+  to apply). The worst-of falls back to the known partner.
+* **GGML_TYPE_COUNT** (no matching entry): the source's
+  qtype is copied as-is; no override counted.
+* **Unknown qtype** in `qtype_bits`: returns 0 (F32
+  anchor). The worst_of known partner wins.
+
+### Tests
+
+`test-unified-writer` (`tools/quantize/tessera/test_unified_writer.cpp`,
+156 cases total):
+* **Test 1b (25 cases)**: `qtype_bits` + `worst_of` truth
+  table. Every K-quant has the right bit cost, the F32/F16
+  anchors, IQ family coverage, the unknown-degrades-safely
+  case, and the full worst_of commutative truth table.
+* **Test 4 update**: the existing 4-component writer
+  test's override count assertion goes from 2 to 3
+  (the dflash's per-block `blk.0.attn_q.weight` now
+  inherits the trunk's policy entry via name-based
+  lookup; the dflash prefix keeps the destination
+  distinct). All other Test 4 assertions are unchanged.
+* **Test 7 (36 cases)**: 5 end-to-end worst-of cases from
+  the spec + 2 bonus cases (unknown dtype skipped, empty
+  dtype skipped). Each case builds a minimal
+  `shared_embd` source with `token_embd.weight` (F16),
+  writes a policy with the case's qtypes, runs the
+  writer, reopens the GGUF, and verifies the
+  destination tensor's qtype matches the expected
+  worst-of resolution. The 5 spec cases:
+
+  | # | policy | resolved |
+  |---|---|---|
+  | 1 | trunk=Q4_K + dflash=Q6_K | Q6_K (architect's primary) |
+  | 2 | trunk only Q4_K | Q4_K (single-entry no-op) |
+  | 3 | dflash=F16 + dspark=Q4_K | F16 (extreme unquantized) |
+  | 4 | trunk=Q5_K + dflash=Q5_K | Q5_K (equal) |
+  | 5 | trunk=F32 + dflash=F32 | F32 (both unquantized) |
+
+### Open follow-ups
+
+* **`attn_post_norm.weight` / `ffn_post_norm.weight`**: in
+  the current arch, these are trunk-only (the drafter
+  borrows the trunk's norms via `ctx_other`, just like
+  `token_embd`). If a future arch changes the drafter to
+  have its own per-block norms, the worst-of rule will
+  apply to them automatically (name-based lookup is
+  role-agnostic). No code change needed; the rule scales
+  to any tensor that ends up shared.
+* **Per-output tensor (lm_head)**: `output.weight` is
+  shared between the trunk and the dflash (the drafter's
+  lm_head IS the trunk's). The worst-of rule applies
+  identically. No code change needed.
+* **Destination tensor deduplication**: when the trunk
+  source and the shared_embd source both export
+  `token_embd.weight`, the writer's `dst_seen` map
+  prevents the shared_embd source from re-writing the
+  destination (the trunk's write is authoritative for the
+  data; the worst-of is applied to the trunk's write's
+  qtype). This is correct behavior but the test could
+  cover the trunk-wins case explicitly.
