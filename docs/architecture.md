@@ -104,7 +104,7 @@ when the legacy converter is no longer in production. See
 
 The user-facing quantizer entry point. `calibrate_quantize.py` is the
 orchestrator; `quantize_v3.py` is the per-tensor writer. Both are
-under `LICENSE-TESSERA`.
+under `LICENSE-TESSERA` (PolyForm Noncommercial License 1.0.0).
 
 ### `tools/imatrix/` — llama-imatrix with spec hook (C++)
 

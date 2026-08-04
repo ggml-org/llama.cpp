@@ -1,0 +1,57 @@
+Tessera
+Copyright 2026 Julian Alejandro Torres Nieto, Tribunus.dev
+
+This product includes software developed at Tribunus.dev and by the
+Tessera project contributors (https://tribunus.dev).
+
+================================================================
+Patent Notice
+================================================================
+
+The Tessera software includes technology that may be covered by one
+or more pending patent applications owned or controlled by Julian
+Alejandro Torres Nieto, Tribunus.dev.
+
+The Tessera software is distributed under the PolyForm Noncommercial
+License 1.0.0 (see LICENSE-TESSERA), which includes a Patent License
+covering patent claims the licensor can license or becomes able to
+license that you would infringe by using the software, subject to
+the noncommercial purpose restriction and the Patent Defense
+provision.
+
+This notice is provided to put the public on notice that one or
+more pending patent applications may cover the Tessera software.
+A current list of pending patent applications, to the extent Julian
+Alejandro Torres Nieto has elected to publish one, is available at:
+
+    https://tribunus.dev/patents
+
+If a published list is not available at that URL at the time of
+distribution, this notice alone discharges the Tessera project's
+disclosure obligation for the pending applications known to the
+project at the time of release. Nothing in this notice grants,
+or is intended to grant, any license under any such patent; the
+PolyForm Noncommercial License 1.0.0 governs what rights you
+receive, and its noncommercial purpose restriction applies.
+
+================================================================
+Upstream and Third-Party Notices
+================================================================
+
+The Tessera distribution contains or builds on third-party material
+distributed under their own licenses. The Tessera licensing terms
+do not withdraw, replace, or restrict rights granted under any
+upstream or third-party license.
+
+  - llama.cpp and ggml: MIT License (see LICENSE)
+  - Other third-party components: see their respective files and
+    the licenses/ directory in the source tree
+
+The full multi-license layering rules, including the scope of the
+PolyForm Noncommercial terms, the MIT-licensed upstream portions,
+and the artifact notice required for Tessera-published GGUF and
+safetensors, are documented in:
+
+    TESSERA-LICENSING.md
+    docs/TESSERA_ARTIFACT_LICENSE_NOTICE.md
+    docs/TESSERA_CALIBRATION_CONTRIBUTION_TERMS_1.0.md
