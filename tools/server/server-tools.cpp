@@ -17,11 +17,59 @@
 #include <functional>
 #include <memory>
 
+#if defined(_WIN32)
+#   ifndef NOMINMAX
+#       define NOMINMAX
+#   endif
+#   include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 
 //
 // internal helpers
 //
+
+#if defined(_WIN32)
+// A chunk can end in the middle of a multi-byte sequence, so the incomplete
+// tail is dropped before validating what precedes it.
+static bool is_utf8_text(const std::string & text) {
+    return is_valid_utf8(text.substr(0, validate_utf8(text)));
+}
+
+// A child process writes its output in the OEM code page, which is not UTF-8
+// on a western Windows install, so accented text reaches the JSON layer as
+// invalid bytes and is replaced there. Text that already decodes as UTF-8 is
+// returned untouched, so a child that emits UTF-8 is never decoded twice.
+// run() spawns without a console, so the console code page does not apply.
+static std::string console_output_to_utf8(const std::string & text) {
+    if (text.empty() || is_utf8_text(text)) {
+        return text;
+    }
+
+    const UINT cp = GetOEMCP();
+
+    // fail rather than emit replacement characters when the code page is wrong
+    const int wide_len = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, text.data(), (int) text.size(), nullptr, 0);
+    if (wide_len <= 0) {
+        return text;
+    }
+    std::wstring wide(wide_len, L'\0');
+    MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, text.data(), (int) text.size(), wide.data(), wide_len);
+
+    const int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wide_len, nullptr, 0, nullptr, nullptr);
+    if (utf8_len <= 0) {
+        return text;
+    }
+    std::string utf8(utf8_len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), wide_len, utf8.data(), utf8_len, nullptr, nullptr);
+    return utf8;
+}
+#else
+static std::string console_output_to_utf8(const std::string & text) {
+    return text;
+}
+#endif
 
 json server_tool::to_json() const {
     return {
@@ -246,14 +294,14 @@ public:
                     size_t len = strlen(buf);
                     if (output.size() + len <= max_output) {
                         output.append(buf, len);
-                        if (on_chunk && !on_chunk(std::string(buf, len))) {
+                        if (on_chunk && !on_chunk(console_output_to_utf8(std::string(buf, len)))) {
                             proc.terminate();
                             break;
                         }
                     } else {
                         size_t remaining = max_output - output.size();
                         output.append(buf, remaining);
-                        if (on_chunk && remaining > 0) on_chunk(std::string(buf, remaining));
+                        if (on_chunk && remaining > 0) on_chunk(console_output_to_utf8(std::string(buf, remaining)));
                         truncated = true;
                     }
                 }
@@ -267,7 +315,7 @@ public:
 
         res.exit_code = proc.join();
 
-        res.output    = output;
+        res.output    = console_output_to_utf8(output);
         res.timed_out = timed_out.load();
         if (truncated) {
             res.output += "\n[output truncated]";
