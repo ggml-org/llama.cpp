@@ -188,6 +188,20 @@ static int test_with_model(common_params & params_in, const std::string & teleme
     // (ctx_tgt, ctx_dft, types).  The caller passes its own params;
     // we don't want to mutate the caller's struct.
     common_params params = params_in;
+    // TODO(embedded-drafter, Workstream A, test fixture):
+    //   This test currently exercises the embedded ctor branch by
+    //   setting draft.target_model_path = params.model.path (the
+    //   verifier GGUF doubles as the embedded drafter).  That works
+    //   because the ctor's embedded branch is a placeholder that
+    //   loads the whole target GGUF as a draft model.  When the
+    //   per-drafter tensor extractor lands, this test will need a
+    //   real 'main + 4 embedded drafters' GGUF (MTP, DFlash, DSPark,
+    //   Eagle3) to exercise the prefix-sliced path.  The architect
+    //   is providing that fixture (or a hand-rolled minimal one) as
+    //   a separate workstream; the test will be updated to point at
+    //   it.  Until then, the verifier-as-drafter form above keeps
+    //   the ctor's load path and the spec calibration loop under
+    //   test.
     LOG_INF("%s: loading verifier model '%s'\n", __func__, params.model.path.c_str());
 
     // Load the verifier via the standard common path.
