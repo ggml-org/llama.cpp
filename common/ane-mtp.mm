@@ -395,6 +395,265 @@ static MLMultiArray * pin_iosurface_slot(void * state_base,
                       error:&error];
 }
 
+// Find a manifest function by name. Returns nullptr if the manifest
+// is not loaded or the function is not present. The returned pointer
+// is borrowed; the manifest's lifetime is the program's lifetime.
+static const ane_function_v1_t * find_manifest_function(
+        const common_ane_mtp_program & program,
+        const std::string & function_name) {
+    if (!program.manifest_loaded) {
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < program.manifest.n_functions; ++i) {
+        if (std::strcmp(program.manifest.functions[i].name,
+                        function_name.c_str()) == 0) {
+            return &program.manifest.functions[i];
+        }
+    }
+    return nullptr;
+}
+
+// Find a manifest slot by name. Returns nullptr if the manifest is
+// not loaded or the slot is not present. Borrowed pointer.
+static const ane_slot_v1_t * find_manifest_slot(
+        const common_ane_mtp_program & program,
+        const std::string & slot_name) {
+    if (!program.manifest_loaded) {
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < program.manifest.n_slots; ++i) {
+        if (std::strcmp(program.manifest.slots[i].name,
+                        slot_name.c_str()) == 0) {
+            return &program.manifest.slots[i];
+        }
+    }
+    return nullptr;
+}
+
+// Find the manifest function associated with a (role, bucket) pair.
+// Used by the compute_* entry points to map (role, sequence_length)
+// to the right pinned-slot function. The legacy find_compute_function
+// lookup is kept for the warmup path.
+static const ane_function_v1_t * find_manifest_function_by_role(
+        const common_ane_mtp_program & program,
+        ane_role_t role,
+        uint32_t bucket) {
+    if (!program.manifest_loaded) {
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < program.manifest.n_functions; ++i) {
+        const ane_function_v1_t & f = program.manifest.functions[i];
+        if (f.role == role && f.bucket == bucket) {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
+// Write host data into a pinned input slot. The host dtype is fp32
+// for float slots and i32 for integer slots. The function converts
+// to the slot's declared dtype (fp16 conversion is a one-shot
+// ggml_fp32_to_fp16_row call). Returns true on success, false if
+// the slot is not found or the count doesn't fit.
+static bool set_pinned_input(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        const void * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr) {
+        return false;
+    }
+    size_t element_size = 0;
+    switch (slot->dtype) {
+        case ANE_DTYPE_F32: element_size = sizeof(float); break;
+        case ANE_DTYPE_F16: element_size = sizeof(ggml_fp16_t); break;
+        case ANE_DTYPE_I32: element_size = sizeof(int32_t); break;
+    }
+    if (element_size == 0 || slot->size_bytes / element_size < count) {
+        return false;
+    }
+    void * dst = (char *) program.state_base + slot->offset;
+    if (slot->dtype == ANE_DTYPE_F32) {
+        std::memcpy(dst, host_data, count * sizeof(float));
+    } else if (slot->dtype == ANE_DTYPE_F16) {
+        ggml_fp32_to_fp16_row((const float *) host_data,
+                              (ggml_fp16_t *) dst, (int64_t) count);
+    } else { // ANE_DTYPE_I32
+        std::memcpy(dst, host_data, count * sizeof(int32_t));
+    }
+    return true;
+}
+
+// Write i32 host data into a pinned input slot. Specialization for
+// the common token_ids/positions inputs. Returns true on success.
+static bool set_pinned_input_i32(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        const int32_t * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr || slot->dtype != ANE_DTYPE_I32) {
+        return false;
+    }
+    if ((size_t) slot->size_bytes / sizeof(int32_t) < count) {
+        return false;
+    }
+    void * dst = (char *) program.state_base + slot->offset;
+    std::memcpy(dst, host_data, count * sizeof(int32_t));
+    return true;
+}
+
+// Read a pinned output slot to host memory as fp32. The slot's
+// declared dtype is converted to fp32 (fp16 is the common case for
+// the gemma4 prefill bundle). Returns true on success.
+static bool get_pinned_output(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        float * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr) {
+        return false;
+    }
+    size_t element_size = 0;
+    switch (slot->dtype) {
+        case ANE_DTYPE_F32: element_size = sizeof(float); break;
+        case ANE_DTYPE_F16: element_size = sizeof(ggml_fp16_t); break;
+        case ANE_DTYPE_I32: element_size = sizeof(int32_t); break;
+    }
+    if (element_size == 0 || slot->size_bytes / element_size < count) {
+        return false;
+    }
+    void * src = (char *) program.state_base + slot->offset;
+    if (slot->dtype == ANE_DTYPE_F32) {
+        std::memcpy(host_data, src, count * sizeof(float));
+    } else if (slot->dtype == ANE_DTYPE_F16) {
+        ggml_fp16_to_fp32_row((const ggml_fp16_t *) src,
+                              host_data, (int64_t) count);
+    } else {
+        // i32 -> fp32 conversion (rare; prefill outputs are always f16/f32)
+        const int32_t * src_i32 = (const int32_t *) src;
+        for (size_t i = 0; i < count; ++i) {
+            host_data[i] = (float) src_i32[i];
+        }
+    }
+    return true;
+}
+
+// Dispatch the bound function by name, using the pinned IOSurface
+// state. Inputs are already in the pinned state from prior
+// set_pinned_input calls; outputs land in the pinned state and
+// callers read them via get_pinned_output. The dispatch is
+// synchronous on the program queue and uses MLPredictionOptions.
+// outputBackings so Core ML writes outputs directly into the
+// pinned slots (zero-copy, no result memcpy). Returns false on
+// any failure (manifest missing, function unknown, model not warm,
+// Core ML prediction nil).
+//
+// This is the canonical multifunction dispatch path. The W2 design
+// is locked: stateless at the Core ML level, stateful via the
+// IOSurface; the dispatch doesn't use MLState.
+static bool dispatch_pinned_function(
+        common_ane_mtp_program & program,
+        const std::string & function_name) {
+    if (!program.manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function(
+        program, function_name);
+    if (function == nullptr) {
+        return false;
+    }
+    // Resolve the per-function model. The multifunction bundle loads
+    // one MLModel per declared function; the manifest's
+    // core_ml_function_name matches what we set on MLModelConfiguration
+    // at load time. We look the instance up by the function name
+    // (which the program->functions map is keyed by).
+    auto it = program.functions.find(function_name);
+    if (it == program.functions.end() || it->second == nullptr) {
+        return false;
+    }
+    common_ane_compute_instance & instance = *it->second;
+    if (!instance.warm.load()) {
+        return false;
+    }
+
+    __block bool ok = false;
+    dispatch_sync(program.queue, ^{
+        @autoreleasepool {
+            NSError * error = nil;
+            NSMutableDictionary<NSString *, MLFeatureValue *> * features =
+                [NSMutableDictionary dictionary];
+            for (uint32_t i = 0; i < function->n_inputs; ++i) {
+                const uint32_t slot_id = function->input_slot_ids[i];
+                if (slot_id >= ANE_STATE_SLOTS_MAX ||
+                        program.pinned_slots[slot_id] == nil) {
+                    return;
+                }
+                const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
+                features[[NSString stringWithUTF8String:slot->name]] =
+                    [MLFeatureValue featureValueWithMultiArray:
+                        program.pinned_slots[slot_id]];
+            }
+            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
+                initWithDictionary:features error:&error];
+            if (inputs == nil) {
+                LOG_WRN("ANE pinned dispatch %s: input provider build failed: %s\n",
+                        function_name.c_str(),
+                        error.localizedDescription.UTF8String ?: "unknown");
+                return;
+            }
+            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
+            NSMutableDictionary<NSString *, MLMultiArray *> * backings =
+                [NSMutableDictionary dictionary];
+            for (uint32_t i = 0; i < function->n_outputs; ++i) {
+                const uint32_t slot_id = function->output_slot_ids[i];
+                if (slot_id >= ANE_STATE_SLOTS_MAX ||
+                        program.pinned_slots[slot_id] == nil) {
+                    return;
+                }
+                const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
+                backings[[NSString stringWithUTF8String:slot->name]] =
+                    program.pinned_slots[slot_id];
+            }
+            options.outputBackings = backings;
+            // Stateless dispatch. No usingState: — the design is
+            // locked: state lives in our IOSurface, not in Core ML's
+            // opaque MLState.
+            id<MLFeatureProvider> output = [instance.model
+                predictionFromFeatures:inputs
+                               options:options
+                                 error:&error];
+            if (output == nil) {
+                LOG_WRN("ANE pinned dispatch %s: prediction failed: %s\n",
+                        function_name.c_str(),
+                        error.localizedDescription.UTF8String ?: "unknown");
+                return;
+            }
+            // Verify the result provider's MLMultiArrays are the same
+            // pointers as our pinned output slots (the outputBackings
+            // contract). This is the zero-copy proof.
+            for (uint32_t i = 0; i < function->n_outputs; ++i) {
+                const uint32_t slot_id = function->output_slot_ids[i];
+                if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
+                const ane_slot_v1_t * slot = &program.manifest.slots[slot_id];
+                MLMultiArray * result = [[output featureValueForName:
+                    [NSString stringWithUTF8String:slot->name]]
+                    multiArrayValue];
+                if (result == nil ||
+                        result.dataPointer != program.pinned_slots[slot_id].dataPointer) {
+                    LOG_WRN("ANE pinned dispatch %s: output %s not zero-copy\n",
+                            function_name.c_str(), slot->name);
+                    return;
+                }
+            }
+            ok = true;
+        }
+    });
+    return ok;
+}
+
 static void read_float_data(const MLMultiArray * array, float * destination, size_t count) {
     GGML_ASSERT(array && destination && count <= (size_t) array.count);
     const NSArray<NSNumber *> * shape = array.shape;
