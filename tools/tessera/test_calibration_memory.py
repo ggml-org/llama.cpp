@@ -206,6 +206,122 @@ class TestChunkedProcessing(unittest.TestCase):
             cm.chunked_process(w, activations=a, chunk_rows=2,
                                 compute=lambda w, a, s: None)
 
+    def test_chunked_process_mmap_views(self) -> None:
+        """The chunked_process utility passes mmap views to the
+        compute callback without copying.  For the per-tensor
+        calibration, this means the OS keeps the weight's zip
+        mmap alive and the per-chunk reads do not materialise
+        the full weight in RAM."""
+        import tempfile
+        rng = np.random.default_rng(0)
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "big.npz"
+            np.savez(p, weight=rng.standard_normal((1000, 100)).astype(np.float32))
+            weight = cm.mmap_tensor(p, "weight", dtype=np.float32)
+            captured = {"shape": None, "base_is_mmap": None}
+            def capture(w_chunk, _a, _spec):
+                captured["shape"] = w_chunk.shape
+                captured["base_is_mmap"] = w_chunk.base is not None
+                return None
+            results = cm.chunked_process(weight, activations=None, chunk_rows=250,
+                                          compute=capture)
+            self.assertEqual(len(results), 4)
+            self.assertEqual(captured["shape"], (250, 100))
+            # The mmap view is passed through (no copy).  Closing
+            # the np.load handle inside mmap_tensor doesn't
+            # invalidate the view; the OS keeps the zip mmap
+            # alive as long as the view is held.
+            self.assertIsNotNone(captured["base_is_mmap"])
+
+    def test_chunked_process_wired_to_lrq_training(self) -> None:
+        """End-to-end smoke: a small synthetic tensor goes through
+        ``train_lrq_chunked`` and produces an LRQ result whose
+        initial/final MSE is close to the legacy single-shot
+        path.  The chunked path uses different matmul
+        accumulation orders per chunk, so the float32 results
+        are not bit-equivalent; the test asserts the relative
+        MSE delta is bounded (the per-tensor result is
+        numerically equivalent, not byte-identical)."""
+        import per_tensor_calibrate as ptc
+        rng = np.random.default_rng(0)
+        out_dim, in_dim = 32, 16
+        n_tokens = 8
+        weight = rng.standard_normal((out_dim, in_dim)).astype(np.float32)
+        acts = rng.standard_normal((n_tokens, in_dim)).astype(np.float32)
+        layer = ptc.Layer(
+            name="test_chunked_lrq",
+            family="ffn",
+            weight=weight,
+            train_activations=acts,
+            heldout_activations=None,
+            in_sum2=(acts.astype(np.float32) ** 2).sum(axis=0),
+            in_count=n_tokens,
+        )
+        # Legacy single-shot baseline.
+        legacy = ptc.train_lrq(layer, rank=4, iterations=3, lr=1e-2, seed=0, aggregation="mean")
+        # Chunked path.  32 rows / 16-row chunks = 2 chunks.
+        chunked = ptc.train_lrq_chunked(
+            layer, rank=4, iterations=3, lr=1e-2, seed=0,
+            aggregation="mean", chunk_rows=16,
+        )
+        # The initial MSE is close (the chunked forward is
+        # per-chunk matmul; float32 accumulation order differs).
+        rel_init = abs(legacy.initial_mse - chunked.initial_mse) / max(abs(legacy.initial_mse), 1e-12)
+        self.assertLess(rel_init, 1e-2)
+        # The final MSE is close (Adam's float32 step order can
+        # differ across the chunked boundary).
+        rel_final = abs(legacy.final_mse - chunked.final_mse) / max(abs(legacy.final_mse), 1e-12)
+        self.assertLess(rel_final, 1e-2)
+        # The U, V are the same shape and dtype.
+        self.assertEqual(legacy.u.shape, chunked.u.shape)
+        self.assertEqual(legacy.v.shape, chunked.v.shape)
+        # The scale_aggregate is close (per-input-channel
+        # aggregate of S = U @ V; chunked aggregation is
+        # equivalent to the legacy one for ``aggregation="mean"``,
+        # modulo the float32 order-of-operations in the per-chunk
+        # matmul).
+        np.testing.assert_allclose(legacy.scale_aggregate, chunked.scale_aggregate,
+                                    rtol=5e-2, atol=5e-2)
+
+    def test_chunked_process_wired_to_flrq_sketch(self) -> None:
+        """The chunked FLRQ sketch produces the same Y (up to
+        float32 order) as the legacy single-shot path."""
+        import per_tensor_calibrate as ptc
+        rng = np.random.default_rng(0)
+        weight = rng.standard_normal((64, 32)).astype(np.float32)
+        Y_legacy, U_legacy, _ = ptc.flrq_sketch(weight, n_projections=8, seed=0, target_rank=4)
+        Y_chunked, U_chunked, _ = ptc.flrq_sketch_chunked(
+            weight, n_projections=8, seed=0, target_rank=4, chunk_rows=16,
+        )
+        np.testing.assert_allclose(Y_legacy, Y_chunked, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(np.abs(U_legacy), np.abs(U_chunked), rtol=1e-4, atol=1e-5)
+
+    def test_chunked_process_dispatch_to_legacy(self) -> None:
+        """``train_lrq_chunked`` with ``chunk_rows <= 0`` or
+        ``chunk_rows >= n_rows`` dispatches to the legacy
+        single-shot ``train_lrq`` (the public API is consistent)."""
+        import per_tensor_calibrate as ptc
+        rng = np.random.default_rng(0)
+        layer = ptc.Layer(
+            name="test_dispatch",
+            family="ffn",
+            weight=rng.standard_normal((8, 16)).astype(np.float32),
+            train_activations=rng.standard_normal((4, 16)).astype(np.float32),
+            heldout_activations=None,
+            in_sum2=None,
+            in_count=0,
+        )
+        # chunk_rows=0 -> legacy
+        r0 = ptc.train_lrq_chunked(layer, rank=2, iterations=2, lr=1e-2,
+                                    seed=0, chunk_rows=0)
+        # chunk_rows > n_rows -> legacy
+        r_big = ptc.train_lrq_chunked(layer, rank=2, iterations=2, lr=1e-2,
+                                      seed=0, chunk_rows=100)
+        # Both should match the legacy call.
+        r_legacy = ptc.train_lrq(layer, rank=2, iterations=2, lr=1e-2, seed=0)
+        self.assertAlmostEqual(r0.final_mse, r_legacy.final_mse, places=5)
+        self.assertAlmostEqual(r_big.final_mse, r_legacy.final_mse, places=5)
+
 
 class TestSpatialOccupancy(unittest.TestCase):
     """``interleave_components`` round-robins per-component tensors

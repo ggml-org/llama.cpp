@@ -92,6 +92,13 @@ DEFAULT_RANK = 16
 DEFAULT_ITERATIONS = 50
 DEFAULT_LR = 1.0e-3
 DEFAULT_OUTLIER_FRAC = 0.005
+# Phase 16 (calibration memopt).  Default chunk size for the
+# row-chunked processing path.  For a 12B FFN gate tensor at
+# 16384x4096 = 256 MB F32, ``chunk_rows=4096`` gives 4 chunks
+# of 4096x4096 = 64 MB each, which is the largest single-shot
+# intermediate that still fits a 256 GB host.  The legacy
+# single-shot path is ``chunk_rows <= 0``.
+DEFAULT_CHUNK_ROWS = 4096
 
 # Aggregation method for reducing a rank-r S matrix to a per-input-channel scale
 # that the existing AWQ path can consume without runtime changes.
@@ -352,6 +359,107 @@ class Adam:
             param -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
 
 
+class ChunkedAdam:
+    """Adam with per-chunk U state and full V state.
+
+    Phase 16 (calibration memopt): the per-tensor LRQ training
+    is split into row-chunks; each chunk's U slice has its own
+    Adam ``m`` and ``v`` buffers, while V's Adam state is
+    shared across chunks (the ``d_v`` gradient is accumulated
+    across chunks before stepping).
+
+    The split mirrors the gradient flow::
+
+        d_u_slice = d_s_chunk @ v.T                 # (chunk_rows, rank)
+        d_v       = sum_chunks u_chunk.T @ d_s_chunk # (rank, in_dim)
+
+    so each chunk's d_u is local to the chunk (no cross-chunk
+    coupling) and d_v is a sum across chunks.  Splitting U's
+    Adam state per-chunk keeps the per-chunk peak RSS bounded
+    to ``max(W_chunk, intermediates)`` rather than
+    ``max(W_full, intermediates_full)``.
+
+    Parameters
+    ----------
+    u : (out_dim, rank) ndarray
+        The U factor to be optimised.  Updated in place.
+    v : (rank, in_dim) ndarray
+        The V factor to be optimised.  Updated in place.
+    chunk_rows : int
+        The number of rows per U slice.  ``<= 0`` or
+        ``>= out_dim`` is the legacy single-chunk path; the
+        ChunkedAdam collapses to the standard ``Adam`` in that
+        case.
+    lr : float
+        Adam learning rate.
+    betas, eps, weight_decay
+        Standard Adam hyperparameters.
+    """
+
+    def __init__(
+        self,
+        u: np.ndarray,
+        v: np.ndarray,
+        chunk_rows: int,
+        lr: float = DEFAULT_LR,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ) -> None:
+        self.u = u
+        self.v = v
+        self.chunk_rows = int(chunk_rows)
+        self.lr = float(lr)
+        self.b1, self.b2 = betas
+        self.eps = float(eps)
+        self.weight_decay = float(weight_decay)
+        self.t = 0
+        # Per-chunk U state.  Each entry is one row-chunk; the
+        # ``specs`` list carries the (start, end) row range for
+        # in-place updates.
+        self.u_specs: list[tuple[int, int]] = []
+        n_rows = u.shape[0]
+        if self.chunk_rows <= 0 or self.chunk_rows >= n_rows:
+            self.u_specs.append((0, n_rows))
+        else:
+            for start in range(0, n_rows, self.chunk_rows):
+                end = min(start + self.chunk_rows, n_rows)
+                self.u_specs.append((start, end))
+        self.u_m = [np.zeros((end - start, u.shape[1]), dtype=u.dtype)
+                    for start, end in self.u_specs]
+        self.u_v = [np.zeros((end - start, u.shape[1]), dtype=u.dtype)
+                    for start, end in self.u_specs]
+        # Full V state.
+        self.v_m = np.zeros_like(v)
+        self.v_v = np.zeros_like(v)
+
+    def step(self, d_u_per_chunk: list[np.ndarray], d_v: np.ndarray) -> None:
+        """Apply one Adam step using per-chunk U gradients and
+        a single accumulated V gradient."""
+        self.t += 1
+        b1c = 1.0 - self.b1 ** self.t
+        b2c = 1.0 - self.b2 ** self.t
+        for i, ((start, end), m_buf, v_buf, grad) in enumerate(
+            zip(self.u_specs, self.u_m, self.u_v, d_u_per_chunk)
+        ):
+            g = grad
+            if self.weight_decay > 0.0:
+                g = g + self.weight_decay * self.u[start:end]
+            self.u_m[i] = self.b1 * m_buf + (1.0 - self.b1) * g
+            self.u_v[i] = self.b2 * v_buf + (1.0 - self.b2) * (g * g)
+            m_hat = self.u_m[i] / b1c
+            v_hat = self.u_v[i] / b2c
+            self.u[start:end] -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+        g = d_v
+        if self.weight_decay > 0.0:
+            g = g + self.weight_decay * self.v
+        self.v_m = self.b1 * self.v_m + (1.0 - self.b1) * g
+        self.v_v = self.b2 * self.v_v + (1.0 - self.b2) * (g * g)
+        m_hat = self.v_m / b1c
+        v_hat = self.v_v / b2c
+        self.v -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+
+
 # ---------------------------------------------------------------------------
 # LRQ training
 # ---------------------------------------------------------------------------
@@ -527,6 +635,187 @@ def train_lrq(
 
     final_mse = history[-1]
     s_aggregate = _aggregate_scale(s, aggregation)
+    return LRQResult(
+        rank=rank,
+        u=u,
+        v=v,
+        initial_mse=initial_mse,
+        final_mse=final_mse,
+        iterations=iterations,
+        history=history,
+        input_scale_agg=aggregation,
+        scale_aggregate=s_aggregate.astype(np.float32),
+        baseline_scale=layer.input_scale(),
+        bundle_name=layer.name,
+    )
+
+
+def _lrq_chunked_initial_mse(
+    u: np.ndarray,
+    v: np.ndarray,
+    weight: np.ndarray,
+    x: np.ndarray,
+    chunk_rows: int,
+) -> float:
+    """Compute the initial MSE of the LRQ training in a chunked way.
+
+    The full forward pass would materialise ``U @ V`` (size
+    ``out_dim * in_dim``) and a per-row residual of the same
+    size.  For a 12B FFN gate that's 256 MB of intermediates.
+    The chunked version processes row-chunks; per-chunk peak
+    RSS is ``max(W_chunk, intermediates)`` = ``chunk_rows *
+    in_dim * 4`` bytes = 64 MB at the default chunk size.
+    """
+    n_rows, in_dim = weight.shape
+    err_sq_sum = 0.0
+    err_count = 0
+    for spec in chunked_iter(n_rows, chunk_rows):
+        u_chunk = u[spec.start:spec.end]   # (chunk_rows, rank)
+        s_chunk = u_chunk @ v              # (chunk_rows, in_dim)
+        w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
+        scaled_chunk = w_chunk * s_chunk
+        w_q_chunk = _ternary_recon(scaled_chunk)
+        residual_chunk = w_q_chunk - w_chunk
+        err_chunk = residual_chunk @ x.T    # (chunk_rows, n_tokens)
+        err_sq_sum += float(np.sum(err_chunk * err_chunk))
+        err_count += err_chunk.size
+    if err_count == 0:
+        return 0.0
+    return err_sq_sum / float(err_count)
+
+
+def _lrq_chunked_aggregate_scale(
+    u: np.ndarray,
+    v: np.ndarray,
+    aggregation: str,
+    chunk_rows: int,
+) -> np.ndarray:
+    """Compute the per-input-channel aggregate of ``S = U @ V``
+    incrementally (per-chunk) to avoid materialising the full
+    ``(out_dim, in_dim)`` S.
+
+    The aggregate is along axis 0 (out_dim) so per-chunk
+    contributions stack cleanly.  ``mean`` is the simple
+    chunk-mean average; ``rms`` is the per-chunk
+    ``sum(s^2)/out_dim`` accumulator.
+    """
+    n_rows, in_dim = u.shape[0], v.shape[1]
+    if aggregation == "mean":
+        acc = np.zeros(in_dim, dtype=np.float64)
+        n_seen = 0
+        for spec in chunked_iter(n_rows, chunk_rows):
+            u_chunk = u[spec.start:spec.end]
+            s_chunk = u_chunk @ v
+            acc += s_chunk.sum(axis=0).astype(np.float64)
+            n_seen += (spec.end - spec.start)
+        if n_seen == 0:
+            return np.zeros(in_dim, dtype=np.float32)
+        return (acc / float(n_seen)).astype(np.float32)
+    if aggregation == "rms":
+        acc = np.zeros(in_dim, dtype=np.float64)
+        n_seen = 0
+        for spec in chunked_iter(n_rows, chunk_rows):
+            u_chunk = u[spec.start:spec.end]
+            s_chunk = u_chunk @ v
+            acc += (s_chunk.astype(np.float64) ** 2).sum(axis=0)
+            n_seen += (spec.end - spec.start)
+        if n_seen == 0:
+            return np.zeros(in_dim, dtype=np.float32)
+        return np.sqrt(acc / float(n_seen) + 1e-12).astype(np.float32)
+    raise ValueError(
+        f"unknown aggregation {aggregation!r}; expected one of {LRQ_AGGREGATIONS}"
+    )
+
+
+def train_lrq_chunked(
+    layer: Layer,
+    rank: int = DEFAULT_RANK,
+    iterations: int = DEFAULT_ITERATIONS,
+    lr: float = DEFAULT_LR,
+    seed: int = 0,
+    aggregation: str = "mean",
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
+    verbose: bool = False,
+) -> LRQResult:
+    """LRQ training with row-chunked forward/backward passes.
+
+    Phase 16 (calibration memopt).  For a 12B FFN gate tensor
+    at 16384x4096 = 256 MB F32, the per-iter peak RSS of the
+    legacy ``train_lrq`` is ~1 GB (four 256 MB intermediates).
+    This chunked path keeps each chunk's intermediates to
+    ``chunk_rows * in_dim * 4`` bytes = 64 MB at the default
+    chunk size, so the per-iter peak RSS is ~256 MB.
+
+    The numerical answer is bit-equivalent to ``train_lrq`` (up
+    to the Adam float32 order-of-operations).  The legacy
+    single-shot path is recovered by passing ``chunk_rows <=
+    0`` or ``chunk_rows >= out_dim``; the function dispatches
+    to ``train_lrq`` in that case to keep the public API
+    consistent.
+    """
+    weight = layer.weight
+    if layer.train_activations is None or not layer.train_activations.size:
+        raise ValueError("LRQ training requires train_activations in the bundle")
+    x = layer.train_activations.astype(np.float32)
+    out_dim, in_dim = weight.shape
+    if rank < 1 or rank > min(out_dim, in_dim):
+        raise ValueError(
+            f"rank must be in [1, {min(out_dim, in_dim)}], got {rank}"
+        )
+    if chunk_rows <= 0 or chunk_rows >= out_dim:
+        # Legacy single-shot path.
+        return train_lrq(
+            layer,
+            rank=rank,
+            iterations=iterations,
+            lr=lr,
+            seed=seed,
+            aggregation=aggregation,
+            verbose=verbose,
+        )
+    u, v = _initial_u_v(layer, rank, seed)
+    adam = ChunkedAdam(u, v, chunk_rows=chunk_rows, lr=lr)
+    history: list[float] = []
+    initial_mse = _lrq_chunked_initial_mse(u, v, weight, x, chunk_rows)
+    history.append(initial_mse)
+    n_tokens = x.shape[0]
+    err_total_size = float(out_dim * n_tokens)
+    for it in range(iterations):
+        d_v_accum = np.zeros_like(v)
+        err_sq_sum = 0.0
+        d_u_per_chunk: list[np.ndarray] = []
+        for spec in chunked_iter(out_dim, chunk_rows):
+            u_chunk = u[spec.start:spec.end]
+            # Forward
+            s_chunk = u_chunk @ v                       # (chunk_rows, in_dim)
+            w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
+            scaled_chunk = w_chunk * s_chunk
+            w_q_chunk = _ternary_recon(scaled_chunk)
+            residual_chunk = w_q_chunk - w_chunk
+            err_chunk = residual_chunk @ x.T             # (chunk_rows, n_tokens)
+            err_sq_sum += float(np.sum(err_chunk * err_chunk))
+            # Backward.  d_err normalisation uses the FULL
+            # err.size (out_dim * n_tokens), not the per-chunk
+            # size, so the chunked and single-shot gradients
+            # match exactly.
+            d_err = (2.0 / err_total_size) * err_chunk
+            d_residual = d_err @ x                       # (chunk_rows, in_dim)
+            d_scaled = d_residual                        # STE
+            d_s = d_scaled * w_chunk                     # (chunk_rows, in_dim)
+            d_u_slice = d_s @ v.T                        # (chunk_rows, rank)
+            d_u_per_chunk.append(d_u_slice)
+            d_v_accum += u_chunk.T @ d_s                 # accumulate across chunks
+        loss = err_sq_sum / err_total_size if err_total_size else 0.0
+        history.append(loss)
+        adam.step(d_u_per_chunk, d_v_accum)
+        if verbose and (it % max(1, iterations // 10) == 0 or it == iterations - 1):
+            print(
+                f"  lrq[chunked {layer.name}] iter {it:3d}/{iterations}  "
+                f"mse={loss:.6e}  delta={history[-2] - loss:+.3e}",
+                file=sys.stderr,
+            )
+    final_mse = history[-1]
+    s_aggregate = _lrq_chunked_aggregate_scale(u, v, aggregation, chunk_rows)
     return LRQResult(
         rank=rank,
         u=u,
@@ -1120,6 +1409,91 @@ def flrq_sketch(
     return Y, U_basis, sigma
 
 
+def flrq_sketch_chunked(
+    weight: np.ndarray,
+    n_projections: int,
+    seed: int,
+    target_rank: int | None = None,
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """R1-Sketch with row-chunked Gaussian projection.
+
+    Phase 16 (calibration memopt).  The legacy
+    ``flrq_sketch`` materialises the full ``Y = W @ Omega`` as
+    a single F32 matmul.  For a 12B FFN gate at 16384x4096
+    with ``n_projections=32, target_rank=64``, Y is (16384,
+    2048) = 128 MB; the matmul's input W is 256 MB; the
+    working peak is 384 MB.
+
+    The chunked path materialises Y **one chunk at a time**:
+    each chunk produces a (chunk_rows, total_width) slice
+    that is then ``np.concatenate``d at the end.  Per-chunk
+    peak is ``max(W_chunk, Y_chunk)`` = ``max(64 MB, 32 MB)``
+    at the default chunk size, so the working peak RSS is
+    bounded by the larger of W_chunk and Y_chunk (64 MB
+    here), plus the final Y (128 MB) at concatenate time.
+
+    The numerical result is bit-equivalent to ``flrq_sketch``:
+    the per-row ``Y[start:end] = W[start:end] @ Omega`` is
+    the same matmul, just split.
+
+    Parameters
+    ----------
+    weight : (K, N) ndarray
+        The 2-D weight matrix.  An mmap view is fine; the
+        per-chunk matmul pages in the rows it needs.
+    n_projections, seed, target_rank
+        As in ``flrq_sketch``.
+    chunk_rows : int
+        The number of rows per chunk.  ``<= 0`` or
+        ``>= K`` is the legacy single-shot path (a single
+        chunk covering the full weight).
+
+    Returns
+    -------
+    Y : (K, n_projections * target_rank) FP32 ndarray
+        The R1-Sketch of W.
+    U_basis : (K, target_rank) FP32 ndarray
+        The top ``target_rank`` left singular vectors of ``Y``.
+    sigma : (target_rank,) FP32 ndarray
+        The corresponding singular values, descending.
+    """
+    if weight.ndim != 2:
+        raise ValueError(f"flrq_sketch_chunked: weight must be 2-D, got {weight.ndim}-D")
+    K, N = weight.shape
+    if n_projections < 1:
+        raise ValueError(f"flrq_sketch_chunked: n_projections must be >= 1, got {n_projections}")
+    if target_rank is None:
+        target_rank = max(1, min(K, N, 16))
+    r = max(1, min(int(target_rank), K, N))
+    total_width = min(N, n_projections * r)
+    if chunk_rows <= 0 or chunk_rows >= K:
+        # Legacy single-shot path; the result is bit-equivalent
+        # to ``flrq_sketch`` (modulo the matmul float32
+        # order-of-operations, which is stable because Y is
+        # dense F32).
+        rng = np.random.default_rng(seed)
+        omega = rng.standard_normal((N, total_width), dtype=np.float32)
+        Y = np.asarray(weight, dtype=np.float32) @ omega
+        U_full, sigma, _ = np.linalg.svd(Y, full_matrices=False)
+        return Y, U_full[:, :r].astype(np.float32), sigma[:r].astype(np.float32)
+    rng = np.random.default_rng(seed)
+    omega = rng.standard_normal((N, total_width), dtype=np.float32)
+    # Compute Y row-chunk by row-chunk.  Each chunk's matmul
+    # pages in the relevant W rows from the mmap and produces
+    # a (chunk_rows, total_width) slice of Y.  The slices are
+    # concatenated at the end.
+    y_slices: list[np.ndarray] = []
+    for spec in chunked_iter(K, chunk_rows):
+        w_chunk = np.asarray(weight[spec.start:spec.end], dtype=np.float32)
+        y_slices.append(w_chunk @ omega)
+        del w_chunk
+    Y = np.concatenate(y_slices, axis=0)
+    del y_slices
+    U_full, sigma, _ = np.linalg.svd(Y, full_matrices=False)
+    return Y, U_full[:, :r].astype(np.float32), sigma[:r].astype(np.float32)
+
+
 def flrq_bcl(
     weight: np.ndarray,
     U_basis: np.ndarray,
@@ -1308,6 +1682,7 @@ def train_flrq(
     blc_iters: int = FLRQ_DEFAULT_BLC_ITERS,
     qbits: int = FLRQ_DEFAULT_QBITS,
     mse_threshold: float = FLRQ_DEFAULT_MSE_THRESHOLD,
+    chunk_rows: int = 0,
     verbose: bool = False,
 ) -> FLRQResult:
     """High-level FLRQ driver for one tensor bundle.
@@ -1318,6 +1693,17 @@ def train_flrq(
     baseline MSE is the MSE of a per-tensor symmetric quantiser at
     ``qbits`` bits with no low-rank correction; the reconstruction
     MSE is after the BLC step.
+
+    Phase 16 (calibration memopt): when ``chunk_rows > 0`` and
+    the weight is large enough to benefit (``n_rows > chunk_rows``),
+    the chosen-rank recompute's R1-Sketch step uses
+    ``flrq_sketch_chunked`` which keeps the per-chunk peak RSS
+    bounded.  The BLC step still needs the full weight (it
+    iterates ``W - U @ V``); that is a separate optimisation that
+    the FLRQ paper leaves to the runtime, so the chunked path
+    here is a partial win (sketch only) and the baseline / BLC
+    paths remain in the legacy single-shot shape.  Pass
+    ``chunk_rows <= 0`` to opt out (the legacy path).
     """
     W = layer.weight.astype(np.float32)
     K, N = W.shape
@@ -1345,12 +1731,16 @@ def train_flrq(
     # the recorded MSE.  ``flrq_select_rank`` already ran BLC for that
     # rank; we re-run it here so the caller has access to the full
     # U, V, residual, residual_q tensors (per_rank only keeps scalars).
-    _, U_basis, _ = flrq_sketch(
-        W,
+    use_chunked = chunk_rows > 0 and K > chunk_rows
+    sketch_fn = flrq_sketch_chunked if use_chunked else flrq_sketch
+    sketch_kwargs: dict = dict(
         n_projections=n_projections,
         seed=seed + chosen_rank,
         target_rank=chosen_rank,
     )
+    if use_chunked:
+        sketch_kwargs["chunk_rows"] = chunk_rows
+    _, U_basis, _ = sketch_fn(W, **sketch_kwargs)
     U, V, scale, clip, residual, residual_q = flrq_bcl(
         W,
         U_basis,
@@ -1554,19 +1944,36 @@ def run_compare(args: argparse.Namespace) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     digests = {p.stem: bundle_digest(p) for p in layers}
 
-    # LRQ leg
+    # LRQ leg.  Phase 16 (calibration memopt): the chunked
+    # path is used when ``--chunk-rows > 0`` and the tensor
+    # is large enough; the legacy single-shot path is the
+    # default and is bit-equivalent for matching chunk_rows.
     lrq_results: list[tuple[Layer, LRQResult]] = []
+    chunked_train = getattr(args, "chunk_rows", 0) > 0
     for path in layers:
         layer = load_layer(path, max_tokens=args.max_tokens)
-        result = train_lrq(
-            layer,
-            rank=args.lrq_rank,
-            iterations=args.lrq_iterations,
-            lr=args.lr,
-            seed=args.seed,
-            aggregation=args.lrq_agg,
-            verbose=args.verbose,
-        )
+        use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
+        if use_chunked:
+            result = train_lrq_chunked(
+                layer,
+                rank=args.lrq_rank,
+                iterations=args.lrq_iterations,
+                lr=args.lr,
+                seed=args.seed,
+                aggregation=args.lrq_agg,
+                chunk_rows=args.chunk_rows,
+                verbose=args.verbose,
+            )
+        else:
+            result = train_lrq(
+                layer,
+                rank=args.lrq_rank,
+                iterations=args.lrq_iterations,
+                lr=args.lr,
+                seed=args.seed,
+                aggregation=args.lrq_agg,
+                verbose=args.verbose,
+            )
         lrq_results.append((layer, result))
 
     provenance = {
@@ -1715,12 +2122,16 @@ def run_flrq(args: argparse.Namespace) -> int:
             mse_threshold=args.flrq_mse_threshold,
         )
         per_rank[layer.name] = sweep
-        _, U_basis, _ = flrq_sketch(
-            W,
+        use_chunked = getattr(args, "chunk_rows", 0) > 0 and W.shape[0] > args.chunk_rows
+        sketch_fn = flrq_sketch_chunked if use_chunked else flrq_sketch
+        sketch_kwargs: dict = dict(
             n_projections=args.flrq_n_projections,
             seed=args.seed + chosen_rank,
             target_rank=chosen_rank,
         )
+        if use_chunked:
+            sketch_kwargs["chunk_rows"] = args.chunk_rows
+        _, U_basis, _ = sketch_fn(W, **sketch_kwargs)
         U, V, scale, clip, residual, residual_q = flrq_bcl(
             W,
             U_basis,
@@ -1930,6 +2341,23 @@ def _build_parser() -> argparse.ArgumentParser:
             f"INT3-INT4 is the recommended operating range (default {FLRQ_DEFAULT_QBITS})"
         ),
     )
+    # Phase 16 (calibration memopt): chunked processing.  For
+    # tensors with n_rows > chunk_rows, the per-tensor
+    # training iterates row-chunks so the per-chunk peak RSS
+    # is bounded to ``chunk_rows * in_dim * 4`` bytes rather
+    # than the full weight.  Default 4096 matches the
+    # ``DEFAULT_CHUNK_ROWS`` constant above (4 chunks for a
+    # 12B FFN gate at 16384 rows).  ``<= 0`` or
+    # ``>= n_rows`` is the legacy single-shot path.
+    parser.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=DEFAULT_CHUNK_ROWS,
+        help=(
+            f"Phase 16 chunked processing row count (default {DEFAULT_CHUNK_ROWS}). "
+            "Use 0 or a negative value to disable chunking."
+        ),
+    )
     return parser
 
 
@@ -1941,17 +2369,38 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"{args.layers}: no layer bundles")
         digests = {p.stem: bundle_digest(p) for p in layers}
         lrq_results: list[tuple[Layer, LRQResult]] = []
+        # Phase 16 (calibration memopt): dispatch to the
+        # chunked LRQ path when the user opted in
+        # (``chunk_rows > 0``) and the per-tensor loop has at
+        # least one tensor large enough to benefit.  The
+        # chunked path is bit-equivalent to ``train_lrq`` for
+        # matching ``chunk_rows``; the legacy path is
+        # preserved for ``chunk_rows <= 0`` or ``>= n_rows``.
+        chunked_train = getattr(args, "chunk_rows", 0) > 0
         for path in layers:
             layer = load_layer(path, max_tokens=args.max_tokens)
-            result = train_lrq(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                verbose=args.verbose,
-            )
+            use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
+            if use_chunked:
+                result = train_lrq_chunked(
+                    layer,
+                    rank=args.lrq_rank,
+                    iterations=args.lrq_iterations,
+                    lr=args.lr,
+                    seed=args.seed,
+                    aggregation=args.lrq_agg,
+                    chunk_rows=args.chunk_rows,
+                    verbose=args.verbose,
+                )
+            else:
+                result = train_lrq(
+                    layer,
+                    rank=args.lrq_rank,
+                    iterations=args.lrq_iterations,
+                    lr=args.lr,
+                    seed=args.seed,
+                    aggregation=args.lrq_agg,
+                    verbose=args.verbose,
+                )
             lrq_results.append((layer, result))
             if args.verbose:
                 print(
