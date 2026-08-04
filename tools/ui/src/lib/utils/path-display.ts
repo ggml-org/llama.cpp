@@ -1,10 +1,15 @@
+import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
+import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
 import {
 	CWD_CHANGED_PREFIX,
 	CWD_CHANGED_PREFIX_LEGACY,
 	CWD_CLEARED_TEXT,
 	CWD_CLEARED_TEXT_LEGACY,
 	CWD_LINK_LEGACY_REGEX,
-	CWD_LINK_REGEX
+	CWD_LINK_REGEX,
+	FILE_URI_PREFIX,
+	HOME_TILDE,
+	HOME_TILDE_PREFIX
 } from '$lib/constants';
 
 /**
@@ -12,8 +17,8 @@ import {
  * slashes stripped. Returns the input unchanged when no `/` is present.
  */
 export function lastPathSegment(p: string): string {
-	const trimmed = p.replace(/\/+$/, '');
-	const idx = trimmed.lastIndexOf('/');
+	const trimmed = p.replace(TRAILING_SLASHES_REGEX, '');
+	const idx = trimmed.lastIndexOf(PATH_SEPARATOR);
 	return idx === -1 ? trimmed : trimmed.slice(idx + 1);
 }
 
@@ -29,8 +34,9 @@ export function abbreviateWorkingDir(
 ): string {
 	if (!path) return '';
 	if (!home) return lastPathSegment(path);
-	if (path === home) return '~';
-	if (path.startsWith(home + '/')) return '~/' + path.slice(home.length + 1);
+	if (path === home) return HOME_TILDE;
+	if (path.startsWith(home + PATH_SEPARATOR))
+		return HOME_TILDE_PREFIX + path.slice(home.length + 1);
 	return lastPathSegment(path);
 }
 
@@ -42,8 +48,9 @@ export function abbreviateWorkingDir(
  */
 export function abbreviateHome(path: string, home: string | null | undefined): string {
 	if (!home) return path;
-	if (path === home) return '~';
-	if (path.startsWith(home + '/')) return '~/' + path.slice(home.length + 1);
+	if (path === home) return HOME_TILDE;
+	if (path.startsWith(home + PATH_SEPARATOR))
+		return HOME_TILDE_PREFIX + path.slice(home.length + 1);
 	return path;
 }
 
@@ -64,7 +71,7 @@ export interface CwdMessageInfo {
  */
 export function formatCwdMessage(cwd: string, home: string | null): string {
 	const display = abbreviateWorkingDir(cwd, home);
-	return `${CWD_CHANGED_PREFIX}[file://${cwd}](${display}).`;
+	return `${CWD_CHANGED_PREFIX}[${FILE_URI_PREFIX}${cwd}](${display}).`;
 }
 
 /**

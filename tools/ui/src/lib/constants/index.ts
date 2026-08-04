@@ -61,3 +61,4 @@ export * from './ui';
 export * from './uri-template';
 export * from './url';
 export * from './viewport';
+export * from './working-directory';

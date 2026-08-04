@@ -8,6 +8,15 @@
  * client-side; the component owns the network/state plumbing.
  */
 
+import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
+import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
+import {
+	GLOB_RANGE_CLOSE,
+	GLOB_RANGE_OPEN,
+	GLOB_SPECIAL_CHARS,
+	GLOB_WILDCARD,
+	HOME_TILDE
+} from '$lib/constants';
 import { lastPathSegment } from './path-display';
 
 export interface GlobEntry {
@@ -22,26 +31,26 @@ export interface PathQuery {
 
 /** A query starting with `/` or `~` is path navigation, not a home-relative glob. */
 export function splitPathQuery(query: string): PathQuery | null {
-	if (!query.startsWith('/') && !query.startsWith('~')) return null;
-	const normalized = query.replace(/\/+$/, '');
-	if (!normalized || normalized === '~') {
-		return { parent: normalized === '~' ? '~' : '/', last: '' };
+	if (!query.startsWith(PATH_SEPARATOR) && !query.startsWith(HOME_TILDE)) return null;
+	const normalized = query.replace(TRAILING_SLASHES_REGEX, '');
+	if (!normalized || normalized === HOME_TILDE) {
+		return { parent: normalized === HOME_TILDE ? HOME_TILDE : PATH_SEPARATOR, last: '' };
 	}
-	const idx = normalized.lastIndexOf('/');
-	if (idx === 0) return { parent: '/', last: normalized.slice(1) };
+	const idx = normalized.lastIndexOf(PATH_SEPARATOR);
+	if (idx === 0) return { parent: PATH_SEPARATOR, last: normalized.slice(1) };
 	return { parent: normalized.slice(0, idx), last: normalized.slice(idx + 1) };
 }
 
 /** Build a case-insensitive glob that matches `query` anywhere within a name. */
 export function buildCaseInsensitiveGlob(query: string): string {
-	let out = '*';
+	let out = GLOB_WILDCARD;
 	for (const c of query) {
 		const lo = c.toLowerCase();
 		const up = c.toUpperCase();
-		if (lo !== up) out += `[${lo}${up}]`;
-		else if (!'*?[]'.includes(c)) out += c;
+		if (lo !== up) out += GLOB_RANGE_OPEN + lo + up + GLOB_RANGE_CLOSE;
+		else if (!GLOB_SPECIAL_CHARS.includes(c)) out += c;
 	}
-	return out + '*';
+	return out + GLOB_WILDCARD;
 }
 
 /** Exact basename first, then prefix, then substring; lower is better. */
@@ -67,7 +76,7 @@ export function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
 /** Join a base path and a relative segment, avoiding duplicate slashes. */
 export function joinPath(base: string, rel: string): string {
 	if (!base) return rel;
-	return base.replace(/\/+$/, '') + '/' + rel;
+	return base.replace(TRAILING_SLASHES_REGEX, '') + PATH_SEPARATOR + rel;
 }
 
 /** Split `text` into alternating segments at each case-insensitive `query` match. */
