@@ -190,6 +190,7 @@ check_gpus_idle "pre-launch safety check"
 
 now_ns() { date +%s%N; }
 group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+leader_or_group_alive() { kill -0 "$1" 2>/dev/null || group_alive "$1"; }
 terminate_group() {
     local pgid=$1 deadline
     group_alive "$pgid" || return
@@ -200,7 +201,7 @@ terminate_group() {
 }
 sample_smi() {
     local pgid=$1
-    while group_alive "$pgid"; do
+    while leader_or_group_alive "$pgid"; do
         printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
         rocm-smi --showuse --showmemuse --showpower --showclocks --showtemp --csv 2>&1 || true
         sleep 1
@@ -225,7 +226,7 @@ set +e
 setsid timeout --signal=TERM --kill-after=5s "${TIMEOUT_S}s" "${command[@]}" \
     > "$run_dir/result.json" 2> "$run_dir/bench.log" &
 pid=$!; pgid=$pid
-sample_smi "$pgid" > "$run_dir/rocm-smi.log" & smi_pid=$!
+sample_smi "$pgid" > "$run_dir/rocm-smi.log" 9>&- & smi_pid=$!
 wait "$pid"; rc=$?
 if group_alive "$pgid"; then terminate_group "$pgid"; fi
 kill "$smi_pid" 2>/dev/null || true; wait "$smi_pid" 2>/dev/null || true

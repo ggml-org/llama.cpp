@@ -302,6 +302,7 @@ check_gpus_idle "pre-launch safety check"
 
 now_ns() { date +%s%N; }
 group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+leader_or_group_alive() { kill -0 "$1" 2>/dev/null || group_alive "$1"; }
 signal_group() { kill "-$1" -- "-$2" 2>/dev/null || true; }
 terminate_group_now() {
     local pgid=$1 deadline
@@ -314,7 +315,7 @@ terminate_group_now() {
 
 sample_smi() {
     local pgid=$1
-    while group_alive "$pgid"; do
+    while leader_or_group_alive "$pgid"; do
         printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
         rocm-smi --showuse --showmemuse --showpower --showclocks --showtemp --csv 2>&1 || true
         sleep 1
@@ -356,7 +357,7 @@ watch_group() {
     local pgid=$1 phase_file=$2 phase=setup phase_start timeout_s hard term now last_event=""
     local event_ns event_phase event_bench event_rep event_total
     phase_start=$(now_ns)
-    while group_alive "$pgid"; do
+    while leader_or_group_alive "$pgid"; do
         if [[ -s "$phase_file" ]]; then
             event_ns=""; event_phase=""; event_bench=""; event_rep=""; event_total=""
             IFS=$'\t' read -r event_ns event_phase event_bench event_rep event_total < "$phase_file" || true
@@ -418,16 +419,16 @@ mkfifo "$stderr_fifo" "$stdout_fifo"
 : > "$run_dir/result-completed-at.ns"
 : > "$run_dir/measurement-start.ns"
 printf 'timestamp_ns\tphase\tbenchmark\trepetition\ttotal_repetitions\n' > "$run_dir/phase-events.tsv"
-stderr_consumer "$stderr_fifo" "$phase_file" "$run_dir/bench.log" "$run_dir/phase-events.tsv" & stderr_pid=$!
-stdout_consumer "$stdout_fifo" "$run_dir/result.jsonl" "$run_dir/result-completed-at.ns" & stdout_pid=$!
+stderr_consumer "$stderr_fifo" "$phase_file" "$run_dir/bench.log" "$run_dir/phase-events.tsv" 9>&- & stderr_pid=$!
+stdout_consumer "$stdout_fifo" "$run_dir/result.jsonl" "$run_dir/result-completed-at.ns" 9>&- & stdout_pid=$!
 
 printf 'run_dir=%s\n' "$run_dir"
 printf 'started_at_ns=%s\n' "$(now_ns)" > "$run_dir/status.txt"
 set +e
 setsid "${bench_cmd[@]}" > "$stdout_fifo" 2> "$stderr_fifo" &
 bench_pid=$!; bench_pgid=$bench_pid
-sample_smi "$bench_pgid" > "$run_dir/rocm-smi.log" & smi_pid=$!
-watch_group "$bench_pgid" "$phase_file" & watchdog_pid=$!
+sample_smi "$bench_pgid" > "$run_dir/rocm-smi.log" 9>&- & smi_pid=$!
+watch_group "$bench_pgid" "$phase_file" 9>&- & watchdog_pid=$!
 wait "$bench_pid"; rc=$?
 if group_alive "$bench_pgid"; then terminate_group_now "$bench_pgid"; fi
 wait "$stderr_pid" 2>/dev/null || true; stderr_pid=""
