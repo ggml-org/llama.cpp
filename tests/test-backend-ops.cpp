@@ -9776,15 +9776,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // CONT of a 0<->2 permute at DeepSeek-V4 lightning-indexer shapes:
     // indexer_kq is [n_kv, n_tokens, n_head=64] and gets ggml_cont(ggml_permute(.., 2,1,0,3)).
-    // Measured on Vulkan/gfx1151 this ran at ~1 GB/s of a ~200 GB/s box and was
-    // 43% of DeepSeek-V4 prefill. n_kv values include power-of-two and
-    // non-power-of-two neighbours because the two differed by ~2.4x.
-    // NOTE: the n_tokens=64 shapes keep a single slow-path dispatch in the
-    // tens of ms; at 512 the OLD path took ~273 ms per dispatch and perf
-    // mode's looping tripped the amdgpu watchdog (observed 2026-08-02).
-    // The n_tokens=512 shapes are ~270-300 MB so they exceed GPU L2 on
-    // large parts, where the 64-token shapes fit in cache and read above
-    // memory bandwidth.
     for (int64_t n_kv : { 1024, 1280, 2048, 2304 }) {
         test_cases.emplace_back(new test_cont(
             GGML_TYPE_F32, {n_kv, 64, 64, 1}, false, {2, 1, 0, 3}));
