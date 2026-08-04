@@ -2713,7 +2713,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
         {"--expert-heat-decay"}, "F",
-        "expert heatmap decay rate per update (default: 0.99)",
+        "expert heatmap decay rate per update (default: 0.999)",
         [](common_params & params, const std::string & value) {
             params.expert_heat_decay = std::stof(value);
         }
@@ -2741,7 +2741,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_EXPERT_DWELL"));
     add_opt(common_arg(
         {"-las", "--expert-hot-s"}, "N",
-        "number of top expert slots for GPU hot store (default: 0 = disabled)",
+        "-1 = autofit slots from free VRAM, 0 = disabled, N = manual top-N slots",
         [](common_params & params, int value) {
             params.expert_hot_s = value;
         }
