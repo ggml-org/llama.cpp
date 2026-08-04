@@ -222,12 +222,102 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    after_frob FLOAT,\n"
     "    PRIMARY KEY (run_id, tensor_name, generation)\n"
     ");\n"
+    // ---- shared tensor_stats: cross-pipeline feature table (additive) ----
+    // One row per (model_hash, name). The C++ quantization pipeline writes the
+    // GA-prep walk stats here (kurtosis, eff_rank, source_type); the Python
+    // calibration pipeline writes the imatrix / AWQ stats (rms, mean_abs,
+    // tail_ratio). source records which pipeline last wrote the row. PRIMARY
+    // KEY makes this an upsert target for both sides. The 'tensors' table
+    // stays as-is for backward compatibility with the per-run ga-prep walk;
+    // new code should read from tensor_stats.
+    "CREATE TABLE IF NOT EXISTS tensor_stats (\n"
+    "    model_hash   TEXT NOT NULL,\n"
+    "    name         TEXT NOT NULL,\n"
+    "    family       TEXT,\n"
+    "    layer_depth  INTEGER,\n"
+    "    out_dim      BIGINT,\n"
+    "    in_dim       BIGINT,\n"
+    "    n_elements   BIGINT,\n"
+    "    dtype        TEXT,\n"
+    "    kurtosis     DOUBLE,\n"
+    "    eff_rank     DOUBLE,\n"
+    "    rms          DOUBLE,\n"
+    "    mean_abs     DOUBLE,\n"
+    "    tail_ratio   DOUBLE,\n"
+    "    source       TEXT,\n"
+    "    updated_at   TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, name)\n"
+    ");\n"
+    // ---- per-tensor summary mirrors of the four analytical outputs ----
+    // These are the per-tensor summary of the typed-NDJSON outputs the
+    // Python calibration / analytics pipeline writes
+    // (l3_outlier, l4_probe, l5_plan, per_layer_error). The row-level data
+    // stays in NDJSON / parquet; only the per-tensor summary fields land in
+    // DuckDB so the C++ side can join against them in the GA warm-start /
+    // L5 requant fixup path. model_hash + name joins back to tensor_stats.
+    "CREATE TABLE IF NOT EXISTS l3_outlier_summary (\n"
+    "    model_hash        TEXT NOT NULL,\n"
+    "    name              TEXT NOT NULL,\n"
+    "    layer             INTEGER,\n"
+    "    sidecar_label     TEXT,\n"
+    "    outlier_count     BIGINT,\n"
+    "    outlier_fraction  DOUBLE,\n"
+    "    max_abs           DOUBLE,\n"
+    "    rms               DOUBLE,\n"
+    "    updated_at        TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, name, sidecar_label)\n"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS l4_probe_summary (\n"
+    "    model_hash        TEXT NOT NULL,\n"
+    "    name              TEXT NOT NULL,\n"
+    "    layer             INTEGER,\n"
+    "    current_qtype     TEXT,\n"
+    "    mse               DOUBLE,\n"
+    "    mse_minus_one     DOUBLE,\n"
+    "    perplexity        DOUBLE,\n"
+    "    top1_mismatch     DOUBLE,\n"
+    "    n_weights         BIGINT,\n"
+    "    updated_at        TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, name)\n"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS l5_plan_summary (\n"
+    "    model_hash        TEXT NOT NULL,\n"
+    "    name              TEXT NOT NULL,\n"
+    "    layer             INTEGER,\n"
+    "    iteration         INTEGER,\n"
+    "    plan_id           TEXT,\n"
+    "    sensitivity_score DOUBLE,\n"
+    "    recommended_qtype TEXT,\n"
+    "    recommended_alpha DOUBLE,\n"
+    "    recommended_clip  DOUBLE,\n"
+    "    updated_at        TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS per_layer_error_summary (\n"
+    "    model_hash        TEXT NOT NULL,\n"
+    "    name              TEXT NOT NULL,\n"
+    "    layer             INTEGER,\n"
+    "    epsilon           DOUBLE,\n"
+    "    reference_qtype   TEXT,\n"
+    "    updated_at        TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, name)\n"
+    ");\n"
     "CREATE INDEX IF NOT EXISTS idx_ga_results_family\n"
     "    ON ga_results(family, best_composite DESC);\n"
     "CREATE INDEX IF NOT EXISTS idx_ga_eval_tensor\n"
     "    ON ga_evaluations(run_id, tensor_name);\n"
     "CREATE INDEX IF NOT EXISTS idx_tensors_family\n"
-    "    ON tensors(run_id, family);\n";
+    "    ON tensors(run_id, family);\n"
+    "CREATE INDEX IF NOT EXISTS idx_tensor_stats_family\n"
+    "    ON tensor_stats(model_hash, family);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l3_outlier_model\n"
+    "    ON l3_outlier_summary(model_hash, layer);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l4_probe_model\n"
+    "    ON l4_probe_summary(model_hash, layer);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l5_plan_model\n"
+    "    ON l5_plan_summary(model_hash, layer);\n"
+    "CREATE INDEX IF NOT EXISTS idx_per_layer_error_model\n"
+    "    ON per_layer_error_summary(model_hash, layer);\n";
 
 // DuckDB escapes single quotes by doubling them. Sufficient for run_id,
 // model_path, family, etc. (no LIKE / backslash semantics in DuckDB strings).
