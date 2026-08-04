@@ -123,8 +123,11 @@ add_library(${TARGET}
     )
 
 if (APPLE)
-    target_sources(${TARGET} PRIVATE ane-mtp.mm ane-mtp.h)
+    target_sources(${TARGET} PRIVATE
+        ane-mtp.mm ane-mtp.h
+        ane-pump.mm ane-pump.h)
     set_source_files_properties(ane-mtp.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(ane-pump.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(${TARGET} PRIVATE "-framework CoreML" "-framework Foundation" "-framework IOSurface")
 endif()
 

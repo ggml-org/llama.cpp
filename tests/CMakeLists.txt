@@ -446,6 +446,19 @@ if (APPLE)
             )
         endif()
     endif()
+    # E-core pump state machine unit test. Lock-free SPSC across
+    # 1000 single-thread cycles and 10000 cross-thread cycles.
+    # No real Core ML required: the noop_submit callback verifies
+    # the state transitions without invoking the model. The
+    # submit_fn / common_ane_mtp_program / common_ane_compute_instance
+    # types are C++ forward-declared so the test can compile
+    # without the full program header (the test casts to the
+    # forward-declared types; the noop_submit doesn't dereference).
+    llama_build_and_test(test-ane-pump.cpp)
+    if (TARGET test-ane-pump)
+        target_link_libraries(test-ane-pump PRIVATE
+                              llama-common)
+    endif()
     # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
     llama_build(test-ane-matmul-w1-dispatch.cpp)
     if (TARGET test-ane-matmul-w1-dispatch)

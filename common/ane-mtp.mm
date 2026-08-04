@@ -1,5 +1,6 @@
 #include "ane-mtp.h"
 
+#include "ane-pump.h"
 #include "ane-state-layout.h"
 
 #include "ggml.h"
@@ -44,6 +45,16 @@ struct common_ane_compute_instance {
     std::string role;
     uint32_t bucket = 0;
     std::atomic<bool> warm = false;
+    // W6: per-function E-core pump. One pump per multifunction
+    // function. The pump is initialized when the function is
+    // registered at load time; the dispatch path drives the
+    // state machine via ane_pump_run (or the host signals via
+    // ane_pump_signal_input_ready). The E-core pinning is a
+    // follow-on; today the pump is driven on whatever thread
+    // ane_pump_run is called from.
+    common_ane_pump pump;
+    // True once pump has been initialized.
+    bool pump_ready = false;
 };
 
 struct common_ane_prefill_request {
@@ -1277,6 +1288,30 @@ static common_ane_mtp_program_ptr common_ane_program_load(
                     function_name.c_str()));
                 if (!instance->warm.load()) {
                     continue;
+                }
+                // W6.1: initialize the per-function E-core pump.
+                // The pump drives the lock-free state machine
+                // (IDLE -> INPUT_READY -> ANE_BUSY -> OUTPUT_READY
+                // -> IDLE) for this function. The pump's
+                // input_slot_ids and output_slot_ids are
+                // resolved from the manifest here so the pump
+                // doesn't need to look them up on every
+                // transition. When the manifest is absent, the
+                // pump is left in a default-initialized state
+                // (state == IDLE, no slot ids) and is not used
+                // (the load path returns false if no manifest
+                // would have made it to the dispatch anyway).
+                if (program->manifest_loaded) {
+                    for (uint32_t fi = 0;
+                            fi < program->manifest.n_functions; ++fi) {
+                        if (std::strcmp(
+                                program->manifest.functions[fi].name,
+                                function_name.c_str()) == 0) {
+                            instance->pump_ready = ane_pump::init(
+                                instance->pump, program->manifest, fi);
+                            break;
+                        }
+                    }
                 }
                 LOG_INF("loaded and warmed embedded ANE %s function %s\n",
                         role.c_str(), function_name.c_str());
