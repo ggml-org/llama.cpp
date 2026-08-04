@@ -5037,6 +5037,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
+    // Workstream B: --spec-adaptive is a convenience wrapper that sets
+    // the type to DRAFT_ADAPTIVE.  The 4 per-drafter ctx_dft slots are
+    // not set by this flag -- they must be wired by the caller via
+    // params.speculative.adaptive.{ctx_dft_mtp, ctx_dft_dflash, ...}
+    // (typically from common_speculative_init_from_params when
+    // Workstream A's embedded-drafter loader is in place).  Without
+    // the ctx_dft slots the muxer will report "no active children" and
+    // the call is a no-op (no draft will be produced).
+    add_opt(common_arg(
+        {"--spec-adaptive"},
+        string_format("enable the ADAPTIVE muxer (Workstream B): run all 4 embedded "
+                "drafters (MTP, DFlash, DSPark, Eagle3) per step and let the verifier "
+                "arbitrate the longest accepted prefix.  The 4 per-drafter ctx_dft "
+                "slots must be wired by the caller; this flag is equivalent to "
+                "`--spec-type draft-adaptive`.\n"),
+        [](common_params & params) {
+            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_ADAPTIVE);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_ADAPTIVE"));
     add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
