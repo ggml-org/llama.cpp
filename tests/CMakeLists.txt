@@ -384,6 +384,17 @@ if (APPLE)
                               "-framework Foundation"
                               "-framework Metal")
     endif()
+    # Dispatch API test: cross-timeline CPU <-> Metal coordination
+    # through MTLSharedEvent + IOSurface (the lock-free dispatch
+    # primitive end-to-end).
+    llama_build(test-ane-metal-dispatch.mm)
+    if (TARGET test-ane-metal-dispatch)
+        target_link_libraries(test-ane-metal-dispatch PRIVATE
+                              ggml ggml-base
+                              "-framework Foundation"
+                              "-framework Metal"
+                              "-framework IOSurface")
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")

@@ -126,3 +126,21 @@ GGML_BACKEND_API void * ggml_mtl_shared_event_get_mtl_event(ggml_mtl_shared_even
     }
     return (__bridge void *) event->mtl_event;
 }
+
+GGML_BACKEND_API void ggml_mtl_shared_event_encode_wait(
+        ggml_mtl_shared_event_t event, void * cmd_buf, uint64_t value) {
+    if (!event || !cmd_buf) {
+        return;
+    }
+    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>) cmd_buf;
+    [cb encodeWaitForEvent:event->mtl_event value:value];
+}
+
+GGML_BACKEND_API void ggml_mtl_shared_event_encode_signal(
+        ggml_mtl_shared_event_t event, void * cmd_buf, uint64_t value) {
+    if (!event || !cmd_buf) {
+        return;
+    }
+    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>) cmd_buf;
+    [cb encodeSignalEvent:event->mtl_event value:value];
+}

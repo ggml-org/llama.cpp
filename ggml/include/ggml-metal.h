@@ -109,6 +109,40 @@ GGML_BACKEND_API uint64_t ggml_mtl_shared_event_get_value(ggml_mtl_shared_event_
 // the event is freed.
 GGML_BACKEND_API void * ggml_mtl_shared_event_get_mtl_event(ggml_mtl_shared_event_t event);
 
+//
+// Dispatch API: tie events to a Metal command buffer.
+//
+// The dispatch layer composes lock-free CPU/Metal/ANE handoffs. The
+// pattern: the producer (a Metal kernel, an ANE dispatch, or a CPU
+// write) signals a shared event after it publishes to its output
+// IOSurface slot. The consumer encodes a wait for that event value
+// into its own command buffer (Metal) or a CPU-side spin (ANE leg).
+//
+// `cmd_buf` is an opaque `MTLCommandBuffer*` obtained from a Metal
+// backend. The dispatch helpers are the only sanctioned way to
+// encode a wait/signal on a shared event; callers should not call
+// the underlying Metal APIs directly because the helpers also
+// record the wait/signal for the dispatch planner's bookkeeping.
+//
+
+// Encode a wait for `value` into the Metal command buffer `cmd_buf`.
+// Consumer-side: call this BEFORE the consumer's work. The command
+// buffer's execution will block on the GPU timeline until the event
+// reaches `value`.
+GGML_BACKEND_API void ggml_mtl_shared_event_encode_wait(
+        ggml_mtl_shared_event_t event,
+        void * cmd_buf,
+        uint64_t value);
+
+// Encode a signal at `value` into the Metal command buffer `cmd_buf`.
+// Producer-side: call this AFTER the producer's work. The signal
+// is committed when the command buffer reaches this point in its
+// execution.
+GGML_BACKEND_API void ggml_mtl_shared_event_encode_signal(
+        ggml_mtl_shared_event_t event,
+        void * cmd_buf,
+        uint64_t value);
+
 #ifdef __cplusplus
 }
 #endif
