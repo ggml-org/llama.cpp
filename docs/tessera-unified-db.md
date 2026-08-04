@@ -38,8 +38,8 @@ USING (model_hash, name)` instead of three hand-written parsers.
 | **`l4_probe_summary`** | 1 per tensor | Python (analytics) | L4 E2E probe (mse, perplexity, top1_mismatch). |
 | **`l4_plan_outcome`** | 1 per (tensor, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
 | **`l5_plan_summary`** | 1 per (tensor, iteration, plan_id) | Python (l5_orchestrator) | L5 requant plan (sensitivity_score, recommended_alpha, recommended_clip). |
-| **`l5_outcome`** | 1 per (tensor, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score (a running measure of how well the orchestrator's sensitivity scoring predicts the actual error delta). |
-| **`l5_weights`** | 1 per (model, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db`, closing the loop. |
+| **`l5_outcome`** | 1 per (tensor, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score (a running measure of how well the orchestrator's sensitivity scoring predicts the actual error delta). Phase 14: also carries the per-tensor components `imatrix_magnitude`, `gradient_proxy`, `layer_position_prior` (all nullable) so a future retune can fit a 3-coefficient model. |
+| **`l5_weights`** | 1 per (model, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db`, closing the loop. Phase 14: also carries `requant_budget_bits` (nullable) — the dispatch-side budget the retune recommends for the next requant pass. |
 | **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. |
 
 The 7 bolded tables are the additions on top of the existing
@@ -195,8 +195,8 @@ last one wins (CLI ordering convention).
 |---|---|---|
 | C++ schema | `tools/quantize/tessera/tessera-quantize-db.{h,cpp}` | Owns the schema (CREATE TABLE IF NOT EXISTS) and the typed insert helpers. `--tessera-db PATH` opens or creates the file. |
 | C++ buffer | `tools/quantize/tessera/tessera-db-buffer.{h,cpp}` | MPSC write buffer with count + time + explicit flush triggers and sync-on-exit. |
-| C++ dispatch | `tools/quantize/tessera/tessera-dispatch.cpp` | The dispatch opens two buffers (`ga_evaluations` + `l4_plan_outcome`); the eval_recorder + L5 loop push rows into them. The GA-prep walk also upserts into `tensor_stats` via `ts_quantize_db_upsert_tensor_stat`. |
-| C++ tests | `tools/quantize/tessera/test_db_buffer.cpp`, `tools/quantize/tessera/test_quantize_db.cpp` | 8 + 6 cases. |
+| C++ dispatch | `tools/quantize/tessera/tessera-dispatch.cpp` | The dispatch opens two buffers (`ga_evaluations` + `l4_plan_outcome`); the eval_recorder + L5 loop push rows into them. The GA-prep walk also upserts into `tensor_stats` via `ts_quantize_db_upsert_tensor_stat`. Phase 14: pre-loads `l5_weights` for the GA's `family_seed_lookup` warm-start; the L5 loop's early-exit consults `l5_outcome` for the converged-fast gate. |
+| C++ tests | `tools/quantize/tessera/test_db_buffer.cpp`, `tools/quantize/tessera/test_quantize_db.cpp`, `tools/quantize/tessera/test_l5_dispatch.cpp` | 8 + 6 + 35 cases. |
 | Python buffer | `tools/tessera/tessera_db_buffer.py` | Python mirror; same contract. |
 | Python unified | `tools/tessera/tessera_db.py` | High-level API (`TesseraDB` class) that owns the DuckDB connection + per-table buffers. Typed helpers per summary table. |
 | Python l5_outcome | `tools/tessera/l5_outcome.py` | The feedback-loop consumer. Joins `l5_plan_summary` and `l4_plan_outcome`, computes `delta_mse` + `plan_accepted` + per-(model, family) `residual`, writes `l5_outcome`. |
@@ -361,25 +361,49 @@ python3 tools/tessera/l5_orchestrator.py \
   (direct `INSERT ... ON CONFLICT DO UPDATE`, like
   `tensor_stats`). 15 Python tests + 1 new C++ test
   case.
+- **Phase 13:** (skipped — Phase 12 already includes the
+  close-the-loop work; the candidate commit was merged
+  into Phase 12.)
+- **Phase 14 (this commit):** C++ side of the feedback
+  loop. Schema additions: `l5_weights.requant_budget_bits
+  BIGINT` (nullable) + `l5_outcome.{imatrix_magnitude,
+  gradient_proxy, layer_position_prior}` (nullable).
+  C++ API: `ts_tessera_db_list_l5_weights` typed reader,
+  `ts_tessera_db_l5_outcome_stats_for` per-(model,
+  family) hit_rate aggregate, `ts_tessera_db_test_insert_l5_outcome`
+  test-only INSERT helper. Dispatch wiring: `ts_dispatch_db_open`
+  pre-loads `l5_weights` into `l5_weight_map`;
+  `ts_dispatch_family_seed_lookup` consumes it as the
+  primary warm-start source ahead of the legacy
+  `ga_results` lookup (hit_rate > 0.5 -> alpha/clip
+  biased up). L5 loop: `ts_dispatch_run_l5_loop` gains a
+  converged-fast early-exit at the top of each gen
+  (gen >= 1) — when `l5_outcome` hit_rate > 0.95 the
+  loop breaks before the L2 measurement; the report
+  JSON carries a `converged_fast=true` marker. Tests:
+  `test_quantize_db` round-trip on the new field + the
+  two new readers; `test_l5_dispatch` end-to-end
+  warm-start + converged-fast coverage (synthetic
+  l5_outcome row -> loop exits one generation early).
 
 ## Open follow-ups (after this commit)
 
-The unified-DB feedback loop is now feature-complete: the
-producer side (`l4_plan_outcome` + `l5_plan_summary`) is in
-production, the consumer side (`l5_outcome` + `l5_weights`) is
-in production, and the closed-loop wiring
-(`--retune-from-db`) is in production. The remaining items
-are about extending the loop, not about adding the next leg.
+The unified-DB feedback loop is now feature-complete on both
+the producer and consumer sides. Phase 14 closed the three
+remaining follow-ups from this section (the C++ warm-start,
+the C++ converged-fast early-exit, and the `l5_outcome`
+per-tensor component columns). New items that have surfaced
+during Phase 14 work are tracked below.
 
-- Per-tensor component storage in `l5_outcome`. Currently
-  the retune fits a 2-coefficient OLS (intercept + slope on
-  the combined `sensitivity_score`); if we stored
-  per-tensor `imatrix_magnitude`, `gradient_proxy`, and
-  `layer_position_prior` in `l5_outcome`, the retune could
-  fit a 3-coefficient model and isolate which component
-  drives the miscalibration per family. Schema change; the
-  orchestrator's `write_history` would need to start
-  populating the per-component columns (currently NaN).
+- Per-tensor component storage in `l5_outcome` (DONE in
+  Phase 14). The schema now carries nullable
+  `imatrix_magnitude`, `gradient_proxy`,
+  `layer_position_prior` columns. The C++ side does not
+  populate them (the orchestrator's `write_history` is the
+  production writer); the C++ reader accepts them. A
+  retune that fits a 3-coefficient model per (model,
+  family) is now possible without a follow-up schema
+  change.
 - Cross-model retune. `l5_weights` is keyed by
   `(model_hash, family)`, so a new model starts from the
   base weights. A second pass could add a global
@@ -387,8 +411,128 @@ are about extending the loop, not about adding the next leg.
   across-model n_samples-weighted mean; the orchestrator
   would warm-start new models from that.
 - GA-prep walk: read `l5_weights` to bias the GA's
-  initialization for the families the retune flagged as
-  miscalibrated. This is the C++ consumer side; the
-  dispatch would call `ts_tessera_db_list_l5_weights` at
-  `ts_dispatch_db_open` time and thread the per-family
-  weights into the GA's seed-generation.
+  initialization (DONE in Phase 14). The dispatch's
+  `ts_dispatch_db_open` pre-loads `l5_weights` into a
+  per-family registry; the GA's `family_seed_lookup`
+  hook consumes it as the primary warm-start source
+  (ahead of the legacy `ga_results` lookup). The bias
+  rule: `hit_rate > 0.5` -> alpha 25% higher and clip
+  20% higher than the 0.5/0.7 base; otherwise the base.
+- Converged-fast early-exit in the L5 adaptive loop
+  (DONE in Phase 14). When `l5_outcome` has rows for
+  the model with `hit_rate > 0.95`, the l5 loop breaks
+  before the L2 measurement on `gen >= 1`. The first
+  generation still runs (to seed `l4_outcome` rows);
+  the early-exit fires from the second onward. The
+  report JSON carries a `converged_fast=true` marker
+  with the `hit_rate` and `n_rows` the dispatch saw.
+
+## Phase 14 (this commit)
+
+Phase 14 closes the C++ side of the feedback loop. The
+retune's per-(model, family) `(w_imatrix, w_gradient,
+w_layer)` and `hit_rate` now feed the dispatch's GA warm-start,
+and the orchestrator's `l5_outcome` verdict drives a
+converged-fast early-exit in the L5 adaptive requantize loop.
+All schema changes are additive; existing rows remain
+readable.
+
+### Schema additions (additive)
+
+- `l5_weights.requant_budget_bits BIGINT` (nullable).
+  The dispatch-side budget the orchestrator's
+  `l5_retune` recommends for this family in the next
+  requant pass; computed by `l5_retune.py` as
+  `total_storage * (1 - hit_rate) *
+  base_budget_fraction` and NULL when the family has
+  too few samples to project a budget. The dispatch
+  currently reads it for forward-compatibility but
+  does not act on the value yet; the column is here
+  so the producer/consumer agree on the schema. C++
+  uses a `-1` sentinel for NULL; the upsert SQL
+  emits the literal `NULL` token when the field is
+  set to `-1`.
+- `l5_outcome.imatrix_magnitude DOUBLE` (nullable).
+- `l5_outcome.gradient_proxy DOUBLE` (nullable).
+- `l5_outcome.layer_position_prior DOUBLE`
+  (nullable). The orchestrator's `write_history`
+  path populates these so the retune can fit a
+  3-coefficient model and isolate which component
+  drives the miscalibration per family. The C++
+  side reads but does not write them; the columns
+  are nullable so the pre-emptive schema change
+  stays additive.
+
+### C++ API additions
+
+- `ts_tessera_db_l5_weight::requant_budget_bits`
+  (default `-1` = NULL). Mirrors the new schema
+  column.
+- `ts_tessera_db_list_l5_weights(db, model_hash,
+  family_or_empty, &out)`. Typed reader that
+  returns one entry per `(model, family)` row,
+  ordered by `hit_rate DESC`. Empty `family` means
+  "all families for this model_hash". Mirrors
+  `ts_tessera_db_list_converged_for_model`.
+- `ts_tessera_db_l5_outcome_stats_for(db,
+  model_hash, family_or_empty, &out)`. Per-(model,
+  family) `hit_rate` / `n_rows` aggregate over
+  `l5_outcome`. The C++ aggregation is built from
+  two `COUNT(*) FILTER (WHERE ...)` calls because
+  the DuckDB amalgamation in this build does not
+  load the `core_functions` extension (so `SUM` /
+  `AVG` are unavailable); `hit_rate` is the C++
+  ratio of the two counts.
+- `ts_tessera_db_test_insert_l5_outcome(db, row)`
+  (test-only). The `l5_outcome` table is normally
+  Python-written; this C++ helper lets the
+  converged-fast test populate it without
+  round-tripping through Python. The 3 per-tensor
+  component columns are emitted as `NULL` when
+  passed 0 (the C++ test path is round-trip only).
+
+### Dispatch wiring
+
+- `ts_dispatch_db` gains a `l5_weight_map`
+  (`unordered_map<family, entry>`). Populated at
+  `ts_dispatch_db_open` via
+  `ts_tessera_db_list_l5_weights`; the dispatch
+  logs the loaded entries when `verbose` is on.
+- `ts_dispatch_family_seed_lookup` now consults
+  `l5_weight_map` first: if the family has a row,
+  the seed is biased by `hit_rate` (alpha 0.5 +
+  0.25*hit_rate, clip 0.7 + 0.20*hit_rate when
+  `hit_rate > 0.5`; base 0.5/0.7 otherwise). The
+  legacy `ga_results` lookup is the fallback for
+  families with no `l5_weight` row.
+- `ts_dispatch_run_l5_loop` gains a converged-fast
+  early-exit at the top of each generation
+  (`gen >= 1`): if `l5_outcome` has rows for the
+  model with `hit_rate > 0.95`, the loop logs +
+  breaks before the L2 measurement. The first
+  generation always runs (to seed `l4_outcome`
+  rows); the early-exit fires from the second
+  onward. The report JSON carries a
+  `converged_fast=true` marker with the `hit_rate`
+  and `n_rows` the dispatch saw.
+
+### Tests
+
+- `test_quantize_db`: round-trip for
+  `requant_budget_bits` (NULL via `-1` sentinel,
+  real value, zero edge case, untouched row stays
+  NULL), `ts_tessera_db_list_l5_weights` (empty
+  family = all, non-empty = single, unknown
+  model/family = empty, ordering by `hit_rate
+  DESC`), `ts_tessera_db_l5_outcome_stats_for`
+  (empty case).
+- `test_l5_dispatch`: end-to-end warm-start
+  coverage (pre-populate `l5_weights` for both
+  fixture families, re-run the dispatch with
+  `--tessera-db`, verify the dispatch completed and
+  the warm-start path didn't break the pipeline);
+  end-to-end converged-fast coverage (pre-populate
+  10 `l5_outcome` rows with `hit_rate=1.0`, re-run
+  the dispatch with `l5_max_generations=4`, verify
+  the loop produced exactly one
+  `converged_fast=true` marker and broke early).
