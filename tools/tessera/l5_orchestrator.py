@@ -1262,6 +1262,32 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Existing calibration policy to mutate when --apply is set",
     )
+    parser.add_argument(
+        "--retune-from-db",
+        default=None,
+        type=Path,
+        help=(
+            "Path to the unified tessera.duckdb file. When given, the "
+            "orchestrator reads the per-(model, family) l5_weights "
+            "rows written by tools/tessera/l5_retune.py and uses "
+            "the n_samples-weighted average as the starting "
+            "(w_imatrix, w_gradient, w_layer) tuple. This is the "
+            "consumer half of the feedback loop: the previous "
+            "generation's residual determines this generation's "
+            "weights. Requires --model-hash (the l5_weights rows "
+            "are keyed by model_hash)."
+        ),
+    )
+    parser.add_argument(
+        "--model-hash",
+        default=None,
+        help=(
+            "model_hash for the --retune-from-db lookup. Default "
+            "None = the weights are not loaded from the DB even "
+            "if --retune-from-db is set (the per-model keying is "
+            "required for a meaningful retune)."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -1272,9 +1298,53 @@ def main(argv: list[str] | None = None) -> int:
     l4_report = _read_l4_report(args.l4_report)
     imatrix = _read_imatrix(args.imatrix)
 
+    # Weight resolution. The base weights come from the
+    # --w-imatrix / --w-gradient / --w-layer flags. The
+    # --retune-from-db flag, when paired with --model-hash,
+    # overrides the flags with the n_samples-weighted
+    # average of the l5_weights rows for the model. This is
+    # the consumer half of the "did this requant plan reduce
+    # error?" feedback loop: the previous generation's
+    # residual determines this generation's weights.
+    w_im, w_grad, w_layer = (
+        args.w_imatrix, args.w_gradient, args.w_layer,
+    )
+    retune_source = None
+    if args.retune_from_db is not None:
+        if args.model_hash is None:
+            raise ValueError(
+                "--retune-from-db requires --model-hash; the l5_weights "
+                "rows are keyed by model_hash, and a model-less lookup "
+                "would silently mix recommendations across models."
+            )
+        # Local import to keep the top of this module light; the
+        # l5_retune module pulls polars + duckdb at import time.
+        from l5_retune import aggregate_weights, read_l5_weights
+        weights_df = read_l5_weights(
+            args.retune_from_db, model_hash=args.model_hash,
+        )
+        if weights_df.height == 0:
+            print(
+                f"WARN: --retune-from-db {args.retune_from_db} has no "
+                f"l5_weights for model_hash={args.model_hash!r}; using "
+                f"the --w-* flag values",
+                file=sys.stderr,
+            )
+        else:
+            w_im, w_grad, w_layer = aggregate_weights(
+                weights_df,
+                base_weights=(args.w_imatrix, args.w_gradient, args.w_layer),
+            )
+            retune_source = str(args.retune_from_db)
+            print(
+                f"[l5] retune-from-db: {weights_df.height} family row(s) "
+                f"-> w=({w_im:.3f}, {w_grad:.3f}, {w_layer:.3f})",
+                file=sys.stderr,
+            )
+
     scorer = SensitivityScorer(
         decay=args.ema_decay,
-        weights=(args.w_imatrix, args.w_gradient, args.w_layer),
+        weights=(w_im, w_grad, w_layer),
         total_layers=args.total_layers,
     )
     planner = RequantPlanner(
@@ -1325,6 +1395,8 @@ def main(argv: list[str] | None = None) -> int:
         "actions": [a.to_dict() for a in last.actions],
         "storage_before_bits": last.storage_before_bits,
         "storage_after_bits": last.storage_after_bits,
+        "weights": list(scorer.weights),
+        "retune_source": retune_source,
         "policy": str(args.policy) if args.policy else None,
         "history": str(args.history) if args.history else None,
     }

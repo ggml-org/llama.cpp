@@ -367,6 +367,37 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    updated_at            TIMESTAMP,\n"
     "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
     ");\n"
+    // ---- l5_weights: per-(model, family) retuned scoring weights (additive) ----
+    // Written by tools/tessera/l5_retune.py from a closed-form OLS fit
+    // of delta_mse on sensitivity_score per (model, family) group in
+    // l5_outcome. The retune is the "did this plan reduce error?"
+    // feedback loop's consumer: the orchestrator's next generation
+    // reads l5_weights and uses the recommended
+    // (w_imatrix, w_gradient, w_layer) as the starting point for
+    // SensitivityScorer, closing the loop.
+    //
+    // PRIMARY KEY (model_hash, family) so the upsert target is per
+    // (model, family). bias is the OLS intercept (the constant in
+    // delta_mse = a + b*sensitivity_score); in_sample_loss is the
+    // mean absolute residual after the fit, an "are these weights
+    // any good" signal for the next retune. n_samples is the count
+    // of l5_outcome rows that fed the fit; updated_at is the wall
+    // clock. retune_source records which retune algorithm produced
+    // the row ("ols_slope_v1" is the current production algorithm).
+    "CREATE TABLE IF NOT EXISTS l5_weights (\n"
+    "    model_hash            TEXT NOT NULL,\n"
+    "    family                TEXT NOT NULL,\n"
+    "    w_imatrix             DOUBLE NOT NULL,\n"
+    "    w_gradient            DOUBLE NOT NULL,\n"
+    "    w_layer               DOUBLE NOT NULL,\n"
+    "    bias                  DOUBLE,\n"
+    "    n_samples             INTEGER,\n"
+    "    in_sample_loss        DOUBLE,\n"
+    "    hit_rate              DOUBLE,\n"
+    "    retune_source         TEXT,\n"
+    "    updated_at            TIMESTAMP,\n"
+    "    PRIMARY KEY (model_hash, family)\n"
+    ");\n"
     "CREATE INDEX IF NOT EXISTS idx_ga_results_family\n"
     "    ON ga_results(family, best_composite DESC);\n"
     "CREATE INDEX IF NOT EXISTS idx_ga_eval_tensor\n"
@@ -386,7 +417,9 @@ static const char * TS_QDB_SCHEMA_SQL =
     "CREATE INDEX IF NOT EXISTS idx_l4_outcome_model\n"
     "    ON l4_plan_outcome(model_hash, layer);\n"
     "CREATE INDEX IF NOT EXISTS idx_l5_outcome_model\n"
-    "    ON l5_outcome(model_hash, family, plan_accepted);\n";
+    "    ON l5_outcome(model_hash, family, plan_accepted);\n"
+    "CREATE INDEX IF NOT EXISTS idx_l5_weights_model\n"
+    "    ON l5_weights(model_hash);\n";
 
 // DuckDB escapes single quotes by doubling them. Sufficient for run_id,
 // model_path, family, etc. (no LIKE / backslash semantics in DuckDB strings).
@@ -745,6 +778,60 @@ int ts_tessera_db_upsert_tensor_stat(
         return 1;
     } catch (...) {
         if (err) *err = "upsert_tensor_stat failed: unknown exception";
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// L5 weights upsert: per-(model, family) retuned scoring weights
+// ---------------------------------------------------------------------------
+
+int ts_tessera_db_upsert_l5_weight(
+    ts_tessera_db * db,
+    const ts_tessera_db_l5_weight & row,
+    std::string * err) {
+    if (db == nullptr || db->conn == nullptr) return 0;
+    // PRIMARY KEY (model_hash, family). The ON CONFLICT DO UPDATE
+    // clause overwrites every column on a re-write. retune_source
+    // is updated to the current writer's tag so the consumer can
+    // tell which algorithm produced the row.
+    std::ostringstream q;
+    q << "INSERT INTO l5_weights (model_hash, family, "
+         "w_imatrix, w_gradient, w_layer, bias, n_samples, "
+         "in_sample_loss, hit_rate, retune_source, updated_at) VALUES ("
+      << "'" << sql_escape(row.model_hash) << "', "
+      << "'" << sql_escape(row.family) << "', "
+      << row.w_imatrix << ", "
+      << row.w_gradient << ", "
+      << row.w_layer << ", "
+      << row.bias << ", "
+      << row.n_samples << ", "
+      << row.in_sample_loss << ", "
+      << row.hit_rate << ", "
+      << "'" << sql_escape(row.retune_source) << "', "
+      << ts_now_ts()
+      << ") ON CONFLICT (model_hash, family) DO UPDATE SET "
+         "w_imatrix=excluded.w_imatrix, "
+         "w_gradient=excluded.w_gradient, "
+         "w_layer=excluded.w_layer, "
+         "bias=excluded.bias, "
+         "n_samples=excluded.n_samples, "
+         "in_sample_loss=excluded.in_sample_loss, "
+         "hit_rate=excluded.hit_rate, "
+         "retune_source=excluded.retune_source, "
+         "updated_at=excluded.updated_at";
+    try {
+        auto res = db->conn->Query(q.str());
+        if (res->HasError()) {
+            if (err) *err = "upsert_l5_weight failed: " + res->GetError();
+            return 1;
+        }
+    } catch (const std::exception & e) {
+        if (err) *err = std::string("upsert_l5_weight failed: ") + e.what();
+        return 1;
+    } catch (...) {
+        if (err) *err = "upsert_l5_weight failed: unknown exception";
         return 1;
     }
     return 0;

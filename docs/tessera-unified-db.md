@@ -39,6 +39,7 @@ USING (model_hash, name)` instead of three hand-written parsers.
 | **`l4_plan_outcome`** | 1 per (tensor, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
 | **`l5_plan_summary`** | 1 per (tensor, iteration, plan_id) | Python (l5_orchestrator) | L5 requant plan (sensitivity_score, recommended_alpha, recommended_clip). |
 | **`l5_outcome`** | 1 per (tensor, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score (a running measure of how well the orchestrator's sensitivity scoring predicts the actual error delta). |
+| **`l5_weights`** | 1 per (model, family) | Python (`tools/tessera/l5_retune.py`) | **The feedback-loop consumer.** Per-(model, family) retuned `(w_imatrix, w_gradient, w_layer)` on the simplex. Computed by `l5_retune.py` from a per-(model, family) closed-form OLS of `delta_mse` on `sensitivity_score` and projected to the simplex. The orchestrator's next generation reads this table via `--retune-from-db`, closing the loop. |
 | **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. |
 
 The 7 bolded tables are the additions on top of the existing
@@ -96,15 +97,41 @@ Python l5_orchestrator        │
     l5_plan_summary ──────────┴────────► l5_outcome.py ─────► l5_outcome
                                                                      │
                                                                      ▼
-                                                              hit_rate + residual
-                                                              (orchestrator retuning)
+                                                              l5_retune.py
+                                                              (per-family OLS)
+                                                                     │
+                                                                     ▼
+                                                                l5_weights
+                                                                     │
+                                                                     ▼
+                                              l5_orchestrator --retune-from-db
+                                              (closes the loop)
 ```
 
-The orchestrator can read `l5_outcome.residual` at the start of
-its next generation and use the residual to retune the
-sensitivity scoring weights, closing the loop. That's a
-follow-up; the current commit lands the producer + consumer
-infrastructure and the metrics.
+The retune is the loop's second consumer (`l5_retune.py`). For
+each (model, family) in `l5_outcome`, it fits a closed-form
+OLS `delta_mse = a + b * sensitivity_score`, then projects the
+result onto the (w_imatrix, w_gradient, w_layer) simplex:
+
+* `b > 0` + low hit rate -> shift mass from `w_imatrix` to
+  `w_gradient` (the imatrix signal is leading the orchestrator
+  astray for this family).
+* `b < 0` + low hit rate -> shift mass from `w_gradient` to
+  `w_imatrix` (the imatrix is correctly identifying the
+  sensitive tensors, and those tensors are being protected;
+  amplify the signal that drove it).
+* `hit_rate = 1.0` -> gate=0, no shift (the orchestrator is
+  working for this family; don't fix it).
+* `n < min_samples` (default 3) -> skip; the OLS is too noisy.
+
+The shifted weights are projected to the simplex
+(non-negative, sum=1) and written to `l5_weights` with
+PRIMARY KEY `(model_hash, family)`. The orchestrator's next
+generation reads the table back via `--retune-from-db` and
+uses the n_samples-weighted average across families as the
+starting `(w_imatrix, w_gradient, w_layer)` tuple. This is
+the closed-loop optimization the feedback loop was designed
+for.
 
 ## The write buffer pattern
 
@@ -173,8 +200,10 @@ last one wins (CLI ordering convention).
 | Python buffer | `tools/tessera/tessera_db_buffer.py` | Python mirror; same contract. |
 | Python unified | `tools/tessera/tessera_db.py` | High-level API (`TesseraDB` class) that owns the DuckDB connection + per-table buffers. Typed helpers per summary table. |
 | Python l5_outcome | `tools/tessera/l5_outcome.py` | The feedback-loop consumer. Joins `l5_plan_summary` and `l4_plan_outcome`, computes `delta_mse` + `plan_accepted` + per-(model, family) `residual`, writes `l5_outcome`. |
+| Python l5_retune | `tools/tessera/l5_retune.py` | The retune (closed-loop) consumer. Per-(model, family) closed-form OLS of `delta_mse` on `sensitivity_score`, projects to the (w_imatrix, w_gradient, w_layer) simplex, writes `l5_weights`. The orchestrator's `--retune-from-db` reads this table. |
 | Python cal | `tools/tessera/calibration_to_tensor_stats.py` | Reads the per-channel observer parquet, reduces to per-tensor summary, upserts into `tensor_stats` (source = `py_cal`). |
-| Python tests | `tools/tessera/test_tessera_db_buffer.py`, `tools/tessera/test_tessera_db.py`, `tools/tessera/test_l5_outcome.py`, `tools/tessera/test_calibration_to_tensor_stats.py` | 8 + 7 + 5 + 3 cases. |
+| Python l3_outlier | `tools/tessera/l3_outlier_report.py` | The L3 outlier report. `--tessera-db` is the fast path: reads per-tensor summary from `tensor_stats` and produces a conservative 0/1 outlier count tagged `source='tensor_stats_estimate'`. The dequant-sidecar path remains the default. |
+| Python tests | `tools/tessera/test_tessera_db_buffer.py`, `tools/tessera/test_tessera_db.py`, `tools/tessera/test_l5_outcome.py`, `tools/tessera/test_calibration_to_tensor_stats.py`, `tools/tessera/test_l3_outlier_fast_path.py`, `tools/tessera/test_l5_retune.py` | 8 + 7 + 5 + 3 + 4 + 15 cases. |
 
 ## Usage
 
@@ -249,6 +278,32 @@ python3 tools/tessera/l5_outcome.py \
 #             ffn_gate  0.714
 ```
 
+```bash
+# Run the retune (per-(model, family) closed-form OLS on
+# l5_outcome -> l5_weights). Defaults: alpha=0.5,
+# min_samples=3.
+python3 tools/tessera/l5_retune.py \
+    --db tessera.duckdb \
+    --model-hash <hash>
+
+# Pipeline run:
+# l5_weights: wrote 3 row(s), skipped 1 (insufficient
+# samples), of 4 (model, family) group(s)
+
+# Use the retuned weights in the next generation's
+# orchestrator. --retune-from-db reads l5_weights and the
+# n_samples-weighted across-family mean overrides the
+# --w-imatrix / --w-gradient / --w-layer flags.
+python3 tools/tessera/l5_orchestrator.py \
+    --l4-report l4.json \
+    --imatrix imatrix.json \
+    --retune-from-db tessera.duckdb \
+    --model-hash <hash> \
+    --policy out/l5-policy.json
+# [l5] retune-from-db: 3 family row(s) ->
+#       w=(0.420, 0.380, 0.200)
+```
+
 ## Migration status
 
 - **Phase 0 (commits `e90adc4d8` + `b70ec075c`):** schema
@@ -277,27 +332,63 @@ python3 tools/tessera/l5_outcome.py \
   `rms / mean_abs / tail_ratio` (source = `py_cal`). The
   `COALESCE` upsert preserves the other side's columns on
   a subsequent write.
-- **Phase 8 (this commit):** CLI rename. `--tessera-db PATH`
+- **Phase 8 (commit `48f353088`):** CLI rename. `--tessera-db PATH`
   is the new canonical flag; `--quantize-db PATH` is a
   deprecated alias for one release. The internal field
   `tessera_params.tessera_db` and `ts_dispatch_params::
   tessera_db_path` are renamed in lockstep.
+- **Phase 9 (commit `97293385b`):** C type rename. `ts_quantize_db`
+  -> `ts_tessera_db` across 10 files for consistency with
+  the user-facing flag. Mechanical, no behavior change.
+- **Phase 10 (commit `91d904056`):** `--imatrix-tidy <parquet>`
+  join in `calibration_rollup.py` — per-tensor reduction
+  (mean rms / mean_abs / kurtosis, max tail_ratio), prefixed
+  `imatrix.*` columns. The cross-pipeline query now includes
+  the imatrix's per-tensor statistics without a separate
+  tessera.duckdb table.
+- **Phase 11 (commit `3723eee69`):** `l3_outlier_report
+  --tessera-db` fast path. Reads per-tensor summary from
+  `tensor_stats` and produces a conservative 0/1 outlier
+  count tagged `source='tensor_stats_estimate'`. The
+  dequant-sidecar path remains the default. 4 new tests.
+- **Phase 12 (this commit):** feedback loop closes. The
+  retune (`l5_retune.py`) writes per-(model, family)
+  retuned `(w_imatrix, w_gradient, w_layer)` to the new
+  `l5_weights` table; the orchestrator's
+  `--retune-from-db` reads it back. C++ side: schema
+  addition + `ts_tessera_db_upsert_l5_weight` helper
+  mirrored on the Python `TesseraDB.insert_l5_weights`
+  (direct `INSERT ... ON CONFLICT DO UPDATE`, like
+  `tensor_stats`). 15 Python tests + 1 new C++ test
+  case.
 
 ## Open follow-ups (after this commit)
 
-- Wire the orchestrator to consume `l5_outcome.residual` and
-  retune the sensitivity scoring weights in the next
-  generation (the closed-loop optimization the feedback
-  loop was designed for). This is a 1-2 day change in
-  `l5_orchestrator.py::_build_components`.
-- Add a per-(model, family) `--imatrix-tidy <parquet>` join
-  in `calibration_rollup.py` so the cross-pipeline query
-  includes the imatrix's per-tensor statistics without a
-  separate tessera.duckdb table.
-- Move `ts_quantize_db` (the C type name) to `ts_tessera_db`
-  for consistency with the user-facing flag. Mechanical,
-  touches the .h API surface.
-- Wire `l3_outlier` to consume `tensor_stats` (currently the
-  L3 outlier report reads the per-channel observer parquet
-  directly; it could use the per-tensor summary for the
-  fast path and fall back to the parquet for per-channel).
+The unified-DB feedback loop is now feature-complete: the
+producer side (`l4_plan_outcome` + `l5_plan_summary`) is in
+production, the consumer side (`l5_outcome` + `l5_weights`) is
+in production, and the closed-loop wiring
+(`--retune-from-db`) is in production. The remaining items
+are about extending the loop, not about adding the next leg.
+
+- Per-tensor component storage in `l5_outcome`. Currently
+  the retune fits a 2-coefficient OLS (intercept + slope on
+  the combined `sensitivity_score`); if we stored
+  per-tensor `imatrix_magnitude`, `gradient_proxy`, and
+  `layer_position_prior` in `l5_outcome`, the retune could
+  fit a 3-coefficient model and isolate which component
+  drives the miscalibration per family. Schema change; the
+  orchestrator's `write_history` would need to start
+  populating the per-component columns (currently NaN).
+- Cross-model retune. `l5_weights` is keyed by
+  `(model_hash, family)`, so a new model starts from the
+  base weights. A second pass could add a global
+  `(family, w_im, w_grad, w_layer)` row that's the
+  across-model n_samples-weighted mean; the orchestrator
+  would warm-start new models from that.
+- GA-prep walk: read `l5_weights` to bias the GA's
+  initialization for the families the retune flagged as
+  miscalibrated. This is the C++ consumer side; the
+  dispatch would call `ts_tessera_db_list_l5_weights` at
+  `ts_dispatch_db_open` time and thread the per-family
+  weights into the GA's seed-generation.

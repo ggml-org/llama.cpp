@@ -158,6 +158,36 @@ int ts_tessera_db_upsert_tensor_stat(ts_tessera_db * db,
                                      const ts_tessera_db_tensor_stat & row,
                                      std::string * err);
 
+// --- L5 weights: per-(model, family) retuned scoring weights ---
+//
+// The "did this requant plan reduce error?" feedback loop lands
+// its consumer at l5_outcome. The next consumer is l5_retune.py,
+// which fits a closed-form OLS model of delta_mse on
+// sensitivity_score per (model, family) and projects the result
+// onto the (w_imatrix, w_gradient, w_layer) simplex. The
+// orchestrator's next generation reads these weights as the
+// starting point for SensitivityScorer, closing the loop.
+//
+// PRIMARY KEY (model_hash, family). bias is the OLS intercept;
+// n_samples is the count of l5_outcome rows that fed the fit;
+// in_sample_loss is the post-fit mean abs residual. retune_source
+// records which algorithm produced the row.
+struct ts_tessera_db_l5_weight {
+    std::string  model_hash;
+    std::string  family;
+    double       w_imatrix    = 0.0;
+    double       w_gradient   = 0.0;
+    double       w_layer      = 0.0;
+    double       bias         = 0.0;
+    int32_t      n_samples    = 0;
+    double       in_sample_loss = 0.0;
+    double       hit_rate     = 0.0;
+    std::string  retune_source;
+};
+int ts_tessera_db_upsert_l5_weight(ts_tessera_db * db,
+                                   const ts_tessera_db_l5_weight & row,
+                                   std::string * err);
+
 // --- L4 plan outcome (the feedback loop audit trail) ---
 //
 // One row per (model_hash, name, iteration, plan_id) recording the

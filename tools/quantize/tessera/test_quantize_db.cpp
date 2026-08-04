@@ -266,6 +266,64 @@ int main(int argc, char ** argv) {
         CHECK(stage_b == 1, "stage B row findable by plan_id");
     }
 
+    // ---- l5_weights: the per-(model, family) retuned scoring weights ----
+    // Verifies the ts_tessera_db_upsert_l5_weight helper:
+    //   * writes a row for (model_hash, family)
+    //   * on a re-write, overwrites all columns (PRIMARY KEY is the
+    //     upsert target)
+    //   * bias / n_samples / in_sample_loss / hit_rate are preserved
+    //   * retune_source records the algorithm tag
+    {
+        ts_tessera_db_l5_weight row;
+        row.model_hash      = "hash_weights";
+        row.family          = "attn_q";
+        row.w_imatrix       = 0.42;
+        row.w_gradient      = 0.33;
+        row.w_layer         = 0.25;
+        row.bias            = -0.001;
+        row.n_samples       = 50;
+        row.in_sample_loss  = 0.0008;
+        row.hit_rate        = 0.80;
+        row.retune_source   = "ols_slope_v1";
+        std::string err;
+        CHECK(ts_tessera_db_upsert_l5_weight(db, row, &err) == 0,
+              ("upsert_l5_weight failed: " + err).c_str());
+        // Re-write with different weights -> upsert overwrites.
+        row.w_imatrix  = 0.30;
+        row.w_gradient = 0.50;
+        row.w_layer    = 0.20;
+        row.n_samples  = 75;
+        row.hit_rate   = 0.85;
+        CHECK(ts_tessera_db_upsert_l5_weight(db, row, &err) == 0,
+              ("upsert_l5_weight re-write failed: " + err).c_str());
+        // Second family, same model.
+        ts_tessera_db_l5_weight ffn;
+        ffn.model_hash      = "hash_weights";
+        ffn.family          = "ffn_gate";
+        ffn.w_imatrix       = 0.50;
+        ffn.w_gradient      = 0.30;
+        ffn.w_layer         = 0.20;
+        ffn.bias            = 0.002;
+        ffn.n_samples       = 30;
+        ffn.in_sample_loss  = 0.0015;
+        ffn.hit_rate        = 0.55;
+        ffn.retune_source   = "ols_slope_v1";
+        CHECK(ts_tessera_db_upsert_l5_weight(db, ffn, &err) == 0,
+              ("upsert_l5_weight ffn failed: " + err).c_str());
+
+        int64_t n = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM l5_weights WHERE model_hash = 'hash_weights'");
+        CHECK(n == 2, "2 weight rows landed (one per family)");
+        // attn_q got the second-write values.
+        int64_t n_im = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM l5_weights WHERE model_hash = 'hash_weights' "
+                "AND family = 'attn_q' AND w_gradient = 0.50 AND n_samples = 75");
+        CHECK(n_im == 1, "attn_q row reflects the upsert (w_gradient=0.50, n_samples=75)");
+        int64_t n_source = ts_tessera_db_debug_count(
+            db, "SELECT COUNT(*) FROM l5_weights WHERE retune_source = 'ols_slope_v1'");
+        CHECK(n_source == 2, "retune_source tag is preserved across both rows");
+    }
+
     if (failures == 0) {
         printf("OK: all tessera-quantize-db tests passed (db=%s)\n", path);
         return 0;

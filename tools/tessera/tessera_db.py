@@ -77,6 +77,12 @@ L5_OUTCOME_COLS: tuple[str, ...] = (
     "mse_before", "mse_after", "delta_mse", "delta_frob",
     "plan_accepted", "accept_threshold", "residual", "updated_at",
 )
+L5_WEIGHTS_COLS: tuple[str, ...] = (
+    "model_hash", "family",
+    "w_imatrix", "w_gradient", "w_layer",
+    "bias", "n_samples", "in_sample_loss", "hit_rate",
+    "retune_source", "updated_at",
+)
 PER_LAYER_ERROR_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer",
     "epsilon", "reference_qtype", "updated_at",
@@ -403,6 +409,82 @@ class TesseraDB:
             )
             buf.append(row)
         return len(rows)
+
+    # ---- write API: l5_weights (PRIMARY KEY -> direct upsert) ----
+
+    def insert_l5_weights(
+        self,
+        rows: Sequence[dict],
+    ) -> int:
+        """Upsert rows into the ``l5_weights`` table (per-model,
+        per-family retuned scoring weights).
+
+        Bypasses the buffer and uses a direct ``INSERT ... ON
+        CONFLICT (model_hash, family) DO UPDATE`` because the table
+        has a primary key; the buffer's plain INSERT would fail on
+        a duplicate. The C++ side has the same primary key and the
+        same upsert pattern (see
+        ``ts_tessera_db_upsert_l5_weight`` in
+        ``tessera-quantize-db.cpp``).
+
+        ``rows`` is a list of dicts with keys: model_hash, family,
+        w_imatrix, w_gradient, w_layer, bias, n_samples,
+        in_sample_loss, hit_rate, retune_source. The retune is
+        the consumer-side half of the "did this requant plan
+        reduce error?" feedback loop: ``tools/tessera/l5_retune.py``
+        fits a per-(model, family) closed-form OLS on
+        ``l5_outcome.delta_mse`` and ``l5_outcome.sensitivity_score``
+        and writes the recommended
+        ``(w_imatrix, w_gradient, w_layer)`` here. The
+        orchestrator's next generation reads the table back via
+        ``--retune-from-db``.
+
+        Returns the number of rows upserted.
+        """
+        if not rows or self._read_only:
+            return 0
+        sql = (
+            "INSERT INTO l5_weights ("
+            "  model_hash, family, w_imatrix, w_gradient, w_layer, "
+            "  bias, n_samples, in_sample_loss, hit_rate, "
+            "  retune_source, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (model_hash, family) DO UPDATE SET "
+            "  w_imatrix       = excluded.w_imatrix, "
+            "  w_gradient      = excluded.w_gradient, "
+            "  w_layer         = excluded.w_layer, "
+            "  bias            = excluded.bias, "
+            "  n_samples       = excluded.n_samples, "
+            "  in_sample_loss  = excluded.in_sample_loss, "
+            "  hit_rate        = excluded.hit_rate, "
+            "  retune_source   = excluded.retune_source, "
+            "  updated_at      = excluded.updated_at"
+        )
+        now = _now_iso()
+        n = 0
+        for r in rows:
+            try:
+                self._conn.execute(sql, [
+                    r.get("model_hash", ""),
+                    r.get("family", ""),
+                    float(r.get("w_imatrix", 0.0)),
+                    float(r.get("w_gradient", 0.0)),
+                    float(r.get("w_layer", 0.0)),
+                    r.get("bias"),
+                    r.get("n_samples"),
+                    r.get("in_sample_loss"),
+                    r.get("hit_rate"),
+                    r.get("retune_source", "ols_slope_v1"),
+                    r.get("updated_at", now),
+                ])
+                n += 1
+            except Exception as e:
+                sys.stderr.write(
+                    f"tessera-db: insert_l5_weights on "
+                    f"({r.get('model_hash', '')}, {r.get('family', '')}) "
+                    f"failed: {e}\n"
+                )
+        return n
 
     def insert_per_layer_error(
         self,
