@@ -413,6 +413,39 @@ if (APPLE)
                               llama-common
                               "-framework Foundation")
     endif()
+    # Pinned-slot dispatch end-to-end test. Validates the W3
+    # architecture pivot: a real multifunction .mlmodelc (the
+    # gemma4 prefill bundle) loads with the manifest sidecar,
+    # the runtime allocates one state_iosurface, pins every
+    # declared slot, and the dispatch goes through the pinned
+    # IOSurface state. The test is gated on the gemma4 prefill
+    # bundle (TESSERA_ANE_STATE_LAYOUT_MANIFEST env var +
+    # a real GGUF arg). Skipped automatically if the env var
+    # or GGUF is not present.
+    llama_build(test-ane-pinned-slot-dispatch.cpp)
+    if (TARGET test-ane-pinned-slot-dispatch)
+        target_link_libraries(test-ane-pinned-slot-dispatch PRIVATE
+                              llama-common)
+        # The test reads TESSERA_ANE_STATE_LAYOUT_MANIFEST from
+        # the environment at runtime. CI passes it via a fixture
+        # pointing at the gemma4 prefill bundle; the test refuses
+        # to run without it. The test ARG is the gemma4 prefill
+        # GGUF; it is also expected to be present. We look for it
+        # in the standard external-drive location used by the
+        # prefill bundle. When the GGUF is missing, the test is
+        # skipped (ctest -E pattern below).
+        if (EXISTS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf")
+            add_test(
+                NAME test-ane-pinned-slot-dispatch
+                COMMAND test-ane-pinned-slot-dispatch
+                    /Volumes/Julian\ T7/models/gemma4-ane-prefill-flat-slab.gguf
+            )
+            set_tests_properties(test-ane-pinned-slot-dispatch PROPERTIES
+                LABELS "ane"
+                ENVIRONMENT "TESSERA_ANE_STATE_LAYOUT_MANIFEST=/Volumes/Julian T7/models/gemma4-ane-prefill-bundle/prefill-bundle.ane_state.v1.json"
+            )
+        endif()
+    endif()
     # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
     llama_build(test-ane-matmul-w1-dispatch.cpp)
     if (TARGET test-ane-matmul-w1-dispatch)
