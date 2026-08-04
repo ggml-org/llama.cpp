@@ -100,35 +100,30 @@ struct lru_sched {
         return victim;
     }
 
-    uint64_t enqueue(std::unique_lock<std::mutex> & lk, const std::string & model_id, bool front = false) {
+    // requests wanting the same model share one entry, so they all need only one slot
+    // and all get unblocked by the single load that entry performs
+    void join(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
         check_lock(lk);
-        uint64_t req_id = next_req_id++;
-        if (front) {
-            queue.push_front({ req_id, model_id, false });
-        } else {
-            queue.push_back({ req_id, model_id, false });
-        }
-        SRV_INF("models_max reached, request for name=%s queued at position %zu\n",
-                model_id.c_str(), front ? (size_t) 1 : queue.size());
-        return req_id;
-    }
-
-    void dequeue(std::unique_lock<std::mutex> & lk, uint64_t req_id) {
-        check_lock(lk);
-        if (req_id == 0) {
+        if (entry_t * e = find(model_id)) {
+            e->n_waiters++;
+            SRV_INF("request for name=%s joined the queue, %d waiting\n", model_id.c_str(), e->n_waiters);
             return;
         }
+        queue.push_back({ model_id, 1, false, false });
+        SRV_INF("models_max reached, request for name=%s queued at position %zu\n",
+                model_id.c_str(), queue.size());
+    }
+
+    void leave(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
         for (auto it = queue.begin(); it != queue.end(); ++it) {
-            if (it->req_id == req_id) {
-                queue.erase(it);
+            if (it->model_id == model_id) {
+                if (--it->n_waiters <= 0) {
+                    queue.erase(it); // last one waiting for this model went away
+                }
                 return;
             }
         }
-    }
-
-    bool is_head(std::unique_lock<std::mutex> & lk, uint64_t req_id) {
-        check_lock(lk);
-        return req_id != 0 && !queue.empty() && queue.front().req_id == req_id;
     }
 
     bool queue_empty(std::unique_lock<std::mutex> & lk) {
@@ -136,14 +131,39 @@ struct lru_sched {
         return queue.empty();
     }
 
-    // a model is on its way out for this entry, so other requests do not also give up one
-    void mark_slot_pending(std::unique_lock<std::mutex> & lk, uint64_t req_id) {
+    // true if it is this model's turn to load, and nobody is loading it yet
+    bool try_claim(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
         check_lock(lk);
-        for (auto & e : queue) {
-            if (e.req_id == req_id) {
-                e.slot_pending = true;
+        if (queue.empty() || queue.front().model_id != model_id || queue.front().loading) {
+            return false;
+        }
+        if (!has_capacity(lk)) {
+            return false;
+        }
+        queue.front().loading = true;
+        return true;
+    }
+
+    // ok means the model is up: drop the entry, the other waiters just watch its status now
+    void claim_done(std::unique_lock<std::mutex> & lk, const std::string & model_id, bool ok) {
+        check_lock(lk);
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if (it->model_id == model_id) {
+                if (ok) {
+                    queue.erase(it);
+                } else {
+                    it->loading = false;
+                }
                 return;
             }
+        }
+    }
+
+    // a model is on its way out for this entry, so other requests do not also give up one
+    void mark_slot_pending(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        if (entry_t * e = find(model_id)) {
+            e->slot_pending = true;
         }
     }
 
@@ -161,10 +181,10 @@ struct lru_sched {
             size_t promised     = 0;
             bool   has_unserved = false;
             for (const auto & e : queue) {
-                if (e.slot_pending) {
-                    promised++;
-                } else {
+                if (e.needs_slot()) {
                     has_unserved = true;
+                } else {
+                    promised++;
                 }
             }
             if (!has_unserved) {
@@ -196,10 +216,23 @@ struct lru_sched {
 
   private:
     struct entry_t {
-        uint64_t    req_id;
         std::string model_id;
-        bool        slot_pending; // a model is already being evicted for this entry
+        int  n_waiters;    // requests waiting for this model
+        bool slot_pending; // a model is already being evicted for this entry
+        bool loading;      // one of the waiters is doing the load right now
+
+        // a slot is already coming, or already taken by the load in flight
+        bool needs_slot() const { return !slot_pending && !loading; }
     };
+
+    entry_t * find(const std::string & model_id) {
+        for (auto & e : queue) {
+            if (e.model_id == model_id) {
+                return &e;
+            }
+        }
+        return nullptr;
+    }
 
     void check_lock(std::unique_lock<std::mutex> & lk) {
         GGML_ASSERT(lk.owns_lock() && lk.mutex() == &models.mutex);
@@ -215,9 +248,8 @@ struct lru_sched {
         return count;
     }
 
-    server_models &     models;
+    server_models & models;
     std::deque<entry_t> queue;
-    uint64_t            next_req_id = 1;
 };
 
 // short loopback budget for the resumable stream router to child JSON calls (probe, lookup,
@@ -1296,9 +1328,9 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
         return false; // child is sleeping but still running; new request will wake it up
     }
 
-    uint64_t req_id = 0;
-    std::string victim;
+    bool queued   = false;
     bool did_load = false;
+    std::string victim;
     {
         std::unique_lock<std::mutex> lk(mutex);
         auto it = mapping.find(name);
@@ -1311,12 +1343,13 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
                 did_load = true;
             } else {
                 // also queue when a slot looks free but others wait already, else they starve
-                req_id = sched->enqueue(lk, name);
+                sched->join(lk, name);
+                queued = true;
                 if (!has_capacity) {
                     // an idle model may sit here right now, do not wait for a request to end
                     victim = sched->pick_victim(lk, name);
                     if (!victim.empty()) {
-                        sched->mark_slot_pending(lk, req_id);
+                        sched->mark_slot_pending(lk, name);
                     }
                 }
             }
@@ -1330,8 +1363,12 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
     // while queued, this is also where the load happens: the head of the queue does it
     SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
     std::unique_lock<std::mutex> lk(mutex);
-    // req_id by reference: a lost race for a slot re-queues under a new id
-    auto erase_entry = [this, &req_id, &lk]() { sched->dequeue(lk, req_id); };
+    auto leave_queue = [this, &queued, &lk, &name]() {
+        if (queued) {
+            sched->leave(lk, name);
+            queued = false;
+        }
+    };
 
     try {
         bool saw_loading = false;
@@ -1358,7 +1395,7 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
                     }
                     break; // unloaded by another code path, caller reports "not running"
                 }
-                if (req_id == 0) {
+                if (!queued) {
                     break; // not queued, and the load someone else started fell over
                 }
             }
@@ -1368,32 +1405,34 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
                 throw std::runtime_error("request cancelled while waiting for model name=" + name);
             }
 
-            // our turn: head of the queue, and a slot really did free up
-            if (status == SERVER_MODEL_STATUS_UNLOADED && sched->is_head(lk, req_id) && sched->has_capacity(lk)) {
-                erase_entry();
+            // our turn: our model is at the head, and a slot really did free up
+            if (status == SERVER_MODEL_STATUS_UNLOADED && sched->try_claim(lk, name)) {
                 lk.unlock();
+                bool ok = true;
                 try {
                     SRV_INF("slot available, loading queued model name=%s\n", name.c_str());
                     load(name);
                     did_load = true;
                 } catch (const std::exception & e) {
-                    // lost a race for the slot; get back in line and retry
+                    // lost a race for the slot, stay in line and retry
                     SRV_WRN("queued load of name=%s did not go through: %s\n", name.c_str(), e.what());
-                    lk.lock();
-                    req_id = sched->enqueue(lk, name, /* front */ true);
-                    continue;
+                    ok = false;
                 }
                 lk.lock();
+                sched->claim_done(lk, name, ok);
+                if (ok) {
+                    queued = false; // entry is gone, the other waiters watch the status now
+                }
                 continue;
             }
 
             cv.wait_for(lk, std::chrono::milliseconds(500));
         }
     } catch (...) {
-        erase_entry();
+        leave_queue();
         throw;
     }
-    erase_entry();
+    leave_queue();
 
     return true;
 }
