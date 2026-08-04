@@ -28,7 +28,7 @@ env:
 
 jobs:
   ctest:
-    runs-on: [self-hosted, X64, CPU, Linux]
+    runs-on: [self-hosted, X64, Linux]
 
     continue-on-error: true
 
