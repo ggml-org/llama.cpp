@@ -1882,7 +1882,9 @@ void server_models_routes::init_routes() {
         // this request instead of leaving an orphan generation
         std::string conv_id = server_stream_conv_id_from_headers(req.headers);
         uint64_t ticket = models.conv_models.remember(conv_id, name);
-        bool waited = autoload && models.ensure_model_ready(name, req.should_stop);
+        // a dead socket must not cancel a session request, only a stop does (checked right below)
+        auto should_stop = ticket == 0 ? req.should_stop : nullptr;
+        bool waited = autoload && models.ensure_model_ready(name, should_stop);
         if (ticket != 0 && !models.conv_models.alive(conv_id, ticket)) {
             SRV_INF("request for conv_id=%s cancelled while model name=%s was loading\n",
                     conv_id.c_str(), name.c_str());
