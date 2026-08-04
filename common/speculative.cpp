@@ -2357,10 +2357,28 @@ common_speculative_init_result::common_speculative_init_result(
 
     std::string model_path;
     if (has_draft) {
-        model_path = params.speculative.draft.mparams.path;
-        LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
+        // Two drafter-source cases, distinguished by which field is set
+        // on params.speculative.draft (has_dft() returns true for either):
+        //   1. mparams set, target_model_path empty -> standalone drafter
+        //      GGUF on disk (the original path).  The ctor loads it as a
+        //      separate llama_model and the drafter context wraps that
+        //      model directly.
+        //   2. target_model_path set, mparams empty -> drafter is embedded
+        //      in the target GGUF.  The ctor loads the target GGUF as a
+        //      llama_model (placeholder for the tensor-extractor that
+        //      will slice out the per-drafter tensors in a follow-up;
+        //      see the GGUF convention comment in this file).
+        const bool use_embedded = !params.speculative.draft.target_model_path.empty() &&
+                                  params.speculative.draft.mparams.empty();
+        if (use_embedded) {
+            model_path = params.speculative.draft.target_model_path;
+            LOG_INF("%s: loading embedded draft from target GGUF '%s'\n", __func__, model_path.c_str());
+        } else {
+            model_path = params.speculative.draft.mparams.path;
+            LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
+        }
 
-        llama_model * model_dft = llama_model_load_from_file(params.model.path.c_str(), mparams);
+        llama_model * model_dft = llama_model_load_from_file(model_path.c_str(), mparams);
         if (model_dft == NULL) {
             LOG_ERR("%s: failed to load draft model, '%s'\n", __func__, model_path.c_str());
             return;
