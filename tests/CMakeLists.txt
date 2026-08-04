@@ -289,6 +289,8 @@ target_include_directories(test-server-mtp-trigger PRIVATE ${PROJECT_SOURCE_DIR}
 target_link_libraries(test-server-mtp-trigger PRIVATE llama-common)
 llama_build(test-telemetry-jsonl.cpp)
 llama_test(test-telemetry-jsonl)
+llama_build(test-tessera-config.cpp)
+llama_test(test-tessera-config)
 llama_build(test-dflash-loader.cpp)
 llama_test(test-dflash-loader)
 target_include_directories(test-dflash-loader PRIVATE ${PROJECT_SOURCE_DIR}/src)
