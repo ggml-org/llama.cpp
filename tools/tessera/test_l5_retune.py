@@ -50,13 +50,22 @@ from l5_retune import (
     DEFAULT_ALPHA,
     DEFAULT_BASE_WEIGHTS,
     DEFAULT_MIN_SAMPLES,
+    DEFAULT_BASE_TOP_FRACTION,
     RETUNE_SOURCE_TAG,
+    RETUNE_SOURCE_TAG_3COEF,
+    RETUNE_SOURCE_TAG_2COEF,
+    RETUNE_SOURCE_TAG_CROSSMODEL,
     aggregate_weights,
     compute_l5_weights,
     read_l5_weights,
+    read_per_family_top_fraction,
+    write_cross_model_aggregate,
+    _ols_3coef_weighted,
     _ols_slope_intercept,
     _project_simplex,
     _retune_family,
+    _compute_top_fraction,
+    _confidence_weight,
 )
 from tessera_db import TesseraDB
 
@@ -72,6 +81,9 @@ SCHEMA_SQL = """
         plan_id               TEXT NOT NULL,
         family                TEXT,
         sensitivity_score     DOUBLE,
+        imatrix_magnitude     DOUBLE,
+        gradient_proxy        DOUBLE,
+        layer_position_prior  DOUBLE,
         recommended_alpha     DOUBLE,
         recommended_clip      DOUBLE,
         mse_before            DOUBLE,
@@ -81,6 +93,7 @@ SCHEMA_SQL = """
         plan_accepted         BOOLEAN,
         accept_threshold      DOUBLE,
         residual              DOUBLE,
+        in_sample_loss        DOUBLE,
         updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, name, iteration, plan_id)
     );
@@ -94,6 +107,7 @@ SCHEMA_SQL = """
         n_samples             INTEGER,
         in_sample_loss        DOUBLE,
         hit_rate              DOUBLE,
+        top_fraction          DOUBLE,
         retune_source         TEXT,
         updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, family)
@@ -583,6 +597,770 @@ class TestL5Retune(unittest.TestCase):
         self.assertAlmostEqual(weights[2], DEFAULT_BASE_WEIGHTS[2], places=6)
         # retune_source is None (no DB contribution).
         self.assertIsNone(summary["retune_source"])
+
+    # ---- 7. Phase 15: 3-coefficient OLS -----------------------
+
+    def test_ols_3coef_recovers_exact_linear_signal(self) -> None:
+        """On ``y = 0.001 + 0.5*im + 0.3*grad + 0.2*layer`` the
+        3-coefficient OLS recovers the coefficients with
+        near-zero in-sample loss.
+
+        The X matrix's three component columns must be
+        linearly independent for the lstsq to recover the
+        unique coefficient vector; we use three independent
+        columns (the im / grad / layer values are not
+        collinear). Random-ish but deterministic.
+        """
+        im   = [0.1, 0.2, 0.4, 0.7, 0.9]
+        grad = [0.3, 0.5, 0.1, 0.6, 0.2]
+        layer = [0.8, 0.05, 0.5, 0.3, 0.7]
+        y = [0.001 + 0.5 * i + 0.3 * g + 0.2 * l
+             for i, g, l in zip(im, grad, layer)]
+        a, b_im, b_grad, b_layer, loss = _ols_3coef_weighted(
+            im=im, grad=grad, layer=layer, y=y,
+        )
+        self.assertAlmostEqual(a, 0.001, places=9)
+        self.assertAlmostEqual(b_im, 0.5, places=9)
+        self.assertAlmostEqual(b_grad, 0.3, places=9)
+        self.assertAlmostEqual(b_layer, 0.2, places=9)
+        self.assertLess(loss, 1e-9)
+
+    def test_ols_3coef_handles_uniform_weights(self) -> None:
+        """Sample weights all 1.0 (default) -> the same fit as
+        the unweighted OLS. Verifies the sqrt-weighting
+        transformation is correct."""
+        a, b_im, b_grad, b_layer, loss = _ols_3coef_weighted(
+            im=[0.1, 0.5, 0.9],
+            grad=[0.2, 0.4, 0.6],
+            layer=[0.3, 0.5, 0.7],
+            y=[0.1, 0.3, 0.5],
+        )
+        # Check the coefficients are not all zero (the signal
+        # is in the data; a non-trivial fit should produce
+        # non-zero coefficients).
+        self.assertFalse(
+            abs(b_im) < 1e-9 and abs(b_grad) < 1e-9 and abs(b_layer) < 1e-9,
+            "all-zero coefficients on a non-trivial signal",
+        )
+        # The loss is finite.
+        self.assertGreater(loss, 0.0)
+
+    def test_ols_3coef_handles_degenerate_input(self) -> None:
+        """When all rows have the same (im, grad, layer), the
+        design matrix is rank-deficient (the three component
+        columns are identical, so the column space is the
+        span of [1, 1, 1] and [0.5, 0.5, 0.5]). The lstsq
+        returns the minimum-norm solution; the coefficient
+        vector is spread evenly across the three
+        identical columns. The loss is the mean abs deviation
+        of y from its mean (a constant fit has no slope)."""
+        a, b_im, b_grad, b_layer, loss = _ols_3coef_weighted(
+            im=[0.5, 0.5, 0.5],
+            grad=[0.5, 0.5, 0.5],
+            layer=[0.5, 0.5, 0.5],
+            y=[0.1, 0.2, 0.3],
+        )
+        # Mean abs deviation of [0.1, 0.2, 0.3] from 0.2 is
+        # (0.1 + 0.0 + 0.1) / 3 = 0.0666..
+        self.assertAlmostEqual(loss, (0.1 + 0.0 + 0.1) / 3, places=6)
+        # The minimum-norm solution has the three component
+        # coefficients equal (the columns are identical).
+        self.assertAlmostEqual(b_im, b_grad, places=6)
+        self.assertAlmostEqual(b_grad, b_layer, places=6)
+        # The coefficient vector is small relative to the
+        # intercept (the rank-deficient columns contribute
+        # to the intercept, not the slope). The minimum-norm
+        # solution for rank 2 in 4 columns has 0.057
+        # per column; the L1 norm of the slope vector is
+        # 0.171.
+        self.assertLess(abs(b_im) + abs(b_grad) + abs(b_layer), 0.3)
+
+    # ---- 8. Phase 15: _retune_family 3-coefficient path ----
+
+    def test_retune_family_3coef_positive_im_shifts_weights(self) -> None:
+        """When ``b_im > 0`` and hit_rate is low, the im
+        component of the recommended weights should RISE
+        (the 3-coefficient path's per-component shift rule:
+        a positive b_im means im is a positive predictor
+        of delta_mse, so increase its weight).
+
+        The X matrix uses im / grad / layer columns that
+        are linearly independent so the lstsq recovers the
+        unique coefficient vector.
+        """
+        # 5 rows where im maps directly to delta_mse
+        # (b_im = 1, b_grad ~ 0, b_layer ~ 0). The grad
+        # and layer are independent of im.
+        im_grid = [0.1, 0.3, 0.5, 0.7, 0.9]
+        grad_grid = [0.7, 0.5, 0.3, 0.1, 0.6]
+        layer_grid = [0.4, 0.6, 0.2, 0.8, 0.5]
+        components = list(zip(im_grid, grad_grid, layer_grid))
+        sensitivity = [
+            0.5 * im + 0.3 * grad + 0.2 * layer
+            for im, grad, layer in components
+        ]
+        delta_mse = list(im_grid)  # b_im = 1, b_grad ~ 0, b_layer ~ 0
+        v = _retune_family(
+            model_hash="m", family="attn_q",
+            sensitivity=sensitivity, delta_mse=delta_mse,
+            plan_accepted=[True, True, True, True, False],  # hr=0.8
+            components=components,
+            base_weights=DEFAULT_BASE_WEIGHTS,
+            alpha=DEFAULT_ALPHA, min_samples=3,
+        )
+        self.assertTrue(v.was_acted_on)
+        self.assertEqual(v.retune_algorithm, RETUNE_SOURCE_TAG_3COEF)
+        # 3-coefficient path: b_im is positive and the
+        # im weight should rise above the base.
+        self.assertGreater(v.slopes[0], 0.0,
+            f"expected b_im > 0, got {v.slopes[0]}")
+        # The hit rate was 4/5 = 0.8, so the gate is
+        # 1 - 0.8 = 0.2; the shift is small but
+        # positive.
+        self.assertGreater(v.weights[0], DEFAULT_BASE_WEIGHTS[0])
+        # Sum-to-1 preserved.
+        self.assertAlmostEqual(sum(v.weights), 1.0, places=9)
+
+    def test_retune_family_3coef_no_components_falls_back(self) -> None:
+        """When components is None (or all-None), the retune
+        falls back to the 2-coefficient OLS on the
+        combined sensitivity_score. The path is tagged
+        ``RETUNE_SOURCE_TAG_2COEF``."""
+        v = _retune_family(
+            model_hash="m", family="ffn_gate",
+            sensitivity=[0.2, 0.4, 0.6, 0.8],
+            delta_mse=[0.001, 0.002, 0.003, 0.004],  # b=+0.005
+            plan_accepted=[True, True, False, False],  # hit_rate=0.5
+            components=None,  # pre-Phase-15 path
+            base_weights=DEFAULT_BASE_WEIGHTS,
+            alpha=DEFAULT_ALPHA, min_samples=3,
+        )
+        self.assertTrue(v.was_acted_on)
+        self.assertEqual(v.retune_algorithm, RETUNE_SOURCE_TAG_2COEF)
+        # 2-coefficient path: b_grad positive, shift
+        # mass from im to grad.
+        self.assertLess(v.weights[0], DEFAULT_BASE_WEIGHTS[0])
+        self.assertGreater(v.weights[1], DEFAULT_BASE_WEIGHTS[1])
+
+    def test_retune_family_3coef_top_fraction_aggressive(self) -> None:
+        """High slope + low hit rate -> top_fraction
+        recommendation > base. The per-family recommendation
+        uses the L2 norm of the coefficient vector as the
+        "dominant slope"."""
+        # 5 rows where the components are very predictive
+        # (slope ~ 1.0) and the hit rate is 0.2.
+        components = [
+            (0.4, 0.5, 0.5),
+        ] * 5
+        delta_mse = [0.4, 0.4, 0.4, 0.4, 0.4]  # b_im=+1
+        v = _retune_family(
+            model_hash="m", family="attn_q",
+            sensitivity=[0.5] * 5,
+            delta_mse=delta_mse,
+            plan_accepted=[True, False, False, False, False],  # hr=0.2
+            components=components,
+            base_weights=DEFAULT_BASE_WEIGHTS,
+            base_top_fraction=0.1,
+            alpha=DEFAULT_ALPHA, min_samples=3,
+        )
+        self.assertTrue(v.was_acted_on)
+        # gate = 0.8; dominant slope = 1.0 (b_im); tanh(2) ~ 0.96;
+        # top_fraction = 0.1 * (1 + 0.96 * 0.8) ~ 0.177.
+        self.assertGreater(v.top_fraction, 0.1)
+        self.assertLess(v.top_fraction, 1.0)
+        # Verify against the formula directly.
+        import math
+        expected = _compute_top_fraction(
+            0.1, math.sqrt(sum(s * s for s in v.slopes)), 0.2,
+        )
+        self.assertAlmostEqual(v.top_fraction, expected, places=6)
+
+    def test_retune_family_3coef_top_fraction_at_base(self) -> None:
+        """When the OLS coefficients are tiny (well-calibrated
+        family), the top_fraction recommendation is at the
+        base (the per-family formula returns the base when
+        the slope is near zero)."""
+        # The components are linearly independent (not
+        # collinear) so the lstsq can recover the
+        # coefficients. The delta_mse varies within
+        # noise, so the coefficients are tiny.
+        v = _retune_family(
+            model_hash="m", family="attn_k",
+            sensitivity=[0.5] * 4,
+            delta_mse=[0.001, 0.0009, 0.0011, 0.001],
+            plan_accepted=[True, True, True, True],
+            components=[
+                (0.1, 0.7, 0.4),
+                (0.3, 0.5, 0.6),
+                (0.5, 0.3, 0.2),
+                (0.7, 0.1, 0.8),
+            ],
+            base_weights=DEFAULT_BASE_WEIGHTS,
+            base_top_fraction=0.1,
+            alpha=DEFAULT_ALPHA, min_samples=3,
+        )
+        self.assertTrue(v.was_acted_on)
+        # The OLS coefficients are tiny (the delta_mse
+        # varies within noise), so the top_fraction is
+        # near base. Allow a small jitter from the
+        # hit_rate gate.
+        import math
+        expected = _compute_top_fraction(
+            0.1, math.sqrt(sum(s * s for s in v.slopes)), 1.0,
+        )
+        self.assertAlmostEqual(v.top_fraction, expected, places=6)
+        # With hit_rate=1.0 the gate is 0, so the
+        # top_fraction is at the base.
+        self.assertAlmostEqual(v.top_fraction, 0.1, places=9)
+
+    def test_compute_top_fraction_formula(self) -> None:
+        """Direct test of the top_fraction formula."""
+        # High slope + low hit rate -> above base.
+        self.assertGreater(
+            _compute_top_fraction(0.1, 1.0, 0.0),
+            0.1,
+        )
+        # Slope 0 -> exactly base (the tanh(0) is 0).
+        self.assertAlmostEqual(
+            _compute_top_fraction(0.1, 0.0, 0.5), 0.1, places=9,
+        )
+        # Hit rate 1.0 -> exactly base (the gate is 0).
+        self.assertAlmostEqual(
+            _compute_top_fraction(0.1, 1.0, 1.0), 0.1, places=9,
+        )
+        # Clipped to [0, 1].
+        self.assertLessEqual(_compute_top_fraction(10.0, 100.0, 0.0), 1.0)
+        # Non-negative even with negative slope.
+        self.assertGreaterEqual(
+            _compute_top_fraction(0.1, -1.0, 0.0), 0.0,
+        )
+
+    def test_confidence_weight_basic(self) -> None:
+        """Confidence weight = 1/(1+loss*100) * sqrt(n/max_n)."""
+        # n=10, loss=0.01, max=10 -> 1/(1+1) * sqrt(1) = 0.5
+        self.assertAlmostEqual(
+            _confidence_weight(10, 0.01, 10), 0.5, places=6,
+        )
+        # n=1, loss=0, max=10 -> 1 * sqrt(0.1) ~ 0.316
+        import math
+        self.assertAlmostEqual(
+            _confidence_weight(1, 0.0, 10), math.sqrt(0.1), places=6,
+        )
+        # loss=0, n=10, max=10 -> 1.0 (the maximum).
+        self.assertAlmostEqual(
+            _confidence_weight(10, 0.0, 10), 1.0, places=6,
+        )
+        # n=0 -> 0 (no data).
+        self.assertAlmostEqual(
+            _confidence_weight(0, 0.0, 10), 0.0, places=6,
+        )
+
+    # ---- 9. Phase 15: confidence-weighted OLS ----------------
+
+    def test_ols_3coef_confidence_weighted(self) -> None:
+        """A high-loss row is downweighted relative to a
+        low-loss row. The fit follows the high-weight rows'
+        signal more closely.
+
+        Four high-weight rows have a known signal
+        ``y = 0.5*im + 0.3*grad + 0.2*layer``; two
+        low-weight rows are noise. The X matrix's three
+        component columns are linearly independent (im /
+        grad / layer are not collinear) so the lstsq
+        recovers the unique coefficient vector. We need
+        at least 4 rows for a determined system (4
+        unknowns incl. the intercept).
+        """
+        # 6 rows. First 4 have the canonical signal and
+        # full weight; last 2 are noise with zero weight
+        # (dropped from the lstsq).
+        im   = [0.1, 0.7, 0.4, 0.2, 0.5, 0.3]
+        grad = [0.4, 0.2, 0.6, 0.3, 0.6, 0.8]
+        layer = [0.3, 0.6, 0.5, 0.8, 0.1, 0.5]
+        y = [
+            0.5 * 0.1 + 0.3 * 0.4 + 0.2 * 0.3,  # 0.23
+            0.5 * 0.7 + 0.3 * 0.2 + 0.2 * 0.6,  # 0.53
+            0.5 * 0.4 + 0.3 * 0.6 + 0.2 * 0.5,  # 0.48
+            0.5 * 0.2 + 0.3 * 0.3 + 0.2 * 0.8,  # 0.35
+            0.1,  # noise
+            0.2,  # noise
+        ]
+        sample_weights = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+        a, b_im, b_grad, b_layer, _ = _ols_3coef_weighted(
+            im, grad, layer, y, sample_weights=sample_weights,
+        )
+        # The high-weight rows say b_im ~ 0.5, b_grad ~ 0.3,
+        # b_layer ~ 0.2. With zero weight on the noise
+        # rows, the fit should be close.
+        self.assertAlmostEqual(b_im, 0.5, places=2)
+        self.assertAlmostEqual(b_grad, 0.3, places=2)
+        self.assertAlmostEqual(b_layer, 0.2, places=2)
+        # Without sample weighting the noise rows
+        # contribute and the coefficients are very
+        # different. At least one of the coefficients
+        # should differ.
+        a2, b_im2, b_grad2, b_layer2, _ = _ols_3coef_weighted(
+            im, grad, layer, y, sample_weights=None,
+        )
+        any_diff = (
+            abs(b_im - b_im2) > 0.05
+            or abs(b_grad - b_grad2) > 0.05
+            or abs(b_layer - b_layer2) > 0.05
+        )
+        self.assertTrue(any_diff,
+            f"unweighted fit didn't differ: b_im={b_im2}, "
+            f"b_grad={b_grad2}, b_layer={b_layer2}")
+
+    # ---- 10. Phase 15: cross-model retune --------------------
+
+    def test_write_cross_model_aggregate_basic(self) -> None:
+        """Three models, two families. The cross-model
+        aggregate writes one row per family with
+        ``model_hash = "*"`` and the n_samples-weighted
+        mean of the per-model rows."""
+        with TesseraDB.open(self.db_path) as db:
+            # Three models, two families (attn_q, ffn_gate).
+            # attn_q has 30 samples across models; ffn_gate
+            # has 10.
+            db.insert_l5_weights([
+                {
+                    "model_hash": "m1", "family": "attn_q",
+                    "w_imatrix": 0.6, "w_gradient": 0.3,
+                    "w_layer": 0.1, "n_samples": 10,
+                    "in_sample_loss": 0.001, "hit_rate": 0.6,
+                    "top_fraction": 0.15,
+                },
+                {
+                    "model_hash": "m2", "family": "attn_q",
+                    "w_imatrix": 0.5, "w_gradient": 0.4,
+                    "w_layer": 0.1, "n_samples": 20,
+                    "in_sample_loss": 0.001, "hit_rate": 0.5,
+                    "top_fraction": 0.10,
+                },
+                {
+                    "model_hash": "m1", "family": "ffn_gate",
+                    "w_imatrix": 0.4, "w_gradient": 0.5,
+                    "w_layer": 0.1, "n_samples": 6,
+                    "in_sample_loss": 0.002, "hit_rate": 0.4,
+                    "top_fraction": None,
+                },
+                {
+                    "model_hash": "m3", "family": "ffn_gate",
+                    "w_imatrix": 0.3, "w_gradient": 0.6,
+                    "w_layer": 0.1, "n_samples": 4,
+                    "in_sample_loss": 0.001, "hit_rate": 0.5,
+                    "top_fraction": 0.20,
+                },
+            ])
+
+        verdicts = write_cross_model_aggregate(self.db_path)
+        self.assertEqual(len(verdicts), 2)
+        # The verdicts are sorted by family.
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        ffn = next(v for v in verdicts if v.family == "ffn_gate")
+        # attn_q: n_samples total = 30. w_imatrix aggregate
+        # = (0.6*10 + 0.5*20) / 30 = 16/30 = 0.5333.
+        # w_gradient = (0.3*10 + 0.4*20) / 30 = 11/30 = 0.3667.
+        # w_layer = 0.1 (uniform).
+        self.assertEqual(attn.model_hash, "*")
+        self.assertEqual(attn.n_samples, 30)
+        self.assertAlmostEqual(attn.weights[0], 0.6 * 10 / 30
+                               + 0.5 * 20 / 30, places=6)
+        self.assertAlmostEqual(attn.weights[1], 0.3 * 10 / 30
+                               + 0.4 * 20 / 30, places=6)
+        self.assertAlmostEqual(sum(attn.weights), 1.0, places=6)
+        # ffn_gate: n_samples total = 10.
+        self.assertEqual(ffn.n_samples, 10)
+        # The cross-model row is tagged.
+        self.assertEqual(attn.retune_algorithm,
+                         RETUNE_SOURCE_TAG_CROSSMODEL)
+        # l5_weights table now has the cross-model rows
+        # in addition to the per-model rows.
+        import duckdb as _dd
+        con = _dd.connect(self.db_path, read_only=True)
+        try:
+            cross = con.execute(
+                "SELECT family FROM l5_weights "
+                "WHERE model_hash = '*' ORDER BY family"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(
+            sorted([c[0] for c in cross]),
+            ["attn_q", "ffn_gate"],
+        )
+
+    def test_cross_model_fallback_in_read_l5_weights(self) -> None:
+        """``read_l5_weights(cross_model_fallback=True)`` returns
+        the per-model rows for the requested model plus the
+        cross-model rows (model_hash = "*") for any family
+        the per-model lookup missed."""
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([
+                {
+                    "model_hash": "warm", "family": "attn_q",
+                    "w_imatrix": 0.6, "w_gradient": 0.3,
+                    "w_layer": 0.1, "n_samples": 10,
+                },
+                {
+                    "model_hash": "warm", "family": "ffn_gate",
+                    "w_imatrix": 0.4, "w_gradient": 0.5,
+                    "w_layer": 0.1, "n_samples": 10,
+                },
+                {
+                    "model_hash": "*", "family": "ffn_gate",
+                    "w_imatrix": 0.3, "w_gradient": 0.6,
+                    "w_layer": 0.1, "n_samples": 50,
+                },
+            ])
+
+        # Read with the cross-model fallback; the per-model
+        # lookup for "cold" has no rows, so the
+        # cross-model row for ffn_gate is appended.
+        df = read_l5_weights(
+            self.db_path, model_hash="cold",
+            cross_model_fallback=True,
+        )
+        families = sorted(df["family"].to_list())
+        # The cross-model ffn_gate row is in the result.
+        self.assertIn("ffn_gate", families)
+        # The cross-model row is preserved with model_hash = "*".
+        cross = df.filter(df["model_hash"] == "*")
+        self.assertEqual(cross.height, 1)
+        self.assertEqual(cross["family"][0], "ffn_gate")
+        # The ffn_gate row has the cross-model weights.
+        self.assertAlmostEqual(
+            df.filter(df["family"] == "ffn_gate")["w_gradient"][0],
+            0.6, places=6,
+        )
+
+        # Without the fallback, the result is empty (no
+        # per-model rows for "cold").
+        df2 = read_l5_weights(
+            self.db_path, model_hash="cold",
+            cross_model_fallback=False,
+        )
+        self.assertEqual(df2.height, 0)
+
+    # ---- 11. Phase 15: per-family top_fraction lookup ----
+
+    def test_read_per_family_top_fraction(self) -> None:
+        """The orchestrator's per-family top_fraction lookup
+        reads from l5_weights and returns a {family: value}
+        dict. The per-model rows take priority; the
+        cross-model rows fill in for families the per-model
+        lookup missed."""
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([
+                {
+                    "model_hash": "m1", "family": "attn_q",
+                    "w_imatrix": 0.5, "w_gradient": 0.3,
+                    "w_layer": 0.2, "n_samples": 10,
+                    "top_fraction": 0.20,
+                },
+                {
+                    "model_hash": "m1", "family": "ffn_gate",
+                    "w_imatrix": 0.4, "w_gradient": 0.5,
+                    "w_layer": 0.1, "n_samples": 10,
+                    "top_fraction": None,  # no per-family rec
+                },
+                {
+                    "model_hash": "*", "family": "ffn_gate",
+                    "w_imatrix": 0.3, "w_gradient": 0.6,
+                    "w_layer": 0.1, "n_samples": 50,
+                    "top_fraction": 0.30,
+                },
+                {
+                    "model_hash": "*", "family": "token_embd",
+                    "w_imatrix": 0.2, "w_gradient": 0.3,
+                    "w_layer": 0.5, "n_samples": 20,
+                    "top_fraction": 0.05,
+                },
+            ])
+
+        # Per-model rows for m1; cross-model rows fill in
+        # for ffn_gate (the per-model row has NULL
+        # top_fraction) and token_embd (no per-model row).
+        recs = read_per_family_top_fraction(
+            self.db_path, model_hash="m1",
+            cross_model_fallback=True,
+        )
+        self.assertAlmostEqual(recs["attn_q"], 0.20, places=6)
+        # The ffn_gate per-model row has NULL top_fraction,
+        # so the cross-model row fills in.
+        self.assertAlmostEqual(recs["ffn_gate"], 0.30, places=6)
+        # token_embd has no per-model row; the cross-model
+        # row fills in.
+        self.assertAlmostEqual(recs["token_embd"], 0.05, places=6)
+        # Without the cross-model fallback, only the
+        # per-model rows are returned.
+        recs_no_fallback = read_per_family_top_fraction(
+            self.db_path, model_hash="m1",
+            cross_model_fallback=False,
+        )
+        self.assertNotIn("token_embd", recs_no_fallback)
+        # ffn_gate's per-model row has NULL top_fraction;
+        # without the fallback it's not in the dict.
+        self.assertNotIn("ffn_gate", recs_no_fallback)
+        self.assertIn("attn_q", recs_no_fallback)
+
+    # ---- 12. Phase 15: end-to-end 3-coefficient retune ----
+
+    def test_compute_l5_weights_3coef_with_components(self) -> None:
+        """A synthetic l5_outcome with per-tensor component
+        columns populated produces a 3-coefficient OLS
+        retune. The verdict is tagged with the 3-coefficient
+        algorithm; the top_fraction is recommended.
+
+        The component columns are linearly independent
+        (im / grad / layer are not collinear) so the lstsq
+        can recover the unique coefficient vector.
+        """
+        rows: list[dict] = []
+        # 6 rows for attn_q. delta_mse = im (so b_im = 1,
+        # b_grad ~ 0, b_layer ~ 0). The im / grad / layer
+        # columns are linearly independent (no collinearity).
+        im_grid = [0.10, 0.30, 0.50, 0.70, 0.20, 0.80]
+        grad_grid = [0.70, 0.50, 0.30, 0.10, 0.60, 0.40]
+        layer_grid = [0.40, 0.60, 0.20, 0.80, 0.50, 0.10]
+        for i, (im, grad, layer) in enumerate(
+            zip(im_grid, grad_grid, layer_grid),
+        ):
+            sens = 0.5 * im + 0.3 * grad + 0.2 * layer
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"p{i}", "family": "attn_q",
+                "sensitivity_score": sens,
+                "imatrix_magnitude": im,
+                "gradient_proxy": grad,
+                "layer_position_prior": layer,
+                "mse_before": 0.01, "mse_after": 0.01 + im,
+                "delta_mse": im,
+                "plan_accepted": i % 2 == 0,  # hit_rate = 0.5
+                "in_sample_loss": 0.0,
+            })
+        _seed_l5_outcome(self.db_path, "3coef", rows)
+
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="3coef",
+            write_back=True,
+        )
+        # The 3-coefficient path produced a verdict.
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        self.assertTrue(attn.was_acted_on)
+        self.assertEqual(attn.retune_algorithm, RETUNE_SOURCE_TAG_3COEF)
+        # b_im is positive (im is a positive predictor of
+        # delta_mse).
+        self.assertGreater(attn.slopes[0], 0.0)
+        # The top_fraction is recommended (not None).
+        self.assertIsNotNone(attn.top_fraction)
+        self.assertGreater(attn.top_fraction, DEFAULT_BASE_TOP_FRACTION)
+        # l5_weights has the row with top_fraction populated.
+        df = read_l5_weights(self.db_path, model_hash="3coef")
+        self.assertEqual(df.height, 1)
+        self.assertIsNotNone(df["top_fraction"][0])
+        self.assertEqual(
+            df["retune_source"][0], RETUNE_SOURCE_TAG_3COEF,
+        )
+
+    def test_compute_l5_weights_2coef_fallback_when_components_null(
+        self,
+    ) -> None:
+        """A pre-Phase-15 l5_outcome (no per-tensor component
+        columns populated) routes through the 2-coefficient
+        fallback. The verdict is tagged with the
+        2-coefficient algorithm."""
+        rows: list[dict] = []
+        # 4 rows with the per-tensor component columns NULL
+        # (a pre-Phase-15 producer / older C++ writer).
+        sens = [0.2, 0.4, 0.6, 0.8]
+        deltas = [0.001, 0.002, 0.003, 0.004]
+        for i, (s, d) in enumerate(zip(sens, deltas)):
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"p{i}", "family": "attn_q",
+                "sensitivity_score": s,
+                # Per-tensor component columns are NULL on
+                # pre-Phase-15 rows.
+                "imatrix_magnitude": None,
+                "gradient_proxy": None,
+                "layer_position_prior": None,
+                "mse_before": 0.01, "mse_after": 0.01 + d,
+                "delta_mse": d,
+                "plan_accepted": True,
+            })
+        _seed_l5_outcome(self.db_path, "pre15", rows)
+
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="pre15",
+            write_back=True,
+        )
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        self.assertTrue(attn.was_acted_on)
+        # The 2-coefficient path is the fallback.
+        self.assertEqual(attn.retune_algorithm, RETUNE_SOURCE_TAG_2COEF)
+        # b_grad is the only non-zero coefficient.
+        self.assertAlmostEqual(attn.slopes[0], 0.0, places=6)
+        self.assertAlmostEqual(attn.slopes[2], 0.0, places=6)
+        # b_grad ~ 0.005 (the per-row slope).
+        self.assertAlmostEqual(attn.slopes[1], 0.005, places=6)
+        # The top_fraction is still recommended.
+        self.assertIsNotNone(attn.top_fraction)
+
+    # ---- 13. Phase 15: EMA-aware retune --------------------
+
+    def test_compute_l5_weights_ema_join_replaces_score(self) -> None:
+        """When l5_plan_ema is present, the retune uses the
+        EMA-tracked score for the OLS instead of the
+        per-iteration sensitivity_score. The per-row
+        ema_score is the EMA value at the iteration of the
+        plan; the join replaces the per-iteration score
+        with the EMA value.
+
+        This test exercises the join path. The verdict is
+        tagged with the 3-coefficient algorithm and the
+        coefficients reflect the EMA-driven signal.
+        """
+        rows: list[dict] = []
+        # 4 rows; per-iteration scores are noisy; the EMA
+        # values are the stable signal. The component
+        # columns are populated so the 3-coefficient path
+        # runs.
+        im_grid = [0.1, 0.3, 0.5, 0.7]
+        grad_grid = [0.4, 0.2, 0.6, 0.3]
+        layer_grid = [0.5, 0.7, 0.3, 0.1]
+        for i, (im, grad, layer) in enumerate(
+            zip(im_grid, grad_grid, layer_grid),
+        ):
+            # The per-iteration sensitivity is noisy
+            # (random-ish, distinct from the EMA).
+            sens = 0.4 + 0.1 * i
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"p{i}", "family": "attn_q",
+                "sensitivity_score": sens,
+                "imatrix_magnitude": im,
+                "gradient_proxy": grad,
+                "layer_position_prior": layer,
+                "mse_before": 0.01, "mse_after": 0.01 + im,
+                "delta_mse": im,
+                "plan_accepted": i % 2 == 0,
+            })
+        _seed_l5_outcome(self.db_path, "ema", rows)
+
+        # The EMA values: a stable signal where
+        # ema_score = 0.5 * im + 0.3 * grad + 0.2 * layer.
+        # The 3-coefficient OLS on (im, grad, layer, ema)
+        # recovers the (1, 0, 0) coefficient on im; the
+        # per-iteration sensitivity_score is too noisy
+        # to recover a clean signal.
+        ema_rows = [
+            {
+                "model_hash": "ema",
+                "name": f"blk.0.attn_q.{i}",
+                "iteration": 0, "plan_id": f"p{i}",
+                "ema_score": 0.5 * im + 0.3 * grad + 0.2 * layer,
+            }
+            for i, (im, grad, layer) in enumerate(
+                zip(im_grid, grad_grid, layer_grid),
+            )
+        ]
+        # Insert the EMA rows directly (the test schema
+        # does not have a typed insert helper).
+        import duckdb as _dd
+        con = _dd.connect(self.db_path)
+        try:
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS l5_plan_ema ("
+                "model_hash TEXT NOT NULL, name TEXT NOT NULL, "
+                "iteration INTEGER NOT NULL, plan_id TEXT NOT NULL, "
+                "ema_score DOUBLE, "
+                "PRIMARY KEY (model_hash, name, iteration, plan_id))"
+            )
+            for r in ema_rows:
+                con.execute(
+                    "INSERT INTO l5_plan_ema VALUES (?, ?, ?, ?, ?)",
+                    [r["model_hash"], r["name"], r["iteration"],
+                     r["plan_id"], r["ema_score"]],
+                )
+        finally:
+            con.close()
+
+        # Run the retune with the EMA-aware path. The 4
+        # rows produce a 3-coefficient OLS; the EMA-driven
+        # sensitivity is the per-iteration score in the
+        # lstsq (because the per-iteration score is
+        # replaced by the EMA value on the join).
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="ema",
+            use_ema=True, write_back=False,
+        )
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        self.assertTrue(attn.was_acted_on)
+        # The 3-coefficient path is used.
+        self.assertEqual(attn.retune_algorithm, RETUNE_SOURCE_TAG_3COEF)
+        # b_im is positive (im is a positive predictor of
+        # delta_mse; the per-iteration sensitivity is
+        # replaced by the EMA value via the join, so the
+        # OLS sees the stable signal).
+        self.assertGreater(attn.slopes[0], 0.0)
+
+        # Without the EMA join (use_ema=False), the OLS
+        # uses the per-iteration sensitivity_score, which
+        # is noisy. The coefficients may differ.
+        verdicts_no_ema = compute_l5_weights(
+            self.db_path, model_hash="ema",
+            use_ema=False, write_back=False,
+        )
+        attn_no_ema = next(v for v in verdicts_no_ema
+                           if v.family == "attn_q")
+        # The two retunes may produce different
+        # coefficients; the EMA path is the production
+        # path. We don't enforce a specific difference,
+        # but we verify both runs succeed.
+        self.assertTrue(attn_no_ema.was_acted_on)
+
+    def test_compute_l5_weights_no_ema_table_falls_back(self) -> None:
+        """When l5_plan_ema is missing (DBs created before
+        Phase 15 or the EMA producer hasn't run yet), the
+        retune falls back to the per-iteration
+        sensitivity_score. The retune is unaffected.
+        """
+        rows: list[dict] = []
+        for i, (im, grad, layer) in enumerate([
+            (0.1, 0.7, 0.4),
+            (0.3, 0.5, 0.6),
+            (0.5, 0.3, 0.2),
+            (0.7, 0.1, 0.8),
+        ]):
+            sens = 0.5 * im + 0.3 * grad + 0.2 * layer
+            rows.append({
+                "name": f"blk.0.attn_q.{i}",
+                "layer": 0, "iteration": 0,
+                "plan_id": f"p{i}", "family": "attn_q",
+                "sensitivity_score": sens,
+                "imatrix_magnitude": im,
+                "gradient_proxy": grad,
+                "layer_position_prior": layer,
+                "mse_before": 0.01, "mse_after": 0.01 + im,
+                "delta_mse": im,
+                "plan_accepted": i % 2 == 0,
+            })
+        _seed_l5_outcome(self.db_path, "no_ema", rows)
+        # No l5_plan_ema table; the retune uses the
+        # per-iteration sensitivity_score.
+        verdicts = compute_l5_weights(
+            self.db_path, model_hash="no_ema",
+            use_ema=True, write_back=True,
+        )
+        attn = next(v for v in verdicts if v.family == "attn_q")
+        self.assertTrue(attn.was_acted_on)
+        # The 3-coefficient path is used (the per-tensor
+        # components are populated).
+        self.assertEqual(attn.retune_algorithm, RETUNE_SOURCE_TAG_3COEF)
 
 
 if __name__ == "__main__":

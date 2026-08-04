@@ -44,6 +44,13 @@ def _fresh_path(idx: int) -> str:
 
 # Schema (only the tables the l5_outcome flow touches). Mirrored
 # on the C++ side in tessera-quantize-db.cpp.
+#
+# Phase 15: the per-tensor sensitivity component columns
+# (imatrix_magnitude, gradient_proxy, layer_position_prior) live
+# on both l5_plan_summary and l5_outcome. The test schema
+# includes them from the start so the test exercises the full
+# column path; production code adds them via ALTER TABLE IF NOT
+# EXISTS for DBs that pre-date the column addition.
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS l5_plan_summary (
         model_hash            TEXT NOT NULL,
@@ -55,6 +62,9 @@ SCHEMA_SQL = """
         recommended_qtype     TEXT,
         recommended_alpha     DOUBLE,
         recommended_clip      DOUBLE,
+        imatrix_magnitude     DOUBLE,
+        gradient_proxy        DOUBLE,
+        layer_position_prior  DOUBLE,
         updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, name, iteration, plan_id)
     );
@@ -87,6 +97,9 @@ SCHEMA_SQL = """
         plan_id               TEXT NOT NULL,
         family                TEXT,
         sensitivity_score     DOUBLE,
+        imatrix_magnitude     DOUBLE,
+        gradient_proxy        DOUBLE,
+        layer_position_prior  DOUBLE,
         recommended_alpha     DOUBLE,
         recommended_clip      DOUBLE,
         mse_before            DOUBLE,
@@ -374,6 +387,188 @@ class TestL5Outcome(unittest.TestCase):
         l5o.compute_l5_outcome(path, model_hash="idem", write_back=True)
         self.assertEqual(_count(path, "l5_outcome"), 1,
             "second run must replace, not append")
+
+    # ---- 6. Phase 15: per-tensor sensitivity component columns ----
+
+    def test_per_tensor_components_flow_through(self) -> None:
+        """The per-tensor sensitivity components
+        (imatrix_magnitude, gradient_proxy, layer_position_prior)
+        live on l5_plan_summary and must flow through the join
+        to l5_outcome. The 3-coefficient retune (Phase 15) reads
+        them; the verdict writeback preserves them so the retune
+        does not need a second join.
+        """
+        path = self._fresh(6)
+        # Two plans, with distinct per-tensor component values.
+        # The component sum equals the (combined) sensitivity_score
+        # under the default weights 0.5/0.3/0.2, so a downstream
+        # consumer can cross-check.
+        plan_rows = [
+            {
+                "name":              "blk.0.attn_q.weight",
+                "layer":             0,
+                "iteration":         0,
+                "plan_id":           "p0",
+                "sensitivity_score": 0.5 * 0.6 + 0.3 * 0.4 + 0.2 * 0.2,
+                "recommended_qtype": "Q4_K",
+                "imatrix_magnitude":  0.6,
+                "gradient_proxy":     0.4,
+                "layer_position_prior": 0.2,
+            },
+            {
+                "name":              "blk.0.ffn_gate.weight",
+                "layer":             0,
+                "iteration":         0,
+                "plan_id":           "p0",
+                "sensitivity_score": 0.5 * 0.3 + 0.3 * 0.7 + 0.2 * 0.5,
+                "recommended_qtype": "Q4_K",
+                "imatrix_magnitude":  0.3,
+                "gradient_proxy":     0.7,
+                "layer_position_prior": 0.5,
+            },
+        ]
+        outcome_rows = [
+            {
+                "name":        "blk.0.attn_q.weight",
+                "layer":       0,
+                "iteration":   0,
+                "plan_id":     "p0",
+                "strategy":    "A",
+                "mse_before":  0.010,
+                "mse_after":   0.009,
+                "frob_before": 0.010,
+                "frob_after":  0.009,
+                "family":      "attn_q",
+            },
+            {
+                "name":        "blk.0.ffn_gate.weight",
+                "layer":       0,
+                "iteration":   0,
+                "plan_id":     "p0",
+                "strategy":    "A",
+                "mse_before":  0.020,
+                "mse_after":   0.022,
+                "frob_before": 0.020,
+                "frob_after":  0.022,
+                "family":      "ffn_gate",
+            },
+        ]
+        with TesseraDB.open(path) as db:
+            db.insert_l5_plan(model_hash="comp", rows=plan_rows)
+            db.insert_l4_plan_outcome(model_hash="comp", rows=outcome_rows)
+        # sync-on-exit drained both buffers.
+
+        verdict = l5o.compute_l5_outcome(
+            path, model_hash="comp", write_back=True,
+        )
+        self.assertEqual(verdict.height, 2)
+        # The component columns are surfaced on the returned
+        # DataFrame. Sort by name for a deterministic order.
+        rows = sorted(verdict.to_dicts(), key=lambda r: r["name"])
+        # attn_q: im=0.6, grad=0.4, layer=0.2.
+        self.assertAlmostEqual(rows[0]["imatrix_magnitude"], 0.6, places=6)
+        self.assertAlmostEqual(rows[0]["gradient_proxy"], 0.4, places=6)
+        self.assertAlmostEqual(rows[0]["layer_position_prior"], 0.2, places=6)
+        # ffn_gate: im=0.3, grad=0.7, layer=0.5.
+        self.assertAlmostEqual(rows[1]["imatrix_magnitude"], 0.3, places=6)
+        self.assertAlmostEqual(rows[1]["gradient_proxy"], 0.7, places=6)
+        self.assertAlmostEqual(rows[1]["layer_position_prior"], 0.5, places=6)
+        # The components also land on the l5_outcome table.
+        self.assertEqual(_count(path, "l5_outcome"), 2)
+        import duckdb as _dd
+        con = _dd.connect(path, read_only=True)
+        try:
+            dbr = con.execute(
+                "SELECT name, imatrix_magnitude, gradient_proxy, "
+                "layer_position_prior FROM l5_outcome "
+                "WHERE model_hash = 'comp' ORDER BY name"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(dbr[0][0], "blk.0.attn_q.weight")
+        self.assertAlmostEqual(dbr[0][1], 0.6, places=6)
+        self.assertAlmostEqual(dbr[0][2], 0.4, places=6)
+        self.assertAlmostEqual(dbr[0][3], 0.2, places=6)
+        self.assertEqual(dbr[1][0], "blk.0.ffn_gate.weight")
+        self.assertAlmostEqual(dbr[1][1], 0.3, places=6)
+        self.assertAlmostEqual(dbr[1][2], 0.7, places=6)
+        self.assertAlmostEqual(dbr[1][3], 0.5, places=6)
+
+    def test_pre_phase15_schema_falls_back_gracefully(self) -> None:
+        """A DB whose l5_plan_summary lacks the per-tensor
+        component columns (pre-Phase-15 schema, C++ side that has
+        not yet migrated) is handled by the SELECT fallback. The
+        verdict surfaces the components as NULL so the retune can
+        fall back to the 2-coefficient OLS on the combined
+        sensitivity_score.
+        """
+        path = self._fresh(7)
+        # Build a pre-Phase-15 schema: l5_plan_summary without
+        # the per-tensor component columns. The TesseraDB's
+        # _ensure_l5_plan_columns() is what would normally add
+        # them on a writable connection; we DROP and recreate
+        # l5_plan_summary so it lacks the columns entirely.
+        import duckdb as _dd
+        con = _dd.connect(path)
+        try:
+            con.execute("DROP TABLE l5_plan_summary")
+            con.execute("""
+                CREATE TABLE l5_plan_summary (
+                    model_hash            TEXT NOT NULL,
+                    name                  TEXT NOT NULL,
+                    layer                 INTEGER,
+                    iteration             INTEGER NOT NULL,
+                    plan_id               TEXT NOT NULL,
+                    sensitivity_score     DOUBLE,
+                    recommended_qtype     TEXT,
+                    recommended_alpha     DOUBLE,
+                    recommended_clip      DOUBLE,
+                    updated_at            TIMESTAMP,
+                    PRIMARY KEY (model_hash, name, iteration, plan_id)
+                )
+            """)
+        finally:
+            con.close()
+        # Write a plan row + matching l4 outcome via raw duckdb
+        # (the TesseraDB.insert_l5_plan helper would re-add the
+        # columns via ALTER; we want to keep the pre-Phase-15
+        # shape for this test). Note: updated_at IS still on the
+        # pre-Phase-15 l5_plan_summary (it's not one of the
+        # Phase 15 additions); only the per-tensor component
+        # columns are missing.
+        con = _dd.connect(path)
+        try:
+            con.execute(
+                "INSERT INTO l5_plan_summary VALUES "
+                "('old', 'blk.0.attn_q.weight', 0, 0, 'p0', 0.5, "
+                " 'Q4_K', 0.5, 1.0, NULL)"
+            )
+            con.execute(
+                "INSERT INTO l4_plan_outcome VALUES "
+                "('old', 'blk.0.attn_q.weight', 0, 0, 'p0', 'A', "
+                " 0.5, 0.5, 1.0, 1.0, 4.0, 4.0, 0.01, 0.009, 0.01, 0.009, "
+                " 'attn_q', NULL)"
+            )
+        finally:
+            con.close()
+
+        # Run the verdict. The SELECT fallback in
+        # _read_l5_plan_safe should kick in; the per-tensor
+        # component columns surface as NULL on the verdict.
+        verdict = l5o.compute_l5_outcome(
+            path, model_hash="old", write_back=False,
+        )
+        self.assertEqual(verdict.height, 1)
+        row = verdict.to_dicts()[0]
+        for col in ("imatrix_magnitude", "gradient_proxy",
+                    "layer_position_prior"):
+            self.assertIsNone(
+                row[col],
+                f"pre-Phase-15 row should have NULL {col}, "
+                f"got {row[col]!r}",
+            )
+        # The combined sensitivity_score is still present.
+        self.assertAlmostEqual(row["sensitivity_score"], 0.5, places=6)
 
 
 if __name__ == "__main__":

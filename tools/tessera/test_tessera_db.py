@@ -93,17 +93,59 @@ SCHEMA_SQL = """
         PRIMARY KEY (model_hash, name)
     );
     CREATE TABLE IF NOT EXISTS l5_plan_summary (
-        model_hash        TEXT NOT NULL,
-        name              TEXT NOT NULL,
-        layer             INTEGER,
-        iteration         INTEGER,
-        plan_id           TEXT,
-        sensitivity_score DOUBLE,
-        recommended_qtype TEXT,
-        recommended_alpha DOUBLE,
-        recommended_clip  DOUBLE,
-        updated_at        TIMESTAMP,
+        model_hash            TEXT NOT NULL,
+        name                  TEXT NOT NULL,
+        layer                 INTEGER,
+        iteration             INTEGER,
+        plan_id               TEXT,
+        sensitivity_score     DOUBLE,
+        recommended_qtype     TEXT,
+        recommended_alpha     DOUBLE,
+        recommended_clip      DOUBLE,
+        imatrix_magnitude     DOUBLE,
+        gradient_proxy        DOUBLE,
+        layer_position_prior  DOUBLE,
+        updated_at            TIMESTAMP,
         PRIMARY KEY (model_hash, name, iteration, plan_id)
+    );
+    CREATE TABLE IF NOT EXISTS l5_outcome (
+        model_hash            TEXT NOT NULL,
+        name                  TEXT NOT NULL,
+        layer                 INTEGER,
+        iteration             INTEGER NOT NULL,
+        plan_id               TEXT NOT NULL,
+        family                TEXT,
+        sensitivity_score     DOUBLE,
+        imatrix_magnitude     DOUBLE,
+        gradient_proxy        DOUBLE,
+        layer_position_prior  DOUBLE,
+        recommended_alpha     DOUBLE,
+        recommended_clip      DOUBLE,
+        mse_before            DOUBLE,
+        mse_after             DOUBLE,
+        delta_mse             DOUBLE,
+        delta_frob            DOUBLE,
+        plan_accepted         BOOLEAN,
+        accept_threshold      DOUBLE,
+        residual              DOUBLE,
+        in_sample_loss        DOUBLE,
+        updated_at            TIMESTAMP,
+        PRIMARY KEY (model_hash, name, iteration, plan_id)
+    );
+    CREATE TABLE IF NOT EXISTS l5_weights (
+        model_hash            TEXT NOT NULL,
+        family                TEXT NOT NULL,
+        w_imatrix             DOUBLE NOT NULL,
+        w_gradient            DOUBLE NOT NULL,
+        w_layer               DOUBLE NOT NULL,
+        bias                  DOUBLE,
+        n_samples             INTEGER,
+        in_sample_loss        DOUBLE,
+        hit_rate              DOUBLE,
+        top_fraction          DOUBLE,
+        retune_source         TEXT,
+        updated_at            TIMESTAMP,
+        PRIMARY KEY (model_hash, family)
     );
     CREATE TABLE IF NOT EXISTS per_layer_error_summary (
         model_hash        TEXT NOT NULL,
@@ -419,6 +461,229 @@ class TestTesseraDB(unittest.TestCase):
             self.assertEqual(df.height, 1)
             # recommended_action is NULL when not provided.
             self.assertIsNone(df["recommended_action"].to_list()[0])
+
+
+# ---- 8. Phase 15: l5_plan_summary with per-tensor component
+    #         columns ----------------------------------------------
+
+    def test_insert_l5_plan_with_component_columns(self) -> None:
+        """Phase 15: insert_l5_plan writes the per-tensor
+        component columns (imatrix_magnitude, gradient_proxy,
+        layer_position_prior) and the row round-trips through
+        a SELECT with the new columns populated.
+        """
+        path = self._fresh(8)
+        with TesseraDB.open(path) as db:
+            n = db.insert_l5_plan(
+                model_hash="p15", rows=[
+                    {
+                        "name":                  "blk.0.attn_q.weight",
+                        "layer":                 0,
+                        "iteration":             0,
+                        "plan_id":               "p0",
+                        "sensitivity_score":     0.5,
+                        "recommended_qtype":     "Q4_K",
+                        "recommended_alpha":     0.5,
+                        "recommended_clip":      1.0,
+                        "imatrix_magnitude":     0.7,
+                        "gradient_proxy":        0.4,
+                        "layer_position_prior":  0.2,
+                    },
+                    {
+                        "name":                  "blk.0.ffn_gate.weight",
+                        "layer":                 0,
+                        "iteration":             0,
+                        "plan_id":               "p0",
+                        "sensitivity_score":     0.3,
+                        "recommended_qtype":     "Q4_K",
+                        "recommended_alpha":     0.5,
+                        "recommended_clip":      1.0,
+                        # Components are None (the per-tensor
+                        # components are optional; older
+                        # producers / the C++ side before
+                        # migration do not set them).
+                        "imatrix_magnitude":     None,
+                        "gradient_proxy":        None,
+                        "layer_position_prior":  None,
+                    },
+                ],
+            )
+        # sync-on-exit drained the buffer.
+        self.assertEqual(n, 2)
+        # The rows are visible with the new columns populated
+        # / NULL correctly.
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT name, imatrix_magnitude, gradient_proxy, "
+                "layer_position_prior FROM l5_plan_summary "
+                "WHERE model_hash = 'p15' ORDER BY name"
+            )
+        self.assertEqual(df.height, 2)
+        # attn_q: 0.7 / 0.4 / 0.2
+        self.assertAlmostEqual(df["imatrix_magnitude"][0], 0.7, places=6)
+        self.assertAlmostEqual(df["gradient_proxy"][0], 0.4, places=6)
+        self.assertAlmostEqual(df["layer_position_prior"][0], 0.2, places=6)
+        # ffn_gate: NULL / NULL / NULL
+        self.assertIsNone(df["imatrix_magnitude"][1])
+        self.assertIsNone(df["gradient_proxy"][1])
+        self.assertIsNone(df["layer_position_prior"][1])
+
+    def test_insert_l5_plan_adds_missing_columns_idempotently(self) -> None:
+        """A pre-Phase-15 l5_plan_summary (without the
+        per-tensor component columns) is upgraded in place
+        on the first insert_l5_plan call. The ALTER TABLE
+        ADD COLUMN IF NOT EXISTS is a no-op on subsequent
+        calls. The end state has all three columns and the
+        new insert round-trips correctly.
+        """
+        path = self._fresh(9)
+        # Pre-Phase-15 schema: drop the per-tensor component
+        # columns. The TesseraDB.open() in
+        # _create_fresh_db() creates the full schema, so we
+        # need to drop the Phase 15 columns to simulate a
+        # pre-Phase-15 DB.
+        import duckdb as _dd
+        con = _dd.connect(path)
+        try:
+            for col in ("imatrix_magnitude", "gradient_proxy",
+                        "layer_position_prior"):
+                con.execute(f"ALTER TABLE l5_plan_summary DROP COLUMN {col}")
+        finally:
+            con.close()
+        # Now insert_l5_plan() must add the columns back.
+        with TesseraDB.open(path) as db:
+            db.insert_l5_plan(
+                model_hash="pre15", rows=[{
+                    "name": "blk.0.attn_q.weight",
+                    "iteration": 0, "plan_id": "p0",
+                    "sensitivity_score": 0.5,
+                    "recommended_qtype": "Q4_K",
+                    "imatrix_magnitude": 0.6,
+                    "gradient_proxy": 0.3,
+                    "layer_position_prior": 0.1,
+                }],
+            )
+        # The columns are present and the row is in the
+        # table.
+        with TesseraDB.open(path, read_only=True) as db:
+            names = [c for c in db.query(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'l5_plan_summary'"
+            )["column_name"].to_list()]
+        for col in ("imatrix_magnitude", "gradient_proxy",
+                    "layer_position_prior"):
+            self.assertIn(col, names)
+        # The row round-trips.
+        with TesseraDB.open(path, read_only=True) as db:
+            row = db.query(
+                "SELECT imatrix_magnitude, gradient_proxy, "
+                "layer_position_prior FROM l5_plan_summary "
+                "WHERE model_hash = 'pre15'"
+            ).row(0, named=True)
+        self.assertAlmostEqual(row["imatrix_magnitude"], 0.6, places=6)
+        self.assertAlmostEqual(row["gradient_proxy"], 0.3, places=6)
+        self.assertAlmostEqual(row["layer_position_prior"], 0.1, places=6)
+
+    def test_insert_l5_weights_with_top_fraction(self) -> None:
+        """Phase 15: insert_l5_weights writes the per-family
+        top_fraction column (nullable). The row round-trips
+        through a SELECT.
+        """
+        path = self._fresh(10)
+        with TesseraDB.open(path) as db:
+            n = db.insert_l5_weights([
+                {
+                    "model_hash":     "tf",
+                    "family":         "attn_q",
+                    "w_imatrix":      0.6,
+                    "w_gradient":     0.3,
+                    "w_layer":        0.1,
+                    "bias":           0.0,
+                    "n_samples":      20,
+                    "in_sample_loss": 0.001,
+                    "hit_rate":       0.5,
+                    "top_fraction":   0.18,
+                },
+                {
+                    "model_hash":     "tf",
+                    "family":         "ffn_gate",
+                    "w_imatrix":      0.4,
+                    "w_gradient":     0.5,
+                    "w_layer":        0.1,
+                    "bias":           0.0,
+                    "n_samples":      20,
+                    "in_sample_loss": 0.002,
+                    "hit_rate":       0.4,
+                    # top_fraction is None (older writers
+                    # / the 2-coefficient fallback path).
+                    "top_fraction":   None,
+                },
+            ])
+        self.assertEqual(n, 2)
+        # The rows round-trip.
+        with TesseraDB.open(path, read_only=True) as db:
+            df = db.query(
+                "SELECT family, top_fraction FROM l5_weights "
+                "WHERE model_hash = 'tf' ORDER BY family"
+            )
+        self.assertEqual(df.height, 2)
+        # attn_q: top_fraction = 0.18
+        self.assertAlmostEqual(df["top_fraction"][0], 0.18, places=6)
+        # ffn_gate: top_fraction is NULL
+        self.assertIsNone(df["top_fraction"][1])
+
+    def test_insert_l5_weights_adds_top_fraction_idempotently(self) -> None:
+        """A pre-Phase-15 l5_weights (without the top_fraction
+        column) is upgraded in place on the first
+        insert_l5_weights call. The column addition is
+        idempotent across multiple calls.
+        """
+        path = self._fresh(11)
+        # Drop the top_fraction column to simulate a
+        # pre-Phase-15 DB.
+        import duckdb as _dd
+        con = _dd.connect(path)
+        try:
+            con.execute("ALTER TABLE l5_weights DROP COLUMN top_fraction")
+        finally:
+            con.close()
+        with TesseraDB.open(path) as db:
+            db.insert_l5_weights([{
+                "model_hash":     "add",
+                "family":         "attn_q",
+                "w_imatrix":      0.5,
+                "w_gradient":     0.3,
+                "w_layer":        0.2,
+                "n_samples":      10,
+                "hit_rate":       0.5,
+                "top_fraction":   0.12,
+            }])
+        # The column is back.
+        with TesseraDB.open(path, read_only=True) as db:
+            names = [c for c in db.query(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'l5_weights'"
+            )["column_name"].to_list()]
+        self.assertIn("top_fraction", names)
+        # Idempotent: a second insert does not fail.
+        with TesseraDB.open(path) as db:
+            db.insert_l5_weights([{
+                "model_hash":     "add",
+                "family":         "ffn_gate",
+                "w_imatrix":      0.4,
+                "w_gradient":     0.4,
+                "w_layer":        0.2,
+                "n_samples":      10,
+                "hit_rate":       0.5,
+                "top_fraction":   0.08,
+            }])
+        # Both rows are present.
+        with TesseraDB.open(path, read_only=True) as db:
+            count = int(db.query(
+                "SELECT COUNT(*) AS n FROM l5_weights "
+                "WHERE model_hash = 'add'"
+            )["n"][0])
+        self.assertEqual(count, 2)
 
 
 if __name__ == "__main__":
