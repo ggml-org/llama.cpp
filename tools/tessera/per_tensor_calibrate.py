@@ -68,6 +68,11 @@ try:
         mmap_layer,
         mmap_tensor,
     )
+    from .calibration_residency import (
+        ResidencyTracker,
+        default_budget_gb,
+        read_rss_bytes,
+    )
 except ImportError:  # pragma: no cover - script-mode import
     _REPO_ROOT = Path(__file__).resolve().parents[2]
     if str(_REPO_ROOT) not in sys.path:
@@ -82,6 +87,11 @@ except ImportError:  # pragma: no cover - script-mode import
         interleave_components,
         mmap_layer,
         mmap_tensor,
+    )
+    from tools.tessera.calibration_residency import (  # type: ignore[no-redef]
+        ResidencyTracker,
+        default_budget_gb,
+        read_rss_bytes,
     )
 
 
@@ -1882,6 +1892,71 @@ def run_awq_subprocess(
     return json.loads(output_path.read_text(encoding="utf-8"))
 
 
+def _run_lrq_with_residency(
+    layers: list[Path],
+    *,
+    args: argparse.Namespace,
+    tracker: ResidencyTracker,
+) -> list[tuple[Layer, LRQResult]]:
+    """LRQ per-tensor loop with the peak-RSS tracker check at each
+    iteration.
+
+    Phase 16 (calibration memopt) Cat 3.  The per-tensor
+    training is the natural place to check the budget: the
+    RSS spikes during the per-iter matmuls, so a check at
+    the top of each iteration catches the over-budget state
+    before the OS kills the process.
+
+    The loop dispatches to ``train_lrq_chunked`` when
+    ``args.chunk_rows > 0`` and the tensor's n_rows exceeds
+    ``args.chunk_rows``; the legacy ``train_lrq`` is used
+    otherwise.  The chunked path keeps the per-iter peak
+    RSS bounded; the residency check is a belt-and-braces
+    guard against unexpected allocations (numpy's internal
+    pool, gc, intermediate F32 copies from the consumer
+    side).
+    """
+    chunked_train = getattr(args, "chunk_rows", 0) > 0
+    results: list[tuple[Layer, LRQResult]] = []
+    for path in layers:
+        # Phase 16 Cat 3: the budget check fires at the top
+        # of each per-tensor iteration, before load_layer.
+        # The check is the granular signal that catches the
+        # over-budget state before the OS kills the process.
+        tracker.check(str(path))
+        layer = load_layer(path, max_tokens=args.max_tokens)
+        use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
+        if use_chunked:
+            result = train_lrq_chunked(
+                layer,
+                rank=args.lrq_rank,
+                iterations=args.lrq_iterations,
+                lr=args.lr,
+                seed=args.seed,
+                aggregation=args.lrq_agg,
+                chunk_rows=args.chunk_rows,
+                verbose=args.verbose,
+            )
+        else:
+            result = train_lrq(
+                layer,
+                rank=args.lrq_rank,
+                iterations=args.lrq_iterations,
+                lr=args.lr,
+                seed=args.seed,
+                aggregation=args.lrq_agg,
+                verbose=args.verbose,
+            )
+        results.append((layer, result))
+        if args.verbose:
+            print(
+                f"lrq[{layer.name}]: initial_mse={result.initial_mse:.4e} "
+                f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
+                file=sys.stderr,
+            )
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Compare mode
 # ---------------------------------------------------------------------------
@@ -1935,7 +2010,7 @@ def _format_comparison(
     return "\n".join(lines) + "\n"
 
 
-def run_compare(args: argparse.Namespace) -> int:
+def run_compare(args: argparse.Namespace, tracker: ResidencyTracker | None = None) -> int:
     layers = iter_layer_paths(args.layers)
     if not layers:
         raise ValueError(f"{args.layers}: no layer bundles")
@@ -1948,33 +2023,17 @@ def run_compare(args: argparse.Namespace) -> int:
     # path is used when ``--chunk-rows > 0`` and the tensor
     # is large enough; the legacy single-shot path is the
     # default and is bit-equivalent for matching chunk_rows.
-    lrq_results: list[tuple[Layer, LRQResult]] = []
-    chunked_train = getattr(args, "chunk_rows", 0) > 0
-    for path in layers:
-        layer = load_layer(path, max_tokens=args.max_tokens)
-        use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
-        if use_chunked:
-            result = train_lrq_chunked(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                chunk_rows=args.chunk_rows,
-                verbose=args.verbose,
-            )
-        else:
-            result = train_lrq(
-                layer,
-                rank=args.lrq_rank,
-                iterations=args.lrq_iterations,
-                lr=args.lr,
-                seed=args.seed,
-                aggregation=args.lrq_agg,
-                verbose=args.verbose,
-            )
-        lrq_results.append((layer, result))
+    # The peak-RSS check is wired in via the helper when a
+    # tracker is supplied (the main() path always supplies
+    # one; the test paths that call ``run_compare`` directly
+    # pass ``None`` to skip the check).
+    if tracker is not None:
+        lrq_results = _run_lrq_with_residency(layers, args=args, tracker=tracker)
+    else:
+        # Fallback: no tracker.  Use a no-op for the
+        # per-iteration check.
+        noop = ResidencyTracker(budget_bytes=0, abort_on_exceed=False)
+        lrq_results = _run_lrq_with_residency(layers, args=args, tracker=noop)
 
     provenance = {
         "tool": "per_tensor_calibrate.py",
@@ -2024,14 +2083,17 @@ def run_compare(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_dartquant(args: argparse.Namespace) -> int:
+def run_dartquant(args: argparse.Namespace, tracker: ResidencyTracker | None = None) -> int:
     """Run the DartQuant pre-rotation mode on every layer bundle."""
     layers = iter_layer_paths(args.layers)
     if not layers:
         raise ValueError(f"{args.layers}: no layer bundles")
     digests = {p.stem: bundle_digest(p) for p in layers}
+    if tracker is None:
+        tracker = ResidencyTracker(budget_bytes=0, abort_on_exceed=False)
     results: list[tuple[Layer, DartQuantResult]] = []
     for path in layers:
+        tracker.check(str(path))
         layer = load_layer(path, max_tokens=args.max_tokens)
         X = layer.train_activations
         if X is None or X.size == 0:
@@ -2087,7 +2149,7 @@ def run_dartquant(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def run_flrq(args: argparse.Namespace) -> int:
+def run_flrq(args: argparse.Namespace, tracker: ResidencyTracker | None = None) -> int:
     """Driver for the ``--fitness flrq`` mode.
 
     Iterates the layer bundles, runs ``train_flrq`` on each, and writes
@@ -2104,10 +2166,13 @@ def run_flrq(args: argparse.Namespace) -> int:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     digests = {p.stem: bundle_digest(p) for p in layers}
+    if tracker is None:
+        tracker = ResidencyTracker(budget_bytes=0, abort_on_exceed=False)
 
     flrq_results: list[tuple[Layer, FLRQResult]] = []
     per_rank: dict[str, dict[int, dict]] = {}
     for path in layers:
+        tracker.check(str(path))
         layer = load_layer(path, max_tokens=args.max_tokens)
         # We need the per-rank sweep data for the policy, so call
         # ``flrq_select_rank`` directly and build the result from it.
@@ -2358,56 +2423,46 @@ def _build_parser() -> argparse.ArgumentParser:
             "Use 0 or a negative value to disable chunking."
         ),
     )
+    # Phase 16 (calibration memopt) Cat 3: peak-RSS budget.
+    # The calibration aborts with a clear error if the
+    # process RSS exceeds the budget.  Default 32 GB fits
+    # a 12B unified run on a 64 GB host with the chunked
+    # path.  Use 0 to disable the check (the tracker still
+    # records peak_bytes for the final report, but never
+    # raises).
+    parser.add_argument(
+        "--peak-rss-budget-gb",
+        type=int,
+        default=default_budget_gb(),
+        help=(
+            "Phase 16 peak-RSS budget in GiB "
+            f"(default {default_budget_gb()}, 0 to disable)"
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    # Phase 16 Cat 3: peak-RSS budget tracker.  Created at the
+    # top of main() so all fitness modes share the same
+    # tracker.  ``--peak-rss-budget-gb 0`` disables the check
+    # (the tracker still records peak_bytes for the final
+    # report, but never raises).
+    tracker = ResidencyTracker(
+        budget_bytes=int(getattr(args, "peak_rss_budget_gb", 0) or 0) * 1024**3,
+        abort_on_exceed=True,
+    )
     if args.fitness == "lrq":
         layers = iter_layer_paths(args.layers)
         if not layers:
             raise ValueError(f"{args.layers}: no layer bundles")
         digests = {p.stem: bundle_digest(p) for p in layers}
-        lrq_results: list[tuple[Layer, LRQResult]] = []
-        # Phase 16 (calibration memopt): dispatch to the
-        # chunked LRQ path when the user opted in
-        # (``chunk_rows > 0``) and the per-tensor loop has at
-        # least one tensor large enough to benefit.  The
-        # chunked path is bit-equivalent to ``train_lrq`` for
-        # matching ``chunk_rows``; the legacy path is
-        # preserved for ``chunk_rows <= 0`` or ``>= n_rows``.
-        chunked_train = getattr(args, "chunk_rows", 0) > 0
-        for path in layers:
-            layer = load_layer(path, max_tokens=args.max_tokens)
-            use_chunked = chunked_train and layer.weight.shape[0] > args.chunk_rows
-            if use_chunked:
-                result = train_lrq_chunked(
-                    layer,
-                    rank=args.lrq_rank,
-                    iterations=args.lrq_iterations,
-                    lr=args.lr,
-                    seed=args.seed,
-                    aggregation=args.lrq_agg,
-                    chunk_rows=args.chunk_rows,
-                    verbose=args.verbose,
-                )
-            else:
-                result = train_lrq(
-                    layer,
-                    rank=args.lrq_rank,
-                    iterations=args.lrq_iterations,
-                    lr=args.lr,
-                    seed=args.seed,
-                    aggregation=args.lrq_agg,
-                    verbose=args.verbose,
-                )
-            lrq_results.append((layer, result))
-            if args.verbose:
-                print(
-                    f"lrq[{layer.name}]: initial_mse={result.initial_mse:.4e} "
-                    f"final_mse={result.final_mse:.4e} bytes={result.bytes_used()}",
-                    file=sys.stderr,
-                )
+        # Phase 16 Cat 3: the per-tensor check is inside the
+        # helper (``_run_lrq_with_residency``).  The helper
+        # also dispatches to the chunked path when
+        # ``--chunk-rows > 0`` and the tensor is large enough.
+        lrq_results = _run_lrq_with_residency(layers, args=args, tracker=tracker)
         provenance = {
             "tool": "per_tensor_calibrate.py",
             "mode": "lrq",
@@ -2424,6 +2479,7 @@ def main(argv: list[str] | None = None) -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {output} with {len(lrq_results)} LRQ tensor entries", file=sys.stderr)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
         return 0
     if args.fitness == "awq":
         output = Path(args.output)
@@ -2436,13 +2492,20 @@ def main(argv: list[str] | None = None) -> int:
             population=args.awq_population,
         )
         print(f"wrote {output} via awq-evolve.py", file=sys.stderr)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
         return 0
     if args.fitness == "flrq":
-        return run_flrq(args)
+        rc = run_flrq(args, tracker=tracker)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return rc
     if args.fitness == "compare":
-        return run_compare(args)
+        rc = run_compare(args, tracker=tracker)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return rc
     if args.fitness == "dartquant":
-        return run_dartquant(args)
+        rc = run_dartquant(args, tracker=tracker)
+        print(f"residency: {tracker.report()}", file=sys.stderr)
+        return rc
     raise ValueError(f"unknown --fitness {args.fitness!r}")
 
 

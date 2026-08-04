@@ -67,6 +67,111 @@ def _make_bundle(
     np.savez(path, **arrays)
 
 
+class TestResidencyDecisions(unittest.TestCase):
+    """The peak-RSS budget tracker (``ResidencyTracker``) is
+    the Phase 16 Cat 3 mechanism.  It reads the current
+    process RSS, compares it against the budget, and aborts
+    with a clear error when the budget is exceeded."""
+
+    def test_read_rss_returns_nonzero(self) -> None:
+        """The RSS reader returns a positive integer (the
+        process is alive, so RSS is at least a few MB)."""
+        rss = cm_residency.read_rss_bytes()
+        self.assertGreater(rss, 0)
+
+    def test_tracker_default_budget_32gb(self) -> None:
+        """The default budget is 32 GB (a 12B unified
+        calibration on a 64 GB host)."""
+        from calibration_residency import ResidencyTracker
+        t = ResidencyTracker()
+        self.assertEqual(t.budget_bytes, 32 * 1024**3)
+
+    def test_tracker_below_budget_passes(self) -> None:
+        """A check that is below the budget returns the
+        observed RSS and does not raise."""
+        from calibration_residency import ResidencyTracker
+        t = ResidencyTracker(budget_bytes=10 * 1024**3)  # 10 GB
+        current = t.check("test_tensor")
+        # The check returns the observed RSS (positive).
+        self.assertGreater(current, 0)
+        # The peak is updated.
+        self.assertGreaterEqual(t.peak_bytes, current)
+        # The check counter is incremented.
+        self.assertEqual(t.n_checks, 1)
+        self.assertEqual(t.n_violations, 0)
+
+    def test_tracker_over_budget_raises(self) -> None:
+        """A check that exceeds the budget raises
+        ``MemoryError`` naming the tensor and the observed
+        RSS vs the budget."""
+        from calibration_residency import ResidencyTracker
+        # 1 MB budget; the test process is >>1 MB so the
+        # first check will exceed.
+        t = ResidencyTracker(budget_bytes=1 * 1024 * 1024, abort_on_exceed=True)
+        with self.assertRaises(MemoryError) as ctx:
+            t.check("tensor_xyz")
+        msg = str(ctx.exception)
+        self.assertIn("tensor_xyz", msg)
+        self.assertIn("RSS", msg)
+        self.assertIn("budget", msg)
+
+    def test_tracker_over_budget_does_not_raise_in_advisory(self) -> None:
+        """A tracker with ``abort_on_exceed=False`` (advisory
+        mode) records the violation but does not raise.  The
+        diagnostics surface is still useful for the
+        non-aborting path."""
+        from calibration_residency import ResidencyTracker
+        t = ResidencyTracker(budget_bytes=1, abort_on_exceed=False)
+        t.check("test_tensor")  # would normally raise; advisory mode doesn't
+        self.assertEqual(t.n_violations, 1)
+        self.assertGreater(t.peak_bytes, 0)
+
+    def test_tracker_zero_budget_disables_check(self) -> None:
+        """A budget of 0 (the ``--peak-rss-budget-gb 0``
+        opt-out) disables the check; the tracker still
+        records peak_bytes for the final report."""
+        from calibration_residency import ResidencyTracker
+        t = ResidencyTracker(budget_bytes=0, abort_on_exceed=True)
+        # Multiple checks: none raise.
+        for i in range(5):
+            t.check(f"t{i}")
+        self.assertEqual(t.n_checks, 5)
+        self.assertEqual(t.n_violations, 0)
+        # peak_bytes is still recorded.
+        self.assertGreater(t.peak_bytes, 0)
+
+    def test_tracker_rejects_negative_budget(self) -> None:
+        """A negative budget is a programming error; raise
+        at construction time so the misconfiguration is
+        caught early (vs at the first check)."""
+        from calibration_residency import ResidencyTracker
+        with self.assertRaises(ValueError):
+            ResidencyTracker(budget_bytes=-1, abort_on_exceed=True)
+
+    def test_tracker_report_is_one_line(self) -> None:
+        """The report is a one-line summary suitable for the
+        final stderr log line."""
+        from calibration_residency import ResidencyTracker
+        t = ResidencyTracker(budget_bytes=32 * 1024**3)
+        t.check("test")
+        report = t.report()
+        self.assertIn("peak RSS", report)
+        self.assertIn("budget", report)
+        self.assertIn("checks", report)
+        self.assertIn("violations", report)
+        # One line: no embedded newlines.
+        self.assertNotIn("\n", report)
+
+
+# The residency module is imported at module level so the
+# ``TestResidencyDecisions`` class can reference it via
+# ``cm_residency``.  The import is below the streaming /
+# chunked / spatial / temporal test classes so the
+# streaming / chunked tests can run without the residency
+# dependency.
+import calibration_residency as cm_residency  # noqa: E402  pylint: disable=wrong-import-position
+
+
 class TestStreamingIO(unittest.TestCase):
     """``mmap_tensor`` and ``mmap_layer`` open ``.npz`` keys as
     memory-mapped views rather than reading the whole file into
