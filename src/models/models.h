@@ -424,6 +424,78 @@ struct llama_model_mellum : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct llama_model_motif3 : public llama_model_base {
+    llama_model_motif3(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // mHC (Manifold-constrained Hyper-Connections), Motif-3 variant
+        // computes the h_pre/h_post/h_res gates from the expanded residual stream
+        void build_mhc_gates(
+                ggml_tensor  * x,       // [n_embd, mhc_mult, n_tokens]
+                ggml_tensor  * norm_w,
+                ggml_tensor  * pre_w,  ggml_tensor * pre_b,
+                ggml_tensor  * post_w, ggml_tensor * post_b,
+                ggml_tensor  * res_w,  ggml_tensor * res_b,
+                ggml_tensor  * alpha,  // [3] = {alpha_pre, alpha_post, alpha_res}
+                ggml_tensor ** h_pre,  // out: [mhc_mult, n_tokens]
+                ggml_tensor ** h_post, // out: [mhc_mult, n_tokens]
+                ggml_tensor ** h_res,  // out: [mhc_mult, mhc_mult, n_tokens] (ne0 = src)
+                int il) const;
+
+        ggml_tensor * build_mhc_sinkhorn(ggml_tensor * m, int il) const;
+
+        // weighted reduction over the expansion dim: [n_embd, E, nt] -> [n_embd, nt]
+        ggml_tensor * build_mhc_apply_pre(ggml_tensor * x, ggml_tensor * h_pre, int il) const;
+
+        // out[dst] = sum_src h_res[dst,src] * x[src] + h_post[dst] * y
+        ggml_tensor * build_mhc_combine(
+                ggml_tensor * x,      // [n_embd, E, nt]
+                ggml_tensor * y,      // [n_embd, nt]
+                ggml_tensor * h_post,
+                ggml_tensor * h_res,
+                int il) const;
+
+        // grouped PolyNorm gated activation: poly(gate) * up
+        // per-expert variant when selected != nullptr (poly_w = [3, n_expert], poly_b = [1, n_expert])
+        ggml_tensor * build_polynorm_act(
+                ggml_tensor * gate,
+                ggml_tensor * up,
+                ggml_tensor * poly_w,
+                ggml_tensor * poly_b,
+                ggml_tensor * selected, // [n_expert_used, n_tokens] or nullptr
+                bool          clamp_bias,
+                bool          clamp_result,
+                int il) const;
+
+        ggml_tensor * build_polynorm_mlp(
+                ggml_tensor * cur,
+                ggml_tensor * gate_w,
+                ggml_tensor * up_w,
+                ggml_tensor * down_w,
+                ggml_tensor * poly_w,
+                ggml_tensor * poly_b,
+                int il) const;
+
+        ggml_tensor * build_moe_polynorm(const llama_model & model, ggml_tensor * cur, int il) const;
+
+        ggml_tensor * build_gdla_attn(
+                const llama_model & model,
+                llm_graph_input_attn_kv      * inp_kv,
+                llm_graph_input_attn_kv_iswa * inp_iswa,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                float kq_scale_full,
+                float kq_scale_swa,
+                int il) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_nanbeige : public llama_model_base {
     llama_model_nanbeige(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

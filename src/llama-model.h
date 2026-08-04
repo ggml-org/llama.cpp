@@ -139,6 +139,7 @@ enum llm_type {
     LLM_TYPE_235B_A22B,
     LLM_TYPE_300B_A47B, // Ernie MoE big
     LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
+    LLM_TYPE_314B_A13B, // Motif-3
     LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_397B_A17B, // Qwen3.5
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
@@ -337,6 +338,32 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act    = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
+
+    // Motif-3
+    struct ggml_tensor * wq_b_gate         = nullptr;
+    struct ggml_tensor * attn_lambda       = nullptr;
+    struct ggml_tensor * ffn_poly_w        = nullptr;
+    struct ggml_tensor * ffn_poly_b        = nullptr;
+    struct ggml_tensor * ffn_poly_exps_w   = nullptr;
+    struct ggml_tensor * ffn_poly_exps_b   = nullptr;
+    struct ggml_tensor * ffn_poly_shexp_w  = nullptr;
+    struct ggml_tensor * ffn_poly_shexp_b  = nullptr;
+    struct ggml_tensor * mhc_attn_norm     = nullptr;
+    struct ggml_tensor * mhc_attn_pre      = nullptr;
+    struct ggml_tensor * mhc_attn_pre_b    = nullptr;
+    struct ggml_tensor * mhc_attn_post     = nullptr;
+    struct ggml_tensor * mhc_attn_post_b   = nullptr;
+    struct ggml_tensor * mhc_attn_res      = nullptr;
+    struct ggml_tensor * mhc_attn_res_b    = nullptr;
+    struct ggml_tensor * mhc_attn_alpha    = nullptr;
+    struct ggml_tensor * mhc_ffn_norm      = nullptr;
+    struct ggml_tensor * mhc_ffn_pre       = nullptr;
+    struct ggml_tensor * mhc_ffn_pre_b     = nullptr;
+    struct ggml_tensor * mhc_ffn_post      = nullptr;
+    struct ggml_tensor * mhc_ffn_post_b    = nullptr;
+    struct ggml_tensor * mhc_ffn_res       = nullptr;
+    struct ggml_tensor * mhc_ffn_res_b     = nullptr;
+    struct ggml_tensor * mhc_ffn_alpha     = nullptr;
     struct ggml_tensor * ffn_gate_tid2eid = nullptr;
 
     // mamba proj

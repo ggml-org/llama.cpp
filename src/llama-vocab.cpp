@@ -2611,6 +2611,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|im_end|>"
                         || t.first == "<|end|>"
                         || t.first == "<end_of_turn>"
+                        || t.first == "<|endofturn|>" // Motif-3
                         || t.first == "<|endoftext|>"
                         || t.first == "<|end_of_text|>" // granite
                         || t.first == "<EOT>"
@@ -2811,6 +2812,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<|flush|>"  // solar-open
                     || t.first == "<|calls|>"  // solar-open
                     || t.first == "<end_of_turn>"
+                    || t.first == "<|endofturn|>" // Motif-3
                     || t.first == "<|endoftext|>"
                     || t.first == "</s>"      // paddleocr
                     || t.first == "<|eom_id|>"
