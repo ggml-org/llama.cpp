@@ -370,7 +370,7 @@ if(LLAMA_BUILD_TESTS)
     # (no libgguf / libggml needed) so it runs in the standalone
     # test_all.sh too.
     set(TARGET test-tessera-ga-model-role)
-    add_executable(${TARGET} ../tests/test-tessera-ga-model-role.cpp
+    add_executable(${TARGET} ../../tests/test-tessera-ga-model-role.cpp
                                   tessera/tessera-quantize-db.cpp
                                   tessera/tessera-db-buffer.cpp)
     target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tessera)
