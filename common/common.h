@@ -107,9 +107,41 @@ enum llama_example {
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
     LLAMA_EXAMPLE_TOKENIZE,
+    // Tessera fork: top-level scope for all --tessera-* / subcommand flags.
+    // Subcommand-specific flags are additionally tagged with a
+    // tessera_subcommand value in common_arg (see common/tessera-args.h).
     LLAMA_EXAMPLE_TESSERA,
 
     LLAMA_EXAMPLE_COUNT,
+};
+
+// Tessera fork: subcommand namespace. The CLI surface is collapsed from
+// a flat 60-flag pile into 19 named subcommands. A flag is visible only
+// when its tagged tessera_subcommand is either empty (top-level / "any")
+// or matches the current ctx_arg.tessera_sc.
+enum tessera_subcommand {
+    TESSERA_SC_NONE,        // no subcommand (main quantize path / top-level)
+    TESSERA_SC_ACCEPT,
+    TESSERA_SC_ADAPT,
+    TESSERA_SC_ANONYMIZE,
+    TESSERA_SC_AWQ,
+    TESSERA_SC_CALIBRATE,
+    TESSERA_SC_CAPABILITY,
+    TESSERA_SC_CHAMPQ,
+    TESSERA_SC_DATASET,
+    TESSERA_SC_DPACE,
+    TESSERA_SC_EVOLVE,
+    TESSERA_SC_GA,
+    TESSERA_SC_KERNEL_FITNESS,
+    TESSERA_SC_L15,
+    TESSERA_SC_L2,
+    TESSERA_SC_L5,
+    TESSERA_SC_POLICY,
+    TESSERA_SC_RUNTIME_PROBE,
+    TESSERA_SC_THROUGHPUT,
+    TESSERA_SC_W4A4,
+
+    TESSERA_SC_COUNT,
 };
 
 enum common_sampler_type {

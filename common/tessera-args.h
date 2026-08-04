@@ -106,3 +106,22 @@ struct common_tessera_params {
 };
 
 const common_tessera_params & common_get_tessera_params();
+
+// Tessera fork: subcommand-aware entry point. Inspects argv[1] for a known
+// subcommand name and dispatches the rest of the arguments to the matching
+// per-subcommand flag set; without a subcommand, falls through to the main
+// quantize path (tessera_sc = TESSERA_SC_NONE). On `--help`, prints the
+// subcommand list (or the active subcommand's flag set) and exits 0. The
+// caller is responsible for invoking the subcommand's CLI handler after
+// this returns (see llama_tessera_main in tools/quantize/quantize.cpp).
+// Returns true on a clean parse, false on a parse error.
+//
+// HARD BREAK (Tier 2): the legacy --tessera-* / --calib-* flag surface is
+// not parsed here. Old flags produce "unrecognized argument" via
+// common_params_parse. Use the subcommand syntax: `llama-tessera
+// <subcommand> [flags]` or omit the subcommand for the main quantize path.
+bool common_tessera_params_parse(int argc, char ** argv, common_params & params, void(*print_usage)(int, char **) = nullptr);
+
+// Tessera fork: the subcommand selected by the most recent
+// common_tessera_params_parse call. TESSERA_SC_NONE = no subcommand.
+enum tessera_subcommand common_tessera_active_subcommand();

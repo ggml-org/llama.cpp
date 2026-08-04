@@ -67,9 +67,76 @@ static std::initializer_list<enum llama_example> mmproj_examples = {
 };
 
 static common_tessera_params tessera_params;
+static enum tessera_subcommand tessera_active_sc = TESSERA_SC_NONE;
 
 const common_tessera_params & common_get_tessera_params() {
     return tessera_params;
+}
+
+enum tessera_subcommand common_tessera_active_subcommand() {
+    return tessera_active_sc;
+}
+
+// Tessera fork: subcommand name <-> enum. Single source of truth for the
+// dispatch table; both the dispatch in common_tessera_params_parse and
+// the top-level --help printer use it.
+struct tessera_subcommand_def {
+    const char *      name;
+    tessera_subcommand sc;
+    const char *      description;
+};
+
+static const std::vector<tessera_subcommand_def> & tessera_subcommand_table() {
+    static const std::vector<tessera_subcommand_def> table = {
+        { "accept",         TESSERA_SC_ACCEPT,         "G6 acceptance gate tuning" },
+        { "adapt",          TESSERA_SC_ADAPT,          "guarded one-shot adaptation step" },
+        { "anonymize",      TESSERA_SC_ANONYMIZE,      "tier-2 escalation text scrub" },
+        { "awq",            TESSERA_SC_AWQ,            "AWQ per-tensor tuning" },
+        { "calibrate",      TESSERA_SC_CALIBRATE,      "calibration pass; --only runs calibrate then exits" },
+        { "capability",     TESSERA_SC_CAPABILITY,     "per-axis capability score reduction" },
+        { "champq",         TESSERA_SC_CHAMPQ,         "enable CHAMP-Q permutation for the current quantize run" },
+        { "dataset",        TESSERA_SC_DATASET,        "prepare drafter training data from spec JSONL" },
+        { "dpace",          TESSERA_SC_DPACE,          "compute D-PACE adaptive position weights from DFlash telemetry" },
+        { "evolve",         TESSERA_SC_EVOLVE,         "GA tuning; --only runs GA then exits" },
+        { "ga",             TESSERA_SC_GA,             "GA checkpoint resume" },
+        { "kernel-fitness", TESSERA_SC_KERNEL_FITNESS, "L1 sidecar kernel-direct fitness blend" },
+        { "l15",            TESSERA_SC_L15,            "L1.5 reference sidecar dtype (f16 | f32)" },
+        { "l2",             TESSERA_SC_L2,             "L2 forward-pass differential output" },
+        { "l5",             TESSERA_SC_L5,             "L5 adaptive requantize loop tuning" },
+        { "policy",         TESSERA_SC_POLICY,         "calibration policy I/O and range selection" },
+        { "runtime-probe",  TESSERA_SC_RUNTIME_PROBE,  "L2 forward-pass orchestrator marker" },
+        { "throughput",     TESSERA_SC_THROUGHPUT,     "north-star batched-throughput workload harness" },
+        { "w4a4",           TESSERA_SC_W4A4,           "enable W4A4 activation quantization for the current quantize run" },
+    };
+    return table;
+}
+
+static bool tessera_subcommand_lookup(const char * name, tessera_subcommand & out_sc) {
+    for (const auto & d : tessera_subcommand_table()) {
+        if (strcmp(d.name, name) == 0) {
+            out_sc = d.sc;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void tessera_print_subcommand_list() {
+    printf("Subcommands (run `llama-tessera <subcommand> --help` for details):\n");
+    for (const auto & d : tessera_subcommand_table()) {
+        printf("  %-16s %s\n", d.name, d.description);
+    }
+    printf("\nRun `llama-tessera --help` for the main quantize path flags.\n");
+}
+
+// Tessera fork: top-level help footer. Appends the subcommand list to the
+// standard common_params_print_usage output when no subcommand is active.
+// Static because common_params_parse takes a void(*)(int, char**) callback.
+static void tessera_top_level_help_footer(int /*argc*/, char ** /*argv*/) {
+    if (tessera_active_sc == TESSERA_SC_NONE) {
+        printf("\n");
+        tessera_print_subcommand_list();
+    }
 }
 
 // Forward declaration for the add_opt-backed dispatch path used by
@@ -205,6 +272,11 @@ common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> 
 
 common_arg & common_arg::set_excludes(std::initializer_list<enum llama_example> excludes) {
     this->excludes = excludes;
+    return *this;
+}
+
+common_arg & common_arg::set_tessera_sc(std::initializer_list<enum tessera_subcommand> sc) {
+    this->tessera_sc = sc;
     return *this;
 }
 
