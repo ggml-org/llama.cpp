@@ -101,6 +101,19 @@ struct common_ane_mtp_program {
     std::atomic<uint64_t> async_prefill_submissions = 0;
     std::atomic<uint64_t> async_prefill_completions = 0;
     std::atomic<uint64_t> async_prefill_failures = 0;
+    // W6.5 part 2: the async prefill path bypasses the pump (it
+    // dispatches directly on program.queue), so the pump's
+    // monotonic completion counter isn't used. The async path
+    // tracks its own monotonic counter and emits it as the
+    // MTLSharedEvent signal value, so async-path consumers can
+    // strict-order their reads the same way sync-path consumers
+    // do. The two counters are disjoint: the sync path's pump
+    // counter increments per function via ane_pump::run; the
+    // async counter increments per async prefill call. Both
+    // monotonic. (A future commit can unify them by routing the
+    // async path through the pump too, eliminating the dual
+    // counter.)
+    std::atomic<uint64_t> async_call_counter = 0;
     // A prefill prediction may outlive the queue turn which submitted it.
     // Give every asynchronous call distinct arena slots so a later request
     // cannot overwrite Core ML input/output storage still owned by ANE.
@@ -664,9 +677,50 @@ static void ane_signal_slot_events(
     }
 }
 
+// W6.5 part 2: the pump's submit_fn callback. The pump runs
+// this on the per-pump E-core thread (QOS_CLASS_BACKGROUND
+// affinity, set in ane_pump::init). The submit_fn unpacks
+// the dispatch context (function_name + extra_inputs +
+// output_names) and calls the locked body. The locked body
+// is the prediction + zero-copy proof; it doesn't know about
+// the pump or the queue — those concerns live here, in the
+// pump's wrapper. This is the unified state-machine ownership:
+// the lock-free state machine (IDLE -> INPUT_READY ->
+// ANE_BUSY -> OUTPUT_READY -> IDLE) is owned by the pump;
+// the host only signals input readiness; the pump drives the
+// submit + signal + completion transitions atomically.
+struct ane_pump_dispatch_context {
+    const std::string * function_name;
+    NSDictionary<NSString *, MLFeatureValue *> * extra_inputs;
+    const std::unordered_set<std::string> * output_names;
+};
+
+static bool dispatch_pinned_function_submit(
+        common_ane_mtp_program & program,
+        common_ane_compute_instance & instance,
+        void * context) {
+    const auto * ctx = static_cast<const ane_pump_dispatch_context *>(context);
+    return dispatch_pinned_function_locked(
+        program, *ctx->function_name, ctx->extra_inputs, ctx->output_names);
+}
+
 // This is the canonical multifunction dispatch path. The W2 design
 // is locked: stateless at the Core ML level, stateful via the
 // IOSurface; the dispatch doesn't use MLState.
+//
+// W6.5 part 2: the dispatch is now driven through the per-function
+// E-core pump (common/ane-pump.h). The state machine is owned by
+// the pump; the host only signals input readiness. The pump
+// dispatches the submit_fn on the E-core thread (QOS_CLASS_BACKGROUND
+// affinity, set at pump init) and signals the per-slot MTLSharedEvent
+// handles on the E-core thread. The signal value is the pump's
+// monotonic completion counter (replacing the old steady_clock
+// nanoseconds; consumers can now strict-order their reads via the
+// counter, which is the canonical handoff primitive). Program
+// queue serialization is gone: the pump's serial E-core queue
+// serializes the same function's dispatches (ANE itself is
+// single-threaded per function), and the lock-free CAS guards
+// against host races.
 static bool dispatch_pinned_function(
         common_ane_mtp_program & program,
         const std::string & function_name,
@@ -675,32 +729,35 @@ static bool dispatch_pinned_function(
     if (!program.manifest_loaded) {
         return false;
     }
-    // Resolve the function_id once so the W7 signal_fn can
-    // iterate the function's output slots.
-    const ane_function_v1_t * function = find_manifest_function(
-        program, function_name);
-    if (function == nullptr) {
+    auto it = program.functions.find(function_name);
+    if (it == program.functions.end() || it->second == nullptr) {
         return false;
     }
-    const uint32_t function_id = (uint32_t) (function - program.manifest.functions);
-    __block bool ok = false;
-    dispatch_sync(program.queue, ^{
-        ok = dispatch_pinned_function_locked(program, function_name,
-                                              extra_inputs, output_names);
-    });
-    if (ok) {
-        // W7: signal the per-slot MTLSharedEvent handles for the
-        // function's output slots. The value is a monotonic
-        // counter (we use the wall clock + the function id as a
-        // cheap monotonically increasing value; the pump's
-        // completion counter would be the canonical source but
-        // the dispatch_sync path doesn't track one). The signal
-        // is the OUTPUT_READY release for downstream consumers.
-        const uint64_t value = (uint64_t) std::chrono::steady_clock::now()
-            .time_since_epoch().count();
-        ane_signal_slot_events(program, function_id, value, nullptr);
+    common_ane_compute_instance & instance = *it->second;
+    if (!instance.pump_ready) {
+        return false;
     }
-    return ok;
+    // Host-side: signal input readiness. The CAS IDLE -> INPUT_READY
+    // fails when the pump is busy (a racing dispatch). The caller
+    // should retry; for the canonical prefill path the host is
+    // single-threaded per program, so the CAS is contention-free.
+    if (!ane_pump::signal_input_ready(instance.pump)) {
+        return false;
+    }
+    // The dispatch context is a stack-allocated POD; the pump's
+    // run() consumes it before returning (it doesn't outlive this
+    // scope, so no heap allocation is required).
+    ane_pump_dispatch_context ctx = {
+        &function_name, extra_inputs, output_names
+    };
+    // Pump-side: drive the cycle. submit_fn = dispatch_pinned_function_submit
+    // (runs on the E-core thread); signal_fn = ane_signal_slot_events
+    // (also runs on the E-core thread, after the OUTPUT_READY transition).
+    // The signal value is the pump's monotonic completion counter.
+    return ane_pump::run(instance.pump, program, instance,
+                          dispatch_pinned_function_submit,
+                          ane_signal_slot_events,
+                          &ctx);
 }
 
 static void read_float_data(const MLMultiArray * array, float * destination, size_t count) {
@@ -2019,6 +2076,21 @@ common_ane_prefill_request_ptr common_ane_compute_prefill_async(
                 finish(false);
                 return;
             }
+            // W7 (async-path fix): the sync path's dispatch_pinned_function
+            // signals the per-slot MTLSharedEvent handles via the pump's
+            // signal_fn. The async path bypasses the pump (it dispatches
+            // directly via dispatch_async on program.queue) so the signal
+            // doesn't fire automatically; emit it here. The value is the
+            // program's per-function call counter, incremented on every
+            // successful async prefill; downstream consumers observe a
+            // monotonic ordering. The same value will be visible on the
+            // next sync dispatch through the pump (the pump tracks its
+            // own monotonic counter; the two counters are disjoint because
+            // the sync and async paths are serialized through program.queue
+            // in this commit and never overlap on the same function).
+            const uint32_t function_id = (uint32_t) (function - request->program->manifest.functions);
+            ane_signal_slot_events(*request->program, function_id,
+                                    ++request->program->async_call_counter, nullptr);
             // Read the result. The hidden_states output is in the
             // pinned slot; copy to the caller's host buffer.
             get_pinned_output(*request->program, hidden_slot,
