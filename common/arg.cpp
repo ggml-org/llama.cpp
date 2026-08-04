@@ -95,32 +95,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         return true;
     };
 
-    // enum-valued
-    if (arg == "--tessera-mode") {
-        if (!require_val("--tessera-mode")) return -1;
-        if (val != "off" && val != "default" && val != "calibrate-only" && val != "evolve-only") {
-            err = string_format("error: unknown value for --tessera-mode: '%s'\n", val.c_str());
-            return -1;
-        }
-        tessera_params.mode = val; return 2;
-    }
-    if (arg == "--tessera-range-selection") {
-        if (!require_val("--tessera-range-selection")) return -1;
-        if (val != "legacy" && val != "imatrix-mse" && val != "septq") {
-            err = string_format("error: unknown value for --tessera-range-selection: '%s'\n", val.c_str());
-            return -1;
-        }
-        tessera_params.range_selection = val; return 2;
-    }
-    if (arg == "--tessera-anonymize-level") {
-        if (!require_val("--tessera-anonymize-level")) return -1;
-        if (val != "light" && val != "balanced" && val != "aggressive") {
-            err = string_format("error: unknown value for --tessera-anonymize-level: '%s'\n", val.c_str());
-            return -1;
-        }
-        tessera_params.anonymize_level = val; return 2;
-    }
-
     // string-valued
     if (arg == "--tessera-imatrix")           { if (!require_val("--tessera-imatrix")) return -1;           tessera_params.imatrix          = val; return 2; }
     if (arg == "--tessera-policy")            { if (!require_val("--tessera-policy")) return -1;            tessera_params.policy           = val; return 2; }
