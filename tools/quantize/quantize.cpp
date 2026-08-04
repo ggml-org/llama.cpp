@@ -404,6 +404,14 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
 }
 
 // satisfies -Wmissing-declarations
+int llama_tessera_main(int argc, char ** argv);
+
+// llama_quantize() is the main-quantize-path subroutine: it parses the
+// positional <input> <ftype> [nthreads] args plus the legacy
+// llama-quantize-specific flags (--leave-output-tensor,
+// --output-tensor-type, --tensor-type, ...) and runs the dispatch.
+// Called from llama_tessera_main when the user invokes llama-tessera
+// without a subcommand (or with a tuning subcommand like awq, l5, w4a4).
 int llama_quantize(int argc, char ** argv);
 
 // Serialize a capability score vector. Field order matches the adapt
@@ -839,16 +847,14 @@ int llama_quantize(int argc, char ** argv) {
                 usage(argv[0]);
             }
         } else {
-            std::string terr;
-            const int n = common_arg_dispatch_tessera(argc, argv, arg_idx, terr);
-            if (n < 0) {
-                fprintf(stderr, "%s", terr.c_str());
-                usage(argv[0]);
-            } else if (n == 0) {
-                usage(argv[0]);
-            } else {
-                arg_idx += n - 1;  // the for-loop performs the final ++
-            }
+            // Tessera fork (Tier 2 HARD BREAK): unknown --flag here means
+            // the user passed a legacy --tessera-* or --calib-* flag. Those
+            // are removed; the new subcommand syntax must be used. Print
+            // a clear error pointing to the migration map and exit.
+            fprintf(stderr, "%s: unrecognized argument: %s\n", argv[0], argv[arg_idx]);
+            fprintf(stderr, "    The flat --tessera-* / --calib-* flag surface has been replaced by 19 named subcommands.\n");
+            fprintf(stderr, "    Run `%s --help` for the subcommand list, or see docs/tier2-subcommand-design.md.\n", argv[0]);
+            usage(argv[0]);
         }
     }
 
@@ -1149,4 +1155,102 @@ int llama_quantize(int argc, char ** argv) {
     llama_backend_free();
 
     return 0;
+}
+
+// Tessera fork: top-level subcommand-aware entry point (Tier 2). Called
+// by the llama-tessera binary. Parses with common_tessera_params_parse
+// (which handles the subcommand dispatch and the subcommand-scoped Tessera
+// flag set), then routes to the right handler.
+//
+// Subcommand modes that exit without quantizing (capability, adapt,
+// anonymize, throughput, dataset, dpace, l2) call the matching ts_cli_*
+// helper and return its exit code. Tuning subcommands (awq, l5, w4a4,
+// champq, evolve, calibrate, policy, ga, kernel-fitness, runtime-probe,
+// accept, l15) fall through to the main quantize path; their flags have
+// already been recorded in tessera_params. No-subcommand mode is also
+// the main quantize path.
+//
+// HARD BREAK: the old --tessera-* flag surface is gone. Any old flag
+// that slipped through to llama_quantize's hand-rolled loop will hit
+// the "unrecognized argument" path because common_tessera_parse_one is
+// removed. Old flags must be migrated to subcommand syntax.
+[[noreturn]]
+static void llama_tessera_usage_wrapper(int /*argc*/, char ** argv) {
+    usage(argv[0]);
+}
+
+int llama_tessera_main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
+    common_params params;
+    if (!common_tessera_params_parse(argc, argv, params, llama_tessera_usage_wrapper)) {
+        fprintf(stderr, "error: failed to parse arguments\n");
+        return 1;
+    }
+
+    const enum tessera_subcommand sc = common_tessera_active_subcommand();
+    const common_tessera_params & tp = common_get_tessera_params();
+
+    // Exit-without-quantize subcommands: they run a self-contained CLI
+    // helper against tessera_params and return its exit code. Each
+    // helper checks that its required input was supplied.
+    switch (sc) {
+        case TESSERA_SC_CAPABILITY:
+            if (tp.capability_eval.empty()) {
+                fprintf(stderr, "error: `capability` subcommand requires --eval PATH\n");
+                return 1;
+            }
+            return ts_cli_capability_eval(tp);
+        case TESSERA_SC_ADAPT:
+            if (tp.adapt_eval.empty()) {
+                fprintf(stderr, "error: `adapt` subcommand requires --eval PATH\n");
+                return 1;
+            }
+            return ts_cli_adapt(tp);
+        case TESSERA_SC_ANONYMIZE:
+            if (tp.anonymize_in.empty()) {
+                fprintf(stderr, "error: `anonymize` subcommand requires --in PATH\n");
+                return 1;
+            }
+            return ts_cli_anonymize(tp);
+        case TESSERA_SC_THROUGHPUT:
+            if (tp.throughput_workload.empty()) {
+                fprintf(stderr, "error: `throughput` subcommand requires --workload PATH\n");
+                return 1;
+            }
+            return ts_cli_throughput(tp);
+        case TESSERA_SC_DATASET:
+            if (tp.dataset_in.empty()) {
+                fprintf(stderr, "error: `dataset` subcommand requires --in PATH\n");
+                return 1;
+            }
+            return ts_cli_dataset(tp);
+        case TESSERA_SC_DPACE:
+            if (tp.dpace_in.empty()) {
+                fprintf(stderr, "error: `dpace` subcommand requires --in PATH\n");
+                return 1;
+            }
+            return ts_cli_dpace(tp);
+        default:
+            break;
+    }
+
+    // Tuning subcommands that just set flags on tessera_params and fall
+    // through to the main quantize path. The subcommand-as-toggle cases
+    // (champq, w4a4) are handled here: the subcommand's presence enables
+    // the toggle, no flag needed.
+    if (sc == TESSERA_SC_CHAMPQ) {
+        const_cast<common_tessera_params &>(tp).champq = true;
+    }
+    if (sc == TESSERA_SC_W4A4) {
+        const_cast<common_tessera_params &>(tp).w4a4 = true;
+    }
+
+    // Subcommand-less path or tuning subcommand: rebuild the argv for
+    // the legacy llama_quantize subroutine. common_tessera_params_parse
+    // already shifted the subcommand token out of argv (it was a bare
+    // word in argv[1], not a flag), so argv[0] is still the binary name
+    // and the remaining args are the flag set + positional <input>
+    // <ftype> args that llama_quantize parses.
+    return llama_quantize(argc, argv);
 }

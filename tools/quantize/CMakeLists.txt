@@ -214,9 +214,17 @@ if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)
 endif()
 
-# llama-quantize executable
+# llama-tessera executable (Tier 2: subcommand-aware single binary)
+# Replaces the legacy llama-quantize binary. The hard break is:
+#   - All --tessera-* / --calib-* flags are removed.
+#   - Use the subcommand syntax: `llama-tessera <subcommand> [flags]`
+#   - For the main quantize path, omit the subcommand: `llama-tessera
+#     model.gguf TESSERA_T640` (legacy positional) or
+#     `llama-tessera --model model.gguf TESSERA_T640` (new).
+# See common/arg.cpp for the subcommand table and docs/tier2-subcommand-design.md
+# for the per-flag migration map.
 
-set(TARGET llama-quantize)
+set(TARGET llama-tessera)
 
 add_executable(${TARGET} main.cpp)
 target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
