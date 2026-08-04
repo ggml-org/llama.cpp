@@ -181,10 +181,34 @@ the fully hashed V4-Flash IQ2_M model, routed/shared MMVQ attribution requires
 exact type/fusion/workgroup/grid signatures plus exactly one
 `deepseek4.block_count=43` manifest record. Normal and anomalous tensor-type
 multiplicities must match `target tokens * layers * four GPU agents` globally,
-per agent, and per repetition; a partial signature match fails closed.
+per agent, and per repetition; a partial signature match fails closed. At 16K
+and 64K, exact F16 concat type/dimension/grid signatures similarly split CSA/HCA
+K materialization and final-mask concatenation. Their 21/20-layer counts must
+match globally, per agent, and per repetition; unknown near-shapes fail closed.
+Other depths remain explicitly unclassified rather than borrowing these grids.
 `non_moe_quantized_matmul` combines attention/indexer/final-output projections.
 Unclassified `other` time is not silently assigned. RCCL/HIP API durations are
 reported separately, may overlap, and are never added to device-kernel time.
+
+`analyze-tg-communication.py` performs read-only forensics across preserved
+selected-region artifacts. It requires the exact rocprof RCCL schema and exact
+43-block/tg32/four-GPU cadence: 86 AllReduce groups per token, 344 rank calls per
+token, and 2,752 groups / 11,008 rank calls plus device kernels per repetition.
+It reports long device-kernel intervals and same-agent timestamp overlap without
+calling them stalls or proving a critical path. The supported RCCL trace has no
+count/datatype/buffer/communicator/rank/message-byte arguments, and its API and
+device-kernel correlation-ID sets are disjoint; message sizes and direct
+API-to-kernel attribution are therefore unavailable, not inferred from launch
+geometry. Example (output only after every run validates):
+
+```bash
+python3 scripts/dsv4-rocm/analyze-tg-communication.py \
+  "$PROFILE_16K_A" "$PROFILE_16K_B" "$PROFILE_64K_A" \
+  --json "$PROFILE_64K_A/communication-forensics.json" \
+  > "$PROFILE_64K_A/communication-forensics.txt"
+```
+
+Run `scripts/dsv4-rocm/test-tg-communication.py` as the non-GPU fixture gate.
 
 ## Five-minute quick PP baseline
 
