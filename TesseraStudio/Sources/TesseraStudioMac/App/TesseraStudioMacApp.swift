@@ -44,8 +44,8 @@ struct TesseraStudioMacApp: App {
 
             // Insert Open / Save / Save As after the system Save
             // group. Cmd-O opens a workflow JSON, Cmd-S saves the
-            // current workflow, Shift-Cmd-S does a Save As (same
-            // code path today; FileDocument handles the rename).
+            // current workflow, Shift-Cmd-S presents a separate
+            // Save As panel and re-baselines at the chosen URL.
             CommandGroup(after: .saveItem) {
                 Divider()
                 OpenWorkflowMenuItem()

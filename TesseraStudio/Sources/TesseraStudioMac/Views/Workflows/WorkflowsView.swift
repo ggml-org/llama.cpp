@@ -17,6 +17,10 @@ struct WorkflowsView: View {
     @State private var pendingConnection: PendingConnection?
     @State private var connectionError: String?
     @State private var isExporting = false
+    /// Save As presents its own exporter so the two save paths
+    /// stay distinct presentation states (Save may later write
+    /// back to a remembered URL without touching Save As).
+    @State private var isSavingAs = false
     @State private var isImporting = false
     /// Palette column visibility for the NavigationSplitView
     /// (View > Show/Hide Node Palette toggles it).
@@ -79,6 +83,22 @@ struct WorkflowsView: View {
                 connectionError = "Save failed: \(err.localizedDescription)"
             }
         }
+        // Save As: same live document, prefilled with the current
+        // name, but its own panel presentation; the chosen URL
+        // becomes the new saved baseline.
+        .fileExporter(
+            isPresented: $isSavingAs,
+            document: editor.document,
+            contentType: .tesseraWorkflow,
+            defaultFilename: editor.documentName
+        ) { result in
+            switch result {
+            case .success(let url):
+                editor.markSaved(at: url)
+            case .failure(let err):
+                connectionError = "Save failed: \(err.localizedDescription)"
+            }
+        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.tesseraWorkflow],
@@ -103,6 +123,7 @@ struct WorkflowsView: View {
             new: newDocument,
             open: { isImporting = true },
             save: { isExporting = true },
+            saveAs: { isSavingAs = true },
             canSave: { editor.canSave },
             togglePalette: togglePalette,
             paletteVisible: { paletteVisibility != .detailOnly },

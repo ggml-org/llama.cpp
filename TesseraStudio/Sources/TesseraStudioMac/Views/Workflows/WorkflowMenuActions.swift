@@ -9,6 +9,7 @@ struct WorkflowMenuActions {
     var new: () -> Void
     var open: () -> Void
     var save: () -> Void
+    var saveAs: () -> Void
     var canSave: () -> Bool
     var togglePalette: () -> Void
     var paletteVisible: () -> Bool
@@ -19,6 +20,7 @@ struct WorkflowMenuActions {
         new: {},
         open: {},
         save: {},
+        saveAs: {},
         canSave: { false },
         togglePalette: {},
         paletteVisible: { false },
@@ -91,14 +93,16 @@ struct SaveWorkflowMenuItem: View {
     }
 }
 
-/// File > Save As. `Shift-Cmd-S`.
+/// File > Save As. `Shift-Cmd-S`. Presents its own save panel
+/// (distinct from Save's) and records the chosen URL as the new
+/// saved baseline.
 struct SaveAsWorkflowMenuItem: View {
     @FocusedValue(\.workflowMenuActions) private var actions
 
     var body: some View {
-        Button("Save As…") { actions?.save() }
+        Button("Save As…") { actions?.saveAs() }
             .keyboardShortcut("s", modifiers: [.command, .shift])
-            .disabled(actions == nil)
+            .disabled(actions == nil || (actions?.canSave() == false))
     }
 }
 
