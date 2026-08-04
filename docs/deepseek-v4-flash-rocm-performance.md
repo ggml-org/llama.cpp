@@ -139,6 +139,28 @@ candidate for the remaining long-context gains at 256K-1M. Confirming it
 locally still requires raising the five-minute measured cap to reach the
 >=64K crossover, per the existing H1 test.
 
+#### Local measured scaling (new, 2026-08): dense CSA cost grows super-linearly
+
+A same-day full-stack PP sweep (J16+HC+LID, non-traced llama-bench) shows the
+dense/masked CSA path does not scale linearly in context:
+
+| Native context | PP t/s (single run) | measured prompt time | cost vs 16K |
+|---|---:|---:|---:|
+| 16,384 | 372.1 t/s | 44 s | 1.0x |
+| 32,768 | 117.4 t/s | 279 s | ~6.3x |
+
+Doubling context 16K->32K multiplied measured time ~6.3x instead of 2x. This
+super-linear growth is consistent with the dense-mask attention cost scaling
+with `T = ctx/4` compressed entries *and* the full-score indexer/top-k
+materialization growing between 16K and 32K. It is direct local evidence for
+H1: the dense CSA path becomes the dominant long-context cost, so gains from an
+indexed (gather-only-selected) CSA should grow with context. The 64K point was
+attempted but exceeds the ~900s measured cap and is recorded as an incomplete
+termination (its elapsed-time failure is itself super-linear evidence).
+
+Artifacts: `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260804T025141.681162476Z-csa-scaling-16k-16384-d032b943d185-13070/`
+(driver: `20260804-025141-csa-scaling2-d032b943d`).
+
 ### HCA and raw attention
 
 HCA concatenates raw SWA entries with all visible 128:1 compressed entries and calls generic MHA. At practical context this is far smaller than CSA. Initial layers use raw 128-token SWA.
@@ -754,7 +776,8 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Promote same-tree LID subwave-4 as guarded optimization three for the known stack. | Focused exact/path/fallback/counter gates pass; J16+HC-held-constant whole model is +10.18% at 16K with 0.14% control drift and has no >2% short midpoint regression; fully hashed LID-off/on proxy outputs match in all six layer/tensor cases. | accepted guarded |
 | 2026-08-03 | Promote RDNA2 IQ3_XXS J16 128-thread blocks as optimization four. | Exact focused outputs; IQ3 uniform/hot -16.08/-16.38%; whole-model +2.11/+2.37/+1.70/+1.69% at 512/2K/8K/16K; natural-proxy gate `complete=1` (all six equal); compact rocprof dispatch shows IQ3 wavefronts 11,264→5,632. I64 regresses, I256 unsupported, occupancy 1/3 neutral. | accepted |
 | 2026-08-03 | Reject/defer production MTP for the exact-greedy DSV4 stack. | Production and n-max matrix diverge; rejection-only sequential replay fixes target-only continuation but not continued speculation; even zero-accept target-single advancement with full-state checkpoints later forks. No exact output or TG acceptance exists. | final deferred |
-| 2026-08-03 | Reframe indexed CSA as the strongest remaining long-context candidate after an external fact-check. | Source facts confirmed (dense-masked, ratios 4/128, top-k<=512, full-score write). Paper/Transformers confirm the intended design is indexed-sparse; StreamIndex shows score materialization OOMs at 64K and a viable streaming top-k to 1M; dense flash cost scales with ctx/4 vs ~512 selected. The earlier deferral was a 16K measurement-limit decision, not evidence against CSA. | provisional (measure >=64K to close) |
+| 2026-08-03 | Reframe indexed CSA as the strongest remaining long-context candidate after an external fact-check. | Source facts confirmed (dense-masked, ratios 4/128, top-k<=512, full-score write). Paper/Transformers confirm the intended design is indexed-sparse; StreamIndex shows score materialization OOMs at 64K and a viable streaming top-k to 1M; dense flash cost scales with ctx/4 vs ~512 selected. | provisional |
+| 2026-08-04 | Local scaling confirms dense CSA cost grows super-linearly with context. | Same-day PP sweep: 16K=372.1 t/s (44 s) vs 32K=117.4 t/s (279 s) = ~6.3x cost for 2x tokens; 64K exceeds the 900s cap. Supports H1 and justifies prototyping indexed CSA. | accepted evidence |
 
 ## 9. Open questions
 
