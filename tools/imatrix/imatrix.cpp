@@ -393,6 +393,20 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (t->op != GGML_OP_MUL_MAT) return false;
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
+        // The classification is intentionally broad: any tensor whose name
+        // starts with "blk." is in scope. This covers all per-layer
+        // attention (attn_q/attn_k/attn_v/attn_output) and FFN tensors
+        // (ffn_gate/ffn_up/ffn_down) for every Llama-family block
+        // (blk.0.ffn_down.weight, blk.7.ffn_gate.weight, etc.), as well
+        // as the per-expert / per-ternary variants (ffn_*_exps,
+        // ffn_*_shexp). ffn_down is NOT special-cased; it is in scope
+        // because it shares the "blk." prefix with every other per-layer
+        // weight. The downstream tensor_category::FFN_DOWN branch in
+        // src/llama-quant.cpp and the
+        // blk\.\d*\.ffn_down(_exps)?.weight pattern in src/llama-model.cpp
+        // are the only places that name-check ffn_down explicitly; the
+        // collector itself is name-agnostic above the blk./output split.
+        // tests/test-imatrix-ffn-down-coverage.cpp pins this.
         if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && wname == "output.weight"))) return false;
         return true;
     }
