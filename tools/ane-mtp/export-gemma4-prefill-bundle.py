@@ -21,6 +21,7 @@ import json
 import math
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -28,6 +29,27 @@ import coremltools as ct
 import torch
 import torch.nn.functional as F
 from safetensors import safe_open
+
+# The ane_state_layout.v1 manifest is the contract between this
+# converter and the runtime's stateless-with-IOSurface-state
+# design (common/ane-mtp.mm + ggml/src/ggml-ane/ggml-ane.mm).
+# The converter emits it directly next to the .mlmodelc; the
+# runtime reads it via the shared reader in
+# common/ane-state-layout.h. See tools/ane-mtp/state_layout.py
+# for the schema and tools/ane-mtp/test_emit_manifest.py
+# for the 9-case unit suite.
+sys.path.insert(0, str(Path(__file__).parent))
+from state_layout import (  # noqa: E402
+    ANE_MIN_ALLOC_BYTES,
+    ANE_PAGE_BYTES,
+    ANE_SIMD_ALIGN,
+    DTYPE_BYTES,
+    FunctionSpec,
+    ROLE_PREFILL,
+    StateLayout,
+    StateSlot,
+    manifest_path_for,
+)
 
 
 EPS = 1.0e-6
@@ -223,6 +245,156 @@ def main() -> None:
     (args.output / "prefill-bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"wrote {named}")
     print(f"wrote {args.output / 'prefill-bundle.json'}")
+
+    # Emit the ane_state_layout.v1 manifest sidecar next to the
+    # .mlmodelc. The runtime reads this JSON via the shared
+    # reader in common/ane-state-layout.h to allocate the state
+    # IOSurface and pin the per-function input/output slots.
+    # We introspect the compiled .mlmodelc's metadata.json (the
+    # same source the bridge tool uses) rather than re-deriving
+    # the schema from coremltools' in-memory model, because the
+    # .mlmodelc is what the runtime actually loads; the schema
+    # may differ slightly from the source .mlpackage due to
+    # Core ML's MIL optimization passes.
+    state_manifest = build_state_layout_v1_manifest(
+        mlmodelc_dir=named,
+        bundle_name="prefill-bundle",
+    )
+    state_manifest.write_json(manifest_path_for(named, "prefill-bundle"))
+    print(f"wrote {manifest_path_for(named, 'prefill-bundle')}")
+
+
+def build_state_layout_v1_manifest(mlmodelc_dir: Path,
+                                    bundle_name: str) -> StateLayout:
+    """Read the .mlmodelc's metadata.json and build the
+    ane_state_layout.v1 manifest. This is the production
+    counterpart of the bridge tool
+    (tools/ane-mtp/emit_manifest_from_mlmodelc.py); both
+    produce the same JSON format. Kept here so the converter
+    and the bridge can't drift.
+    """
+    metadata_path = mlmodelc_dir / "metadata.json"
+    if not metadata_path.is_file():
+        raise SystemExit(f"no metadata.json at {metadata_path}")
+    with metadata_path.open() as f:
+        meta = json.load(f)
+    if not isinstance(meta, list) or len(meta) != 1:
+        raise SystemExit(f"unexpected metadata.json shape: {type(meta)}")
+    meta = meta[0]
+    model_type_str = meta.get("modelType", {}).get("name", "")
+    model_type = ("ml_program" if "mlProgram" in model_type_str
+                  else "neural_network")
+    functions = meta.get("functions") or []
+    if not functions:
+        raise SystemExit("metadata.json has no functions")
+
+    def parse_shape(shape) -> list[int]:
+        if isinstance(shape, list):
+            return [int(d) for d in shape]
+        if isinstance(shape, str):
+            s = shape.strip().lstrip("[").rstrip("]")
+            if not s:
+                return []
+            return [int(d.strip()) for d in s.split(",")]
+        raise TypeError(f"unexpected shape type: {type(shape)}")
+
+    def slot_bytes(dtype: str, shape) -> int:
+        esize = DTYPE_BYTES[dtype.lower()]
+        count = 1
+        for d in parse_shape(shape):
+            count *= d
+        raw = count * esize
+        return ((raw + ANE_SIMD_ALIGN - 1) // ANE_SIMD_ALIGN) * ANE_SIMD_ALIGN
+
+    def parse_role(name: str) -> str:
+        head = name.split("_", 1)[0]
+        return {
+            "prefill": "prefill",
+            "mtp": "mtp",
+            "dflash": "dflash",
+            "hybrid": "hybrid",
+            "sync": "sync",
+            "reset": "reset",
+        }.get(head, head)
+
+    def parse_bucket(name: str) -> int:
+        parts = name.split("_")
+        if len(parts) < 2:
+            return 0
+        if parts[0] not in ("prefill", "dflash", "hybrid"):
+            return 0
+        try:
+            return int(parts[1].lstrip("bsBS"))
+        except ValueError:
+            return 0
+
+    def cml_dtype_to_ane(dtype: str) -> str:
+        return {"Int32": "i32", "Float32": "f32", "Float16": "f16"}.get(
+            dtype, dtype.lower())
+
+    slots: list[StateSlot] = []
+    functions_out: list[FunctionSpec] = []
+    offset = 0
+    for func in functions:
+        fname = func["name"]
+        role_str = parse_role(fname)
+        bucket = parse_bucket(fname)
+        is_ane = role_str not in ("sync", "reset")
+        in_ids: list[int] = []
+        out_ids: list[int] = []
+        for inp in func.get("inputSchema", []):
+            iname = inp["name"]
+            idtype = inp["dataType"]
+            ishape = parse_shape(inp["shape"])
+            s = StateSlot(
+                name=f"{fname}.{iname}",
+                kind="input",
+                dtype=cml_dtype_to_ane(idtype),
+                shape=ishape,
+                offset=offset,
+                size_bytes=slot_bytes(idtype, ishape),
+            )
+            offset += s.size_bytes
+            slots.append(s)
+            in_ids.append(len(slots) - 1)
+        for outp in func.get("outputSchema", []):
+            oname = outp["name"]
+            odtype = outp["dataType"]
+            oshape = parse_shape(outp["shape"])
+            kind = "state" if oname in ("key_states", "value_states") else "output"
+            s = StateSlot(
+                name=f"{fname}.{oname}",
+                kind=kind,
+                dtype=cml_dtype_to_ane(odtype),
+                shape=oshape,
+                offset=offset,
+                size_bytes=slot_bytes(odtype, oshape),
+            )
+            offset += s.size_bytes
+            slots.append(s)
+            out_ids.append(len(slots) - 1)
+        functions_out.append(FunctionSpec(
+            name=fname,
+            role=role_str,
+            bucket=bucket,
+            stateful=True,
+            input_slots=[slots[i].name for i in in_ids],
+            output_slots=[slots[i].name for i in out_ids],
+            core_ml_function_name=fname,
+            use_ane=is_ane,
+        ))
+    state_size = ((offset + ANE_PAGE_BYTES - 1) // ANE_PAGE_BYTES) * ANE_PAGE_BYTES
+    if state_size < ANE_MIN_ALLOC_BYTES:
+        state_size = ANE_MIN_ALLOC_BYTES
+    return StateLayout(
+        version=1,
+        bundle_name=bundle_name,
+        state_size_bytes=state_size,
+        model_type=model_type,
+        slots=slots,
+        functions=functions_out,
+        dependencies=[],
+    )
 
 
 if __name__ == "__main__":

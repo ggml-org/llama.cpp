@@ -402,6 +402,123 @@ if (APPLE)
                               "-framework Metal"
                               "-framework IOSurface")
     endif()
+    # Shared ane_state_layout.v1 reader test. Exercises the
+    # C++ side of the manifest contract from
+    # common/ane-state-layout.h. The Python side has its own
+    # 24-test suite in tools/ane-mtp/test_state_layout.py.
+    # .mm because ane-state-layout.h imports Foundation.
+    llama_build_and_test(test-ane-state-layout.mm)
+    if (TARGET test-ane-state-layout)
+        target_link_libraries(test-ane-state-layout PRIVATE
+                              llama-common
+                              "-framework Foundation")
+    endif()
+    # Pinned-slot dispatch end-to-end test. Validates the W3
+    # architecture pivot: a real multifunction .mlmodelc (the
+    # gemma4 prefill bundle) loads with the manifest sidecar,
+    # the runtime allocates one state_iosurface, pins every
+    # declared slot, and the dispatch goes through the pinned
+    # IOSurface state. The test is gated on the gemma4 prefill
+    # bundle (TESSERA_ANE_STATE_LAYOUT_MANIFEST env var +
+    # a real GGUF arg). Skipped automatically if the env var
+    # or GGUF is not present.
+    llama_build(test-ane-pinned-slot-dispatch.cpp)
+    if (TARGET test-ane-pinned-slot-dispatch)
+        target_link_libraries(test-ane-pinned-slot-dispatch PRIVATE
+                              llama-common)
+        # The test reads TESSERA_ANE_STATE_LAYOUT_MANIFEST from
+        # the environment at runtime. CI passes it via a fixture
+        # pointing at the gemma4 prefill bundle; the test refuses
+        # to run without it. The test ARG is the gemma4 prefill
+        # GGUF; it is also expected to be present. We look for it
+        # in the standard external-drive location used by the
+        # prefill bundle. When the GGUF is missing, the test is
+        # skipped (ctest -E pattern below).
+        if (EXISTS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf")
+            add_test(
+                NAME test-ane-pinned-slot-dispatch
+                COMMAND test-ane-pinned-slot-dispatch
+                    /Volumes/Julian\ T7/models/gemma4-ane-prefill-flat-slab.gguf
+            )
+            set_tests_properties(test-ane-pinned-slot-dispatch PROPERTIES
+                LABELS "ane"
+                ENVIRONMENT "TESSERA_ANE_STATE_LAYOUT_MANIFEST=/Volumes/Julian T7/models/gemma4-ane-prefill-bundle/prefill-bundle.ane_state.v1.json"
+            )
+        endif()
+    endif()
+    # E-core pump state machine unit test. Lock-free SPSC across
+    # 1000 single-thread cycles and 10000 cross-thread cycles.
+    # No real Core ML required: the noop_submit callback verifies
+    # the state transitions without invoking the model. The
+    # submit_fn / common_ane_mtp_program / common_ane_compute_instance
+    # types are C++ forward-declared so the test can compile
+    # without the full program header (the test casts to the
+    # forward-declared types; the noop_submit doesn't dereference).
+    llama_build_and_test(test-ane-pump.cpp)
+    if (TARGET test-ane-pump)
+        target_link_libraries(test-ane-pump PRIVATE
+                              llama-common)
+    endif()
+    # W7 MTLSharedEvent handoff per state slot. Validates that
+    # the per-slot events are signaled by the dispatch path on
+    # OUTPUT_READY and that a consumer thread can wait on the
+    # event with the signaled value (the cross-thread lock-free
+    # contract). Gated on the gemma4 prefill bundle +
+    # TESSERA_ANE_STATE_LAYOUT_MANIFEST.
+    llama_build(test-ane-slot-event.cpp)
+    if (TARGET test-ane-slot-event)
+        target_link_libraries(test-ane-slot-event PRIVATE
+                              llama-common
+                              ggml ggml-base
+                              "-framework Foundation"
+                              "-framework Metal")
+    endif()
+    # Phase 0 profile: per-function phase table for a real ANE
+    # dispatch. Validates the four-phase timing
+    # (input_prep / ane_dispatch / output_read / signal) is
+    # collected lock-free and exposed via
+    # common_ane_mtp_program_phase_stats. Gated on the gemma4
+    # prefill bundle + TESSERA_ANE_STATE_LAYOUT_MANIFEST.
+    llama_build(test-ane-phase-profile.cpp)
+    if (TARGET test-ane-phase-profile)
+        target_link_libraries(test-ane-phase-profile PRIVATE
+                              llama-common)
+        if (EXISTS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf")
+            add_test(
+                NAME test-ane-phase-profile
+                COMMAND test-ane-phase-profile
+                    /Volumes/Julian\ T7/models/gemma4-ane-prefill-flat-slab.gguf
+            )
+            set_tests_properties(test-ane-phase-profile PROPERTIES
+                LABELS "ane"
+                ENVIRONMENT "TESSERA_ANE_STATE_LAYOUT_MANIFEST=/Volumes/Julian T7/models/gemma4-ane-prefill-bundle/prefill-bundle.ane_state.v1.json"
+            )
+        endif()
+    endif()
+    # Drafter shape contract: synthetic validation of dflash /
+    # hybrid / mtp_predict slot shape contract without a real
+    # drafter bundle. The test builds a synthetic
+    # ane_state_layout.v1.json with the drafter functions and
+    # their declared slots, then asserts the slot dtypes and
+    # shapes match the dispatch path's contract. Also calls
+    # the drafter public API on a prefill bundle to verify
+    # graceful rejection when the bundle declares no drafter
+    # functions. End-to-end validation against a real MTP /
+    # DFlash bundle is deferred until a bundle with manifest
+    # sidecar is available. .mm because ane-state-layout.h
+    # imports Foundation.
+    llama_build_and_test(test-ane-drafter-shape.mm)
+    if (TARGET test-ane-drafter-shape)
+        target_link_libraries(test-ane-drafter-shape PRIVATE
+                              llama-common
+                              "-framework Foundation")
+        if (EXISTS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf")
+            set_tests_properties(test-ane-drafter-shape PROPERTIES
+                ENVIRONMENT "TESSERA_ANE_STATE_LAYOUT_MANIFEST=/Volumes/Julian T7/models/gemma4-ane-prefill-bundle/prefill-bundle.ane_state.v1.json"
+                ARGS "/Volumes/Julian T7/models/gemma4-ane-prefill-flat-slab.gguf"
+            )
+        endif()
+    endif()
     # W1 ANE MUL_MAT dispatch test: end-to-end ggml graph -> bundle.
     llama_build(test-ane-matmul-w1-dispatch.cpp)
     if (TARGET test-ane-matmul-w1-dispatch)

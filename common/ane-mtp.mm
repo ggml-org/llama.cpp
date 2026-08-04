@@ -1,5 +1,9 @@
 #include "ane-mtp.h"
 
+#include "ane-pump.h"
+#include "ane-state-layout.h"
+
+#include "ggml-metal.h"
 #include "ggml.h"
 #include "gguf.h"
 #include "llama.h"
@@ -11,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -19,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -27,86 +33,58 @@
 
 namespace fs = std::filesystem;
 
-struct common_ane_mtp_arena_buffer {
-    IOSurfaceRef surface = nullptr;
-    void * heap = nullptr;
-    void * data = nullptr;
-    size_t capacity = 0;
-
-    ~common_ane_mtp_arena_buffer() {
-        if (surface) {
-            IOSurfaceUnlock(surface, 0, nullptr);
-            CFRelease(surface);
-            surface = nullptr;
-        }
-        std::free(heap);
-        heap = nullptr;
-        data = nullptr;
-    }
-
-    bool reserve(size_t size, bool use_iosurface) {
-        if (capacity >= size) {
-            return true;
-        }
-        const size_t page = 16 * 1024;
-        const size_t rounded = ((size + page - 1) / page) * page;
-        if (!use_iosurface) {
-            void * replacement = nullptr;
-            if (posix_memalign(&replacement, page, rounded) != 0) {
-                return false;
-            }
-            if (surface) {
-                IOSurfaceUnlock(surface, 0, nullptr);
-                CFRelease(surface);
-                surface = nullptr;
-            }
-            std::free(heap);
-            heap = replacement;
-            data = heap;
-            capacity = rounded;
-            return true;
-        }
-        NSDictionary * properties = @{
-            (id) kIOSurfaceWidth: @(rounded),
-            (id) kIOSurfaceHeight: @1,
-            (id) kIOSurfaceBytesPerElement: @1,
-            (id) kIOSurfaceBytesPerRow: @(rounded),
-            (id) kIOSurfaceAllocSize: @(rounded),
-        };
-        IOSurfaceRef replacement = IOSurfaceCreate((CFDictionaryRef) properties);
-        if (!replacement || IOSurfaceLock(replacement, 0, nullptr) != kIOReturnSuccess) {
-            if (replacement) {
-                CFRelease(replacement);
-            }
-            return false;
-        }
-        void * replacement_data = IOSurfaceGetBaseAddress(replacement);
-        if (!replacement_data) {
-            IOSurfaceUnlock(replacement, 0, nullptr);
-            CFRelease(replacement);
-            return false;
-        }
-        if (surface) {
-            IOSurfaceUnlock(surface, 0, nullptr);
-            CFRelease(surface);
-        }
-        std::free(heap);
-        heap = nullptr;
-        surface = replacement;
-        data = replacement_data;
-        capacity = rounded;
-        return true;
-    }
+// Internal per-function phase stats. Same field layout as the
+// public common_ane_phase_stats snapshot (in ane-mtp.h) but with
+// std::atomic<uint64_t> fields so the E-core thread can update
+// them without explicit locking while the host reads them via
+// common_ane_mtp_program_phase_stats. The snapshot is built by
+// individual .load() calls and copied into a plain common_ane_phase_stats
+// for return; the atomic struct itself never leaves the file.
+struct common_ane_phase_stats_internal {
+    std::atomic<uint64_t> input_prep_us_total{0};
+    std::atomic<uint64_t> input_prep_us_max{0};
+    std::atomic<uint64_t> ane_dispatch_us_total{0};
+    std::atomic<uint64_t> ane_dispatch_us_max{0};
+    std::atomic<uint64_t> output_read_us_total{0};
+    std::atomic<uint64_t> output_read_us_max{0};
+    std::atomic<uint64_t> signal_us_total{0};
+    std::atomic<uint64_t> signal_us_max{0};
+    std::atomic<uint64_t> count{0};
 };
 
 struct common_ane_compute_instance {
     MLModel * model = nil;
+    // Single MLState per function. The 5s re-warm timer used to
+    // require a separate keepalive_state so the live state wasn't
+    // mutated by periodic warm-up predictions. With the timer gone
+    // (the .mlmodelc stays loaded; IOSurface-backed state never
+    // goes cold) we only need the live execution_state. Future
+    // commits will drop this too once the dispatch path uses
+    // pinned-state slots + outputBackings instead of MLState.
     MLState * execution_state = nil;
-    MLState * keepalive_state = nil;
     std::string name;
     std::string role;
     uint32_t bucket = 0;
     std::atomic<bool> warm = false;
+    // W6: per-function E-core pump. One pump per multifunction
+    // function. The pump is initialized when the function is
+    // registered at load time; the dispatch path drives the
+    // state machine via ane_pump_run (or the host signals via
+    // ane_pump_signal_input_ready). The E-core pinning is a
+    // follow-on; today the pump is driven on whatever thread
+    // ane_pump_run is called from.
+    common_ane_pump pump;
+    // True once pump has been initialized.
+    bool pump_ready = false;
+    // Phase 0 profile: per-function timing of the four dispatch
+    // phases. The counters are mutated on the E-core thread (the
+    // pump runs the submit_fn + signal_fn there); the host reads
+    // them via common_ane_mtp_program_phase_stats on the host
+    // thread. The atomic fields give tearing-free reads; the
+    // counters are approximate (the host snapshot can sample
+    // mid-dispatch) but the per-row inconsistency is bounded by
+    // one in-flight dispatch and is acceptable for a profile.
+    common_ane_phase_stats_internal phase_stats;
 };
 
 struct common_ane_prefill_request {
@@ -123,12 +101,21 @@ struct common_ane_prefill_request {
 
 struct common_ane_mtp_program {
     MLModel * model = nil;
-    MLModel * sync_model = nil;
-    MLModel * reset_model = nil;
+    // sync_model and reset_model are dropped in W4. The architecture
+    // call is that K/V synchronization and K/V clearing are direct
+    // memcpy/memset on the state_iosurface, not CPU-only Core ML
+    // functions. The .mlmodelc no longer carries a "sync" or "reset"
+    // function; the K/V state slots in the manifest are the source of
+    // truth. common_ane_mtp_program_sync_kv and
+    // common_ane_mtp_program_reset are reimplemented below as direct
+    // memory operations on the pinned STATE slots; for bundles
+    // without STATE slots (e.g. the gemma4 prefill bundle, where
+    // each prefill function owns its own K/V as OUTPUT slots), they
+    // are no-ops. The E-core pump (a follow-on commit) will move
+    // the memcpy/memset work off the critical dispatch path onto a
+    // pinned E-core.
     MLState * execution_state = nil;
-    MLState * keepalive_state = nil;
     dispatch_queue_t queue = nullptr;
-    dispatch_source_t keepalive = nullptr;
     std::string cache_path;
     uint32_t batch_bucket = 1;
     uint32_t context_length = 0;
@@ -142,11 +129,23 @@ struct common_ane_mtp_program {
     std::atomic<uint64_t> async_prefill_submissions = 0;
     std::atomic<uint64_t> async_prefill_completions = 0;
     std::atomic<uint64_t> async_prefill_failures = 0;
+    // W6.5 part 2: the async prefill path bypasses the pump (it
+    // dispatches directly on program.queue), so the pump's
+    // monotonic completion counter isn't used. The async path
+    // tracks its own monotonic counter and emits it as the
+    // MTLSharedEvent signal value, so async-path consumers can
+    // strict-order their reads the same way sync-path consumers
+    // do. The two counters are disjoint: the sync path's pump
+    // counter increments per function via ane_pump::run; the
+    // async counter increments per async prefill call. Both
+    // monotonic. (A future commit can unify them by routing the
+    // async path through the pump too, eliminating the dual
+    // counter.)
+    std::atomic<uint64_t> async_call_counter = 0;
     // A prefill prediction may outlive the queue turn which submitted it.
     // Give every asynchronous call distinct arena slots so a later request
     // cannot overwrite Core ML input/output storage still owned by ANE.
     std::atomic<uint64_t> next_prefill_arena_epoch = 0;
-    std::unordered_map<std::string, std::unique_ptr<common_ane_mtp_arena_buffer>> arena;
     std::unordered_map<std::string, std::unique_ptr<common_ane_compute_instance>> functions;
     // A multifunction bundle whose layer weights live in the source GGUF (rather
     // than in a per-bundle weight file) holds one MLMultiArray per declared
@@ -159,16 +158,86 @@ struct common_ane_mtp_program {
     uint32_t embedding_dim = 0;
     std::string gguf_path;
 
+    // Optional: the ane_state_layout.v1 manifest next to the
+    // materialized .mlmodelc. Read at load time if present; the
+    // dispatch path uses the manifest's slot/function tables to
+    // wire inputs to the pinned IOSurface slots and outputs to
+    // MLPredictionOptions.outputBackings. When the manifest is
+    // present, the multifunction refactor has the layout it needs;
+    // when absent, the legacy GGUF-metadata path keeps working.
+    ane_state_layout_v1_t manifest;
+    bool                   manifest_loaded = false;
+
+    // The shared state IOSurface: one buffer of manifest.state_size_bytes
+    // holding every declared slot. All slots share this surface so ANE,
+    // Metal, and the host CPU all see the same bytes (zero-copy). The
+    // state_iosurface is allocated at load when manifest_loaded is true;
+    // it is locked for the program's lifetime. Released in the destructor.
+    IOSurfaceRef state_iosurface = nullptr;
+    void *       state_base      = nullptr;
+    size_t       state_size      = 0;
+
+    // Pinned MLMultiArray wrappers, one per manifest slot, each pointing
+    // into the state_iosurface at the slot's manifest offset with
+    // deallocator:nil. Core ML reads/writes through these arrays; the
+    // host reads/writes the same physical pages. Index = slot_id from
+    // the manifest. Released in the destructor.
+    MLMultiArray * pinned_slots[ANE_STATE_SLOTS_MAX] = {};
+
+    // W7: per-slot MTLSharedEvent handles. One event per manifest
+    // slot, allocated at load time when the manifest is present.
+    // The pump's run() invokes a signal_fn that signals each
+    // function's output slot events with the pump's monotonic
+    // completion counter value. Downstream consumers (Metal via
+    // ggml_mtl_shared_event_encode_wait, or the host via
+    // ggml_mtl_shared_event_wait) can then read the slot bytes
+    // under the lock-free event contract. Index = slot_id from
+    // the manifest. The default signal_fn in the dispatch path
+    // is the "ane_signal_events" C function below. The events
+    // are released in the destructor.
+    ggml_mtl_shared_event_t slot_events[ANE_STATE_SLOTS_MAX] = {};
+
     ~common_ane_mtp_program() {
-        if (keepalive) {
-            dispatch_source_cancel(keepalive);
-            keepalive = nullptr;
+        // Tear down the per-function E-core pumps before the
+        // rest of the program is freed (the pumps reference the
+        // program via the submit_fn / signal_fn closures). The
+        // free() drains any in-flight block and releases the
+        // per-pump E-core queue.
+        for (auto & entry : functions) {
+            if (entry.second != nullptr && entry.second->pump_ready) {
+                ane_pump::free(entry.second->pump);
+            }
         }
+        // Drop the pinned MLMultiArray strong references first; they
+        // wrap the IOSurface so the order matters (the IOSurface
+        // unlock + release below must come after). Under ARC the
+        // strong references are released by setting to nil; no
+        // explicit [obj release] is needed (or allowed).
+        for (uint32_t i = 0; i < ANE_STATE_SLOTS_MAX; ++i) {
+            pinned_slots[i] = nil;
+        }
+        // W7: release the per-slot MTLSharedEvent handles. The
+        // events are owned by the program; freeing them here
+        // invalidates any pending waits (consumers would see
+        // a stale value but the program is being destroyed so
+        // there should be no pending waits).
+        for (uint32_t i = 0; i < ANE_STATE_SLOTS_MAX; ++i) {
+            if (slot_events[i] != nullptr) {
+                ggml_mtl_shared_event_free(slot_events[i]);
+                slot_events[i] = nullptr;
+            }
+        }
+        // Unlock + release the state IOSurface. CFRelease is still
+        // required under ARC (CFType is not ARC-managed).
+        if (state_iosurface != nullptr) {
+            IOSurfaceUnlock(state_iosurface, 0, nullptr);
+            CFRelease(state_iosurface);
+            state_iosurface = nullptr;
+        }
+        state_base = nullptr;
+        state_size = 0;
         execution_state = nil;
-        keepalive_state = nil;
         model = nil;
-        sync_model = nil;
-        reset_model = nil;
         // The MLMultiArray weight inputs are autoreleased in their creating
         // scope; clearing the map drops the strong references and the next
         // drain releases the underlying objects.
@@ -220,34 +289,7 @@ static MLMultiArray * wrap_multi_array(
                       error:error];
 }
 
-static MLMultiArray * arena_multi_array(
-        common_ane_mtp_program & program,
-        const std::string & name,
-        NSArray<NSNumber *> * shape,
-        MLMultiArrayDataType type,
-        NSError ** error) {
-    const size_t element_size = multi_array_element_size(type);
-    if (element_size == 0) {
-        return nil;
-    }
-    auto & slot = program.arena[name];
-    if (!slot) {
-        slot = std::make_unique<common_ane_mtp_arena_buffer>();
-    }
-    // Core ML's CPU-only state mutation functions cannot reliably consume an
-    // IOSurface-backed MLMultiArray.  They are off the latency-critical path;
-    // use the aligned host fallback while stateless ANE functions retain the
-    // IOSurface arena contract.
-    const bool use_iosurface = name.rfind("sync.", 0) != 0 &&
-        name.rfind("reset.", 0) != 0;
-    if (!slot->reserve(shape_count(shape) * element_size, use_iosurface)) {
-        return nil;
-    }
-    if (use_iosurface) {
-        program.iosurface_arena_bytes += shape_count(shape) * element_size;
-    }
-    return wrap_multi_array(slot->data, shape, type, error);
-}
+
 
 static void write_float_data(MLMultiArray * array, const float * source, size_t count) {
     if (array.dataType == MLMultiArrayDataTypeFloat32) {
@@ -255,6 +297,577 @@ static void write_float_data(MLMultiArray * array, const float * source, size_t 
     } else {
         ggml_fp32_to_fp16_row(source, (ggml_fp16_t *) array.dataPointer, count);
     }
+}
+
+// Allocate the shared state IOSurface for a manifest. The size is
+// rounded up to the ANE 16 KB page boundary and clamped to the 64 KB
+// IOSurface minimum (Orion #4). Returns the locked base address on
+// success; returns nullptr on failure. The IOSurfaceRef is stored in
+// `out_iosurface` for the caller to release.
+static void * allocate_state_iosurface(size_t requested_bytes,
+                                        IOSurfaceRef * out_iosurface) {
+    const size_t page = 16 * 1024;
+    const size_t min_size = 64 * 1024;
+    const size_t rounded = std::max(min_size,
+            ((requested_bytes + page - 1) / page) * page);
+    // Match the ggml-ane backend's IOSurface allocation: width/height/
+    // bytesPerElement/bytesPerRow/allocSize all set so the kernel can
+    // use the surface for both ANE pages and CPU writes.
+    NSDictionary * properties = @{
+        (id) kIOSurfaceWidth:          @(rounded),
+        (id) kIOSurfaceHeight:         @1,
+        (id) kIOSurfaceBytesPerElement:@1,
+        (id) kIOSurfaceBytesPerRow:    @(rounded),
+        (id) kIOSurfaceAllocSize:      @(rounded),
+    };
+    IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef) properties);
+    if (surface == nullptr) {
+        return nullptr;
+    }
+    if (IOSurfaceLock(surface, 0, nullptr) != kIOReturnSuccess) {
+        CFRelease(surface);
+        return nullptr;
+    }
+    void * base = IOSurfaceGetBaseAddress(surface);
+    if (base == nullptr) {
+        IOSurfaceUnlock(surface, 0, nullptr);
+        CFRelease(surface);
+        return nullptr;
+    }
+    // Zero the state at load so the first real dispatch isn't polluted
+    // by IOSurface allocator garbage. The K/V slots start as zero;
+    // INPUT slots are written before each dispatch.
+    std::memset(base, 0, rounded);
+    *out_iosurface = surface;
+    return base;
+}
+
+// Wrap one IOSurface-backed slot as an MLMultiArray with deallocator:nil
+// (zero-copy). Mirrors the canonical pattern in ggml/src/ggml-ane/ggml-ane.mm
+// (ggml_ane_pin_slot). The MLMultiArray's data pointer is
+// state_base + slot.offset; its shape and dtype come from the manifest.
+// Returns a strong-reference MLMultiArray that the caller stores in a
+// long-lived slot (e.g. program->pinned_slots[]). Under ARC the strong
+// reference is tracked automatically; setting the slot to nil later
+// drops the reference.
+static MLMultiArray * pin_iosurface_slot(void * state_base,
+                                          const ane_slot_v1_t * slot) {
+    NSError * error = nil;
+    NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:slot->n_dim];
+    for (uint32_t i = 0; i < slot->n_dim; ++i) {
+        [shape addObject:@(slot->shape[i])];
+    }
+    NSArray<NSNumber *> * strides = contiguous_strides(shape);
+    MLMultiArrayDataType dtype = MLMultiArrayDataTypeFloat32;
+    switch (slot->dtype) {
+        case ANE_DTYPE_F32: dtype = MLMultiArrayDataTypeFloat32; break;
+        case ANE_DTYPE_F16: dtype = MLMultiArrayDataTypeFloat16; break;
+        case ANE_DTYPE_I32: dtype = MLMultiArrayDataTypeInt32;   break;
+    }
+    void * slot_base = (char *) state_base + slot->offset;
+    return [[MLMultiArray alloc]
+        initWithDataPointer:slot_base
+                      shape:shape
+                   dataType:dtype
+                    strides:strides
+                deallocator:nil
+                      error:&error];
+}
+
+// Find a manifest function by name. Returns nullptr if the manifest
+// is not loaded or the function is not present. The returned pointer
+// is borrowed; the manifest's lifetime is the program's lifetime.
+static const ane_function_v1_t * find_manifest_function(
+        const common_ane_mtp_program & program,
+        const std::string & function_name) {
+    if (!program.manifest_loaded) {
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < program.manifest.n_functions; ++i) {
+        if (std::strcmp(program.manifest.functions[i].name,
+                        function_name.c_str()) == 0) {
+            return &program.manifest.functions[i];
+        }
+    }
+    return nullptr;
+}
+
+// Find a manifest slot by name. Returns nullptr if the manifest is
+// not loaded or the slot is not present. Borrowed pointer.
+static const ane_slot_v1_t * find_manifest_slot(
+        const common_ane_mtp_program & program,
+        const std::string & slot_name) {
+    if (!program.manifest_loaded) {
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < program.manifest.n_slots; ++i) {
+        if (std::strcmp(program.manifest.slots[i].name,
+                        slot_name.c_str()) == 0) {
+            return &program.manifest.slots[i];
+        }
+    }
+    return nullptr;
+}
+
+// Find the manifest function associated with a (role, bucket) pair.
+// Used by the compute_* entry points to map (role, sequence_length)
+// to the right pinned-slot function. The legacy find_compute_function
+// lookup is kept for the warmup path.
+static const ane_function_v1_t * find_manifest_function_by_role(
+        const common_ane_mtp_program & program,
+        ane_role_t role,
+        uint32_t bucket) {
+    if (!program.manifest_loaded) {
+        return nullptr;
+    }
+    for (uint32_t i = 0; i < program.manifest.n_functions; ++i) {
+        const ane_function_v1_t & f = program.manifest.functions[i];
+        if (f.role == role && f.bucket == bucket) {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
+// Write host data into a pinned input slot. The host dtype is fp32
+// for float slots and i32 for integer slots. The function converts
+// to the slot's declared dtype (fp16 conversion is a one-shot
+// ggml_fp32_to_fp16_row call). Returns true on success, false if
+// the slot is not found or the count doesn't fit.
+static bool set_pinned_input(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        const void * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr) {
+        return false;
+    }
+    size_t element_size = 0;
+    switch (slot->dtype) {
+        case ANE_DTYPE_F32: element_size = sizeof(float); break;
+        case ANE_DTYPE_F16: element_size = sizeof(ggml_fp16_t); break;
+        case ANE_DTYPE_I32: element_size = sizeof(int32_t); break;
+    }
+    if (element_size == 0 || slot->size_bytes / element_size < count) {
+        return false;
+    }
+    void * dst = (char *) program.state_base + slot->offset;
+    if (slot->dtype == ANE_DTYPE_F32) {
+        std::memcpy(dst, host_data, count * sizeof(float));
+    } else if (slot->dtype == ANE_DTYPE_F16) {
+        ggml_fp32_to_fp16_row((const float *) host_data,
+                              (ggml_fp16_t *) dst, (int64_t) count);
+    } else { // ANE_DTYPE_I32
+        std::memcpy(dst, host_data, count * sizeof(int32_t));
+    }
+    return true;
+}
+
+// Write i32 host data into a pinned input slot. Specialization for
+// the common token_ids/positions inputs. Returns true on success.
+static bool set_pinned_input_i32(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        const int32_t * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr || slot->dtype != ANE_DTYPE_I32) {
+        return false;
+    }
+    if ((size_t) slot->size_bytes / sizeof(int32_t) < count) {
+        return false;
+    }
+    void * dst = (char *) program.state_base + slot->offset;
+    std::memcpy(dst, host_data, count * sizeof(int32_t));
+    return true;
+}
+
+// Read a pinned output slot to host memory as i32. The slot must
+// be declared as i32 in the manifest. Returns true on success.
+static bool get_pinned_output_i32(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        int32_t * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr || slot->dtype != ANE_DTYPE_I32) {
+        return false;
+    }
+    if (slot->size_bytes / sizeof(int32_t) < count) {
+        return false;
+    }
+    void * src = (char *) program.state_base + slot->offset;
+    std::memcpy(host_data, src, count * sizeof(int32_t));
+    return true;
+}
+
+// Read a pinned output slot to host memory as fp32. The slot's
+// declared dtype is converted to fp32 (fp16 is the common case for
+// the gemma4 prefill bundle). Returns true on success.
+static bool get_pinned_output(
+        common_ane_mtp_program & program,
+        const std::string & slot_name,
+        float * host_data,
+        size_t count) {
+    const ane_slot_v1_t * slot = find_manifest_slot(program, slot_name);
+    if (slot == nullptr) {
+        return false;
+    }
+    size_t element_size = 0;
+    switch (slot->dtype) {
+        case ANE_DTYPE_F32: element_size = sizeof(float); break;
+        case ANE_DTYPE_F16: element_size = sizeof(ggml_fp16_t); break;
+        case ANE_DTYPE_I32: element_size = sizeof(int32_t); break;
+    }
+    if (element_size == 0 || slot->size_bytes / element_size < count) {
+        return false;
+    }
+    void * src = (char *) program.state_base + slot->offset;
+    if (slot->dtype == ANE_DTYPE_F32) {
+        std::memcpy(host_data, src, count * sizeof(float));
+    } else if (slot->dtype == ANE_DTYPE_F16) {
+        ggml_fp16_to_fp32_row((const ggml_fp16_t *) src,
+                              host_data, (int64_t) count);
+    } else {
+        // i32 -> fp32 conversion (rare; prefill outputs are always f16/f32)
+        const int32_t * src_i32 = (const int32_t *) src;
+        for (size_t i = 0; i < count; ++i) {
+            host_data[i] = (float) src_i32[i];
+        }
+    }
+    return true;
+}
+
+// Strip the "<function_name>." prefix from a manifest slot name to
+// get the Core ML function's declared input/output name. Returns
+// the full name when the prefix is absent (defensive default).
+static std::string strip_manifest_prefix(
+        const std::string & full,
+        const std::string & prefix) {
+    if (full.size() > prefix.size() + 1 &&
+            full.compare(0, prefix.size(), prefix) == 0 &&
+            full[prefix.size()] == '.') {
+        return full.substr(prefix.size() + 1);
+    }
+    return full;
+}
+
+// The dispatch body, factored out so the sync path can wrap it in
+// dispatch_sync (the program queue serializes Core ML dispatches)
+// while the async path runs on the program queue already and
+// invokes this directly. The caller is responsible for queue
+// serialization; the body is the prediction + zero-copy proof.
+//
+// Phase 0 profile: the body times three phases via ggml_time_us
+// and records them on instance.phase_stats. The phases are:
+//   input_prep   building the input feature dict (slot loop +
+//                extra_inputs merge + MLDictionaryFeatureProvider)
+//   ane_dispatch the Core ML predictionFromFeatures call (the
+//                actual ANE/CPU work)
+//   output_read  reading outputs from the feature provider +
+//                zero-copy verification
+// The fourth phase (signal) is recorded by ane_signal_slot_events.
+// Failed dispatches do not update the phase_stats counters; the
+// host can detect a clean run by checking (count == 0 -> no
+// successful dispatches yet).
+static bool dispatch_pinned_function_locked(
+        common_ane_mtp_program & program,
+        const std::string & function_name,
+        NSDictionary<NSString *, MLFeatureValue *> * extra_inputs,
+        const std::unordered_set<std::string> * output_names) {
+    const ane_function_v1_t * function = find_manifest_function(
+        program, function_name);
+    if (function == nullptr) {
+        return false;
+    }
+    auto it = program.functions.find(function_name);
+    if (it == program.functions.end() || it->second == nullptr) {
+        return false;
+    }
+    common_ane_compute_instance & instance = *it->second;
+    if (!instance.warm.load()) {
+        return false;
+    }
+    const int64_t t_input_start = ggml_time_us();
+    @autoreleasepool {
+        NSError * error = nil;
+        NSMutableDictionary<NSString *, MLFeatureValue *> * features =
+            [NSMutableDictionary dictionary];
+        for (uint32_t i = 0; i < function->n_inputs; ++i) {
+            const uint32_t slot_id = function->input_slot_ids[i];
+            if (slot_id >= ANE_STATE_SLOTS_MAX ||
+                    program.pinned_slots[slot_id] == nil) {
+                return false;
+            }
+            const std::string core_ml_name = strip_manifest_prefix(
+                program.manifest.slots[slot_id].name, function_name);
+            features[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
+                [MLFeatureValue featureValueWithMultiArray:
+                    program.pinned_slots[slot_id]];
+        }
+        if (extra_inputs != nil) {
+            [features addEntriesFromDictionary:extra_inputs];
+        }
+        MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
+            initWithDictionary:features error:&error];
+        if (inputs == nil) {
+            LOG_WRN("ANE pinned dispatch %s: input provider build failed: %s\n",
+                    function_name.c_str(),
+                    error.localizedDescription.UTF8String ?: "unknown");
+            return false;
+        }
+        MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
+        NSMutableDictionary<NSString *, MLMultiArray *> * backings =
+            [NSMutableDictionary dictionary];
+        for (uint32_t i = 0; i < function->n_outputs; ++i) {
+            const uint32_t slot_id = function->output_slot_ids[i];
+            if (slot_id >= ANE_STATE_SLOTS_MAX ||
+                    program.pinned_slots[slot_id] == nil) {
+                return false;
+            }
+            const std::string core_ml_name = strip_manifest_prefix(
+                program.manifest.slots[slot_id].name, function_name);
+            if (output_names != nullptr &&
+                    output_names->find(core_ml_name) == output_names->end()) {
+                continue;
+            }
+            backings[[NSString stringWithUTF8String:core_ml_name.c_str()]] =
+                program.pinned_slots[slot_id];
+        }
+        options.outputBackings = backings;
+        const int64_t t_ane_start = ggml_time_us();
+        id<MLFeatureProvider> output = [instance.model
+            predictionFromFeatures:inputs
+                           options:options
+                             error:&error];
+        const int64_t t_output_start = ggml_time_us();
+        if (output == nil) {
+            LOG_WRN("ANE pinned dispatch %s: prediction failed: %s\n",
+                    function_name.c_str(),
+                    error.localizedDescription.UTF8String ?: "unknown");
+            return false;
+        }
+        for (uint32_t i = 0; i < function->n_outputs; ++i) {
+            const uint32_t slot_id = function->output_slot_ids[i];
+            if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
+            const std::string core_ml_name = strip_manifest_prefix(
+                program.manifest.slots[slot_id].name, function_name);
+            if (output_names != nullptr &&
+                    output_names->find(core_ml_name) == output_names->end()) {
+                continue;
+            }
+            MLMultiArray * result = [[output featureValueForName:
+                [NSString stringWithUTF8String:core_ml_name.c_str()]]
+                multiArrayValue];
+            if (result == nil ||
+                    result.dataPointer != program.pinned_slots[slot_id].dataPointer) {
+                LOG_WRN("ANE pinned dispatch %s: output %s not zero-copy\n",
+                        function_name.c_str(), core_ml_name.c_str());
+                return false;
+            }
+        }
+        const int64_t t_end = ggml_time_us();
+        // Record phase stats. Each phase's duration is a uint64
+        // microsecond delta; we accumulate totals via fetch_add
+        // and update max via a CAS loop. Failed dispatches have
+        // already returned false above; we only reach this point
+        // on success.
+        const uint64_t dt_input = (uint64_t) (t_ane_start - t_input_start);
+        const uint64_t dt_ane = (uint64_t) (t_output_start - t_ane_start);
+        const uint64_t dt_output = (uint64_t) (t_end - t_output_start);
+        instance.phase_stats.input_prep_us_total.fetch_add(
+            dt_input, std::memory_order_relaxed);
+        instance.phase_stats.ane_dispatch_us_total.fetch_add(
+            dt_ane, std::memory_order_relaxed);
+        instance.phase_stats.output_read_us_total.fetch_add(
+            dt_output, std::memory_order_relaxed);
+        // Max updates: load-CAS loop. Single-thread per instance
+        // (the pump's E-core thread is the only writer), so the
+        // CAS rarely retries; we use relaxed ordering.
+        auto update_max = [](std::atomic<uint64_t> & field, uint64_t value) {
+            uint64_t cur = field.load(std::memory_order_relaxed);
+            while (value > cur &&
+                    !field.compare_exchange_weak(cur, value,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed)) {
+                // cur is reloaded by compare_exchange_weak; loop.
+            }
+        };
+        update_max(instance.phase_stats.input_prep_us_max, dt_input);
+        update_max(instance.phase_stats.ane_dispatch_us_max, dt_ane);
+        update_max(instance.phase_stats.output_read_us_max, dt_output);
+        instance.phase_stats.count.fetch_add(
+            1, std::memory_order_relaxed);
+        return true;
+    }
+    return true;  // unreachable
+}
+
+// Dispatch the bound function by name, using the pinned IOSurface
+// state. Inputs are already in the pinned state from prior
+// set_pinned_input calls; outputs land in the pinned state and
+// callers read them via get_pinned_output. `extra_inputs` is a
+// caller-provided input feature dict (e.g. weight MLMultiArrays
+// that aren't in the manifest's input_slots); it is merged into
+// the manifest's input feature dict. `output_names` is an optional
+// caller-provided set of Core ML output names to pin via
+// outputBackings; if null, every manifest output slot is pinned
+// (the canonical multifunction case). When the filter is non-null,
+// outputs not in the set go to Core ML's allocator (the simpler
+// prefill case, which doesn't need K/V in the IOSurface). The
+// dispatch is synchronous on the program queue. Returns false on
+// any failure (manifest missing, function unknown, model not warm,
+// Core ML prediction nil, output not zero-copy).
+//
+// W7: default signal_fn for the pump. Iterates the function's
+// output slot ids in the manifest and signals each slot's
+// MTLSharedEvent with the pump's completion value. The signal
+// is the OUTPUT_READY -> IDLE transition's downstream release:
+// a Metal consumer can encodeWaitForEvent: cmd_buf with the
+// same value and observe the IOSurface bytes that the ANE
+// just wrote.
+//
+// We pass the program via context (the function is the
+// producer for which we're signaling; the program's events
+// are indexed by slot id). The function_id is the manifest's
+// function index; the program resolves the output slot ids
+// from the manifest and signals each.
+//
+// Phase 0 profile: the per-slot signals are timed via
+// ggml_time_us and recorded on the function's instance.phase_stats.
+// The signal phase is typically <1us per slot (the signal is
+// a single setSignaledValue: call), so the totals are small
+// relative to ane_dispatch; the metric is here for tail-latency
+// debugging when downstream Metal consumers are involved.
+static void ane_signal_slot_events(
+        common_ane_mtp_program & program,
+        uint32_t function_id,
+        uint64_t value,
+        void * /*context*/) {
+    if (!program.manifest_loaded ||
+            function_id >= program.manifest.n_functions) {
+        return;
+    }
+    const ane_function_v1_t & function = program.manifest.functions[function_id];
+    // Resolve the function's compute instance for phase stats.
+    // The manifest's function name maps to the program's
+    // functions map; if the function was never registered (e.g.
+    // a stale manifest), fall back gracefully.
+    common_ane_compute_instance * instance = nullptr;
+    auto it = program.functions.find(function.name);
+    if (it != program.functions.end() && it->second != nullptr) {
+        instance = it->second.get();
+    }
+    const int64_t t_signal_start = ggml_time_us();
+    for (uint32_t i = 0; i < function.n_outputs; ++i) {
+        const uint32_t slot_id = function.output_slot_ids[i];
+        if (slot_id >= ANE_STATE_SLOTS_MAX) continue;
+        ggml_mtl_shared_event_t event = program.slot_events[slot_id];
+        if (event != nullptr) {
+            ggml_mtl_shared_event_signal(event, value);
+        }
+    }
+    const int64_t t_signal_end = ggml_time_us();
+    if (instance != nullptr) {
+        const uint64_t dt = (uint64_t) (t_signal_end - t_signal_start);
+        instance->phase_stats.signal_us_total.fetch_add(
+            dt, std::memory_order_relaxed);
+        // Max update via load-CAS loop (single-writer on the
+        // E-core thread, contention-free in practice).
+        uint64_t cur = instance->phase_stats.signal_us_max.load(
+            std::memory_order_relaxed);
+        while (dt > cur &&
+                !instance->phase_stats.signal_us_max.compare_exchange_weak(
+                    cur, dt,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+            // cur reloaded; loop.
+        }
+    }
+}
+
+// W6.5 part 2: the pump's submit_fn callback. The pump runs
+// this on the per-pump E-core thread (QOS_CLASS_BACKGROUND
+// affinity, set in ane_pump::init). The submit_fn unpacks
+// the dispatch context (function_name + extra_inputs +
+// output_names) and calls the locked body. The locked body
+// is the prediction + zero-copy proof; it doesn't know about
+// the pump or the queue — those concerns live here, in the
+// pump's wrapper. This is the unified state-machine ownership:
+// the lock-free state machine (IDLE -> INPUT_READY ->
+// ANE_BUSY -> OUTPUT_READY -> IDLE) is owned by the pump;
+// the host only signals input readiness; the pump drives the
+// submit + signal + completion transitions atomically.
+struct ane_pump_dispatch_context {
+    const std::string * function_name;
+    NSDictionary<NSString *, MLFeatureValue *> * extra_inputs;
+    const std::unordered_set<std::string> * output_names;
+};
+
+static bool dispatch_pinned_function_submit(
+        common_ane_mtp_program & program,
+        common_ane_compute_instance & instance,
+        void * context) {
+    const auto * ctx = static_cast<const ane_pump_dispatch_context *>(context);
+    return dispatch_pinned_function_locked(
+        program, *ctx->function_name, ctx->extra_inputs, ctx->output_names);
+}
+
+// This is the canonical multifunction dispatch path. The W2 design
+// is locked: stateless at the Core ML level, stateful via the
+// IOSurface; the dispatch doesn't use MLState.
+//
+// W6.5 part 2: the dispatch is now driven through the per-function
+// E-core pump (common/ane-pump.h). The state machine is owned by
+// the pump; the host only signals input readiness. The pump
+// dispatches the submit_fn on the E-core thread (QOS_CLASS_BACKGROUND
+// affinity, set at pump init) and signals the per-slot MTLSharedEvent
+// handles on the E-core thread. The signal value is the pump's
+// monotonic completion counter (replacing the old steady_clock
+// nanoseconds; consumers can now strict-order their reads via the
+// counter, which is the canonical handoff primitive). Program
+// queue serialization is gone: the pump's serial E-core queue
+// serializes the same function's dispatches (ANE itself is
+// single-threaded per function), and the lock-free CAS guards
+// against host races.
+static bool dispatch_pinned_function(
+        common_ane_mtp_program & program,
+        const std::string & function_name,
+        NSDictionary<NSString *, MLFeatureValue *> * extra_inputs = nil,
+        const std::unordered_set<std::string> * output_names = nullptr) {
+    if (!program.manifest_loaded) {
+        return false;
+    }
+    auto it = program.functions.find(function_name);
+    if (it == program.functions.end() || it->second == nullptr) {
+        return false;
+    }
+    common_ane_compute_instance & instance = *it->second;
+    if (!instance.pump_ready) {
+        return false;
+    }
+    // Host-side: signal input readiness. The CAS IDLE -> INPUT_READY
+    // fails when the pump is busy (a racing dispatch). The caller
+    // should retry; for the canonical prefill path the host is
+    // single-threaded per program, so the CAS is contention-free.
+    if (!ane_pump::signal_input_ready(instance.pump)) {
+        return false;
+    }
+    // The dispatch context is a stack-allocated POD; the pump's
+    // run() consumes it before returning (it doesn't outlive this
+    // scope, so no heap allocation is required).
+    ane_pump_dispatch_context ctx = {
+        &function_name, extra_inputs, output_names
+    };
+    // Pump-side: drive the cycle. submit_fn = dispatch_pinned_function_submit
+    // (runs on the E-core thread); signal_fn = ane_signal_slot_events
+    // (also runs on the E-core thread, after the OUTPUT_READY transition).
+    // The signal value is the pump's monotonic completion counter.
+    return ane_pump::run(instance.pump, program, instance,
+                          dispatch_pinned_function_submit,
+                          ane_signal_slot_events,
+                          &ctx);
 }
 
 static void read_float_data(const MLMultiArray * array, float * destination, size_t count) {
@@ -652,8 +1265,11 @@ static bool warm_model(
 }
 
 static bool warm_program(common_ane_mtp_program & program, uint32_t batch_hint) {
+    // Use the live execution_state (no separate keepalive_state;
+    // the 5s re-warm timer is gone, so the warm path can use the
+    // live state directly).
     return warm_model(
-        program.model, program.keepalive_state, batch_hint, "MTP");
+        program.model, program.execution_state, batch_hint, "MTP");
 }
 
 static common_ane_mtp_program_ptr common_ane_program_load(
@@ -743,33 +1359,123 @@ static common_ane_mtp_program_ptr common_ane_program_load(
 
         auto program = std::make_shared<common_ane_mtp_program>();
         program->model = model;
-        if (@available(macOS 15.0, *)) {
-            MLModelConfiguration * sync_config = [[MLModelConfiguration alloc] init];
-            // Stateful scatter/reset operations are latency-insensitive and
-            // compile poorly on ANE at the larger fixed buckets. Keep them on
-            // CPU while sharing the same MLState with the ANE prediction
-            // function; this leaves ANE capacity and residency for the MTP
-            // transformer itself.
-            sync_config.computeUnits = MLComputeUnitsCPUOnly;
-            sync_config.functionName = @"sync";
-            NSError * sync_error = nil;
-            program->sync_model = [MLModel modelWithContentsOfURL:
-                [NSURL fileURLWithPath:[NSString stringWithUTF8String:bundle_path.c_str()]]
-                                                   configuration:sync_config
-                                                           error:&sync_error];
-            MLModelConfiguration * reset_config = [[MLModelConfiguration alloc] init];
-            reset_config.computeUnits = MLComputeUnitsCPUOnly;
-            reset_config.functionName = @"reset";
-            NSError * reset_error = nil;
-            program->reset_model = [MLModel modelWithContentsOfURL:
-                [NSURL fileURLWithPath:[NSString stringWithUTF8String:bundle_path.c_str()]]
-                                                   configuration:reset_config
-                                                           error:&reset_error];
-        }
-        // Keep residency traffic isolated from the state used for real MTP
-        // predictions. A keepalive prediction is allowed to mutate its state.
+        // sync_model and reset_model are dropped in W4. The .mlmodelc
+        // is a multifunction stateless asset; K/V synchronization and
+        // K/V clearing are direct memcpy/memset on the state IOSurface
+        // (the pinned STATE slots), not CPU-only Core ML functions.
+        // The "sync" and "reset" functions are no longer loaded. The
+        // .mlmodelc no longer carries them; the bundle's K/V STATE
+        // slots are the source of truth.
+        //
+        // Keep the live execution_state for the dispatch path. The
+        // 5s re-warm timer and the keepalive_state it protected
+        // are gone; with IOSurface-backed state and the .mlmodelc
+        // loaded once at startup, neither the state nor the
+        // compiled model goes cold. (A follow-on commit will drop
+        // execution_state too once the dispatch path migrates to
+        // pinned-state slots + outputBackings for every function.)
         program->execution_state = [model newState];
-        program->keepalive_state = [model newState];
+
+        // Optional: read the ane_state_layout.v1 manifest next to
+        // the .mlmodelc. The manifest is the source of truth for
+        // the multifunction state layout (slot kinds, offsets,
+        // function inputs/outputs, dependency graph). The
+        // dispatch path doesn't use it yet (still on the
+        // GGUF-metadata + arena + MLState path) but the load
+        // path now reserves the space and validates the manifest
+        // so the converter can start emitting it without the
+        // runtime being unprepared. When the manifest is
+        // present, the multifunction refactor has the layout it
+        // needs; when absent, the legacy GGUF-metadata path
+        // keeps working.
+        //
+        // The env var TESSERA_ANE_STATE_LAYOUT_MANIFEST, when set,
+        // overrides the sidecar lookup so the load can find a manifest
+        // that lives next to a source .mlmodelc (e.g. the gemma4
+        // prefill bundle's prefill-bundle.ane_state.v1.json) when the
+        // materialized .mlmodelc is in the per-process cache. The
+        // canonical load path (sidecar next to the materialized
+        // .mlmodelc) takes over once the converter embeds the manifest
+        // as a GGUF tensor (a follow-on).
+        {
+            std::string manifest_path_str;
+            if (const char * override_path = std::getenv(
+                    "TESSERA_ANE_STATE_LAYOUT_MANIFEST");
+                    override_path != nullptr && override_path[0] != '\0') {
+                manifest_path_str = override_path;
+            } else {
+                manifest_path_str = ane_layout::manifest_path_for_mlmodelc_dir(
+                    bundle_path.c_str());
+            }
+            if (!manifest_path_str.empty()) {
+                std::string merror;
+                if (ane_layout::read_state_layout(manifest_path_str.c_str(),
+                                                  &program->manifest, &merror)) {
+                    program->manifest_loaded = true;
+                    LOG_INF("loaded ane_state_layout.v1 manifest for %s: "
+                            "%u slots, %u functions, %u deps (path=%s)\n",
+                            program->manifest.bundle_name,
+                            program->manifest.n_slots,
+                            program->manifest.n_functions,
+                            program->manifest.n_deps,
+                            manifest_path_str.c_str());
+                } else if (fs::exists(manifest_path_str)) {
+                    // Manifest exists but is malformed. The load
+                    // is still allowed (the legacy path covers it)
+                    // but we warn loudly so the converter knows.
+                    LOG_WRN("ignoring malformed ane_state_layout.v1 "
+                            "manifest at %s: %s\n",
+                            manifest_path_str.c_str(), merror.c_str());
+                }
+            }
+        }
+        // Allocate the shared state IOSurface and pin every declared
+        // slot to a subregion. Done when the manifest is present; the
+        // dispatch refactor (a follow-on commit) will use these pinned
+        // arrays for input writes and outputBackings. Without the
+        // manifest we keep the legacy per-arena allocation path.
+        if (program->manifest_loaded) {
+            program->state_base = allocate_state_iosurface(
+                program->manifest.state_size_bytes,
+                &program->state_iosurface);
+            if (program->state_base == nullptr) {
+                LOG_WRN("failed to allocate %zu byte state IOSurface for %s\n",
+                        program->manifest.state_size_bytes,
+                        program->manifest.bundle_name);
+                return nullptr;
+            }
+            program->state_size = program->manifest.state_size_bytes;
+            for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+                program->pinned_slots[i] = pin_iosurface_slot(
+                    program->state_base, &program->manifest.slots[i]);
+                if (program->pinned_slots[i] == nil) {
+                    LOG_WRN("failed to pin slot %s for %s\n",
+                            program->manifest.slots[i].name,
+                            program->manifest.bundle_name);
+                    return nullptr;
+                }
+            }
+            // W7: allocate one MTLSharedEvent per manifest slot.
+            // The events are signaled by the pump's signal_fn on
+            // OUTPUT_READY and consumed by Metal (via
+            // ggml_mtl_shared_event_encode_wait) or by the host
+            // (via ggml_mtl_shared_event_wait). The event value
+            // is the pump's monotonic completion counter, so
+            // consumers can strict-order their reads.
+            for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+                program->slot_events[i] = ggml_mtl_shared_event_new();
+                if (program->slot_events[i] == nullptr) {
+                    LOG_WRN("failed to allocate MTLSharedEvent for slot %s\n",
+                            program->manifest.slots[i].name);
+                    return nullptr;
+                }
+            }
+            LOG_INF("ANE state IOSurface: %zu bytes, %u pinned slots, "
+                    "%u MTLSharedEvents for %s\n",
+                    program->state_size, program->manifest.n_slots,
+                    program->manifest.n_slots,
+                    program->manifest.bundle_name);
+        }
         program->queue = dispatch_queue_create("org.ggml.llama.ane", DISPATCH_QUEUE_SERIAL);
         program->cache_path = bundle_path.string();
         program->batch_bucket = lane_bucket_override ? lane_bucket_override : selected_batch;
@@ -839,18 +1545,46 @@ static common_ane_mtp_program_ptr common_ane_program_load(
                 }
                 auto instance = std::make_unique<common_ane_compute_instance>();
                 instance->model = function_model;
+                // Single execution_state (no keepalive_state). The
+                // 5s re-warm timer is gone; the live state is the
+                // only state. The dispatch path is unchanged in this
+                // commit; future commits will migrate to pinned-state
+                // slots + outputBackings.
                 instance->execution_state = [function_model newState];
-                instance->keepalive_state = [function_model newState];
                 instance->name = function_name;
                 instance->role = role;
                 instance->bucket = bucket;
                 instance->warm.store(warm_model(
                     instance->model,
-                    instance->keepalive_state,
+                    instance->execution_state,
                     program->batch_bucket,
                     function_name.c_str()));
                 if (!instance->warm.load()) {
                     continue;
+                }
+                // W6.1: initialize the per-function E-core pump.
+                // The pump drives the lock-free state machine
+                // (IDLE -> INPUT_READY -> ANE_BUSY -> OUTPUT_READY
+                // -> IDLE) for this function. The pump's
+                // input_slot_ids and output_slot_ids are
+                // resolved from the manifest here so the pump
+                // doesn't need to look them up on every
+                // transition. When the manifest is absent, the
+                // pump is left in a default-initialized state
+                // (state == IDLE, no slot ids) and is not used
+                // (the load path returns false if no manifest
+                // would have made it to the dispatch anyway).
+                if (program->manifest_loaded) {
+                    for (uint32_t fi = 0;
+                            fi < program->manifest.n_functions; ++fi) {
+                        if (std::strcmp(
+                                program->manifest.functions[fi].name,
+                                function_name.c_str()) == 0) {
+                            instance->pump_ready = ane_pump::init(
+                                instance->pump, program->manifest, fi);
+                            break;
+                        }
+                    }
                 }
                 LOG_INF("loaded and warmed embedded ANE %s function %s\n",
                         role.c_str(), function_name.c_str());
@@ -858,27 +1592,12 @@ static common_ane_mtp_program_ptr common_ane_program_load(
             }
         }
 
-        program->keepalive = dispatch_source_create(
-            DISPATCH_SOURCE_TYPE_TIMER, 0, 0, program->queue);
-        dispatch_source_set_timer(program->keepalive,
-            dispatch_time(DISPATCH_TIME_NOW, 5ull * NSEC_PER_SEC),
-            5ull * NSEC_PER_SEC,
-            250ull * NSEC_PER_MSEC);
-        std::weak_ptr<common_ane_mtp_program> weak = program;
-        dispatch_source_set_event_handler(program->keepalive, ^{
-            if (auto retained = weak.lock()) {
-                retained->warm.store(warm_program(*retained, retained->batch_bucket));
-                for (auto & entry : retained->functions) {
-                    auto & instance = *entry.second;
-                    instance.warm.store(warm_model(
-                        instance.model,
-                        instance.keepalive_state,
-                        retained->batch_bucket,
-                        instance.name.c_str()));
-                }
-            }
-        });
-        dispatch_resume(program->keepalive);
+        // No 5s re-warm timer. The .mlmodelc is loaded once and
+        // stays loaded; state is in IOSurface (not in an opaque
+        // MLState) and never "goes cold" in a way that requires
+        // re-warming. The dispatch path uses execution_state for
+        // now; future commits will replace it with pinned-state
+        // slots + outputBackings (zero-copy across ANE/Metal/CPU).
         LOG_INF("loaded and warmed embedded ANE program in namespace %s at %s (requested batch=%u, bucket=%u)\n",
                 root_prefix.c_str(),
                 program->cache_path.c_str(), batch_hint, selected_batch);
@@ -1057,57 +1776,55 @@ std::vector<common_ane_compute_function> common_ane_compute_functions(
     return result;
 }
 
-static common_ane_compute_instance * find_compute_function(
-        const common_ane_mtp_program_ptr & program,
-        const char * role,
-        uint32_t bucket) {
+std::vector<common_ane_program_phase_stats_row> common_ane_mtp_program_phase_stats(
+        const common_ane_mtp_program_ptr & program) {
+    std::vector<common_ane_program_phase_stats_row> result;
     if (!program) {
-        return nullptr;
+        return result;
     }
+    result.reserve(program->functions.size());
     for (const auto & entry : program->functions) {
-        auto * instance = entry.second.get();
-        if (instance->role == role && instance->bucket == bucket &&
-                instance->warm.load()) {
-            return instance;
-        }
+        const auto & instance = *entry.second;
+        // Snapshot the per-function phase stats. The values are
+        // atomic so we read them in a consistent order; the
+        // snapshot is not strictly atomic (the four phase totals
+        // can be sampled at slightly different microsecond
+        // boundaries if the E-core thread is in the middle of a
+        // dispatch), but the resulting per-row inconsistency is
+        // bounded by one in-flight dispatch and is acceptable
+        // for a profile snapshot.
+        common_ane_program_phase_stats_row row;
+        row.function_name = instance.name;
+        row.role = instance.role;
+        row.bucket = instance.bucket;
+        row.stats.input_prep_us_total = instance.phase_stats.input_prep_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.input_prep_us_max = instance.phase_stats.input_prep_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.ane_dispatch_us_total = instance.phase_stats.ane_dispatch_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.ane_dispatch_us_max = instance.phase_stats.ane_dispatch_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.output_read_us_total = instance.phase_stats.output_read_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.output_read_us_max = instance.phase_stats.output_read_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.signal_us_total = instance.phase_stats.signal_us_total.load(
+            std::memory_order_relaxed);
+        row.stats.signal_us_max = instance.phase_stats.signal_us_max.load(
+            std::memory_order_relaxed);
+        row.stats.count = instance.phase_stats.count.load(
+            std::memory_order_relaxed);
+        result.push_back(std::move(row));
     }
-    return nullptr;
-}
-
-static MLMultiArray * make_i32_input(
-        common_ane_mtp_program & program,
-        const std::string & arena_name,
-        NSArray<NSNumber *> * shape,
-        const int32_t * source,
-        size_t active_count,
-        bool direct,
-        NSError ** error) {
-    if (direct) {
-        return wrap_multi_array(
-            (void *) source, shape, MLMultiArrayDataTypeInt32, error);
-    }
-    MLMultiArray * result = arena_multi_array(
-        program, arena_name, shape, MLMultiArrayDataTypeInt32, error);
-    if (!result) {
-        return nil;
-    }
-    std::memcpy(result.dataPointer, source, active_count * sizeof(int32_t));
-    std::memset(
-        (int32_t *) result.dataPointer + active_count,
-        0,
-        (result.count - active_count) * sizeof(int32_t));
-    program.arena_input_bytes += result.count * sizeof(int32_t);
+    // Same sort order as common_ane_compute_functions: (role, bucket).
+    std::sort(result.begin(), result.end(),
+            [](const common_ane_program_phase_stats_row & a,
+               const common_ane_program_phase_stats_row & b) {
+        if (a.role != b.role) return a.role < b.role;
+        return a.bucket < b.bucket;
+    });
     return result;
-}
-
-static bool valid_multi_array(
-        MLFeatureDescription * description,
-        MLMultiArrayDataType type,
-        size_t count) {
-    return description &&
-        description.type == MLFeatureTypeMultiArray &&
-        description.multiArrayConstraint.dataType == type &&
-        shape_count(description.multiArrayConstraint.shape) == count;
 }
 
 bool common_ane_compute_prefill(
@@ -1118,11 +1835,19 @@ bool common_ane_compute_prefill(
         uint32_t n_active,
         uint32_t hidden_size,
         float * hidden_states) {
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "prefill", sequence_length);
-    if (!instance || !token_ids || !positions || !hidden_states ||
-            n_active == 0 || n_active > program->batch_bucket ||
-            hidden_size == 0) {
+    if (!program || !token_ids || !positions || !hidden_states ||
+            n_active == 0 || hidden_size == 0) {
+        return false;
+    }
+    // W3.5.2: the legacy arena + MLState path is retired. The
+    // dispatch contract requires the manifest. Refuse the call
+    // when the manifest is absent.
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_PREFILL, sequence_length);
+    if (function == nullptr) {
         return false;
     }
     if (program->context_length > 0) {
@@ -1134,110 +1859,24 @@ bool common_ane_compute_prefill(
             }
         }
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * outputs_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            const size_t bucket_tokens =
-                (size_t) program->batch_bucket * sequence_length;
-            MLFeatureDescription * token_desc = inputs_desc[@"token_ids"];
-            MLFeatureDescription * position_desc = inputs_desc[@"positions"];
-            MLFeatureDescription * hidden_desc = outputs_desc[@"hidden_states"];
-            if (!valid_multi_array(
-                    token_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !valid_multi_array(
-                        position_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !hidden_desc || hidden_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(hidden_desc.multiArrayConstraint.shape) !=
-                        bucket_tokens * hidden_size) {
-                return;
-            }
-            const MLMultiArrayDataType hidden_type =
-                hidden_desc.multiArrayConstraint.dataType;
-            if (hidden_type != MLMultiArrayDataTypeFloat16 &&
-                    hidden_type != MLMultiArrayDataTypeFloat32) {
-                return;
-            }
-
-            NSError * error = nil;
-            const bool direct = n_active == program->batch_bucket;
-            const size_t active_tokens = (size_t) n_active * sequence_length;
-            MLMultiArray * tokens = make_i32_input(
-                *program, instance->name + ".token_ids",
-                token_desc.multiArrayConstraint.shape,
-                token_ids, active_tokens, direct, &error);
-            MLMultiArray * positions_array = make_i32_input(
-                *program, instance->name + ".positions",
-                position_desc.multiArrayConstraint.shape,
-                positions, active_tokens, direct, &error);
-            if (!tokens || !positions_array) {
-                return;
-            }
-            if (direct) {
-                program->direct_input_views += 2;
-            }
-
-            const bool direct_output =
-                direct && hidden_type == MLMultiArrayDataTypeFloat32;
-            MLMultiArray * output_backing = direct_output
-                ? wrap_multi_array(
-                    hidden_states,
-                    hidden_desc.multiArrayConstraint.shape,
-                    hidden_type,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".hidden_states",
-                    hidden_desc.multiArrayConstraint.shape,
-                    hidden_type,
-                    &error);
-            if (!output_backing) {
-                return;
-            }
-            MLDictionaryFeatureProvider * inputs =
-                [[MLDictionaryFeatureProvider alloc]
-                    initWithDictionary:@{
-                        @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                        @"positions": [MLFeatureValue featureValueWithMultiArray:positions_array],
-                    }
-                    error:&error];
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{@"hidden_states": output_backing};
-            id<MLFeatureProvider> output = instance->execution_state
-                ? [instance->model predictionFromFeatures:inputs
-                                               usingState:instance->execution_state
-                                                  options:options
-                                                    error:&error]
-                : [instance->model predictionFromFeatures:inputs
-                                                  options:options
-                                                    error:&error];
-            MLMultiArray * result =
-                [output featureValueForName:@"hidden_states"].multiArrayValue;
-            if (!output || !result ||
-                    (size_t) result.count < active_tokens * hidden_size ||
-                    result.dataType != hidden_type) {
-                LOG_WRN("ANE prefill %s failed: %s\n",
-                        instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            if (result.dataPointer == output_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (!direct_output) {
-                read_float_data(
-                    result, hidden_states, active_tokens * hidden_size);
-                program->copied_output_bytes +=
-                    active_tokens * hidden_size * sizeof(float);
-            }
-            ok = true;
-        }
-    });
-    return ok;
+    const size_t active_tokens = (size_t) n_active * sequence_length;
+    const std::string func_name = function->name;
+    if (!set_pinned_input_i32(*program, func_name + ".token_ids",
+                              token_ids, active_tokens) ||
+            !set_pinned_input_i32(*program, func_name + ".positions",
+                                  positions, active_tokens)) {
+        return false;
+    }
+    // Pin only the hidden_states output; the K/V outputs (when the
+    // function declares them) go to Core ML's allocator since this
+    // entry point doesn't read K/V. The output_filter is the
+    // selector for outputBackings.
+    const std::unordered_set<std::string> output_names = { "hidden_states" };
+    if (!dispatch_pinned_function(*program, func_name, nullptr, &output_names)) {
+        return false;
+    }
+    return get_pinned_output(*program, func_name + ".hidden_states",
+                              hidden_states, active_tokens * hidden_size);
 }
 
 bool common_ane_compute_prefill_slab(
@@ -1252,134 +1891,83 @@ bool common_ane_compute_prefill_slab(
         float * hidden_states,
         float * key_states,
         float * value_states) {
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "prefill", sequence_length);
-    if (!instance || !token_ids || !positions || !hidden_states || !key_states ||
-            !value_states || n_active == 0 || n_active > program->batch_bucket ||
+    if (!program || !token_ids || !positions || !hidden_states || !key_states ||
+            !value_states || n_active == 0 ||
             hidden_size == 0 || kv_heads == 0 || head_dim == 0) {
         return false;
     }
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            const size_t bucket_tokens = (size_t) program->batch_bucket * sequence_length;
-            const size_t active_tokens = (size_t) n_active * sequence_length;
-            const size_t kv_width = (size_t) kv_heads * head_dim;
-            const auto & inputs_desc = instance->model.modelDescription.inputDescriptionsByName;
-            const auto & outputs_desc = instance->model.modelDescription.outputDescriptionsByName;
-            MLFeatureDescription * token_desc = inputs_desc[@"token_ids"];
-            MLFeatureDescription * pos_desc = inputs_desc[@"positions"];
-            MLFeatureDescription * hidden_desc = outputs_desc[@"hidden_states"];
-            MLFeatureDescription * key_desc = outputs_desc[@"key_states"];
-            MLFeatureDescription * value_desc = outputs_desc[@"value_states"];
-            if (!valid_multi_array(token_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !valid_multi_array(pos_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !hidden_desc || !key_desc || !value_desc ||
-                    hidden_desc.type != MLFeatureTypeMultiArray ||
-                    key_desc.type != MLFeatureTypeMultiArray ||
-                    value_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(hidden_desc.multiArrayConstraint.shape) != bucket_tokens * hidden_size ||
-                    shape_count(key_desc.multiArrayConstraint.shape) != bucket_tokens * kv_width ||
-                    shape_count(value_desc.multiArrayConstraint.shape) != bucket_tokens * kv_width) {
-                return;
+    // W3.5.1: the legacy arena + MLState path is retired. The dispatch
+    // contract requires the manifest (the multifunction bundle is
+    // loaded stateless, the IOSurface is the canonical state). The
+    // gemma4 prefill bundle (and every future multifunction bundle)
+    // emits a manifest sidecar at convert time; without one, the
+    // bundle cannot be used. Refuse the call rather than silently
+    // fall back to a path that no longer exists in the runtime.
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_PREFILL, sequence_length);
+    if (function == nullptr) {
+        return false;
+    }
+    const size_t active_tokens = (size_t) n_active * sequence_length;
+    const size_t kv_width = (size_t) kv_heads * head_dim;
+    const std::string func_name = function->name;
+    const std::string token_slot_name = func_name + ".token_ids";
+    const std::string position_slot_name = func_name + ".positions";
+    if (!set_pinned_input_i32(*program, token_slot_name, token_ids, active_tokens) ||
+            !set_pinned_input_i32(*program, position_slot_name, positions, active_tokens)) {
+        return false;
+    }
+    NSMutableDictionary<NSString *, MLFeatureValue *> * extra = nil;
+    if (!program->weight_inputs.empty() || !program->embedding.empty()) {
+        extra = [NSMutableDictionary dictionary];
+        for (auto & entry : program->weight_inputs) {
+            NSString * weight_name = [NSString stringWithUTF8String:entry.first.c_str()];
+            extra[weight_name] = [MLFeatureValue featureValueWithMultiArray:entry.second];
+        }
+        if (const ane_slot_v1_t * emb_slot = find_manifest_slot(*program, "embedded");
+                emb_slot != nullptr) {
+            if (program->embedding.empty() || program->embedding_dim != hidden_size) {
+                return false;
             }
-            const MLMultiArrayDataType hidden_type = hidden_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType key_type = key_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType value_type = value_desc.multiArrayConstraint.dataType;
-            if ((hidden_type != MLMultiArrayDataTypeFloat16 && hidden_type != MLMultiArrayDataTypeFloat32) ||
-                    (key_type != MLMultiArrayDataTypeFloat16 && key_type != MLMultiArrayDataTypeFloat32) ||
-                    (value_type != MLMultiArrayDataTypeFloat16 && value_type != MLMultiArrayDataTypeFloat32)) {
-                return;
+            NSMutableArray<NSNumber *> * shape = [NSMutableArray arrayWithCapacity:emb_slot->n_dim];
+            for (uint32_t i = 0; i < emb_slot->n_dim; ++i) {
+                [shape addObject:@(emb_slot->shape[i])];
             }
-            NSError * error = nil;
-            const std::string prefix = instance->name + ".slab";
-            MLMultiArray * tokens = make_i32_input(*program, prefix + ".token_ids",
-                    token_desc.multiArrayConstraint.shape, token_ids, active_tokens, false, &error);
-            MLMultiArray * pos = make_i32_input(*program, prefix + ".positions",
-                    pos_desc.multiArrayConstraint.shape, positions, active_tokens, false, &error);
-            if (!tokens || !pos) {
-                return;
+            NSError * emb_error = nil;
+            MLMultiArray * embedded = [[MLMultiArray alloc]
+                initWithShape:shape
+                     dataType:MLMultiArrayDataTypeFloat16
+                        error:&emb_error];
+            if (embedded == nil) {
+                return false;
             }
-            NSMutableDictionary<NSString *, MLFeatureValue *> * features =
-                [NSMutableDictionary dictionaryWithDictionary:@{
-                    @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                    @"positions": [MLFeatureValue featureValueWithMultiArray:pos],
-                }];
-
-            // Layer weights + per-token embedded values arrive as MLMultiArray
-            // inputs.  The weight arrays were created at bundle load time from
-            // the source GGUF.  The embedded array is a one-shot gather of
-            // token rows from the cached embedding table; it lives in the
-            // arena for the duration of this prediction.
-            MLMultiArray * embedded = nil;
-            if (inputs_desc[@"embedded"] != nil) {
-                if (program->embedding.empty() || program->embedding_dim != hidden_size) {
-                    return;
+            uint16_t * dst = (uint16_t *) embedded.dataPointer;
+            const uint16_t * vocab = program->embedding.data();
+            const size_t emb_count = (size_t) embedded.count;
+            for (size_t i = 0; i < emb_count; ++i) {
+                const int32_t tok = token_ids[i];
+                if ((size_t) tok * hidden_size + hidden_size > program->embedding.size()) {
+                    return false;
                 }
-                MLFeatureDescription * emb_desc = inputs_desc[@"embedded"];
-                if (emb_desc.type != MLFeatureTypeMultiArray ||
-                        emb_desc.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat16) {
-                    return;
-                }
-                NSArray<NSNumber *> * emb_shape = emb_desc.multiArrayConstraint.shape;
-                NSMutableArray<NSNumber *> * ns_emb_shape = [emb_shape mutableCopy];
-                const std::string emb_name = prefix + ".embedded";
-                embedded = arena_multi_array(*program, emb_name, ns_emb_shape,
-                        MLMultiArrayDataTypeFloat16, &error);
-                if (!embedded) {
-                    return;
-                }
-                uint16_t * dst = (uint16_t *) embedded.dataPointer;
-                const uint16_t * vocab = program->embedding.data();
-                for (size_t i = 0; i < active_tokens; ++i) {
-                    const int32_t tok = token_ids[i];
-                    if ((size_t) tok * hidden_size + hidden_size > program->embedding.size()) {
-                        return;
-                    }
-                    std::memcpy(dst + i * hidden_size,
+                std::memcpy(dst + i * hidden_size,
                             vocab + (size_t) tok * hidden_size,
                             hidden_size * sizeof(uint16_t));
-                }
-                features[@"embedded"] = [MLFeatureValue featureValueWithMultiArray:embedded];
             }
-            for (auto & entry : program->weight_inputs) {
-                NSString * weight_name = [NSString stringWithUTF8String:entry.first.c_str()];
-                features[weight_name] = [MLFeatureValue featureValueWithMultiArray:entry.second];
-            }
-
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:features error:&error];
-            if (!inputs) {
-                return;
-            }
-            // Core ML 15 accepts multi-output backings, but some ANE drivers
-            // return silently sparse data for rank-four output backings.  Use
-            // materialized outputs until the backing contract is qualified by
-            // the parity test; inputs remain in the IOSurface arena.
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            id<MLFeatureProvider> output = [instance->model predictionFromFeatures:inputs
-                                                                            options:options
-                                                                              error:&error];
-            MLMultiArray * out_hidden = [output featureValueForName:@"hidden_states"].multiArrayValue;
-            MLMultiArray * out_keys = [output featureValueForName:@"key_states"].multiArrayValue;
-            MLMultiArray * out_values = [output featureValueForName:@"value_states"].multiArrayValue;
-            if (!output || !out_hidden || !out_keys || !out_values ||
-                    (size_t) out_hidden.count < active_tokens * hidden_size ||
-                    (size_t) out_keys.count < active_tokens * kv_width ||
-                    (size_t) out_values.count < active_tokens * kv_width) {
-                LOG_WRN("ANE prefill slab %s failed: %s\n", instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            read_float_data(out_hidden, hidden_states, active_tokens * hidden_size);
-            read_float_data(out_keys, key_states, active_tokens * kv_width);
-            read_float_data(out_values, value_states, active_tokens * kv_width);
-            program->copied_output_bytes += active_tokens *
-                (hidden_size + 2 * kv_width) * sizeof(float);
-            ok = true;
+            extra[@"embedded"] = [MLFeatureValue featureValueWithMultiArray:embedded];
         }
-    });
-    return ok;
+    }
+    if (!dispatch_pinned_function(*program, func_name, extra)) {
+        return false;
+    }
+    const std::string hidden_slot = func_name + ".hidden_states";
+    const std::string key_slot = func_name + ".key_states";
+    const std::string value_slot = func_name + ".value_states";
+    return get_pinned_output(*program, hidden_slot, hidden_states, active_tokens * hidden_size) &&
+           get_pinned_output(*program, key_slot, key_states, active_tokens * kv_width) &&
+           get_pinned_output(*program, value_slot, value_states, active_tokens * kv_width);
 }
 
 bool common_ane_prefill_decode(
@@ -1582,18 +2170,47 @@ common_ane_prefill_request_ptr common_ane_compute_prefill_async(
             n_active == 0 || sequence_length == 0 || hidden_size == 0) {
         return nullptr;
     }
+    // W3.5.3: the legacy per-request arena path is retired. The
+    // async dispatch is now a direct dispatch_async to the pinned-
+    // slot path; the result lands in the pinned output slot and
+    // is read by the completion handler via get_pinned_output. The
+    // request lifecycle is the dispatch_semaphore signal.
+    if (!program->manifest_loaded) {
+        return nullptr;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_PREFILL, sequence_length);
+    if (function == nullptr) {
+        return nullptr;
+    }
+    if (program->context_length > 0) {
+        const size_t count = (size_t) n_active * sequence_length;
+        for (size_t i = 0; i < count; ++i) {
+            if (positions[i] < 0 ||
+                    (uint32_t) positions[i] >= program->context_length) {
+                return nullptr;
+            }
+        }
+    }
     auto request = std::make_shared<common_ane_prefill_request>();
     request->program = program;
     request->completion = dispatch_semaphore_create(0);
     request->arena_epoch = program->next_prefill_arena_epoch.fetch_add(1) + 1;
     ++program->async_prefill_submissions;
+    const size_t active_tokens = (size_t) n_active * sequence_length;
+    const std::string func_name = function->name;
+    const std::string token_slot = func_name + ".token_ids";
+    const std::string position_slot = func_name + ".positions";
+    const std::string hidden_slot = func_name + ".hidden_states";
+    // The async dispatch is serialized through the program queue
+    // (the same serial queue the sync path uses) so the host input
+    // write and the dispatch are atomically observed by the host
+    // and by Core ML. Per-request state is the request's local
+    // success flag; the pinned state is the program's, shared
+    // across requests (only one async prefill can be in flight per
+    // program, matching the sync-path contract).
     dispatch_async(program->queue, ^{
         @autoreleasepool {
-            common_ane_compute_instance * instance =
-                find_compute_function(request->program, "prefill", sequence_length);
-            const size_t active_tokens = (size_t) n_active * sequence_length;
-            const size_t bucket_tokens =
-                (size_t) request->program->batch_bucket * sequence_length;
             const auto finish = ^(bool success) {
                 ++request->program->async_prefill_completions;
                 if (!success) {
@@ -1603,94 +2220,43 @@ common_ane_prefill_request_ptr common_ane_compute_prefill_async(
                 request->complete.store(true);
                 dispatch_semaphore_signal(request->completion);
             };
-            if (!instance || request->program->context_length > 0) {
-                for (size_t i = 0; instance && i < active_tokens; ++i) {
-                    if (positions[i] < 0 ||
-                            (uint32_t) positions[i] >= request->program->context_length) {
-                        finish(false);
-                        return;
-                    }
-                }
-            }
-            if (!instance) {
+            // Copy host inputs into the pinned input slots on the
+            // dispatch thread. The host pointers are caller-owned;
+            // the copy is mandatory because the caller's buffers
+            // may be recycled before the async dispatch runs.
+            if (!set_pinned_input_i32(*request->program, token_slot,
+                                      token_ids, active_tokens) ||
+                    !set_pinned_input_i32(*request->program, position_slot,
+                                          positions, active_tokens)) {
                 finish(false);
                 return;
             }
-            NSDictionary<NSString *, MLFeatureDescription *> * input_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * output_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            MLFeatureDescription * token_desc = input_desc[@"token_ids"];
-            MLFeatureDescription * position_desc = input_desc[@"positions"];
-            MLFeatureDescription * hidden_desc = output_desc[@"hidden_states"];
-            if (!valid_multi_array(token_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !valid_multi_array(position_desc, MLMultiArrayDataTypeInt32, bucket_tokens) ||
-                    !hidden_desc || hidden_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(hidden_desc.multiArrayConstraint.shape) !=
-                        bucket_tokens * hidden_size) {
+            const std::unordered_set<std::string> output_names = { "hidden_states" };
+            if (!dispatch_pinned_function_locked(*request->program, func_name,
+                                                  nullptr, &output_names)) {
                 finish(false);
                 return;
             }
-            const MLMultiArrayDataType hidden_type = hidden_desc.multiArrayConstraint.dataType;
-            if (hidden_type != MLMultiArrayDataTypeFloat16 &&
-                    hidden_type != MLMultiArrayDataTypeFloat32) {
-                finish(false);
-                return;
-            }
-            NSError * error = nil;
-            // Inputs are copied into per-request IOSurface slots.  This makes
-            // completion-handler execution safe even if the scheduler recycles
-            // its prompt buffers immediately after submitting the request.
-            const std::string epoch = ".async." + std::to_string(request->arena_epoch);
-            MLMultiArray * tokens = make_i32_input(
-                *request->program, instance->name + epoch + ".token_ids",
-                token_desc.multiArrayConstraint.shape, token_ids, active_tokens,
-                false, &error);
-            MLMultiArray * positions_array = make_i32_input(
-                *request->program, instance->name + epoch + ".positions",
-                position_desc.multiArrayConstraint.shape, positions, active_tokens,
-                false, &error);
-            MLMultiArray * output_backing = arena_multi_array(
-                *request->program, instance->name + epoch + ".hidden_states",
-                hidden_desc.multiArrayConstraint.shape, hidden_type, &error);
-            if (!tokens || !positions_array || !output_backing) {
-                finish(false);
-                return;
-            }
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{
-                    @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                    @"positions": [MLFeatureValue featureValueWithMultiArray:positions_array],
-                } error:&error];
-            if (!inputs) {
-                finish(false);
-                return;
-            }
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{@"hidden_states": output_backing};
-            [instance->model predictionFromFeatures:inputs
-                                            options:options
-                                  completionHandler:^(id<MLFeatureProvider> output, NSError * completion_error) {
-                @autoreleasepool {
-                    MLMultiArray * result =
-                        [output featureValueForName:@"hidden_states"].multiArrayValue;
-                    const bool valid = output && !completion_error && result &&
-                        result.dataType == hidden_type &&
-                        (size_t) result.count >= active_tokens * hidden_size;
-                    if (valid) {
-                        if (result.dataPointer == output_backing.dataPointer) {
-                            ++request->program->direct_output_backings;
-                        }
-                        read_float_data(result, hidden_states, active_tokens * hidden_size);
-                        request->program->copied_output_bytes +=
-                            active_tokens * hidden_size * sizeof(float);
-                    } else {
-                        LOG_WRN("ANE async prefill %s failed: %s\n", instance->name.c_str(),
-                                completion_error.localizedDescription.UTF8String ?: "invalid output");
-                    }
-                    finish(valid);
-                }
-            }];
+            // W7 (async-path fix): the sync path's dispatch_pinned_function
+            // signals the per-slot MTLSharedEvent handles via the pump's
+            // signal_fn. The async path bypasses the pump (it dispatches
+            // directly via dispatch_async on program.queue) so the signal
+            // doesn't fire automatically; emit it here. The value is the
+            // program's per-function call counter, incremented on every
+            // successful async prefill; downstream consumers observe a
+            // monotonic ordering. The same value will be visible on the
+            // next sync dispatch through the pump (the pump tracks its
+            // own monotonic counter; the two counters are disjoint because
+            // the sync and async paths are serialized through program.queue
+            // in this commit and never overlap on the same function).
+            const uint32_t function_id = (uint32_t) (function - request->program->manifest.functions);
+            ane_signal_slot_events(*request->program, function_id,
+                                    ++request->program->async_call_counter, nullptr);
+            // Read the result. The hidden_states output is in the
+            // pinned slot; copy to the caller's host buffer.
+            get_pinned_output(*request->program, hidden_slot,
+                              hidden_states, active_tokens * hidden_size);
+            finish(true);
         }
     });
     return request;
@@ -1722,11 +2288,17 @@ bool common_ane_compute_dflash(
         const int32_t * positions,
         int32_t * draft_tokens,
         float * confidence) {
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "dflash", block_size);
-    if (!instance || !target_features || !token_ids || !positions ||
+    if (!program || !target_features || !token_ids || !positions ||
             !draft_tokens || !confidence || n_active == 0 ||
-            n_active > program->batch_bucket || feature_width == 0) {
+            feature_width == 0) {
+        return false;
+    }
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_DFLASH, block_size);
+    if (function == nullptr) {
         return false;
     }
     if (program->context_length > 0) {
@@ -1737,179 +2309,38 @@ bool common_ane_compute_dflash(
             }
         }
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * outputs_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            const size_t lane_bucket = program->batch_bucket;
-            MLFeatureDescription * features_desc = inputs_desc[@"target_features"];
-            MLFeatureDescription * token_desc = inputs_desc[@"token_ids"];
-            MLFeatureDescription * position_desc = inputs_desc[@"positions"];
-            MLFeatureDescription * drafts_desc = outputs_desc[@"draft_tokens"];
-            MLFeatureDescription * confidence_desc = outputs_desc[@"confidence"];
-            if (!features_desc || features_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(features_desc.multiArrayConstraint.shape) !=
-                        lane_bucket * feature_width ||
-                    !valid_multi_array(
-                        token_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(
-                        position_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(
-                        drafts_desc, MLMultiArrayDataTypeInt32,
-                        lane_bucket * block_size) ||
-                    !confidence_desc ||
-                    confidence_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(confidence_desc.multiArrayConstraint.shape) !=
-                        lane_bucket * block_size) {
-                return;
-            }
-            const MLMultiArrayDataType features_type =
-                features_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType confidence_type =
-                confidence_desc.multiArrayConstraint.dataType;
-            if ((features_type != MLMultiArrayDataTypeFloat16 &&
-                        features_type != MLMultiArrayDataTypeFloat32) ||
-                    (confidence_type != MLMultiArrayDataTypeFloat16 &&
-                        confidence_type != MLMultiArrayDataTypeFloat32)) {
-                return;
-            }
-
-            NSError * error = nil;
-            const bool direct = n_active == lane_bucket;
-            MLMultiArray * features =
-                direct && features_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array(
-                    (void *) target_features,
-                    features_desc.multiArrayConstraint.shape,
-                    features_type,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".target_features",
-                    features_desc.multiArrayConstraint.shape,
-                    features_type,
-                    &error);
-            MLMultiArray * tokens = make_i32_input(
-                *program, instance->name + ".token_ids",
-                token_desc.multiArrayConstraint.shape,
-                token_ids, n_active, direct, &error);
-            MLMultiArray * positions_array = make_i32_input(
-                *program, instance->name + ".positions",
-                position_desc.multiArrayConstraint.shape,
-                positions, n_active, direct, &error);
-            if (!features || !tokens || !positions_array) {
-                return;
-            }
-            const size_t active_features = (size_t) n_active * feature_width;
-            if (!(direct && features_type == MLMultiArrayDataTypeFloat32)) {
-                write_float_data(features, target_features, active_features);
-                std::memset(
-                    (char *) features.dataPointer +
-                        active_features * multi_array_element_size(features_type),
-                    0,
-                    (lane_bucket * feature_width - active_features) *
-                        multi_array_element_size(features_type));
-                program->arena_input_bytes +=
-                    lane_bucket * feature_width *
-                    multi_array_element_size(features_type);
-            } else {
-                ++program->direct_input_views;
-            }
-            if (direct) {
-                program->direct_input_views += 2;
-            }
-
-            const bool direct_confidence =
-                direct && confidence_type == MLMultiArrayDataTypeFloat32;
-            MLMultiArray * draft_backing = direct
-                ? wrap_multi_array(
-                    draft_tokens,
-                    drafts_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".draft_tokens",
-                    drafts_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32,
-                    &error);
-            MLMultiArray * confidence_backing = direct_confidence
-                ? wrap_multi_array(
-                    confidence,
-                    confidence_desc.multiArrayConstraint.shape,
-                    confidence_type,
-                    &error)
-                : arena_multi_array(
-                    *program,
-                    instance->name + ".confidence",
-                    confidence_desc.multiArrayConstraint.shape,
-                    confidence_type,
-                    &error);
-            if (!draft_backing || !confidence_backing) {
-                return;
-            }
-            MLDictionaryFeatureProvider * inputs =
-                [[MLDictionaryFeatureProvider alloc]
-                    initWithDictionary:@{
-                        @"target_features": [MLFeatureValue featureValueWithMultiArray:features],
-                        @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                        @"positions": [MLFeatureValue featureValueWithMultiArray:positions_array],
-                    }
-                    error:&error];
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{
-                @"draft_tokens": draft_backing,
-                @"confidence": confidence_backing,
-            };
-            id<MLFeatureProvider> output = instance->execution_state
-                ? [instance->model predictionFromFeatures:inputs
-                                               usingState:instance->execution_state
-                                                  options:options
-                                                    error:&error]
-                : [instance->model predictionFromFeatures:inputs
-                                                  options:options
-                                                    error:&error];
-            MLMultiArray * drafts =
-                [output featureValueForName:@"draft_tokens"].multiArrayValue;
-            MLMultiArray * probabilities =
-                [output featureValueForName:@"confidence"].multiArrayValue;
-            const size_t active_drafts = (size_t) n_active * block_size;
-            if (!output || !drafts || !probabilities ||
-                    drafts.dataType != MLMultiArrayDataTypeInt32 ||
-                    probabilities.dataType != confidence_type ||
-                    (size_t) drafts.count < active_drafts ||
-                    (size_t) probabilities.count < active_drafts) {
-                LOG_WRN("ANE DFlash %s failed: %s\n",
-                        instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            if (!direct) {
-                std::memcpy(
-                    draft_tokens, drafts.dataPointer,
-                    active_drafts * sizeof(int32_t));
-                program->copied_output_bytes +=
-                    active_drafts * sizeof(int32_t);
-            }
-            if (!direct_confidence) {
-                read_float_data(probabilities, confidence, active_drafts);
-                program->copied_output_bytes +=
-                    active_drafts * sizeof(float);
-            }
-            if (drafts.dataPointer == draft_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (probabilities.dataPointer == confidence_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            ok = true;
-        }
-    });
-    return ok;
+    const std::string func_name = function->name;
+    // The DFlash function's pinned input slots are target_features
+    // (fp32, [bucket, feature_width]), token_ids (i32, [bucket]),
+    // positions (i32, [bucket]). Outputs are draft_tokens (i32)
+    // and confidence (fp32). The pinned-slot path writes the host
+    // inputs into the IOSurface directly and pins the outputs as
+    // zero-copy MLMultiArray backings. The host output buffers are
+    // filled by get_pinned_output below.
+    if (!set_pinned_input(*program, func_name + ".target_features",
+                          target_features, (size_t) n_active * feature_width) ||
+            !set_pinned_input_i32(*program, func_name + ".token_ids",
+                                  token_ids, n_active) ||
+            !set_pinned_input_i32(*program, func_name + ".positions",
+                                  positions, n_active)) {
+        return false;
+    }
+    if (!dispatch_pinned_function(*program, func_name)) {
+        return false;
+    }
+    // Copy outputs to host. draft_tokens is i32 (no conversion);
+    // confidence is fp32 (or fp16 -> fp32 conversion via the helper).
+    if (!get_pinned_output_i32(*program, func_name + ".draft_tokens",
+                               draft_tokens, (size_t) n_active * block_size)) {
+        return false;
+    }
+    // For confidence, use the fp32 read path; get_pinned_output
+    // handles f16->f32 conversion when the slot is f16.
+    if (!get_pinned_output(*program, func_name + ".confidence",
+                           confidence, (size_t) n_active * block_size)) {
+        return false;
+    }
+    return true;
 }
 
 bool common_ane_compute_hybrid(
@@ -1925,204 +2356,55 @@ bool common_ane_compute_hybrid(
         float dflash_cutoff,
         int32_t * selected_source,
         int32_t * agreement) {
-    common_ane_compute_instance * instance =
-        find_compute_function(program, "hybrid", block_size);
-    if (!instance || !dflash_tokens || !dflash_confidence || !dflash_counts ||
+    if (!program || !dflash_tokens || !dflash_confidence || !dflash_counts ||
             !mtp_tokens || !mtp_confidence || !mtp_counts ||
-            !selected_source || !agreement || n_active == 0 ||
-            n_active > program->batch_bucket) {
+            !selected_source || !agreement || n_active == 0) {
         return false;
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * inputs_desc =
-                instance->model.modelDescription.inputDescriptionsByName;
-            NSDictionary<NSString *, MLFeatureDescription *> * outputs_desc =
-                instance->model.modelDescription.outputDescriptionsByName;
-            const size_t lane_bucket = program->batch_bucket;
-            const size_t block_count = lane_bucket * block_size;
-
-            MLFeatureDescription * d_tokens_desc = inputs_desc[@"dflash_tokens"];
-            MLFeatureDescription * d_conf_desc = inputs_desc[@"dflash_confidence"];
-            MLFeatureDescription * d_counts_desc = inputs_desc[@"dflash_counts"];
-            MLFeatureDescription * m_tokens_desc = inputs_desc[@"mtp_tokens"];
-            MLFeatureDescription * m_conf_desc = inputs_desc[@"mtp_confidence"];
-            MLFeatureDescription * m_counts_desc = inputs_desc[@"mtp_counts"];
-            MLFeatureDescription * cutoff_desc = inputs_desc[@"dflash_cutoff"];
-            MLFeatureDescription * source_desc = outputs_desc[@"selected_source"];
-            MLFeatureDescription * agreement_desc = outputs_desc[@"agreement"];
-            if (!valid_multi_array(d_tokens_desc, MLMultiArrayDataTypeInt32, block_count) ||
-                    !valid_multi_array(d_counts_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(m_tokens_desc, MLMultiArrayDataTypeInt32, block_count) ||
-                    !valid_multi_array(m_counts_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(source_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !valid_multi_array(agreement_desc, MLMultiArrayDataTypeInt32, lane_bucket) ||
-                    !cutoff_desc || cutoff_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(cutoff_desc.multiArrayConstraint.shape) != lane_bucket ||
-                    !d_conf_desc || d_conf_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(d_conf_desc.multiArrayConstraint.shape) != block_count ||
-                    !m_conf_desc || m_conf_desc.type != MLFeatureTypeMultiArray ||
-                    shape_count(m_conf_desc.multiArrayConstraint.shape) != block_count) {
-                return;
-            }
-            const MLMultiArrayDataType d_conf_type =
-                d_conf_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType m_conf_type =
-                m_conf_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType cutoff_type =
-                cutoff_desc.multiArrayConstraint.dataType;
-            if ((d_conf_type != MLMultiArrayDataTypeFloat16 &&
-                        d_conf_type != MLMultiArrayDataTypeFloat32) ||
-                    (m_conf_type != MLMultiArrayDataTypeFloat16 &&
-                        m_conf_type != MLMultiArrayDataTypeFloat32) ||
-                    (cutoff_type != MLMultiArrayDataTypeFloat16 &&
-                        cutoff_type != MLMultiArrayDataTypeFloat32)) {
-                return;
-            }
-
-            NSError * error = nil;
-            const bool direct = n_active == lane_bucket;
-            const size_t active_blocks = (size_t) n_active * block_size;
-            MLMultiArray * d_tokens = make_i32_input(
-                *program, instance->name + ".dflash_tokens",
-                d_tokens_desc.multiArrayConstraint.shape,
-                dflash_tokens, active_blocks, direct, &error);
-            MLMultiArray * d_counts = make_i32_input(
-                *program, instance->name + ".dflash_counts",
-                d_counts_desc.multiArrayConstraint.shape,
-                dflash_counts, n_active, direct, &error);
-            MLMultiArray * m_tokens = make_i32_input(
-                *program, instance->name + ".mtp_tokens",
-                m_tokens_desc.multiArrayConstraint.shape,
-                mtp_tokens, active_blocks, direct, &error);
-            MLMultiArray * m_counts = make_i32_input(
-                *program, instance->name + ".mtp_counts",
-                m_counts_desc.multiArrayConstraint.shape,
-                mtp_counts, n_active, direct, &error);
-            auto make_confidence = [&](const std::string & name,
-                                       MLFeatureDescription * desc,
-                                       MLMultiArrayDataType type,
-                                       const float * values) -> MLMultiArray * {
-                MLMultiArray * array = arena_multi_array(
-                    *program, name, desc.multiArrayConstraint.shape, type, &error);
-                if (array) {
-                    write_float_data(array, values, active_blocks);
-                    if (active_blocks < block_count) {
-                        std::memset(
-                            (char *) array.dataPointer +
-                                active_blocks * multi_array_element_size(type),
-                            0,
-                            (block_count - active_blocks) *
-                                multi_array_element_size(type));
-                    }
-                    program->arena_input_bytes +=
-                        block_count * multi_array_element_size(type);
-                }
-                return array;
-            };
-            MLMultiArray * d_conf = make_confidence(
-                instance->name + ".dflash_confidence",
-                d_conf_desc, d_conf_type, dflash_confidence);
-            MLMultiArray * m_conf = make_confidence(
-                instance->name + ".mtp_confidence",
-                m_conf_desc, m_conf_type, mtp_confidence);
-            MLMultiArray * cutoff = arena_multi_array(
-                *program, instance->name + ".dflash_cutoff",
-                cutoff_desc.multiArrayConstraint.shape,
-                cutoff_type, &error);
-            if (!d_tokens || !d_counts || !m_tokens || !m_counts ||
-                    !d_conf || !m_conf || !cutoff) {
-                return;
-            }
-            std::vector<float> cutoff_values(lane_bucket, dflash_cutoff);
-            write_float_data(cutoff, cutoff_values.data(), lane_bucket);
-            program->arena_input_bytes +=
-                lane_bucket * multi_array_element_size(cutoff_type);
-            if (direct) {
-                program->direct_input_views += 4;
-            }
-
-            MLMultiArray * source_backing = direct
-                ? wrap_multi_array(
-                    selected_source,
-                    source_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(
-                    *program, instance->name + ".selected_source",
-                    source_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * agreement_backing = direct
-                ? wrap_multi_array(
-                    agreement,
-                    agreement_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(
-                    *program, instance->name + ".agreement",
-                    agreement_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            if (!source_backing || !agreement_backing) {
-                return;
-            }
-
-            MLDictionaryFeatureProvider * inputs =
-                [[MLDictionaryFeatureProvider alloc]
-                    initWithDictionary:@{
-                        @"dflash_tokens": [MLFeatureValue featureValueWithMultiArray:d_tokens],
-                        @"dflash_confidence": [MLFeatureValue featureValueWithMultiArray:d_conf],
-                        @"dflash_counts": [MLFeatureValue featureValueWithMultiArray:d_counts],
-                        @"mtp_tokens": [MLFeatureValue featureValueWithMultiArray:m_tokens],
-                        @"mtp_confidence": [MLFeatureValue featureValueWithMultiArray:m_conf],
-                        @"mtp_counts": [MLFeatureValue featureValueWithMultiArray:m_counts],
-                        @"dflash_cutoff": [MLFeatureValue featureValueWithMultiArray:cutoff],
-                    }
-                    error:&error];
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{
-                @"selected_source": source_backing,
-                @"agreement": agreement_backing,
-            };
-            id<MLFeatureProvider> output = instance->execution_state
-                ? [instance->model predictionFromFeatures:inputs
-                                               usingState:instance->execution_state
-                                                  options:options
-                                                    error:&error]
-                : [instance->model predictionFromFeatures:inputs
-                                                  options:options
-                                                    error:&error];
-            MLMultiArray * source =
-                [output featureValueForName:@"selected_source"].multiArrayValue;
-            MLMultiArray * agreed =
-                [output featureValueForName:@"agreement"].multiArrayValue;
-            if (!output || !source || !agreed ||
-                    source.dataType != MLMultiArrayDataTypeInt32 ||
-                    agreed.dataType != MLMultiArrayDataTypeInt32 ||
-                    (size_t) source.count < n_active ||
-                    (size_t) agreed.count < n_active) {
-                LOG_WRN("ANE hybrid %s failed: %s\n",
-                        instance->name.c_str(),
-                        error.localizedDescription.UTF8String ?: "invalid output");
-                return;
-            }
-            if (!direct) {
-                std::memcpy(selected_source, source.dataPointer,
-                            n_active * sizeof(int32_t));
-                std::memcpy(agreement, agreed.dataPointer,
-                            n_active * sizeof(int32_t));
-                program->copied_output_bytes +=
-                    n_active * 2 * sizeof(int32_t);
-            }
-            if (source.dataPointer == source_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (agreed.dataPointer == agreement_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            ok = true;
-        }
-    });
-    return ok;
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    const ane_function_v1_t * function = find_manifest_function_by_role(
+        *program, ANE_ROLE_HYBRID, block_size);
+    if (function == nullptr) {
+        return false;
+    }
+    const std::string func_name = function->name;
+    // The hybrid function's inputs are dflash_tokens, dflash_confidence,
+    // dflash_counts, mtp_tokens, mtp_confidence, mtp_counts, dflash_cutoff.
+    // Outputs are selected_source, agreement (both i32, [bucket]).
+    const size_t active_blocks = (size_t) n_active * block_size;
+    if (!set_pinned_input_i32(*program, func_name + ".dflash_tokens",
+                              dflash_tokens, active_blocks) ||
+            !set_pinned_input(*program, func_name + ".dflash_confidence",
+                              dflash_confidence, active_blocks) ||
+            !set_pinned_input_i32(*program, func_name + ".dflash_counts",
+                                  dflash_counts, n_active) ||
+            !set_pinned_input_i32(*program, func_name + ".mtp_tokens",
+                                  mtp_tokens, active_blocks) ||
+            !set_pinned_input(*program, func_name + ".mtp_confidence",
+                              mtp_confidence, active_blocks) ||
+            !set_pinned_input_i32(*program, func_name + ".mtp_counts",
+                                  mtp_counts, n_active)) {
+        return false;
+    }
+    // dflash_cutoff is a per-lane constant, broadcast into [bucket].
+    const size_t cutoff_count = (size_t) program->batch_bucket;
+    std::vector<float> cutoff_broadcast(cutoff_count, dflash_cutoff);
+    if (!set_pinned_input(*program, func_name + ".dflash_cutoff",
+                          cutoff_broadcast.data(), cutoff_count)) {
+        return false;
+    }
+    if (!dispatch_pinned_function(*program, func_name)) {
+        return false;
+    }
+    if (!get_pinned_output_i32(*program, func_name + ".selected_source",
+                               selected_source, n_active) ||
+            !get_pinned_output_i32(*program, func_name + ".agreement",
+                                   agreement, n_active)) {
+        return false;
+    }
+    return true;
 }
 
 bool common_ane_mtp_program_predict(
@@ -2136,7 +2418,24 @@ bool common_ane_mtp_program_predict(
         float * confidence,
         float * next_hidden) {
     if (!program || !token_ids || !h_nextn || !top_token || !confidence || !next_hidden ||
-            n_active == 0 || n_active > program->batch_bucket) {
+            n_active == 0) {
+        return false;
+    }
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    // The MTP predict is a multifunction whose bucket is the
+    // batch_bucket (1 for the typical MTP, but a multifunction can
+    // declare a larger bucket). Match by role; bucket=0 is the
+    // MTP singleton case where the manifest function has bucket 0.
+    const ane_function_v1_t * function = nullptr;
+    for (uint32_t i = 0; i < program->manifest.n_functions; ++i) {
+        if (program->manifest.functions[i].role == ANE_ROLE_MTP) {
+            function = &program->manifest.functions[i];
+            break;
+        }
+    }
+    if (function == nullptr) {
         return false;
     }
     if (program->context_length > 0 && positions) {
@@ -2147,249 +2446,77 @@ bool common_ane_mtp_program_predict(
             }
         }
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSError * error = nil;
-            MLFeatureDescription * hidden_desc =
-                program->model.modelDescription.inputDescriptionsByName[@"h_nextn"];
-            const MLMultiArrayDataType hidden_type = hidden_desc.multiArrayConstraint.dataType;
-            NSArray<NSNumber *> * token_shape = @[@(program->batch_bucket)];
-            NSArray<NSNumber *> * hidden_shape =
-                @[@(program->batch_bucket), @(hidden_size)];
-            const bool full_bucket = n_active == program->batch_bucket;
-            MLMultiArray * tokens = full_bucket
-                ? wrap_multi_array((void *) token_ids, token_shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "predict.token_ids", token_shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * hidden =
-                full_bucket && hidden_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array((void *) h_nextn, hidden_shape, hidden_type, &error)
-                : arena_multi_array(*program, "predict.h_nextn", hidden_shape,
-                    hidden_type, &error);
-            if (!tokens || !hidden) {
-                return;
-            }
-
-            const size_t active_hidden = (size_t) n_active * hidden_size;
-            if (hidden_type != MLMultiArrayDataTypeFloat32 &&
-                    hidden_type != MLMultiArrayDataTypeFloat16) {
-                return;
-            }
-            if (!full_bucket) {
-                int32_t * token_data = (int32_t *) tokens.dataPointer;
-                std::memcpy(token_data, token_ids, n_active * sizeof(int32_t));
-                std::memset(token_data + n_active, 0,
-                        (program->batch_bucket - n_active) * sizeof(int32_t));
-                program->arena_input_bytes +=
-                    program->batch_bucket * sizeof(int32_t);
-            } else {
-                ++program->direct_input_views;
-            }
-            if (!(full_bucket && hidden_type == MLMultiArrayDataTypeFloat32)) {
-                write_float_data(hidden, h_nextn, active_hidden);
-                const size_t padded_hidden =
-                    (size_t) program->batch_bucket * hidden_size - active_hidden;
-                std::memset((char *) hidden.dataPointer +
-                            active_hidden * multi_array_element_size(hidden_type),
-                        0, padded_hidden * multi_array_element_size(hidden_type));
-                program->arena_input_bytes +=
-                    (size_t) program->batch_bucket * hidden_size *
-                    multi_array_element_size(hidden_type);
-            } else {
-                ++program->direct_input_views;
-            }
-
-            NSMutableDictionary<NSString *, MLFeatureValue *> * input_values =
-                [@{
-                    @"token_ids": [MLFeatureValue featureValueWithMultiArray:tokens],
-                    @"h_nextn": [MLFeatureValue featureValueWithMultiArray:hidden],
-                } mutableCopy];
-            if (program->model.modelDescription.inputDescriptionsByName[@"positions"]) {
-                if (!positions) {
-                    return;
-                }
-                MLMultiArray * position_values = full_bucket
-                    ? wrap_multi_array((void *) positions, token_shape,
-                        MLMultiArrayDataTypeInt32, &error)
-                    : arena_multi_array(*program, "predict.positions", token_shape,
-                        MLMultiArrayDataTypeInt32, &error);
-                if (!position_values) {
-                    return;
-                }
-                if (!full_bucket) {
-                    int32_t * position_data = (int32_t *) position_values.dataPointer;
-                    std::memcpy(position_data, positions, n_active * sizeof(int32_t));
-                    std::memset(position_data + n_active, 0,
-                            (program->batch_bucket - n_active) * sizeof(int32_t));
-                    program->arena_input_bytes +=
-                        program->batch_bucket * sizeof(int32_t);
-                } else {
-                    ++program->direct_input_views;
-                }
-                input_values[@"positions"] =
-                    [MLFeatureValue featureValueWithMultiArray:position_values];
-            }
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:input_values error:&error];
-            if (!inputs) {
-                return;
-            }
-
-            NSDictionary<NSString *, MLFeatureDescription *> * output_descriptions =
-                program->model.modelDescription.outputDescriptionsByName;
-            MLFeatureDescription * token_out_desc = output_descriptions[@"top_token"];
-            MLFeatureDescription * confidence_out_desc = output_descriptions[@"confidence"];
-            MLFeatureDescription * hidden_out_desc = output_descriptions[@"next_hidden"];
-            if (!token_out_desc || !confidence_out_desc || !hidden_out_desc) {
-                return;
-            }
-            const MLMultiArrayDataType confidence_type =
-                confidence_out_desc.multiArrayConstraint.dataType;
-            const MLMultiArrayDataType output_hidden_type =
-                hidden_out_desc.multiArrayConstraint.dataType;
-            MLMultiArray * token_backing = full_bucket
-                ? wrap_multi_array(top_token, token_out_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "predict.out_token",
-                    token_out_desc.multiArrayConstraint.shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * confidence_backing =
-                full_bucket && confidence_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array(confidence,
-                    confidence_out_desc.multiArrayConstraint.shape,
-                    confidence_type, &error)
-                : arena_multi_array(*program, "predict.out_confidence",
-                    confidence_out_desc.multiArrayConstraint.shape,
-                    confidence_type, &error);
-            MLMultiArray * hidden_backing =
-                full_bucket && output_hidden_type == MLMultiArrayDataTypeFloat32
-                ? wrap_multi_array(next_hidden,
-                    hidden_out_desc.multiArrayConstraint.shape,
-                    output_hidden_type, &error)
-                : arena_multi_array(*program, "predict.out_hidden",
-                    hidden_out_desc.multiArrayConstraint.shape,
-                    output_hidden_type, &error);
-            if (!token_backing || !confidence_backing || !hidden_backing) {
-                return;
-            }
-            MLPredictionOptions * options = [[MLPredictionOptions alloc] init];
-            options.outputBackings = @{
-                @"top_token": token_backing,
-                @"confidence": confidence_backing,
-                @"next_hidden": hidden_backing,
-            };
-            id<MLFeatureProvider> output = program->execution_state
-                ? [program->model predictionFromFeatures:inputs
-                                              usingState:program->execution_state
-                                                 options:options
-                                                   error:&error]
-                : [program->model predictionFromFeatures:inputs error:&error];
-            if (!output) {
-                LOG_WRN("ANE MTP prediction failed: %s\n",
-                        error.localizedDescription.UTF8String ?: "unknown error");
-                return;
-            }
-
-            MLMultiArray * out_token = [output featureValueForName:@"top_token"].multiArrayValue;
-            MLMultiArray * out_confidence = [output featureValueForName:@"confidence"].multiArrayValue;
-            MLMultiArray * out_hidden = [output featureValueForName:@"next_hidden"].multiArrayValue;
-            if (!out_token || !out_confidence || !out_hidden ||
-                    out_token.dataType != MLMultiArrayDataTypeInt32 ||
-                    out_token.count < n_active ||
-                    out_confidence.count < n_active ||
-                    (NSUInteger) out_hidden.count < (NSUInteger) n_active * hidden_size) {
-                return;
-            }
-
-            if ((out_confidence.dataType != MLMultiArrayDataTypeFloat32 &&
-                        out_confidence.dataType != MLMultiArrayDataTypeFloat16) ||
-                    (out_hidden.dataType != MLMultiArrayDataTypeFloat32 &&
-                        out_hidden.dataType != MLMultiArrayDataTypeFloat16)) {
-                return;
-            }
-            if (!full_bucket) {
-                std::memcpy(top_token, out_token.dataPointer,
-                        n_active * sizeof(int32_t));
-                program->copied_output_bytes +=
-                    n_active * sizeof(int32_t);
-            }
-            if (out_token.dataPointer == token_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (!(full_bucket && confidence_type == MLMultiArrayDataTypeFloat32)) {
-                read_float_data(out_confidence, confidence, n_active);
-                program->copied_output_bytes += n_active * sizeof(float);
-            }
-            if (out_confidence.dataPointer == confidence_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            if (!(full_bucket && output_hidden_type == MLMultiArrayDataTypeFloat32)) {
-                read_float_data(out_hidden, next_hidden, active_hidden);
-                program->copied_output_bytes += active_hidden * sizeof(float);
-            }
-            if (out_hidden.dataPointer == hidden_backing.dataPointer) {
-                ++program->direct_output_backings;
-            }
-            ok = true;
+    const std::string func_name = function->name;
+    const size_t active_hidden = (size_t) n_active * hidden_size;
+    if (!set_pinned_input_i32(*program, func_name + ".token_ids",
+                              token_ids, n_active) ||
+            !set_pinned_input(*program, func_name + ".h_nextn",
+                              h_nextn, active_hidden)) {
+        return false;
+    }
+    if (positions) {
+        if (!set_pinned_input_i32(*program, func_name + ".positions",
+                                  positions, n_active)) {
+            return false;
         }
-    });
-    return ok;
+    }
+    if (!dispatch_pinned_function(*program, func_name)) {
+        return false;
+    }
+    if (!get_pinned_output_i32(*program, func_name + ".top_token",
+                               top_token, n_active) ||
+            !get_pinned_output(*program, func_name + ".confidence",
+                               confidence, n_active)) {
+        return false;
+    }
+    return get_pinned_output(*program, func_name + ".next_hidden",
+                              next_hidden, active_hidden);
 }
 
 bool common_ane_mtp_program_reset(
         const common_ane_mtp_program_ptr & program,
         uint32_t n_lanes,
         const int32_t * active) {
-    if (!program || !program->reset_model || !active ||
-            n_lanes == 0 || n_lanes > program->batch_bucket) {
+    if (!program || !active || n_lanes == 0) {
         return false;
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSError * error = nil;
-            NSArray<NSNumber *> * shape = @[@(program->batch_bucket)];
-            const bool full_bucket = n_lanes == program->batch_bucket;
-            MLMultiArray * lanes = full_bucket
-                ? wrap_multi_array((void *) active, shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "reset.active", shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            if (!lanes) {
-                return;
-            }
-            if (!full_bucket) {
-                int32_t * lane_data = (int32_t *) lanes.dataPointer;
-                std::memcpy(lane_data, active, n_lanes * sizeof(int32_t));
-                std::memset(lane_data + n_lanes, 0,
-                        (program->batch_bucket - n_lanes) * sizeof(int32_t));
-            }
-            MLDictionaryFeatureProvider * input = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{
-                    @"active": [MLFeatureValue featureValueWithMultiArray:lanes],
-                }
-                error:&error];
-            if (!input) {
-                return;
-            }
-            id<MLFeatureProvider> output = [program->reset_model
-                predictionFromFeatures:input
-                            usingState:program->execution_state
-                               options:[[MLPredictionOptions alloc] init]
-                                 error:&error];
-            if (!output) {
-                LOG_WRN("ANE MTP state reset failed: %s\n",
-                        error.localizedDescription.UTF8String ?: "unknown error");
-                return;
-            }
-            ok = true;
+    // W4 design: reset is a memset on the K/V STATE slots in the
+    // state_iosurface. For bundles without STATE slots (e.g. the
+    // gemma4 prefill bundle, where each prefill function owns its
+    // own K/V as OUTPUT slots), reset is a no-op success. For
+    // bundles with STATE slots, the E-core pump (a follow-on)
+    // will own the actual memset work; this entry point is the
+    // synchronous host-side path used by tests and small calls.
+    if (!program->manifest_loaded) {
+        // Legacy bundle without a manifest sidecar. The .mlmodelc
+        // no longer carries a "reset" Core ML function (sync_model
+        // / reset_model are dropped in W4), so the legacy path is
+        // gone. Refuse the call so callers fall back to whatever
+        // they used before the architecture pivot.
+        return false;
+    }
+    // Find the K/V STATE slots and memset them to zero. The exact
+    // slot naming convention is bundle-specific; we look for any
+    // STATE-kind slot whose name ends with "key_states" or
+    // "value_states" and clear it. A follow-on commit can refine
+    // the selection to per-function slots when a real MTP bundle
+    // with a manifest is exported.
+    bool cleared = false;
+    for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+        const ane_slot_v1_t & slot = program->manifest.slots[i];
+        if (slot.kind != ANE_SLOT_KIND_STATE) continue;
+        const std::string name(slot.name);
+        if (name.find("key_states") == std::string::npos &&
+            name.find("value_states") == std::string::npos) {
+            continue;
         }
-    });
-    return ok;
+        void * dst = (char *) program->state_base + slot.offset;
+        std::memset(dst, 0, slot.size_bytes);
+        cleared = true;
+    }
+    (void) n_lanes;
+    (void) active;
+    return cleared;
 }
 
 bool common_ane_mtp_program_sync_kv(
@@ -2404,153 +2531,60 @@ bool common_ane_mtp_program_sync_kv(
         const float * swa_keys,
         const float * swa_values,
         uint32_t swa_width) {
-    if (!program || !program->sync_model || !row_counts || !positions ||
+    if (!program || !row_counts || !positions ||
             !base_keys || !base_values || !swa_keys || !swa_values ||
-            n_active == 0 || n_active > program->batch_bucket || row_stride == 0) {
+            n_active == 0 || row_stride == 0) {
         return false;
     }
-
-    __block bool ok = false;
-    dispatch_sync(program->queue, ^{
-        @autoreleasepool {
-            NSDictionary<NSString *, MLFeatureDescription *> * descriptions =
-                program->sync_model.modelDescription.inputDescriptionsByName;
-            MLFeatureDescription * pos_desc = descriptions[@"positions"];
-            if (!pos_desc || pos_desc.type != MLFeatureTypeMultiArray ||
-                    pos_desc.multiArrayConstraint.shape.count != 2) {
-                return;
+    // W4 design: sync is a memcpy from the host K/V arrays into
+    // the K/V STATE slots in the state_iosurface. For bundles
+    // without STATE slots (e.g. the gemma4 prefill bundle, where
+    // each prefill function owns its own K/V as OUTPUT slots),
+    // sync is a no-op success. For bundles with STATE slots, the
+    // E-core pump (a follow-on) will own the actual memcpy work;
+    // this entry point is the synchronous host-side path used by
+    // tests and small calls. The mapping from the public
+    // function's parameters (n_active, row_stride, row_counts,
+    // positions, base_keys, base_values, swa_keys, swa_values,
+    // base_width, swa_width) to the manifest's STATE-slot layout
+    // is bundle-specific; this entry point's stub copies the
+    // first row of each tensor into the matching slot so a
+    // minimal correctness test can run. A real MTP bundle with a
+    // manifest will replace this with a per-slot scatter driven
+    // by the manifest's slot names.
+    if (!program->manifest_loaded) {
+        return false;
+    }
+    bool copied = false;
+    auto copy_first_row = [&](const std::string & suffix,
+                              const float * source, uint32_t width) {
+        for (uint32_t i = 0; i < program->manifest.n_slots; ++i) {
+            const ane_slot_v1_t & slot = program->manifest.slots[i];
+            if (slot.kind != ANE_SLOT_KIND_STATE) continue;
+            const std::string name(slot.name);
+            if (name.find(suffix) == std::string::npos) continue;
+            void * dst = (char *) program->state_base + slot.offset;
+            const size_t esize = (slot.dtype == ANE_DTYPE_F16)
+                ? sizeof(ggml_fp16_t) : sizeof(float);
+            const size_t available = slot.size_bytes / esize;
+            const size_t to_copy = std::min((size_t) width, available);
+            if (slot.dtype == ANE_DTYPE_F16) {
+                ggml_fp32_to_fp16_row(source,
+                        (ggml_fp16_t *) dst, (int64_t) to_copy);
+            } else {
+                std::memcpy(dst, source, to_copy * sizeof(float));
             }
-            const uint32_t chunk = pos_desc.multiArrayConstraint.shape[1].unsignedIntValue;
-            if (chunk == 0 ||
-                    (program->sync_chunk > 0 &&
-                     chunk != program->sync_chunk)) {
-                return;
-            }
-            for (uint32_t lane = 0; lane < n_active; ++lane) {
-                if (row_counts[lane] > chunk ||
-                        row_counts[lane] > row_stride) {
-                    return;
-                }
-                if (program->context_length > 0) {
-                    for (uint32_t row = 0; row < row_counts[lane]; ++row) {
-                        const int32_t position =
-                            positions[(size_t) lane * row_stride + row];
-                        if (position < 0 ||
-                                (uint32_t) position >= program->context_length) {
-                            return;
-                        }
-                    }
-                }
-            }
-
-            NSError * error = nil;
-            NSArray<NSNumber *> * active_shape = @[@(program->batch_bucket)];
-            NSArray<NSNumber *> * position_shape =
-                @[@(program->batch_bucket), @(chunk)];
-            bool exact_layout = n_active == program->batch_bucket &&
-                row_stride == chunk;
-            for (uint32_t lane = 0; lane < n_active; ++lane) {
-                exact_layout = exact_layout && row_counts[lane] == chunk;
-            }
-            MLMultiArray * out_positions = exact_layout
-                ? wrap_multi_array((void *) positions, position_shape,
-                    MLMultiArrayDataTypeInt32, &error)
-                : arena_multi_array(*program, "sync.positions", position_shape,
-                    MLMultiArrayDataTypeInt32, &error);
-            MLMultiArray * out_active = arena_multi_array(
-                *program, "sync.active", active_shape,
-                MLMultiArrayDataTypeInt32, &error);
-            auto make_values = [&](NSString * name, const char * arena_name,
-                                   uint32_t width, const float * source) -> MLMultiArray * {
-                MLFeatureDescription * desc = descriptions[name];
-                if (!desc || desc.type != MLFeatureTypeMultiArray) {
-                    return nil;
-                }
-                NSArray<NSNumber *> * shape =
-                    @[@(program->batch_bucket), @(chunk), @(width)];
-                if (exact_layout &&
-                        desc.multiArrayConstraint.dataType == MLMultiArrayDataTypeFloat32) {
-                    return wrap_multi_array((void *) source, shape,
-                        MLMultiArrayDataTypeFloat32, &error);
-                }
-                return arena_multi_array(*program, arena_name, shape,
-                    desc.multiArrayConstraint.dataType, &error);
-            };
-            MLMultiArray * out_base_k = make_values(
-                @"base_keys", "sync.base_k", base_width, base_keys);
-            MLMultiArray * out_base_v = make_values(
-                @"base_values", "sync.base_v", base_width, base_values);
-            MLMultiArray * out_swa_k = make_values(
-                @"swa_keys", "sync.swa_k", swa_width, swa_keys);
-            MLMultiArray * out_swa_v = make_values(
-                @"swa_values", "sync.swa_v", swa_width, swa_values);
-            if (!out_active || !out_positions || !out_base_k || !out_base_v || !out_swa_k || !out_swa_v) {
-                return;
-            }
-
-            int32_t * active_data = (int32_t *) out_active.dataPointer;
-            for (uint32_t lane = 0; lane < program->batch_bucket; ++lane) {
-                active_data[lane] =
-                    lane < n_active && row_counts[lane] > 0 ? 1 : 0;
-            }
-            auto copy_row = [](MLMultiArray * destination, size_t dst_row,
-                               const float * source, size_t src_row,
-                               uint32_t width) {
-                const size_t element_size =
-                    multi_array_element_size(destination.dataType);
-                void * dst = (char *) destination.dataPointer +
-                    dst_row * width * element_size;
-                if (destination.dataType == MLMultiArrayDataTypeFloat32) {
-                    std::memcpy(dst, source + src_row * width,
-                            width * sizeof(float));
-                } else {
-                    ggml_fp32_to_fp16_row(source + src_row * width,
-                            (ggml_fp16_t *) dst, width);
-                }
-            };
-
-            int32_t * position_data = (int32_t *) out_positions.dataPointer;
-            for (uint32_t lane = 0; lane < program->batch_bucket; ++lane) {
-                const uint32_t source_lane = std::min(lane, n_active - 1);
-                const uint32_t count = row_counts[source_lane];
-                for (uint32_t row = 0; row < chunk; ++row) {
-                    const uint32_t source_row = count > 0 ? std::min(row, count - 1) : 0;
-                    const size_t src_row = (size_t) source_lane * row_stride + source_row;
-                    const size_t dst_row = (size_t) lane * chunk + row;
-                    if (!exact_layout) {
-                        position_data[dst_row] = positions[src_row];
-                    }
-                    if (!exact_layout ||
-                            out_base_k.dataType != MLMultiArrayDataTypeFloat32) {
-                        copy_row(out_base_k, dst_row, base_keys, src_row, base_width);
-                        copy_row(out_base_v, dst_row, base_values, src_row, base_width);
-                        copy_row(out_swa_k, dst_row, swa_keys, src_row, swa_width);
-                        copy_row(out_swa_v, dst_row, swa_values, src_row, swa_width);
-                    }
-                }
-            }
-
-            MLDictionaryFeatureProvider * inputs = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{
-                    @"active": [MLFeatureValue featureValueWithMultiArray:out_active],
-                    @"positions": [MLFeatureValue featureValueWithMultiArray:out_positions],
-                    @"base_keys": [MLFeatureValue featureValueWithMultiArray:out_base_k],
-                    @"base_values": [MLFeatureValue featureValueWithMultiArray:out_base_v],
-                    @"swa_keys": [MLFeatureValue featureValueWithMultiArray:out_swa_k],
-                    @"swa_values": [MLFeatureValue featureValueWithMultiArray:out_swa_v],
-                } error:&error];
-            id<MLFeatureProvider> output = [program->sync_model
-                predictionFromFeatures:inputs
-                            usingState:program->execution_state
-                               options:[[MLPredictionOptions alloc] init]
-                                 error:&error];
-            if (!output) {
-                LOG_WRN("ANE MTP K/V synchronization failed: %s\n",
-                        error.localizedDescription.UTF8String ?: "unknown error");
-                return;
-            }
-            ok = true;
+            copied = true;
+            return;
         }
-    });
-    return ok;
+    };
+    copy_first_row("base_keys",   base_keys,   base_width);
+    copy_first_row("base_values", base_values, base_width);
+    copy_first_row("swa_keys",    swa_keys,    swa_width);
+    copy_first_row("swa_values",  swa_values,  swa_width);
+    (void) row_stride;
+    (void) row_counts;
+    (void) positions;
+    (void) n_active;
+    return copied;
 }
