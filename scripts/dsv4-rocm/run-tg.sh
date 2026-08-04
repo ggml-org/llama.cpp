@@ -30,6 +30,7 @@ LOAD_MODE=${DSV4_LOAD_MODE:-mmap}
 ALLOW_BUSY=${DSV4_ALLOW_BUSY_GPUS:-0}
 REQUIRE_ACCEPTED_STACK=${DSV4_REQUIRE_ACCEPTED_STACK:-1}
 LABEL=${DSV4_LABEL:-raw-tg}
+RCCL_CANDIDATE=${DSV4_RCCL_CANDIDATE:-control-auto}
 DRY_RUN=0
 
 usage() {
@@ -91,6 +92,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [[ "$LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "invalid DSV4_LABEL: $LABEL"
+[[ "$RCCL_CANDIDATE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "invalid DSV4_RCCL_CANDIDATE: $RCCL_CANDIDATE"
 [[ "$MODE" == performance || "$MODE" == residency ]] || fail "DSV4_TG_MODE must be performance or residency"
 [[ "$PROFILE" == none || "$PROFILE" == kernel ]] || fail "DSV4_TG_PROFILE must be none or kernel"
 [[ "$DEPTH_STATE_API" == context ]] || fail "DSV4_TG_DEPTH_STATE_API must be context; sequence restore failed the DSV4 equivalence gate"
@@ -168,6 +170,7 @@ if [[ "$PROFILE" == kernel ]]; then
 fi
 export DSV4_TG_PROFILE="$PROFILE"
 export DSV4_HASH_MODE="$HASH_MODE"
+export DSV4_RCCL_CANDIDATE="$RCCL_CANDIDATE"
 
 [ -f "$MODEL" ] || fail "model not found: $MODEL"
 [ -x "$BENCH" ] || fail "llama-bench not executable: $BENCH"
@@ -218,8 +221,9 @@ printf 'Mode: %s; profile: %s\n' "$MODE" "$PROFILE"
 printf 'Planned command:'
 printf ' %q' "${bench_cmd[@]}"
 printf '\n'
-printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q\n' \
-    "$GGML_SCHED_DEBUG" "$LLAMA_BENCH_DEPTH_STATE_API" "$GGML_HIP_RDNA2_MMQ_J" "$GGML_HIP_RDNA2_HC_MIXES" "$GGML_HIP_RDNA2_LID_SUBWAVE"
+printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q DSV4_RCCL_CANDIDATE=%q NCCL_ALGO=%q NCCL_PROTO=%q NCCL_MIN_NCHANNELS=%q NCCL_MAX_NCHANNELS=%q\n' \
+    "$GGML_SCHED_DEBUG" "$LLAMA_BENCH_DEPTH_STATE_API" "$GGML_HIP_RDNA2_MMQ_J" "$GGML_HIP_RDNA2_HC_MIXES" "$GGML_HIP_RDNA2_LID_SUBWAVE" \
+    "$RCCL_CANDIDATE" "${NCCL_ALGO-<unset>}" "${NCCL_PROTO-<unset>}" "${NCCL_MIN_NCHANNELS-<unset>}" "${NCCL_MAX_NCHANNELS-<unset>}"
 printf 'Per-sample cap: %ss; per-setup cap: %ss\n' "$SAMPLE_TIMEOUT_S" "$SETUP_TIMEOUT_S"
 if [[ "$PROFILE" == kernel ]]; then
     printf 'Profiler: %s; selected accepted regions only; skip repetitions: %s\n' "$ROCPROF" "$DISCARD_FIRST"
@@ -281,7 +285,21 @@ Path(sys.argv[1]).write_text(
 )
 PY
 
-printf 'env LLAMA_BENCH_DEPTH_STATE_API=%q ' "$LLAMA_BENCH_DEPTH_STATE_API" > "$run_dir/command.sh"
+write_repro_env_prefix() {
+    local output=$1 name
+    local -a optional=(NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS)
+    printf 'env' > "$output"
+    for name in "${optional[@]}"; do
+        declare -p "$name" >/dev/null 2>&1 || printf ' -u %q' "$name" >> "$output"
+    done
+    printf ' DSV4_RCCL_CANDIDATE=%q' "$RCCL_CANDIDATE" >> "$output"
+    for name in "${optional[@]}"; do
+        declare -p "$name" >/dev/null 2>&1 && printf ' %s=%q' "$name" "${!name}" >> "$output"
+    done
+    printf ' LLAMA_BENCH_DEPTH_STATE_API=%q ' "$LLAMA_BENCH_DEPTH_STATE_API" >> "$output"
+}
+
+write_repro_env_prefix "$run_dir/command.sh"
 if [[ "$PROFILE" == kernel ]]; then
     export LLAMA_BENCH_ROCPROF_BOUNDARIES="$run_dir/rocprof-selected-regions.tsv"
     printf 'LLAMA_BENCH_ROCPROF_SELECTED_REGIONS=1 LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS=%q LLAMA_BENCH_ROCPROF_BOUNDARIES=%q ' \
@@ -310,7 +328,7 @@ if [[ "$PROFILE" == kernel ]]; then
     )
     payload_cmd=("$ROCPROF" "${profile_args[@]}" -- "${bench_cmd[@]}")
 fi
-printf 'env LLAMA_BENCH_DEPTH_STATE_API=%q ' "$LLAMA_BENCH_DEPTH_STATE_API" > "$run_dir/executed-command.sh"
+write_repro_env_prefix "$run_dir/executed-command.sh"
 if [[ "$PROFILE" == kernel ]]; then
     printf 'LLAMA_BENCH_ROCPROF_SELECTED_REGIONS=1 LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS=%q LLAMA_BENCH_ROCPROF_BOUNDARIES=%q ' \
         "$DISCARD_FIRST" "$LLAMA_BENCH_ROCPROF_BOUNDARIES" >> "$run_dir/executed-command.sh"
@@ -322,6 +340,15 @@ chmod +x "$run_dir/executed-command.sh"
 {
     printf 'DSV4_TG_MODE=%q\n' "$MODE"
     printf 'DSV4_TG_PROFILE=%q\n' "$PROFILE"
+    printf 'DSV4_RCCL_CANDIDATE=%q\n' "$RCCL_CANDIDATE"
+    for name in NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS; do
+        if declare -p "$name" >/dev/null 2>&1; then
+            printf '%s_IS_SET=1\n' "$name"
+            printf '%s=%q\n' "$name" "${!name}"
+        else
+            printf '%s_IS_SET=0\n' "$name"
+        fi
+    done
     [[ "$PROFILE" == kernel ]] && printf 'DSV4_ROCPROF=%q\n' "$ROCPROF"
     printf 'DSV4_TG_DEPTH_STATE_API=%q\n' "$DEPTH_STATE_API"
     printf 'LLAMA_BENCH_DEPTH_STATE_API=%q\n' "$LLAMA_BENCH_DEPTH_STATE_API"
@@ -383,6 +410,17 @@ pathlib.Path(out).write_text(json.dumps({
     "profile_skip_repetitions": int(__import__("os").environ.get("LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS", "0")),
     "model_hash_mode": __import__("os").environ.get("DSV4_HASH_MODE", "metadata"),
     "require_accepted_stack": int(__import__("os").environ.get("DSV4_REQUIRE_ACCEPTED_STACK", "1")),
+    "communication_candidate": {
+        "label": __import__("os").environ.get("DSV4_RCCL_CANDIDATE", "control-auto"),
+        "backend": __import__("os").environ.get("GGML_CUDA_ALLREDUCE", ""),
+        "hip_graphs": __import__("os").environ.get("GGML_HIP_GRAPHS", ""),
+        "algorithm": __import__("os").environ.get("NCCL_ALGO"),
+        "protocol": __import__("os").environ.get("NCCL_PROTO"),
+        "min_channels": __import__("os").environ.get("NCCL_MIN_NCHANNELS"),
+        "max_channels": __import__("os").environ.get("NCCL_MAX_NCHANNELS"),
+        "debug": __import__("os").environ.get("NCCL_DEBUG"),
+        "debug_subsys": __import__("os").environ.get("NCCL_DEBUG_SUBSYS"),
+    },
     "accepted_stack": {
         "mmq_j": int(__import__("os").environ["GGML_HIP_RDNA2_MMQ_J"]),
         "hc_mixes": int(__import__("os").environ["GGML_HIP_RDNA2_HC_MIXES"]),

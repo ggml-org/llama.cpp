@@ -137,6 +137,48 @@ sweep incomplete.
 Do not use scheduler-debug TG as a production throughput number and do not
 combine performance and residency samples.
 
+## Unprofiled RCCL raw-TG candidate screen
+
+After two independent exact-role profiles at both 16K and 64K selected
+communication, routine profiling stops. `screen-rccl-tg.sh` runs reversible
+RCCL algorithm/protocol candidates through the real target-only TG path:
+
+```bash
+# Run this first. It uses one model load and 5 accepted tg32 samples/depth.
+scripts/dsv4-rocm/screen-rccl-tg.sh tree-ll
+
+# Run the matched control only if tree-ll is plausibly >=3% above the accepted
+# historical 64K median. ring-ll is the one fallback candidate.
+scripts/dsv4-rocm/screen-rccl-tg.sh auto
+scripts/dsv4-rocm/screen-rccl-tg.sh ring-ll
+```
+
+The wrapper forces 16K/32K/64K, tg32, six raw repetitions, one predeclared
+discard, full model hashes, accepted MMQ/HC/LID settings, HIP graphs on, exact tensor
+split, F16 K/V, no profiler, and no speculative path. It rejects every inherited
+`NCCL_*`/`RCCL_*` variable before setting the complete candidate environment.
+`auto` leaves algorithm/protocol unset; `tree-ll` and `ring-ll` force exactly
+those algorithms with the LL protocol. All use setup-only
+`NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=ENV,TUNING`, which is recorded along with
+set-versus-unset controls in `command.sh`, `executed-command.sh`,
+`effective-settings.sh`, and `contract.json`.
+
+Channel forcing is excluded. The installed RCCL 2.30.4 binary explicitly says
+`NCCL_MIN_NCHANNELS` is ignored below eight GPUs, so a 1/2-channel sweep would
+not be a valid four-V620 candidate. Compare a contemporaneous control and
+candidate with:
+
+```bash
+scripts/dsv4-rocm/compare-rccl-tg.py CONTROL_DIR CANDIDATE_DIR \
+  --json CANDIDATE_DIR/rccl-screen-comparison.json
+```
+
+The fail-closed gate requires complete stable identity-matched runs, >=3%
+median TG gain at 64K, and no >2% median regression at 16K or 32K. Passing five
+accepted samples selects only a full 31-repetition validation; it never accepts
+an optimization. `test-rccl-screen.py` covers exact wrapper isolation, inherited
+NCCL rejection, positive/no-go gates, and identity mismatch.
+
 ## Target-only raw-decode profile
 
 `profile-tg.sh` is the disk-safe M5.3 profile wrapper. It requires exactly one

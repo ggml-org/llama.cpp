@@ -5,7 +5,7 @@ Owner branch: `perf/dsv4-rocm-pp-20260803`
 Base: `b88a59fbc6ac255e6bf5e2dd790f559c89ce911c` in Edwin's llama.cpp fork  
 Target host: `edwin@192.168.1.161` (`webhie`)  
 Last updated: 2026-08-04
-Current phase: PP plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selects communication at 16K and 64K for investigation, while message/dependency/critical-path evidence and any optimization remain open; indexed CSA is held.
+Current phase: PP plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selects communication at 16K/64K, routine profiling is frozen, and M5.4 has pivoted to unprofiled RCCL/raw-TG candidates; no decode optimization is accepted yet and indexed CSA is held.
 
 ## 1. Objective and success criteria
 
@@ -80,13 +80,13 @@ Reusable assets:
 
 Do not cite incomplete `haraldh_n16_p02.log` as a result.
 
-### Raw-decode evidence status: M5.0/M5.1 ACCEPTED; M5.3 ACTIVE
+### Raw-decode evidence status: M5.0/M5.1 ACCEPTED; M5.3 COMPLETE; M5.4 ACTIVE
 
 A stable, speculation-disabled target-only context-depth sweep is accepted on the four-optimization stack. M5.0 uses tg32, 31 raw/30 accepted repetitions at every depth 0/2K/3K/4K/8K/16K/32K/64K, full-context state, MTP/DSpark/draft absent, and exact four-way tensor split. Medians are 24.063 / 23.669 / 22.841 / 21.924 / 22.637 / 22.133 / 19.729 / 18.402 t/s; every MAD/median is <=1.77%. M5.1 separately attests exact composite-Meta LID/TOP_K scheduler residency. Full binary/model/46-DSO/power identities and telemetry boundaries are preserved under the artifact paths in sections 7 and 11.
 
 Historical 20.1 t/s DSpark and 20.208 t/s failed-MTP observations remain non-baselines. They are superseded for controlled raw TG by M5.0, not retroactively accepted.
 
-Harness status (2026-08-04): `scripts/dsv4-rocm/run-tg.sh` has accepted separate performance/residency mechanics, manifests, phase-aware watchdogs, setup-only telemetry, exact-depth/repetition summaries, strict scheduler parsing, and full-context state. Static fixtures, fake-runner tests, and model-dependent restore equivalence pass. M5.3 selected-region profiling is now active: communication wins the exact 16K investigation gate, while the first 64K profile leaves the global branch unresolved.
+Harness status (2026-08-04): `scripts/dsv4-rocm/run-tg.sh` has accepted separate performance/residency mechanics, manifests, phase-aware watchdogs, setup-only telemetry, exact-depth/repetition summaries, strict scheduler parsing, and full-context state. Static fixtures, fake-runner tests, and model-dependent restore equivalence pass. M5.3 is complete: two profiles at each of 16K/64K select communication in all 30 retained ranks. Routine profiling is frozen; M5.4 unprofiled RCCL/raw-TG solution testing is active.
 
 ## 4. Current DSV4 execution facts
 
@@ -779,8 +779,8 @@ The accepted four-optimization stack and PP reproduction record remain valid. Th
 | M5.1 | ROCm backend-residency audit | DSV4 LID and TOP_K remain GPU-resident; CPU/GPU split counts recorded. |
 | M5.2 | Large HIP TOP_K, **only if reproduced** | Exact selected indices and GPU residency through 64K; no CPU split. |
 | M5.3 | Fresh whole-model raw-decode profile | Ranked elapsed device-time breakdown on the full accepted branch. |
-| M5.4 | Next dominant MMQ/MoE optimization | Exact hot shape and end-to-end TG gain, only if MoE remains dominant. |
-| M5.5 | LID + TOP_K optimization | Only if raw profile shows material share. |
+| M5.4 | Selected communication optimization | Reversible RCCL screen, then source change only if needed; accept only end-to-end TG gain. |
+| M5.5 | LID + TOP_K optimization | Deferred because communication won the locked branch rule. |
 | M5.6 | 32K/64K attention-scaling study | CSA/indexer/TOP_K/mask/block/TG timings and measured crossover. |
 | M5.7 | Indexed CSA | Only if M5.6 supports it. |
 | M5.8 | Decode-chain fusion | Only if measured launch/elementwise cost dominates. |
@@ -927,7 +927,23 @@ Decision branches:
 - **B: LID/TOP_K dominant.** Keep TOP_K GPU-resident, optimize the actual GPU selector, reduce score-buffer traffic, then consider fused indexer + hierarchical selection (`tile -> wave/workgroup candidates -> global merge -> final 512`). Exact selection still scans all candidates; streaming bounds intermediate traffic, not asymptotic scan time.
 - **C: attention meets the predeclared M5.6 gate at long context.** Then consider indexed CSA. CUDA draft PR #25917 is design/correctness reference only (open draft, CUDA MMA, author measurements); its tiling and crossover are not ROCm evidence.
 - **D: elementwise/launch work meets the branch threshold.** Only then pursue decode-chain fusion (compression/norm/RoPE/cache conversion/insertion or inverse-RoPE/packing/projection preparation).
-- **E: communication — selected for investigation at 16K/64K.** Capture RCCL arguments or another payload-size source plus graph/dependency evidence; then optimize only the proven collective/message/serialization path. Generic kernel duration and PCIe topology alone do not select an algorithm.
+- **E: communication — selected for implementation at 16K/64K.** Exact source and end-to-end A/B now drive the remedy. Further tracing is exception-only; generic kernel duration and PCIe topology alone still do not accept an algorithm.
+
+### M5.4 / P1-A - stop profiling and test communication solutions
+
+The user explicitly ended routine profiling after two independent 16K and two independent 64K exact-role artifacts selected NCCL in all 30 retained repetitions. That evidence is sufficient to try solutions; additional trace collection is allowed only to diagnose an anomalous candidate. Causal unprofiled whole-model TG now outranks another attribution pass.
+
+The source closes the basic payload question without a new trace. `ggml_backend_cuda_comm_allreduce_nccl` calls `ncclAllReduce(..., ne, ncclFloat, ncclSum, ...)` for four-way tensors with `ne < 262144`; raw DSV4 decode's two row-parallel hidden outputs per 43 layers each have `ne=7168`. Thus the 86 observed groups/token (86 rank calls/GPU/token) are source-consistent 7,168-element FP32 reductions (28,672 bytes of input per rank per call). The attention output must be reduced before its residual/norm becomes the FFN input, and the FFN output is only available later; blindly combining the two collectives would violate dependencies. The output-head force-FP32 flag is separate and is not one of these 86 layer collectives.
+
+Installed-library attestation, not an upstream-version guess: `/opt/rocm/core-7.14/lib/librccl.so.1` reports RCCL 2.30.4, accepts `NCCL_ALGO`/`NCCL_PROTO`, and contains an explicit diagnostic that `NCCL_MIN_NCHANNELS` is ignored for fewer than eight GPUs. Therefore the first predeclared reversible set is exactly:
+
+1. `tree-ll`: `NCCL_ALGO=Tree NCCL_PROTO=LL` — run first;
+2. `auto`: both unset — run only if tree-ll is plausibly >=3% over the accepted historical 64K median, to obtain a contemporaneous control;
+3. `ring-ll`: `NCCL_ALGO=Ring NCCL_PROTO=LL` — one fallback if tree-ll fails the matched gate.
+
+No 1/2-channel sweep and no rocprof run participate. `screen-rccl-tg.sh` fails closed on inherited `NCCL_*`/`RCCL_*`, forces one load with exact 16K/32K/64K tg32, six raw/one discarded/five accepted repetitions, full hashes, accepted stack, no speculative flags, and setup-only RCCL INFO/TUNING logging. `run-tg.sh` now records set-versus-unset communication controls in both rerunnable commands, effective settings, and `contract.json`. `compare-rccl-tg.py` requires stable complete identity-matched results and predeclares >=3% median TG gain at 64K with no >2% median regression at 16K/32K. A five-repetition pass selects full 31-repetition validation only; `optimization_accepted=0` until that validation and correctness pass.
+
+If both forced protocol candidates fail, the next and only predeclared source candidate is an RDNA2/four-way guard that tests BF16 for these unforced hidden reductions, halving collective input to 14,336 bytes while paying conversion kernels. It must retain force-FP32 outputs, pass deterministic output/logit correctness, and meet the same TG gate. No attempt will collapse two dependency-separated reductions into one.
 
 ### M5.6 / P2 - mandatory 32K and 64K raw TG
 
@@ -1015,6 +1031,7 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Attribute 16K/64K CSA/HCA K and final-mask concat exactly. | Source-unique axis/type plus exact depth grids and 21/20-layer x token x four-GPU counts globally/per GPU/per repetition. Real traces and expanded negative fixtures pass after two review rounds. `other` is flat 1.002x, while CSA K concat scales 3.459x. | accepted diagnostic tooling `a789f138c` |
 | 2026-08-04 | Treat communication as a provisional 64K candidate, not a global selection. | Reclassified first 64K profile: NCCL 20.173% vs non-MoE quantized 17.080%, 3.092-point lead, NCCL first 5/5. Only one independent 64K artifact existed at that checkpoint. | superseded by replicated 64K selection |
 | 2026-08-04 | Select communication as the 64K/global M5.3 investigation branch, not an accepted optimization. | Second independent 64K profile: NCCL 22.762% vs non-MoE quantized 16.502%, 6.260-point lead, NCCL first 10/10; first profile also qualifies, for 15/15 consistent ranks. Both wall curves remain ineligible. | selected at 64K for investigation only |
+| 2026-08-04 | Freeze routine profiling and pivot to unprofiled communication candidates. | Four independent 16K/64K profiles already select NCCL in 30/30 ranks; source identifies 86 FP32 28,672-byte layer collectives/token. More attribution cannot establish a TG gain. | tree-ll first; matched auto only if promising |
 | 2026-08-04 | Bound communication evidence without inventing payload or critical-path claims. | Exact cadence is 86 AllReduce groups/token and 11,008 rank calls/device kernels per tg32 rep. RCCL schema lacks message arguments; API/kernel correlation IDs are disjoint. Long intervals and near-zero same-agent compute overlap do not prove cause/dependencies. | accepted forensics `fa1e98ba2`; critical path open |
 
 ## 10. Closed decisions and open questions
@@ -1025,7 +1042,7 @@ Open questions:
 
 1. Does J16 hold on a future user-supplied production corpus? The committed technical proxy is positive, but no user corpus exists.
 2. Can a later expert-concentration signal select J16/J32/J64 without host synchronization? The accepted patch intentionally stays explicit.
-3. What are the AllReduce count/datatype/message bytes, algorithm/protocol, and graph dependencies; do they place the now-reproduced 16K/64K communication family on the critical path, and which remedy follows?
+3. Does Tree+LL or Ring+LL improve causal whole-model TG for the source-derived 86 x 28,672-byte FP32 layer collectives/token; if not, does guarded BF16 reduction pass correctness and the same gate?
 4. Does HIP flash attention perform partial arbitrary-mask tile pruning, and can its 2.120x growth or the source-proven 3.459x CSA K materialization support a predeclared >=3% removable whole-model projection after replication?
 5. How are LID scores and top-k indices assigned across the four meta devices at runtime?
 6. If MTP is reopened separately, which recurrent state/logit component changes after verification/checkpoint round trips with zero accepted drafts?
@@ -1284,11 +1301,11 @@ Diagnostic M5.3 profile artifacts (all exit 4 / unstable wall):
   $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T161130.092022210Z-raw-tg-profile-64k-a-performance-27f432de97fc-17771/
   $HOME/llama-jobs/dsv4-rocm-tg-profile/20260804T180714.788127093Z-raw-tg-profile-64k-b11-performance-877a73b581c9-31443/
 Current next action:
-  Communication is selected at 16K/64K for investigation only. Add a
-  predeclared, disk-safe way to capture RCCL count/datatype/message bytes and
-  graph dependencies; current rocprof fields cannot prove them or the critical
-  path. Select and implement only the proven communication remedy, then run the
-  matched whole-model TG gate. M5.2 is not triggered; indexed CSA remains held.
+  Routine profiling is frozen. Run the predeclared unprofiled `tree-ll`
+  16K/32K/64K raw-TG screen first. Only if it is plausibly >=3% at 64K, run the
+  matched `auto` control; otherwise try the single `ring-ll` fallback. A matched
+  five-repetition pass advances to full validation but accepts nothing. M5.2 is
+  not triggered; indexed CSA remains held.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
@@ -1352,6 +1369,13 @@ Purpose:
 - Exact attribution reproduces: NCCL 22.762% vs non-MoE quantized 16.502%, lead 6.260 points, NCCL first 10/10. Together with 64K-A (20.173%, 3.092-point lead, first 5/5), two independent aggregates and all 15 ranks select communication at 64K for investigation. Reviewer GO confirmed aggregate thresholds are the declared rule; per-repetition minima 19.041%/1.727 points do not add an undeclared stricter rule.
 - Repaired the durable replication monitor to use explicit `ValueError` gates under Python `-O`, exact MAD/raw instability, repetition lengths, dispatches, trace/role contracts, and eligibility flags; follow-up reviewer GO.
 - Four-run forensics retain invariant cadence. 64K-B has four ~346.8 ms long NCCL intervals in repetition 7 and one 79.195 ms interval in repetition 10; neither establishes cause/dependency/critical path. Preserved `profile-replication-64k.{json,txt}`, exact monitor/hash, and four-run `communication-forensics.{json,txt}` in the second 64K artifact.
+
+### Iteration 3 continued — pivot from profiling to causal A/B
+
+- User correctly identified diminishing returns: no decode throughput has improved during M5.3. Profiling delivered branch selection, not speed. Routine profiling is now frozen and future progress is measured by unprofiled whole-model TG.
+- Source audit identifies exactly two dependency-separated 7,168-element FP32 layer reductions across each of 43 blocks. The existing backend threshold is based on RTX 4090 PCIe and has not been tuned for four RDNA2 V620s. Combining collectives is rejected; reversible RCCL selection is the fastest safe first solution.
+- Installed RCCL is 2.30.4, not the initially researched 2.28 baseline. Local binary strings attest Tree/Ring and LL support and reject a useful min-channel experiment below eight GPUs. The predeclared order is tree-ll -> conditional matched auto -> one ring-ll fallback; no profiler.
+- Added fail-closed wrapper, environment provenance, matched comparator, and fixtures. Screen gate: stable five accepted tg32 samples at 16K/32K/64K, >=3% 64K median gain, <=2% shorter regression; pass advances only to full 31-repetition correctness/performance validation.
 
 **Exact accepted GPU commands:**
 
