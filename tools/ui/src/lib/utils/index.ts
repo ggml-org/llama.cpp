@@ -188,6 +188,13 @@ export {
 	type MentionDismissSnapshot
 } from './mention-token';
 
+// Slash-command token detection (for the `/`-triggered command picker)
+export {
+	findCommandToken,
+	takeCommandDismissSnapshot,
+	type CommandDismissSnapshot
+} from './command-token';
+
 // Tokenization for the chat-form contenteditable (renders `@`-picked
 // `[name](file://...)` links as inline badges inside the input while
 // keeping the markdown source unchanged).

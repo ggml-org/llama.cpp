@@ -434,6 +434,20 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
 export { default as ChatFormMentionPicker } from './ChatForm/ChatFormPickers/ChatFormMentionPicker.svelte';
 
 /**
+ * **ChatFormCommandPicker** - `/`-triggered slash-command picker
+ *
+ * Floating picker that lists the available slash commands (e.g. `/prompt`,
+ * `/cwd`, `/model`) when the user types `/` at the start of the chat input.
+ * The chat input is the search surface: the typed query filters commands by
+ * name/description. Selection hands the command to the parent so it can
+ * dispatch the corresponding picker / selector.
+ *
+ * **Exported API:**
+ * - `handleKeydown(event): boolean` - Process keyboard events, returns true if handled
+ */
+export { default as ChatFormCommandPicker } from './ChatForm/ChatFormPickers/ChatFormCommandPicker.svelte';
+
+/**
  * **ChatFormPickers** - Chat input picker container
  *
  * Container component that hosts both MCP prompt and MCP resource pickers.

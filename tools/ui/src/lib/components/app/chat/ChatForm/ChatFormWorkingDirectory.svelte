@@ -39,20 +39,42 @@
 		class?: string;
 		disabled?: boolean;
 		directory?: string | null;
+		/**
+		 * Controlled open state. The host owns it so both the chip click and
+		 * the `/cwd` slash command can open the picker through the same path.
+		 */
+		isOpen: boolean;
+		/**
+		 * Two-way bound search query. The host keeps it in sync with the text
+		 * after `/cwd ` in the chat input, so typing in either surface updates
+		 * the other.
+		 */
+		query: string;
+		/**
+		 * Anchor at the top edge of the chat form so the popover floats above
+		 * the box, matching the mention picker.
+		 */
+		customAnchor?: HTMLElement | null;
 		onChange?: (directory: string | null) => void;
 		/**
 		 * Lets the host refocus the chat input so typing can resume without
 		 * an extra click after the popover closes.
 		 */
 		onClose?: () => void;
+		/** Fired when the chip is clicked so the host can open the picker. */
+		onOpen?: () => void;
 	}
 
 	let {
 		class: className = '',
 		disabled = false,
-		directory = $bindable(null),
+		directory = null,
+		isOpen,
+		query = $bindable(''),
+		customAnchor = null,
 		onChange,
-		onClose
+		onClose,
+		onOpen
 	}: Props = $props();
 
 	// File System Access API is opt-in: when available (Chrome / Edge / Opera) the popover
@@ -61,9 +83,6 @@
 	const pickerSupported =
 		typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 
-	// Popover open state; the element handles outside-click and Escape.
-	let isOpen = $state(false);
-	let inputValue = $state('');
 	let searchInputRef: HTMLInputElement | null = $state(null);
 
 	let queryResults = $state<string[]>([]);
@@ -110,6 +129,25 @@
 	$effect(() => {
 		if (!isOpen) return;
 		setTimeout(() => searchInputRef?.focus(), FOCUS_DELAY_MS);
+	});
+
+	// The search query is owned by the host (two-way bound to the text after
+	// `/cwd `). Watch it and run the debounced directory search whenever the
+	// picker is open, so typing in either the search input or the chat input
+	// drives the same results.
+	$effect(() => {
+		if (!isOpen) return;
+		const q = query.trim();
+		hoveredIndex = -1;
+		if (q) {
+			runSearch(q);
+		} else {
+			queryResults = [];
+			searchError = null;
+			isSearching = false;
+			hoveredIndex = -1;
+			searchScope = homeBase ?? HOME_TILDE;
+		}
 	});
 
 	let lastScrollTrigger: number | null = null;
@@ -250,12 +288,10 @@
 	// Single funnel for every local close so the host refocus fires
 	// regardless of which commit/dismiss path ended the interaction.
 	function closePicker() {
-		isOpen = false;
 		onClose?.();
 	}
 
 	function commit(path: string) {
-		directory = path;
 		onChange?.(path);
 		closePicker();
 	}
@@ -263,7 +299,6 @@
 	function setDirectory(value: string) {
 		const trimmed = value.trim();
 		if (!trimmed) return;
-		directory = trimmed;
 		onChange?.(trimmed);
 	}
 
@@ -313,7 +348,7 @@
 	}
 
 	function handleSubmit() {
-		const value = inputValue.trim();
+		const value = query.trim();
 		if (!value) {
 			closePicker();
 			return;
@@ -347,19 +382,11 @@
 		}
 	}
 
-	function handleInputInput(value: string) {
-		hoveredIndex = -1;
-		if (value.trim().length > 0) {
-			runSearch(value);
-		}
-	}
-
 	function clearDirectory(event?: MouseEvent) {
-		// Stop the click from bubbling into the popover trigger and re-opening
+		// Stop the click from bubbling into the chip button and re-opening
 		// the picker on top of the now-cleared state.
 		event?.stopPropagation();
 		event?.preventDefault();
-		directory = null;
 		onChange?.(null);
 		closePicker();
 	}
@@ -375,21 +402,12 @@
 	}
 
 	function handleOpenChange(open: boolean) {
-		isOpen = open;
 		if (open) {
-			// Seed the search field with the current path so the user can refine it
-			// (or hit Enter to confirm / clear via the X icon).
-			inputValue = directory ?? '';
-			hoveredIndex = -1;
-			queryResults = [];
-			searchError = null;
 			void toolsStore.resolveServerHome();
-			searchScope = homeBase ?? HOME_TILDE;
-			if (inputValue.trim()) runSearch(inputValue);
 		} else {
 			cancelSearch();
-			// bits-ui-initiated close (Escape on the content, outside-click,
-			// trigger toggle) - the only path that bypasses closePicker().
+			// bits-ui-initiated close (Escape on the content, outside-click) -
+			// the only path that bypasses closePicker().
 			onClose?.();
 		}
 	}
@@ -400,80 +418,89 @@
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
 
-<div
+<button
+	type="button"
 	class={[
 		'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
-		className,
-		isOpen && 'w-full'
+		className
 	]}
+	onclick={onOpen}
+	{disabled}
 >
-	<Popover.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
-		<Popover.Trigger {disabled} class="flex justify-start">
-			<ChatFormWorkingDirectoryChip
-				{directory}
-				{homeBase}
-				{disabled}
-				{showTooltip}
-				onClear={handleDismiss}
+	<ChatFormWorkingDirectoryChip
+		{directory}
+		{homeBase}
+		{disabled}
+		{showTooltip}
+		onClear={handleDismiss}
+	/>
+</button>
+
+<Popover.Root open={isOpen} onOpenChange={handleOpenChange}>
+	<Popover.Trigger
+		class="pointer-events-none absolute inset-0 opacity-0"
+		tabindex={-1}
+		aria-hidden="true"
+	>
+		<span class="sr-only">Open working directory picker</span>
+	</Popover.Trigger>
+
+	<Popover.Content
+		side="top"
+		align="start"
+		sideOffset={12}
+		{customAnchor}
+		onkeydown={handleKeydown}
+		onOpenAutoFocus={(event) => event.preventDefault()}
+		onCloseAutoFocus={(event) => event.preventDefault()}
+		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl"
+	>
+		<div class="p-2 min-h-28 flex flex-col justify-between">
+			<SearchInput
+				bind:ref={searchInputRef}
+				bind:value={query}
+				placeholder="Choose working directory"
+				onClose={closePicker}
+				class="w-full"
 			/>
-		</Popover.Trigger>
 
-		<Popover.Content
-			side="top"
-			align="start"
-			sideOffset={4}
-			class="md:max-w-3xl w-[calc(100vw-1rem)] rounded-xl border-border/50 p-0 shadow-xl md:-translate-2!"
-			onkeydown={handleKeydown}
-			onOpenAutoFocus={(event) => event.preventDefault()}
-		>
-			<div class="p-2 min-h-28 flex flex-col justify-between">
-				<SearchInput
-					bind:ref={searchInputRef}
-					bind:value={inputValue}
-					placeholder="Choose working directory"
-					onInput={handleInputInput}
-					onClose={closePicker}
-					class="w-full"
+			{#if query.trim() && (isSearching || queryResults.length > 0 || searchError)}
+				<ChatFormWorkingDirectoryResultsList
+					results={queryResults}
+					{hoveredIndex}
+					{isSearching}
+					error={searchError}
+					rawQuery={query}
+					bind:container={listContainer}
+					onCommit={commit}
+					onHover={(index) => (hoveredIndex = index)}
 				/>
+			{/if}
 
-				{#if inputValue.trim() && (isSearching || queryResults.length > 0 || searchError)}
-					<ChatFormWorkingDirectoryResultsList
-						results={queryResults}
-						{hoveredIndex}
-						{isSearching}
-						error={searchError}
-						rawQuery={inputValue}
-						bind:container={listContainer}
-						onCommit={commit}
-						onHover={(index) => (hoveredIndex = index)}
-					/>
-				{/if}
+			{#if pickerSupported}
+				<button
+					type="button"
+					class="-mt-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+					onclick={browseNative}
+				>
+					<FolderOpen class="size-4 shrink-0 text-muted-foreground" />
+					<span>Browse</span>
+				</button>
+			{/if}
 
-				{#if pickerSupported}
-					<button
-						type="button"
-						class="-mt-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
-						onclick={browseNative}
+			{#if homeBase}
+				<div class="-mx-2 my-1 h-px bg-border/20" aria-hidden="true"></div>
+
+				<span class="px-2 py-2 font-mono text-[10px]">
+					Searching in:
+
+					<span class="truncate text-muted-foreground/70" title={searchScope}
+						>{abbreviateHome(searchScope, homeBase)}</span
 					>
-						<FolderOpen class="size-4 shrink-0 text-muted-foreground" />
-						<span>Browse</span>
-					</button>
-				{/if}
-
-				{#if homeBase}
-					<div class="-mx-2 my-1 h-px bg-border/20" aria-hidden="true"></div>
-
-					<span class="px-2 py-2 font-mono text-[10px]">
-						Searching in:
-
-						<span class="truncate text-muted-foreground/70" title={searchScope}
-							>{abbreviateHome(searchScope, homeBase)}</span
-						>
-					</span>
-				{/if}
-			</div>
-		</Popover.Content>
-	</Popover.Root>
-</div>
+				</span>
+			{/if}
+		</div>
+	</Popover.Content>
+</Popover.Root>
 
 <svelte:window bind:innerWidth />

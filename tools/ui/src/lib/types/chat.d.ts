@@ -177,3 +177,24 @@ export interface FileMentionEntry {
 	name: string;
 	type: 'file' | 'directory';
 }
+
+/**
+ * Action a slash command dispatches once selected. Each maps to a concrete
+ * picker / selector in the chat form.
+ */
+export type ChatFormCommandAction = 'prompt' | 'cwd' | 'model';
+
+/**
+ * A slash command surfaced by the `/` command picker. `name` is the command
+ * without the leading `/`; `disabled` marks a command whose backing
+ * capability is currently unavailable (e.g. `/prompt` when no MCP server
+ * exposes prompts) - it stays visible but is greyed out and not selectable.
+ */
+export interface ChatFormCommand {
+	name: string;
+	description: string;
+	/** Extra search terms that should match this command in the picker. */
+	keywords?: string[];
+	action: ChatFormCommandAction;
+	disabled: boolean;
+}
