@@ -3,7 +3,7 @@ import Foundation
 // MARK: - JSON Value
 
 /// A type-erased JSON value for tool arguments and results.
-public enum JSONValue: Codable, Sendable, Equatable {
+public enum JSONValue: Codable, Sendable, Equatable, Hashable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -73,7 +73,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
 // MARK: - JSON Schema
 
 /// A JSON Schema descriptor for tool parameters.
-public struct JSONSchema: Codable, Sendable {
+public struct JSONSchema: Codable, Sendable, Equatable, Hashable {
     public let type: String
     public let properties: [String: SchemaProperty]?
     public let required: [String]?
@@ -93,7 +93,7 @@ public struct JSONSchema: Codable, Sendable {
     }
 }
 
-public struct SchemaProperty: Codable, Sendable {
+public struct SchemaProperty: Codable, Sendable, Equatable, Hashable {
     public let type: String
     public let description: String?
     public let enumValues: [String]?

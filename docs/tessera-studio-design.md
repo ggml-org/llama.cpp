@@ -62,6 +62,41 @@ Architect surface, one-line summary of the locked state:
 
 ---
 
+## See also — prior art (pattern reference only)
+
+The node-graph workflow system described in section 16 is a
+from-scratch reimplementation of established patterns, not a
+derivative of any specific project. The most relevant reference
+project is **ComfyUI** (Stable Diffusion community, GPL-3.0):
+
+- **Patterns reimplemented**: node-graph editor, typed input /
+  output ports, per-node parameters, JSON workflow persistence,
+  palette-driven node discovery, real-time progress streaming,
+  plugin / extension model.
+- **Patterns deliberately not ported**: server-client architecture
+  (Tessera Studio is a native in-process app), web frontend
+  (Tessera Studio is SwiftUI on macOS), Python runtime (Tessera
+  Studio is Swift + the existing C++ engine), any specific
+  ComfyUI JSON schema or Python API.
+- **License note**: ComfyUI is GPL-3.0; Tessera Studio is
+  PolyForm Noncommercial 1.0.0. These two licenses are
+  mutually exclusive (commercial-use asymmetry, not viral
+  copyleft), so no ComfyUI code may be imported. Patterns are
+  not copyrightable; specific code is. The ComfyUI project is
+  cited here as a pattern reference for the workflow section
+  only.
+
+Other reference projects whose patterns are visible in Tessera
+Studio (also reimplemented, not derived):
+
+- **Draw Things** (Apache-2.0) — local CoreML inference UI.
+- **LM Studio** (Apache-2.0 for the core) — model discovery
+  and download.
+- **Pocket-TTS** style local-first agent UIs.
+
+All Tessera Studio source is from-scratch. No third-party
+UI / agent framework is imported.
+
 ## 1. Product surface
 
 ### 1.1 The 5-minute iPhone demo
@@ -3754,6 +3789,200 @@ already owns.
   Access + screen recording each need a separate macOS grant. Lean: a
   guided first-run flow that requests each only when the capability that
   needs it is first used, not all up front.
+
+## 16. Workflows (data model + workflow-as-code execution)
+
+The first shipped slice of the workflow system. This section
+covers the Phase-1 deliverable: the data model, the executor,
+and the wrapped Tessera tools. The SwiftUI graph editor
+(Phase 2) and the custom node-pack plugin model (Phase 3) are
+deferred — see "Phasing" below.
+
+### 16.1 What a workflow is
+
+A workflow is a directed graph of typed nodes. Each node has:
+
+- **typed input ports** (the executor fills them from upstream
+  outputs),
+- **per-instance parameters** (a JSON object the user sets in
+  the editor's side panel; not wired),
+- **typed output ports** (downstream nodes consume them).
+
+Edges connect a source `(nodeId, outputPortId)` to a target
+`(nodeId, inputPortId)`. The executor enforces that the source
+and target port types are equal (or the source type is `path`
+and the target is `gguf` / `json` — the only allowed widening).
+
+The whole workflow is serialised as a single JSON file with
+schema marker `tessera.workflow.v1`. New fields are additive
+(default values); new node types are additive (unrecognised
+types produce a validation error at load time).
+
+### 16.2 The data model
+
+Five files in `TesseraStudio/Sources/TesseraCore/Workflow/`:
+
+- `WorkflowPortType.swift` — closed enum of port types
+  (`string`, `number`, `boolean`, `path`, `gguf`, `json`,
+  `toolResult`, `bag`) + `canFlowInto` widening rule + `WorkflowPortValue`
+  typed-value carrier.
+- `WorkflowNodeType.swift` — the protocol, plus the per-run
+  `WorkflowExecutionContext` (file system + logger) and the
+  `TesseraFileSystem` / `WorkflowLogger` abstractions.
+- `WorkflowNodeRegistry.swift` — the metatype-keyed catalogue
+  + the `WorkflowNodePaletteEntry` shape the editor's palette
+  consumes.
+- `Workflow.swift` — `Workflow`, `WorkflowNode`, `WorkflowEdge`,
+  `WorkflowEvent`.
+- `WorkflowExecutor.swift` — actor, validation, Kahn's
+  topological sort, `run` / `runCollecting` over `AsyncStream`.
+- `Nodes/TesseraToolNode.swift` — the wrapper that lifts the
+  existing 18 `TesseraTool`s into workflow nodes, plus 5
+  default wrapped types (`LoadModelNode`, `CalibrateNode`,
+  `QuantizeNode`, `EvaluateNode`, `InspectSidecarNode`) and
+  `WorkflowNodeRegistry.default`.
+
+### 16.3 Wrapping TesseraTools as nodes
+
+Each wrapped node is a zero-state struct that holds a static
+reference to the underlying `TesseraTool`. The wrapper's
+`splitSchema` rule:
+
+- **Required** schema properties become input ports (typed
+  from the schema's `type` field; `_path` suffix maps to
+  `WorkflowPortType.path`).
+- **Optional** properties (have a `defaultValue`, or aren't in
+  `required`) become node-level parameters edited in the side
+  panel, not wired.
+- One synthetic output port `result` typed `toolResult`,
+  carrying the `ToolResult.data` map (or a synthesised
+  `{success, output, error}` map if the tool returns nil data).
+
+Adding a new wrapped tool is ~20 lines: declare the struct,
+supply the static `typeId` / `displayName` / etc., forward
+`execute` to `TesseraToolNode.execute`. No edits to the
+underlying `TesseraTool` are required.
+
+### 16.4 Worked example: calibrate -> quantize -> save
+
+```swift
+let wf = Workflow(
+    name: "calibrate-and-quantize",
+    nodes: [
+        WorkflowNode(
+            id: "calib",
+            type: CalibrateNode.typeId,
+            parameters: ["n_tokens": .number(8000)]
+        ),
+        WorkflowNode(
+            id: "q",
+            type: QuantizeNode.typeId,
+            parameters: [:]
+        ),
+    ],
+    edges: [
+        WorkflowEdge(
+            fromNode: "calib", fromPort: "result",
+            toNode: "q", toPort: "policy_path"
+        ),
+    ]
+)
+let executor = WorkflowExecutor(registry: .default)
+for await event in await executor.run(wf) {
+    // Started / nodeStarted / nodeFinished / log / finished.
+    // Last event is always .finished; the executor aborts on
+    // the first failed node.
+}
+```
+
+The editor surface (Phase 2) draws this same JSON as a
+graph; the executor's `AsyncStream<WorkflowEvent>` is what
+feeds the live progress pane.
+
+### 16.5 Validation
+
+The executor's `validate(_:)` rejects:
+
+- nodes with an unregistered `typeId` (typo or stale JSON),
+- edges that reference a port the target node doesn't declare,
+- edges whose source / target port types are incompatible
+  (per `WorkflowPortType.canFlowInto`),
+- graphs that contain a cycle (Kahn's algorithm).
+
+A `run` that fails validation produces a single
+`.finished(success: false)` event with the error string in
+`message`; no nodes are executed.
+
+### 16.6 Phasing
+
+The workflow system is shipped in three phases. The phases
+have strict gates; the gates are not soft deadlines.
+
+1. **Phase 1 — Data model + workflow-as-code execution
+   (this section, target: merged before Phase 2 starts).**
+   The five data model files, the wrapped tools, the
+   executor, and the round-trip / validation / executor
+   tests. Ships as soon as `swift test` is green and a
+   hand-built 3-node `calibrate -> quantize -> save` workflow
+   executes end-to-end against a stub tool.
+2. **Phase 2 — SwiftUI graph editor (deferred, designer-led).**
+   `WorkflowCanvasView` (SwiftUI `Canvas` for the bezier
+   connections + node rectangles), `WorkflowNodeView`
+   (drag-to-move, port hit-testing, parameter side panel
+   bound to the JSONSchema from `WorkflowNodePaletteEntry`),
+   `WorkflowPaletteView`, `WorkflowToolbarView`,
+   `WorkflowDocument` (file-based persistence), wire to the
+   existing `TesseraStudioMac` `NavigationSplitView` as a
+   new "Workflows" tab. UX work without an installable
+   `.app` from main is wasted; this phase does not start
+   until Phase 1 is merged AND TesseraStudioMac is
+   installable.
+3. **Phase 3 — Custom node packs (deferred, depends on
+   Phase 2).** A `TesseraNodePlugin` protocol, a
+   `tessera.node-plugin.v1.json` manifest, plugin discovery
+   from
+   `~/Library/Application Support/TesseraStudio/Plugins/`,
+   `WorkflowNodeRegistry.merge(_:)` for combining plugin
+   contributions with the default registry, per-plugin actor
+   sandboxing with opt-in `capabilities` for file system
+   and network access. Plugin authors need a target; this
+   phase does not start until Phase 2 has shipped.
+
+### 16.7 Why this order
+
+Phase 1 is load-bearing: the editor (Phase 2) is just a
+pretty picture without a clean protocol + Codable + executor.
+The palette-entry shape shipped in 1.1 is exactly the API a
+SwiftUI `List` will consume in Phase 2.
+
+Phase 2 must exist before Phase 3 has any consumer; plugin
+authors need a target.
+
+Phase 3 has the most legal tail (plugins distributed by
+third parties). Doing it last lets the manifest spec
+reflect what we actually used in Phases 1+2, not what we
+imagine a plugin author would want.
+
+### 16.8 License analysis (binding)
+
+The decision to cite ComfyUI as prior art in this design
+doc, without importing any ComfyUI code, is binding. The
+justification:
+
+- Tessera Studio is PolyForm Noncommercial 1.0.0.
+- ComfyUI is GPL-3.0.
+- Combined work would have to allow commercial use (per
+  GPL viral copyleft), violating PolyForm. They are
+  mutually exclusive.
+- Patterns (node-graph editor UX, typed port system,
+  palette-driven discovery) are not copyrightable. Specific
+  code is.
+- Reimplementing the patterns from scratch in Swift is the
+  only path that satisfies both licenses.
+
+This is the same constraint Prism Engine operates under
+(its compiler / runtime is also from-scratch despite
+referencing LLVM / rustc patterns).
 
 ## Appendix A: File index
 
