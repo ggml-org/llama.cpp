@@ -4162,16 +4162,32 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             tessera_params.progress_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TESSERA}));
+    // --tessera-db is the new canonical flag; --quantize-db is a
+    // deprecated alias kept for one release. Both flags set the
+    // same tessera_params.tessera_db field; if both are given, the
+    // last one wins (CLI ordering convention).
+    add_opt(common_arg(
+        {"--tessera-db"}, "PATH",
+        "Tessera: unified tessera.duckdb file for persistent GA results, family warm-start, "
+        "crash-resumable runs, cross-pipeline tensor_stats, and the L5 feedback loop",
+        [](common_params &, const std::string & value) {
+            tessera_params.tessera_db = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--quantize-db"}, "PATH",
-        "Tessera: DuckDB file for persistent GA results, family warm-start, and crash-resumable runs",
+        "DEPRECATED alias for --tessera-db. Kept for one release; "
+        "use --tessera-db in new scripts. Prints a warning to stderr when used.",
         [](common_params &, const std::string & value) {
-            tessera_params.quantize_db = value;
+            std::fprintf(stderr,
+                "tessera: --quantize-db is deprecated, use --tessera-db instead "
+                "(the alias will be removed in the next release)\n");
+            tessera_params.tessera_db = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TESSERA}));
     add_opt(common_arg(
         {"--force-requantize"},
-        "Tessera: with --quantize-db, re-run the GA for every tensor even if a converged result exists",
+        "Tessera: with --tessera-db, re-run the GA for every tensor even if a converged result exists",
         [](common_params &) {
             tessera_params.force_requantize = true;
         }

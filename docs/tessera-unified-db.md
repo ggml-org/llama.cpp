@@ -33,14 +33,78 @@ USING (model_hash, name)` instead of three hand-written parsers.
 | `ga_results` | 1 per converged tensor | C++ (`ts_quantize_db_insert_ga_result`) | Best (alpha, clip) per tensor. Warm-start seed source. |
 | `acceptance` | 1 per tensor | C++ (`ts_quantize_db_insert_acceptance`) | Acceptance-gate verdict. |
 | `l5_fixups` | 1 per requant fixup | C++ (`ts_quantize_db_insert_l5_fixup`) | L5 adaptive requantize fixup rows. |
-| **`tensor_stats`** | 1 per tensor per model | C++ (GA-prep) + Python (cal) | **The cross-pipeline feature table.** PRIMARY KEY (model_hash, name) makes this an upsert target. C++ writes kurtosis / eff_rank / dtype; Python writes rms / mean_abs / tail_ratio. `source` records which pipeline last wrote the row. |
+| **`tensor_stats`** | 1 per tensor per model | C++ (GA-prep) + Python (cal) | **The cross-pipeline feature table.** PRIMARY KEY (model_hash, name) + ON CONFLICT DO UPDATE = upsert target. C++ writes kurtosis / eff_rank / dtype; Python writes rms / mean_abs / tail_ratio. `source` records which pipeline last wrote the row. |
 | **`l3_outlier_summary`** | 1 per tensor per sidecar label | Python (analytics) | L3 outlier rate per tensor. model_hash + name joins to tensor_stats. |
 | **`l4_probe_summary`** | 1 per tensor | Python (analytics) | L4 E2E probe (mse, perplexity, top1_mismatch). |
-| **`l5_plan_summary`** | 1 per (tensor, iteration, plan_id) | Python (analytics) | L5 requant plan sensitivity. |
+| **`l4_plan_outcome`** | 1 per (tensor, iteration, plan_id) | C++ (adaptive_requantize loop) | **The feedback-loop audit trail.** The per-iteration L4 measurement AFTER a requant plan was applied, with the before/after split. The C++ `ts_dispatch_run_l5_loop` writes one row per (tensor, gen) via `ts_quantize_db_append_l4_outcome`. |
+| **`l5_plan_summary`** | 1 per (tensor, iteration, plan_id) | Python (l5_orchestrator) | L5 requant plan (sensitivity_score, recommended_alpha, recommended_clip). |
+| **`l5_outcome`** | 1 per (tensor, iteration, plan_id) | Python (`tools/tessera/l5_outcome.py`) | **The feedback-loop verdict.** Computed by `l5_outcome.py` from a join of `l5_plan_summary` and `l4_plan_outcome`. `plan_accepted` is True if `delta_mse < accept_threshold`. `residual` is the per-(model, family) linear-fit residual of delta_mse on sensitivity_score (a running measure of how well the orchestrator's sensitivity scoring predicts the actual error delta). |
 | **`per_layer_error_summary`** | 1 per tensor | Python (analytics) | L1/L1.5 sidecar epsilon. |
 
-The 5 bolded tables are the additions on top of the existing
+The 7 bolded tables are the additions on top of the existing
 6-table schema; see the scout §0 / §6 for the original inventory.
+
+## The feedback loop: "did this requant plan actually reduce error?"
+
+The scout §5.4 identified the cross-pipeline feedback loop as the
+analytical force multiplier: a way to ask "for each L5 plan we
+emitted, did the L4 measurement AFTER the plan was applied
+actually show a reduction in error?" and use that signal to retune
+the orchestrator's sensitivity scoring.
+
+The loop lands here with three pieces:
+
+1. **C++ producer (`l4_plan_outcome`).** The dispatch's
+   `ts_dispatch_run_l5_loop` writes one row per
+   `(tensor, gen)` with the before/after split (alpha / clip /
+   outlier_thresh parameters + rel_frob) via
+   `ts_quantize_db_append_l4_outcome`. plan_id is
+   `cpp_quant_gen{N}_stage{S}` where S is the stage that won
+   (A or B). The Python orchestrator's plan_id is
+   `py_orch_iter{N}` and uses a different prefix; both coexist
+   on the (model_hash, name, iteration, plan_id) primary key.
+2. **Python producer (`l5_plan_summary`).** The existing
+   `l5_orchestrator.py::write_history` writes one row per
+   `(tensor, iteration, plan_id)` with `sensitivity_score` and
+   the recommended `alpha / clip`. Already existed before this
+   commit; the unified-schema migration just landed the table.
+3. **Python consumer (`l5_outcome.py`).** Reads
+   `l5_plan_summary` JOIN `l4_plan_outcome` on the primary key,
+   computes `delta_mse = mse_after - mse_before` and
+   `plan_accepted = (delta_mse < accept_threshold)`, fits a
+   per-(model, family) linear model of `delta_mse` on
+   `sensitivity_score` and records the residual, and writes
+   the verdict to `l5_outcome`.
+
+The hit-rate metric (per-run, per-family) and the sensitivity
+calibration residual are the two new things the loop gives the
+architect. The hit rate answers "of the plans we emitted this
+run, how many actually helped?"; the calibration residual answers
+"how well does our sensitivity scoring predict the actual
+delta?" Both are first-class observables on the l5_outcome
+table.
+
+Production data flow:
+
+```
+                    C++ dispatch
+                    ts_dispatch_run_l5_loop
+                            │
+                            ├── l4_plan_outcome (per-iter audit trail)
+                            │
+Python l5_orchestrator        │
+    l5_plan_summary ──────────┴────────► l5_outcome.py ─────► l5_outcome
+                                                                     │
+                                                                     ▼
+                                                              hit_rate + residual
+                                                              (orchestrator retuning)
+```
+
+The orchestrator can read `l5_outcome.residual` at the start of
+its next generation and use the residual to retune the
+sensitivity scoring weights, closing the loop. That's a
+follow-up; the current commit lands the producer + consumer
+infrastructure and the metrics.
 
 ## The write buffer pattern
 
@@ -76,6 +140,13 @@ Properties:
   `rows_dropped`, and the producer continues. The DB is a recording
   aid, never a correctness requirement.
 
+`tensor_stats` is an exception: it has a primary key, so the
+buffered append path would fail on a duplicate. The Python and
+C++ sides both bypass the buffer for `tensor_stats` and use a
+direct `INSERT ... ON CONFLICT (model_hash, name) DO UPDATE SET
+...` with `COALESCE` on the update clause (the upsert preserves
+the other side's columns when the new write's columns are NULL).
+
 Production-tuned throughput (test 5, 8 threads x 50k rows = 400k):
 
 ```
@@ -83,17 +154,27 @@ append: ~500 ms (memory speed, no DuckDB)
 flush:  ~3.4 sec total (~120k rows/sec sustained)
 ```
 
+## CLI
+
+The unified DB is opened by the dispatch with `--tessera-db PATH`.
+The legacy `--quantize-db PATH` is a deprecated alias kept for one
+release; it prints a warning to stderr when used. Both flags set
+the same `tessera_params.tessera_db` field; if both are given, the
+last one wins (CLI ordering convention).
+
 ## Files
 
 | Layer | File | Role |
 |---|---|---|
-| C++ schema | `tools/quantize/tessera/tessera-quantize-db.{h,cpp}` | Owns the schema (CREATE TABLE IF NOT EXISTS) and the typed insert helpers. `--quantize-db PATH` (renamed `--tessera-db PATH` in a follow-up) opens or creates the file. |
+| C++ schema | `tools/quantize/tessera/tessera-quantize-db.{h,cpp}` | Owns the schema (CREATE TABLE IF NOT EXISTS) and the typed insert helpers. `--tessera-db PATH` opens or creates the file. |
 | C++ buffer | `tools/quantize/tessera/tessera-db-buffer.{h,cpp}` | MPSC write buffer with count + time + explicit flush triggers and sync-on-exit. |
-| C++ dispatch | `tools/quantize/tessera/tessera-dispatch.cpp` | The dispatch opens one buffer for `ga_evaluations`; the eval_recorder callback pushes rows into it. |
-| C++ tests | `tools/quantize/tessera/test_db_buffer.cpp` | 8 cases covering the buffer in isolation. |
+| C++ dispatch | `tools/quantize/tessera/tessera-dispatch.cpp` | The dispatch opens two buffers (`ga_evaluations` + `l4_plan_outcome`); the eval_recorder + L5 loop push rows into them. The GA-prep walk also upserts into `tensor_stats` via `ts_quantize_db_upsert_tensor_stat`. |
+| C++ tests | `tools/quantize/tessera/test_db_buffer.cpp`, `tools/quantize/tessera/test_quantize_db.cpp` | 8 + 6 cases. |
 | Python buffer | `tools/tessera/tessera_db_buffer.py` | Python mirror; same contract. |
 | Python unified | `tools/tessera/tessera_db.py` | High-level API (`TesseraDB` class) that owns the DuckDB connection + per-table buffers. Typed helpers per summary table. |
-| Python tests | `tools/tessera/test_tessera_db_buffer.py`, `tools/tessera/test_tessera_db.py` | 8 + 7 cases. |
+| Python l5_outcome | `tools/tessera/l5_outcome.py` | The feedback-loop consumer. Joins `l5_plan_summary` and `l4_plan_outcome`, computes `delta_mse` + `plan_accepted` + per-(model, family) `residual`, writes `l5_outcome`. |
+| Python cal | `tools/tessera/calibration_to_tensor_stats.py` | Reads the per-channel observer parquet, reduces to per-tensor summary, upserts into `tensor_stats` (source = `py_cal`). |
+| Python tests | `tools/tessera/test_tessera_db_buffer.py`, `tools/tessera/test_tessera_db.py`, `tools/tessera/test_l5_outcome.py`, `tools/tessera/test_calibration_to_tensor_stats.py` | 8 + 7 + 5 + 3 cases. |
 
 ## Usage
 
@@ -102,73 +183,121 @@ flush:  ~3.4 sec total (~120k rows/sec sustained)
 ```cpp
 // Already wired in ts_dispatch_db_open / ts_dispatch_db_close.
 ts_quantize_db * db = ts_quantize_db_open("tessera.duckdb", &err);
-ts_db_buffer * buf = ts_db_buffer_open(db, "ga_evaluations", cols,
-                                       65536, 1s);
+ts_db_buffer * eval_buf = ts_db_buffer_open(db, "ga_evaluations", cols,
+                                            65536, 1s);
+ts_db_buffer * l4_buf   = ts_db_buffer_open(db, "l4_plan_outcome", l4_cols,
+                                            1024, 1s);
 for (...) {
-    ts_db_buffer_append(buf, { run_id, tensor_name, ... });
+    ts_db_buffer_append(eval_buf, { run_id, tensor_name, ... });
 }
-ts_db_buffer_flush_now(buf);
-ts_db_buffer_close(&buf);   // sync-on-exit
+// In the L5 adaptive loop:
+ts_quantize_db_l4_outcome row;
+row.model_hash = wrap->model_hash;
+row.iteration  = gen;
+row.plan_id    = "cpp_quant_gen" + std::to_string(gen) + "_stage" + strategy;
+row.mse_before = before; row.mse_after = after;
+ts_quantize_db_append_l4_outcome(l4_buf, row);
+// At end:
+ts_db_buffer_flush_now(eval_buf);
+ts_db_buffer_flush_now(l4_buf);
+ts_db_buffer_close(&eval_buf);
+ts_db_buffer_close(&l4_buf);
 ts_quantize_db_close(db, "completed");
 ```
 
-### Python side (calibration / analytics)
+### Python side (calibration + feedback loop)
 
 ```python
 from tessera_db import TesseraDB
 
+# Calibration side
 with TesseraDB.open("tessera.duckdb") as db:
-    # Calibration writes per-tensor stats
     db.insert_tensor_stats(model_hash=model_hash, rows=[
         {"name": "blk.0.attn_q.weight", "family": "attn_q",
-         "kurtosis": 5.2, "eff_rank": 0.85, "rms": 0.12, ...},
+         "kurtosis": 5.2, "eff_rank": 0.85, ...},
         ...
     ])
-
-    # Analytics writes per-tensor summaries
+    db.insert_l5_plan(model_hash=model_hash, rows=[
+        {"name": "blk.0.attn_q.weight", "iteration": 0, "plan_id": "p0",
+         "sensitivity_score": 0.87, "recommended_alpha": 0.5, ...},
+        ...
+    ])
+    db.insert_l4_plan_outcome(model_hash=model_hash, rows=[{
+        "name": "blk.0.attn_q.weight", "iteration": 0, "plan_id": "p0",
+        "mse_before": 0.012, "mse_after": 0.010, "family": "attn_q",
+        ...
+    }])
     db.insert_l4_probe(model_hash=model_hash, rows=[...])
-    db.insert_l5_plan(model_hash=model_hash, rows=[...])
-
-    # Cross-pipeline query (the analytical force multiplier)
-    df = db.query("""
-        SELECT t.name, t.kurtosis, t.eff_rank,
-               l4.mse, l5.sensitivity_score
-        FROM tensor_stats t
-        LEFT JOIN l4_probe_summary l4 USING (model_hash, name)
-        LEFT JOIN l5_plan_summary  l5 USING (model_hash, name)
-        WHERE t.model_hash = ? AND t.kurtosis > 5.0
-        ORDER BY t.kurtosis DESC
-    """)
 ```
 
-## Schema migration status
+```bash
+# Run the feedback loop consumer (joins + verdict)
+python3 tools/tessera/l5_outcome.py \
+    --db tessera.duckdb \
+    --model-hash <hash> \
+    --accept-threshold 0.0 \
+    --print-summary
 
-- **Phase 0 (this doc + commit `e90adc4d8`):** schema migration
-  landed. 5 new tables, all `CREATE TABLE IF NOT EXISTS`. Existing
-  6 tables untouched. Existing tests pass.
-- **Phase 1 (commit `e96c0c21c`):** C++ buffer landed. 8 cases
-  green. Existing `tessera-quantize-db` and `tessera-quantize-db-e2e`
+# Pipeline run:
+# ll  ok: plans: 24
+#      accepted: 19
+#      hit_rate: 0.792
+#      mean_delta: -0.0008
+#      mean_residual: 0.0012
+#      per-family:
+#             attn_q  0.875
+#             ffn_gate  0.714
+```
+
+## Migration status
+
+- **Phase 0 (commits `e90adc4d8` + `b70ec075c`):** schema
+  migration. 7 new tables (5 in the first commit, +2
+  `l4_plan_outcome` + `l5_outcome` for the feedback loop).
+  All `CREATE TABLE IF NOT EXISTS`. Existing 6 tables untouched.
+- **Phase 1 (commit `e96c0c21c`):** C++ buffer. 8 cases green.
+  Existing `tessera-quantize-db` and `tessera-quantize-db-e2e`
   tests pass.
-- **Phase 2 (commit `db0b1b002`):** dispatch refactor landed.
-  Per-tensor DuckDB Appender sharded map replaced with a single
-  `ts_db_buffer` for `ga_evaluations`. E2E + L5 tests green.
-- **Phase 3 (commit `54e047674`):** Python side landed. Buffer
-  + unified `tessera_db.py` + 8 + 7 cases green.
-- **Phase 4 (commit `b8eac1a2a`):** Python tests stabilized
-  (race fix on the parallel-producers test).
+- **Phase 2 (commit `db0b1b002`):** dispatch refactor.
+  Per-tensor DuckDB Appender sharded map replaced with a
+  single `ts_db_buffer` for `ga_evaluations`. E2E + L5 tests
+  green.
+- **Phase 3 (commit `54e047674`):** Python side. Buffer +
+  unified `tessera_db.py`.
+- **Phase 4 (commit `b8eac1a2a`):** Python tests stabilized.
+- **Phase 5 (commits `17724cc3a` + `bd4caa2e1`):** feedback
+  loop producer side. C++ helper for `l4_plan_outcome`,
+  dispatched into the L5 adaptive loop.
+- **Phase 6 (commits `54e047674` + later + test commits):**
+  feedback loop consumer. `l5_outcome.py` joins plan + outcome,
+  computes verdict, writes `l5_outcome`. 5-case test green.
+- **Phase 7 (commits `516d91cc3` + later):** C++ GA-prep walks
+  upserts `tensor_stats` (kurtosis / eff_rank / dtype, source =
+  `cpp_quant`); Python calibration writes
+  `rms / mean_abs / tail_ratio` (source = `py_cal`). The
+  `COALESCE` upsert preserves the other side's columns on
+  a subsequent write.
+- **Phase 8 (this commit):** CLI rename. `--tessera-db PATH`
+  is the new canonical flag; `--quantize-db PATH` is a
+  deprecated alias for one release. The internal field
+  `tessera_params.tessera_db` and `ts_dispatch_params::
+  tessera_db_path` are renamed in lockstep.
 
-## Open follow-ups (not in this commit)
+## Open follow-ups (after this commit)
 
-- Rename `--quantize-db PATH` to `--tessera-db PATH` (with
-  `--quantize-db` as a deprecated alias for one release).
-- Wire the C++ GA-prep walk to upsert into `tensor_stats`
-  (currently writes only `tensors`; the new `tensor_stats`
-  table is waiting for the C++ side to start populating it).
-- Wire the Python calibration pipeline to write
-  `rms, mean_abs, tail_ratio` into `tensor_stats` (the imatrix
-  observer already computes these; the buffer is the only
-  missing piece).
-- Wire the C++ L5 requant fixup to read `l4_probe_summary` and
-  `l5_plan_summary` for cross-pipeline feedback (the "did this
-  requant plan actually reduce error?" loop the scout §5.4
-  describes).
+- Wire the orchestrator to consume `l5_outcome.residual` and
+  retune the sensitivity scoring weights in the next
+  generation (the closed-loop optimization the feedback
+  loop was designed for). This is a 1-2 day change in
+  `l5_orchestrator.py::_build_components`.
+- Add a per-(model, family) `--imatrix-tidy <parquet>` join
+  in `calibration_rollup.py` so the cross-pipeline query
+  includes the imatrix's per-tensor statistics without a
+  separate tessera.duckdb table.
+- Move `ts_quantize_db` (the C type name) to `ts_tessera_db`
+  for consistency with the user-facing flag. Mechanical,
+  touches the .h API surface.
+- Wire `l3_outlier` to consume `tensor_stats` (currently the
+  L3 outlier report reads the per-channel observer parquet
+  directly; it could use the per-tensor summary for the
+  fast path and fall back to the parquet for per-channel).

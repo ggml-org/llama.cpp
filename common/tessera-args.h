@@ -76,14 +76,18 @@ struct common_tessera_params {
     // tick to that path for the Studio UI to tail.
     std::string progress_file;
     bool        progress_force_terminal = false;
-    // DuckDB-backed persistent store. When quantize_db is non-empty, the
+    // Unified tessera.duckdb store. When tessera_db is non-empty, the
     // dispatch opens (or creates) a DuckDB file at that path and records one
-    // row per run/tensor/GA-result, plus bulk-logs every GA candidate eval
-    // via the Appender API. The store also drives warm-start (GA seeds from
-    // prior runs of the same family) and crash-resumability (tensors that
-    // already converged are skipped). Empty = ephemeral, no DB.
-    std::string quantize_db;
-    // When set with --quantize-db, ignore existing converged tensors for
+    // row per run / tensor / GA-result / L4 plan outcome, plus bulk-logs
+    // every GA candidate eval via the per-table write buffer. The store
+    // drives the GA warm-start (family seeds from prior runs of the same
+    // model), crash-resumability (converged tensors are skipped), the
+    // cross-pipeline tensor_stats feature table (C++ writes
+    // kurtosis / eff_rank, Python writes rms / mean_abs / tail_ratio),
+    // and the L5 feedback loop (l4_plan_outcome + l5_outcome). Empty
+    // = ephemeral, no DB.
+    std::string tessera_db;
+    // When set with --tessera-db, ignore existing converged tensors for
     // this run's model_hash and re-run the GA for every tensor.
     bool        force_requantize = false;
     // L2 forward-pass differential (Layer 2 of the runtime-aware pipeline).

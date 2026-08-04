@@ -551,17 +551,17 @@ struct ts_dispatch_db {
 static ts_dispatch_db * ts_dispatch_db_open(
     const ts_dispatch_params * params, bool verbose)
 {
-    if (params->quantize_db_path.empty()) {
+    if (params->tessera_db_path.empty()) {
         return nullptr;
     }
     ts_dispatch_db * wrap = new (std::nothrow) ts_dispatch_db();
     if (wrap == nullptr) return nullptr;
     std::string err;
-    wrap->db = ts_quantize_db_open(params->quantize_db_path, &err);
+    wrap->db = ts_quantize_db_open(params->tessera_db_path, &err);
     if (wrap->db == nullptr) {
-        fprintf(stderr, "tessera-dispatch: warning: --quantize-db open '%s' "
+        fprintf(stderr, "tessera-dispatch: warning: --tessera-db open '%s' "
                         "failed: %s (continuing without DB)\n",
-                params->quantize_db_path.c_str(), err.c_str());
+                params->tessera_db_path.c_str(), err.c_str());
         return nullptr;
     }
     wrap->model_hash = ts_quantize_db_hash_gguf(params->input_path);
@@ -601,9 +601,9 @@ static ts_dispatch_db * ts_dispatch_db_open(
         }
     }
     if (verbose) {
-        printf("tessera-dispatch: --quantize-db opened '%s' (run_id=%s, "
+        printf("tessera-dispatch: --tessera-db opened '%s' (run_id=%s, "
                "model_hash=%s, %zu converged tensors)\n",
-               params->quantize_db_path.c_str(), wrap->run_id.c_str(),
+               params->tessera_db_path.c_str(), wrap->run_id.c_str(),
                wrap->model_hash.empty() ? "(hash failed)" : wrap->model_hash.c_str(),
                wrap->converged.size());
     }

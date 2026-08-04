@@ -104,7 +104,7 @@ int main() {
         params.nthreads          = 1;
         params.verbose           = false;
         params.policy_out_path   = policy_path;
-        params.quantize_db_path  = db_path;
+        params.tessera_db_path  = db_path;
         // Keep the acceptance + L5 loops off so the test stays focused on
         // the GA path. Both have their own dedicated tests.
         params.run_acceptance     = false;
@@ -163,7 +163,7 @@ int main() {
         params.nthreads          = 1;
         params.verbose           = false;
         params.policy_out_path   = policy_path;
-        params.quantize_db_path  = db_path;
+        params.tessera_db_path  = db_path;
         params.run_acceptance     = false;
         params.adaptive_requantize = false;
         ts_dispatch_result result;
@@ -198,7 +198,7 @@ int main() {
         params.nthreads          = 1;
         params.verbose           = false;
         params.policy_out_path   = policy_path;
-        params.quantize_db_path  = db_path;
+        params.tessera_db_path  = db_path;
         params.run_acceptance     = false;
         params.adaptive_requantize = false;
         ts_dispatch_result result;

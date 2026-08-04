@@ -79,13 +79,18 @@ struct ts_dispatch_params {
     // UI to tail. Terminal live-update auto-enables on TTY stderr.
     std::string progress_file;               // empty = no NDJSON output
     bool        progress_force_terminal = false;
-    // DuckDB persistent store path. When non-empty the dispatch opens (or
-    // creates) a DuckDB file at this path, records one row per run / tensor
-    // / GA result, bulk-logs every GA candidate evaluation, and reloads
-    // family-optimal alpha/clip from prior runs to warm-start the GA. Tensors
-    // with a converged result for the same model_hash are skipped unless
-    // force_requantize is set, making the pipeline crash-resumable.
-    std::string quantize_db_path;            // empty = ephemeral, no DB
+    // Unified tessera.duckdb store path. When non-empty the dispatch
+    // opens (or creates) a DuckDB file at this path, records one row
+    // per run / tensor / GA result / L4 plan outcome, bulk-logs every
+    // GA candidate evaluation through the per-table write buffer, and
+    // reloads family-optimal alpha/clip from prior runs to warm-start
+    // the GA. Tensors with a converged result for the same model_hash
+    // are skipped unless force_requantize is set, making the pipeline
+    // crash-resumable. The C++ side also writes the cross-pipeline
+    // tensor_stats feature table (kurtosis / eff_rank / dtype) here;
+    // the Python calibration pipeline fills rms / mean_abs /
+    // tail_ratio on a subsequent upsert.
+    std::string tessera_db_path;            // empty = ephemeral, no DB
     bool        force_requantize = false;
     // L2 forward-pass differential plumbing (Layer 2 of the runtime-aware
     // pipeline, see docs/runtime-aware-pipeline.md). The dispatch itself
