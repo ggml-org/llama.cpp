@@ -95,7 +95,7 @@
 		"unified": "11.0.5",
 		"unist-util-visit": "5.1.0",
 		"uuid": "13.0.2",
-		"vite": "7.3.5",
+		"vite": "7.3.6",
 		"vite-plugin-devtools-json": "0.2.1",
 		"vitest": "4.1.10",
 		"vitest-browser-svelte": "2.1.1",
