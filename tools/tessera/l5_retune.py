@@ -799,16 +799,26 @@ def compute_l5_weights(
         components: list[tuple[float, float, float] | None] = []
         for i, (im, gr, la) in enumerate(zip(im_col, grad_col, layer_col)):
             if im is None and gr is None and la is None:
+                # All three are NULL: pre-Phase-15 row or
+                # older C++ writer. The 2-coefficient
+                # fallback is the right path.
+                components.append(None)
+            elif im is None or gr is None or la is None:
+                # A partial component (one or two NULLs)
+                # is also treated as "fall back": the
+                # 3-coefficient OLS needs all three. We
+                # could impute the missing component with
+                # the uniform-spread assumption
+                # (l5_metrics.decompose) but the
+                # conservative choice is the 2-coefficient
+                # fallback. In practice the producer side
+                # always populates all three together (the
+                # SensitivityScorer.score() emits them as a
+                # single set); a partial NULL would be a
+                # bug upstream.
                 components.append(None)
             else:
-                # A partial component (one or two NULLs) is
-                # also treated as "fall back": the 3-coefficient
-                # OLS needs all three. We could impute the
-                # missing component with the uniform-spread
-                # assumption (l5_metrics.decompose) but the
-                # conservative choice is the 2-coefficient
-                # fallback.
-                components.append(None)
+                components.append((float(im), float(gr), float(la)))
         # The per-row in_sample_loss is the upstream's loss
         # for that row (the post-fit L1 residual of the
         # sensitivity calibration). Phase 15: the confidence
