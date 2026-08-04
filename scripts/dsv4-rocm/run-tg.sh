@@ -615,9 +615,17 @@ PY
         exit 3
     fi
     if [[ "$PROFILE" == kernel ]]; then
-        python3 "$ROOT_DIR/scripts/dsv4-rocm/summarize-tg-profile.py" "$run_dir" \
-            --json "$run_dir/profile-summary.json" --tsv "$run_dir/profile-families.tsv" \
-            > "$run_dir/profile-summary.txt"
+        git -C "$ROOT_DIR" rev-parse HEAD > "$run_dir/profile-parser-commit.txt"
+        {
+            printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n'
+            printf 'cd %q\n' "$ROOT_DIR"
+            printf 'python3 %q %q --json %q --tsv %q > %q\n' \
+                "$ROOT_DIR/scripts/dsv4-rocm/summarize-tg-profile.py" "$run_dir" \
+                "$run_dir/profile-summary.json" "$run_dir/profile-families.tsv" \
+                "$run_dir/profile-summary.txt"
+        } > "$run_dir/profile-parser-command.sh"
+        chmod +x "$run_dir/profile-parser-command.sh"
+        "$run_dir/profile-parser-command.sh"
         cat "$run_dir/profile-summary.txt"
     fi
     if [[ "$stable" -ne 1 ]]; then
