@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { FolderOpen } from '@lucide/svelte';
 	import { untrack } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
@@ -89,7 +90,7 @@
 	// so repeated queries in the same directory don't re-walk the tree. Entries
 	// expire after a short TTL.
 	const SEARCH_CACHE_TTL_MS = 2000;
-	const searchCache = new Map<string, { results: GlobEntry[]; base: string; at: number }>();
+	const searchCache = new SvelteMap<string, { results: GlobEntry[]; base: string; at: number }>();
 
 	const runSearch = debounce((query: string) => {
 		void doSearch(query);
