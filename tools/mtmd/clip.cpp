@@ -928,6 +928,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_minimax_m3>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_ONYX:
+            {
+                builder = std::make_unique<clip_graph_onyx>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_STEP3VL:
             {
                 builder = std::make_unique<clip_graph_step3vl>(ctx, img);
@@ -3894,7 +3898,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
     };
 
     // set input pixel values
-    if (!imgs.is_audio) {
+    // onyx feeds host-patchified "onyx_patches" instead of raw pixels (handled in the switch below)
+    if (ctx->model.proj_type == PROJECTOR_TYPE_ONYX) {
+        // no generic pixel input
+    } else if (!imgs.is_audio) {
         size_t nelem = 0;
         for (const auto & img : imgs.entries) {
             nelem += img.nx() * img.ny() * 3;
@@ -3951,6 +3958,143 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
 
     // set input per projector
     switch (ctx->model.proj_type) {
+        case PROJECTOR_TYPE_ONYX:
+            {
+                const int grid_w = pos_w;            // image_size_width  / patch_size
+                const int grid_h = pos_h;            // image_size_height / patch_size
+                const int n_tok  = grid_w * grid_h;
+                const int ps     = patch_size;
+                const int nx     = image_size_width;
+                const int pt     = hparams.onyx_patch_temporal;
+                const int pgrid  = hparams.onyx_pos_grid;   // 32
+                const int nemb   = hparams.n_embd;          // 1536
+                const int f      = hparams.n_merge;         // downsample 2
+                const int patch_dim = pt * 3 * ps * ps;
+                const auto & buf = imgs.entries[0].get_ro_buf();    // interleaved pixels (3ch image / 6ch video)
+                // channel count: 3 = image (duplicate frame across patch_temporal),
+                // 3*pt = video frame-pair (distinct frames per temporal slot).
+                const int nchan = (int) (buf.size() / ((size_t) nx * imgs.entries[0].ny()));
+
+                // --- patchify: [pt,c,ps,ps] per token; token = gy*grid_w + gx ---
+                std::vector<float> patches((size_t) patch_dim * n_tok, 0.0f);
+                for (int gy = 0; gy < grid_h; gy++) {
+                    for (int gx = 0; gx < grid_w; gx++) {
+                        const int tok = gy * grid_w + gx;
+                        for (int fr = 0; fr < pt; fr++) {
+                            for (int c = 0; c < 3; c++) {
+                                // image: same RGB for all temporal slots; video: distinct frame per slot
+                                const int src_c = (nchan == 3) ? c : (fr * 3 + c);
+                                for (int py = 0; py < ps; py++) {
+                                    for (int px = 0; px < ps; px++) {
+                                        const int iy = gy * ps + py;
+                                        const int ix = gx * ps + px;
+                                        const int d  = ((fr * 3 + c) * ps + py) * ps + px;
+                                        patches[(size_t) tok * patch_dim + d] =
+                                            buf[(size_t) nchan * ((size_t) iy * nx + ix) + src_c];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                set_input_f32("onyx_patches", patches);
+
+                // --- learned pos-emb bilinear interpolation (grid_sample align_corners=False,
+                //     zeros padding) from pgrid x pgrid to grid_h x grid_w ---
+                ggml_tensor * pe = ctx->model.position_embeddings; // [nemb, pgrid*pgrid]
+                std::vector<float> pe_host((size_t) nemb * pgrid * pgrid);
+                {
+                    std::vector<char> raw(ggml_nbytes(pe));
+                    ggml_backend_tensor_get(pe, raw.data(), 0, ggml_nbytes(pe));
+                    if (pe->type == GGML_TYPE_F32) {
+                        std::memcpy(pe_host.data(), raw.data(), ggml_nbytes(pe));
+                    } else {
+                        const auto * tt = ggml_get_type_traits(pe->type);
+                        tt->to_float(raw.data(), pe_host.data(), (int64_t) nemb * pgrid * pgrid);
+                    }
+                }
+                // NOTE: the reference uses meshgrid(ys, xs, indexing="xy") which yields a
+                // [grid_w, grid_h] grid (width-outer) and grid_sample maps coord0=ys->W axis,
+                // coord1=xs->H axis (a transposed sampling). Token t decomposes as
+                // i=t/grid_h (width), j=t%grid_h (height); sample row a from i (grid_w scale),
+                // col b from j (grid_h scale). This matches the trained convention exactly.
+                std::vector<float> pos_emb((size_t) nemb * n_tok, 0.0f);
+                for (int t = 0; t < n_tok; t++) {
+                    const int   i = t / grid_h;   // width index  (0..grid_w-1)
+                    const int   j = t % grid_h;   // height index (0..grid_h-1)
+                    const float af = (i + 0.5f) * pgrid / grid_w - 0.5f; // row / H axis
+                    const float bf = (j + 0.5f) * pgrid / grid_h - 0.5f; // col / W axis
+                    const int   a0 = (int) std::floor(af); const float wa = af - a0;
+                    const int   b0 = (int) std::floor(bf); const float wb = bf - b0;
+                    const int   as[2] = { a0, a0 + 1 }; const float was[2] = { 1.0f - wa, wa };
+                    const int   bs[2] = { b0, b0 + 1 }; const float wbs[2] = { 1.0f - wb, wb };
+                    float * dst = pos_emb.data() + (size_t) t * nemb;
+                    for (int ka = 0; ka < 2; ka++) {
+                        if (as[ka] < 0 || as[ka] >= pgrid) continue;
+                        for (int kb = 0; kb < 2; kb++) {
+                            if (bs[kb] < 0 || bs[kb] >= pgrid) continue;
+                            const float w = was[ka] * wbs[kb];
+                            if (w == 0.0f) continue;
+                            const float * src = pe_host.data() + (size_t) (as[ka] * pgrid + bs[kb]) * nemb;
+                            for (int c = 0; c < nemb; c++) dst[c] += w * src[c];
+                        }
+                    }
+                }
+                set_input_f32("onyx_pos_emb", pos_emb);
+
+                // --- sparse window grouping (pgrid x pgrid windows) ---
+                const int win = pgrid;
+                const int nwin_h = (grid_h + win - 1) / win;
+                const int nwin_w = (grid_w + win - 1) / win;
+                std::vector<int32_t> sp_perm; sp_perm.reserve(n_tok);
+                std::vector<int>     sp_slens;
+                for (int wy = 0; wy < nwin_h; wy++) {
+                    for (int wx = 0; wx < nwin_w; wx++) {
+                        int cnt = 0;
+                        for (int hh = 0; hh < win; hh++) {
+                            for (int ww = 0; ww < win; ww++) {
+                                const int gy = wy * win + hh;
+                                const int gx = wx * win + ww;
+                                if (gy < grid_h && gx < grid_w) { sp_perm.push_back(gy * grid_w + gx); cnt++; }
+                            }
+                        }
+                        if (cnt > 0) sp_slens.push_back(cnt);
+                    }
+                }
+                std::vector<int32_t> rpos_w(n_tok), rpos_h(n_tok), inv_perm(n_tok);
+                for (int i = 0; i < n_tok; i++) {
+                    const int orig = sp_perm[i];
+                    rpos_w[i] = (orig % grid_w) + 1; // 1-indexed
+                    rpos_h[i] = (orig / grid_w) + 1;
+                    inv_perm[orig] = i;
+                }
+                set_input_i32("onyx_sp_perm",  sp_perm);
+                set_input_i32("onyx_inv_perm", inv_perm);
+                set_input_i32("onyx_pos_w",    rpos_w);
+                set_input_i32("onyx_pos_h",    rpos_h);
+
+                // block-diagonal window mask (permuted order)
+                std::vector<float> sp_mask((size_t) n_tok * n_tok, -INFINITY);
+                {
+                    int off = 0;
+                    for (int s : sp_slens) {
+                        for (int a = 0; a < s; a++)
+                            for (int b = 0; b < s; b++)
+                                sp_mask[(size_t) (off + a) * n_tok + (off + b)] = 0.0f;
+                        off += s;
+                    }
+                }
+                set_input_f32("onyx_sp_mask", sp_mask);
+
+                // pixel-shuffle gather (original order): f*f spatial neighbours grouped
+                std::vector<int32_t> dsp; dsp.reserve(n_tok);
+                for (int oy = 0; oy < grid_h / f; oy++)
+                    for (int ox = 0; ox < grid_w / f; ox++)
+                        for (int ry = 0; ry < f; ry++)
+                            for (int rx = 0; rx < f; rx++)
+                                dsp.push_back((oy * f + ry) * grid_w + (ox * f + rx));
+                set_input_i32("onyx_ds_perm", dsp);
+            } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
                 // inspired from siglip:
@@ -4999,6 +5143,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_MINIMAX_M3:
             return ctx->model.mm_merger_fc2_b->ne[0];
+        case PROJECTOR_TYPE_ONYX:
+            return ctx->model.mm_vision_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_EXAONE4_5:
