@@ -116,6 +116,30 @@ class TestSensitivityScorerDataFrame(unittest.TestCase):
         # Column count stays the same (overwrite, not append).
         self.assertEqual(len(df.columns), len(self._make_df().columns) + 5)
 
+    def test_scorer_default_model_role_is_trunk(self) -> None:
+        """``SensitivityScorer`` defaults ``model_role`` to
+        ``'trunk'`` for backward compat with pre-Phase-16
+        callers.
+        """
+        scorer = l5o.SensitivityScorer(decay=0.9, total_layers=5)
+        self.assertEqual(scorer.model_role, "trunk")
+
+    def test_scorer_explicit_model_role(self) -> None:
+        """An explicit ``model_role`` is stored on the
+        scorer; ``raw_components`` is unaffected (the
+        role is metadata, not a component value).
+        """
+        scorer = l5o.SensitivityScorer(
+            decay=0.9, total_layers=5, model_role="dflash",
+        )
+        self.assertEqual(scorer.model_role, "dflash")
+        df = self._make_df()
+        df = scorer.score(df, l5_demo.SYNTHETIC_IMATRIX)
+        # Score columns are still produced; the role is
+        # stored on the scorer for the per-tensor
+        # RequantAction emission downstream.
+        self.assertIn("sensitivity_score", df.columns)
+
 
 class TestRequantPlannerDataFrame(unittest.TestCase):
     """Polars-backed RequantPlanner cohort picking."""
@@ -163,6 +187,27 @@ class TestRequantPlannerDataFrame(unittest.TestCase):
         delta = sum(a.storage_delta_bits for a in plan.actions)
         self.assertEqual(plan.storage_after_bits - plan.storage_before_bits, delta,
                          "storage_after - storage_before should equal sum of deltas")
+
+    def test_planner_actions_carry_model_role(self) -> None:
+        """The planner passes ``model_role`` to every
+        ``RequantAction`` so the l5_plan_summary writer
+        can tag the row with the role (Phase 16)."""
+        scorer = l5o.SensitivityScorer(
+            decay=0.9, total_layers=5, model_role="dflash",
+        )
+        df = l5o.OrchestratorLoop._load_dataframe(l5_demo.SYNTHETIC_L4)
+        df = scorer.score(df, l5_demo.SYNTHETIC_IMATRIX)
+        planner = l5o.RequantPlanner(
+            top_fraction=0.2, bottom_fraction=0.1,
+            model_role="dflash",
+        )
+        plan = planner.plan(1, df)
+        # Every action carries the role.
+        for action in plan.actions:
+            self.assertEqual(action.model_role, "dflash")
+        # And the to_dict() surfaces the role.
+        d = plan.actions[0].to_dict()
+        self.assertEqual(d["model_role"], "dflash")
 
 
 class TestOrchestratorLoopDataFrame(unittest.TestCase):
