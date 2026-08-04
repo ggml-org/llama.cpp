@@ -96,11 +96,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     };
 
     // string-valued
-    if (arg == "--tessera-adapt")           { if (!require_val("--tessera-adapt")) return -1;           tessera_params.adapt_eval      = val; return 2; }
-    if (arg == "--tessera-adapt-out")       { if (!require_val("--tessera-adapt-out")) return -1;       tessera_params.adapt_out       = val; return 2; }
-    if (arg == "--tessera-anonymize")       { if (!require_val("--tessera-anonymize")) return -1;       tessera_params.anonymize_in    = val; return 2; }
-    if (arg == "--tessera-anonymize-out")   { if (!require_val("--tessera-anonymize-out")) return -1;   tessera_params.anonymize_out   = val; return 2; }
-    if (arg == "--tessera-anonymize-map")   { if (!require_val("--tessera-anonymize-map")) return -1;   tessera_params.anonymize_map   = val; return 2; }
     if (arg == "--tessera-throughput")      { if (!require_val("--tessera-throughput")) return -1;      tessera_params.throughput_workload = val; return 2; }
     if (arg == "--tessera-throughput-out")  { if (!require_val("--tessera-throughput-out")) return -1;  tessera_params.throughput_out  = val; return 2; }
     if (arg == "--tessera-dataset")         { if (!require_val("--tessera-dataset")) return -1;         tessera_params.dataset_in      = val; return 2; }
