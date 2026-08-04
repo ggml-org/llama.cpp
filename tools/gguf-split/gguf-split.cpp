@@ -570,7 +570,6 @@ static void gguf_merge(const split_params & split_params) {
                 fprintf(stderr, "%s: deleted file %s\n", __func__, split_path);
             }
         }
-
     }
 
     if (!split_params.dry_run) {
@@ -586,7 +585,7 @@ static void gguf_merge(const split_params & split_params) {
     fprintf(stderr, "%s: %s merged from %d split with %d tensors.\n",
             __func__, split_params.output.c_str(), n_split, total_tensors);
 
-    if(merge_error){
+    if (merge_error) {
         exit(EXIT_FAILURE);
     }
 }
