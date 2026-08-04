@@ -96,11 +96,6 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     };
 
     // string-valued
-    if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
-    if (arg == "--tessera-acceptance-out") { if (!require_val("--tessera-acceptance-out")) return -1; tessera_params.acceptance_out = val; return 2; }
-    if (arg == "--tessera-l5-out")         { if (!require_val("--tessera-l5-out")) return -1;         tessera_params.l5_out          = val; return 2; }
-    if (arg == "--tessera-capability-eval") { if (!require_val("--tessera-capability-eval")) return -1; tessera_params.capability_eval = val; return 2; }
-    if (arg == "--tessera-capability-out")  { if (!require_val("--tessera-capability-out")) return -1;  tessera_params.capability_out  = val; return 2; }
     if (arg == "--tessera-adapt")           { if (!require_val("--tessera-adapt")) return -1;           tessera_params.adapt_eval      = val; return 2; }
     if (arg == "--tessera-adapt-out")       { if (!require_val("--tessera-adapt-out")) return -1;       tessera_params.adapt_out       = val; return 2; }
     if (arg == "--tessera-anonymize")       { if (!require_val("--tessera-anonymize")) return -1;       tessera_params.anonymize_in    = val; return 2; }
