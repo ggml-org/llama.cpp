@@ -67,6 +67,7 @@ struct llama_model_loader {
     static const int TENSOR_DUPLICATED      = 1 << 1;
     static const int TENSOR_SKIP            = 1 << 2;
     static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
+    static const int TENSOR_ALLOW_RESHAPE   = 1 << 4;
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -177,13 +178,15 @@ struct llama_model_loader {
 
     struct ggml_tensor * require_tensor_meta(const std::string & name) const;
 
-    const struct ggml_tensor * check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const;
+    const struct ggml_tensor * check_tensor_dims(
+            const std::string & name,
+            const std::vector<int64_t> & ne,
+            bool required,
+            bool allow_reshape) const;
 
     struct ggml_tensor * create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
         const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
-
-    struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
     void done_getting_tensors(bool partial = false) const;
 
