@@ -195,7 +195,7 @@ if [ ! -f "$DUCKDB_O" ]; then
         }
 fi
 if [ -f "$DUCKDB_O" ]; then
-    compile_and_run ga_model_role ../../tests/test-tessera-ga-model-role.cpp $T/tessera-quantize-db.cpp $T/tessera-db-buffer.cpp "$DUCKDB_O" -I third-party/duckdb -I $T -I vendor
+    compile_and_run ga_model_role tests/test-tessera-ga-model-role.cpp $T/tessera-quantize-db.cpp $T/tessera-db-buffer.cpp "$DUCKDB_O" -I third-party/duckdb -I $T -I vendor
 else
     printf "  %-30s" "ga_model_role"
     echo "SKIP (duckdb amalgamation build failed)"
