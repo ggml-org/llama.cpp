@@ -1695,6 +1695,8 @@ def main(argv: list[str] | None = None) -> int:
             aggregate_weights,
             read_l5_weights,
             read_per_family_top_fraction,
+            resolve_l5_weights_for_orchestrator,
+            resolve_per_family_top_fraction_for_orchestrator,
         )
         # Retune follow-ups: cross-model dedup. When the
         # requested model_hash is not in the DB and
@@ -1754,45 +1756,22 @@ def main(argv: list[str] | None = None) -> int:
         #   4. base weights (the --w-* flag values).
         # The first tier with a non-empty result wins; the
         # remaining tiers are not consulted.
-        weights_df = pl.DataFrame(schema=L5_WEIGHTS_COLS)
-        if args.model_role is not None:
-            # Tier 1: per-model + per-role.
-            weights_df = read_l5_weights(
-                args.retune_from_db,
-                model_hash=args.model_hash,
-                model_role=args.model_role,
-                cross_model_fallback=False,
-            )
-            # Tier 2: cross-model + per-role (only when
-            # --retune-cross-model-fallback is set).
-            if (
-                weights_df.height == 0
-                and args.retune_cross_model_fallback
-            ):
-                weights_df = read_l5_weights(
-                    args.retune_from_db,
-                    model_hash="*",
-                    model_role=args.model_role,
-                    cross_model_fallback=False,
-                )
-        if weights_df.height == 0:
-            # Tier 3: per-model, no role (legacy pre-Phase-16
-            # path). This branch handles two cases:
-            #   (a) --model-role is None: the legacy
-            #       (model_hash, family) lookup.
-            #   (b) --model-role is set but the role has no
-            #       per-model rows: fall back to the
-            #       role-agnostic per-model rows. The orchestrator
-            #       can warm-start a new role from the trunk's
-            #       recommendation; the (w_imatrix, w_gradient,
-            #       w_layer) tuple is not role-perfect but is
-            #       a reasonable starting point.
-            weights_df = read_l5_weights(
-                args.retune_from_db,
-                model_hash=args.model_hash,
-                model_role=None,
-                cross_model_fallback=args.retune_cross_model_fallback,
-            )
+        #
+        # Retune follow-ups: the lookup is wrapped in a
+        # process-local cache (resolve_l5_weights_for_orchestrator)
+        # so the second call in the same process returns
+        # without re-querying DuckDB. The cache key
+        # includes db_path so a path change produces a
+        # different entry (no manual invalidation
+        # required; a long-running service that replaces
+        # the DB can call clear_l5_weights_lookup_cache
+        # to drop the stale entries).
+        weights_df = resolve_l5_weights_for_orchestrator(
+            args.retune_from_db,
+            model_hash=args.model_hash,
+            model_role=args.model_role,
+            cross_model_fallback=args.retune_cross_model_fallback,
+        )
         if weights_df.height == 0:
             print(
                 f"WARN: --retune-from-db {args.retune_from_db} has no "
@@ -1843,12 +1822,18 @@ def main(argv: list[str] | None = None) -> int:
     if top_fraction_db is None and args.retune_from_db is not None:
         top_fraction_db = args.retune_from_db
     if top_fraction_db is not None:
-        from l5_retune import read_per_family_top_fraction
-        per_family_top_fraction = read_per_family_top_fraction(
-            top_fraction_db,
-            model_hash=args.model_hash,
-            model_role=args.model_role,
-            cross_model_fallback=args.retune_cross_model_fallback,
+        # Retune follow-ups: cached variant of
+        # read_per_family_top_fraction. The second call
+        # in the same process short-circuits the DB
+        # query. The cache key includes db_path so a
+        # path change produces a different entry.
+        per_family_top_fraction = (
+            resolve_per_family_top_fraction_for_orchestrator(
+                top_fraction_db,
+                model_hash=args.model_hash,
+                model_role=args.model_role,
+                cross_model_fallback=args.retune_cross_model_fallback,
+            )
         )
         if per_family_top_fraction:
             role_label = (

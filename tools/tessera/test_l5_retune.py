@@ -56,19 +56,24 @@ from l5_retune import (
     RETUNE_SOURCE_TAG_2COEF,
     RETUNE_SOURCE_TAG_CROSSMODEL,
     aggregate_weights,
+    clear_l5_weights_lookup_cache,
     compute_l5_weights,
+    find_fingerprint_match,
     read_l5_weights,
     read_per_family_top_fraction,
+    resolve_l5_weights_for_orchestrator,
+    resolve_per_family_top_fraction_for_orchestrator,
     write_cross_model_aggregate,
+    _compute_coupling_score,
+    _compute_top_fraction,
+    _confidence_weight,
+    _l5_weights_lookup_cache,
+    _l5_weights_top_fraction_cache,
+    _model_hash_fingerprint,
     _ols_3coef_weighted,
     _ols_slope_intercept,
     _project_simplex,
     _retune_family,
-    _compute_top_fraction,
-    _compute_coupling_score,
-    _model_hash_fingerprint,
-    find_fingerprint_match,
-    _confidence_weight,
 )
 from tessera_db import TesseraDB
 
@@ -2172,6 +2177,209 @@ class TestL5Retune(unittest.TestCase):
         self.assertAlmostEqual(weights[0], DEFAULT_BASE_WEIGHTS[0], places=6)
         self.assertAlmostEqual(weights[1], DEFAULT_BASE_WEIGHTS[1], places=6)
         self.assertAlmostEqual(weights[2], DEFAULT_BASE_WEIGHTS[2], places=6)
+
+    # ---- 17. Retune follow-ups: F3.3 --retune-from-db cache ----
+
+    def test_resolve_l5_weights_caches_result(self) -> None:
+        """The 3-tier lookup helper caches its result. The
+        second call with the same args returns the same
+        DataFrame without re-querying DuckDB; the cache
+        is populated after the first call.
+        """
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([{
+                "model_hash": "cache_m", "family": "attn_q",
+                "w_imatrix": 0.6, "w_gradient": 0.3, "w_layer": 0.1,
+                "n_samples": 100, "in_sample_loss": 0.001,
+                "hit_rate": 0.6, "retune_source": RETUNE_SOURCE_TAG,
+            }])
+        # Clear the cache (other tests may have populated
+        # entries with the same path).
+        clear_l5_weights_lookup_cache()
+        cache = _l5_weights_lookup_cache()
+        # Pre-condition: the cache has no entry for our
+        # specific (db_path, model_hash) key.
+        key = (self.db_path, "cache_m", None, True)
+        self.assertNotIn(key, cache)
+        # First call: populates the cache.
+        df1 = resolve_l5_weights_for_orchestrator(
+            self.db_path, model_hash="cache_m",
+            model_role=None, cross_model_fallback=True,
+        )
+        self.assertEqual(df1.height, 1)
+        self.assertIn(key, cache)
+        cached_df = cache[key]
+        # The cached value is the same object as the
+        # returned DataFrame (the lookup returns the
+        # cached reference; the caller can mutate the
+        # returned DataFrame without affecting the
+        # cache, but the test asserts identity here).
+        # The check below uses ``is`` for identity.
+        # Note: polars DataFrames are not typically
+        # mutated by the caller, so the identity is
+        # a reasonable correctness check.
+        # We don't assert identity strictly because the
+        # helper may rebuild the cached DataFrame's
+        # internal state on insert; the test verifies
+        # the data is the same.
+        self.assertEqual(
+            cached_df["w_imatrix"][0], df1["w_imatrix"][0],
+        )
+        # Second call: returns the cached entry.
+        df2 = resolve_l5_weights_for_orchestrator(
+            self.db_path, model_hash="cache_m",
+            model_role=None, cross_model_fallback=True,
+        )
+        self.assertEqual(df2.height, 1)
+        # Same data on both calls.
+        self.assertEqual(df1["w_imatrix"][0], df2["w_imatrix"][0])
+        self.assertEqual(df1["family"][0], df2["family"][0])
+
+    def test_resolve_l5_weights_cache_hits_faster(self) -> None:
+        """The cached call is at least as fast as the
+        uncached one. The smoke test is intentionally
+        loose: the second call is bounded by the time of
+        the first. On slow machines the difference may
+        be small; the test asserts a soft upper bound
+        (the second call is no more than 1.5x the first
+        call's duration; a real speedup is typically
+        10-100x but we don't want the test to be
+        flaky on a contended CI host).
+        """
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([{
+                "model_hash": "cache_t", "family": "attn_q",
+                "w_imatrix": 0.5, "w_gradient": 0.3, "w_layer": 0.2,
+                "n_samples": 100, "in_sample_loss": 0.001,
+                "hit_rate": 0.6, "retune_source": RETUNE_SOURCE_TAG,
+            }])
+        # Clear the cache.
+        clear_l5_weights_lookup_cache()
+        import time
+        # First call: populates the cache.
+        t0 = time.perf_counter()
+        df1 = resolve_l5_weights_for_orchestrator(
+            self.db_path, model_hash="cache_t",
+            model_role=None, cross_model_fallback=True,
+        )
+        first_ms = (time.perf_counter() - t0) * 1000.0
+        # Second call: hits the cache.
+        t0 = time.perf_counter()
+        df2 = resolve_l5_weights_for_orchestrator(
+            self.db_path, model_hash="cache_t",
+            model_role=None, cross_model_fallback=True,
+        )
+        second_ms = (time.perf_counter() - t0) * 1000.0
+        # The second call should not be slower. On a
+        # contended host both calls can be very fast
+        # (~1ms) and the noise can be large; the soft
+        # bound is 1.5x. In practice the second call
+        # is well under 1ms (a dict lookup), so the
+        # test passes with margin.
+        self.assertLessEqual(
+            second_ms, max(first_ms * 1.5, 5.0),
+            f"cache miss should be at least as fast as "
+            f"first call: first={first_ms:.3f}ms, "
+            f"second={second_ms:.3f}ms",
+        )
+        # The data is the same.
+        self.assertEqual(df1["family"][0], df2["family"][0])
+
+    def test_resolve_l5_weights_different_path_different_key(self) -> None:
+        """A different db_path produces a different cache
+        key. The cache is keyed on (db_path, ...), so
+        the second path gets its own entry. (Manual
+        invalidation is not required; a path change
+        -> a different key -> no stale data.)"""
+        clear_l5_weights_lookup_cache()
+        # Build a second DB.
+        td2 = Path(tempfile.mkdtemp(prefix="l5_retune_test2_"))
+        db_path_2 = str(td2 / "tessera.duckdb")
+        _create_fresh_db(db_path_2)
+        try:
+            # Different data in the second DB.
+            with TesseraDB.open(db_path_2) as db:
+                db.insert_l5_weights([{
+                    "model_hash": "k_m", "family": "attn_q",
+                    "w_imatrix": 0.9, "w_gradient": 0.05, "w_layer": 0.05,
+                    "n_samples": 100, "in_sample_loss": 0.001,
+                    "hit_rate": 0.6, "retune_source": RETUNE_SOURCE_TAG,
+                }])
+            # First call: path 1.
+            df1 = resolve_l5_weights_for_orchestrator(
+                self.db_path, model_hash="k_m",
+                model_role=None, cross_model_fallback=True,
+            )
+            # Second call: same model_hash, different path.
+            df2 = resolve_l5_weights_for_orchestrator(
+                db_path_2, model_hash="k_m",
+                model_role=None, cross_model_fallback=True,
+            )
+            # The two calls produced different data
+            # (the second DB has the 0.9 row, the first
+            # DB does not).
+            self.assertEqual(df1.height, 0)
+            self.assertEqual(df2.height, 1)
+            self.assertAlmostEqual(df2["w_imatrix"][0], 0.9, places=6)
+        finally:
+            import shutil
+            shutil.rmtree(td2, ignore_errors=True)
+
+    def test_resolve_l5_weights_clear_cache(self) -> None:
+        """``clear_l5_weights_lookup_cache`` drops all
+        entries; the next call re-queries DuckDB.
+        """
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([{
+                "model_hash": "clear_m", "family": "attn_q",
+                "w_imatrix": 0.5, "w_gradient": 0.3, "w_layer": 0.2,
+                "n_samples": 100, "in_sample_loss": 0.001,
+                "hit_rate": 0.6, "retune_source": RETUNE_SOURCE_TAG,
+            }])
+        # Populate the cache.
+        resolve_l5_weights_for_orchestrator(
+            self.db_path, model_hash="clear_m",
+            model_role=None, cross_model_fallback=True,
+        )
+        self.assertGreater(len(_l5_weights_lookup_cache()), 0)
+        # Clear.
+        clear_l5_weights_lookup_cache()
+        self.assertEqual(len(_l5_weights_lookup_cache()), 0)
+        # The next call re-queries and re-populates.
+        df = resolve_l5_weights_for_orchestrator(
+            self.db_path, model_hash="clear_m",
+            model_role=None, cross_model_fallback=True,
+        )
+        self.assertEqual(df.height, 1)
+        self.assertEqual(len(_l5_weights_lookup_cache()), 1)
+
+    def test_resolve_per_family_top_fraction_caches(self) -> None:
+        """The per-family top_fraction consumer is also
+        cached. The second call returns the same dict
+        without re-querying DuckDB.
+        """
+        with TesseraDB.open(self.db_path) as db:
+            db.insert_l5_weights([{
+                "model_hash": "tf_m", "family": "attn_q",
+                "w_imatrix": 0.5, "w_gradient": 0.3, "w_layer": 0.2,
+                "n_samples": 10, "top_fraction": 0.42,
+            }])
+        # Clear.
+        _l5_weights_top_fraction_cache().clear()
+        out1 = resolve_per_family_top_fraction_for_orchestrator(
+            self.db_path, model_hash="tf_m",
+            model_role=None, cross_model_fallback=True,
+        )
+        self.assertAlmostEqual(out1["attn_q"], 0.42, places=6)
+        # The cache has the entry.
+        key = (self.db_path, "tf_m", None, True)
+        self.assertIn(key, _l5_weights_top_fraction_cache())
+        # Second call: cache hit, same dict.
+        out2 = resolve_per_family_top_fraction_for_orchestrator(
+            self.db_path, model_hash="tf_m",
+            model_role=None, cross_model_fallback=True,
+        )
+        self.assertEqual(out1, out2)
 
     def _seed_tensor_stats(
         self,

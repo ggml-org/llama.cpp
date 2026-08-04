@@ -1775,6 +1775,214 @@ def aggregate_weights(
     return _project_simplex((w_im, w_grad, w_layer))
 
 
+# Retune follow-ups: --retune-from-db cache layer. The
+# orchestrator's 3-tier lookup chain (per-model+per-role
+# -> cross-model+per-role -> per-model without role) is
+# called per orchestrator iteration; on a hot loop
+# (e.g. an online service that re-reads the DB on every
+# generation) the redundant re-reads are wasteful. The
+# cache memoises the result of the chain for a given
+# (db_path, model_hash, model_role, cross_model_fallback)
+# tuple. The second call returns the cached DataFrame
+# without re-querying DuckDB.
+#
+# The cache is a per-process dict; the orchestrator's
+# long-running mode (or a test that calls the lookup
+# multiple times in the same process) benefits. The
+# cache key includes the db_path so a path change
+# produces a different entry (no manual invalidation
+# required: a different path -> a different key).
+#
+# The cache is intentionally NOT a free function
+# (lru_cache) because the result is a polars DataFrame,
+# which is not hashable. The dict is process-local; no
+# thread safety is enforced (the orchestrator's main
+# loop is single-threaded, and a long-running service
+# is expected to wrap the lookup in its own lock if
+# multi-threading is needed). The cache is exposed via
+# :py:func:`_l5_weights_lookup_cache` so tests can
+# inspect / clear it.
+_L5_WEIGHTS_LOOKUP_CACHE: dict[
+    tuple[str, str | None, str | None, bool], pl.DataFrame
+] = {}
+
+
+def _l5_weights_lookup_cache() -> dict[
+    tuple[str, str | None, str | None, bool], pl.DataFrame
+]:
+    """Return the process-local 3-tier lookup cache.
+
+    Tests use this to inspect the cache (e.g. assert the
+    second call populated the cache) and to clear it
+    (e.g. when a DB is deleted and the cache should
+    not return a stale DataFrame). Production code
+    should not call this; the lookup helper manages
+    the cache internally.
+    """
+    return _L5_WEIGHTS_LOOKUP_CACHE
+
+
+def clear_l5_weights_lookup_cache() -> None:
+    """Clear the process-local 3-tier lookup cache.
+
+    Used by tests that mutate the DB between calls
+    (the cache would otherwise return stale
+    DataFrames). Production code may call this when
+    a long-running service knows the DB has been
+    replaced (e.g. on a schema migration).
+    """
+    _L5_WEIGHTS_LOOKUP_CACHE.clear()
+
+
+def resolve_l5_weights_for_orchestrator(
+    db_path: str | Path,
+    *,
+    model_hash: str | None = None,
+    model_role: str | None = None,
+    cross_model_fallback: bool = True,
+) -> pl.DataFrame:
+    """The orchestrator's --retune-from-db 3-tier lookup,
+    with a process-local cache.
+
+    Implements the 3-tier resolution that ``l5_orchestrator
+    .main`` runs after parsing the CLI args. The tiers
+    are:
+
+      1. (model_hash, model_role, family) per-model,
+         per-role, per-family (the production path).
+      2. ("*", model_role, family) cross-model, per-role,
+         per-family (when ``cross_model_fallback`` is
+         True).
+      3. (model_hash, *, family) per-model, no role
+         (the legacy pre-Phase-16 path; the orchestrator
+         uses this as the final fallback when the
+         role-aware tiers miss).
+
+    The first tier with a non-empty result wins; the
+    remaining tiers are not consulted. The result is
+    cached in :py:data:`_L5_WEIGHTS_LOOKUP_CACHE` keyed
+    by ``(db_path, model_hash, model_role,
+    cross_model_fallback)``; the second call with the
+    same args returns the cached DataFrame without
+    re-querying DuckDB.
+
+    Args:
+      db_path: the unified tessera.duckdb file.
+      model_hash: the model to look up. ``None`` means
+        the lookup returns only the cross-model row
+        (legacy pre-Phase-16 path).
+      model_role: when set, the lookup is per-role
+        (Phase 16). When ``None``, the lookup is
+        role-agnostic.
+      cross_model_fallback: when True (default), the
+        cross-model tier is consulted for families the
+        per-model lookup missed.
+
+    Returns:
+      A polars DataFrame with the l5_weights schema
+      (the union of the per-model and cross-model
+      rows). Empty when no row is found at any tier.
+    """
+    db_str = str(db_path)
+    cache_key = (
+        db_str, model_hash, model_role, cross_model_fallback,
+    )
+    cached = _L5_WEIGHTS_LOOKUP_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    # Phase 16: 3-tier lookup chain. The result is
+    # an empty DataFrame with the l5_weights schema
+    # so the empty-result placeholder has the right
+    # columns for downstream code.
+    weights_df = pl.DataFrame(schema=L5_WEIGHTS_COLS)
+    if model_role is not None and model_hash is not None:
+        # Tier 1: per-model + per-role.
+        weights_df = read_l5_weights(
+            db_path,
+            model_hash=model_hash,
+            model_role=model_role,
+            cross_model_fallback=False,
+        )
+        # Tier 2: cross-model + per-role (only when
+        # cross_model_fallback is on).
+        if weights_df.height == 0 and cross_model_fallback:
+            weights_df = read_l5_weights(
+                db_path,
+                model_hash="*",
+                model_role=model_role,
+                cross_model_fallback=False,
+            )
+    if weights_df.height == 0 and model_hash is not None:
+        # Tier 3: per-model, no role (the legacy
+        # pre-Phase-16 fallback; the orchestrator uses
+        # this when the role-aware tiers miss and the
+        # caller asked for a specific role).
+        weights_df = read_l5_weights(
+            db_path,
+            model_hash=model_hash,
+            model_role=None,
+            cross_model_fallback=cross_model_fallback,
+        )
+    # Cache the result (even an empty DataFrame, so the
+    # second call short-circuits the lookup chain).
+    _L5_WEIGHTS_LOOKUP_CACHE[cache_key] = weights_df
+    return weights_df
+
+
+def resolve_per_family_top_fraction_for_orchestrator(
+    db_path: str | Path,
+    *,
+    model_hash: str | None = None,
+    model_role: str | None = None,
+    cross_model_fallback: bool = True,
+) -> dict[str, float]:
+    """Cached variant of :py:func:`read_per_family_top_fraction`.
+
+    The orchestrator's per-family top_fraction consumer
+    is also re-queried per iteration. The cache key is
+    ``(db_path, model_hash, model_role,
+    cross_model_fallback)`` (the same shape as
+    :py:func:`resolve_l5_weights_for_orchestrator`'s
+    cache key for the (db_path, model_hash, model_role,
+    cross_model_fallback) dimension; the value is
+    stored in a separate dict because the type is
+    different from the l5_weights DataFrame).
+    """
+    db_str = str(db_path)
+    cache_key = (
+        db_str, model_hash, model_role, cross_model_fallback,
+    )
+    cached = _L5_WEIGHTS_TOP_FRACTION_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    out = read_per_family_top_fraction(
+        db_path,
+        model_hash=model_hash,
+        model_role=model_role,
+        cross_model_fallback=cross_model_fallback,
+    )
+    _L5_WEIGHTS_TOP_FRACTION_CACHE[cache_key] = out
+    return out
+
+
+# Retune follow-ups: separate dict for the per-family
+# top_fraction cache (the value type is dict[str, float],
+# not a polars DataFrame, so the two caches are not
+# shareable). The cache shape is the same as the
+# l5_weights cache: keyed by
+# (db_path, model_hash, model_role, cross_model_fallback).
+_L5_WEIGHTS_TOP_FRACTION_CACHE: dict[
+    tuple[str, str | None, str | None, bool], dict[str, float]
+] = {}
+
+
+def _l5_weights_top_fraction_cache() -> dict[
+    tuple[str, str | None, str | None, bool], dict[str, float]
+]:
+    """Return the per-family top_fraction cache (tests)."""
+    return _L5_WEIGHTS_TOP_FRACTION_CACHE
+
+
 def read_per_family_top_fraction(
     db_path: str | Path,
     *,
