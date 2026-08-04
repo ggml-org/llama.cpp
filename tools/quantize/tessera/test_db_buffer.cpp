@@ -59,15 +59,15 @@ static int failures = 0;
     } \
 } while (0)
 
-// Open a fresh in-memory DuckDB and return a ts_quantize_db*. The DB has
-// the unified schema (the production ts_quantize_db_open path) so the
+// Open a fresh in-memory DuckDB and return a ts_tessera_db*. The DB has
+// the unified schema (the production ts_tessera_db_open path) so the
 // buffer can write to any of the schema's tables.
-static ts_quantize_db * open_fresh_db(const std::string & path) {
+static ts_tessera_db * open_fresh_db(const std::string & path) {
     std::remove(path.c_str());
     std::string err;
-    auto * db = ts_quantize_db_open(path, &err);
+    auto * db = ts_tessera_db_open(path, &err);
     if (db == nullptr) {
-        fprintf(stderr, "ts_quantize_db_open failed: %s\n", err.c_str());
+        fprintf(stderr, "ts_tessera_db_open failed: %s\n", err.c_str());
         return nullptr;
     }
     return db;
@@ -75,8 +75,8 @@ static ts_quantize_db * open_fresh_db(const std::string & path) {
 
 // Run a SELECT COUNT(*) ... and return the int64 result. Used to
 // confirm rows landed in the target table.
-static int64_t count_rows(ts_quantize_db * db, const std::string & table) {
-    return ts_quantize_db_debug_count(db, "SELECT COUNT(*) FROM " + table);
+static int64_t count_rows(ts_tessera_db * db, const std::string & table) {
+    return ts_tessera_db_debug_count(db, "SELECT COUNT(*) FROM " + table);
 }
 
 // Helper: append `n` rows with two text columns: model_hash and name.
@@ -98,7 +98,7 @@ static void append_n(ts_db_buffer * buf, int n, int thread_id = 0) {
 // 1. Basic lifecycle: open, append, close, count.
 static void test_basic_lifecycle(const std::string & db_path) {
     fprintf(stderr, "[1] basic lifecycle ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 
@@ -127,7 +127,7 @@ static void test_basic_lifecycle(const std::string & db_path) {
 // Expect a flush to happen because pending >= flush_threshold.
 static void test_count_flush(const std::string & db_path) {
     fprintf(stderr, "[2] count-based flush ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 
@@ -169,7 +169,7 @@ static void test_count_flush(const std::string & db_path) {
 // flush without an explicit flush_now().
 static void test_time_flush(const std::string & db_path) {
     fprintf(stderr, "[3] time-based flush ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 
@@ -202,7 +202,7 @@ static void test_time_flush(const std::string & db_path) {
 // drain is the only path that gets the rows in.
 static void test_sync_on_exit(const std::string & db_path) {
     fprintf(stderr, "[4] sync-on-exit (close-time final drain) ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 
@@ -230,7 +230,7 @@ static void test_sync_on_exit(const std::string & db_path) {
 // 5. Parallel producers: 8 threads * 50k rows = 400k. No drops.
 static void test_parallel_producers(const std::string & db_path) {
     fprintf(stderr, "[5] parallel producers (8 threads x 50k rows) ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 
@@ -284,7 +284,7 @@ static void test_parallel_producers(const std::string & db_path) {
 // increment rows_dropped and stay alive for subsequent valid appends.
 static void test_failed_flush(const std::string & db_path) {
     fprintf(stderr, "[6] failed flush (unknown table) ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 
@@ -324,7 +324,7 @@ static void test_failed_flush(const std::string & db_path) {
 // deleter path).
 static void test_append_after_close(const std::string & db_path) {
     fprintf(stderr, "[7] append / flush after close is a safe no-op ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 
@@ -349,7 +349,7 @@ static void test_append_after_close(const std::string & db_path) {
 // reasonable value mid-flight.
 static void test_pending_depth(const std::string & db_path) {
     fprintf(stderr, "[8] pending depth reflects enqueued rows ...\n");
-    ts_quantize_db * db = open_fresh_db(db_path);
+    ts_tessera_db * db = open_fresh_db(db_path);
     CHECK(db != nullptr, "db open");
     if (!db) return;
 

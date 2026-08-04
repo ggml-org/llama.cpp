@@ -519,7 +519,7 @@ static std::string ts_join(const std::vector<std::string> & parts,
 // DuckDB store plumbing
 //
 // ts_dispatch_db is the per-run state threaded through the GA hooks. It owns
-// the open ts_quantize_db plus per-table write buffers. The buffers replace
+// the open ts_tessera_db plus per-table write buffers. The buffers replace
 // the previous per-tensor DuckDB Appender sharded map: each one is a single
 // MPSC queue with a dedicated flusher thread, 65536-row batches, 1-second
 // time flush, and sync-on-exit via the unique_ptr deleter. See
@@ -534,7 +534,7 @@ static std::string ts_join(const std::vector<std::string> & parts,
 // pipeline continues. The DB is a recording/warm-start aid, not a correctness
 // requirement, so a corrupt file or full disk must never block quantization.
 struct ts_dispatch_db {
-    ts_quantize_db * db = nullptr;     // owned; null when --quantize-db is unset
+    ts_tessera_db * db = nullptr;     // owned; null when --quantize-db is unset
     std::string      run_id;           // empty until begin_run succeeds
     std::string      model_hash;       // empty when hashing failed
     // Resume set: tensor names with a converged result for this run_id.
@@ -557,14 +557,14 @@ static ts_dispatch_db * ts_dispatch_db_open(
     ts_dispatch_db * wrap = new (std::nothrow) ts_dispatch_db();
     if (wrap == nullptr) return nullptr;
     std::string err;
-    wrap->db = ts_quantize_db_open(params->tessera_db_path, &err);
+    wrap->db = ts_tessera_db_open(params->tessera_db_path, &err);
     if (wrap->db == nullptr) {
         fprintf(stderr, "tessera-dispatch: warning: --tessera-db open '%s' "
                         "failed: %s (continuing without DB)\n",
                 params->tessera_db_path.c_str(), err.c_str());
         return nullptr;
     }
-    wrap->model_hash = ts_quantize_db_hash_gguf(params->input_path);
+    wrap->model_hash = ts_tessera_db_hash_gguf(params->input_path);
     // config_json: a compact summary of the knobs that affect GA output. This
     // is informational; warm-start keying uses model_hash only (config drift
     // across runs is acceptable for the family-seed query, which ranks by
@@ -575,7 +575,7 @@ static ts_dispatch_db * ts_dispatch_db_open(
         + ",\"outlier_frac\":" + std::to_string(params->outlier_frac)
         + ",\"awq_clip\":" + std::to_string(params->awq_clip)
         + ",\"awq_alpha\":\"" + params->awq_alpha + "\"}";
-    wrap->run_id = ts_quantize_db_begin_run(wrap->db, params->input_path,
+    wrap->run_id = ts_tessera_db_begin_run(wrap->db, params->input_path,
                                             wrap->model_hash,
                                             "tessera-dev", config, &err);
     if (wrap->run_id.empty()) {
@@ -594,7 +594,7 @@ static ts_dispatch_db * ts_dispatch_db_open(
         // pulling duckdb.hpp into every translation unit that includes the
         // dispatch).
         std::vector<std::string> done;
-        if (ts_quantize_db_list_converged_for_model(wrap->db,
+        if (ts_tessera_db_list_converged_for_model(wrap->db,
                                                     wrap->model_hash,
                                                     &done) == 0) {
             wrap->converged.insert(done.begin(), done.end());
@@ -664,7 +664,7 @@ static void ts_dispatch_db_close(ts_dispatch_db * wrap, const char * status) {
     if (wrap == nullptr || wrap->db == nullptr) return;
     if (!wrap->run_id.empty()) {
         std::string err;
-        if (ts_quantize_db_complete_run(wrap->db, wrap->run_id, status, &err) != 0
+        if (ts_tessera_db_complete_run(wrap->db, wrap->run_id, status, &err) != 0
             && !err.empty()) {
             fprintf(stderr, "tessera-dispatch: warning: complete_run(%s) "
                             "failed: %s\n", status, err.c_str());
@@ -753,8 +753,8 @@ static bool ts_dispatch_family_seed_lookup(const char * family,
         out == nullptr) {
         return false;
     }
-    ts_quantize_db_family_seed seed;
-    if (!ts_quantize_db_lookup_family_seed(wrap->db, family, wrap->run_id,
+    ts_tessera_db_family_seed seed;
+    if (!ts_tessera_db_lookup_family_seed(wrap->db, family, wrap->run_id,
                                            &seed)) {
         return false;
     }
@@ -782,8 +782,8 @@ static bool ts_dispatch_layer_skip(const ts_awq_layer * layer,
     // Look up by model_hash across all runs of this model (the resume set
     // was built cross-run, so the matching ga_result row usually lives
     // under a different run_id than this one).
-    ts_quantize_db_ga_result gr;
-    if (!ts_quantize_db_load_ga_result_for_model(wrap->db, wrap->model_hash,
+    ts_tessera_db_ga_result gr;
+    if (!ts_tessera_db_load_ga_result_for_model(wrap->db, wrap->model_hash,
                                                  layer->name, &gr)) {
         return false;
     }
@@ -814,7 +814,7 @@ static bool ts_dispatch_layer_skip(const ts_awq_layer * layer,
 //
 // db_wrap is optional. When non-null and its l4_outcome_buffer is
 // non-null, the loop writes one l4_plan_outcome row per (tensor, gen)
-// via ts_quantize_db_append_l4_outcome. The integration test passes
+// via ts_tessera_db_append_l4_outcome. The integration test passes
 // nullptr (it does not have a DuckDB store wired up).
 int ts_dispatch_run_l5_loop(
     const ts_dispatch_params * params,
@@ -1047,10 +1047,10 @@ int ts_dispatch_run_l5_loop(
                 // (A or B); the "cpp_quant" prefix disambiguates from
                 // the Python orchestrator's plan_ids.
                 if (db_wrap != nullptr && db_wrap->l4_outcome_buffer != nullptr) {
-                    ts_quantize_db_l4_outcome out_row;
+                    ts_tessera_db_l4_outcome out_row;
                     out_row.model_hash   = db_wrap->model_hash;
                     out_row.name         = e.name;
-                    out_row.layer        = ts_quantize_db_layer_depth(e.name);
+                    out_row.layer        = ts_tessera_db_layer_depth(e.name);
                     out_row.iteration    = gen;
                     out_row.plan_id      = std::string("cpp_quant_gen")
                                            + std::to_string(gen)
@@ -1067,7 +1067,7 @@ int ts_dispatch_run_l5_loop(
                     out_row.frob_before  = before;   // rel_frob is already normalized
                     out_row.frob_after   = after;
                     out_row.family       = fam;
-                    ts_quantize_db_append_l4_outcome(
+                    ts_tessera_db_append_l4_outcome(
                         db_wrap->l4_outcome_buffer, out_row);
                 }
             }
@@ -1734,7 +1734,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // ggml_nelements via the loader callback).
             ga_weight_loaders.push_back({ggml_get_tensor(ggml_ctx, name), {}});
             layer.weights_user_data = &ga_weight_loaders.back();
-            layer.layer_depth = ts_quantize_db_layer_depth(name);
+            layer.layer_depth = ts_tessera_db_layer_depth(name);
             ga_layers.push_back(layer);
             ga_descs.push_back(desc);
             // Record the tensor in the persistent registry. One row per
@@ -1742,7 +1742,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // eff_rank) computed above. Best-effort: a failure here only
             // loses metadata, never blocks quantization.
             if (db_wrap != nullptr) {
-                ts_quantize_db_tensor trec;
+                ts_tessera_db_tensor trec;
                 trec.run_id      = db_wrap->run_id;
                 trec.name        = name;
                 trec.family      = desc.family;
@@ -1754,7 +1754,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 trec.eff_rank    = desc.eff_rank;
                 trec.source_type = ggml_type_name(type);
                 std::string terr;
-                if (ts_quantize_db_insert_tensor(db_wrap->db, trec, &terr) != 0
+                if (ts_tessera_db_insert_tensor(db_wrap->db, trec, &terr) != 0
                     && !terr.empty()) {
                     fprintf(stderr, "tessera-dispatch: warning: "
                                     "insert_tensor('%s') failed: %s\n",
@@ -1770,7 +1770,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 // tail_ratio are left at 0 here (the C++ side
                 // doesn't compute them); the Python side fills them
                 // in on a subsequent write.
-                ts_quantize_db_tensor_stat tstat;
+                ts_tessera_db_tensor_stat tstat;
                 tstat.model_hash = db_wrap->model_hash;
                 tstat.name       = name;
                 tstat.family     = desc.family;
@@ -1786,7 +1786,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 tstat.tail_ratio  = 0.0;
                 tstat.source      = "cpp_quant";
                 std::string uerr;
-                if (ts_quantize_db_upsert_tensor_stat(db_wrap->db, tstat, &uerr) != 0
+                if (ts_tessera_db_upsert_tensor_stat(db_wrap->db, tstat, &uerr) != 0
                     && !uerr.empty()) {
                     fprintf(stderr, "tessera-dispatch: warning: "
                                     "upsert_tensor_stat('%s') failed: %s\n",
@@ -1892,7 +1892,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // runs at the end of the run.
             if (db_wrap != nullptr) {
                 for (size_t l = 0; l < ga_results.size(); l++) {
-                    ts_quantize_db_ga_result gr;
+                    ts_tessera_db_ga_result gr;
                     gr.run_id          = db_wrap->run_id;
                     gr.tensor_name     = ga_names[l];
                     gr.family          = ga_layers[l].family;
@@ -1905,7 +1905,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                     gr.converged       = ga_results[l].converged;
                     gr.warm_started    = ga_results[l].warm_started;
                     std::string gerr;
-                    if (ts_quantize_db_insert_ga_result(db_wrap->db, gr, &gerr) != 0
+                    if (ts_tessera_db_insert_ga_result(db_wrap->db, gr, &gerr) != 0
                         && !gerr.empty()) {
                         fprintf(stderr, "tessera-dispatch: warning: "
                                         "insert_ga_result('%s') failed: %s\n",
@@ -2641,7 +2641,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // breakdown (the part useful for offline analysis).
             if (db_wrap != nullptr) {
                 for (const auto & at : acc_tensors) {
-                    ts_quantize_db_acceptance arec;
+                    ts_tessera_db_acceptance arec;
                     arec.run_id       = db_wrap->run_id;
                     arec.tensor_name  = at.name;
                     arec.family       = ts_regime_infer_family(at.name);
@@ -2653,7 +2653,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                     arec.verdict      = result->acceptance.composite_wins
                                             ? "pass" : "fail";
                     std::string aerr;
-                    if (ts_quantize_db_insert_acceptance(db_wrap->db, arec, &aerr) != 0
+                    if (ts_tessera_db_insert_acceptance(db_wrap->db, arec, &aerr) != 0
                         && !aerr.empty()) {
                         fprintf(stderr, "tessera-dispatch: warning: "
                                         "insert_acceptance('%s') failed: %s\n",

@@ -48,7 +48,7 @@ namespace {
 // ts_db_buffer implementation. The C-style API in the .h is a shim.
 class ts_db_buffer_impl {
 public:
-    ts_db_buffer_impl(ts_quantize_db * db,
+    ts_db_buffer_impl(ts_tessera_db * db,
                       std::string table_name,
                       std::vector<std::string> column_names,
                       size_t flush_threshold,
@@ -307,7 +307,7 @@ private:
         return seen_digit;
     }
 
-    ts_quantize_db * db_;
+    ts_tessera_db * db_;
     const std::string table_name_;
     const std::vector<std::string> column_names_;
     const std::string column_list_;
@@ -340,7 +340,7 @@ private:
 // ---------------------------------------------------------------------------
 
 ts_db_buffer * ts_db_buffer_open(
-    ts_quantize_db * db,
+    ts_tessera_db * db,
     const std::string & table_name,
     const std::vector<std::string> & column_names,
     size_t flush_threshold,

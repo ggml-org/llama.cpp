@@ -17,7 +17,7 @@
 #include "tessera-acceptance.h"
 
 // Forward declaration so the dispatch header does not require duckdb.hpp.
-struct ts_quantize_db;
+struct ts_tessera_db;
 
 // Forward declaration; full definition in tessera-dispatch-internal.h.
 struct ts_dispatch_refine_entry;
@@ -172,7 +172,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 //
 // db_wrap is optional. When non-null and its l4_outcome_buffer is
 // non-null, the loop writes one l4_plan_outcome row per (tensor, gen)
-// via ts_quantize_db_append_l4_outcome (the L5 feedback loop). The
+// via ts_tessera_db_append_l4_outcome (the L5 feedback loop). The
 // integration test passes nullptr.
 struct ts_dispatch_refine_entry;
 struct ts_dispatch_db;

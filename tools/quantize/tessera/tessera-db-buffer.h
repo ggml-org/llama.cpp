@@ -5,7 +5,7 @@
 // producer threads (the GA hot path has 16-64 parallel evaluators) push
 // rows via append(); a single consumer thread (the flusher) drains the
 // queue and bulk-inserts into DuckDB. The pattern extends the existing
-// ts_quantize_db_appender design (one Appender per active tensor, batched
+// ts_tessera_db_appender design (one Appender per active tensor, batched
 // flush per generation) to a unified, table-keyed, multi-producer /
 // single-consumer shape that can drive any of the unified-schema tables
 // (ga_evaluations, tensor_stats, l3_outlier_summary, l4_probe_summary,
@@ -28,7 +28,7 @@
 // The destructor is single-threaded (the owning unique_ptr goes out of
 // scope in a deterministic place).
 //
-// The buffer does NOT take ownership of ts_quantize_db. The dispatch
+// The buffer does NOT take ownership of ts_tessera_db. The dispatch
 // owns the DB and tears it down after all buffers are closed. The
 // dispatch uses unique_ptr<ts_db_buffer> with a custom deleter that
 // calls ts_db_buffer_close first.
@@ -72,7 +72,7 @@ struct ts_db_buffer;
 // `flush_interval` defaults to 1 second; `durable` defaults to false
 // (no fsync). Returns nullptr on allocation failure or invalid args.
 ts_db_buffer * ts_db_buffer_open(
-    ts_quantize_db * db,
+    ts_tessera_db * db,
     const std::string & table_name,
     const std::vector<std::string> & column_names,
     size_t flush_threshold = 65536,

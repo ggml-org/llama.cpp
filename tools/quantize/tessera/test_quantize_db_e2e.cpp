@@ -123,12 +123,12 @@ int main() {
     // tensors, two ga_results, and a non-zero number of ga_evaluations.
     {
         std::string err;
-        ts_quantize_db * db = ts_quantize_db_open(db_path, &err);
+        ts_tessera_db * db = ts_tessera_db_open(db_path, &err);
         check("run 1: DB reopened", db != nullptr);
         if (db == nullptr) return 1;
 
         auto one_int = [&](const std::string & q) -> int64_t {
-            return ts_quantize_db_debug_count(db, q);
+            return ts_tessera_db_debug_count(db, q);
         };
         int64_t n_runs  = one_int("SELECT COUNT(*) FROM runs WHERE status='completed'");
         int64_t n_tens  = one_int("SELECT COUNT(*) FROM tensors");
@@ -179,9 +179,9 @@ int main() {
     int64_t evals_before_run3 = 0;
     {
         std::string err;
-        ts_quantize_db * db = ts_quantize_db_open(db_path, &err);
+        ts_tessera_db * db = ts_tessera_db_open(db_path, &err);
         evals_before_run3 =
-            ts_quantize_db_debug_count(db, "SELECT COUNT(*) FROM ga_evaluations;");
+            ts_tessera_db_debug_count(db, "SELECT COUNT(*) FROM ga_evaluations;");
         delete db;
     }
     {
@@ -208,9 +208,9 @@ int main() {
     }
     {
         std::string err;
-        ts_quantize_db * db = ts_quantize_db_open(db_path, &err);
+        ts_tessera_db * db = ts_tessera_db_open(db_path, &err);
         auto one_int = [&](const std::string & q) -> int64_t {
-            return ts_quantize_db_debug_count(db, q);
+            return ts_tessera_db_debug_count(db, q);
         };
         int64_t n_runs      = one_int("SELECT COUNT(*) FROM runs");
         int64_t n_runs_done = one_int("SELECT COUNT(*) FROM runs WHERE status='completed'");

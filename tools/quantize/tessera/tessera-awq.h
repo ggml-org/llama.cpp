@@ -103,7 +103,7 @@ struct ts_awq_layer {
     float   eff_rank;    // effective rank
     // Block index parsed from the tensor name (e.g. blk.12.ffn_gate -> 12).
     // 0 for non-block tensors (embeddings, norm, output). Set by the dispatch
-    // from ts_quantize_db_layer_depth(); enables depth-aware family queries
+    // from ts_tessera_db_layer_depth(); enables depth-aware family queries
     // like "best alpha for ffn_gate at depth 10-15" against the persistent
     // store. Default 0 keeps existing behaviour when the host does not set it.
     int32_t layer_depth = 0;

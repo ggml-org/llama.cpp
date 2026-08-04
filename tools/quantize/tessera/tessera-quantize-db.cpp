@@ -424,7 +424,7 @@ std::string ts_now_ts() {
 // open / close
 // ---------------------------------------------------------------------------
 
-ts_quantize_db::~ts_quantize_db() {
+ts_tessera_db::~ts_tessera_db() {
     // Order matters: a Connection holds a reference to its DuckDB; tear it
     // down before the database goes away. Both unique_ptrs reset in
     // declaration order (conn declared after db in the header), which is the
@@ -433,9 +433,9 @@ ts_quantize_db::~ts_quantize_db() {
     db.reset();
 }
 
-ts_quantize_db * ts_quantize_db_open(const std::string & path,
+ts_tessera_db * ts_tessera_db_open(const std::string & path,
                                      std::string * err) {
-    auto * wrap = new (std::nothrow) ts_quantize_db();
+    auto * wrap = new (std::nothrow) ts_tessera_db();
     if (wrap == nullptr) {
         if (err) *err = "out of memory";
         return nullptr;
@@ -472,7 +472,7 @@ ts_quantize_db * ts_quantize_db_open(const std::string & path,
 // run lifecycle
 // ---------------------------------------------------------------------------
 
-std::string ts_quantize_db_begin_run(ts_quantize_db * db,
+std::string ts_tessera_db_begin_run(ts_tessera_db * db,
                                      const std::string & model_path,
                                      const std::string & model_hash,
                                      const std::string & tessera_commit,
@@ -514,7 +514,7 @@ std::string ts_quantize_db_begin_run(ts_quantize_db * db,
     return run_id;
 }
 
-int ts_quantize_db_complete_run(ts_quantize_db * db,
+int ts_tessera_db_complete_run(ts_tessera_db * db,
                                 const std::string & run_id,
                                 const std::string & status,
                                 std::string * err) {
@@ -544,8 +544,8 @@ int ts_quantize_db_complete_run(ts_quantize_db * db,
 // tensor registry
 // ---------------------------------------------------------------------------
 
-int ts_quantize_db_insert_tensor(ts_quantize_db * db,
-                                 const ts_quantize_db_tensor & t,
+int ts_tessera_db_insert_tensor(ts_tessera_db * db,
+                                 const ts_tessera_db_tensor & t,
                                  std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
     std::ostringstream q;
@@ -581,8 +581,8 @@ int ts_quantize_db_insert_tensor(ts_quantize_db * db,
 // ga_results (one row per converged tensor)
 // ---------------------------------------------------------------------------
 
-int ts_quantize_db_insert_ga_result(ts_quantize_db * db,
-                                    const ts_quantize_db_ga_result & r,
+int ts_tessera_db_insert_ga_result(ts_tessera_db * db,
+                                    const ts_tessera_db_ga_result & r,
                                     std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
     std::ostringstream q;
@@ -625,8 +625,8 @@ int ts_quantize_db_insert_ga_result(ts_quantize_db * db,
     return 0;
 }
 
-int ts_quantize_db_insert_acceptance(ts_quantize_db * db,
-                                     const ts_quantize_db_acceptance & a,
+int ts_tessera_db_insert_acceptance(ts_tessera_db * db,
+                                     const ts_tessera_db_acceptance & a,
                                      std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
     std::ostringstream q;
@@ -662,8 +662,8 @@ int ts_quantize_db_insert_acceptance(ts_quantize_db * db,
     return 0;
 }
 
-int ts_quantize_db_insert_l5_fixup(ts_quantize_db * db,
-                                   const ts_quantize_db_l5_fixup & f,
+int ts_tessera_db_insert_l5_fixup(ts_tessera_db * db,
+                                   const ts_tessera_db_l5_fixup & f,
                                    std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
     std::ostringstream q;
@@ -698,9 +698,9 @@ int ts_quantize_db_insert_l5_fixup(ts_quantize_db * db,
 // tensor_stats upsert: cross-pipeline feature table
 // ---------------------------------------------------------------------------
 
-int ts_quantize_db_upsert_tensor_stat(
-    ts_quantize_db * db,
-    const ts_quantize_db_tensor_stat & row,
+int ts_tessera_db_upsert_tensor_stat(
+    ts_tessera_db * db,
+    const ts_tessera_db_tensor_stat & row,
     std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
     // PRIMARY KEY (model_hash, name). The ON CONFLICT DO UPDATE
@@ -754,9 +754,9 @@ int ts_quantize_db_upsert_tensor_stat(
 // L4 plan outcome: thin shim over ts_db_buffer for the feedback loop
 // ---------------------------------------------------------------------------
 
-int ts_quantize_db_append_l4_outcome(
+int ts_tessera_db_append_l4_outcome(
     struct ts_db_buffer * buffer,
-    const ts_quantize_db_l4_outcome & row) {
+    const ts_tessera_db_l4_outcome & row) {
     if (buffer == nullptr) return 0;
     // Column order must match the l4_plan_outcome CREATE TABLE
     // (see TS_QDB_SCHEMA_SQL above):
@@ -797,20 +797,20 @@ int ts_quantize_db_append_l4_outcome(
 // Appender: bulk GA evaluation logging
 // ---------------------------------------------------------------------------
 
-struct ts_quantize_db_appender {
-    ts_quantize_db *        owner;
+struct ts_tessera_db_appender {
+    ts_tessera_db *        owner;
     std::string             run_id;
     std::string             tensor_name;
     std::unique_ptr<duckdb::Appender> app;
     bool                    broken = false;   // sticky: stop after first error
 };
 
-ts_quantize_db_appender * ts_quantize_db_appender_open(ts_quantize_db * db,
+ts_tessera_db_appender * ts_tessera_db_appender_open(ts_tessera_db * db,
                                                        const std::string & run_id,
                                                        const std::string & tensor_name,
                                                        std::string * err) {
     if (db == nullptr || db->conn == nullptr) return nullptr;
-    std::unique_ptr<ts_quantize_db_appender> ap(new ts_quantize_db_appender());
+    std::unique_ptr<ts_tessera_db_appender> ap(new ts_tessera_db_appender());
     ap->owner      = db;
     ap->run_id     = run_id;
     ap->tensor_name = tensor_name;
@@ -826,8 +826,8 @@ ts_quantize_db_appender * ts_quantize_db_appender_open(ts_quantize_db * db,
     return ap.release();
 }
 
-int ts_quantize_db_appender_row(ts_quantize_db_appender * ap,
-                                const ts_quantize_db_eval_row & row) {
+int ts_tessera_db_appender_row(ts_tessera_db_appender * ap,
+                                const ts_tessera_db_eval_row & row) {
     if (ap == nullptr || ap->app == nullptr || ap->broken) return 0;
     try {
         ap->app->BeginRow();
@@ -862,7 +862,7 @@ int ts_quantize_db_appender_row(ts_quantize_db_appender * ap,
     return 0;
 }
 
-int ts_quantize_db_appender_flush(ts_quantize_db_appender * ap) {
+int ts_tessera_db_appender_flush(ts_tessera_db_appender * ap) {
     if (ap == nullptr || ap->app == nullptr || ap->broken) return 0;
     try {
         ap->app->Flush();
@@ -876,7 +876,7 @@ int ts_quantize_db_appender_flush(ts_quantize_db_appender * ap) {
     return 0;
 }
 
-void ts_quantize_db_appender_close(ts_quantize_db_appender * ap) {
+void ts_tessera_db_appender_close(ts_tessera_db_appender * ap) {
     if (ap == nullptr) return;
     if (ap->app != nullptr && !ap->broken) {
         try { ap->app->Close(); } catch (...) { /* swallow; cleanup */ }
@@ -888,10 +888,10 @@ void ts_quantize_db_appender_close(ts_quantize_db_appender * ap) {
 // warm-start lookup + resumability
 // ---------------------------------------------------------------------------
 
-bool ts_quantize_db_lookup_family_seed(ts_quantize_db * db,
+bool ts_tessera_db_lookup_family_seed(ts_tessera_db * db,
                                        const std::string & family,
                                        const std::string & exclude_run_id,
-                                       ts_quantize_db_family_seed * out) {
+                                       ts_tessera_db_family_seed * out) {
     if (db == nullptr || db->conn == nullptr || out == nullptr) return false;
     std::ostringstream q;
     q << "SELECT best_alpha, best_clip, best_composite, tensor_name "
@@ -916,7 +916,7 @@ bool ts_quantize_db_lookup_family_seed(ts_quantize_db * db,
     }
 }
 
-int ts_quantize_db_list_converged(ts_quantize_db * db,
+int ts_tessera_db_list_converged(ts_tessera_db * db,
                                   const std::string & run_id,
                                   std::vector<std::string> * out) {
     if (out == nullptr) return 0;
@@ -943,7 +943,7 @@ int ts_quantize_db_list_converged(ts_quantize_db * db,
     return 0;
 }
 
-int ts_quantize_db_list_converged_for_model(ts_quantize_db * db,
+int ts_tessera_db_list_converged_for_model(ts_tessera_db * db,
                                             const std::string & model_hash,
                                             std::vector<std::string> * out) {
     if (out == nullptr) return 0;
@@ -969,10 +969,10 @@ int ts_quantize_db_list_converged_for_model(ts_quantize_db * db,
     return 0;
 }
 
-bool ts_quantize_db_load_ga_result(ts_quantize_db * db,
+bool ts_tessera_db_load_ga_result(ts_tessera_db * db,
                                    const std::string & run_id,
                                    const std::string & tensor_name,
-                                   ts_quantize_db_ga_result * out) {
+                                   ts_tessera_db_ga_result * out) {
     if (db == nullptr || db->conn == nullptr || out == nullptr) return false;
     std::ostringstream q;
     q << "SELECT family, best_alpha, best_clip, best_composite, best_mse, "
@@ -1003,10 +1003,10 @@ bool ts_quantize_db_load_ga_result(ts_quantize_db * db,
     }
 }
 
-bool ts_quantize_db_load_ga_result_for_model(ts_quantize_db * db,
+bool ts_tessera_db_load_ga_result_for_model(ts_tessera_db * db,
                                              const std::string & model_hash,
                                              const std::string & tensor_name,
-                                             ts_quantize_db_ga_result * out) {
+                                             ts_tessera_db_ga_result * out) {
     if (db == nullptr || db->conn == nullptr || out == nullptr) return false;
     if (model_hash.empty()) return false;
     // JOIN runs to filter by model_hash; ORDER BY completed_at DESC so the
@@ -1050,7 +1050,7 @@ bool ts_quantize_db_load_ga_result_for_model(ts_quantize_db * db,
 // helpers
 // ---------------------------------------------------------------------------
 
-int32_t ts_quantize_db_layer_depth(const std::string & name) {
+int32_t ts_tessera_db_layer_depth(const std::string & name) {
     // Match "blk.N." / "blocks.N." (llama-style) and "h.N." (GPT-2 / NEOX).
     // The pattern is "prefix<N>." with N decimal. Returns 0 when no block
     // index is present (norm, embed, output).
@@ -1080,7 +1080,7 @@ int32_t ts_quantize_db_layer_depth(const std::string & name) {
     return any ? depth : 0;
 }
 
-std::string ts_quantize_db_hash_gguf(const std::string & path) {
+std::string ts_tessera_db_hash_gguf(const std::string & path) {
     // Fingerprint the head and tail of the GGUF. The head carries the magic
     // + metadata + tensor info (key/value pairs); the tail carries the last
     // tensor's payload. 1 MB each is enough entropy for warm-start keying and
@@ -1117,7 +1117,7 @@ std::string ts_quantize_db_hash_gguf(const std::string & path) {
     return sha256_hex(dig);
 }
 
-int64_t ts_quantize_db_debug_count(ts_quantize_db * db,
+int64_t ts_tessera_db_debug_count(ts_tessera_db * db,
                                    const std::string & query) {
     if (db == nullptr || db->conn == nullptr) return -1;
     try {
