@@ -248,11 +248,13 @@ bool ggml_cuda_gdn_op_is_chunked(const ggml_tensor * dst) {
         return s && s[0] && !(s[0] == '0' && s[1] == '\0');
     }();
     const int  cc_dev    = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    // NVIDIA-only for now. The HIP/MUSA ggml_cuda_mma backend intentionally not dispatched until validated.
     const bool is_nvidia = GGML_CUDA_CC_IS_NVIDIA(cc_dev);
 
     // - NVIDIA Ampere+ (fp16 WMMA); not KDA; K == 1 (final state only)
-    // - Q/K/G/beta/state must be contiguous; V must be contiguous within each token
-    //   (nb[0]/nb[1] packed) with arbitrary token stride (fused QKV view)
+    // - Q/K/G/beta/state must be contiguous
+    //   (nb[0]/nb[1] packed) with arbitrary token stride (fused QKV view) 
+    // - V is packed per token (nb[2]) and across sequences (nb[3] == n_tokens*nb[2]).
     // - 128-wide heads, GQA-aligned head counts, n_tokens >= 128
     return is_nvidia
         && cc_dev >= GGML_CUDA_CC_AMPERE
@@ -263,6 +265,7 @@ bool ggml_cuda_gdn_op_is_chunked(const ggml_tensor * dst) {
         && n_tokens >= 128
         && ggml_is_contiguous(src_q) && ggml_is_contiguous(src_k) && ggml_is_contiguous(src_g)
         && src_v->nb[0] == ggml_type_size(src_v->type) && src_v->nb[1] == (size_t)S_v * ggml_type_size(src_v->type)
+        && src_v->nb[3] == (size_t) n_tokens * src_v->nb[2]
         && ggml_is_contiguous(src_beta) && ggml_is_contiguous(src_state);
 }
 
