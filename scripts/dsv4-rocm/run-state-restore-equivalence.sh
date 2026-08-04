@@ -28,10 +28,12 @@ The model is loaded once. At each requested depth, the tool:
   1. builds a deterministic target-only prefix from scratch;
   2. saves sequence 0 with llama_state_seq_get_data;
   3. runs a short greedy continuation and captures every full-vocabulary logit;
-  4. clears memory exactly as llama-bench does, restores with
+  4. clears memory, recomputes the exact prefix, and replays those inputs as a
+     fresh-repeat control for ordinary backend repeatability;
+  5. clears memory exactly as llama-bench does, restores with
      llama_state_seq_set_data, and replays the same continuation inputs;
-  5. requires identical argmax tokens, matching non-finite values, and every
-     logit within abs_tol + rel_tol*max(abs(a),abs(b)).
+  6. requires all three argmax paths to match and both full-logit comparisons
+     to satisfy abs_tol + rel_tol*max(abs(a),abs(b)).
 
 Defaults:
   DSV4_STATE_DEPTHS=2048,3072,16384
@@ -281,30 +283,42 @@ for index, (depth, record) in enumerate(zip(expected_depths, records)):
     exact_bool(record, 'accepted', prefix=prefix)
     if type(record.get('state_bytes')) is not int or record['state_bytes'] <= 0:
         errors.append(f'{prefix}.state_bytes must be a positive integer')
-    for key in ('state_fnv1a64','prefix_fnv1a64','fresh_logits_fnv1a64','restored_logits_fnv1a64'):
+    for key in (
+        'state_fnv1a64','reprefill_state_fnv1a64','prefix_fnv1a64',
+        'original_logits_fnv1a64','fresh_logits_fnv1a64','restored_logits_fnv1a64',
+    ):
         if not isinstance(record.get(key), str) or not hex64.fullmatch(record[key]):
             errors.append(f'{prefix}.{key} is not a 16-digit lowercase hex hash')
-    for key in ('bitwise_mismatches','tolerance_violations','nonfinite_mismatches'):
+    for key in (
+        'state_bitwise_mismatches', 'repeat_bitwise_mismatches',
+        'repeat_tolerance_violations', 'repeat_nonfinite_mismatches',
+        'bitwise_mismatches', 'tolerance_violations', 'nonfinite_mismatches',
+    ):
         if type(record.get(key)) is not int or record[key] < 0:
             errors.append(f'{prefix}.{key} must be a non-negative integer')
+    if record.get('repeat_tolerance_violations') != 0 or record.get('repeat_nonfinite_mismatches') != 0:
+        errors.append(f'{prefix} fresh-repeat control has numeric comparison violations')
     if record.get('tolerance_violations') != 0 or record.get('nonfinite_mismatches') != 0:
-        errors.append(f'{prefix} has numeric comparison violations')
-    for key in ('max_abs_diff','max_rel_diff'):
+        errors.append(f'{prefix} restored-state comparison has numeric comparison violations')
+    for key in ('repeat_max_abs_diff','repeat_max_rel_diff','max_abs_diff','max_rel_diff'):
         number = record.get(key)
         if type(number) not in (int, float) or not math.isfinite(number) or number < 0:
             errors.append(f'{prefix}.{key} must be finite and non-negative')
     token_arrays = {}
     for key, length in (
         ('prefix_tokens', depth), ('generation_input_tokens', n_gen),
-        ('fresh_argmax_tokens', n_gen), ('restored_argmax_tokens', n_gen),
+        ('original_argmax_tokens', n_gen), ('fresh_argmax_tokens', n_gen),
+        ('restored_argmax_tokens', n_gen),
     ):
         array = record.get(key)
         if not isinstance(array, list) or len(array) != length or any(type(token) is not int for token in array):
             errors.append(f'{prefix}.{key} must contain exactly {length} integer tokens')
         else:
             token_arrays[key] = array
+    if token_arrays.get('original_argmax_tokens') != token_arrays.get('fresh_argmax_tokens'):
+        errors.append(f'{prefix} original/fresh-repeat argmax token arrays differ')
     if token_arrays.get('fresh_argmax_tokens') != token_arrays.get('restored_argmax_tokens'):
-        errors.append(f'{prefix} fresh/restored argmax token arrays differ')
+        errors.append(f'{prefix} fresh-repeat/restored argmax token arrays differ')
 complete = not errors
 accepted = complete
 summary = {
@@ -321,13 +335,20 @@ summary = {
     'rel_tolerance': value.get('rel_tolerance'),
     'records': [{k: r.get(k) for k in (
         'depth', 'complete', 'accepted', 'state_bytes', 'state_fnv1a64',
-        'prefix_fnv1a64', 'fresh_logits_fnv1a64', 'restored_logits_fnv1a64',
+        'reprefill_state_fnv1a64', 'state_bitwise_mismatches', 'prefix_fnv1a64',
+        'original_logits_fnv1a64', 'fresh_logits_fnv1a64', 'restored_logits_fnv1a64',
+        'repeat_bitwise_mismatches', 'repeat_tolerance_violations',
+        'repeat_nonfinite_mismatches', 'repeat_max_abs_diff', 'repeat_max_rel_diff',
         'bitwise_mismatches', 'tolerance_violations', 'nonfinite_mismatches',
         'max_abs_diff', 'max_rel_diff', 'generation_input_tokens',
-        'fresh_argmax_tokens', 'restored_argmax_tokens')} for r in records if isinstance(r, dict)],
+        'original_argmax_tokens', 'fresh_argmax_tokens', 'restored_argmax_tokens')} for r in records if isinstance(r, dict)],
 }
 pathlib.Path(summary_path).write_text(json.dumps(summary, indent=2) + '\n')
-columns = ['depth','accepted','state_bytes','bitwise_mismatches','tolerance_violations','nonfinite_mismatches','max_abs_diff','max_rel_diff']
+columns = [
+    'depth','accepted','state_bytes','state_bitwise_mismatches',
+    'repeat_tolerance_violations','repeat_max_abs_diff',
+    'tolerance_violations','max_abs_diff',
+]
 lines = ['\t'.join(columns)]
 for r in summary['records']:
     lines.append('\t'.join(str(int(r[c])) if isinstance(r[c], bool) else str(r[c]) for c in columns))

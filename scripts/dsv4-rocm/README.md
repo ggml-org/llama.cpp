@@ -62,12 +62,13 @@ DSV4_LABEL=state-restore-equivalence \
 ```
 
 The gate computes a deterministic fresh prefix at 2K, 3K, and 16K by default,
-saves sequence 0 with `llama_state_seq_get_data`, runs four greedy target
-steps while retaining every full-vocabulary logit, clears memory with the same
-`llama_memory_clear(..., false)` call as llama-bench, restores with
-`llama_state_seq_set_data`, and replays the exact inputs. It requires identical
-argmax tokens, identical non-finite classifications, and every finite logit to
-satisfy `abs_diff <= 1e-5 + 1e-5*max(abs(a),abs(b))`. Exact prefix/input/argmax
+saves sequence 0 with `llama_state_seq_get_data`, and runs four greedy target
+steps while retaining every full-vocabulary logit. It then clears memory and
+recomputes the same prefix/continuation as a fresh-repeat control before a
+second clear, `llama_state_seq_set_data` restore, and exact-input replay. It
+requires all three argmax paths to match and both the original-vs-fresh-repeat
+and fresh-repeat-vs-restored full-logit comparisons to satisfy
+`abs_diff <= 1e-5 + 1e-5*max(abs(a),abs(b))`. Exact prefix/input/argmax
 token IDs, state/logit hashes, byte counts, manifests, DSOs, and telemetry are
 preserved under `$HOME/llama-jobs/dsv4-rocm-state-equivalence/`.
 

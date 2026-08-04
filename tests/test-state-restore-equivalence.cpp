@@ -22,22 +22,31 @@ struct step_logits {
     llama_token argmax = -1;
 };
 
+struct comparison_stats {
+    size_t bitwise_mismatches = 0;
+    size_t tolerance_violations = 0;
+    size_t nonfinite_mismatches = 0;
+    double max_abs_diff = 0.0;
+    double max_rel_diff = 0.0;
+};
+
 struct depth_result {
     int depth = 0;
     bool complete = false;
     bool accepted = false;
     size_t state_bytes = 0;
     uint64_t state_hash = 0;
+    uint64_t reprefill_state_hash = 0;
+    size_t state_bitwise_mismatches = 0;
     uint64_t prefix_hash = 0;
+    uint64_t original_logits_hash = 0;
     uint64_t fresh_logits_hash = 0;
     uint64_t restored_logits_hash = 0;
-    size_t bitwise_mismatches = 0;
-    size_t tolerance_violations = 0;
-    size_t nonfinite_mismatches = 0;
-    double max_abs_diff = 0.0;
-    double max_rel_diff = 0.0;
+    comparison_stats repeatability;
+    comparison_stats restoration;
     std::vector<llama_token> prefix_tokens;
     std::vector<llama_token> generation_inputs;
+    std::vector<llama_token> original_argmax;
     std::vector<llama_token> fresh_argmax;
     std::vector<llama_token> restored_argmax;
 };
@@ -147,6 +156,46 @@ static bool decode_step(llama_context * ctx, llama_token token, int n_vocab, ste
     return true;
 }
 
+static comparison_stats compare_logits(
+        const std::vector<step_logits> & lhs,
+        const std::vector<step_logits> & rhs,
+        double abs_tol,
+        double rel_tol) {
+    comparison_stats stats;
+    if (lhs.size() != rhs.size()) {
+        stats.tolerance_violations = 1;
+        return stats;
+    }
+    for (size_t step = 0; step < lhs.size(); ++step) {
+        if (lhs[step].values.size() != rhs[step].values.size()) {
+            ++stats.tolerance_violations;
+            continue;
+        }
+        for (size_t token = 0; token < lhs[step].values.size(); ++token) {
+            const float a = lhs[step].values[token];
+            const float b = rhs[step].values[token];
+            if (std::memcmp(&a, &b, sizeof(float)) != 0) {
+                ++stats.bitwise_mismatches;
+            }
+            if (!std::isfinite(a) || !std::isfinite(b)) {
+                if (!(std::isnan(a) && std::isnan(b)) && a != b) {
+                    ++stats.nonfinite_mismatches;
+                }
+                continue;
+            }
+            const double diff = std::abs(static_cast<double>(a) - static_cast<double>(b));
+            const double scale = std::max(std::abs(static_cast<double>(a)), std::abs(static_cast<double>(b)));
+            const double rel = scale > 0.0 ? diff / scale : 0.0;
+            stats.max_abs_diff = std::max(stats.max_abs_diff, diff);
+            stats.max_rel_diff = std::max(stats.max_rel_diff, rel);
+            if (diff > abs_tol + rel_tol * scale) {
+                ++stats.tolerance_violations;
+            }
+        }
+    }
+    return stats;
+}
+
 static depth_result check_depth(
         llama_model * model,
         const common_params & params,
@@ -215,20 +264,58 @@ static depth_result check_depth(
     }
     result.state_hash = fnv1a(state.data(), state.size());
 
-    std::vector<step_logits> fresh;
-    fresh.reserve(n_gen);
+    std::vector<step_logits> original;
+    original.reserve(n_gen);
     llama_token input = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : dist(rng);
     for (int step = 0; step < n_gen; ++step) {
         result.generation_inputs.push_back(input);
+        original.emplace_back();
+        if (!decode_step(ctx.get(), input, n_vocab, original.back())) {
+            return result;
+        }
+        result.original_argmax.push_back(original.back().argmax);
+        result.original_logits_hash = fnv1a(
+            original.back().values.data(), original.back().values.size() * sizeof(float),
+            result.original_logits_hash == 0 ? 1469598103934665603ULL : result.original_logits_hash);
+        input = original.back().argmax;
+    }
+
+    // Fresh-repeat control: recompute the exact prefix and replay the fixed
+    // continuation inputs before judging state restoration. This separates
+    // ordinary backend repeatability from any state serialization effect.
+    llama_memory_clear(llama_get_memory(ctx.get()), false);
+    std::fprintf(stderr, "depth %d: fresh re-prefill control (%d tokens)\n", depth, depth);
+    if (!decode_many(ctx.get(), result.prefix_tokens, params.n_batch)) {
+        return result;
+    }
+    if (llama_state_seq_get_size(ctx.get(), 0) != result.state_bytes) {
+        std::fprintf(stderr, "depth %d: re-prefill state size changed\n", depth);
+        return result;
+    }
+    std::vector<uint8_t> reprefill_state(result.state_bytes);
+    const size_t recopied = llama_state_seq_get_data(ctx.get(), reprefill_state.data(), reprefill_state.size(), 0);
+    if (recopied != reprefill_state.size()) {
+        std::fprintf(stderr, "depth %d: re-prefill saved %zu state bytes, expected %zu\n", depth, recopied, reprefill_state.size());
+        return result;
+    }
+    result.reprefill_state_hash = fnv1a(reprefill_state.data(), reprefill_state.size());
+    for (size_t i = 0; i < state.size(); ++i) {
+        result.state_bitwise_mismatches += state[i] != reprefill_state[i];
+    }
+
+    std::vector<step_logits> fresh;
+    fresh.reserve(n_gen);
+    for (int step = 0; step < n_gen; ++step) {
         fresh.emplace_back();
-        if (!decode_step(ctx.get(), input, n_vocab, fresh.back())) {
+        if (!decode_step(ctx.get(), result.generation_inputs[step], n_vocab, fresh.back())) {
             return result;
         }
         result.fresh_argmax.push_back(fresh.back().argmax);
         result.fresh_logits_hash = fnv1a(
-            fresh.back().values.data(), fresh.back().values.size() * sizeof(float), result.fresh_logits_hash == 0 ? 1469598103934665603ULL : result.fresh_logits_hash);
-        input = fresh.back().argmax;
+            fresh.back().values.data(), fresh.back().values.size() * sizeof(float),
+            result.fresh_logits_hash == 0 ? 1469598103934665603ULL : result.fresh_logits_hash);
     }
+    result.repeatability = compare_logits(original, fresh, abs_tol, rel_tol);
 
     llama_memory_clear(llama_get_memory(ctx.get()), false);
     const size_t restored = llama_state_seq_set_data(ctx.get(), state.data(), state.size(), 0);
@@ -247,34 +334,18 @@ static depth_result check_depth(
         }
         result.restored_argmax.push_back(replay.back().argmax);
         result.restored_logits_hash = fnv1a(
-            replay.back().values.data(), replay.back().values.size() * sizeof(float), result.restored_logits_hash == 0 ? 1469598103934665603ULL : result.restored_logits_hash);
-
-        for (int token = 0; token < n_vocab; ++token) {
-            const float a = fresh[step].values[token];
-            const float b = replay[step].values[token];
-            if (std::memcmp(&a, &b, sizeof(float)) != 0) {
-                ++result.bitwise_mismatches;
-            }
-            if (!std::isfinite(a) || !std::isfinite(b)) {
-                if (!(std::isnan(a) && std::isnan(b)) && a != b) {
-                    ++result.nonfinite_mismatches;
-                }
-                continue;
-            }
-            const double diff = std::abs(static_cast<double>(a) - static_cast<double>(b));
-            const double scale = std::max(std::abs(static_cast<double>(a)), std::abs(static_cast<double>(b)));
-            const double rel = scale > 0.0 ? diff / scale : 0.0;
-            result.max_abs_diff = std::max(result.max_abs_diff, diff);
-            result.max_rel_diff = std::max(result.max_rel_diff, rel);
-            if (diff > abs_tol + rel_tol * scale) {
-                ++result.tolerance_violations;
-            }
-        }
+            replay.back().values.data(), replay.back().values.size() * sizeof(float),
+            result.restored_logits_hash == 0 ? 1469598103934665603ULL : result.restored_logits_hash);
     }
+    result.restoration = compare_logits(fresh, replay, abs_tol, rel_tol);
 
     result.complete = true;
-    result.accepted = result.fresh_argmax == result.restored_argmax &&
-        result.nonfinite_mismatches == 0 && result.tolerance_violations == 0;
+    result.accepted = result.original_argmax == result.fresh_argmax &&
+        result.fresh_argmax == result.restored_argmax &&
+        result.repeatability.nonfinite_mismatches == 0 &&
+        result.repeatability.tolerance_violations == 0 &&
+        result.restoration.nonfinite_mismatches == 0 &&
+        result.restoration.tolerance_violations == 0;
     return result;
 }
 
@@ -394,16 +465,25 @@ int main(int argc, char ** argv) {
         std::printf("      \"accepted\": %s,\n", r.accepted ? "true" : "false");
         std::printf("      \"state_bytes\": %zu,\n", r.state_bytes);
         std::printf("      \"state_fnv1a64\": \"%s\",\n", hex64(r.state_hash).c_str());
+        std::printf("      \"reprefill_state_fnv1a64\": \"%s\",\n", hex64(r.reprefill_state_hash).c_str());
+        std::printf("      \"state_bitwise_mismatches\": %zu,\n", r.state_bitwise_mismatches);
         std::printf("      \"prefix_fnv1a64\": \"%s\",\n", hex64(r.prefix_hash).c_str());
+        std::printf("      \"original_logits_fnv1a64\": \"%s\",\n", hex64(r.original_logits_hash).c_str());
         std::printf("      \"fresh_logits_fnv1a64\": \"%s\",\n", hex64(r.fresh_logits_hash).c_str());
         std::printf("      \"restored_logits_fnv1a64\": \"%s\",\n", hex64(r.restored_logits_hash).c_str());
-        std::printf("      \"bitwise_mismatches\": %zu,\n", r.bitwise_mismatches);
-        std::printf("      \"tolerance_violations\": %zu,\n", r.tolerance_violations);
-        std::printf("      \"nonfinite_mismatches\": %zu,\n", r.nonfinite_mismatches);
-        std::printf("      \"max_abs_diff\": %.17g,\n", r.max_abs_diff);
-        std::printf("      \"max_rel_diff\": %.17g,\n", r.max_rel_diff);
+        std::printf("      \"repeat_bitwise_mismatches\": %zu,\n", r.repeatability.bitwise_mismatches);
+        std::printf("      \"repeat_tolerance_violations\": %zu,\n", r.repeatability.tolerance_violations);
+        std::printf("      \"repeat_nonfinite_mismatches\": %zu,\n", r.repeatability.nonfinite_mismatches);
+        std::printf("      \"repeat_max_abs_diff\": %.17g,\n", r.repeatability.max_abs_diff);
+        std::printf("      \"repeat_max_rel_diff\": %.17g,\n", r.repeatability.max_rel_diff);
+        std::printf("      \"bitwise_mismatches\": %zu,\n", r.restoration.bitwise_mismatches);
+        std::printf("      \"tolerance_violations\": %zu,\n", r.restoration.tolerance_violations);
+        std::printf("      \"nonfinite_mismatches\": %zu,\n", r.restoration.nonfinite_mismatches);
+        std::printf("      \"max_abs_diff\": %.17g,\n", r.restoration.max_abs_diff);
+        std::printf("      \"max_rel_diff\": %.17g,\n", r.restoration.max_rel_diff);
         std::printf("      \"prefix_tokens\": "); print_tokens(r.prefix_tokens); std::printf(",\n");
         std::printf("      \"generation_input_tokens\": "); print_tokens(r.generation_inputs); std::printf(",\n");
+        std::printf("      \"original_argmax_tokens\": "); print_tokens(r.original_argmax); std::printf(",\n");
         std::printf("      \"fresh_argmax_tokens\": "); print_tokens(r.fresh_argmax); std::printf(",\n");
         std::printf("      \"restored_argmax_tokens\": "); print_tokens(r.restored_argmax); std::printf("\n");
         std::printf("    }%s\n", i + 1 == results.size() ? "" : ",");
