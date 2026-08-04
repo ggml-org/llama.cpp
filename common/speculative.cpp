@@ -2918,3 +2918,43 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 str_perf.c_str());
     }
 }
+
+// Workstream B: deterministic longest-accepted-prefix picker.
+//
+// Returns the index of the draft whose trial-verification n_accepted was
+// largest.  Ties broken by the caller's order (the first tied index wins),
+// which the muxer fills in the architect-specified order [MTP, DFlash,
+// DSPark, Eagle3].
+//
+// If `drafts_with_accepted` is empty, returns 0 (so a degenerate call
+// site does not index out of bounds; the muxer treats this as "no
+// candidates; fall back to a single-token verify").  The check is for
+// the case `index == 0` callers should also gate on size() > 0.
+//
+// The 4 trial verifier forwards themselves happen inside the muxer
+// (the llama_decode + logits-argmax + llama_memory_seq_rm rollback
+// dance); this function is just the pure selection step that follows.
+size_t common_speculative_pick_best_accepted_idx(
+    const std::vector<std::pair<uint16_t, llama_tokens>> & drafts_with_accepted) {
+    if (drafts_with_accepted.empty()) {
+        return 0;
+    }
+
+    size_t best_idx = 0;
+    uint16_t best_n  = drafts_with_accepted[0].first;
+
+    for (size_t i = 1; i < drafts_with_accepted.size(); ++i) {
+        const uint16_t n = drafts_with_accepted[i].first;
+        // Strict-greater: first tied index wins.  This matches the
+        // architect's spec ("ties broken by the order [mtp, dflash,
+        // dspark, eagle3]") because the muxer fills the vector in that
+        // order, so the earlier index corresponds to the higher-priority
+        // drafter.
+        if (n > best_n) {
+            best_idx = i;
+            best_n   = n;
+        }
+    }
+
+    return best_idx;
+}
