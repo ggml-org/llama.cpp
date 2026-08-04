@@ -50,7 +50,10 @@ def make_fixture(root: pathlib.Path, outside: bool = False) -> pathlib.Path:
         "discard_first": 1,
         "accepted_repetitions": 5,
     }))
-    (run / "summary.json").write_text(json.dumps({"complete": True, "stable": True}))
+    (run / "summary.json").write_text(json.dumps({
+        "complete": True, "stable": True,
+        "records": [{"depth": 16384, "stable": True, "mad_over_median": 0.01, "stability_limit": 0.03}],
+    }))
     (run / "status.txt").write_text("process_exit_code=0\ntruncated=0\ntimeout_phase=none\nfinished_at_ns=1000000900\n")
     (run / "source-status.txt").write_text("")
     (run / "untracked-files.sha256").write_text("")
@@ -154,12 +157,30 @@ def main() -> None:
         assert value["evaluated_target_tokens"] == 160
         assert value["kernel_dispatches"] == 20
         assert value["outside_selected_interval_events"]["kernel"] == 0
-        assert value["families"][0]["family"] == "routed_expert_iq2_iq3_mmq"
+        assert value["families"][0]["family"] == "routed_expert_iq2_iq3_quant_matmul"
+        assert value["profiled_wall_stable"] is True and value["profiled_throughput_eligible"] is False
+        assert len(value["per_repetition"]) == 5
         assert value["trace_domain_status"] == {
             "kernel": "present_with_events", "memory_copy": "present_with_events",
             "rccl": "present_with_events", "hip": "present_with_events",
         }
         assert tsv.read_text().startswith("depth\tprofiled_repetitions\ttarget_tokens\tfamily")
+
+        unstable = make_fixture(root / "unstable")
+        unstable_summary = json.loads((unstable / "summary.json").read_text())
+        unstable_summary["stable"] = False
+        unstable_summary["records"][0].update({"stable": False, "mad_over_median": 0.06})
+        (unstable / "summary.json").write_text(json.dumps(unstable_summary))
+        unstable_out = unstable / "profile.json"
+        result = subprocess.run(
+            [sys.executable, str(TOOL), str(unstable), "--json", str(unstable_out)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        assert result.returncode == 0, result.stderr
+        unstable_value = json.loads(unstable_out.read_text())
+        assert unstable_value["profiled_wall_stable"] is False
+        assert unstable_value["csa_decision_eligible"] is False
+        assert unstable_value["family_attribution_complete"] is True
 
         expect_bad(make_fixture(root / "outside", outside=True), "outside accepted generation intervals")
 

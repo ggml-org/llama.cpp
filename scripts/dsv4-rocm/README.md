@@ -156,8 +156,10 @@ memory-copy, RCCL, and HIP-runtime domain files so launch/synchronization calls
 remain visible. Never substitute an unscoped whole-process trace at 32K/64K.
 
 Run independent decision-context profiles as separate processes/artifacts.
-The wrapper defaults to six raw repetitions; if the 3% stability gate misses,
-increase `DSV4_TG_REPS` only and retain exactly one discard:
+The wrapper defaults to six raw repetitions; if the 3% profiled-wall stability
+gate misses, increase `DSV4_TG_REPS` only and retain exactly one discard. The
+scope-validated family attribution is still preserved for diagnosis, but the
+runner exits 4 and the perturbed throughput cannot establish TG or decide CSA:
 
 ```bash
 DSV4_TG_DEPTHS=16384 DSV4_TG_REPS=11 DSV4_LABEL=raw-tg-profile-16k-a \
@@ -174,7 +176,7 @@ that every trace event is wholly inside an authoritative accepted generation int
 reports accepted wall time, target-token count, dispatches, summed device time,
 per-agent totals, HIP/RCCL/copy calls, exclusive name-matched families, and top
 kernel/grid/workgroup groups. Summed device time spans four devices/queues and
-is the branch-share denominator; it is not wall time. IQ2_XXS/IQ3_XXS routed-MMQ
+is the branch-share denominator; it is not wall time. IQ2_XXS/IQ3_XXS routed MMQ/MMVQ
 classification remains an explicit model/name/shape inference and must be
 checked against call/grid evidence before selecting branch A. Unclassified
 `other` time is not silently assigned.

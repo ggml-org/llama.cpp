@@ -614,15 +614,15 @@ PY
         echo "INCOMPLETE raw-TG sweep; no baseline/CSA decision is allowed. Artifacts: $run_dir"
         exit 3
     fi
-    if [[ "$stable" -ne 1 ]]; then
-        echo "UNSTABLE raw-TG sweep; increase repetitions only; keep tg32 and the predeclared discard unchanged. Artifacts: $run_dir"
-        exit 4
-    fi
     if [[ "$PROFILE" == kernel ]]; then
         python3 "$ROOT_DIR/scripts/dsv4-rocm/summarize-tg-profile.py" "$run_dir" \
             --json "$run_dir/profile-summary.json" --tsv "$run_dir/profile-families.tsv" \
             > "$run_dir/profile-summary.txt"
         cat "$run_dir/profile-summary.txt"
+    fi
+    if [[ "$stable" -ne 1 ]]; then
+        echo "UNSTABLE raw-TG wall timing; selected-region attribution is preserved but cannot establish TG or decide CSA. Increase repetitions only; keep tg32 and the predeclared discard unchanged. Artifacts: $run_dir"
+        exit 4
     fi
 else
     python3 "$ROOT_DIR/scripts/dsv4-rocm/parse-sched-debug.py" "$run_dir/bench.log" \

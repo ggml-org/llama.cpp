@@ -103,8 +103,11 @@ def accepted_intervals(run_dir: Path, depth: int, discard: int, reps: int) -> li
     return intervals
 
 
-def interval_contains(intervals: list[tuple[int, int, int]], start: int, end: int) -> bool:
-    return any(start >= left and end <= right for left, right, _ in intervals)
+def containing_repetition(intervals: list[tuple[int, int, int]], start: int, end: int) -> int | None:
+    matches = [rep for left, right, rep in intervals if start >= left and end <= right]
+    if len(matches) > 1:
+        raise ValueError(f"trace event is contained by multiple selected regions: {start}-{end}")
+    return matches[0] if matches else None
 
 
 def classify_kernel(name: str) -> str:
@@ -117,11 +120,11 @@ def classify_kernel(name: str) -> str:
         return "lid_top_k"
     if "flash_attn" in lower:
         return "flash_attention"
-    if "dsv4_hc_mixes" in lower:
+    if "dsv4_hc_" in lower:
         return "hc_mixes"
-    if "mul_mat_q<" in name and re.search(r"\(ggml_type\)(16|18),", name):
-        return "routed_expert_iq2_iq3_mmq"
-    if "mul_mat_q<" in name:
+    if ("mul_mat_q<" in name or "mul_mat_vec_q<" in name) and re.search(r"\(ggml_type\)(16|18),", name):
+        return "routed_expert_iq2_iq3_quant_matmul"
+    if "mul_mat_q<" in name or "mul_mat_vec_q<" in name:
         return "other_quantized_matmul"
     if "quantize" in lower and ("q8_1" in lower or "mmq" in lower):
         return "activation_quantization"
@@ -186,8 +189,15 @@ def main() -> int:
         raise ValueError("profile requires tg32, at least 6 raw repetitions, exactly first discarded, and at least 5 accepted")
     if int(contract.get("profile_skip_repetitions", -1)) != discard:
         raise ValueError("profiler skip count does not match discarded repetitions")
-    if not summary.get("complete") or not summary.get("stable"):
-        raise ValueError("raw-TG result is not complete/stable")
+    if not summary.get("complete"):
+        raise ValueError("raw-TG result is incomplete")
+    summary_records = summary.get("records")
+    if not isinstance(summary_records, list) or len(summary_records) != 1 or summary_records[0].get("depth") != depths[0]:
+        raise ValueError("raw-TG summary does not contain exactly the profiled depth")
+    profile_wall_stable = bool(summary.get("stable")) and bool(summary_records[0].get("stable"))
+    profile_wall_mad_over_median = float(summary_records[0]["mad_over_median"])
+    if profile_wall_stable != (profile_wall_mad_over_median <= float(summary_records[0]["stability_limit"])):
+        raise ValueError("raw-TG summary stability fields are inconsistent")
     read_status(run_dir / "status.txt")
     if (run_dir / "source-status.txt").read_text().strip() or (run_dir / "untracked-files.sha256").read_text().strip():
         raise ValueError("profile source identity is not clean")
@@ -236,6 +246,7 @@ def main() -> int:
         raise ValueError(f"expected four GPU agents, found {len(agents)}")
 
     family_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    repetition_family_totals: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
     agent_totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     kernel_totals: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
     outside_events = 0
@@ -255,7 +266,8 @@ def main() -> int:
             start, end = int(row["Start_Timestamp"]), int(row["End_Timestamp"])
             if end < start:
                 raise ValueError(f"kernel row {reader.line_num} ends before it starts")
-            if not interval_contains(intervals, start, end):
+            repetition = containing_repetition(intervals, start, end)
+            if repetition is None:
                 outside_events += 1
             agent = row["Agent_Id"]
             if agent not in agents:
@@ -264,6 +276,9 @@ def main() -> int:
             family = classify_kernel(row["Kernel_Name"])
             family_totals[family][0] += 1
             family_totals[family][1] += duration
+            if repetition is not None:
+                repetition_family_totals[repetition][family][0] += 1
+                repetition_family_totals[repetition][family][1] += duration
             agent_totals[agent][0] += 1
             agent_totals[agent][1] += duration
             kernel_totals[(row["Kernel_Name"], shape_key(row))][0] += 1
@@ -292,7 +307,7 @@ def main() -> int:
                 start, end = int(row["Start_Timestamp"]), int(row["End_Timestamp"])
                 if end < start:
                     raise ValueError(f"{path}:{reader.line_num} ends before it starts")
-                if not interval_contains(intervals, start, end):
+                if containing_repetition(intervals, start, end) is None:
                     outside += 1
                 output[name][0] += 1
                 output[name][1] += end - start
@@ -335,6 +350,27 @@ def main() -> int:
         }
         for agent, values in sorted(agent_totals.items())
     }
+    per_repetition = []
+    for rep in range(discard + 1, reps + 1):
+        values = repetition_family_totals.get(rep)
+        if not values:
+            raise ValueError(f"accepted repetition {rep} contains no kernel events")
+        repetition_total = sum(item[1] for item in values.values())
+        ranked = sorted(values.items(), key=lambda item: (-item[1][1], item[0]))
+        per_repetition.append({
+            "repetition": rep,
+            "total_summed_device_ns": repetition_total,
+            "kernel_dispatches": sum(item[0] for item in values.values()),
+            "top_family": ranked[0][0],
+            "top_family_share": ranked[0][1][1] / repetition_total,
+            "families": {
+                name: {
+                    "calls": item[0], "duration_ns": item[1],
+                    "share_of_summed_device_time": item[1] / repetition_total,
+                }
+                for name, item in sorted(values.items())
+            },
+        })
     output = {
         "complete": True,
         "scope": "accepted target-generation ROCTx selected regions only",
@@ -347,6 +383,11 @@ def main() -> int:
         "evaluated_target_tokens": evaluated_tokens,
         "accepted_wall_ns": accepted_wall_ns,
         "accepted_median_ns": sorted(accepted_samples)[len(accepted_samples) // 2],
+        "profiled_wall_stable": profile_wall_stable,
+        "profiled_wall_mad_over_median": profile_wall_mad_over_median,
+        "profiled_throughput_eligible": False,
+        "csa_decision_eligible": False,
+        "family_attribution_complete": True,
         "total_summed_device_ns": total_device_ns,
         "kernel_dispatches": kernel_rows,
         "clock_offset_ns": offset,
@@ -369,12 +410,13 @@ def main() -> int:
         "families": families,
         "top_kernel_shapes": top_kernels,
         "per_agent": per_agent,
+        "per_repetition": per_repetition,
         "memory_copies": copies,
         "rccl_api": rccl,
         "hip_api": hip,
         "classification_caveat": (
-            "Families are exclusive kernel-name matches. routed_expert_iq2_iq3_mmq is inferred from the model's "
-            "IQ2_XXS/IQ3_XXS MMQ types and must be checked against grid/call evidence; other may contain unclassified "
+            "Families are exclusive kernel-name matches. routed_expert_iq2_iq3_quant_matmul is inferred from the model's "
+            "IQ2_XXS/IQ3_XXS MMQ/MMVQ types and must be checked against grid/call evidence; other may contain unclassified "
             "attention, mask, projection, elementwise, or selector support. Durations are summed across devices/queues."
         ),
     }
@@ -382,6 +424,7 @@ def main() -> int:
     print(f"run_dir={run_dir}")
     print(f"depth={depths[0]} profiled_repetitions={accepted_reps} evaluated_target_tokens={evaluated_tokens}")
     print(f"accepted_wall_ms={accepted_wall_ns / 1e6:.3f}")
+    print(f"profiled_wall_stable={int(profile_wall_stable)} mad_over_median={profile_wall_mad_over_median:.6f} profiled_throughput_eligible=0 csa_decision_eligible=0")
     print(f"kernel_dispatches={kernel_rows} summed_device_ms={total_device_ns / 1e6:.3f}")
     print(f"clock_drift_ns={drift} clock_uncertainty_ns={uncertainty} outside_events=0")
     print("boundary_source=llama-bench CLOCK_MONOTONIC resume_return/pause_call")
@@ -398,6 +441,13 @@ def main() -> int:
         print(
             f"{100 * row['share_of_summed_device_time']:.3f}\t{row['duration_ns'] / 1e6:.3f}\t"
             f"{row['calls']}\t{row['shape']}\t{short_name}"
+        )
+    print("\n[per-repetition top family]")
+    print("repetition\tdevice_ms\tdispatches\ttop_share_pct\ttop_family")
+    for item in per_repetition:
+        print(
+            f"{item['repetition']}\t{item['total_summed_device_ns'] / 1e6:.3f}\t{item['kernel_dispatches']}\t"
+            f"{100 * item['top_family_share']:.3f}\t{item['top_family']}"
         )
     print("\n[per-agent summed kernel time]")
     print("agent\tdevice_ms\tcalls\tshare_pct")
