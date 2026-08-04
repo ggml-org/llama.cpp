@@ -86,7 +86,9 @@ public struct PlaygroundView: View {
             .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || agentLoop.isRunning)
 
             if agentLoop.isRunning {
-                Button("Cancel", role: .destructive) {
+                // Cancelling a run is not data destruction (13.1):
+                // .cancel keeps the button neutral instead of red.
+                Button("Cancel", role: .cancel) {
                     agentLoop.cancel()
                 }
                 .font(.caption)
