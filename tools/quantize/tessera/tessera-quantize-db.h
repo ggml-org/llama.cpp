@@ -152,6 +152,13 @@ int ts_tessera_db_insert_l5_fixup(ts_tessera_db * db,
 // without disturbing the C++ side's other columns.
 struct ts_tessera_db_tensor_stat {
     std::string  model_hash;
+    std::string  model_role;   // Phase 16: "trunk" / "dflash" / "dspark" /
+                               // "mtp_nextn" / "shared_embd". Disambiguates
+                               // tensors with the same name in the unified
+                               // Gemma4 12B + dspark + dflash + MTP arch
+                               // (e.g. "blk.0.attn_q.weight" exists in both
+                               // the trunk and the dflash encoder). Default
+                               // "trunk" preserves the pre-Phase-16 contract.
     std::string  name;
     std::string  family;
     int32_t      layer_depth = 0;
@@ -189,6 +196,12 @@ int ts_tessera_db_upsert_tensor_stat(ts_tessera_db * db,
 // records which algorithm produced the row.
 struct ts_tessera_db_l5_weight {
     std::string  model_hash;
+    std::string  model_role;   // Phase 16: same enum as tensor_stats.
+                               // The l5_weights table is per-(model, role,
+                               // family) so the dflash family's retuned
+                               // weights don't collide with the trunk
+                               // family's. Default "trunk" preserves the
+                               // pre-Phase-16 contract.
     std::string  family;
     double       w_imatrix    = 0.0;
     double       w_gradient   = 0.0;
@@ -225,6 +238,11 @@ int ts_tessera_db_upsert_l5_weight(ts_tessera_db * db,
 // DESC order so the dispatch sees the most-converged family first.
 struct ts_tessera_db_l5_weight_list_entry {
     std::string  model_hash;
+    std::string  model_role;   // Phase 16: echoes the row's role so the
+                               // dispatch's GA-prep walk can filter on
+                               // (model_hash, model_role) without a
+                               // separate read. Default "trunk" for
+                               // pre-Phase-16 rows.
     std::string  family;
     double       w_imatrix    = 0.0;
     double       w_gradient   = 0.0;
@@ -285,7 +303,16 @@ int ts_tessera_db_l5_outcome_stats_for(ts_tessera_db * db,
 // per (tensor, iteration).
 struct ts_tessera_db_l4_outcome {
     std::string model_hash;        // empty when hashing failed
-    std::string  name;             // tensor name
+    std::string  model_role;       // Phase 16: "trunk" / "dflash" / "dspark" /
+                                   // "mtp_nextn" / "shared_embd". The
+                                   // l4_plan_outcome table is the
+                                   // feedback-loop audit trail; rows
+                                   // for dflash / dspark / mtp_nextn
+                                   // tensors must be distinguishable.
+                                   // Default "trunk" preserves the
+                                   // pre-Phase-16 contract.
+    std::string  name;             // tensor name (drafter-local for
+                                   // non-trunk roles)
     int32_t      layer             = 0;
     int32_t      iteration         = 0;
     std::string  plan_id;          // "cpp_quant_gen{N}_stage{S}" or "py_orch_..."
@@ -401,6 +428,36 @@ bool ts_tessera_db_load_ga_result_for_model(ts_tessera_db * db,
 int64_t ts_tessera_db_debug_count(ts_tessera_db * db,
                                    const std::string & query);
 
+// --- Phase 16: model_role migration ---
+//
+// The unified Gemma4 12B + dspark + dflash + MTP arch has tensors
+// with the same name in both the trunk and the drafter. Phase 16
+// disambiguates them with a `model_role` column on 7 of the
+// unified-schema tables (tensor_stats, l3_outlier_summary,
+// l4_probe_summary, l4_plan_outcome, l5_plan_summary, l5_outcome,
+// l5_weights). The PK changes to include model_role.
+//
+// This function is the C++ side of the migration. It is:
+//   * Idempotent: re-running on an already-migrated DB is a no-op
+//     (each affected table is checked for the model_role column;
+//     if present, the rebuild is skipped).
+//   * Forward-compatible: a fresh DB created with the new schema
+//     (CREATE TABLE IF NOT EXISTS includes model_role) is detected
+//     as already-migrated and the function returns 0 without any
+//     DDL.
+//   * PK-changing: when the table lacks model_role, the function
+//     does the standard DuckDB PK-rebuild dance (CREATE TABLE
+//     new_name with the new schema, INSERT INTO new_name SELECT
+//     *, 'trunk' AS model_role FROM old_name, DROP old_name,
+//     ALTER new_name RENAME TO old_name).
+//
+// Called automatically by ts_tessera_db_open on every open. The
+// Python-side tools/tessera/migrate_model_role.py is the
+// equivalent migration for Python-only-opened DBs; both are
+// idempotent so calling either or both is safe.
+int ts_tessera_db_migrate_model_role(ts_tessera_db * db,
+                                      std::string * err);
+
 // Test-only: insert one synthetic l5_outcome row. The l5_outcome
 // table is normally Python-written (tools/tessera/l5_outcome.py),
 // but the C++ converged-fast test in test_l5_dispatch needs a way
@@ -409,6 +466,12 @@ int64_t ts_tessera_db_debug_count(ts_tessera_db * db,
 // dispatch's ts_tessera_db_l5_outcome_stats_for query can find it.
 struct ts_tessera_db_l5_outcome_row {
     std::string  model_hash;
+    std::string  model_role;    // Phase 16: same enum as tensor_stats. The
+                                // l5_outcome table is per-(model, role,
+                                // tensor, iter, plan_id) so the dflash /
+                                // dspark / mtp_nextn verdicts don't
+                                // collide with the trunk's. Default
+                                // "trunk" for pre-Phase-16 rows.
     std::string  name;
     int32_t      layer          = 0;
     int32_t      iteration      = 0;

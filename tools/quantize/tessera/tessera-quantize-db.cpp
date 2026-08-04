@@ -27,6 +27,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <map>
 #include <random>
 #include <sstream>
 #include <string>
@@ -233,6 +234,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     // new code should read from tensor_stats.
     "CREATE TABLE IF NOT EXISTS tensor_stats (\n"
     "    model_hash         TEXT NOT NULL,\n"
+    "    model_role         TEXT NOT NULL DEFAULT 'trunk',\n"
     "    name               TEXT NOT NULL,\n"
     "    family             TEXT,\n"
     "    layer_depth        INTEGER,\n"
@@ -248,7 +250,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    source             TEXT,\n"
     "    recommended_action TEXT,\n"
     "    updated_at         TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, name)\n"
+    "    PRIMARY KEY (model_hash, model_role, name)\n"
     ");\n"
     // ---- per-tensor summary mirrors of the four analytical outputs ----
     // These are the per-tensor summary of the typed-NDJSON outputs the
@@ -259,6 +261,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     // L5 requant fixup path. model_hash + name joins back to tensor_stats.
     "CREATE TABLE IF NOT EXISTS l3_outlier_summary (\n"
     "    model_hash        TEXT NOT NULL,\n"
+    "    model_role        TEXT NOT NULL DEFAULT 'trunk',\n"
     "    name              TEXT NOT NULL,\n"
     "    layer             INTEGER,\n"
     "    sidecar_label     TEXT,\n"
@@ -267,10 +270,11 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    max_abs           DOUBLE,\n"
     "    rms               DOUBLE,\n"
     "    updated_at        TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, name, sidecar_label)\n"
+    "    PRIMARY KEY (model_hash, model_role, name, sidecar_label)\n"
     ");\n"
     "CREATE TABLE IF NOT EXISTS l4_probe_summary (\n"
     "    model_hash        TEXT NOT NULL,\n"
+    "    model_role        TEXT NOT NULL DEFAULT 'trunk',\n"
     "    name              TEXT NOT NULL,\n"
     "    layer             INTEGER,\n"
     "    current_qtype     TEXT,\n"
@@ -280,10 +284,11 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    top1_mismatch     DOUBLE,\n"
     "    n_weights         BIGINT,\n"
     "    updated_at        TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, name)\n"
+    "    PRIMARY KEY (model_hash, model_role, name)\n"
     ");\n"
     "CREATE TABLE IF NOT EXISTS l5_plan_summary (\n"
     "    model_hash        TEXT NOT NULL,\n"
+    "    model_role        TEXT NOT NULL DEFAULT 'trunk',\n"
     "    name              TEXT NOT NULL,\n"
     "    layer             INTEGER,\n"
     "    iteration         INTEGER,\n"
@@ -293,7 +298,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    recommended_alpha DOUBLE,\n"
     "    recommended_clip  DOUBLE,\n"
     "    updated_at        TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
+    "    PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)\n"
     ");\n"
     "CREATE TABLE IF NOT EXISTS per_layer_error_summary (\n"
     "    model_hash        TEXT NOT NULL,\n"
@@ -318,6 +323,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     // mse_after - mse_before) so the schema stays narrow.
     "CREATE TABLE IF NOT EXISTS l4_plan_outcome (\n"
     "    model_hash           TEXT NOT NULL,\n"
+    "    model_role           TEXT NOT NULL DEFAULT 'trunk',\n"
     "    name                 TEXT NOT NULL,\n"
     "    layer                INTEGER,\n"
     "    iteration            INTEGER NOT NULL,\n"
@@ -335,7 +341,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    frob_after           DOUBLE,\n"
     "    family               TEXT,\n"
     "    updated_at           TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
+    "    PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)\n"
     ");\n"
     // ---- l5_outcome: the verdict (Python-written, additive) ----
     // The "did this requant plan reduce error?" verdict, computed by
@@ -356,6 +362,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     // are nullable so the pre-emptive schema change stays additive.
     "CREATE TABLE IF NOT EXISTS l5_outcome (\n"
     "    model_hash            TEXT NOT NULL,\n"
+    "    model_role            TEXT NOT NULL DEFAULT 'trunk',\n"
     "    name                  TEXT NOT NULL,\n"
     "    layer                 INTEGER,\n"
     "    iteration             INTEGER NOT NULL,\n"
@@ -375,7 +382,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    gradient_proxy        DOUBLE,\n"
     "    layer_position_prior  DOUBLE,\n"
     "    updated_at            TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, name, iteration, plan_id)\n"
+    "    PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)\n"
     ");\n"
     // ---- l5_weights: per-(model, family) retuned scoring weights (additive) ----
     // Written by tools/tessera/l5_retune.py from a closed-form OLS fit
@@ -403,6 +410,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     // the column is here so the producer/consumer agree on the schema.
     "CREATE TABLE IF NOT EXISTS l5_weights (\n"
     "    model_hash            TEXT NOT NULL,\n"
+    "    model_role            TEXT NOT NULL DEFAULT 'trunk',\n"
     "    family                TEXT NOT NULL,\n"
     "    w_imatrix             DOUBLE NOT NULL,\n"
     "    w_gradient            DOUBLE NOT NULL,\n"
@@ -414,7 +422,7 @@ static const char * TS_QDB_SCHEMA_SQL =
     "    retune_source         TEXT,\n"
     "    requant_budget_bits   BIGINT,\n"
     "    updated_at            TIMESTAMP,\n"
-    "    PRIMARY KEY (model_hash, family)\n"
+    "    PRIMARY KEY (model_hash, model_role, family)\n"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_ga_results_family\n"
     "    ON ga_results(family, best_composite DESC);\n"
@@ -504,6 +512,16 @@ ts_tessera_db * ts_tessera_db_open(const std::string & path,
         auto res = wrap->conn->Query(TS_QDB_SCHEMA_SQL);
         if (res->HasError()) {
             if (err) *err = "schema setup failed: " + res->GetError();
+            delete wrap;
+            return nullptr;
+        }
+        // Phase 16: in-place migration of pre-Phase-16 DBs. The
+        // CREATE TABLE IF NOT EXISTS above is a no-op on an
+        // existing old schema, so the migration is what actually
+        // adds model_role to a pre-Phase-16 DB. Idempotent: a
+        // fresh DB has the column already, so the migration
+        // short-circuits to a no-op.
+        if (ts_tessera_db_migrate_model_role(wrap, err) != 0) {
             delete wrap;
             return nullptr;
         }
@@ -754,15 +772,22 @@ int ts_tessera_db_upsert_tensor_stat(
     const ts_tessera_db_tensor_stat & row,
     std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
-    // PRIMARY KEY (model_hash, name). The ON CONFLICT DO UPDATE
-    // clause overwrites every column on a re-write. source is
-    // updated to the current writer's tag.
+    // PRIMARY KEY (model_hash, model_role, name). The ON CONFLICT
+    // DO UPDATE clause overwrites every column on a re-write.
+    // source is updated to the current writer's tag. Phase 16
+    // adds model_role; the default "trunk" preserves the
+    // pre-Phase-16 contract when the caller leaves the field
+    // empty.
+    const std::string role = row.model_role.empty()
+        ? std::string("trunk")
+        : row.model_role;
     std::ostringstream q;
-    q << "INSERT INTO tensor_stats (model_hash, name, family, "
+    q << "INSERT INTO tensor_stats (model_hash, model_role, name, family, "
          "layer_depth, out_dim, in_dim, n_elements, dtype, "
          "kurtosis, eff_rank, rms, mean_abs, tail_ratio, source, "
          "recommended_action, updated_at) VALUES ("
       << "'" << sql_escape(row.model_hash) << "', "
+      << "'" << sql_escape(role) << "', "
       << "'" << sql_escape(row.name) << "', "
       << "'" << sql_escape(row.family) << "', "
       << row.layer_depth << ", "
@@ -778,7 +803,7 @@ int ts_tessera_db_upsert_tensor_stat(
       << "'" << sql_escape(row.source) << "', "
       << "'" << sql_escape(row.recommended_action) << "', "
       << ts_now_ts()
-      << ") ON CONFLICT (model_hash, name) DO UPDATE SET "
+      << ") ON CONFLICT (model_hash, model_role, name) DO UPDATE SET "
          "family=excluded.family, layer_depth=excluded.layer_depth, "
          "out_dim=excluded.out_dim, in_dim=excluded.in_dim, "
          "n_elements=excluded.n_elements, dtype=excluded.dtype, "
@@ -812,22 +837,29 @@ int ts_tessera_db_upsert_l5_weight(
     const ts_tessera_db_l5_weight & row,
     std::string * err) {
     if (db == nullptr || db->conn == nullptr) return 0;
-    // PRIMARY KEY (model_hash, family). The ON CONFLICT DO UPDATE
-    // clause overwrites every column on a re-write. retune_source
-    // is updated to the current writer's tag so the consumer can
-    // tell which algorithm produced the row. requant_budget_bits
-    // uses the C++ -1 sentinel for NULL so a missing budget (the
-    // common case when l5_retune.py doesn't have enough samples
-    // to project one) round-trips without a separate has_value
-    // flag on the struct.
+    // PRIMARY KEY (model_hash, model_role, family). The ON
+    // CONFLICT DO UPDATE clause overwrites every column on a
+    // re-write. retune_source is updated to the current writer's
+    // tag so the consumer can tell which algorithm produced the
+    // row. requant_budget_bits uses the C++ -1 sentinel for NULL
+    // so a missing budget (the common case when l5_retune.py
+    // doesn't have enough samples to project one) round-trips
+    // without a separate has_value flag on the struct. Phase 16
+    // adds model_role; the default "trunk" preserves the
+    // pre-Phase-16 contract when the caller leaves the field
+    // empty.
+    const std::string role = row.model_role.empty()
+        ? std::string("trunk")
+        : row.model_role;
     const std::string budget_str =
         (row.requant_budget_bits >= 0) ? std::to_string(row.requant_budget_bits) : std::string("NULL");
     std::ostringstream q;
-    q << "INSERT INTO l5_weights (model_hash, family, "
+    q << "INSERT INTO l5_weights (model_hash, model_role, family, "
          "w_imatrix, w_gradient, w_layer, bias, n_samples, "
          "in_sample_loss, hit_rate, retune_source, requant_budget_bits, "
          "updated_at) VALUES ("
       << "'" << sql_escape(row.model_hash) << "', "
+      << "'" << sql_escape(role) << "', "
       << "'" << sql_escape(row.family) << "', "
       << row.w_imatrix << ", "
       << row.w_gradient << ", "
@@ -839,7 +871,7 @@ int ts_tessera_db_upsert_l5_weight(
       << "'" << sql_escape(row.retune_source) << "', "
       << budget_str << ", "
       << ts_now_ts()
-      << ") ON CONFLICT (model_hash, family) DO UPDATE SET "
+      << ") ON CONFLICT (model_hash, model_role, family) DO UPDATE SET "
          "w_imatrix=excluded.w_imatrix, "
          "w_gradient=excluded.w_gradient, "
          "w_layer=excluded.w_layer, "
@@ -885,8 +917,12 @@ int ts_tessera_db_list_l5_weights(ts_tessera_db * db,
     out->entries.clear();
     if (db == nullptr || db->conn == nullptr) return 0;
     if (model_hash.empty()) return 0;
+    // Phase 16: model_role added to the SELECT so the dispatch
+    // can filter on (model_hash, model_role) without a separate
+    // read. Optional model_role_filter arg defaults to empty
+    // (all roles); a non-empty value filters the read.
     std::ostringstream q;
-    q << "SELECT model_hash, family, w_imatrix, w_gradient, w_layer, "
+    q << "SELECT model_hash, model_role, family, w_imatrix, w_gradient, w_layer, "
          "bias, n_samples, in_sample_loss, hit_rate, requant_budget_bits, "
          "retune_source FROM l5_weights WHERE model_hash = '"
       << sql_escape(model_hash) << "'";
@@ -903,20 +939,27 @@ int ts_tessera_db_list_l5_weights(ts_tessera_db * db,
             ts_tessera_db_l5_weight_list_entry e;
             auto mh = res->GetValue(0, r);
             e.model_hash = mh.IsNull() ? std::string() : mh.ToString();
-            auto fm = res->GetValue(1, r);
+            auto mr = res->GetValue(1, r);
+            // Pre-Phase-16 rows have NULL model_role (the column
+            // was added with DEFAULT 'trunk' but the migration
+            // backfills via the same default, so the column is
+            // never NULL in practice; the IsNull guard is
+            // belt-and-suspenders for safety).
+            e.model_role = mr.IsNull() ? std::string("trunk") : mr.ToString();
+            auto fm = res->GetValue(2, r);
             e.family     = fm.IsNull() ? std::string() : fm.ToString();
-            e.w_imatrix  = res->GetValue(2, r).GetValue<double>();
-            e.w_gradient = res->GetValue(3, r).GetValue<double>();
-            e.w_layer    = res->GetValue(4, r).GetValue<double>();
-            e.bias       = res->GetValue(5, r).GetValue<double>();
-            e.n_samples  = (int32_t) res->GetValue(6, r).GetValue<int64_t>();
-            e.in_sample_loss = res->GetValue(7, r).GetValue<double>();
-            e.hit_rate   = res->GetValue(8, r).GetValue<double>();
+            e.w_imatrix  = res->GetValue(3, r).GetValue<double>();
+            e.w_gradient = res->GetValue(4, r).GetValue<double>();
+            e.w_layer    = res->GetValue(5, r).GetValue<double>();
+            e.bias       = res->GetValue(6, r).GetValue<double>();
+            e.n_samples  = (int32_t) res->GetValue(7, r).GetValue<int64_t>();
+            e.in_sample_loss = res->GetValue(8, r).GetValue<double>();
+            e.hit_rate   = res->GetValue(9, r).GetValue<double>();
             // requant_budget_bits: NULL when the family had too few samples
             // to project a budget. Use -1 as the C++ NULL sentinel.
-            auto bv = res->GetValue(9, r);
+            auto bv = res->GetValue(10, r);
             e.requant_budget_bits = bv.IsNull() ? -1 : bv.GetValue<int64_t>();
-            auto rs = res->GetValue(10, r);
+            auto rs = res->GetValue(11, r);
             e.retune_source = rs.IsNull() ? std::string() : rs.ToString();
             out->entries.push_back(std::move(e));
         }
@@ -996,16 +1039,23 @@ int ts_tessera_db_append_l4_outcome(
     if (buffer == nullptr) return 0;
     // Column order must match the l4_plan_outcome CREATE TABLE
     // (see TS_QDB_SCHEMA_SQL above):
-    //   model_hash, name, layer, iteration, plan_id, strategy,
-    //   alpha_before, alpha_after, clip_before, clip_after,
+    //   model_hash, model_role, name, layer, iteration, plan_id,
+    //   strategy, alpha_before, alpha_after, clip_before, clip_after,
     //   outlier_thresh_before, outlier_thresh_after, mse_before,
     //   mse_after, frob_before, frob_after, family, updated_at
     // updated_at is the special NULL token; the buffer's
     // looks_like_int / looks_like_float pass-through skips the
     // quote path for numerics, and the literal string "NULL"
-    // bypasses the quote path entirely.
+    // bypasses the quote path entirely. Phase 16: model_role
+    // defaults to "trunk" when the caller leaves it empty
+    // (preserves the pre-Phase-16 contract for C++ writers that
+    // pre-date the field).
+    const std::string role = row.model_role.empty()
+        ? std::string("trunk")
+        : row.model_role;
     std::vector<std::string> values = {
         sql_escape(row.model_hash),
+        sql_escape(role),
         sql_escape(row.name),
         std::to_string(row.layer),
         std::to_string(row.iteration),
@@ -1365,6 +1415,360 @@ int64_t ts_tessera_db_debug_count(ts_tessera_db * db,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 16 migration: add model_role to 7 tables + rebuild PK
+// ---------------------------------------------------------------------------
+//
+// DuckDB's older versions do not support `ALTER TABLE ... DROP
+// CONSTRAINT <pk_name>`; the only way to change a PRIMARY KEY is
+// the standard rebuild dance:
+//   1. CREATE TABLE <name>_new (..., model_role, PRIMARY KEY (...));
+//   2. INSERT INTO <name>_new SELECT *, 'trunk' AS model_role FROM <name>;
+//   3. DROP TABLE <name>;
+//   4. ALTER TABLE <name>_new RENAME TO <name>;
+//
+// This is destructive on the old table's PK, but the data is
+// preserved. The migration is idempotent: a re-run is a no-op when
+// the model_role column already exists (the SELECT FROM
+// information_schema.columns check at the top of each table's
+// migration). On a fresh DB created with the new CREATE TABLE
+// schema, the function also no-ops (the column is present from
+// the schema setup).
+//
+// Called automatically by ts_tessera_db_open on every open.
+// tools/tessera/migrate_model_role.py is the Python-side
+// equivalent for Python-only-opened DBs.
+
+namespace {
+
+// Does the table have the model_role column? Used as the
+// idempotency guard: when the column is present, the table
+// was either freshly created with the new schema (fresh DB)
+// or already migrated (re-opened old DB), and the rebuild
+// would be a no-op (or destructive — don't do it).
+bool table_has_model_role(duckdb::Connection & conn,
+                           const std::string & table_name,
+                           std::string * err) {
+    const std::string q =
+        "SELECT COUNT(*) FROM information_schema.columns "
+        "WHERE table_name = '" + table_name +
+        "' AND column_name = 'model_role'";
+    try {
+        auto res = conn.Query(q);
+        if (res->HasError()) {
+            if (err) *err = "model_role check failed on " + table_name + ": " + res->GetError();
+            return false;
+        }
+        if (res->RowCount() == 0) return false;
+        const int64_t n = res->GetValue(0, 0).GetValue<int64_t>();
+        return n > 0;
+    } catch (const std::exception & e) {
+        if (err) *err = std::string("model_role check exception on ") + table_name + ": " + e.what();
+        return false;
+    } catch (...) {
+        if (err) *err = "model_role check exception on " + table_name;
+        return false;
+    }
+}
+
+// Run a single DDL/DML statement. Translates DuckDB errors to the
+// out `err` parameter and returns non-zero. Used by the migration
+// table loops.
+int exec_simple(duckdb::Connection & conn,
+                 const std::string & sql,
+                 const std::string & context,
+                 std::string * err) {
+    try {
+        auto res = conn.Query(sql);
+        if (res->HasError()) {
+            if (err) *err = context + " failed: " + res->GetError();
+            return 1;
+        }
+    } catch (const std::exception & e) {
+        if (err) *err = context + " exception: " + e.what();
+        return 1;
+    } catch (...) {
+        if (err) *err = context + " unknown exception";
+        return 1;
+    }
+    return 0;
+}
+
+// Migrate one table: if model_role is missing, rebuild with the
+// new schema (model_role column + new PK). Returns 0 on success or
+// no-op; non-zero on error. The `create_new_sql` is the CREATE
+// TABLE for the new (Phase 16) schema; the `insert_select_sql` is
+// the INSERT ... SELECT that backfills model_role='trunk' for
+// existing rows.
+int migrate_one_table(duckdb::Connection & conn,
+                       const std::string & table_name,
+                       const std::string & create_new_sql,
+                       const std::string & insert_select_sql,
+                       std::string * err) {
+    if (table_has_model_role(conn, table_name, err)) {
+        return 0;   // already migrated (fresh DB or re-open)
+    }
+    const std::string tmp = table_name + "__p16_new";
+    // 1. CREATE TABLE <name>__p16_new (..., model_role, PRIMARY KEY (...))
+    std::string create_sql = create_new_sql;
+    // Replace the table name in the CREATE SQL with the temporary name.
+    const std::string token = "CREATE TABLE IF NOT EXISTS " + table_name + " (";
+    const std::string repl  = "CREATE TABLE " + tmp + " (";
+    auto pos = create_sql.find(token);
+    if (pos == std::string::npos) {
+        if (err) *err = "migrate_one_table: cannot find CREATE TABLE token for " + table_name;
+        return 1;
+    }
+    create_sql.replace(pos, token.size(), repl);
+    if (exec_simple(conn, create_sql, "CREATE " + tmp, err) != 0) return 1;
+    // 2. INSERT INTO <name>__p16_new SELECT *, 'trunk' AS model_role FROM <name>
+    if (exec_simple(conn, insert_select_sql, "INSERT into " + tmp, err) != 0) return 1;
+    // 3. DROP TABLE <name>
+    if (exec_simple(conn, "DROP TABLE " + table_name, "DROP " + table_name, err) != 0) return 1;
+    // 4. ALTER TABLE <name>__p16_new RENAME TO <name>
+    if (exec_simple(conn, "ALTER TABLE " + tmp + " RENAME TO " + table_name,
+                    "RENAME " + tmp, err) != 0) return 1;
+    return 0;
+}
+
+}  // namespace
+
+int ts_tessera_db_migrate_model_role(ts_tessera_db * db,
+                                      std::string * err) {
+    if (db == nullptr || db->conn == nullptr) {
+        if (err) *err = "migrate_model_role: null db or conn";
+        return 1;
+    }
+    // The CREATE statements here are the Phase 16 schemas. They
+    // are templated on table_name; migrate_one_table substitutes
+    // the temporary table name. Each statement matches the
+    // canonical schema in TS_QDB_SCHEMA_SQL above (one source of
+    // truth — the open path uses TS_QDB_SCHEMA_SQL; this
+    // migration rebuilds to the same shape).
+    //
+    // Order matters: do the leaf tables first (l3, l4, l5
+    // outcomes) before the per-(model, family) aggregates. In
+    // practice there are no FKs between them (the schema is
+    // key-only, no REFERENCES), so order is documented but not
+    // enforced.
+    const std::map<std::string, std::pair<std::string, std::string>> tables = {
+        // tensor_stats
+        {"tensor_stats", {
+            "CREATE TABLE IF NOT EXISTS tensor_stats ("
+            "    model_hash         TEXT NOT NULL,"
+            "    model_role         TEXT NOT NULL DEFAULT 'trunk',"
+            "    name               TEXT NOT NULL,"
+            "    family             TEXT,"
+            "    layer_depth        INTEGER,"
+            "    out_dim            BIGINT,"
+            "    in_dim             BIGINT,"
+            "    n_elements         BIGINT,"
+            "    dtype              TEXT,"
+            "    kurtosis           DOUBLE,"
+            "    eff_rank           DOUBLE,"
+            "    rms                DOUBLE,"
+            "    mean_abs           DOUBLE,"
+            "    tail_ratio         DOUBLE,"
+            "    source             TEXT,"
+            "    recommended_action TEXT,"
+            "    updated_at         TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, name)"
+            ")",
+            // INSERT: the SELECT explicitly lists the old
+            // columns so the trailing AS model_role has a
+            // matching slot in the CREATE TABLE column list.
+            "INSERT INTO tensor_stats__p16_new "
+            "(model_hash, name, family, layer_depth, out_dim, in_dim, "
+            "n_elements, dtype, kurtosis, eff_rank, rms, mean_abs, "
+            "tail_ratio, source, recommended_action, updated_at, model_role) "
+            "SELECT model_hash, name, family, layer_depth, out_dim, in_dim, "
+            "n_elements, dtype, kurtosis, eff_rank, rms, mean_abs, "
+            "tail_ratio, source, recommended_action, updated_at, 'trunk' "
+            "FROM tensor_stats",
+        }},
+        // l3_outlier_summary
+        {"l3_outlier_summary", {
+            "CREATE TABLE IF NOT EXISTS l3_outlier_summary ("
+            "    model_hash        TEXT NOT NULL,"
+            "    model_role        TEXT NOT NULL DEFAULT 'trunk',"
+            "    name              TEXT NOT NULL,"
+            "    layer             INTEGER,"
+            "    sidecar_label     TEXT,"
+            "    outlier_count     BIGINT,"
+            "    outlier_fraction  DOUBLE,"
+            "    max_abs           DOUBLE,"
+            "    rms               DOUBLE,"
+            "    updated_at        TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, name, sidecar_label)"
+            ")",
+            "INSERT INTO l3_outlier_summary__p16_new "
+            "(model_hash, name, layer, sidecar_label, outlier_count, "
+            "outlier_fraction, max_abs, rms, updated_at, model_role) "
+            "SELECT model_hash, name, layer, sidecar_label, outlier_count, "
+            "outlier_fraction, max_abs, rms, updated_at, 'trunk' "
+            "FROM l3_outlier_summary",
+        }},
+        // l4_probe_summary
+        {"l4_probe_summary", {
+            "CREATE TABLE IF NOT EXISTS l4_probe_summary ("
+            "    model_hash        TEXT NOT NULL,"
+            "    model_role        TEXT NOT NULL DEFAULT 'trunk',"
+            "    name              TEXT NOT NULL,"
+            "    layer             INTEGER,"
+            "    current_qtype     TEXT,"
+            "    mse               DOUBLE,"
+            "    mse_minus_one     DOUBLE,"
+            "    perplexity        DOUBLE,"
+            "    top1_mismatch     DOUBLE,"
+            "    n_weights         BIGINT,"
+            "    updated_at        TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, name)"
+            ")",
+            "INSERT INTO l4_probe_summary__p16_new "
+            "(model_hash, name, layer, current_qtype, mse, mse_minus_one, "
+            "perplexity, top1_mismatch, n_weights, updated_at, model_role) "
+            "SELECT model_hash, name, layer, current_qtype, mse, mse_minus_one, "
+            "perplexity, top1_mismatch, n_weights, updated_at, 'trunk' "
+            "FROM l4_probe_summary",
+        }},
+        // l5_plan_summary
+        {"l5_plan_summary", {
+            "CREATE TABLE IF NOT EXISTS l5_plan_summary ("
+            "    model_hash        TEXT NOT NULL,"
+            "    model_role        TEXT NOT NULL DEFAULT 'trunk',"
+            "    name              TEXT NOT NULL,"
+            "    layer             INTEGER,"
+            "    iteration         INTEGER,"
+            "    plan_id           TEXT,"
+            "    sensitivity_score DOUBLE,"
+            "    recommended_qtype TEXT,"
+            "    recommended_alpha DOUBLE,"
+            "    recommended_clip  DOUBLE,"
+            "    updated_at        TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)"
+            ")",
+            "INSERT INTO l5_plan_summary__p16_new "
+            "(model_hash, name, layer, iteration, plan_id, sensitivity_score, "
+            "recommended_qtype, recommended_alpha, recommended_clip, "
+            "updated_at, model_role) "
+            "SELECT model_hash, name, layer, iteration, plan_id, sensitivity_score, "
+            "recommended_qtype, recommended_alpha, recommended_clip, "
+            "updated_at, 'trunk' "
+            "FROM l5_plan_summary",
+        }},
+        // l4_plan_outcome
+        {"l4_plan_outcome", {
+            "CREATE TABLE IF NOT EXISTS l4_plan_outcome ("
+            "    model_hash           TEXT NOT NULL,"
+            "    model_role           TEXT NOT NULL DEFAULT 'trunk',"
+            "    name                 TEXT NOT NULL,"
+            "    layer                INTEGER,"
+            "    iteration            INTEGER NOT NULL,"
+            "    plan_id              TEXT NOT NULL,"
+            "    strategy             TEXT,"
+            "    alpha_before         DOUBLE,"
+            "    alpha_after          DOUBLE,"
+            "    clip_before          DOUBLE,"
+            "    clip_after           DOUBLE,"
+            "    outlier_thresh_before DOUBLE,"
+            "    outlier_thresh_after  DOUBLE,"
+            "    mse_before           DOUBLE,"
+            "    mse_after            DOUBLE,"
+            "    frob_before          DOUBLE,"
+            "    frob_after           DOUBLE,"
+            "    family               TEXT,"
+            "    updated_at           TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)"
+            ")",
+            "INSERT INTO l4_plan_outcome__p16_new "
+            "(model_hash, name, layer, iteration, plan_id, strategy, "
+            "alpha_before, alpha_after, clip_before, clip_after, "
+            "outlier_thresh_before, outlier_thresh_after, mse_before, "
+            "mse_after, frob_before, frob_after, family, updated_at, model_role) "
+            "SELECT model_hash, name, layer, iteration, plan_id, strategy, "
+            "alpha_before, alpha_after, clip_before, clip_after, "
+            "outlier_thresh_before, outlier_thresh_after, mse_before, "
+            "mse_after, frob_before, frob_after, family, updated_at, 'trunk' "
+            "FROM l4_plan_outcome",
+        }},
+        // l5_outcome
+        {"l5_outcome", {
+            "CREATE TABLE IF NOT EXISTS l5_outcome ("
+            "    model_hash            TEXT NOT NULL,"
+            "    model_role            TEXT NOT NULL DEFAULT 'trunk',"
+            "    name                  TEXT NOT NULL,"
+            "    layer                 INTEGER,"
+            "    iteration             INTEGER NOT NULL,"
+            "    plan_id               TEXT NOT NULL,"
+            "    family                TEXT,"
+            "    sensitivity_score     DOUBLE,"
+            "    recommended_alpha     DOUBLE,"
+            "    recommended_clip      DOUBLE,"
+            "    mse_before            DOUBLE,"
+            "    mse_after             DOUBLE,"
+            "    delta_mse             DOUBLE,"
+            "    delta_frob            DOUBLE,"
+            "    plan_accepted         BOOLEAN,"
+            "    accept_threshold      DOUBLE,"
+            "    residual              DOUBLE,"
+            "    imatrix_magnitude     DOUBLE,"
+            "    gradient_proxy        DOUBLE,"
+            "    layer_position_prior  DOUBLE,"
+            "    updated_at            TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)"
+            ")",
+            "INSERT INTO l5_outcome__p16_new "
+            "(model_hash, name, layer, iteration, plan_id, family, "
+            "sensitivity_score, recommended_alpha, recommended_clip, "
+            "mse_before, mse_after, delta_mse, delta_frob, plan_accepted, "
+            "accept_threshold, residual, imatrix_magnitude, gradient_proxy, "
+            "layer_position_prior, updated_at, model_role) "
+            "SELECT model_hash, name, layer, iteration, plan_id, family, "
+            "sensitivity_score, recommended_alpha, recommended_clip, "
+            "mse_before, mse_after, delta_mse, delta_frob, plan_accepted, "
+            "accept_threshold, residual, imatrix_magnitude, gradient_proxy, "
+            "layer_position_prior, updated_at, 'trunk' "
+            "FROM l5_outcome",
+        }},
+        // l5_weights
+        {"l5_weights", {
+            "CREATE TABLE IF NOT EXISTS l5_weights ("
+            "    model_hash            TEXT NOT NULL,"
+            "    model_role            TEXT NOT NULL DEFAULT 'trunk',"
+            "    family                TEXT NOT NULL,"
+            "    w_imatrix             DOUBLE NOT NULL,"
+            "    w_gradient            DOUBLE NOT NULL,"
+            "    w_layer               DOUBLE NOT NULL,"
+            "    bias                  DOUBLE,"
+            "    n_samples             INTEGER,"
+            "    in_sample_loss        DOUBLE,"
+            "    hit_rate              DOUBLE,"
+            "    retune_source         TEXT,"
+            "    requant_budget_bits   BIGINT,"
+            "    updated_at            TIMESTAMP,"
+            "    PRIMARY KEY (model_hash, model_role, family)"
+            ")",
+            "INSERT INTO l5_weights__p16_new "
+            "(model_hash, family, w_imatrix, w_gradient, w_layer, bias, "
+            "n_samples, in_sample_loss, hit_rate, retune_source, "
+            "requant_budget_bits, updated_at, model_role) "
+            "SELECT model_hash, family, w_imatrix, w_gradient, w_layer, bias, "
+            "n_samples, in_sample_loss, hit_rate, retune_source, "
+            "requant_budget_bits, updated_at, 'trunk' "
+            "FROM l5_weights",
+        }},
+    };
+    for (const auto & kv : tables) {
+        const std::string & tname = kv.first;
+        const std::string & create_sql  = kv.second.first;
+        const std::string & insert_sql  = kv.second.second;
+        if (migrate_one_table(*db->conn, tname, create_sql, insert_sql, err) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Test-only INSERT into l5_outcome. The l5_outcome table is
 // normally Python-written (tools/tessera/l5_outcome.py), but the
 // C++ converged-fast test in test_l5_dispatch.cpp needs a way to
@@ -1386,19 +1790,24 @@ int ts_tessera_db_test_insert_l5_outcome(
     // The per-tensor component columns are nullable; the test
     // passes 0 as the "leave NULL" sentinel (a real value of 0
     // would be unusual in this domain, and the C++ test path is
-    // round-trip only).
+    // round-trip only). Phase 16: model_role defaults to "trunk"
+    // when the caller leaves it empty.
+    const std::string role = row.model_role.empty()
+        ? std::string("trunk")
+        : row.model_role;
     const std::string im_str = (row.imatrix_magnitude == 0.0) ? std::string("NULL") : std::to_string(row.imatrix_magnitude);
     const std::string gp_str = (row.gradient_proxy == 0.0)    ? std::string("NULL") : std::to_string(row.gradient_proxy);
     const std::string lp_str = (row.layer_position_prior == 0.0) ? std::string("NULL") : std::to_string(row.layer_position_prior);
     std::ostringstream q;
     q << "INSERT INTO l5_outcome ("
-         "model_hash, name, layer, iteration, plan_id, family, "
+         "model_hash, model_role, name, layer, iteration, plan_id, family, "
          "sensitivity_score, recommended_alpha, recommended_clip, "
          "mse_before, mse_after, delta_mse, delta_frob, "
          "plan_accepted, accept_threshold, residual, "
          "imatrix_magnitude, gradient_proxy, layer_position_prior) "
          "VALUES ("
       << "'" << sql_escape(row.model_hash) << "', "
+      << "'" << sql_escape(role) << "', "
       << "'" << sql_escape(row.name) << "', "
       << row.layer << ", "
       << row.iteration << ", "
