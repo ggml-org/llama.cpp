@@ -1,11 +1,12 @@
 # DeepSeek-V4 ROCm benchmark harness
 
-This directory contains the controlled PP baseline/profiling harness for
+This directory contains the controlled PP and target-only raw-decode
+baseline/profiling harness for
 `docs/deepseek-v4-flash-rocm-performance.md`.
 
 ## Safety
 
-`run-pp.sh` acquires `$HOME/llama-jobs/gpu.lock`, then checks
+`run-pp.sh` and `run-tg.sh` acquire `$HOME/llama-jobs/gpu.lock`, then check
 `rocm-smi --showpids` twice: once before manifest capture and again immediately
 before launch. Discovery errors fail closed. Any active ROCm process causes a
 refusal. The benchmark runs in its own process group; cleanup and both watchdogs
@@ -19,9 +20,74 @@ Inspect the exact command without querying ROCm or starting a GPU process:
 ```bash
 scripts/dsv4-rocm/run-pp.sh --dry-run
 scripts/dsv4-rocm/profile-pp.sh --dry-run
+scripts/dsv4-rocm/run-tg.sh --dry-run
+DSV4_TG_MODE=residency scripts/dsv4-rocm/run-tg.sh --dry-run
 ```
 
-## Five-minute quick baseline
+## Target-only raw decode baseline
+
+`run-tg.sh` uses llama-bench's `--n-depth` path: prefix/depth setup happens
+outside `samples_ns`, then `test_gen` performs exactly the fixed number of
+single-token target evaluations. There is no sampler, EOS stop, draft model,
+or speculative flag. Default performance mode runs the required depth sweep
+with tg32 and six raw repetitions; it predeclares the first target-depth sample
+as graph-cold and reports the remaining five. `summarize-tg.py` recomputes t/s
+and ms/token from raw nanoseconds, requires exact depth/config/repetition
+coverage, and reports MAD/median stability.
+
+Scheduler logging is deliberately separate so verbose debug output cannot
+perturb accepted TG. Residency mode runs one target evaluation per depth with
+`GGML_SCHED_DEBUG=2 --verbose`; `parse-sched-debug.py` records DSV4 LID/TOP_K
+backend assignments plus CPU and ROCm/meta split counts and scheduled split-input
+copies. A CPU assignment exits 4 as valid pre-fix evidence, not as a deployment
+pass.
+
+Dry-run and non-GPU fixture validation:
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+scripts/dsv4-rocm/test-tg-tools.py
+scripts/dsv4-rocm/run-tg.sh --dry-run
+DSV4_TG_MODE=residency scripts/dsv4-rocm/run-tg.sh --dry-run
+```
+
+After a GPU window is confirmed:
+
+```bash
+# Performance: tg32, six raw / five accepted samples at every depth.
+DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh
+
+# Separate scheduler-residency audit; timings are not baseline TG.
+DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency \
+  scripts/dsv4-rocm/run-tg.sh
+```
+
+Default depths are actual starting KV depths
+`0,2048,3072,4096,8192,16384,32768,65536`. Depth 0 means the context is empty
+before `test_gen` evaluates its first BOS/random token; it is recorded as 0,
+not relabeled as a user-visible zero-token prompt. llama-bench saves the
+first target-only depth state and restores it for later repetitions. That
+fresh-vs-restored equivalence remains a separate M5.0 acceptance gate.
+
+Performance mode sets scheduler debug to zero. Residency mode sets it to two.
+Both modes explicitly default to the accepted J16/HC/LID controls (16/1/4),
+F16 K/V, flash on, tensor split `1/1/1/1` (llama-bench's device-list spelling
+of `1,1,1,1`), batch 512, and ubatch 256. Set
+`DSV4_REQUIRE_ACCEPTED_STACK=0` only for a separately declared A/B arm.
+Artifacts are written under `$HOME/llama-jobs/dsv4-rocm-tg/`.
+
+Each setup phase (model/context/depth) and each generation sample has a
+separate watchdog deadline (`DSV4_TG_SETUP_TIMEOUT` and
+`DSV4_TG_SAMPLE_TIMEOUT`). Phase transitions and every measured-sample start
+are preserved in `phase-events.tsv` and `measurement-start.ns`; setup time is
+never reported as TG. A timeout preserves completed depth records and marks the
+sweep incomplete.
+
+Do not use scheduler-debug TG as a production throughput number, do not combine
+performance and residency samples, and do not use full rocprof CSV tracing at
+32K/64K.
+
+## Five-minute quick PP baseline
 
 After the GPU owner has stopped inference and confirmed a benchmark window:
 

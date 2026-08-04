@@ -86,6 +86,8 @@ No stable, speculation-disabled context-depth TG sweep has been accepted on the 
 
 Required closure: identical target model/quantization/layer split; MTP and DSpark absent; fixed measured generation count; at least five valid repetitions at every required depth, including 32K and 64K; scheduler/backend residency attested; exact command, commit, clocks/power state, and artifacts recorded.
 
+Harness status (2026-08-04): M5.0 tooling and its non-GPU validation are complete, but this does **not** close the evidence gap. `scripts/dsv4-rocm/run-tg.sh` now provides separate performance and residency modes, manifests, phase-aware setup/sample watchdogs, telemetry, exact-depth/repetition summaries, and measured-decode scheduler parsing. Static fixtures and fake-runner tests passed complete, incomplete, unstable, CPU-residency, measured-timeout, and setup-timeout cases. No model was loaded and no GPU timing was produced. Fresh-prefill versus restored target-only state equivalence remains the blocking pre-run gate.
+
 ## 4. Current DSV4 execution facts
 
 The load-bearing source path is `src/models/deepseek4.cpp:606-846`.
@@ -807,6 +809,16 @@ P0 has two acceptance states:
 
 Both states require no speculative decoding/draft model; a stable five-run median (initial target MAD/median <=3%, otherwise increase tg/repetitions and retain instability as evidence); and an exact externally rerunnable command/artifact directory. A GPU split count need not be zero under four-way tensor execution; it must be stable/explained. A CPU LID/TOP_K split blocks post-fix/deployment acceptance until corrected or causally justified.
 
+#### M5.0 harness readiness (tooling accepted; TG still missing)
+
+Performance mode uses llama-bench `n_prompt=0`, `n_depth=<sweep>`, `n_gen=32`, and `--no-warmup` under one model load. llama-bench computes/restores the requested depth before its timer, then `test_gen` performs exactly 32 one-token target `llama_decode` calls with no sampler or EOS stop. Six raw repetitions are preserved; the first target-depth graph-cold sample is predeclared and excluded, leaving five accepted samples. `summarize-tg.py` validates the exact depth/config/repetition contract and recomputes t/s, ms/token, ranges, and latency MAD/median from raw nanoseconds.
+
+Residency mode is a separate non-performance run (`n_gen=1`, one repetition, `GGML_SCHED_DEBUG=2 --verbose`). `parse-sched-debug.py` changes phase only on llama-bench progress markers, ignores setup/prefill assignments, and records measured-decode LID/TOP_K backends, CPU/ROCm-meta split counts, and scheduled split-input copies. Separating it prevents verbose scheduler output from perturbing accepted TG. The tensor split is spelled `1/1/1/1` because llama-bench reserves commas for parameter variants; this is its exact four-device equivalent of `1,1,1,1`.
+
+The non-GPU monitor rerun passed at
+`$HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/`.
+It preserved a reproduced/rejected FIFO notification deadlock: a fast child could exit before a later FIFO event had a reader. The accepted implementation uses an append-only phase log plus an atomically replaced latest-phase file. Expected/observed exits were 0/0 for stable performance and residency, 3/3 for missing depth and measured timeout, 4/4 for instability, and 124/124 for setup timeout. These are tooling results only. Before any real baseline, either attest fresh-prefill versus llama-bench restored-state target logits/tokens or change the harness to fresh equivalent state per repetition.
+
 ### M5.1-M5.2 / P0-A - TOP_K residency, then fix only if reproduced
 
 The premise that this branch lacks large HIP TOP_K is **not currently true**. Source audit at commit `925d93700` (implementation source unchanged by the subsequent documentation edits):
@@ -907,6 +919,7 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-03 | Reframe indexed CSA as a credible long-context candidate after an external fact-check. | Source facts confirmed (dense-masked operands, ratios 4/128, top-k<=512). Paper/Transformers describe indexed-sparse intent; StreamIndex supports streaming selection. Local TG dominance remains unmeasured. | provisional / on hold |
 | 2026-08-04 | Record 16K->32K super-linear **whole-graph PP** scaling without assigning component dominance. | Single PP observations: 16K=372.1 t/s (44 s), 32K=117.4 t/s (279 s). No successful 32K attribution trace. 64K exited 137 during warmup before measurement start and supplies no timing. | accepted, qualified evidence |
 | 2026-08-04 | Make target-only raw decode the blocking next phase and hold indexed CSA. | No accepted MTP/DSpark-disabled repeated TG sweep exists; PP scaling cannot select the raw-decode bottleneck. | selected |
+| 2026-08-04 | Accept the M5.0 harness mechanics, not a raw-TG result. | Dry runs, source/CLI audit, parser fixtures, and fake end-to-end runs passed success/incomplete/unstable/setup-timeout/measured-timeout/residency cases without loading a model or launching GPU work. A reproduced FIFO deadlock was fixed before acceptance. | tooling accepted; TG blocked by restored-state equivalence |
 | 2026-08-04 | Treat large HIP TOP_K work as conditional, not presumed missing. | Current branch enables HIP hipCUB, uses rocPRIM top-k for DSV4 large rows, and advertises TOP_K support; scheduler residency must still be attested in raw decode. | selected diagnostic |
 | 2026-08-04 | Invalidate old percentage profiles for target selection after >3% whole-model gains. | Accepted J16/HC/LID/T128 changes materially altered Amdahl shares; LID alone changed 16K PP by +10.18%. | final rule |
 | 2026-08-04 | Keep MTP/DSpark outside raw-decode baselines and kernel selection. | Exact-greedy MTP state diverges; speculative acceptance/checkpoint behavior is a separate workstream. | final |
@@ -935,8 +948,20 @@ monitor-rerunnable PP verification command. A complete single-run 32K PP
 result now exists, but repeated matched 32K A/B, successful 32K attribution,
 and every 64K PP measurement remain missing. The 64K attempt terminated in
 warmup before measurement start. No target-only repeated raw-TG sweep or
-user-supplied production corpus has been accepted. The new raw-decode harness
-must preserve its own measured-generation cap separately from context setup.
+user-supplied production corpus has been accepted. The raw-decode harness now
+preserves its measured-generation cap separately from context setup, but its
+restored-state equivalence gate remains open.
+
+**Current non-GPU M5.0 harness monitor command** (tooling verification only):
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+ARTIFACT=$HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6 \
+OUT=/tmp/dsv4-tg-static-rerun \
+  "$HOME/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/commands.sh"
+```
+
+It uses fake llama-bench/model/`rocm-smi` fixtures and launches no GPU work. The planned real commands are `DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh` and `DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency scripts/dsv4-rocm/run-tg.sh`; do not run them until the restored-state gate is closed and GPU ownership is rechecked.
 
 **Final externally rerunnable PP verification command** (recorded on ancestor
 `77ef7c2d1`; implementation source unchanged since `803a41c37`, with
@@ -1072,9 +1097,12 @@ Raw-decode Ralph status:
   active, iteration 1/50; started 2026-08-04T03:47:49Z
 Initial synchronized roadmap commit:
   5df30a53e
+M5.0 static-validation artifacts:
+  $HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/
 Current next action:
-  Design and statically validate the M5.0 raw-TG harness before consuming a
-  GPU window.
+  Attest fresh-prefill versus restored target-only state logits/tokens at
+  representative depths, or switch the harness to fresh equivalent states,
+  before consuming the full raw-TG GPU window.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
