@@ -86,7 +86,7 @@ No stable, speculation-disabled context-depth TG sweep has been accepted on the 
 
 Required closure: identical target model/quantization/layer split; MTP and DSpark absent; fixed measured generation count; at least five valid repetitions at every required depth, including 32K and 64K; scheduler/backend residency attested; exact command, commit, clocks/power state, and artifacts recorded.
 
-Harness status (2026-08-04, implementation commit `1e5519bf1`): M5.0 tooling and its non-GPU validation are complete, but this does **not** close the evidence gap. `scripts/dsv4-rocm/run-tg.sh` now provides separate performance and residency modes, manifests, phase-aware setup/sample watchdogs, telemetry, exact-depth/repetition summaries, and measured-decode scheduler parsing. Static fixtures and fake-runner tests passed complete, incomplete, unstable, CPU-residency, measured-timeout, and setup-timeout cases. No model was loaded and no GPU timing was produced. Fresh-prefill versus restored target-only state equivalence remains the blocking pre-run gate.
+Harness status (2026-08-04): M5.0 tooling and its non-GPU validation are complete, and the restore-equivalence gate is now closed, but no raw-TG sweep has run. `scripts/dsv4-rocm/run-tg.sh` provides separate performance and residency modes, manifests, phase-aware setup/sample watchdogs, telemetry, exact-depth/repetition summaries, and measured-decode scheduler parsing. Static fixtures and fake-runner tests passed complete, incomplete, unstable, CPU-residency, measured-timeout, and setup-timeout cases. Model-dependent testing found that llama-bench's prior sequence-only restore is invalid for DSV4, while full context restore is bit-identical; `f97f5cdb0` makes context state explicit and fail-closed. The blocking next evidence is the actual five-sample TG/residency sweep.
 
 ## 4. Current DSV4 execution facts
 
@@ -817,7 +817,15 @@ Residency mode is a separate non-performance run (`n_gen=1`, one repetition, `GG
 
 The non-GPU monitor rerun passed for the code committed at `1e5519bf1`; its precommit source patch and file hashes are preserved at
 `$HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/`.
-It preserved a reproduced/rejected FIFO notification deadlock: a fast child could exit before a later FIFO event had a reader. The accepted implementation uses an append-only phase log plus an atomically replaced latest-phase file. Expected/observed exits were 0/0 for stable performance and residency, 3/3 for missing depth and measured timeout, 4/4 for instability, and 124/124 for setup timeout. These are tooling results only. Before any real baseline, either attest fresh-prefill versus llama-bench restored-state target logits/tokens or change the harness to fresh equivalent state per repetition.
+It preserved a reproduced/rejected FIFO notification deadlock: a fast child could exit before a later FIFO event had a reader. The accepted implementation uses an append-only phase log plus an atomically replaced latest-phase file. Expected/observed exits were 0/0 for stable performance and residency, 3/3 for missing depth and measured timeout, 4/4 for instability, and 124/124 for setup timeout. These are tooling results only.
+
+The model-dependent restore gate (`3d23fff4a`, controlled diagnostic `400c47cd6`, full-context extension `5d80b8662`) used deterministic fresh prefixes at 2K/3K/16K, four greedy target steps, every full-vocabulary logit, exact token IDs, and a fresh re-prefill control. The fresh repeat was bit-identical at all depths (state byte mismatches 0, logit tolerance violations 0, max absolute difference 0). Sequence-only `llama_state_seq_get/set_data` then failed at every depth: 516,983 / 516,900 / 516,930 logit tolerance violations, maximum absolute differences 4.118656 / 0.818019 / 0.736117, and a 2K final argmax divergence. Therefore the sequence API is rejected for DSV4 depth reuse.
+
+Full `llama_state_get/set_data` context state passed bit-identically at all three depths: state sizes 60,674,301 / 67,567,869 / 157,184,253 bytes; zero state-byte mismatch against fresh re-prefill; zero repeat/restore bitwise or tolerance/non-finite mismatches; identical four-token argmax paths. Accepted artifact:
+`$HOME/edwin/llama-jobs/dsv4-rocm-state-equivalence/20260804T044114.706244382Z-context-state-controlled-5d80b8662a95-16000/`.
+Rejected controlled sequence artifact:
+`$HOME/edwin/llama-jobs/dsv4-rocm-state-equivalence/20260804T043609.677826936Z-state-restore-controlled-400c47cd68ce-27056/`.
+The fixed sweep has one generation/batch configuration and unique depths, so reuse occurs only for repetitions 2-6 inside the same context. Commit `f97f5cdb0` adds explicit llama-bench full-context depth state and makes `run-tg.sh` reject any sequence-mode override.
 
 ### M5.1-M5.2 / P0-A - TOP_K residency, then fix only if reproduced
 
@@ -919,7 +927,8 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-03 | Reframe indexed CSA as a credible long-context candidate after an external fact-check. | Source facts confirmed (dense-masked operands, ratios 4/128, top-k<=512). Paper/Transformers describe indexed-sparse intent; StreamIndex supports streaming selection. Local TG dominance remains unmeasured. | provisional / on hold |
 | 2026-08-04 | Record 16K->32K super-linear **whole-graph PP** scaling without assigning component dominance. | Single PP observations: 16K=372.1 t/s (44 s), 32K=117.4 t/s (279 s). No successful 32K attribution trace. 64K exited 137 during warmup before measurement start and supplies no timing. | accepted, qualified evidence |
 | 2026-08-04 | Make target-only raw decode the blocking next phase and hold indexed CSA. | No accepted MTP/DSpark-disabled repeated TG sweep exists; PP scaling cannot select the raw-decode bottleneck. | selected |
-| 2026-08-04 | Accept the M5.0 harness mechanics, not a raw-TG result. | Dry runs, source/CLI audit, parser fixtures, and fake end-to-end runs passed success/incomplete/unstable/setup-timeout/measured-timeout/residency cases without loading a model or launching GPU work. A reproduced FIFO deadlock was fixed before acceptance. | tooling accepted; TG blocked by restored-state equivalence |
+| 2026-08-04 | Accept the M5.0 harness mechanics, not a raw-TG result. | Dry runs, source/CLI audit, parser fixtures, and fake end-to-end runs passed success/incomplete/unstable/setup-timeout/measured-timeout/residency cases without loading a model or launching GPU work. A reproduced FIFO deadlock was fixed before acceptance. | tooling accepted; TG pending |
+| 2026-08-04 | Reject sequence-only depth-state restore for DSV4; require full context state. | Controlled 2K/3K/16K gate: fresh re-prefill is bit-identical, sequence restore has ~516.9K logit violations/depth and one 2K argmax divergence, while full context restore is bit-identical with zero token/logit/state mismatches. | accepted correctness fix `f97f5cdb0` |
 | 2026-08-04 | Treat large HIP TOP_K work as conditional, not presumed missing. | Current branch enables HIP hipCUB, uses rocPRIM top-k for DSV4 large rows, and advertises TOP_K support; scheduler residency must still be attested in raw decode. | selected diagnostic |
 | 2026-08-04 | Invalidate old percentage profiles for target selection after >3% whole-model gains. | Accepted J16/HC/LID/T128 changes materially altered Amdahl shares; LID alone changed 16K PP by +10.18%. | final rule |
 | 2026-08-04 | Keep MTP/DSpark outside raw-decode baselines and kernel selection. | Exact-greedy MTP state diverges; speculative acceptance/checkpoint behavior is a separate workstream. | final |
@@ -949,8 +958,9 @@ result now exists, but repeated matched 32K A/B, successful 32K attribution,
 and every 64K PP measurement remain missing. The 64K attempt terminated in
 warmup before measurement start. No target-only repeated raw-TG sweep or
 user-supplied production corpus has been accepted. The raw-decode harness now
-preserves its measured-generation cap separately from context setup, but its
-restored-state equivalence gate remains open.
+preserves its measured-generation cap separately from context setup. Its
+full-context restored-state equivalence gate is accepted; sequence-only restore
+is rejected and fails closed.
 
 **Current non-GPU M5.0 harness monitor command** (tooling verification only):
 
@@ -961,7 +971,18 @@ OUT=/tmp/dsv4-tg-static-rerun
 ARTIFACT="$ARTIFACT" OUT="$OUT" "$ARTIFACT/commands.sh"
 ```
 
-It uses fake llama-bench/model/`rocm-smi` fixtures and launches no GPU work. The planned real commands are `DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh` and `DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency scripts/dsv4-rocm/run-tg.sh`; do not run them until the restored-state gate is closed and GPU ownership is rechecked.
+It uses fake llama-bench/model/`rocm-smi` fixtures and launches no GPU work.
+
+**Accepted restored-state monitor command:**
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+cmake --build build --target test-state-restore-equivalence -j 12
+DSV4_STATE_API=context DSV4_LABEL=context-state-controlled \
+  scripts/dsv4-rocm/run-state-restore-equivalence.sh
+```
+
+The accepted result is the `5d80b8662` artifact listed above; all original/fresh-repeat/restored logits and argmax tokens are bit-identical. The next real commands are `DSV4_LABEL=raw-tg-baseline scripts/dsv4-rocm/run-tg.sh` and `DSV4_TG_MODE=residency DSV4_LABEL=raw-tg-residency scripts/dsv4-rocm/run-tg.sh`. Recheck GPU ownership immediately before each.
 
 **Final externally rerunnable PP verification command** (recorded on ancestor
 `77ef7c2d1`; implementation source unchanged since `803a41c37`, with
@@ -1090,7 +1111,11 @@ Repository implementation/evidence chain:
   925d93700 (indexed-CSA design note, now held by this roadmap) ->
   5df30a53e (raw-decode-first roadmap reset) ->
   0376a55aa (Ralph loop registration) ->
-  1e5519bf1 (M5.0 target-only TG harness + static validation)
+  1e5519bf1 (M5.0 target-only TG harness + static validation) ->
+  3d23fff4a (restore-equivalence gate) ->
+  400c47cd6 (fresh-repeat control) ->
+  5d80b8662 (full-context diagnostic) ->
+  f97f5cdb0 (llama-bench/run-tg full-context integration)
 
 Raw-decode Ralph log:
   /Users/edwin/.ralph/dsv4-raw-decode-roadmap.md
@@ -1100,14 +1125,15 @@ Raw-decode Ralph status:
   active, iteration 1/50; started 2026-08-04T03:47:49Z
 Revised roadmap / loop-registration commits:
   5df30a53e / 0376a55aa
-M5.0 harness implementation commit:
-  1e5519bf1
+M5.0 harness / corrected depth-state commits:
+  1e5519bf1 / f97f5cdb0
 M5.0 static-validation artifacts:
   $HOME/edwin/llama-jobs/dsv4-rocm-tg/static-validation-20260804T0415Z-0376a55aacd6/
 Current next action:
-  Attest fresh-prefill versus restored target-only state logits/tokens at
-  representative depths, or switch the harness to fresh equivalent states,
-  before consuming the full raw-TG GPU window.
+  Recheck GPU ownership, then run the full context-state-backed raw TG
+  performance sweep and separate scheduler-residency audit. Accept no baseline
+  unless all required depths have five stable tg32 samples; 32K/64K remain
+  mandatory and incomplete points cannot decide CSA.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
