@@ -37,7 +37,7 @@ struct TesseraStudioMacApp: App {
             // delete File > New Window (Cmd-Shift-N), and each
             // WindowGroup window is an independent studio surface
             // (own sidebar selection, own agent loop, own
-            // WorkflowsView state), so multi-window is supported.
+            // workflow editor store), so multi-window is supported.
             CommandGroup(after: .newItem) {
                 NewWorkflowMenuItem()
             }

@@ -2,32 +2,22 @@ import SwiftUI
 import UniformTypeIdentifiers
 import TesseraCore
 
-/// The "Workflows" surface. Holds the in-flight workflow +
-/// positions + selection, routes toolbar / palette / canvas /
-/// port gestures, and uses `WorkflowDocument` for the Open /
-/// Save round-trip.
+/// The "Workflows" surface. A presentation shell over the
+/// scene-lived ``WorkflowEditorStore`` owned by `ContentView`:
+/// routes toolbar / palette / canvas / port gestures into the
+/// store and renders its state. The document, its saved baseline,
+/// the selection, and any in-flight run live in the store, so
+/// they survive sidebar destination switches; what stays here is
+/// presentation-only state that may safely reset on the way back
+/// (the in-flight wire, the error banner, the file pickers, and
+/// column visibility).
 struct WorkflowsView: View {
-    @State private var workflow: Workflow = WorkflowsView.exampleWorkflow
-    @State private var positions: WorkflowPositionMap = WorkflowsView.examplePositions
-    @State private var registry: WorkflowNodeRegistry = .default
+    @Bindable var editor: WorkflowEditorStore
+
     @State private var pendingConnection: PendingConnection?
     @State private var connectionError: String?
-    @State private var selectedNodeId: String?
-    @State private var document: WorkflowDocument = WorkflowDocument(
-        workflow: WorkflowsView.exampleWorkflow,
-        positions: WorkflowsView.examplePositions
-    )
-    /// The document as of the last New / Open / Save. Comparing
-    /// it against `document` yields the "Edited" indicator - a
-    /// derived value, not a flag that could desync.
-    @State private var savedDocument: WorkflowDocument = WorkflowDocument(
-        workflow: WorkflowsView.exampleWorkflow,
-        positions: WorkflowsView.examplePositions
-    )
-    @State private var documentName: String = "calibrate-and-quantize"
     @State private var isExporting = false
     @State private var isImporting = false
-    @State private var runPhase: WorkflowRunPhase = .idle
     /// Palette column visibility for the NavigationSplitView
     /// (View > Show/Hide Node Palette toggles it).
     @State private var paletteVisibility: NavigationSplitViewVisibility = .all
@@ -38,25 +28,18 @@ struct WorkflowsView: View {
 
     @Environment(\.undoManager) private var undoManager
 
-    /// True when the live document differs from the last saved /
-    /// loaded snapshot. Drives the "Edited" marker in the window
-    /// title (macOS documents show `<name> - Edited`).
-    private var isEdited: Bool {
-        document != savedDocument
-    }
-
     var body: some View {
         NavigationSplitView(columnVisibility: $paletteVisibility) {
-            WorkflowPaletteView(registry: registry)
+            WorkflowPaletteView(registry: editor.registry)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
         } detail: {
             ZStack {
                 WorkflowCanvasView(
-                    workflow: workflow,
-                    registry: registry,
-                    positions: $positions,
+                    workflow: editor.workflow,
+                    registry: editor.registry,
+                    positions: $editor.positions,
                     pendingConnection: $pendingConnection,
-                    selectedNodeId: $selectedNodeId,
+                    selectedNodeId: $editor.selectedNodeId,
                     onConnectionCompleted: { dropPoint, canvasSize in
                         completeConnection(at: dropPoint, in: canvasSize)
                     },
@@ -83,16 +66,15 @@ struct WorkflowsView: View {
         }
         .fileExporter(
             isPresented: $isExporting,
-            document: document,
+            document: editor.document,
             contentType: .tesseraWorkflow,
-            defaultFilename: documentName
+            defaultFilename: editor.documentName
         ) { result in
             switch result {
             case .success(let url):
-                // Save succeeded: the current document is now the
-                // saved baseline, and the title drops "- Edited".
-                savedDocument = document
-                documentName = url.deletingPathExtension().lastPathComponent
+                // Save succeeded: the store records the new
+                // baseline and the title drops "- Edited".
+                editor.markSaved(at: url)
             case .failure(let err):
                 connectionError = "Save failed: \(err.localizedDescription)"
             }
@@ -105,7 +87,7 @@ struct WorkflowsView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    loadDocument(from: url)
+                    openDocument(from: url)
                 }
             case .failure(let err):
                 connectionError = "Open failed: \(err.localizedDescription)"
@@ -121,7 +103,7 @@ struct WorkflowsView: View {
             new: newDocument,
             open: { isImporting = true },
             save: { isExporting = true },
-            canSave: { !workflow.nodes.isEmpty || !workflow.edges.isEmpty },
+            canSave: { editor.canSave },
             togglePalette: togglePalette,
             paletteVisible: { paletteVisibility != .detailOnly },
             toggleInspector: { inspectorVisible.toggle() },
@@ -131,7 +113,7 @@ struct WorkflowsView: View {
         // standard "- Edited" marker while there are unsaved
         // changes (HIG: documents surface modification state in
         // the title bar, not just a dot somewhere).
-        .navigationTitle(isEdited ? "\(documentName) - Edited" : documentName)
+        .navigationTitle(editor.isEdited ? "\(editor.documentName) - Edited" : editor.documentName)
     }
 
     // MARK: - Window toolbar
@@ -148,7 +130,7 @@ struct WorkflowsView: View {
                 Label("New", systemImage: "doc.badge.plus")
             }
             .help("New workflow")
-            .disabled(runPhase.isRunning)
+            .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("New workflow")
             .accessibilityHint("Replace the current workflow with an empty one")
 
@@ -156,7 +138,7 @@ struct WorkflowsView: View {
                 Label("Open", systemImage: "folder")
             }
             .help("Open workflow from disk")
-            .disabled(runPhase.isRunning)
+            .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("Open workflow")
             .accessibilityHint("Choose a workflow file to open")
 
@@ -164,21 +146,21 @@ struct WorkflowsView: View {
                 Label("Save", systemImage: "square.and.arrow.down")
             }
             .help("Save workflow to disk")
-            .disabled(runPhase.isRunning)
+            .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("Save workflow")
             .accessibilityHint("Save the current workflow to a file")
         }
         ToolbarItemGroup(placement: .primaryAction) {
-            if runPhase.isRunning {
+            if editor.runPhase.isRunning {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel("Workflow running")
             }
-            Button(action: { runWorkflow() }) {
+            Button(action: { editor.runWorkflow() }) {
                 Label("Run", systemImage: "play.fill")
             }
             .help("Run workflow")
-            .disabled(runPhase.isRunning)
+            .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("Run workflow")
             .accessibilityHint("Execute the current workflow and show progress")
         }
@@ -192,51 +174,31 @@ struct WorkflowsView: View {
 
     /// Register a single undo / redo pair on the env UndoManager.
     /// The action name is shown in the Edit menu ("Undo Connect
-    /// Nodes", "Undo Move Node", etc.).
+    /// Nodes", "Undo Move Node", etc.). The closures capture the
+    /// scene-lived store (a class), so an entry stays valid even
+    /// when the view is recreated by a destination switch.
     private func registerUndoPair(
         name: String,
-        undo: @escaping (WorkflowsView) -> Void,
-        redo: @escaping (WorkflowsView) -> Void
+        undo: @escaping () -> Void,
+        redo: @escaping () -> Void
     ) {
         guard let mgr = undoManager else { return }
         mgr.setActionName(name)
         // `registerUndo(withTarget:handler:)` requires an
-        // `AnyObject` target; `WorkflowsView` is a struct. The
-        // `UndoPair` helper holds the closures and re-registers
-        // itself for redo after each undo (and vice versa).
-        // The captured `self` is a struct copy, but writes through
-        // `@State` go to the same backing storage as the live
-        // view, so the undo actually mutates the live state.
-        let pair = UndoPair(
-            undo: { undo(self) },
-            redo: { redo(self) },
-            manager: mgr
-        )
+        // `AnyObject` target; the `UndoPair` helper holds the
+        // closures and re-registers itself for redo after each
+        // undo (and vice versa).
+        let pair = UndoPair(undo: undo, redo: redo, manager: mgr)
         mgr.registerUndo(withTarget: pair) { $0.performUndo() }
     }
 
     private func recordNodeMove(nodeId: String, start: CGPoint, end: CGPoint) {
         guard start != end else { return }
-        // The drag gesture already wrote `end` into `positions`;
-        // sync the save snapshot so the move both flips the
-        // "Edited" marker and survives the next Cmd-S.
-        document = WorkflowDocument(workflow: workflow, positions: positions)
-        let nodeId = nodeId
-        let start = start, end = end
+        let editor = self.editor
         registerUndoPair(
             name: "Move Node",
-            undo: { vc in
-                var p = vc.positions
-                p[nodeId] = start
-                vc.positions = p
-                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
-            },
-            redo: { vc in
-                var p = vc.positions
-                p[nodeId] = end
-                vc.positions = p
-                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
-            }
+            undo: { editor.positions[nodeId] = start },
+            redo: { editor.positions[nodeId] = end }
         )
     }
 
@@ -244,43 +206,29 @@ struct WorkflowsView: View {
         newEdge: WorkflowEdge,
         oldEdges: [WorkflowEdge]
     ) {
+        let editor = self.editor
         registerUndoPair(
             name: "Connect Nodes",
-            undo: { vc in
-                vc.workflow = Workflow(
-                    schema: vc.workflow.schema,
-                    name: vc.workflow.name,
-                    nodes: vc.workflow.nodes,
-                    edges: oldEdges
-                )
-                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
-            },
-            redo: { vc in
-                vc.workflow = Workflow(
-                    schema: vc.workflow.schema,
-                    name: vc.workflow.name,
-                    nodes: vc.workflow.nodes,
-                    edges: oldEdges + [newEdge]
-                )
-                vc.document = WorkflowDocument(workflow: vc.workflow, positions: vc.positions)
-            }
+            undo: { editor.setEdges(oldEdges) },
+            redo: { editor.setEdges(oldEdges + [newEdge]) }
         )
     }
 
     // MARK: - Run progress sheet
 
-    /// Drives the run-progress sheet off ``runPhase``. The sheet
-    /// is presented for any non-idle phase; dismissing it returns
-    /// the phase to `.idle`. While a run is in flight the Close
-    /// button is disabled and only Cancel can end the run.
+    /// Drives the run-progress sheet off the store's run phase.
+    /// The sheet is presented for any non-idle phase; dismissing
+    /// it returns the phase to `.idle`. While a run is in flight
+    /// the Close button is disabled and only Cancel can end the
+    /// run.
     private var runSheetPresented: Binding<Bool> {
         Binding(
             get: {
-                if case .idle = runPhase { return false }
+                if case .idle = editor.runPhase { return false }
                 return true
             },
             set: { presented in
-                if !presented { runPhase = .idle }
+                if !presented { editor.runPhase = .idle }
             }
         )
     }
@@ -296,12 +244,12 @@ struct WorkflowsView: View {
                 Text("Run progress")
                     .font(.headline)
                 Spacer()
-                switch runPhase {
+                switch editor.runPhase {
                 case .running(let task, _):
-                    Button("Cancel", role: .cancel) { cancelRun(task) }
+                    Button("Cancel", role: .cancel) { editor.cancelRun(task) }
                         .accessibilityHint("Stop the workflow run")
                 default:
-                    Button("Close") { runPhase = .idle }
+                    Button("Close") { editor.runPhase = .idle }
                 }
             }
             .padding(12)
@@ -309,20 +257,20 @@ struct WorkflowsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(runPhase.events.enumerated()), id: \.offset) { (idx, ev) in
+                        ForEach(Array(editor.runPhase.events.enumerated()), id: \.offset) { (idx, ev) in
                             runEventRow(ev)
                                 .id(idx)
                         }
                     }
                     .padding(12)
                 }
-                .onChange(of: runPhase.events.count) { _, newCount in
+                .onChange(of: editor.runPhase.events.count) { _, newCount in
                     if newCount > 0 {
                         proxy.scrollTo(newCount - 1, anchor: .bottom)
                     }
                 }
             }
-            if case .finished(let outcome, _) = runPhase {
+            if case .finished(let outcome, _) = editor.runPhase {
                 Divider()
                 runOutcomeFooter(outcome)
             }
@@ -424,76 +372,14 @@ struct WorkflowsView: View {
         }
     }
 
-    /// Drive the executor. Builds a per-run context (silent
-    /// logger so the progress sheet is the only event surface),
-    /// runs to completion, and folds every event into
-    /// ``runPhase``. The terminal `.finished` event is parsed
-    /// exactly once into a ``WorkflowRunOutcome`` so the sheet
-    /// footer switches on a structured result rather than the
-    /// raw success flag.
-    private func runWorkflow() {
-        guard !runPhase.isRunning else { return }
-        let context = WorkflowExecutionContext(
-            fileSystem: LocalTesseraFileSystem(),
-            logger: SilentWorkflowLogger()
-        )
-        let executor = WorkflowExecutor(registry: registry)
-        let workflow = self.workflow
-        let task = Task {
-            for await event in await executor.run(workflow, context: context) {
-                if Task.isCancelled { return }
-                if let outcome = WorkflowRunOutcome(finishedEvent: event) {
-                    await MainActor.run {
-                        self.finishRun(
-                            outcome: outcome, appending: event,
-                            workflowName: workflow.name
-                        )
-                    }
-                    return
-                }
-                await MainActor.run { self.appendRunEvent(event) }
-            }
-        }
-        runPhase = .running(task: task, events: [])
-    }
-
-    /// Cancel the in-flight run. Cancels the driving task and
-    /// transitions straight to a terminal `.cancelled` outcome;
-    /// `completedNodes` counts the nodes that already finished.
-    private func cancelRun(_ task: Task<Void, Never>) {
-        guard case .running(_, let events) = runPhase else { return }
-        task.cancel()
-        runPhase = .finished(outcome: .cancelled(events: events), events: events)
-    }
-
-    private func appendRunEvent(_ event: WorkflowEvent) {
-        guard case .running(let task, var events) = runPhase else { return }
-        events.append(event)
-        runPhase = .running(task: task, events: events)
-    }
-
-    private func finishRun(
-        outcome: WorkflowRunOutcome,
-        appending event: WorkflowEvent,
-        workflowName: String
-    ) {
-        var events = runPhase.events
-        events.append(event)
-        runPhase = .finished(outcome: outcome, events: events)
-        // Pull the user back only if they wandered off mid-run
-        // (the notifier no-ops while the app is frontmost and
-        // for cancellations).
-        WorkflowRunNotifier.post(outcome: outcome, workflowName: workflowName)
-    }
-
     /// The right-hand parameter panel. Hidden visually but kept
     /// in the layout when no node is selected (so the HSplit
     /// divider doesn't jump around).
     @ViewBuilder
     private var parameterPanel: some View {
-        if let id = selectedNodeId,
-           let node = workflow.node(id: id),
-           let type = registry.nodeType(for: node.type) {
+        if let id = editor.selectedNodeId,
+           let node = editor.workflow.node(id: id),
+           let type = editor.registry.nodeType(for: node.type) {
             WorkflowParameterPanelView(
                 node: node,
                 type: type,
@@ -511,10 +397,10 @@ struct WorkflowsView: View {
         }
     }
 
-    /// Build a binding into `workflow.nodes[i].parameters`
-    /// keyed by node id. Reads return the current dict;
-    /// writes replace the node with a new copy (Swift value
-    /// type) so the workflow change republishes.
+    /// Build a binding into the store's workflow keyed by node
+    /// id. Reads return the current dict; writes replace the
+    /// node through the store (Swift value type), so the change
+    /// republishes and the derived document picks it up.
     ///
     /// The `TextField` inside `WorkflowParameterPanelView` uses
     /// the same UndoManager from the environment, so per-keystroke
@@ -524,29 +410,10 @@ struct WorkflowsView: View {
     private func parametersBinding(
         for nodeId: String
     ) -> Binding<[String: JSONValue]> {
-        Binding(
-            get: {
-                workflow.node(id: nodeId)?.parameters ?? [:]
-            },
-            set: { newParams in
-                guard let idx = workflow.nodes.firstIndex(where: { $0.id == nodeId }) else { return }
-                workflow = Workflow(
-                    schema: workflow.schema,
-                    name: workflow.name,
-                    nodes: workflow.nodes.enumerated().map { (i, n) in
-                        i == idx
-                            ? WorkflowNode(
-                                id: n.id, type: n.type, parameters: newParams
-                            )
-                            : n
-                    },
-                    edges: workflow.edges
-                )
-                // Keep the save snapshot in sync so a parameter
-                // edit both flips the "Edited" marker and is
-                // actually included by the next Cmd-S.
-                document = WorkflowDocument(workflow: workflow, positions: positions)
-            }
+        let editor = self.editor
+        return Binding(
+            get: { editor.workflow.node(id: nodeId)?.parameters ?? [:] },
+            set: { editor.setParameters(for: nodeId, values: $0) }
         )
     }
 
@@ -571,40 +438,16 @@ struct WorkflowsView: View {
     }
 
     private func newDocument() {
-        workflow = Workflow(name: "untitled", nodes: [], edges: [])
-        positions = [:]
-        selectedNodeId = nil
+        editor.hydrateNewDocument()
         pendingConnection = nil
-        documentName = "untitled"
-        document = WorkflowDocument(workflow: workflow, positions: positions)
-        // A fresh document starts clean, not "Edited".
-        savedDocument = document
         // A "New" can't be undone; clear the stack.
         undoManager?.removeAllActions()
     }
 
-    private func loadDocument(from url: URL) {
-        // `fileImporter` gives us a URL with the security
-        // scoped resource flag set; start access so we can
-        // read it. End access on completion.
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+    private func openDocument(from url: URL) {
         do {
-            let data = try Data(contentsOf: url)
-            let envelope = try JSONDecoder().decode(
-                WorkflowDocument.Envelope.self, from: data
-            )
-            workflow = envelope.workflow
-            positions = envelope.positions ?? [:]
-            selectedNodeId = nil
-            document = WorkflowDocument(workflow: workflow, positions: positions)
-            // The freshly loaded file is the saved baseline.
-            savedDocument = document
-            // fileExporter appends the extension itself (driven
-            // by contentType), so the suggested filename must be
-            // the bare base name without the `.tessera-workflow`
-            // suffix.
-            documentName = url.deletingPathExtension().lastPathComponent
+            try editor.hydrate(from: url)
+            pendingConnection = nil
             // Loading a new file replaces the undo stack.
             undoManager?.removeAllActions()
         } catch {
@@ -632,26 +475,20 @@ struct WorkflowsView: View {
             connectionError = "Type mismatch: \(pending.source.portType.rawValue) cannot flow into \(target.portType.rawValue)."
             return
         }
-        if workflow.edges.contains(where: {
+        if editor.workflow.edges.contains(where: {
             $0.toNode == target.nodeId && $0.toPort == target.portId
         }) {
             connectionError = "Input port \"\(target.portId)\" already has a source."
             return
         }
-        let oldEdges = workflow.edges
+        let oldEdges = editor.workflow.edges
         let newEdge = WorkflowEdge(
             fromNode: pending.source.nodeId,
             fromPort: pending.source.portId,
             toNode: target.nodeId,
             toPort: target.portId
         )
-        workflow = Workflow(
-            schema: workflow.schema,
-            name: workflow.name,
-            nodes: workflow.nodes,
-            edges: oldEdges + [newEdge]
-        )
-        document = WorkflowDocument(workflow: workflow, positions: positions)
+        editor.setEdges(oldEdges + [newEdge])
         recordConnectionAddition(newEdge: newEdge, oldEdges: oldEdges)
     }
 
@@ -660,9 +497,9 @@ struct WorkflowsView: View {
     ) -> PendingPortEndpoint? {
         var best: (PendingPortEndpoint, CGFloat)?
         let threshold: CGFloat = 20
-        for node in workflow.nodes where node.id != sourceNodeId {
-            guard let type = registry.nodeType(for: node.type),
-                  let pos = positions[node.id] else { continue }
+        for node in editor.workflow.nodes where node.id != sourceNodeId {
+            guard let type = editor.registry.nodeType(for: node.type),
+                  let pos = editor.positions[node.id] else { continue }
             let ports = (side == .left) ? type.inputs : type.outputs
             for (idx, port) in ports.enumerated() {
                 let center = WorkflowGeometry.portCenter(
@@ -681,60 +518,6 @@ struct WorkflowsView: View {
             }
         }
         return best?.0
-    }
-
-    static let exampleWorkflow = Workflow(
-        name: "calibrate-and-quantize",
-        nodes: [
-            WorkflowNode(
-                id: "calib",
-                type: CalibrateNode.typeId,
-                parameters: ["n_tokens": .number(8000)]
-            ),
-            WorkflowNode(
-                id: "q",
-                type: QuantizeNode.typeId,
-                parameters: [:]
-            ),
-        ],
-        edges: [
-            WorkflowEdge(
-                fromNode: "calib", fromPort: "result",
-                toNode: "q", toPort: "policy_path"
-            ),
-        ]
-    )
-
-    static let examplePositions: WorkflowPositionMap = [
-        "calib": CGPoint(x: 220, y: 220),
-        "q":     CGPoint(x: 540, y: 220),
-    ]
-}
-
-/// The run-lifecycle state for the editor. A sum type replaces
-/// the old `(isRunning, showRunProgress, runEvents)` flag soup:
-/// a run is either not started, in flight (with its driving task
-/// and the events so far), or terminal (with a structured
-/// ``WorkflowRunOutcome`` and the full event trail). Every UI
-/// question - "show the sheet?", "offer Cancel?", "enable
-/// Close?" - becomes an exhaustive switch instead of a flag
-/// combination that could disagree with itself.
-enum WorkflowRunPhase {
-    case idle
-    case running(task: Task<Void, Never>, events: [WorkflowEvent])
-    case finished(outcome: WorkflowRunOutcome, events: [WorkflowEvent])
-
-    var isRunning: Bool {
-        if case .running = self { return true }
-        return false
-    }
-
-    var events: [WorkflowEvent] {
-        switch self {
-        case .idle: return []
-        case .running(_, let events): return events
-        case .finished(_, let events): return events
-        }
     }
 }
 

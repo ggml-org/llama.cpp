@@ -51,6 +51,13 @@ struct ContentView: View {
     @State private var restoredMessages: [ChatMessage] = []
     @State private var playgroundSession = UUID()
     @State private var exportItem: ExportItem?
+    // Scene-lived workflow editor state. The detail column is
+    // rebuilt on every destination switch, destroying view-local
+    // @State; the store lives here (one per window, lifetime =
+    // the scene) so in-flight edits, the save baseline, and a
+    // running run survive the switch. WorkflowsView is a shell
+    // over it and is recreated freely.
+    @State private var workflowEditor = WorkflowEditorStore()
 
     var body: some View {
         NavigationSplitView {
@@ -142,7 +149,7 @@ struct ContentView: View {
         case .learning:
             LearningDashboardView()
         case .workflows:
-            WorkflowsView()
+            WorkflowsView(editor: workflowEditor)
         case nil:
             ContentUnavailableView(
                 "Select a destination",
