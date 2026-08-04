@@ -5598,11 +5598,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--tessera-config"}, "FILE",
         "Tessera: load default --tessera-* options from this INI file. "
-        "CLI flags (and env vars) override config-file values. The file is "
-        "loaded AFTER argument parsing completes; precedence is "
-        "config < env < CLI. See examples/tessera-config.ini for the "
-        "supported sections and key names. "
-        "(env: TESSERA_CONFIG)",
+        "Precedence is config < env < CLI, so explicit CLI flags and "
+        "TESSERA_* env vars always win over config-file values. The file "
+        "is loaded at the top of the parse path, before env and CLI "
+        "handling, so later writes naturally take precedence. See "
+        "examples/tessera-config.ini for the supported sections and "
+        "key names.",
         [](common_params &, const std::string & value) {
             tessera_params.tessera_config_path = value;
         }
