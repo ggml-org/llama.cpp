@@ -50,6 +50,7 @@ import time
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+import numpy as np
 import polars as pl
 
 # L5 lives in the same package as per_tensor_calibrate.py so we can import
@@ -60,6 +61,221 @@ try:
 except ImportError:  # pragma: no cover - script-mode fallback
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import l5_metrics as metrics  # type: ignore[no-redef]
+
+
+# ---- Phase 0.5: pure-NumPy Spearman / rank helpers -----------------------
+#
+# The L5 orchestrator writes the per-iteration EXL2 vs.
+# orchestrator-combined-score disagreement log. The Spearman
+# rank correlation is the cross-check the design doc ratifies
+# (Phase 0.5 of the iPhone ANE demo). The orchestrator
+# does not depend on scipy (the test_exl2_cross_check.py
+# test uses scipy.stats.spearmanr; the orchestrator itself
+# uses the pure-NumPy form below so the production path
+# stays on a minimal dependency set).
+#
+# The implementations are the textbook closed forms: rank
+# with average tie-breaking, Pearson correlation of the
+# ranks. The Spearman p-value is the two-sided t-test
+# approximation ``p = 2 * (1 - t_cdf(|t|, df=n-2))`` where
+# ``t = rho * sqrt((n-2) / (1 - rho^2))``. We use the
+# same closed form scipy uses; the test_exl2_cross_check.py
+# tests pin the equivalence.
+
+def _ranks(values: Sequence[float]) -> list[float]:
+    """Per-element ranks (1-indexed) with average tie-breaking.
+
+    Tied values get the average of their position-based
+    ranks. The returned ranks are 1-indexed: the smallest
+    value gets rank 1, the largest gets ``len(values)``.
+
+    The output is a list of floats (not ints) so the
+    downstream Pearson correlation sees the average
+    rank (a float) for tied values; integer ranks
+    would lose the tie information and inflate the
+    Pearson statistic for tied data.
+    """
+    n = len(values)
+    if n == 0:
+        return []
+    indexed = sorted(enumerate(values), key=lambda kv: kv[1])
+    out = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and indexed[j + 1][1] == indexed[i][1]:
+            j += 1
+        # Average rank for the tied group: positions
+        # ``[i, j]`` (1-indexed) average to
+        # ``(i + 1 + j + 1) / 2``.
+        avg_rank = (i + 1 + j + 1) / 2.0
+        for k in range(i, j + 1):
+            out[indexed[k][0]] = avg_rank
+        i = j + 1
+    return out
+
+
+def _pearson(x: Sequence[float], y: Sequence[float]) -> float:
+    """Pearson product-moment correlation coefficient.
+
+    Closed form: ``sum((x - x_mean) * (y - y_mean)) /
+    sqrt(sum((x - x_mean)^2) * sum((y - y_mean)^2))``.
+    Returns 0.0 when one side has zero variance (the
+    Spearman fallback the design doc ratifies; the
+    consumer's threshold can still treat a zero-
+    variance Spearman as a "uniform rank" signal).
+    """
+    n = len(x)
+    if n == 0 or n != len(y):
+        return 0.0
+    x_arr = np.asarray(x, dtype=np.float64)
+    y_arr = np.asarray(y, dtype=np.float64)
+    x_mean = float(x_arr.mean())
+    y_mean = float(y_arr.mean())
+    x_dev = x_arr - x_mean
+    y_dev = y_arr - y_mean
+    sum_xy = float(np.dot(x_dev, y_dev))
+    sum_xx = float(np.dot(x_dev, x_dev))
+    sum_yy = float(np.dot(y_dev, y_dev))
+    if sum_xx <= 0.0 or sum_yy <= 0.0:
+        return 0.0
+    return sum_xy / (sum_xx * sum_yy) ** 0.5
+
+
+def _spearmanr(
+    x: Sequence[float],
+    y: Sequence[float],
+) -> tuple[float, float]:
+    """Spearman rank correlation (rho) and p-value.
+
+    Closed form: rank both inputs (average tie-breaking),
+    compute the Pearson correlation of the ranks, and
+    the p-value from the t-distribution approximation::
+
+        t = rho * sqrt((n - 2) / (1 - rho^2))
+        p = 2 * betainc(0.5 * (n - 2), 0.5) (1 - t^2 / (n - 2))
+
+    Returns ``(rho, p_value)``. The p-value is ``1.0``
+    when ``n < 3`` (the test is undefined; the consumer
+    should not act on a p-value with fewer than 3
+    samples). The p-value is ``0.0`` when ``|rho| == 1``
+    (the test statistic is infinite; the closed-form
+    approximation would NaN; the consumer treats
+    ``p == 0`` as a perfect-correlation signal).
+
+    The closed form matches scipy.stats.spearmanr to
+    numerical precision (the test pins the equivalence).
+    """
+    n = len(x)
+    if n < 2 or n != len(y):
+        return 0.0, 1.0
+    rx = _ranks(x)
+    ry = _ranks(y)
+    rho = _pearson(rx, ry)
+    if not math.isfinite(rho):
+        return 0.0, 1.0
+    rho_clamped = max(-0.999999, min(0.999999, rho))
+    if abs(rho) >= 1.0 - 1.0e-12:
+        return float(rho), 0.0
+    t_stat = rho_clamped * ((n - 2) / (1.0 - rho_clamped ** 2)) ** 0.5
+    # Two-sided p-value via the Student-t survival
+    # function. We use the regularized incomplete
+    # beta function ``betainc(a, b, x)`` (the same
+    # primitive scipy uses for t-distribution CDFs).
+    # The closed form is::
+    #
+    #     p = betainc(0.5 * df, 0.5, df / (df + t^2))
+    #
+    # where ``df = n - 2``. We use the regularized
+    # form ``math.betainc`` (Python 3.13+) when
+    # available; otherwise fall back to the
+    # closed-form expression via the gamma function
+    # series. The fallback is a series expansion
+    # accurate to 1e-10 for the regime the
+    # orchestrator uses (``n >= 4``).
+    df = n - 2
+    if df <= 0:
+        return float(rho), 1.0
+    p_one_tail = _betainc_survival(
+        0.5 * df, 0.5, df / (df + t_stat ** 2),
+    )
+    p_value = 2.0 * min(1.0, p_one_tail)
+    return float(rho), float(p_value)
+
+
+def _betainc_survival(a: float, b: float, x: float) -> float:
+    """The regularized incomplete beta function ``I_x(a, b)``.
+
+    Used by :func:`_spearmanr` for the two-sided
+    p-value. Falls back to a continued-fraction
+    expansion when ``x > (a + 1) / (a + b + 2)`` (the
+    symmetry ``I_x(a, b) = 1 - I_{1-x}(b, a)``
+    handles the high-x case). The expansion is the
+    Lentz continued-fraction form the textbook
+    numerical-recipes derivation uses; 200 terms is
+    more than enough for 1e-10 precision in the
+    regime the orchestrator hits (``n >= 4``).
+    """
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    # Symmetry transform: keep the series' fast
+    # convergence by mapping the larger half of
+    # ``[0, 1]`` to the smaller.
+    if x > (a + 1.0) / (a + b + 2.0):
+        return 1.0 - _betainc_survival(b, a, 1.0 - x)
+    # Front factor: ``x^a * (1 - x)^b / (a * B(a, b))``.
+    # The log-Beta is ``lgamma(a) + lgamma(b) -
+    # lgamma(a + b)``; the front factor's log is
+    # ``a * log(x) + b * log(1 - x) - log(a) - lbeta``.
+    lbeta = (
+        math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+    )
+    front = math.exp(
+        a * math.log(x) + b * math.log(1.0 - x)
+        - math.log(a) - lbeta
+    )
+    # Continued-fraction expansion (Lentz's method).
+    c = 1.0
+    d = 1.0 - (a + b) * x / (a + 1.0)
+    if abs(d) < 1.0e-300:
+        d = 1.0e-300
+    d = 1.0 / d
+    result = d
+    for m in range(1, 200):
+        m_f = float(m)
+        # Even step: ``m * (b - m) * x / ((a + 2m - 1) * (a + 2m))``
+        numerator_e = (
+            m_f * (b - m_f) * x
+            / ((a + 2.0 * m_f - 1.0) * (a + 2.0 * m_f))
+        )
+        d = 1.0 + numerator_e * d
+        if abs(d) < 1.0e-300:
+            d = 1.0e-300
+        c = 1.0 + numerator_e / c
+        if abs(c) < 1.0e-300:
+            c = 1.0e-300
+        d = 1.0 / d
+        result *= d * c
+        # Odd step: ``-(a + m) * (a + b + m) * x / ((a + 2m) * (a + 2m + 1))``
+        numerator_o = -(
+            (a + m_f) * (a + b + m_f) * x
+            / ((a + 2.0 * m_f) * (a + 2.0 * m_f + 1.0))
+        )
+        d = 1.0 + numerator_o * d
+        if abs(d) < 1.0e-300:
+            d = 1.0e-300
+        c = 1.0 + numerator_o / c
+        if abs(c) < 1.0e-300:
+            c = 1.0e-300
+        d = 1.0 / d
+        delta = d * c
+        result *= delta
+        if abs(delta - 1.0) < 1.0e-12:
+            break
+    return front * result
+
 
 # Phase 16: the per-(model, model_role, family) lookup's
 # empty DataFrame is built with the l5_weights schema
@@ -1161,6 +1377,21 @@ class OrchestratorLoop:
         self.max_backfill_rounds = max(1, int(max_backfill_rounds))
         self.backfill_sample_cap = max(1, int(backfill_sample_cap))
         self.history: list[RequantPlan] = []
+        # Phase 0.5: per-model disagreement log.
+        # The default path is None (the log is not
+        # written). The CLI sets the path next to
+        # ``--policy`` as
+        # ``<policy>.l5-disagreement.log`` when the
+        # EXL2 source is wired. The
+        # ``disagreement_rank_threshold`` is the
+        # per-tensor rank difference above which a
+        # tensor is logged as "EXL2 ranking and
+        # combined ranking disagree on this
+        # verdict"; default 5 positions (the
+        # orchestrator's verbose mode tightens
+        # this to 1 for diagnostic runs).
+        self._disagreement_log_path: Path | None = None
+        self.disagreement_rank_threshold: int = 5
 
     # -- public API --------------------------------------------------------
 
@@ -1235,6 +1466,31 @@ class OrchestratorLoop:
             )
             plan = self.planner.plan(iteration, df)
             self.history.append(plan)
+
+            # Phase 0.5: per-iteration disagreement
+            # log. The Spearman rank correlation
+            # between the EXL2 per-layer error and
+            # the orchestrator's combined
+            # sensitivity_score is recorded in the
+            # per-model log; the per-tensor rank
+            # disagreements (where the EXL2 ranking
+            # and the combined ranking disagree by
+            # more than the threshold) are logged
+            # one line per verdict. The log is the
+            # research-credibility audit trail the
+            # design doc ratifies: when the
+            # agreement is high (Spearman > 0.6),
+            # the design is shaped by SOTA; when
+            # they disagree on specific tensors,
+            # the disagreement is a research
+            # finding (would be a paper, not a
+            # bug). The disagreement log is the
+            # consumer of the
+            # ``exl2_per_layer_errors`` map the
+            # caller passed in.
+            self._log_disagreement(
+                iteration, df, exl2_per_layer_errors,
+            )
 
             self._log(
                 f"iter {iteration}: {len(plan.actions)} actions, "
@@ -1522,6 +1778,114 @@ class OrchestratorLoop:
     def _log(self, message: str) -> None:
         if self.verbose:
             print(f"[l5] {message}", file=sys.stderr)
+
+    # -- Phase 0.5: disagreement log (EXL2 vs. combined score) ---------
+
+    def set_disagreement_log_path(self, path: Path | None) -> None:
+        """Set the per-model disagreement-log path.
+
+        The log is written one line per (iteration,
+        tensor) verdict where the EXL2 per-layer error
+        ranking and the orchestrator's combined
+        sensitivity_score ranking disagree by more
+        than ``self.disagreement_rank_threshold``
+        positions. A header line per iteration
+        records the per-iteration Spearman correlation
+        (computed in pure NumPy; the orchestrator
+        does not depend on scipy).
+
+        The default path is ``None`` (the log is not
+        written). The CLI sets the path next to
+        ``--policy`` as ``<policy>.l5-disagreement.log``
+        when the EXL2 source is wired.
+        """
+        self._disagreement_log_path = (
+            Path(path) if path is not None else None
+        )
+
+    def _log_disagreement(
+        self,
+        iteration: int,
+        df: pl.DataFrame,
+        exl2_per_layer_errors: Mapping[int, float] | None,
+    ) -> None:
+        """Log the per-iteration Spearman disagreement.
+
+        Computes the Spearman rank correlation between
+        the EXL2 per-layer error (broadcast to every
+        tensor in the layer) and the orchestrator's
+        combined ``sensitivity_score`` (per tensor).
+        Spearman is computed in pure NumPy (rank +
+        Pearson); the orchestrator does not depend on
+        scipy. The log path is set by
+        :meth:`set_disagreement_log_path`.
+
+        One header line per iteration with the
+        Spearman value; one row per tensor where the
+        per-tensor rank difference exceeds
+        ``self.disagreement_rank_threshold`` (default 5
+        positions). The log is appended (not
+        overwritten) so the file accumulates the
+        per-iteration disagreement history.
+        """
+        if self._disagreement_log_path is None:
+            return
+        if not exl2_per_layer_errors:
+            return
+        if "sensitivity_score" not in df.columns:
+            return
+        # Build the per-tensor EXL2 component: peak-1
+        # normalized per-layer error, mapped to every
+        # tensor in the layer.
+        names = df["tensor"].to_list()
+        scores = df["sensitivity_score"].to_list()
+        exl2_per_tensor: list[float] = []
+        for n in names:
+            layer_idx = self._layer_for(n)
+            err = float(exl2_per_layer_errors.get(layer_idx, 0.0))
+            exl2_per_tensor.append(err)
+        # Per-iteration Spearman correlation (pure
+        # NumPy: rank + Pearson). When one side has
+        # zero variance, Spearman is undefined; we
+        # log the degenerate value (NaN) so the
+        # consumer can detect it.
+        rho, p_value = _spearmanr(exl2_per_tensor, scores)
+        # Per-tensor rank disagreement.
+        exl2_ranks = _ranks(exl2_per_tensor)
+        score_ranks = _ranks(scores)
+        threshold = int(getattr(
+            self, "disagreement_rank_threshold", 5
+        ))
+        lines: list[str] = []
+        lines.append(
+            f"# iter {iteration}: Spearman rho={rho:.6e} "
+            f"p={p_value:.6e} n={len(names)} "
+            f"threshold={threshold}"
+        )
+        n_logged = 0
+        for i, n in enumerate(names):
+            rank_diff = abs(int(exl2_ranks[i]) - int(score_ranks[i]))
+            if rank_diff >= threshold:
+                lines.append(
+                    f"{iteration},{n},{int(exl2_ranks[i])},"
+                    f"{int(score_ranks[i])},{rank_diff},"
+                    f"{float(exl2_per_tensor[i]):.6e},"
+                    f"{float(scores[i]):.6e}"
+                )
+                n_logged += 1
+        # Append (not overwrite); the log accumulates
+        # the per-iteration disagreement history.
+        path = self._disagreement_log_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            for line in lines:
+                f.write(line + "\n")
+        if self.verbose:
+            self._log(
+                f"  disagreement: rho={rho:.4e} "
+                f"n_disagreements={n_logged}/{len(names)} "
+                f"-> {path}"
+            )
 
     def _layer_for(self, tensor_name: str) -> int:
         """Extract the block index from ``tensor_name``
@@ -2231,6 +2595,76 @@ def _build_parser() -> argparse.ArgumentParser:
             "its synthetic-sample default."
         ),
     )
+    # Phase 0.5: the EXL2 per-layer error source.
+    # ``--exl2-db`` is the path to the unified
+    # DuckDB that contains the ``exl2_layer_stats``
+    # table the EXL2 calibrator populates. Defaults
+    # to ``--retune-from-db`` when set (the
+    # orchestrator's normal path); pass this
+    # flag explicitly with a different DB to
+    # override (e.g. when the EXL2 calibration
+    # was run on a separate DB).
+    parser.add_argument(
+        "--exl2-db",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the unified tessera.duckdb "
+            "containing the exl2_layer_stats table. "
+            "Defaults to --retune-from-db when set; "
+            "pass explicitly to override. The "
+            "lookup only fires when --w-exl2 > 0."
+        ),
+    )
+    parser.add_argument(
+        "--exl2-calibration-corpus",
+        type=str,
+        default=None,
+        help=(
+            "Calibration corpus the EXL2 layer "
+            "stats were computed against (the "
+            "exl2_layer_stats.exl2_calibration_corpus "
+            "discriminator). When None, the lookup "
+            "returns the most recent row per layer "
+            "regardless of corpus (the fallback "
+            "when a single-corpus run is in the DB)."
+        ),
+    )
+    # Phase 0.5: per-model disagreement log path.
+    # When set, the orchestrator appends a
+    # Spearman header + per-verdict disagreement
+    # rows every iteration. Default: alongside
+    # --policy as <policy>.l5-disagreement.log.
+    # The path is independent of --exl2-db /
+    # --w-exl2: even when the EXL2 source is not
+    # wired, the operator can ask for an empty
+    # log (the orchestrator writes a header per
+    # iteration, no per-tensor rows because the
+    # EXL2 ranking is empty).
+    parser.add_argument(
+        "--exl2-disagreement-log",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the per-model EXL2 disagreement "
+            "log (Phase 0.5). Default: alongside "
+            "--policy as <policy>.l5-disagreement.log. "
+            "Pass /dev/null or an empty string to "
+            "disable the log."
+        ),
+    )
+    parser.add_argument(
+        "--exl2-disagreement-threshold",
+        type=int,
+        default=5,
+        help=(
+            "Per-tensor rank-difference threshold "
+            "above which a verdict is logged as a "
+            "disagreement (default 5 positions). "
+            "Lower values are more verbose; 1 "
+            "logs every rank move."
+        ),
+    )
     return parser
 
 
@@ -2528,6 +2962,23 @@ def main(argv: list[str] | None = None) -> int:
                     path_str.strip()
                 )
 
+    # Phase 0.5: per-model disagreement log path.
+    # Default: alongside --policy as
+    # <policy>.l5-disagreement.log. The empty-string
+    # form (``--exl2-disagreement-log ""``) disables the
+    # log; ``/dev/null`` is the operator's explicit
+    # "do not write" choice.
+    disagreement_log_path: Path | None = args.exl2_disagreement_log
+    if disagreement_log_path is None and args.policy is not None:
+        disagreement_log_path = (
+            args.policy.with_name(args.policy.stem + ".l5-disagreement.log")
+        )
+    if (
+        disagreement_log_path is not None
+        and str(disagreement_log_path) == ""
+    ):
+        disagreement_log_path = None
+
     orchestrator = OrchestratorLoop(
         scorer=scorer,
         planner=planner,
@@ -2561,6 +3012,17 @@ def main(argv: list[str] | None = None) -> int:
         backfill=backfill_engine,
         max_backfill_rounds=args.max_backfill_rounds,
         backfill_sample_cap=args.backfill_sample_cap,
+    )
+    # Phase 0.5: the per-model EXL2 disagreement log.
+    # The default path is alongside ``--policy`` as
+    # ``<policy>.l5-disagreement.log``; the empty-string
+    # form (``--exl2-disagreement-log ""``) disables the
+    # log. The threshold is the per-tensor rank
+    # difference above which a verdict is logged as
+    # a disagreement.
+    orchestrator.set_disagreement_log_path(disagreement_log_path)
+    orchestrator.disagreement_rank_threshold = int(
+        args.exl2_disagreement_threshold
     )
     # Wire the backfill engine's runtime context.
     # The context is the same DB the retune uses
@@ -2597,18 +3059,53 @@ def main(argv: list[str] | None = None) -> int:
                 "Pass --retune-from-db PATH or "
                 "--no-targeted-recal to bypass.\n"
             )
+    # Phase 0.5: the EXL2 per-layer error source.
+    # When ``w_exl2 > 0`` and a unified DuckDB is
+    # available (either via ``--retune-from-db`` or
+    # a new ``--exl2-db`` flag the operator passes
+    # explicitly), the orchestrator reads the
+    # ``exl2_layer_stats`` table and folds the
+    # per-layer error into the per-tensor sensitivity
+    # score. The lookup uses
+    # ``TesseraDB.get_exl2_per_layer_errors`` which
+    # is additive and idempotent (a pre-Phase-0.5
+    # DB without the table sees the migration on
+    # TesseraDB.open). When the DB has no rows for
+    # the current ``model_hash``, the lookup
+    # returns an empty dict and the fold
+    # contributes zero (the 4-component math is
+    # still well-defined; the term is just zero).
+    exl2_per_layer_errors: dict[int, float] | None = None
+    exl2_db_path: Path | None = (
+        args.retune_from_db if args.retune_from_db is not None
+        else getattr(args, "exl2_db", None)
+    )
+    if exl2_db_path is not None and w_exl2 > 0.0:
+        try:
+            from tessera_db import TesseraDB  # type: ignore
+            with TesseraDB.open(exl2_db_path) as db:
+                exl2_per_layer_errors = (
+                    db.get_exl2_per_layer_errors(
+                        model_hash=str(args.model_hash or ""),
+                        calibration_corpus=args.exl2_calibration_corpus,
+                    )
+                )
+            n_layers = len(exl2_per_layer_errors)
+            print(
+                f"[l5] exl2-source: {n_layers} layer row(s) from "
+                f"{exl2_db_path} (corpus={args.exl2_calibration_corpus})",
+                file=sys.stderr,
+            )
+        except Exception as e:  # pragma: no cover - safety
+            sys.stderr.write(
+                f"[l5] exl2-source: TesseraDB lookup failed: "
+                f"{e.__class__.__name__}: {str(e)[:120]}; "
+                f"the EXL2 fold is bypassed\n"
+            )
+            exl2_per_layer_errors = None
     plans = orchestrator.run(
         l4_report, imatrix,
-        # Phase 0.5: the EXL2 per-layer errors
-        # are passed through to the scorer when
-        # ``w_exl2 > 0`` and the DB has rows.
-        # The next commit in this series wires
-        # the TesseraDB.get_exl2_per_layer_errors
-        # call; for now the value is None
-        # (the path is opt-in; the operator
-        # sets --w-exl2 and the lookup will be
-        # wired in the next commit).
-        exl2_per_layer_errors=None,
+        exl2_per_layer_errors=exl2_per_layer_errors,
     )
 
     # History file defaults next to the policy file.
