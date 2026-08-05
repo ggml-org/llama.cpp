@@ -1828,6 +1828,22 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             //   src[4]  outlier_cols        (I32  [n_outliers])
             //   src[5]  outlier_vals        (F16  [n_outliers])
             //   src[6]  B (activations)     (F16  [in_dim, n_tokens, ...])
+            //
+            // The per-row meta (page_scales, lane_scales,
+            // outlier data) is consumed at runtime: the
+            // dispatch reads src[1..5] from the ggml graph on
+            // every call and writes them into the bundle's
+            // pinned slots. The per-layer alpha is the AWQ
+            // exponent applied at quantization time; it is
+            // folded into the ternary encoding (the weight
+            // itself), not into the per-row meta. With the
+            // default ts_quantize_2d parameters the per-row
+            // meta is alpha-independent, so a "same weight,
+            // different alpha" parity test would be
+            // degenerate. The per-row meta plumbing is
+            // exercised by the re-run case in the parity
+            // test (different seed = different page_scales =
+            // different ANE output).
             if (op->src[0] == nullptr || op->src[1] == nullptr ||
                 op->src[2] == nullptr || op->src[3] == nullptr ||
                 op->src[4] == nullptr || op->src[5] == nullptr ||
