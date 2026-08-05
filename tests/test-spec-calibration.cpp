@@ -157,6 +157,26 @@ static int count_array_entries(const std::string & line, const std::string & key
     return commas + 1;
 }
 
+// Parse a top-level integer array field into a vector.  Returns an empty
+// vector when the field is missing.
+static std::vector<int> parse_int_array(const std::string & line, const std::string & key) {
+    std::vector<int> out;
+    const std::string needle = "\"" + key + "\":[";
+    size_t p = line.find(needle);
+    if (p == std::string::npos) return out;
+    p += needle.size();
+    while (p < line.size() && line[p] != ']') {
+        while (p < line.size() && (line[p] == ' ' || line[p] == ',')) ++p;
+        if (p >= line.size() || line[p] == ']') break;
+        char * end = nullptr;
+        const long v = std::strtol(line.c_str() + p, &end, 10);
+        if (end == line.c_str() + p) break;
+        out.push_back((int) v);
+        p = (size_t) (end - line.c_str());
+    }
+    return out;
+}
+
 static int parse_record(const std::string & line, jsonl_record & rec) {
     rec.schema    = find_field(line, "schema");
     const std::string seq_id_s = find_field(line, "seq_id");
@@ -331,6 +351,38 @@ static int test_with_model(common_params & params_in, const std::string & teleme
                 LOG_ERR("%s: spec.v1 confidence[%d] != drafted=%d\n",
                         __func__, rec.n_conf, rec.drafted);
                 return 47;
+            }
+            // Off-by-one regression: verifier row i is conditioned on
+            // prefix + draft[0..i-1], so it judges draft[i]. Every
+            // accepted position must therefore satisfy
+            // verifier_argmax[i] == drafted_tokens[i], and the bonus
+            // (last accepted_tokens entry) must equal
+            // verifier_argmax[accepted]. The pre-fix accept loop
+            // compared v_argmax[i] to draft[i-1], which made accepted
+            // positions satisfy verifier_argmax[i] == drafted_tokens[i-1]
+            // instead.
+            {
+                const std::vector<int> varg  = parse_int_array(line, "verifier_argmax");
+                const std::vector<int> dtoks = parse_int_array(line, "drafted_tokens");
+                const std::vector<int> atoks = parse_int_array(line, "accepted_tokens");
+                if ((int) varg.size() != rec.drafted + 1) {
+                    LOG_ERR("%s: verifier_argmax has %zu entries, expected %d\n",
+                            __func__, varg.size(), rec.drafted + 1);
+                    return 51;
+                }
+                for (int i = 0; i < rec.accepted; ++i) {
+                    if (i >= (int) dtoks.size() || varg[i] != dtoks[i]) {
+                        LOG_ERR("%s: off-by-one regression: verifier_argmax[%d]=%d != drafted_tokens[%d]=%d\n",
+                                __func__, i, i < (int) varg.size() ? varg[i] : -1,
+                                i, i < (int) dtoks.size() ? dtoks[i] : -1);
+                        return 52;
+                    }
+                }
+                if (!atoks.empty() && varg[rec.accepted] != atoks.back()) {
+                    LOG_ERR("%s: off-by-one regression: bonus %d != verifier_argmax[accepted=%d]=%d\n",
+                            __func__, atoks.back(), rec.accepted, varg[rec.accepted]);
+                    return 53;
+                }
             }
         } else {
             LOG_ERR("%s: unknown schema '%s' in record %d\n",

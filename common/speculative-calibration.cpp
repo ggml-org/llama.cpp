@@ -60,10 +60,12 @@
 // Serialize one llama.tessera.spec.v1 JSONL record for a single spec
 // step.  See speculative-calibration.h for the contract.
 //
-// This is the per-step record serialization moved verbatim out of
-// common_speculative_calibration_run(); the only additions are the
+// This is the per-step record serialization moved out of
+// common_speculative_calibration_run(); the additions are the
 // provenance / sid trailing fields (emitted only when non-NULL) so the
-// calibration output stays byte-identical.
+// calibration output stays byte-identical, and the off-by-one fix
+// described in the run() history below (confidence[i] and the bonus
+// now use row i / row n_acc instead of row i+1 / row n_dft).
 //
 std::string common_spec_telemetry_record(
         int32_t step,
@@ -141,10 +143,11 @@ std::string common_spec_telemetry_record(
         v_topk_probs[i]  = std::move(tk.second);
         v_argmax_explicit[i] = am;
     }
-    // confidence[] is the softmax prob of draft[i-1] under the
-    // verifier at the i-th per-position forward. Use the
-    // precomputed row (avoids re-scanning the vocab).
-    for (int i = 1; i <= n_dft; ++i) {
+    // confidence[] is the softmax prob of draft[i] under the verifier
+    // row that judges it: row i is conditioned on prefix +
+    // draft[0..i-1] (the same conditioning the accept check uses).
+    // Use the precomputed row (avoids re-scanning the vocab).
+    for (int i = 0; i < n_dft; ++i) {
         const float * row = (i < (int) v_logits_rows.size())
                             ? v_logits_rows[i] : nullptr;
         if (row == nullptr) continue;
@@ -157,9 +160,9 @@ std::string common_spec_telemetry_record(
             sum_exp += std::exp((double) row[v] - (double) max_logit);
         }
         const double prob = sum_exp > 0.0
-            ? std::exp((double) row[draft[i - 1]] - (double) max_logit) / sum_exp
+            ? std::exp((double) row[draft[i]] - (double) max_logit) / sum_exp
             : 0.0;
-        confidence[i - 1] = (float) prob;
+        confidence[i] = (float) prob;
     }
 
     // Drafter: n_dft+1 per-position distributions (priming + drafts).
@@ -177,12 +180,10 @@ std::string common_spec_telemetry_record(
     }
 
     // accepted_tokens: drafts[0..n_acc-1] + bonus
-    // Bonus = verifier argmax at position n_acc (which equals
-    // v_argmax_explicit[n_dft] in our per-prefix scheme; the
-    // verifier "extends past the last accepted draft" with the
-    // same prediction regardless of how many drafts were
-    // accepted).
-    const llama_token bonus_local = v_argmax_explicit[n_dft];
+    // Bonus = verifier argmax of row n_acc, the first row conditioned
+    // only on accepted drafts (prefix + draft[0..n_acc-1]). Rows past
+    // n_acc also saw rejected drafts, so they must not contribute.
+    const llama_token bonus_local = v_argmax_explicit[n_acc];
     std::vector<int32_t> accepted_tokens;
     accepted_tokens.reserve(n_acc + 1);
     for (size_t k = 0; k < n_acc; ++k) {
@@ -343,6 +344,14 @@ std::string common_spec_telemetry_record(
 //   - The per-step record serialization was moved verbatim into
 //     common_spec_telemetry_record() below (byte-identical output;
 //     pinned by tests/test-telemetry-golden.cpp).
+//   - Off-by-one accept fix: the accept loop compared v_argmax[i] to
+//     draft[i-1] and took the bonus from row n_dft, while the
+//     per-prefix forwards document that row i (conditioned on prefix +
+//     draft[0..i-1]) judges draft[i]. The loop now compares v_argmax[i]
+//     to draft[i] and takes the bonus from row n_acc, matching the
+//     production accept path. The shared emitter's confidence[] and
+//     accepted_tokens bonus were shifted the same way and were fixed
+//     in lockstep (this also corrects runtime records).
 //
 bool common_speculative_calibration_run(
     llama_context * ctx_tgt,
@@ -647,24 +656,23 @@ bool common_speculative_calibration_run(
             llama_batch_free(ver_batch);
         }
 
-        // 3. The "main" verifier forward (already done as the i==n_dft
-        //    per-prefix forward) sampled the bonus.  Compute the
-        //    accepted count from the per-position argmaxes (this is
-        //    the same logic as the verifier's normal accept check).
-        //
-        //    The first draft is accepted iff v_argmax[1] == draft[0],
-        //    the second iff v_argmax[2] == draft[1] AND draft[0] was
-        //    accepted, etc. So the longest prefix match is the number
-        //    of accepted drafts.
+        // 3. Compute the accepted count from the per-position argmaxes.
+        //    Row i is conditioned on prefix + draft[0..i-1], so it
+        //    judges draft[i] - the same pairing as the production
+        //    accept path (common_sampler_sample_and_accept_n over the
+        //    batched verify forward; the adaptive muxer's trial_verify
+        //    compares the logits of the entry that fed draft[i-1] to
+        //    draft[i]). The bonus is the argmax of row n_acc, the
+        //    first row conditioned only on accepted drafts.
         int n_acc = 0;
-        for (int i = 1; i <= n_dft; ++i) {
-            if (v_argmax[i] == draft[i - 1]) {
-                n_acc = i;
+        for (int i = 0; i < n_dft; ++i) {
+            if (v_argmax[i] == draft[i]) {
+                n_acc = i + 1;
             } else {
                 break;
             }
         }
-        const llama_token bonus = v_argmax[n_dft];
+        const llama_token bonus = v_argmax[n_acc];
         std::vector<llama_token> ids;
         ids.reserve(n_acc + 1);
         for (int k = 0; k < n_acc; ++k) {
@@ -675,17 +683,10 @@ bool common_speculative_calibration_run(
 
         // 4. Roll back the verifier's KV for the rejected tokens. The
         //    verifier's KV now has positions n_past..n_past+n_dft
-        //    (n_dft+1 tokens).  The kept tail is n_acc drafts
-        //    (positions n_past+1..n_past+n_acc) plus the bonus token
-        //    (position n_past+n_acc+1, which is v_argmax[n_acc] -- we
-        //    overwrite the verifier's pre-existing bonus prediction
-        //    with the just-sampled bonus, which is v_argmax[n_dft]).
-        //
-        //    Easier formulation: the next id_last is bonus, and the
-        //    next n_past is n_past + n_acc + 1.  So we want the
-        //    verifier's KV to end at position n_past + n_acc (inclusive
-        //    of id_last at n_past).  Trim positions n_past+n_acc+1
-        //    through n_past+n_dft (which is n_past+n_dft+1 - 1).
+        //    (n_dft+1 tokens). Keep id_last + the accepted drafts
+        //    (positions n_past..n_past+n_acc); the bonus becomes the
+        //    next step's id_last at position n_past+n_acc+1. Trim
+        //    positions n_past+n_acc+1..n_past+n_dft.
         if (n_acc < n_dft) {
             llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0,
                                 n_past + n_acc + 1,
@@ -703,14 +704,11 @@ bool common_speculative_calibration_run(
         //
         //     The verifier's per-position logits are in v_logits_ptrs
         //     (n_dft+1 entries, one per prefix [id_last] up through
-        //     [id_last, draft[0], ..., draft[n_dft-1]]). The i-th
-        //     argmax at v_logits_ptrs[i] is the verifier's prediction
-        //     for the (i+1)-th "next token" position.
-        //
-        //     The drafter's per-position logits are in dft_logits_ptrs
-        //     (n_dft+1 entries: priming + n_dft draft forwards). The
-        //     i-th dft_logits_ptrs[i] is the drafter's view of the
-        //     token at position n_past+i+1.
+        //     [id_last, draft[0], ..., draft[n_dft-1]]). Row i is
+        //     conditioned on prefix + draft[0..i-1]: it judges draft[i],
+        //     and row n_dft is the bonus row. The drafter's rows in
+        //     dft_logits_ptrs follow the same convention (priming row
+        //     + one row per draft forward).
         if (telemetry_fp != nullptr) {
             const std::string line = common_spec_telemetry_record(
                 step, id_last, draft, (size_t) n_acc,

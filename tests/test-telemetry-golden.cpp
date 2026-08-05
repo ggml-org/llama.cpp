@@ -47,7 +47,9 @@ namespace {
 // Frozen copy of the pre-factoring per-step serialization, operating on
 // the same per-position logits rows the factored function consumes.
 // Copied from the inline block of common_speculative_calibration_run()
-// as it existed before the S1 factoring; pinned here.
+// as it existed before the S1 factoring; pinned here. Updated in
+// lockstep with the off-by-one accept fix (confidence reads row i
+// instead of row i+1; the bonus reads row n_acc instead of row n_dft).
 // ---------------------------------------------------------------------------
 std::string golden_spec_record(int32_t step,
                                int32_t id_last,
@@ -119,7 +121,7 @@ std::string golden_spec_record(int32_t step,
         v_topk_probs[i]  = std::move(tk.second);
         v_argmax_explicit[i] = am;
     }
-    for (int i = 1; i <= n_dft; ++i) {
+    for (int i = 0; i < n_dft; ++i) {
         const float * row = (i < (int) v_logits_ptrs.size())
                             ? v_logits_ptrs[i] : nullptr;
         if (row == nullptr) continue;
@@ -132,9 +134,9 @@ std::string golden_spec_record(int32_t step,
             sum_exp += std::exp((double) row[v] - (double) max_logit);
         }
         const double prob = sum_exp > 0.0
-            ? std::exp((double) row[draft[i - 1]] - (double) max_logit) / sum_exp
+            ? std::exp((double) row[draft[i]] - (double) max_logit) / sum_exp
             : 0.0;
-        confidence[i - 1] = (float) prob;
+        confidence[i] = (float) prob;
     }
 
     std::vector<std::vector<int32_t>> d_topk_tokens(n_dft + 1);
@@ -150,7 +152,7 @@ std::string golden_spec_record(int32_t step,
         d_argmax_explicit[i] = am;
     }
 
-    const int32_t bonus_local = v_argmax_explicit[n_dft];
+    const int32_t bonus_local = v_argmax_explicit[n_acc];
     std::vector<int32_t> accepted_tokens;
     accepted_tokens.reserve(n_acc + 1);
     for (size_t k = 0; k < n_acc; ++k) {
@@ -351,11 +353,13 @@ int main() {
     // -----------------------------------------------------------------
     // 1. Hand-computed literal anchor (topk == 0, n_vocab 4, 1 draft,
     //    fully accepted). Rows are exactly representable floats so the
-    //    double-precision softmax math is reproducible by hand:
-    //      v row 1 = [0, 1, 2, 3], draft[0] = 2
-    //      confidence = e^(2-3) / (e^-3 + e^-2 + e^-1 + 1)
-    //                 = 0.23688281...  -> float -> "%.8g" -> 0.23688282
-    //      bonus = argmax(v row 1) = 3
+    //    double-precision softmax math is reproducible by hand.
+    //    confidence[0] is the prob of draft[0] under row 0 (the row
+    //    that judges draft[0]); the bonus is argmax(row n_acc).
+    //      v row 0 = [0.1, 0.2, 0.3, 0.4], draft[0] = 2
+    //      confidence = e^(0.3-0.4) / (e^(0.1-0.4) + e^(0.2-0.4) +
+    //                   e^(0.3-0.4) + 1) = 0.26118261... -> "%.8g"
+    //      bonus = argmax(v row 1) = 3 (n_acc == n_dft here)
     // -----------------------------------------------------------------
     {
         const std::vector<float> v0 = { 0.1f, 0.2f, 0.3f, 0.4f };
@@ -373,9 +377,51 @@ int main() {
             "{\"schema\":\"llama.tessera.spec.v1\",\"seq_id\":0,\"step_idx\":0,"
             "\"prime_token\":1,\"drafted\":1,\"accepted\":1,"
             "\"drafted_tokens\":[2],\"accepted_tokens\":[2,3],"
-            "\"confidence\":[0.23688282]}\n";
+            "\"confidence\":[0.26118261]}\n";
         if (line != expected) {
             std::fprintf(stderr, "test-telemetry-golden: literal anchor mismatch\n"
+                                 "  expected: %s  actual:   %s\n",
+                         expected.c_str(), line.c_str());
+            return 1;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 1b. Off-by-one regression pin (fails on the pre-fix emitter).
+    //     Row i is conditioned on prefix + draft[0..i-1] and judges
+    //     draft[i]; the bonus comes from row n_acc. With n_acc < n_dft:
+    //       v row 0 = [0, 4, 0, 0]  argmax 1 == draft[0] (accepted)
+    //       v row 1 = [0, 0, 0, 3]  argmax 3 != draft[1] (rejected)
+    //       v row 2 = [2, 0, 0, 0]  argmax 0 (row saw the rejected draft)
+    //     Correct output:
+    //       confidence[0] = P(1 | row 0) = e^4/(e^4+3) -> 0.94791502
+    //       confidence[1] = P(2 | row 1) = 1/(3+e^3)   -> 0.043317165
+    //       bonus = argmax(row n_acc=1) = 3, accepted_tokens = [1, 3]
+    //     The pre-fix emitter read confidence from row i+1
+    //     ([0.043317165, 0.096255139]) and the bonus from row n_dft
+    //     (accepted_tokens [1, 0]).
+    // -----------------------------------------------------------------
+    {
+        const std::vector<float> v0 = { 0.0f, 4.0f, 0.0f, 0.0f };
+        const std::vector<float> v1 = { 0.0f, 0.0f, 0.0f, 3.0f };
+        const std::vector<float> v2 = { 2.0f, 0.0f, 0.0f, 0.0f };
+        const std::vector<float> d0 = { 1.0f, 1.0f, 1.0f, 1.0f };
+        const std::vector<float> d1 = { 1.0f, 1.0f, 1.0f, 1.0f };
+        const std::vector<float> d2 = { 1.0f, 1.0f, 1.0f, 1.0f };
+        const std::vector<const float *> v_rows = { v0.data(), v1.data(), v2.data() };
+        const std::vector<const float *> d_rows = { d0.data(), d1.data(), d2.data() };
+
+        const std::string line = common_spec_telemetry_record(
+            /*step=*/1, /*id_last=*/9, /*draft=*/{ 1, 2 }, /*n_acc=*/1,
+            v_rows, d_rows, /*n_vocab=*/4, /*topk=*/0);
+
+        const std::string expected =
+            "{\"schema\":\"llama.tessera.spec.v1\",\"seq_id\":0,\"step_idx\":1,"
+            "\"prime_token\":9,\"drafted\":2,\"accepted\":1,"
+            "\"drafted_tokens\":[1,2],\"accepted_tokens\":[1,3],"
+            "\"confidence\":[0.94791502,0.043317165]}\n";
+        if (line != expected) {
+            std::fprintf(stderr, "test-telemetry-golden: off-by-one regression pin mismatch\n"
                                  "  expected: %s  actual:   %s\n",
                          expected.c_str(), line.c_str());
             return 1;

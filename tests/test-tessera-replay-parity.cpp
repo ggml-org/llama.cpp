@@ -22,13 +22,17 @@
 //      present in a runtime record. Runtime records are schema-identical
 //      plus the additive "provenance" and "sid" fields.
 //
-// Acceptance COUNTS are deliberately not compared across the two engines:
-// common_speculative_calibration_run's accept loop compares v_argmax[i] to
-// draft[i-1] while its verifier forwards document that row i predicts
-// draft[i] (a pre-existing off-by-one; the runtime engine uses the
-// production accept path instead). Both sides are checked for internal
-// consistency (accepted <= drafted) here; the divergence is documented
-// here rather than silently papered over.
+// Acceptance COUNTS are deliberately not compared across the two engines.
+// The accept SEMANTICS now match: both engines judge draft[i] with the
+// verifier row conditioned on prefix + draft[0..i-1] (the calibration
+// off-by-one that compared v_argmax[i] to draft[i-1] was fixed on
+// fix/calibration-offbyone). The DRAFT policies still differ, though:
+// calibration always forwards n_draft_max greedy drafts, while the
+// runtime's draft-simple head applies its own sampler plus the p_min /
+// n_min early-stop gates - so the two engines are not guaranteed to
+// propose identical draft tokens, and count parity is only expected
+// token-for-token when the draft trajectories coincide. Both sides are
+// checked for internal consistency (accepted <= drafted) here.
 //
 // USAGE
 // -----
