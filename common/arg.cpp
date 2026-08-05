@@ -361,7 +361,6 @@ static bool spec_types_is_default(const common_params & params) {
 common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex) {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
-    common_download_hf_plan plan_voc;
     common_download_ms_plan plan_ms;
     common_download_opts opts;
 
@@ -415,15 +414,11 @@ common_models_handler common_models_handler_init(const common_params & params, l
         plan_spec = common_download_get_hf_plan(params.speculative.draft.mparams, opts_spec);
     }
 
-    if (!params.vocoder.model.hf_repo.empty()) {
-        plan_voc = common_download_get_hf_plan(params.vocoder.model, opts);
-    }
-
     if (!params.model.ms_repo.empty()) {
         plan_ms = common_download_get_ms_plan(params.model, opts);
     }
 
-    return common_models_handler{plan, plan_spec, plan_voc, plan_ms, opts};
+    return common_models_handler{plan, plan_spec, plan_ms, opts};
 }
 
 bool common_models_handler_is_preset_repo(const common_models_handler & handler) {
@@ -473,7 +468,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 
     auto & plan      = handler.plan;
     auto & plan_spec = handler.plan_spec;
-    auto & plan_voc  = handler.plan_voc;
     auto & plan_ms   = handler.plan_ms;
 
     auto opts = handler.opts; // copy
@@ -1492,7 +1486,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             auto models = common_list_cached_models();
             printf("number of models in cache: %zu\n", models.size());
             for (size_t i = 0; i < models.size(); i++) {
-                printf("%4zu. %s\n", i + 1, models[i].to_string().c_str());
+                printf("%4zu. [%s] %s\n", i + 1, models[i].source.c_str(), models[i].to_string().c_str());
             }
             exit(0);
         }
@@ -3068,20 +3062,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.ms_repo = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MS_REPO"));
-    add_opt(common_arg(
-        {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
-        "Hugging Face model repository for the vocoder model (default: unused)",
-        [](common_params & params, const std::string & value) {
-            params.vocoder.model.hf_repo = value;
-        }
-    ).set_env("LLAMA_ARG_HF_REPO_V"));
-    add_opt(common_arg(
-        {"-hffv", "--hf-file-v"}, "FILE",
-        "Hugging Face model file for the vocoder model (default: unused)",
-        [](common_params & params, const std::string & value) {
-            params.vocoder.model.hf_file = value;
-        }
-    ).set_env("LLAMA_ARG_HF_FILE_V"));
     add_opt(common_arg(
         {"-hft", "--hf-token"}, "TOKEN",
         "Hugging Face access token (default: value from HF_TOKEN environment variable)",
