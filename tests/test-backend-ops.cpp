@@ -4113,16 +4113,25 @@ struct test_gated_delta_net : public test_case {
     const bool    permuted;
     const bool    kda;
     const int64_t K; // snapshot slot count: 1 = final-only, >1 = last K states
+    const bool    writeback; // append the state writeback cpy the models build after the op
 
     std::string vars() override {
-        return VARS_TO_STR9(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat, permuted, kda, K);
+        return VARS_TO_STR10(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat, permuted, kda, K, writeback);
     }
+
+    // the graph ends in the writeback cpy, so name the pattern instead of the last op
+    std::string op_desc(ggml_tensor * t) override {
+        return writeback ? "GATED_DELTA_NET_FUSION" : ggml_op_desc(t);
+    }
+
+    // backends may fuse the writeback into the op, which only happens on a whole graph
+    bool run_whole_graph() override { return writeback; }
 
     test_gated_delta_net(ggml_type type = GGML_TYPE_F32,
             int64_t head_count = 4, int64_t head_size = 16, int64_t n_seq_tokens = 1, int64_t n_seqs = 1,
-            int v_repeat = 1, bool permuted = false, bool kda = false, int64_t K = 1)
+            int v_repeat = 1, bool permuted = false, bool kda = false, int64_t K = 1, bool writeback = false)
         : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs),
-          v_repeat(v_repeat), permuted(permuted), kda(kda), K(K) {}
+          v_repeat(v_repeat), permuted(permuted), kda(kda), K(K), writeback(writeback) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * q;
@@ -4152,7 +4161,27 @@ struct test_gated_delta_net : public test_case {
         q = ggml_l2_norm(ctx, q, 1e-6f);
         k = ggml_l2_norm(ctx, k, 1e-6f);
         ggml_tensor * out   = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, K);
-        return out;
+        if (!writeback) {
+            return out;
+        }
+
+        // scatter the newest min(n_seq_tokens, K) snapshots into the state cache, as
+        // llm_build_delta_net_base does. slot i is rollback group i, slot 0 the newest
+        const int64_t H         = head_count * v_repeat;
+        const int64_t D         = head_size * head_size * H;
+        const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+        const int64_t mem_size  = n_seqs + 1; // leave a spare row so the cache view is not at offset 0
+
+        ggml_tensor * cache = ggml_new_tensor_2d(ctx, type, D, mem_size * K);
+        ggml_set_name(cache, "cache");
+
+        ggml_tensor * snapshots = ggml_view_3d(ctx, out, D, n_seqs, n_written,
+            ggml_row_size(type, D), ggml_row_size(type, D * n_seqs),
+            ggml_row_size(type, head_size * H * n_seq_tokens * n_seqs));
+        ggml_tensor * slots = ggml_view_3d(ctx, cache, D, n_seqs, n_written,
+            cache->nb[1], mem_size * cache->nb[1], cache->nb[1]);
+
+        return ggml_cpy(ctx, snapshots, slots);
     }
 
     void initialize_tensors(ggml_context * ctx) override {
@@ -9708,6 +9737,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // overflow: n_tokens > K — only the last K snapshots kept.
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 32,   8, 1, 1, false, false, /*K=*/3));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  16, 2, 1, false, false, /*K=*/4));
+
+    // with the state writeback cpy the models build after the op, which backends may fuse away
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,   1, 1, 1, false, false, /*K=*/1, /*writeback=*/true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,   1, 3, 1, false, false, /*K=*/1, /*writeback=*/true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  16, 2, 2, false, false, /*K=*/1, /*writeback=*/true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,   1, 2, 1, false, false, /*K=*/4, /*writeback=*/true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 32,   8, 2, 1, false, true,  /*K=*/3, /*writeback=*/true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,   4, 3, 1, false, false, /*K=*/4, /*writeback=*/true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 32,   4, 2, 2, false, false, /*K=*/4, /*writeback=*/true));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
