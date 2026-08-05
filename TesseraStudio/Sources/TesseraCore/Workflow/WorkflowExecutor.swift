@@ -55,15 +55,26 @@ public actor WorkflowExecutor {
     /// final outputs (one entry per output port on the last
     /// node in the topological order, so the caller can
     /// inspect what came out of the workflow).
+    ///
+    /// The task iterating the stream owns the run: cancelling
+    /// it stops the executor - no further nodes are scheduled
+    /// and the in-flight node observes Task cancellation.
     public func run(
         _ workflow: Workflow,
         context: WorkflowExecutionContext = WorkflowExecutionContext()
     ) -> AsyncStream<WorkflowEvent> {
         AsyncStream { continuation in
-            Task {
+            let producer = Task {
                 let outputs = await self.runInternal(workflow, context: context, continuation: continuation)
                 continuation.finish()
                 _ = outputs
+            }
+            // the consumer's cancellation must reach the producer; the
+            // unstructured task above does not inherit it on its own
+            continuation.onTermination = { termination in
+                if case .cancelled = termination {
+                    producer.cancel()
+                }
             }
         }
     }
@@ -123,6 +134,10 @@ public actor WorkflowExecutor {
         var outputs: [String: [String: WorkflowPortValue]] = [:]
         var inputs: [String: [String: WorkflowPortValue]] = [:]
         for node in order {
+            if Task.isCancelled {
+                continuation.yield(.finished(success: false, message: "cancelled"))
+                return outputs
+            }
             guard let type = registry.nodeType(for: node.type) else {
                 let msg = "internal: validator accepted \(node.type) but registry lost it"
                 continuation.yield(.nodeFinished(nodeId: node.id, success: false, message: msg))
