@@ -333,6 +333,32 @@ llama_context::llama_context(
             backends.emplace_back(backend);
         }
 
+        // add backends for the devices of the other model (if any)
+        // some models (e.g. Gemma4Assistant, Eagle3, DFlash, DSpark) share tensors
+        // with the target model through ctx_other, and those tensors may be
+        // pre-allocated on devices that are not part of this model's device list
+        if (cparams.ctx_other != nullptr) {
+            const llama_model * model_other = llama_get_model(cparams.ctx_other);
+            for (const auto & dev : model_other->devices) {
+                bool found = false;
+                for (const auto & dev_self : model.devices) {
+                    if (dev_self.dev == dev.dev) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
+                    if (backend == nullptr) {
+                        throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
+                    }
+                    LLAMA_LOG_INFO("%s: adding backend for device %s: shared tensors with the other model (e.g. tok_embd, output)\n",
+                            __func__, ggml_backend_dev_name(dev.dev));
+                    backends.emplace_back(backend);
+                }
+            }
+        }
+
         // add ACCEL backends (such as BLAS)
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
