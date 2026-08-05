@@ -52,7 +52,20 @@ BITS_PER_WEIGHT: dict[str, float] = {
     "F32": 32.0,
 }
 
-DEFAULT_WEIGHTS = (0.5, 0.3, 0.2)
+DEFAULT_WEIGHTS = (0.5, 0.3, 0.2, 0.0)
+# Phase 0.5: the EXL2 per-layer error is the 4th evidence
+# signal the L5 orchestrator can fold into the per-tensor
+# sensitivity score. The default ``w_exl2 = 0.0`` keeps the
+# path opt-in until the first EXL2 run lands (when
+# ``w_exl2 == 0.0``, the EXL2 term contributes zero, so the
+# math is byte-equivalent to the 3-component path; existing
+# callers that ignore the 4th component see no change). The
+# ``combine`` / ``decompose`` helpers are 4-arg, but the
+# orchestrator's ``SensitivityScorer`` decides whether to
+# pass an EXL2 component dict or an empty one based on the
+# runtime ``w_exl2`` and the EXL2 row availability in
+# ``exl2_layer_stats``.
+DEFAULT_EXL2_WEIGHT = 0.0
 
 
 # -- Component functions ----------------------------------------------------
@@ -148,25 +161,97 @@ def layer_position_prior(
 # -- Combination ------------------------------------------------------------
 
 
+def exl2_per_layer_error(
+    per_layer_errors: Mapping[int, float] | None,
+    tensor_names: Iterable[str],
+) -> ComponentScores:
+    """Phase 0.5: per-tensor EXL2 per-layer-error component.
+
+    Maps the EXL2 per-layer error map ``{layer_index:
+    per_layer_error}`` (the L5 orchestrator's read from
+    ``exl2_layer_stats``) onto the per-tensor names the
+    SensitivityScorer scores. The mapping is by
+    ``layer_index`` parsed from the tensor name
+    (``blk.<i>....`` -> ``i``; tensors without a block
+    prefix get 0.0, the same neutral value the
+    ``layer_position_prior`` uses).
+
+    The output is a ``ComponentScores`` dict
+    ``{tensor_name: per_layer_error_normalized}``. The
+    normalization is the same peak-1 the other
+    components use: ``per_layer_error / max(per_layer_errors)``
+    clipped to ``[0, 1]``. The peak-1 form is what
+    makes the weight comparable to the other
+    components (which are also peak-1 in ``[0, 1]``).
+
+    When ``per_layer_errors`` is ``None`` or empty, the
+    function returns an empty dict; the orchestrator
+    treats this as "EXL2 has not been run on this
+    model" and the fold is skipped (the 4th column in
+    the DataFrame is all-zero, the weight default
+    ``w_exl2 = 0.0`` means the term contributes zero
+    either way).
+    """
+    if not per_layer_errors:
+        return {}
+    finite = {
+        int(li): max(0.0, float(v))
+        for li, v in per_layer_errors.items()
+    }
+    peak = max(finite.values()) if finite else 0.0
+    if peak <= 0.0:
+        return {}
+    out: ComponentScores = {}
+    for name in tensor_names:
+        # Extract the block index the same way the
+        # orchestrator's ``_tensor_family`` /
+        # ``_layer_for`` do: ``blk.<i>.`` -> ``i``; else
+        # 0 (the neutral value the layer_position_prior
+        # uses for tensors without a block prefix).
+        parts = str(name).split(".")
+        idx = 0
+        if len(parts) >= 3 and parts[0] == "blk":
+            try:
+                idx = int(parts[1])
+            except ValueError:
+                idx = 0
+        err = finite.get(idx, 0.0)
+        out[name] = max(0.0, min(1.0, err / peak))
+    return out
+
+
 def combine(
-    components: tuple[ComponentScores, ComponentScores, ComponentScores],
-    weights: tuple[float, float, float] = DEFAULT_WEIGHTS,
+    components: tuple[
+        ComponentScores, ComponentScores, ComponentScores,
+        ComponentScores,
+    ],
+    weights: tuple[float, float, float, float] = DEFAULT_WEIGHTS,
     model_role: str | None = None,
 ) -> ComponentScores:
-    """Combine the three components into a single sensitivity score.
+    """Combine the four components into a single sensitivity score.
 
-    The union of names from the three components forms the output key set.
-    Missing components contribute zero.
+    The union of names from the four components forms the
+    output key set. Missing components contribute zero.
 
-    Phase 16: ``model_role`` is an optional pass-through parameter
-    (the orchestrator's ``SensitivityScorer`` carries the role
-    through the call chain; this helper accepts it for API
-    symmetry but the role does not change the math). The role
-    is recorded on the per-tensor ``RequantAction`` and
-    ``l5_plan_summary`` rows so the retune's per-(model,
-    model_role, family) partition can find the right group.
+    Phase 0.5: the 4th component is the EXL2 per-layer
+    error (``exl2_per_layer_error``). When ``w_exl2 == 0.0``
+    (the default), the EXL2 term contributes zero regardless
+    of its input value, so the math is byte-equivalent to
+    the 3-component path. The orchestrator's
+    ``SensitivityScorer`` reads the EXL2 component from the
+    ``exl2_layer_stats`` DuckDB table and folds it when
+    ``w_exl2 > 0``.
+
+    Phase 16: ``model_role`` is an optional pass-through
+    parameter (the orchestrator's ``SensitivityScorer``
+    carries the role through the call chain; this helper
+    accepts it for API symmetry but the role does not
+    change the math). The role is recorded on the
+    per-tensor ``RequantAction`` and ``l5_plan_summary``
+    rows so the retune's per-(model, model_role, family)
+    partition can find the right group.
     """
-    w_im, w_grad, w_layer = weights
+    w_im, w_grad, w_layer, w_exl2 = weights
     names: set[str] = set()
     for component in components:
         names.update(component.keys())
@@ -176,22 +261,24 @@ def combine(
             w_im * components[0].get(name, 0.0)
             + w_grad * components[1].get(name, 0.0)
             + w_layer * components[2].get(name, 0.0)
+            + w_exl2 * components[3].get(name, 0.0)
         )
     return out
 
 
 def decompose(
     combined_score: float,
-    weights: tuple[float, float, float] = DEFAULT_WEIGHTS,
+    weights: tuple[float, float, float, float] = DEFAULT_WEIGHTS,
     model_role: str | None = None,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float]:
     """Best-effort inversion of :func:`combine` for a single tensor.
 
     Given a combined ``sensitivity_score`` and the weights that
     produced it, recover the per-component contributions
-    ``(im, grad, layer)`` such that
-    ``w_im * im + w_grad * grad + w_layer * layer = combined_score``
-    and ``im == grad == layer`` (the uniform-spread assumption).
+    ``(im, grad, layer, exl2)`` such that
+    ``w_im * im + w_grad * grad + w_layer * layer + w_exl2 * exl2
+    = combined_score`` and ``im == grad == layer == exl2``
+    (the uniform-spread assumption).
 
     This is the same decomposition the orchestrator's
     :class:`SensitivityScorer` uses when storing the per-component
@@ -201,9 +288,15 @@ def decompose(
     wants the (uniform) per-component spread.
 
     The function is not a true inverse (there are infinitely many
-    ``(im, grad, layer)`` triples that produce a given combined
-    score); the uniform-spread assumption is the most reasonable
-    one when the per-tensor components are not available.
+    4-tuples that produce a given combined score); the
+    uniform-spread assumption is the most reasonable one when
+    the per-tensor components are not available.
+
+    Phase 0.5: the 4th element is the EXL2 per-layer error
+    contribution. When ``w_exl2 == 0.0``, the EXL2
+    contribution is 0.0 regardless of the combined score; the
+    other three contributions absorb the entire score (the
+    pre-Phase-0.5 3-component math).
 
     Phase 16: ``model_role`` is an optional pass-through
     parameter; the role does not change the math. The
@@ -215,20 +308,27 @@ def decompose(
 
     Edge cases:
       * If all weights are zero (degenerate), returns
-        ``(0.0, 0.0, 0.0)``. The SensitivityScorer's
+        ``(0.0, 0.0, 0.0, 0.0)``. The SensitivityScorer's
         rebalance-when-imatrix-missing path can land in this
         state.
       * If only one weight is non-zero, the entire ``combined_score``
         is attributed to that component.
     """
-    w_im, w_grad, w_layer = weights
+    w_im, w_grad, w_layer, w_exl2 = weights
     s = float(combined_score)
     # Uniform spread: each component is s / sum(weights). When
     # all weights are equal (the default), this is s.
-    total = float(w_im) + float(w_grad) + float(w_layer)
+    total = (
+        float(w_im) + float(w_grad) + float(w_layer) + float(w_exl2)
+    )
     if total <= 0.0:
-        return (0.0, 0.0, 0.0)
-    return (s * w_im / total, s * w_grad / total, s * w_layer / total)
+        return (0.0, 0.0, 0.0, 0.0)
+    return (
+        s * w_im / total,
+        s * w_grad / total,
+        s * w_layer / total,
+        s * w_exl2 / total,
+    )
 
 
 # -- EMA tracker ------------------------------------------------------------
