@@ -372,6 +372,23 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #endif  // defined(GGML_USE_HIP)
     }
 
+#if defined(GGML_USE_HIP)
+    // rocBLAS defaults to Tensile, hipBLASLt is significantly faster for the prompt processing GEMMs on RDNA3.5
+    // the variable is read when the first rocBLAS handle is created, which happens after this point
+    if (!getenv("ROCBLAS_USE_HIPBLASLT")) {
+        for (int id = 0; id < info.device_count; ++id) {
+            if (GGML_CUDA_CC_IS_RDNA3_5(info.devices[id].cc)) {
+#ifdef _WIN32
+                _putenv_s("ROCBLAS_USE_HIPBLASLT", "1");
+#else
+                setenv("ROCBLAS_USE_HIPBLASLT", "1", 0);
+#endif // _WIN32
+                break;
+            }
+        }
+    }
+#endif // defined(GGML_USE_HIP)
+
     if (ggml_cuda_highest_compiled_arch(GGML_CUDA_CC_TURING) >= GGML_CUDA_CC_TURING && !turing_devices_without_mma.empty()) {
         GGML_LOG_INFO("The following devices will have suboptimal performance due to a lack of tensor cores:\n");
         for (size_t device_pos = 0; device_pos < turing_devices_without_mma.size(); device_pos++) {
