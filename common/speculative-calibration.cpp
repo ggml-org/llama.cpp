@@ -57,6 +57,277 @@
 #include <vector>
 
 //
+// Serialize one llama.tessera.spec.v1 JSONL record for a single spec
+// step.  See speculative-calibration.h for the contract.
+//
+// This is the per-step record serialization moved verbatim out of
+// common_speculative_calibration_run(); the only additions are the
+// provenance / sid trailing fields (emitted only when non-NULL) so the
+// calibration output stays byte-identical.
+//
+std::string common_spec_telemetry_record(
+        int32_t step,
+        llama_token id_last,
+        const llama_tokens & draft,
+        size_t n_acc,
+        const std::vector<const float *> & v_logits_rows,
+        const std::vector<const float *> & dft_logits_rows,
+        int32_t n_vocab,
+        int32_t topk,
+        const char * provenance,
+        const char * sid) {
+
+    const int n_dft = (int) draft.size();
+    topk = std::min(topk > 0 ? topk : 0, n_vocab);
+
+    // Per-row top-k helper. Builds two parallel vectors
+    // (tokens, logit-values) sorted high-to-low.
+    auto topk_row = [&](const float * row,
+                        int32_t & argmax_out) {
+        std::vector<int32_t> tok;
+        std::vector<float>   val;
+        if (row == nullptr) {
+            argmax_out = 0;
+            return std::pair{std::move(tok), std::move(val)};
+        }
+        int32_t am = 0;
+        float   am_val = row[0];
+        for (int v = 1; v < n_vocab; ++v) {
+            if (row[v] > am_val) { am_val = row[v]; am = v; }
+        }
+        argmax_out = am;
+        if (topk == 0) {
+            return std::pair{std::move(tok), std::move(val)};
+        }
+        std::vector<std::pair<float, int32_t>> heap;
+        heap.reserve(topk);
+        for (int v = 0; v < n_vocab; ++v) {
+            if ((int) heap.size() < topk) {
+                heap.emplace_back(row[v], v);
+                std::push_heap(heap.begin(), heap.end(),
+                    std::greater<std::pair<float, int32_t>>());
+            } else if (row[v] > heap.front().first) {
+                std::pop_heap(heap.begin(), heap.end(),
+                    std::greater<std::pair<float, int32_t>>());
+                heap.back() = {row[v], v};
+                std::push_heap(heap.begin(), heap.end(),
+                    std::greater<std::pair<float, int32_t>>());
+            }
+        }
+        tok.reserve(topk);
+        val.reserve(topk);
+        while (!heap.empty()) {
+            std::pop_heap(heap.begin(), heap.end(),
+                std::greater<std::pair<float, int32_t>>());
+            tok.push_back(heap.back().second);
+            val.push_back(heap.back().first);
+            heap.pop_back();
+        }
+        return std::pair{std::move(tok), std::move(val)};
+    };
+
+    // Verifier: n_dft+1 per-position distributions from the per-prefix
+    // forward rows.
+    std::vector<std::vector<int32_t>> v_topk_tokens(n_dft + 1);
+    std::vector<std::vector<float>>   v_topk_probs(n_dft + 1);
+    std::vector<int32_t>              v_argmax_explicit(n_dft + 1, 0);
+    std::vector<float>                confidence(n_dft, 0.0f);
+    for (int i = 0; i <= n_dft; ++i) {
+        int32_t am = 0;
+        auto tk = topk_row(
+            i < (int) v_logits_rows.size() ? v_logits_rows[i] : nullptr,
+            am);
+        v_topk_tokens[i] = std::move(tk.first);
+        v_topk_probs[i]  = std::move(tk.second);
+        v_argmax_explicit[i] = am;
+    }
+    // confidence[] is the softmax prob of draft[i-1] under the
+    // verifier at the i-th per-position forward. Use the
+    // precomputed row (avoids re-scanning the vocab).
+    for (int i = 1; i <= n_dft; ++i) {
+        const float * row = (i < (int) v_logits_rows.size())
+                            ? v_logits_rows[i] : nullptr;
+        if (row == nullptr) continue;
+        float max_logit = row[0];
+        for (int v = 1; v < n_vocab; ++v) {
+            if (row[v] > max_logit) max_logit = row[v];
+        }
+        double sum_exp = 0.0;
+        for (int v = 0; v < n_vocab; ++v) {
+            sum_exp += std::exp((double) row[v] - (double) max_logit);
+        }
+        const double prob = sum_exp > 0.0
+            ? std::exp((double) row[draft[i - 1]] - (double) max_logit) / sum_exp
+            : 0.0;
+        confidence[i - 1] = (float) prob;
+    }
+
+    // Drafter: n_dft+1 per-position distributions (priming + drafts).
+    std::vector<std::vector<int32_t>> d_topk_tokens(n_dft + 1);
+    std::vector<std::vector<float>>   d_topk_probs(n_dft + 1);
+    std::vector<int32_t>              d_argmax_explicit(n_dft + 1, 0);
+    for (int i = 0; i <= n_dft; ++i) {
+        int32_t am = 0;
+        auto tk = topk_row(
+            i < (int) dft_logits_rows.size() ? dft_logits_rows[i] : nullptr,
+            am);
+        d_topk_tokens[i] = std::move(tk.first);
+        d_topk_probs[i]  = std::move(tk.second);
+        d_argmax_explicit[i] = am;
+    }
+
+    // accepted_tokens: drafts[0..n_acc-1] + bonus
+    // Bonus = verifier argmax at position n_acc (which equals
+    // v_argmax_explicit[n_dft] in our per-prefix scheme; the
+    // verifier "extends past the last accepted draft" with the
+    // same prediction regardless of how many drafts were
+    // accepted).
+    const llama_token bonus_local = v_argmax_explicit[n_dft];
+    std::vector<int32_t> accepted_tokens;
+    accepted_tokens.reserve(n_acc + 1);
+    for (size_t k = 0; k < n_acc; ++k) {
+        accepted_tokens.push_back(draft[k]);
+    }
+    if (n_acc <= (size_t) n_dft) {
+        accepted_tokens.push_back(bonus_local);
+    }
+
+    // Hand-build the JSONL record. Single schema
+    // (llama.tessera.spec.v1). The cheap per-step fields are
+    // always emitted; the top-k fields are added only when
+    // topk > 0. We keep arrays parallel (tokens[] and probs[])
+    // to keep the encoding compact; the training pipeline
+    // re-zips them per position.
+    std::string line;
+    line  = "{\"schema\":\"llama.tessera.spec.v1\"";
+    line += ",\"seq_id\":0";
+    line += ",\"step_idx\":" + std::to_string(step);
+    line += ",\"prime_token\":" + std::to_string(id_last);
+    line += ",\"drafted\":" + std::to_string(n_dft);
+    line += ",\"accepted\":" + std::to_string(n_acc);
+
+    // drafted_tokens and accepted_tokens are part of the cheap
+    // payload (always emitted) so that downstream consumers
+    // (LK training, DFlash dataset prep) don't need topk > 0
+    // to recover the draft trajectory.
+    line += ",\"drafted_tokens\":[";
+    for (int i = 0; i < n_dft; ++i) {
+        if (i > 0) line += ",";
+        line += std::to_string(draft[i]);
+    }
+    line += "]";
+
+    line += ",\"accepted_tokens\":[";
+    for (size_t i = 0; i < accepted_tokens.size(); ++i) {
+        if (i > 0) line += ",";
+        line += std::to_string(accepted_tokens[i]);
+    }
+    line += "]";
+
+    // confidence = verifier softmax prob of each draft token.
+    // Always emitted as part of the unified record.
+    line += ",\"confidence\":[";
+    for (size_t i = 0; i < confidence.size(); ++i) {
+        if (i > 0) line += ",";
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.8g",
+                      (double) confidence[i]);
+        line += buf;
+    }
+    line += "]";
+
+    if (topk > 0) {
+        // Per-position top-k distributions: argmaxes plus the
+        // top-k token/prob arrays for both verifier and drafter.
+        line += ",\"topk\":" + std::to_string(topk);
+
+        line += ",\"verifier_argmax\":[";
+        for (int i = 0; i <= n_dft; ++i) {
+            if (i > 0) line += ",";
+            line += std::to_string(v_argmax_explicit[i]);
+        }
+        line += "]";
+
+        line += ",\"drafter_argmax\":[";
+        for (int i = 0; i <= n_dft; ++i) {
+            if (i > 0) line += ",";
+            line += std::to_string(d_argmax_explicit[i]);
+        }
+        line += "]";
+
+        // Verifier top-k: parallel arrays.
+        line += ",\"verifier_topk_tokens\":[";
+        for (int i = 0; i <= n_dft; ++i) {
+            if (i > 0) line += ",";
+            line += "[";
+            for (size_t k = 0; k < v_topk_tokens[i].size(); ++k) {
+                if (k > 0) line += ",";
+                line += std::to_string(v_topk_tokens[i][k]);
+            }
+            line += "]";
+        }
+        line += "]";
+        line += ",\"verifier_topk_probs\":[";
+        for (int i = 0; i <= n_dft; ++i) {
+            if (i > 0) line += ",";
+            line += "[";
+            for (size_t k = 0; k < v_topk_probs[i].size(); ++k) {
+                if (k > 0) line += ",";
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.6g",
+                              (double) v_topk_probs[i][k]);
+                line += buf;
+            }
+            line += "]";
+        }
+        line += "]";
+
+        // Drafter top-k: parallel arrays.
+        line += ",\"drafter_topk_tokens\":[";
+        for (int i = 0; i <= n_dft; ++i) {
+            if (i > 0) line += ",";
+            line += "[";
+            for (size_t k = 0; k < d_topk_tokens[i].size(); ++k) {
+                if (k > 0) line += ",";
+                line += std::to_string(d_topk_tokens[i][k]);
+            }
+            line += "]";
+        }
+        line += "]";
+        line += ",\"drafter_topk_probs\":[";
+        for (int i = 0; i <= n_dft; ++i) {
+            if (i > 0) line += ",";
+            line += "[";
+            for (size_t k = 0; k < d_topk_probs[i].size(); ++k) {
+                if (k > 0) line += ",";
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.6g",
+                              (double) d_topk_probs[i][k]);
+                line += buf;
+            }
+            line += "]";
+        }
+        line += "]";
+    }
+
+    // Additive runtime fields: present only when the caller stamps
+    // them; calibration passes NULL and the record is unchanged.
+    if (provenance != nullptr) {
+        line += ",\"provenance\":\"";
+        line += provenance;
+        line += "\"";
+    }
+    if (sid != nullptr) {
+        line += ",\"sid\":\"";
+        line += sid;
+        line += "\"";
+    }
+
+    line += "}\n";
+    return line;
+}
+
+//
 // Run the spec-decoding calibration loop.  See speculative-calibration.h
 // for the API contract.  Logic was moved verbatim from the inlined
 // `compute_imatrix_spec()` that used to live in
@@ -69,6 +340,9 @@
 //   - `int` -> `int32_t` for the public-option-derived locals
 //     (n_draft_max, n_steps) so the option type and the local type
 //     match.  No behavior change.
+//   - The per-step record serialization was moved verbatim into
+//     common_spec_telemetry_record() below (byte-identical output;
+//     pinned by tests/test-telemetry-golden.cpp).
 //
 bool common_speculative_calibration_run(
     llama_context * ctx_tgt,
@@ -418,10 +692,10 @@ bool common_speculative_calibration_run(
                                 n_past + n_dft + 1);
         }
 
-        // 4b. If telemetry is enabled, compute the verifier's softmax
-        //     probability of each draft token and emit a JSONL record.
-        //     Single schema: llama.tessera.spec.v1. The cheap per-step
-        //     fields (schema, seq_id, step_idx, prime_token, drafted,
+        // 4b. If telemetry is enabled, serialize the per-step record
+        //     with the shared emitter and write it. Single schema:
+        //     llama.tessera.spec.v1. The cheap per-step fields
+        //     (schema, seq_id, step_idx, prime_token, drafted,
         //     accepted, drafted_tokens, accepted_tokens, confidence)
         //     are always emitted; the per-position top-k distributions
         //     (verifier_topk_*, drafter_topk_*, *_argmax) are added only
@@ -438,243 +712,11 @@ bool common_speculative_calibration_run(
         //     i-th dft_logits_ptrs[i] is the drafter's view of the
         //     token at position n_past+i+1.
         if (telemetry_fp != nullptr) {
-            const int n_vocab = llama_vocab_n_tokens(vocab);
-            const int topk    = std::min(
-                opts.telemetry_topk > 0 ? opts.telemetry_topk : 0,
-                n_vocab);
-
-            // Per-row top-k helper. Builds two parallel vectors
-            // (tokens, logit-values) sorted high-to-low.
-            auto topk_row = [&](const float * row,
-                                int32_t & argmax_out) {
-                std::vector<int32_t> tok;
-                std::vector<float>   val;
-                if (row == nullptr) {
-                    argmax_out = 0;
-                    return std::pair{std::move(tok), std::move(val)};
-                }
-                int32_t am = 0;
-                float   am_val = row[0];
-                for (int v = 1; v < n_vocab; ++v) {
-                    if (row[v] > am_val) { am_val = row[v]; am = v; }
-                }
-                argmax_out = am;
-                if (topk == 0) {
-                    return std::pair{std::move(tok), std::move(val)};
-                }
-                std::vector<std::pair<float, int32_t>> heap;
-                heap.reserve(topk);
-                for (int v = 0; v < n_vocab; ++v) {
-                    if ((int) heap.size() < topk) {
-                        heap.emplace_back(row[v], v);
-                        std::push_heap(heap.begin(), heap.end(),
-                            std::greater<std::pair<float, int32_t>>());
-                    } else if (row[v] > heap.front().first) {
-                        std::pop_heap(heap.begin(), heap.end(),
-                            std::greater<std::pair<float, int32_t>>());
-                        heap.back() = {row[v], v};
-                        std::push_heap(heap.begin(), heap.end(),
-                            std::greater<std::pair<float, int32_t>>());
-                    }
-                }
-                tok.reserve(topk);
-                val.reserve(topk);
-                while (!heap.empty()) {
-                    std::pop_heap(heap.begin(), heap.end(),
-                        std::greater<std::pair<float, int32_t>>());
-                    tok.push_back(heap.back().second);
-                    val.push_back(heap.back().first);
-                    heap.pop_back();
-                }
-                return std::pair{std::move(tok), std::move(val)};
-            };
-
-            // Verifier: n_dft+1 per-position distributions from
-            // v_logits_ptrs (captured during per-prefix forwards).
-            std::vector<std::vector<int32_t>> v_topk_tokens(n_dft + 1);
-            std::vector<std::vector<float>>   v_topk_probs(n_dft + 1);
-            std::vector<int32_t>              v_argmax_explicit(n_dft + 1, 0);
-            std::vector<float>                confidence(n_dft, 0.0f);
-            for (int i = 0; i <= n_dft; ++i) {
-                int32_t am = 0;
-                auto tk = topk_row(
-                    i < (int) v_logits_ptrs.size() ? v_logits_ptrs[i] : nullptr,
-                    am);
-                v_topk_tokens[i] = std::move(tk.first);
-                v_topk_probs[i]  = std::move(tk.second);
-                v_argmax_explicit[i] = am;
-            }
-            // confidence[] is the softmax prob of draft[i-1] under the
-            // verifier at the i-th per-position forward. Use the
-            // precomputed row (avoids re-scanning the vocab).
-            for (int i = 1; i <= n_dft; ++i) {
-                const float * row = (i < (int) v_logits_ptrs.size())
-                                    ? v_logits_ptrs[i] : nullptr;
-                if (row == nullptr) continue;
-                float max_logit = row[0];
-                for (int v = 1; v < n_vocab; ++v) {
-                    if (row[v] > max_logit) max_logit = row[v];
-                }
-                double sum_exp = 0.0;
-                for (int v = 0; v < n_vocab; ++v) {
-                    sum_exp += std::exp((double) row[v] - (double) max_logit);
-                }
-                const double prob = sum_exp > 0.0
-                    ? std::exp((double) row[draft[i - 1]] - (double) max_logit) / sum_exp
-                    : 0.0;
-                confidence[i - 1] = (float) prob;
-            }
-
-            // Drafter: n_dft+1 per-position distributions from
-            // dft_logits_ptrs (one per drafter forward, priming + drafts).
-            std::vector<std::vector<int32_t>> d_topk_tokens(n_dft + 1);
-            std::vector<std::vector<float>>   d_topk_probs(n_dft + 1);
-            std::vector<int32_t>              d_argmax_explicit(n_dft + 1, 0);
-            for (int i = 0; i <= n_dft; ++i) {
-                int32_t am = 0;
-                auto tk = topk_row(
-                    i < (int) dft_logits_ptrs.size() ? dft_logits_ptrs[i] : nullptr,
-                    am);
-                d_topk_tokens[i] = std::move(tk.first);
-                d_topk_probs[i]  = std::move(tk.second);
-                d_argmax_explicit[i] = am;
-            }
-
-            // accepted_tokens: drafts[0..n_acc-1] + bonus
-            // Bonus = verifier argmax at position n_acc (which equals
-            // v_argmax_explicit[n_dft] in our per-prefix scheme; the
-            // verifier "extends past the last accepted draft" with the
-            // same prediction regardless of how many drafts were
-            // accepted).
-            const llama_token bonus_local = v_argmax_explicit[n_dft];
-            std::vector<int32_t> accepted_tokens;
-            accepted_tokens.reserve(n_acc + 1);
-            for (size_t k = 0; k < n_acc; ++k) {
-                accepted_tokens.push_back(draft[k]);
-            }
-            if (n_acc <= (size_t) n_dft) {
-                accepted_tokens.push_back(bonus_local);
-            }
-
-            // Hand-build the JSONL record. Single schema
-            // (llama.tessera.spec.v1). The cheap per-step fields are
-            // always emitted; the top-k fields are added only when
-            // topk > 0. We keep arrays parallel (tokens[] and probs[])
-            // to keep the encoding compact; the training pipeline
-            // re-zips them per position.
-            std::string line;
-            line  = "{\"schema\":\"llama.tessera.spec.v1\"";
-            line += ",\"seq_id\":0";
-            line += ",\"step_idx\":" + std::to_string(step);
-            line += ",\"prime_token\":" + std::to_string(id_last);
-            line += ",\"drafted\":" + std::to_string(n_dft);
-            line += ",\"accepted\":" + std::to_string(n_acc);
-
-            // drafted_tokens and accepted_tokens are part of the cheap
-            // payload (always emitted) so that downstream consumers
-            // (LK training, DFlash dataset prep) don't need topk > 0
-            // to recover the draft trajectory.
-            line += ",\"drafted_tokens\":[";
-            for (int i = 0; i < n_dft; ++i) {
-                if (i > 0) line += ",";
-                line += std::to_string(draft[i]);
-            }
-            line += "]";
-
-            line += ",\"accepted_tokens\":[";
-            for (size_t i = 0; i < accepted_tokens.size(); ++i) {
-                if (i > 0) line += ",";
-                line += std::to_string(accepted_tokens[i]);
-            }
-            line += "]";
-
-            // confidence = verifier softmax prob of each draft token.
-            // Always emitted as part of the unified record.
-            line += ",\"confidence\":[";
-            for (size_t i = 0; i < confidence.size(); ++i) {
-                if (i > 0) line += ",";
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "%.8g",
-                              (double) confidence[i]);
-                line += buf;
-            }
-            line += "]";
-
-            if (topk > 0) {
-                // Per-position top-k distributions: argmaxes plus the
-                // top-k token/prob arrays for both verifier and drafter.
-                line += ",\"topk\":" + std::to_string(topk);
-
-                line += ",\"verifier_argmax\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(v_argmax_explicit[i]);
-                }
-                line += "]";
-
-                line += ",\"drafter_argmax\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(d_argmax_explicit[i]);
-                }
-                line += "]";
-
-                // Verifier top-k: parallel arrays.
-                line += ",\"verifier_topk_tokens\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < v_topk_tokens[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        line += std::to_string(v_topk_tokens[i][k]);
-                    }
-                    line += "]";
-                }
-                line += "]";
-                line += ",\"verifier_topk_probs\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < v_topk_probs[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        char buf[64];
-                        std::snprintf(buf, sizeof(buf), "%.6g",
-                                      (double) v_topk_probs[i][k]);
-                        line += buf;
-                    }
-                    line += "]";
-                }
-                line += "]";
-
-                // Drafter top-k: parallel arrays.
-                line += ",\"drafter_topk_tokens\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < d_topk_tokens[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        line += std::to_string(d_topk_tokens[i][k]);
-                    }
-                    line += "]";
-                }
-                line += "]";
-                line += ",\"drafter_topk_probs\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < d_topk_probs[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        char buf[64];
-                        std::snprintf(buf, sizeof(buf), "%.6g",
-                                      (double) d_topk_probs[i][k]);
-                        line += buf;
-                    }
-                    line += "]";
-                }
-                line += "]";
-            }
-
-            line += "}\n";
+            const std::string line = common_spec_telemetry_record(
+                step, id_last, draft, (size_t) n_acc,
+                v_logits_ptrs, dft_logits_ptrs,
+                llama_vocab_n_tokens(vocab), opts.telemetry_topk,
+                /*provenance=*/nullptr, /*sid=*/nullptr);
             if (std::fwrite(line.data(), 1, line.size(), telemetry_fp) != line.size()) {
                 LOG_WRN("%s: failed to write telemetry record at step %d\n",
                         __func__, step);

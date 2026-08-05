@@ -90,6 +90,41 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+
+//
+// Serialize one llama.tessera.spec.v1 JSONL record (including the
+// trailing newline) for a single spec step.
+//
+// Factored out of common_speculative_calibration_run() so other drivers
+// (the runtime spec engine in common/tessera-runtime.cpp) can emit
+// schema-identical records.  Inputs:
+//
+//   - step, id_last, draft, n_acc: the step bookkeeping (n_acc is the
+//     number of accepted drafts, longest accepted prefix).
+//   - v_logits_rows / dft_logits_rows: the per-position verifier and
+//     drafter logits rows, n_dft + 1 entries each (one per prefix).
+//     Entries may be nullptr when a row was unavailable; such positions
+//     serialize as argmax 0 and empty top-k arrays, matching the
+//     historical inline behavior.
+//   - n_vocab: vocabulary size used for the softmax / top-k scans.
+//   - topk: clamped to [0, n_vocab].  0 emits only the cheap per-step
+//     payload; > 0 adds the per-position top-k fields.
+//   - provenance / sid: additive trailing fields, emitted only when
+//     non-NULL (runtime records).  Calibration passes NULL for both so
+//     its output stays byte-identical to the historical inline emitter.
+//
+std::string common_spec_telemetry_record(
+    int32_t step,
+    llama_token id_last,
+    const llama_tokens & draft,
+    size_t n_acc,
+    const std::vector<const float *> & v_logits_rows,
+    const std::vector<const float *> & dft_logits_rows,
+    int32_t n_vocab,
+    int32_t topk,
+    const char * provenance = nullptr,
+    const char * sid = nullptr);
 
 //
 // Observer hooks (called around the verifier's "main" forward).

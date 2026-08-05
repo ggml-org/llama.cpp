@@ -315,6 +315,8 @@ target_include_directories(test-dspark-markov-head PRIVATE ${PROJECT_SOURCE_DIR}
 llama_build(test-telemetry-record.cpp ${PROJECT_SOURCE_DIR}/tools/imatrix/telemetry-record.cpp)
 target_include_directories(test-telemetry-record PRIVATE ${PROJECT_SOURCE_DIR}/tools/imatrix)
 llama_test(test-telemetry-record)
+llama_build(test-telemetry-golden.cpp)
+llama_test(test-telemetry-golden)
 llama_build_and_test(test-spec-adaptive-mux.cpp)
 add_test(
     NAME test-telemetry-schema-stability
