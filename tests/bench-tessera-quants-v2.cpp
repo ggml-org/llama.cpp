@@ -1,0 +1,306 @@
+// bench-tessera-quants-v2
+//
+// Throughput benchmark for the 5 TILE640 v2 quant functions
+// in ggml/src/ggml-quants-v2.c. Times each function on the
+// 5 canonical Phase 0 shapes (256x256, 512x512, 1024x1024,
+// 128x4096, 4096x4096) plus the smaller 640x640 (single
+// page) and 1280x1280 (2 pages, partial last) for context.
+//
+// Reports:
+//   - mean us / call (across N=10 runs, 5 warmup runs)
+//   - speedup vs the C reference (ggml/src/ggml-quants.c)
+//   - throughput in MB/s for the dequant path
+//
+// Target: 2-4x speedup on A15-class hardware (M1 MacBook
+// Pro host). The benchmark is the empirical basis for the
+// "v2 fast path" claim in the dispatch policy table and the
+// Part 6 docs.
+//
+// The benchmark does NOT run the GGML_OP_TILE640_MATMUL
+// dispatch end-to-end (that requires the .mlmodelc fixtures
+// which are not built in this worktree). The benchmark is
+// the host-side quant v2 path only; the iPhone 13 Pro Max
+// A15 numbers will be measured on-device in a follow-up
+// worker (the v2 functions are byte-identical in
+// instruction stream, so the speedup scales with the
+// dispatch's per-row call count).
+
+#include "ggml.h"
+#include "ggml-common.h"
+#include "ggml-impl.h"
+#include "ggml-quants.h"
+#include "ggml-quants-v2.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <random>
+#include <vector>
+
+namespace {
+
+constexpr int kWarmup = 5;
+constexpr int kRuns   = 10;
+constexpr uint32_t kSeed = 0xCAFEu;
+
+size_t tessera_t640_row_bytes(int64_t k) {
+    const int pages = (int) ((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
+    return (size_t) pages * TILE640_WORDS_PER_PAGE * sizeof(uint32_t)
+         + (size_t) pages * sizeof(uint16_t)
+         + (size_t) pages * TILE640_LANES_PER_PAGE * sizeof(int8_t);
+}
+
+double median_us(std::vector<double> & samples) {
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2];
+}
+
+void make_signal(std::vector<float> & x, int64_t k, uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+    x.assign((size_t) k, 0.0f);
+    for (int64_t i = 0; i < k; i++) {
+        const int lane_idx = (int) (i / TILE640_LANE_SIZE);
+        const int pos      = (int) (i % TILE640_LANE_SIZE);
+        const float amp    = (lane_idx < 16) ? 2.5f : 4.0f;
+        if (pos % 3 == 0) {
+            x[(size_t) i] = 0.0f;
+        } else {
+            x[(size_t) i] = (pos % 2 == 0) ? amp : -amp;
+        }
+    }
+    for (int64_t i = 0; i < k; i++) {
+        x[(size_t) i] += 0.01f * dist(rng);
+    }
+}
+
+int bench_dequant(int64_t k) {
+    std::vector<float> x;
+    make_signal(x, k, kSeed);
+    std::vector<uint8_t> packed(tessera_t640_row_bytes(k));
+    quantize_row_tessera_t640_ref(x.data(), packed.data(), k);
+    std::vector<float> y((size_t) k, 0.0f);
+
+    auto time_fn = [&](auto fn) {
+        // Warmup.
+        for (int i = 0; i < kWarmup; i++) {
+            fn(packed.data(), y.data(), k);
+        }
+        std::vector<double> us;
+        us.reserve((size_t) kRuns);
+        for (int i = 0; i < kRuns; i++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            fn(packed.data(), y.data(), k);
+            const auto t1 = std::chrono::steady_clock::now();
+            us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+        }
+        return median_us(us);
+    };
+
+    const double us_c  = time_fn(dequantize_row_tessera_t640);
+    const double us_v2 = time_fn(dequantize_row_tessera_t640_v2);
+    const double speedup = us_c / us_v2;
+    // Throughput: read packed + write fp32.
+    const double bytes_io = (double) (tessera_t640_row_bytes(k) + k * sizeof(float));
+    const double mbps_c   = bytes_io / (us_c * 1e3);
+    const double mbps_v2  = bytes_io / (us_v2 * 1e3);
+    printf("  dequant k=%-5lld  C: %7.2f us (%.0f MB/s)  v2: %7.2f us (%.0f MB/s)  speedup: %.2fx\n",
+           (long long) k, us_c, mbps_c, us_v2, mbps_v2, speedup);
+    return 0;
+}
+
+int bench_quant(int64_t k) {
+    std::vector<float> x;
+    make_signal(x, k, kSeed);
+    std::vector<uint8_t> packed(tessera_t640_row_bytes(k));
+
+    auto time_fn = [&](auto fn) {
+        for (int i = 0; i < kWarmup; i++) {
+            fn(x.data(), packed.data(), k);
+        }
+        std::vector<double> us;
+        us.reserve((size_t) kRuns);
+        for (int i = 0; i < kRuns; i++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            fn(x.data(), packed.data(), k);
+            const auto t1 = std::chrono::steady_clock::now();
+            us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+        }
+        return median_us(us);
+    };
+
+    const double us_c  = time_fn(quantize_row_tessera_t640_ref);
+    const double us_v2 = time_fn(quantize_row_tessera_t640_v2);
+    const double speedup = us_c / us_v2;
+    const double bytes_io = (double) (tessera_t640_row_bytes(k) + k * sizeof(float));
+    const double mbps_c   = bytes_io / (us_c * 1e3);
+    const double mbps_v2  = bytes_io / (us_v2 * 1e3);
+    printf("  quant  k=%-5lld  C: %7.2f us (%.0f MB/s)  v2: %7.2f us (%.0f MB/s)  speedup: %.2fx\n",
+           (long long) k, us_c, mbps_c, us_v2, mbps_v2, speedup);
+    return 0;
+}
+
+int bench_meta(int64_t n_pages) {
+    const int64_t n_lanes = n_pages * TILE640_LANES_PER_PAGE;
+    std::vector<uint16_t> page_scales((size_t) n_pages);
+    std::vector<int8_t> lane_scales((size_t) n_lanes);
+    std::vector<float> page_max((size_t) n_pages);
+    std::vector<float> lane_scale((size_t) n_lanes);
+    std::mt19937 rng(kSeed);
+    std::uniform_int_distribution<int> ls_dist(-127, 127);
+    for (int64_t i = 0; i < n_pages; i++) {
+        page_scales[(size_t) i] = (uint16_t) 0x3C00u;  // 1.0 in fp16
+    }
+    for (int64_t i = 0; i < n_lanes; i++) {
+        lane_scales[(size_t) i] = (int8_t) ls_dist(rng);
+    }
+    // Scalar reference: inline the C dispatch's per-element
+    // pattern.
+    auto scalar_ref = [&]() {
+        for (int64_t i = 0; i < n_pages; i++) {
+            page_max[(size_t) i] = GGML_FP16_TO_FP32(page_scales[(size_t) i]);
+        }
+        for (int64_t i = 0; i < n_lanes; i++) {
+            lane_scale[(size_t) i] = ((float) lane_scales[(size_t) i]) * (1.0f / 127.0f);
+        }
+    };
+    auto v2_fn = [&]() {
+        decode_per_row_meta_v2(page_scales.data(), lane_scales.data(),
+                               n_pages, page_max.data(), lane_scale.data());
+    };
+    auto time_fn = [&](auto fn) {
+        for (int i = 0; i < kWarmup; i++) fn();
+        std::vector<double> us;
+        us.reserve((size_t) kRuns);
+        for (int i = 0; i < kRuns; i++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            fn();
+            const auto t1 = std::chrono::steady_clock::now();
+            us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+        }
+        return median_us(us);
+    };
+    const double us_c  = time_fn(scalar_ref);
+    const double us_v2 = time_fn(v2_fn);
+    const double speedup = (us_v2 > 0.0) ? us_c / us_v2 : 0.0;
+    printf("  meta   n_pages=%-3lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx\n",
+           (long long) n_pages, us_c, us_v2, speedup);
+    return 0;
+}
+
+int bench_act_scale(int64_t n) {
+    std::vector<float> y_c((size_t) n, 1.0f);
+    std::vector<float> y_v2 = y_c;
+    std::vector<uint16_t> as((size_t) n, (uint16_t) 0x3C00u);  // 1.0 in fp16
+    auto scalar_ref = [&]() {
+        for (int64_t i = 0; i < n; i++) {
+            y_c[(size_t) i] *= GGML_FP16_TO_FP32(as[(size_t) i]);
+        }
+    };
+    auto v2_fn = [&]() {
+        apply_act_scale_v2(y_v2.data(), as.data(), n);
+    };
+    auto time_fn = [&](auto fn) {
+        for (int i = 0; i < kWarmup; i++) fn();
+        std::vector<double> us;
+        us.reserve((size_t) kRuns);
+        for (int i = 0; i < kRuns; i++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            fn();
+            const auto t1 = std::chrono::steady_clock::now();
+            us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+        }
+        return median_us(us);
+    };
+    const double us_c  = time_fn(scalar_ref);
+    const double us_v2 = time_fn(v2_fn);
+    const double speedup = (us_v2 > 0.0) ? us_c / us_v2 : 0.0;
+    printf("  act    n=%-5lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx\n",
+           (long long) n, us_c, us_v2, speedup);
+    return 0;
+}
+
+int bench_outlier(int64_t k, int64_t n_outliers) {
+    std::vector<float> row((size_t) k, 0.0f);
+    std::vector<int32_t> cols((size_t) n_outliers);
+    std::vector<uint16_t> vals((size_t) n_outliers);
+    std::mt19937 rng(kSeed);
+    std::uniform_int_distribution<int64_t> col_dist(0, k - 1);
+    for (int64_t i = 0; i < n_outliers; i++) {
+        cols[(size_t) i] = (int32_t) col_dist(rng);
+        vals[(size_t) i] = (uint16_t) 0x3C00u;
+    }
+    std::vector<float> row_c = row;
+    std::vector<float> row_v2 = row;
+    auto scalar_ref = [&]() {
+        for (int64_t k2 = 0; k2 < n_outliers; k2++) {
+            const int32_t col = cols[(size_t) k2];
+            if (col >= 0 && col < k) {
+                row_c[(size_t) col] = GGML_FP16_TO_FP32(vals[(size_t) k2]);
+            }
+        }
+    };
+    auto v2_fn = [&]() {
+        apply_outlier_addback_v2(row_v2.data(), k, 0, (int32_t) n_outliers,
+                                 cols.data(), vals.data());
+    };
+    auto time_fn = [&](auto fn) {
+        for (int i = 0; i < kWarmup; i++) fn();
+        std::vector<double> us;
+        us.reserve((size_t) kRuns);
+        for (int i = 0; i < kRuns; i++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            fn();
+            const auto t1 = std::chrono::steady_clock::now();
+            us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+        }
+        return median_us(us);
+    };
+    const double us_c  = time_fn(scalar_ref);
+    const double us_v2 = time_fn(v2_fn);
+    const double speedup = (us_v2 > 0.0) ? us_c / us_v2 : 0.0;
+    printf("  outlier k=%-5lld n=%-5lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx\n",
+           (long long) k, (long long) n_outliers, us_c, us_v2, speedup);
+    return 0;
+}
+
+}  // namespace
+
+int main(void) {
+    if (!ggml_tessera_t640_v2_enabled()) {
+        printf("v2 disabled (GGML_TESSERA_T640_V2_DISABLE=1); skipping\n");
+        return 0;
+    }
+    printf("dequant (per row, fp32 out, k rows of in_dim):\n");
+    bench_dequant(640);
+    bench_dequant(1024);
+    bench_dequant(1280);
+    bench_dequant(2560);
+    bench_dequant(4096);
+    bench_dequant(8192);
+    printf("quant (per row, fp32 in, k rows of in_dim):\n");
+    bench_quant(640);
+    bench_quant(1024);
+    bench_quant(1280);
+    bench_quant(2560);
+    bench_quant(4096);
+    bench_quant(8192);
+    printf("meta decode (per row, n_pages = ceil(in_dim/640)):\n");
+    bench_meta(1);
+    bench_meta(4);
+    bench_meta(8);
+    bench_meta(16);
+    printf("act_scale (per row, n = in_dim):\n");
+    bench_act_scale(1024);
+    bench_act_scale(4096);
+    bench_act_scale(8192);
+    printf("outlier addback (per row, sparse 5%%):\n");
+    bench_outlier(1024, 51);
+    bench_outlier(4096, 204);
+    bench_outlier(8192, 409);
+    return 0;
+}

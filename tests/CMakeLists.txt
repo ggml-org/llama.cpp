@@ -638,6 +638,15 @@ if (NOT GGML_BACKEND_DL)
         target_include_directories(test-tessera-quants-v2 PRIVATE
             ${PROJECT_SOURCE_DIR}/ggml/src)
     endif()
+    # TILE640 v2 throughput benchmark. Times each of the 5
+    # functions on the canonical Phase 0 shapes; reports
+    # speedup vs the C reference. Not a ctest target (it's
+    # a manual benchmark binary, not a pass/fail test).
+    llama_build(bench-tessera-quants-v2.cpp)
+    if (TARGET bench-tessera-quants-v2)
+        target_include_directories(bench-tessera-quants-v2 PRIVATE
+            ${PROJECT_SOURCE_DIR}/ggml/src)
+    endif()
 endif()
 
 # libmtmd
