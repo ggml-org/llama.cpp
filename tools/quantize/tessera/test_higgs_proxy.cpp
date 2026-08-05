@@ -17,7 +17,10 @@
 //   - model_hash matches `shasum -a 256` of the test fixture,
 //   - tinyllamas family-prior rank order,
 //   - L1-agnostic alpha scaling with a custom measurement_fn,
-//   - empty / 1-element / zero-norm tensors do not crash.
+//   - empty / 1-element / zero-norm tensors do not crash,
+//   - L1-on-ANE measurement (the new default): packing layout,
+//     guards, determinism, L1-vs-offline range, v2 dispatch
+//     branch, legacy env opt-out, alpha parity with offline.
 //
 // 30+ tests, runs in <1s on a tiny synthetic GGUF.
 
@@ -871,6 +874,241 @@ static void test_estimator_rejects_missing_file() {
 }
 
 // ---------------------------------------------------------------------------
+// 14. L1-on-ANE measurement (the Phase 0 source, the new default).
+// ---------------------------------------------------------------------------
+
+static std::vector<float> make_test_weights(int64_t n, uint32_t seed, float scale) {
+    std::vector<float> w((size_t)n);
+    uint32_t rng = seed;
+    for (int64_t j = 0; j < n; j++) {
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        float u = (float)((rng >> 8) & 0xFFFF) / (float)0xFFFF;
+        w[(size_t)j] = (u - 0.5f) * scale;
+    }
+    return w;
+}
+
+static void test_l1_pack_tile640_sizes() {
+    // Per-row flat TILE640 size: pages * (32 words * 4B + 2B page
+    // scale + 32 lane scales) = pages * 162.
+    std::vector<float> w;
+    std::vector<uint8_t> packed;
+
+    w = make_test_weights(3 * 64, 11u, 1.0f);
+    ts_higgs_proxy_pack_tile640(w.data(), 3, 64, packed);
+    check("l1-pack: 3x64 -> 3*162 bytes", packed.size() == (size_t)3 * 162);
+
+    w = make_test_weights(2 * 640, 12u, 1.0f);
+    ts_higgs_proxy_pack_tile640(w.data(), 2, 640, packed);
+    check("l1-pack: 2x640 exact page -> 2*162 bytes",
+          packed.size() == (size_t)2 * 162);
+
+    w = make_test_weights(2 * 641, 13u, 1.0f);
+    ts_higgs_proxy_pack_tile640(w.data(), 2, 641, packed);
+    check("l1-pack: 2x641 page spill -> 2*324 bytes",
+          packed.size() == (size_t)2 * 324);
+
+    w = make_test_weights(2 * 1024, 14u, 1.0f);
+    ts_higgs_proxy_pack_tile640(w.data(), 2, 1024, packed);
+    check("l1-pack: 2x1024 -> 2*324 bytes", packed.size() == (size_t)2 * 324);
+
+    ts_higgs_proxy_pack_tile640(nullptr, 2, 64, packed);
+    check("l1-pack: null input -> empty", packed.empty());
+    w = make_test_weights(64, 15u, 1.0f);
+    ts_higgs_proxy_pack_tile640(w.data(), 0, 64, packed);
+    check("l1-pack: out_dim=0 -> empty", packed.empty());
+}
+
+static void test_l1_measurement_guards() {
+    std::vector<float> w = make_test_weights(4 * 64, 21u, 1.0f);
+    std::vector<uint8_t> packed;
+    ts_higgs_proxy_pack_tile640(w.data(), 4, 64, packed);
+
+    check("l1-guard: null W_orig -> 0",
+          ts_higgs_proxy_measure_l1(nullptr, packed.data(), 4, 64, 0, nullptr) == 0.0f);
+    check("l1-guard: null packed -> 0",
+          ts_higgs_proxy_measure_l1(w.data(), nullptr, 4, 64, 0, nullptr) == 0.0f);
+    check("l1-guard: out_dim=0 -> 0",
+          ts_higgs_proxy_measure_l1(w.data(), packed.data(), 0, 64, 0, nullptr) == 0.0f);
+    check("l1-guard: in_dim=0 -> 0",
+          ts_higgs_proxy_measure_l1(w.data(), packed.data(), 4, 0, 0, nullptr) == 0.0f);
+
+    std::vector<float> z((size_t)2 * 64, 0.0f);
+    std::vector<uint8_t> zpacked;
+    ts_higgs_proxy_pack_tile640(z.data(), 2, 64, zpacked);
+    check("l1-guard: zero-norm tensor -> 0",
+          ts_higgs_proxy_measure_l1(z.data(), zpacked.data(), 2, 64, 0, nullptr) == 0.0f);
+}
+
+static void test_l1_measurement_determinism() {
+    std::vector<float> w = make_test_weights(8 * 128, 7u, 2.0f);
+    std::vector<uint8_t> packed;
+    ts_higgs_proxy_pack_tile640(w.data(), 8, 128, packed);
+    float a = ts_higgs_proxy_measure_l1(w.data(), packed.data(), 8, 128, 0, nullptr);
+    float b = ts_higgs_proxy_measure_l1(w.data(), packed.data(), 8, 128, 0, nullptr);
+    check("l1: positive on uniform weights", a > 0.0f);
+    check("l1: deterministic across calls", a == b);
+    // The packing (C reference quantizer) is deterministic too.
+    std::vector<uint8_t> packed2;
+    ts_higgs_proxy_pack_tile640(w.data(), 8, 128, packed2);
+    check("l1: pack deterministic", packed == packed2);
+    float c = ts_higgs_proxy_measure_l1(w.data(), packed2.data(), 8, 128, 0, nullptr);
+    check("l1: re-packed measurement identical", a == c);
+}
+
+static void test_l1_measurement_vs_offline_range() {
+    // The L1 metric is mean |W - W_deq| / max |W|: it captures the
+    // ternary quantization error AND the fp16 pre-dequant rounding.
+    // The offline metric is the ternary-only relative Frobenius.
+    // Both are dimensionless error measures on the same tensor, so
+    // they must be the same order; empirically the ratio is ~1.5
+    // on uniform weights (L1 >= offline because it adds the fp16
+    // mac loss on top of the ternary error).
+    std::vector<float> w = make_test_weights(16 * 256, 42u, 2.0f);
+    std::vector<uint8_t> packed;
+    ts_higgs_proxy_pack_tile640(w.data(), 16, 256, packed);
+    float l1  = ts_higgs_proxy_measure_l1(w.data(), packed.data(), 16, 256, 0, nullptr);
+    float off = ts_higgs_proxy_measure_offline(w.data(), 16 * 256, 0, nullptr);
+    check("l1-vs-offline: l1 > 0", l1 > 0.0f);
+    check("l1-vs-offline: offline > 0", off > 0.0f);
+    check("l1-vs-offline: l1 >= offline (fp16 loss on top)", l1 >= off);
+    check("l1-vs-offline: ratio in [1.0, 2.5]",
+          off > 0.0f && l1 / off >= 1.0f && l1 / off <= 2.5f);
+}
+
+static void test_l1_measurement_v2_branch() {
+    // in_dim >= GGML_TESSERA_T640_V2_MIN_K (1024) exercises the v2
+    // dequant branch (v2 is enabled by default on Apple Silicon);
+    // below the cutoff the C reference runs.
+    std::vector<float> w = make_test_weights(2 * 1024, 9u, 2.0f);
+    std::vector<uint8_t> packed;
+    ts_higgs_proxy_pack_tile640(w.data(), 2, 1024, packed);
+    float a = ts_higgs_proxy_measure_l1(w.data(), packed.data(), 2, 1024, 0, nullptr);
+    float b = ts_higgs_proxy_measure_l1(w.data(), packed.data(), 2, 1024, 0, nullptr);
+    check("l1-v2: positive at in_dim=1024", a > 0.0f);
+    check("l1-v2: deterministic", a == b);
+}
+
+static void test_estimator_l1_default_source(const std::string & fixture_path) {
+    ts_higgs_proxy_params p = {};
+    p.min_params_for_estimate = 0;
+    ts_higgs_proxy_result r;
+    int rc = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r);
+    check("l1-default: returns 0", rc == 0);
+    if (rc != 0) return;
+    check("l1-default: top-level source l1_kernel_dequant",
+          r.t_squared_source == "l1_kernel_dequant");
+    bool all_labeled = !r.layers.empty();
+    bool any_positive = false;
+    for (const auto & lr : r.layers) {
+        if (lr.t_squared_source != "l1_kernel_dequant") all_labeled = false;
+        if (std::isnan(lr.t_squared) || std::isinf(lr.t_squared) ||
+            !(lr.t_squared >= 0.0f)) {
+            all_labeled = false;
+        }
+        if (lr.t_squared > 0.0f) any_positive = true;
+    }
+    check("l1-default: per-layer source l1_kernel_dequant", all_labeled);
+    check("l1-default: at least one positive t_squared", any_positive);
+}
+
+static void test_estimator_legacy_offline_env(const std::string & fixture_path) {
+    ts_higgs_proxy_params p = {};
+    p.min_params_for_estimate = 0;
+
+    ::setenv("TS_HIGGS_PROXY_LEGACY_OFFLINE", "1", 1);
+    ts_higgs_proxy_result r;
+    int rc = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r);
+    ::unsetenv("TS_HIGGS_PROXY_LEGACY_OFFLINE");
+    check("legacy-env: returns 0", rc == 0);
+    if (rc == 0) {
+        check("legacy-env: source offline_ternary_mse",
+              r.t_squared_source == "offline_ternary_mse");
+        bool per_layer_legacy = !r.layers.empty();
+        for (const auto & lr : r.layers) {
+            if (lr.t_squared_source != "offline_ternary_mse") per_layer_legacy = false;
+        }
+        check("legacy-env: per-layer source offline_ternary_mse", per_layer_legacy);
+        // The sidecar JSON shape is unchanged; only the value differs.
+        std::string json = ts_higgs_proxy_to_json(&r, fixture_path.c_str(), nullptr);
+        check("legacy-env: json measurement offline_ternary_mse",
+              json.find("\"measurement\": \"offline_ternary_mse\"") != std::string::npos);
+    }
+
+    // Env cleared: the L1 default is back.
+    ts_higgs_proxy_result r2;
+    rc = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r2);
+    check("legacy-env: L1 default restored after unset",
+          rc == 0 && r2.t_squared_source == "l1_kernel_dequant");
+}
+
+static void test_estimator_l1_json_shape(const std::string & fixture_path) {
+    ts_higgs_proxy_params p = {};
+    p.min_params_for_estimate = 0;
+    ts_higgs_proxy_result r;
+    int rc = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r);
+    check("l1-json: returns 0", rc == 0);
+    if (rc != 0) return;
+    std::string json = ts_higgs_proxy_to_json(&r, fixture_path.c_str(), nullptr);
+    check("l1-json: measurement l1_kernel_dequant",
+          json.find("\"measurement\": \"l1_kernel_dequant\"") != std::string::npos);
+    check("l1-json: per-layer t_squared_source l1_kernel_dequant",
+          json.find("\"t_squared_source\": \"l1_kernel_dequant\"") != std::string::npos);
+    check("l1-json: schema unchanged",
+          json.find("ane.alpha-coefficients.v1") != std::string::npos);
+    ts_higgs_proxy_result r2;
+    int rc2 = ts_higgs_proxy_from_json(json.c_str(), &r2);
+    check("l1-json: round-trip preserves l1 source",
+          rc2 == 0 && r2.t_squared_source == "l1_kernel_dequant");
+}
+
+static void test_estimator_alphas_identical_l1_vs_offline(const std::string & fixture_path) {
+    // The proxy alpha is the structural family prior, independent of
+    // the t^2 measurement source. The L1 default and the legacy
+    // offline path must produce identical alphas; only t_squared and
+    // the source label differ.
+    ts_higgs_proxy_params p = {};
+    p.min_params_for_estimate = 0;
+    p.alpha_floor_fraction = 1e-3f;
+
+    ts_higgs_proxy_result r_l1;
+    int rc1 = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r_l1);
+
+    ::setenv("TS_HIGGS_PROXY_LEGACY_OFFLINE", "1", 1);
+    ts_higgs_proxy_result r_off;
+    int rc2 = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r_off);
+    ::unsetenv("TS_HIGGS_PROXY_LEGACY_OFFLINE");
+
+    check("e2e: both runs succeed", rc1 == 0 && rc2 == 0);
+    if (rc1 != 0 || rc2 != 0) return;
+    check("e2e: same layer count", r_l1.layers.size() == r_off.layers.size());
+    if (r_l1.layers.size() != r_off.layers.size()) return;
+
+    bool alphas_equal = true;
+    bool frob_equal = true;
+    bool t2_differ = false;
+    bool ratio_ok = true;
+    for (size_t i = 0; i < r_l1.layers.size(); i++) {
+        const auto & a = r_l1.layers[i];
+        const auto & b = r_off.layers[i];
+        if (a.name != b.name) { alphas_equal = false; break; }
+        if (a.alpha_l != b.alpha_l) alphas_equal = false;
+        if (a.frobenius_norm_sq != b.frobenius_norm_sq) frob_equal = false;
+        if (a.t_squared != b.t_squared) t2_differ = true;
+        if (a.t_squared > 0.0f && b.t_squared > 0.0f) {
+            const float ratio = a.t_squared / b.t_squared;
+            if (ratio < 0.3f || ratio > 4.0f) ratio_ok = false;
+        }
+    }
+    check("e2e: alpha identical (structural prior)", alphas_equal);
+    check("e2e: frobenius identical", frob_equal);
+    check("e2e: t_squared differs between sources", t2_differ);
+    check("e2e: per-layer t_squared ratio within [0.3, 4.0]", ratio_ok);
+    check("e2e: mean_alpha identical",
+          feq(r_l1.mean_alpha, r_off.mean_alpha, 1e-6f));
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -944,6 +1182,17 @@ int main() {
     test_estimator_rejects_null_gguf_path();
     test_estimator_rejects_null_result();
     test_estimator_rejects_missing_file();
+
+    // 14. L1-on-ANE measurement (the new default)
+    test_l1_pack_tile640_sizes();
+    test_l1_measurement_guards();
+    test_l1_measurement_determinism();
+    test_l1_measurement_vs_offline_range();
+    test_l1_measurement_v2_branch();
+    test_estimator_l1_default_source(fixture_path);
+    test_estimator_legacy_offline_env(fixture_path);
+    test_estimator_l1_json_shape(fixture_path);
+    test_estimator_alphas_identical_l1_vs_offline(fixture_path);
 
     ::unlink(fixture_path.c_str());
 
