@@ -1,14 +1,12 @@
+#include "ssm-scan.cuh"
+
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 #define USE_CUB
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
 #ifdef USE_CUB
-#include "cub-compat.cuh"
 using namespace cub;
 #endif // USE_CUB
-
-#include "ssm-scan.cuh"
-
 
 // Minimum number of tokens to use SSD (State Space Duality) matmul path instead of scan path.
 // For n_tok <= this threshold, the scan kernel is used (lower overhead for short sequences).

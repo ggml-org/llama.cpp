@@ -4,10 +4,6 @@
 #include "ggml-cuda/common.cuh"
 #include "ggml.h"
 
-#ifdef GGML_CUDA_USE_CUB
-#   include "cub-compat.cuh"
-#endif // GGML_CUDA_USE_CUB
-
 template<typename T, int BLOCK_SIZE>
 static __global__ void cumsum_cub_kernel(
         const T * __restrict__ src,

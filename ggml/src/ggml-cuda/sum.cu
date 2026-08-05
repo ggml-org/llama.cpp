@@ -1,12 +1,10 @@
 #include "sum.cuh"
 #include "sumrows.cuh"
+#include <cstdint>
 
 #ifdef GGML_CUDA_USE_CUB
-#include "cub-compat.cuh"
 using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
-
-#include <cstdint>
 
 void sum_f32_cuda(ggml_cuda_pool & pool, const float * x, float * dst, const int64_t ne, cudaStream_t stream) {
 #ifdef GGML_CUDA_USE_CUB

@@ -2,7 +2,6 @@
 #include "reduce_rows.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#include "cub-compat.cuh"
 using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
 
