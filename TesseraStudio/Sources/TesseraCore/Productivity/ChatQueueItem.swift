@@ -80,6 +80,25 @@ public struct ChatQueueItem: Codable, Sendable, Identifiable, Hashable {
         /// The chat panel shows a retry button.
         case failed
     }
+
+    // MARK: - Convenience
+
+    /// True iff this item has been superseded by another (the
+    /// spec's match-and-supersede check marked it). Superseded
+    /// items stay in the queue (visible but dimmed) so the user
+    /// can see the history of intent.
+    public var isSuperseded: Bool { supersededByID != nil }
+
+    /// The position the user sees in the chat panel: front of
+    /// the queue is position 1 (one-based), so the first item is
+    /// #1. Used by the "replaces #N" badge on superseded items.
+    public func displayPosition(among items: [ChatQueueItem]) -> Int? {
+        let ordered = items.sorted { lhs, rhs in
+            if lhs.order != rhs.order { return lhs.order < rhs.order }
+            return lhs.createdAt < rhs.createdAt
+        }
+        return ordered.firstIndex(where: { $0.id == self.id }).map { $0 + 1 }
+    }
 }
 
 // MARK: - ChatQueue

@@ -54,6 +54,19 @@ public struct ReceiptSigner: Sendable {
         }
     }
 
+    /// The injected signing key, when this signer was
+    /// initialized with one. Used by the export service to
+    /// build export receipts with a custom summary (the
+    /// regular `sign(_:)` path doesn't expose the summary
+    /// override). Nil for the production (Keychain-backed)
+    /// signer.
+    public var injectedSigningKey: Curve25519.Signing.PrivateKey? {
+        switch keySource {
+        case .keychain: return nil
+        case .injected(let key): return key
+        }
+    }
+
     /// Sign a new receipt. The receipt's `id`, `timestamp`, and
     /// `signature` are populated by this call; the `summary` is
     /// composed from the mutations. The `c2paManifest` is generated
