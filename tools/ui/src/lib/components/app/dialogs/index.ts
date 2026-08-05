@@ -126,6 +126,7 @@ export { default as DialogConversationRename } from './DialogConversationRename.
 export { default as DialogEncryptionEnable } from './DialogEncryptionEnable.svelte';
 export { default as DialogEncryptionUnlock } from './DialogEncryptionUnlock.svelte';
 export { default as DialogExportEncryption } from './DialogExportEncryption.svelte';
+export { default as DialogImportEncryption } from './DialogImportEncryption.svelte';
 
 /**
  *
