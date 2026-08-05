@@ -781,6 +781,97 @@ static void ggml_ane_write_array_fp32(const float * src, MLMultiArray * array, s
     }
 }
 
+// Typed input: data pointer + host dtype. The runtime converts
+// from the host dtype to the slot's dtype (declared by the
+// .mlmodelc). Supported host dtypes: fp32, fp16, i32. The
+// .mlmodelc's slot dtypes are constrained by the bundle's
+// TensorType declarations.
+//
+// Phase 0 (TILE640_MATMUL) ships the typed path because the
+// bundle takes the host-dedequantized weight as fp16 (not
+// fp32). The existing fp32-only path is preserved as a thin
+// wrapper for the body-op dispatchers (RMS_NORM, SOFT_MAX,
+// ROPE, GLU, GET_ROWS, MUL_MAT), which all use fp32 today.
+enum ggml_ane_input_dtype {
+    GGML_ANE_INPUT_FP32 = 0,
+    GGML_ANE_INPUT_FP16 = 1,
+    GGML_ANE_INPUT_I32  = 2,
+};
+
+struct ggml_ane_typed_input {
+    const void * data;
+    ggml_ane_input_dtype dtype;
+};
+
+static size_t ggml_ane_input_dtype_size(ggml_ane_input_dtype d) {
+    switch (d) {
+        case GGML_ANE_INPUT_FP32: return 4;
+        case GGML_ANE_INPUT_FP16: return 2;
+        case GGML_ANE_INPUT_I32:  return 4;
+    }
+    return 4;
+}
+
+static size_t ggml_ane_multi_array_element_size(MLMultiArrayDataType d) {
+    switch (d) {
+        case MLMultiArrayDataTypeFloat32: return 4;
+        case MLMultiArrayDataTypeFloat16: return 2;
+        case MLMultiArrayDataTypeInt32:   return 4;
+        default: return 4;
+    }
+}
+
+// Write a host buffer into a pinned slot, converting from the
+// host dtype to the slot's dtype when they differ. For
+// dtype matches, it's a straight memcpy; for mismatches, it's
+// an elementwise conversion (fp32<->fp16 today; i32 stays
+// i32). The conversion happens in the dispatch queue (off
+// the per-thread hot path).
+static void ggml_ane_write_array_typed(const ggml_ane_typed_input & src,
+                                        MLMultiArray * array, size_t count) {
+    const MLMultiArrayDataType slot_dtype = array.dataType;
+    const size_t slot_esize = ggml_ane_multi_array_element_size(slot_dtype);
+    if (src.dtype == GGML_ANE_INPUT_FP32 && slot_dtype == MLMultiArrayDataTypeFloat32) {
+        std::memcpy(array.dataPointer, src.data, count * sizeof(float));
+        return;
+    }
+    if (src.dtype == GGML_ANE_INPUT_FP16 && slot_dtype == MLMultiArrayDataTypeFloat16) {
+        std::memcpy(array.dataPointer, src.data, count * sizeof(ggml_fp16_t));
+        return;
+    }
+    if (src.dtype == GGML_ANE_INPUT_I32 && slot_dtype == MLMultiArrayDataTypeInt32) {
+        std::memcpy(array.dataPointer, src.data, count * sizeof(int32_t));
+        return;
+    }
+    // Mixed dtypes: convert via the existing fp32 helper for
+    // fp16<->fp32, or a small i32<->i32 loop. The Phase 0 L1
+    // path never hits this branch (the bundle's w/x slots are
+    // fp16 and the host supplies fp16 directly). The branch
+    // exists for forward-compatibility with mixed-dtype
+    // bundles in Phase 0.5.
+    if (src.dtype == GGML_ANE_INPUT_FP32 && slot_dtype == MLMultiArrayDataTypeFloat16) {
+        ggml_fp32_to_fp16_row((const float *) src.data,
+                              (ggml_fp16_t *) array.dataPointer, (int64_t) count);
+        return;
+    }
+    if (src.dtype == GGML_ANE_INPUT_FP16 && slot_dtype == MLMultiArrayDataTypeFloat32) {
+        ggml_fp16_to_fp32_row((const ggml_fp16_t *) src.data,
+                              (float *) array.dataPointer, (int64_t) count);
+        return;
+    }
+    if (src.dtype == GGML_ANE_INPUT_I32 && slot_dtype == MLMultiArrayDataTypeFloat32) {
+        const int32_t * p = (const int32_t *) src.data;
+        float * d = (float *) array.dataPointer;
+        for (size_t i = 0; i < count; ++i) d[i] = (float) p[i];
+        return;
+    }
+    // Last-resort: zero the slot so a wrong-dtype input does
+    // not silently produce garbage. The dispatch policy
+    // validates dtypes up front; reaching this branch is a
+    // logic error in supports_op / dispatch_op.
+    std::memset(array.dataPointer, 0, count * slot_esize);
+}
+
 // Run the bound program: feed inputs from the host into the pinned
 // state slots, dispatch the bound function with outputBackings set so
 // Core ML writes outputs directly into our pinned slots, and read
@@ -791,8 +882,15 @@ static void ggml_ane_write_array_fp32(const float * src, MLMultiArray * array, s
 // bound function. Returns false (with a logged warning) when Core
 // ML returns nil; the caller is responsible for falling back to
 // Metal/CPU.
+//
+// Inputs are typed (fp32 / fp16 / i32 host buffers); the runtime
+// converts to the slot's declared dtype (the .mlmodelc's
+// TensorType). The Phase 0 L1 path passes fp16 for the
+// host-dedequantized weight and the fp16 activations; the
+// existing fp32 body-op dispatchers wrap their float pointers
+// in a typed input and the slot dtype matches.
 static bool ggml_ane_program_run(ggml_backend_ane_program * program,
-                                 const std::unordered_map<std::string, const float *> & inputs,
+                                 const std::unordered_map<std::string, ggml_ane_typed_input> & inputs,
                                  const std::vector<std::string> & output_names,
                                  const std::unordered_map<std::string, float *> & outputs) {
     if (!program || !program->warm.load() || !program->layout_loaded) {
@@ -809,11 +907,10 @@ static bool ggml_ane_program_run(ggml_backend_ane_program * program,
             // Build the input feature dict from the bound function's
             // manifest input slots. Each pinned slot is the
             // IOSurface-backed MLMultiArray; we memcpy the host
-            // fp32 input into the IOSurface bytes directly (the
-            // pinned slot's dataType is what the .mlmodelc expects,
-            // so the fp32 host data may need a one-shot dtype
-            // conversion; the simple W0 case is fp32 -> fp32 which
-            // is a straight memcpy).
+            // buffer (in the host's dtype) into the IOSurface bytes,
+            // converting to the slot's dtype when they differ
+            // (ggml_ane_write_array_typed handles the common cases
+            // without an intermediate buffer).
             NSMutableDictionary<NSString *, MLFeatureValue *> * features =
                 [NSMutableDictionary dictionary];
             for (uint32_t i = 0; i < func->n_inputs; ++i) {
@@ -826,8 +923,8 @@ static bool ggml_ane_program_run(ggml_backend_ane_program * program,
                 }
                 const size_t count = (size_t) pinned.count;
                 auto it = inputs.find(slot->name);
-                if (it != inputs.end() && it->second) {
-                    ggml_ane_write_array_fp32(it->second, pinned, count);
+                if (it != inputs.end() && it->second.data) {
+                    ggml_ane_write_array_typed(it->second, pinned, count);
                 } else {
                     // No host-side data: leave the slot as-is. The
                     // caller is responsible for ensuring prior calls
@@ -1155,10 +1252,13 @@ static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> 
 // faster, not when ANE is available.
 //
 // Per-op policy (mirrors docs/tessera-ane-ios-demo-design.md,
-// Phase 1 table):
+// Phase 1 table, and Phase 0 Part 6):
 //
-//   MUL_MAT (T640_3D)  -> ANE (L1 path, Phase 0; the matmul is
-//                         the whole point)
+//   TILE640_MATMUL      -> ANE (L1 path, Phase 0; the dequant
+//                         is on the host, the matmul is the
+//                         ANE fp16 matmul; shape must match the
+//                         bound bundle's baked shape, otherwise
+//                         fall through to ggml-cpu/Metal)
 //   MUL_MAT (BF16/fp16)-> ANE if the bound bundle's function matches
 //                         the op's shape; otherwise fall through
 //                         to Accelerate BLAS (the W0 spike's path
@@ -1199,6 +1299,7 @@ enum ggml_ane_dispatch_target {
 static enum ggml_ane_dispatch_target ggml_ane_dispatch_policy(const ggml_tensor * op) {
     switch (op->op) {
         case GGML_OP_MUL_MAT:
+        case GGML_OP_TILE640_MATMUL:
         case GGML_OP_RMS_NORM:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_ROPE:
@@ -1319,8 +1420,8 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             // Build the input/output maps and call the bundle. The
             // bundle's "main" function is the default function name.
-            std::unordered_map<std::string, const float *> inputs;
-            inputs.emplace("x", (const float *) op->src[0]->data);
+            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+            inputs.emplace("x", ggml_ane_typed_input{(const void *) op->src[0]->data, GGML_ANE_INPUT_FP32});
             std::vector<std::string> out_names_vec = { "y" };
             std::unordered_map<std::string, float *> outputs;
             outputs.emplace("y", (float *) op->data);
@@ -1386,8 +1487,8 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 // route the op to a different backend.
                 return false;
             }
-            std::unordered_map<std::string, const float *> inputs;
-            inputs.emplace("x", (const float *) op->src[0]->data);
+            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+            inputs.emplace("x", ggml_ane_typed_input{(const void *) op->src[0]->data, GGML_ANE_INPUT_FP32});
             std::vector<std::string> out_names_vec = { "y" };
             std::unordered_map<std::string, float *> outputs;
             outputs.emplace("y", (float *) op->data);
@@ -1447,8 +1548,8 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 y_shape[1].longLongValue != op->ne[1]) {
                 return false;
             }
-            std::unordered_map<std::string, const float *> inputs;
-            inputs.emplace("x", (const float *) op->src[0]->data);
+            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+            inputs.emplace("x", ggml_ane_typed_input{(const void *) op->src[0]->data, GGML_ANE_INPUT_FP32});
             std::vector<std::string> out_names_vec = { "y" };
             std::unordered_map<std::string, float *> outputs;
             outputs.emplace("y", (float *) op->data);
@@ -1550,9 +1651,9 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 return false;
             }
             float pos_f = static_cast<float>(pos_i);
-            std::unordered_map<std::string, const float *> inputs;
-            inputs.emplace("x", (const float *) op->src[0]->data);
-            inputs.emplace("pos", &pos_f);
+            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+            inputs.emplace("x", ggml_ane_typed_input{(const void *) op->src[0]->data, GGML_ANE_INPUT_FP32});
+            inputs.emplace("pos", ggml_ane_typed_input{(const void *) &pos_f, GGML_ANE_INPUT_FP32});
             std::vector<std::string> out_names_vec = { "y" };
             std::unordered_map<std::string, float *> outputs;
             outputs.emplace("y", (float *) op->data);
@@ -1618,9 +1719,9 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 y_shape[1].longLongValue != op->ne[1]) {
                 return false;
             }
-            std::unordered_map<std::string, const float *> inputs;
-            inputs.emplace("gate", (const float *) op->src[0]->data);
-            inputs.emplace("up",   (const float *) op->src[1]->data);
+            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+            inputs.emplace("gate", ggml_ane_typed_input{(const void *) op->src[0]->data, GGML_ANE_INPUT_FP32});
+            inputs.emplace("up",   ggml_ane_typed_input{(const void *) op->src[1]->data, GGML_ANE_INPUT_FP32});
             std::vector<std::string> out_names_vec = { "y" };
             std::unordered_map<std::string, float *> outputs;
             outputs.emplace("y", (float *) op->data);
@@ -1683,8 +1784,8 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 i_shape[0].longLongValue != op->ne[1]) {
                 return false;
             }
-            std::unordered_map<std::string, const float *> inputs;
-            inputs.emplace("table", (const float *) op->src[0]->data);
+            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+            inputs.emplace("table", ggml_ane_typed_input{(const void *) op->src[0]->data, GGML_ANE_INPUT_FP32});
             // The bundle's ids input is declared Float32 by
             // CoreML's input schema (the int32 cast happens
             // inside the bundle via mb.cast(ids, int32)). The
@@ -1699,7 +1800,7 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 ids_f[i] = static_cast<float>(
                     ((const int32_t *) op->src[1]->data)[i]);
             }
-            inputs.emplace("ids", ids_f.data());
+            inputs.emplace("ids", ggml_ane_typed_input{(const void *) ids_f.data(), GGML_ANE_INPUT_FP32});
             std::vector<std::string> out_names_vec = { "y" };
             std::unordered_map<std::string, float *> outputs;
             outputs.emplace("y", (float *) op->data);
@@ -1709,11 +1810,189 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             return ok;
         }
-        case GGML_OP_TILE640_MATMUL:
-            // TODO(ane-bundle): dispatch matmul to the bound bundle's matmul
-            // function once the conversion tool names one. Today the matmul
-            // lives inside the layer-slab function rather than standalone.
-            return false;
+        case GGML_OP_TILE640_MATMUL: {
+            // L1 kernel-direct fidelity: y = W_dequant @ B on the ANE.
+            // The Phase 0 spec is the dequant-on-host + ANE matmul
+            // path: the dispatch reads the 6 TILE640 weight
+            // components (src[0..5]) and the activation (src[6]),
+            // dequants the weight on the host via the existing
+            // dequantize_row_tessera_t640 (ggml-quants.c), writes
+            // the fp16 weight into the bundle's pinned `w` slot,
+            // and calls the bundle with the weight and the
+            // activation as inputs. The 5-trit-base-243 dequant
+            // is on the host; the ANE does the matmul. The fused
+            // dequant+matmul on ANE is Phase 0.5 (the MIL graph
+            // for the 5-trit-base-243 unpack is ~50 elementwise
+            // ops per page; the host dequant is the architect's
+            // allowed fallback per the Phase 0 spec's open
+            // question).
+            //
+            // The 7 sources per the L0.5 reference
+            // (ggml-metal-ops.cpp:1765-1828):
+            //   src[0]  packed              (I32  [out, pages, 32])
+            //   src[1]  page_scales         (F16  [out, pages])
+            //   src[2]  lane_scales         (I8   [out, pages, 32])
+            //   src[3]  outlier_row_offsets (I32  [out + 1])
+            //   src[4]  outlier_cols        (I32  [n_outliers])
+            //   src[5]  outlier_vals        (F16  [n_outliers])
+            //   src[6]  B (activations)     (F16  [in_dim, n_tokens, ...])
+            if (op->src[0] == nullptr || op->src[1] == nullptr ||
+                op->src[2] == nullptr || op->src[3] == nullptr ||
+                op->src[4] == nullptr || op->src[5] == nullptr ||
+                op->src[6] == nullptr) {
+                return false;
+            }
+            if (op->src[0]->type != GGML_TYPE_I32 ||
+                op->src[1]->type != GGML_TYPE_F16 ||
+                op->src[2]->type != GGML_TYPE_I8  ||
+                op->src[3]->type != GGML_TYPE_I32 ||
+                op->src[4]->type != GGML_TYPE_I32 ||
+                op->src[5]->type != GGML_TYPE_F16 ||
+                op->src[6]->type != GGML_TYPE_F16 ||
+                op->type        != GGML_TYPE_F32) {
+                // The bundle's pinned slot dtypes are fp16 for the
+                // weight and activation, fp32 for the output. The
+                // dispatch refuses a dtype mismatch so the
+                // scheduler can route the op to a different
+                // backend (ggml-cpu or ggml-metal).
+                return false;
+            }
+            // The matmul's out_dim is in op_params[0] (the
+            // ggml_tile640_matmul wrapper sets it; see ggml.h:2631).
+            const int32_t out_dim = ggml_get_op_params_i32(op, 0);
+            const int32_t in_dim  = (int32_t) op->src[6]->ne[0];
+            const int32_t n_tokens = (int32_t) op->src[6]->ne[1];
+            if (out_dim <= 0 || in_dim <= 0 || n_tokens <= 0) {
+                return false;
+            }
+            MLModelDescription * desc = program->model.modelDescription;
+            if (!desc) {
+                return false;
+            }
+            // The bundle is shape-locked at export time; the
+            // dispatch matches on the bound function's input
+            // shape. A shape mismatch returns false so the
+            // scheduler can route to a backend that has a
+            // matching bundle (the production graph would carry
+            // one .mlmodelc per (out_dim, in_dim, n_tokens) triple;
+            // the Phase 0 spike ships only 256x256x1, so larger
+            // shapes fall through to ggml-cpu/Metal).
+            MLFeatureDescription * w_desc = desc.inputDescriptionsByName[@"w"];
+            MLFeatureDescription * x_desc = desc.inputDescriptionsByName[@"x"];
+            MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
+            if (!w_desc || w_desc.type != MLFeatureTypeMultiArray ||
+                !x_desc || x_desc.type != MLFeatureTypeMultiArray ||
+                !y_desc || y_desc.type != MLFeatureTypeMultiArray) {
+                return false;
+            }
+            // The bundle declares the weight and activation as
+            // fp16 MultiArrays and the output as fp32. The
+            // dispatch validates the dtypes too (a bundle
+            // declared with a different precision would
+            // silently mismatch the slot's dataType; surfacing
+            // it here is a fail-fast).
+            if (w_desc.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat16 ||
+                x_desc.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat16 ||
+                y_desc.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat32) {
+                return false;
+            }
+            NSArray<NSNumber *> * w_shape = w_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * x_shape = x_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
+            if (w_shape.count != 2 || x_shape.count != 2 || y_shape.count != 2 ||
+                w_shape[0].longLongValue != out_dim ||
+                w_shape[1].longLongValue != in_dim ||
+                x_shape[0].longLongValue != in_dim ||
+                x_shape[1].longLongValue != n_tokens ||
+                y_shape[0].longLongValue != out_dim ||
+                y_shape[1].longLongValue != n_tokens) {
+                return false;
+            }
+            // Phase 0: dequant the TILE640 weight on the host
+            // into a stack fp16 buffer. The dequant uses
+            // dequantize_row_tessera_t640 (ggml-quants.c) row
+            // by row. The outlier addback is applied in fp32
+            // (matching the L0.5 reference's behaviour per
+            // test_b5_tile640_metal_dequant.cpp:343-349).
+            // The packed rows are assembled in the flat
+            // per-row layout the dequant function expects:
+            //   [packed | page_scales | lane_scales] per row.
+            std::vector<ggml_fp16_t> weight_fp16((size_t) out_dim * in_dim);
+            const int64_t pages_per_row = (in_dim + 639) / 640;
+            const int64_t words_per_page = 32;
+            const int32_t * packed = (const int32_t *) op->src[0]->data;
+            const ggml_fp16_t * page_scales = (const ggml_fp16_t *) op->src[1]->data;
+            const int8_t * lane_scales = (const int8_t *) op->src[2]->data;
+            const int32_t * outlier_row_offsets = (const int32_t *) op->src[3]->data;
+            const int32_t * outlier_cols = (const int32_t *) op->src[4]->data;
+            const ggml_fp16_t * outlier_vals = (const ggml_fp16_t *) op->src[5]->data;
+            std::vector<uint8_t> row_bytes(
+                (size_t)(pages_per_row * (words_per_page * 4 + 2 + words_per_page)));
+            std::vector<float> row_f32((size_t) in_dim);
+            for (int32_t r = 0; r < out_dim; ++r) {
+                row_bytes.clear();
+                // Packed words (32-bit each).
+                for (int64_t p = 0; p < pages_per_row; ++p) {
+                    for (int64_t l = 0; l < words_per_page; ++l) {
+                        const uint32_t v = (uint32_t) packed[
+                            (r * pages_per_row + p) * words_per_page + l];
+                        row_bytes.insert(row_bytes.end(),
+                                         (const uint8_t *) &v,
+                                         (const uint8_t *) &v + 4);
+                    }
+                }
+                // Page scales (16-bit each, fp16).
+                for (int64_t p = 0; p < pages_per_row; ++p) {
+                    const uint16_t s = (uint16_t) page_scales[
+                        r * pages_per_row + p];
+                    row_bytes.insert(row_bytes.end(),
+                                     (const uint8_t *) &s,
+                                     (const uint8_t *) &s + 2);
+                }
+                // Lane scales (8-bit each, int8).
+                for (int64_t p = 0; p < pages_per_row; ++p) {
+                    for (int64_t l = 0; l < words_per_page; ++l) {
+                        const int8_t s = lane_scales[
+                            (r * pages_per_row + p) * words_per_page + l];
+                        row_bytes.push_back((uint8_t) s);
+                    }
+                }
+                // Dequant the row in fp32 (the L0.5 reference's
+                // precision; the ANE's fp16 path is downstream
+                // of this).
+                dequantize_row_tessera_t640(row_bytes.data(),
+                                            row_f32.data(), in_dim);
+                // Sparse outlier addback (fp32; matches the GPU
+                // kernel's outlier path).
+                const int32_t lo = outlier_row_offsets[r];
+                const int32_t hi = outlier_row_offsets[r + 1];
+                for (int32_t k = lo; k < hi; ++k) {
+                    const int32_t col = outlier_cols[k];
+                    if (col >= 0 && col < in_dim) {
+                        row_f32[col] = ggml_fp16_to_fp32(outlier_vals[k]);
+                    }
+                }
+                // Cast to fp16 for the bundle's pinned slot.
+                for (int32_t c = 0; c < in_dim; ++c) {
+                    weight_fp16[(size_t) r * in_dim + c] =
+                        ggml_fp32_to_fp16(row_f32[(size_t) c]);
+                }
+            }
+            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+            inputs.emplace("w", ggml_ane_typed_input{
+                (const void *) weight_fp16.data(), GGML_ANE_INPUT_FP16});
+            inputs.emplace("x", ggml_ane_typed_input{
+                (const void *) op->src[6]->data, GGML_ANE_INPUT_FP16});
+            std::vector<std::string> out_names_vec = { "y" };
+            std::unordered_map<std::string, float *> outputs;
+            outputs.emplace("y", (float *) op->data);
+            const bool ok = ggml_ane_program_run(program, inputs,
+                                                  out_names_vec, outputs);
+            if (ok) {
+                out_names = std::move(out_names_vec);
+            }
+            return ok;
+        }
         default:
             return false;
     }
@@ -2011,6 +2290,18 @@ static bool ggml_backend_ane_device_supports_op(ggml_backend_dev_t dev, const gg
         case GGML_OP_ROPE:
         case GGML_OP_GLU:
         case GGML_OP_GET_ROWS:
+            return dev != nullptr;
+
+        // L1 matmul (Phase 0). The TILE640_MATMUL op carries
+        // the 7 TILE640 sources; the dispatch path dequants on
+        // the host and runs the ANE fp16 matmul. The bundle is
+        // shape-locked at export time; the precise check lives
+        // in ggml_ane_program_dispatch_op (a shape mismatch
+        // returns false so the scheduler routes to a backend
+        // that has the matching bundle, e.g. ggml-cpu/Metal).
+        // The device-level supports_op advertises the op so
+        // the scheduler considers the ANE backend.
+        case GGML_OP_TILE640_MATMUL:
             return dev != nullptr;
 
         // ANE-NATIVE elementwise ops with an Accelerate implementation.
