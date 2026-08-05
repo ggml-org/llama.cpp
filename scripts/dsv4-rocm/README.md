@@ -211,7 +211,7 @@ reduction, not another runtime candidate or routine profile.
 `GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1` is an experimental, fail-closed
 shape-scoped option. It requires a HIP build with RCCL/NCCL, explicit
 `GGML_CUDA_ALLREDUCE=nccl`, exactly four distinct physical RDNA2 devices, and
-contiguous F32 rank tensors of exact shape `[7168,1,1,1]`. The force-FP32 flag
+contiguous F32 rank tensors of exact shape `[4096,1,1,1]`. The force-FP32 flag
 is ORed across all ranks and always wins. Qualifying calls reuse the existing
 F32-to-BF16, BF16 RCCL sum, and BF16-to-F32 implementation; all misses retain
 the existing size heuristic. Unset or exact `0` disables the candidate and any
@@ -238,7 +238,7 @@ The deterministic correctness A/B uses only 2K context and four fixed target
 inputs. It captures raw full-vocabulary F32 logits, requires matching argmax
 tokens, finite values, every element within `0.05 + 0.01*scale`, RMSE at most
 0.02, exactly 344 eligible hidden reductions, zero candidate BF16 calls in the
-control, 344 in the candidate, and a positive force-FP32 count. It does not use
+control, 344 in the candidate, and the model-observed exact dynamic force-FP32 count of zero (rank-wise precedence is proved by the host selector test). It does not use
 state restore, sampling, a profiler, or speculative decoding.
 
 The matched performance triage uses only 0/2K/8K, tg8, six raw repetitions,

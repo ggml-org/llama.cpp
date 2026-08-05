@@ -22,8 +22,8 @@ static ggml_cuda_allreduce_precision_input eligible_input() {
     input.all_contiguous     = true;
     input.all_same_shape     = true;
     input.n_backends         = 4;
-    input.nelements          = 7168;
-    input.ne[0]              = 7168;
+    input.nelements          = 4096;
+    input.ne[0]              = 4096;
     input.ne[1]              = 1;
     input.ne[2]              = 1;
     input.ne[3]              = 1;
@@ -123,19 +123,19 @@ int main() {
             "five backends must miss candidate");
 
     input = eligible_input();
-    input.nelements = 7167;
+    input.nelements = 4095;
     require(ggml_cuda_select_allreduce_precision(input) == ggml_cuda_allreduce_precision::legacy_fp32,
-            "7167 elements must miss candidate");
+            "4095 elements must miss candidate");
     input = eligible_input();
-    input.nelements = 7169;
+    input.nelements = 4097;
     require(ggml_cuda_select_allreduce_precision(input) == ggml_cuda_allreduce_precision::legacy_fp32,
-            "7169 elements must miss candidate");
+            "4097 elements must miss candidate");
 
     input = eligible_input();
-    input.ne[0] = 3584;
+    input.ne[0] = 2048;
     input.ne[1] = 2;
     require(ggml_cuda_select_allreduce_precision(input) == ggml_cuda_allreduce_precision::legacy_fp32,
-            "reshaped 7168 elements must miss candidate");
+            "reshaped 4096 elements must miss candidate");
 
     input = eligible_input();
     input.all_f32 = false;

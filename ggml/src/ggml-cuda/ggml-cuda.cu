@@ -987,11 +987,11 @@ struct ggml_backend_cuda_comm_context {
     std::string                        rdna2_bf16_hidden_audit_path;
     uint64_t                           audit_context_id = 0;
     ggml_cuda_allreduce_audit_counters audit;
-    uint64_t audit_ne7168_calls           = 0;
-    uint64_t audit_ne7168_all_f32_calls   = 0;
-    uint64_t audit_ne7168_same_shape_calls = 0;
-    int64_t  audit_first_ne7168_shape[4]  = { 0, 0, 0, 0 };
-    bool     audit_first_ne7168_recorded  = false;
+    uint64_t audit_ne4096_calls            = 0;
+    uint64_t audit_ne4096_all_f32_calls    = 0;
+    uint64_t audit_ne4096_same_shape_calls = 0;
+    int64_t  audit_first_ne4096_shape[4]   = { 0, 0, 0, 0 };
+    bool     audit_first_ne4096_recorded   = false;
 
 #ifdef GGML_USE_NCCL
     std::vector<ncclComm_t>     comms;
@@ -1038,12 +1038,12 @@ void ggml_backend_cuda_comm_context::write_rdna2_bf16_hidden_audit() const {
          << ",\"force_candidate_conflict_calls\":" << audit.force_candidate_conflicts
          << ",\"legacy_fp32_calls\":" << audit.legacy_fp32_calls
          << ",\"legacy_bf16_calls\":" << audit.legacy_bf16_calls
-         << ",\"ne7168_calls\":" << audit_ne7168_calls
-         << ",\"ne7168_all_f32_calls\":" << audit_ne7168_all_f32_calls
-         << ",\"ne7168_same_shape_calls\":" << audit_ne7168_same_shape_calls
-         << ",\"first_ne7168_shape\":[" << audit_first_ne7168_shape[0] << ","
-         << audit_first_ne7168_shape[1] << "," << audit_first_ne7168_shape[2] << ","
-         << audit_first_ne7168_shape[3] << "]"
+         << ",\"ne4096_calls\":" << audit_ne4096_calls
+         << ",\"ne4096_all_f32_calls\":" << audit_ne4096_all_f32_calls
+         << ",\"ne4096_same_shape_calls\":" << audit_ne4096_same_shape_calls
+         << ",\"first_ne4096_shape\":[" << audit_first_ne4096_shape[0] << ","
+         << audit_first_ne4096_shape[1] << "," << audit_first_ne4096_shape[2] << ","
+         << audit_first_ne4096_shape[3] << "]"
          << ",\"complete\":true}\n";
 
     std::lock_guard<std::mutex> lock(ggml_cuda_rdna2_bf16_hidden_audit_mutex);
@@ -1108,15 +1108,15 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
     const bool candidate_eligible = ggml_cuda_is_rdna2_bf16_hidden_shape(precision_input);
     const ggml_cuda_allreduce_precision precision = ggml_cuda_select_allreduce_precision(precision_input);
 
-    if (audit_enabled && ne == 7168) {
-        ++comm_ctx->audit_ne7168_calls;
-        comm_ctx->audit_ne7168_all_f32_calls += all_f32;
-        comm_ctx->audit_ne7168_same_shape_calls += all_same_shape;
-        if (!comm_ctx->audit_first_ne7168_recorded) {
+    if (audit_enabled && ne == 4096) {
+        ++comm_ctx->audit_ne4096_calls;
+        comm_ctx->audit_ne4096_all_f32_calls += all_f32;
+        comm_ctx->audit_ne4096_same_shape_calls += all_same_shape;
+        if (!comm_ctx->audit_first_ne4096_recorded) {
             for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
-                comm_ctx->audit_first_ne7168_shape[dim] = tensors[0]->ne[dim];
+                comm_ctx->audit_first_ne4096_shape[dim] = tensors[0]->ne[dim];
             }
-            comm_ctx->audit_first_ne7168_recorded = true;
+            comm_ctx->audit_first_ne4096_recorded = true;
         }
     }
     if (audit_enabled) {
@@ -1124,7 +1124,7 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
             comm_ctx->audit, candidate_eligible, comm_ctx->rdna2_bf16_hidden_enabled, force_fp32, precision);
     }
 
-    if (comm_ctx->rdna2_bf16_hidden_enabled && ne == 7168 &&
+    if (comm_ctx->rdna2_bf16_hidden_enabled && ne == 4096 &&
             precision != ggml_cuda_allreduce_precision::candidate_bf16 &&
             !comm_ctx->rdna2_bf16_hidden_miss_logged) {
         std::fprintf(stderr,

@@ -89,8 +89,11 @@ def write_correctness(root: pathlib.Path, binary: pathlib.Path, common: pathlib.
             "zero_element_calls": 0, "candidate_eligible_calls": 344,
             "candidate_bf16_calls": 344 if value == "1" else 0,
             "candidate_disabled_fp32_calls": 344 if value == "0" else 0,
-            "force_fp32_calls": 4, "force_candidate_conflict_calls": 0,
-            "legacy_fp32_calls": 50 if value == "1" else 394, "legacy_bf16_calls": 102, "complete": True,
+            "force_fp32_calls": 0, "force_candidate_conflict_calls": 0,
+            "legacy_fp32_calls": 50 if value == "1" else 394, "legacy_bf16_calls": 102,
+            "ne4096_calls": 344, "ne4096_all_f32_calls": 344,
+            "ne4096_same_shape_calls": 344, "first_ne4096_shape": [4096, 1, 1, 1],
+            "complete": True,
         }
         (directory / "audit.jsonl").write_text(json.dumps(audit) + "\n", encoding="utf-8")
     if compare:
@@ -217,6 +220,20 @@ def main() -> None:
                 write_correctness(fixture, common / "correctness-bin", common, compare=False)
                 mutate_manifest_hash(fixture, artifact, mode)
                 assert run_correctness_comparator(fixture) == 2
+
+        audit_type_mutations = {
+            "schema-bool": lambda audit: audit.__setitem__("schema_version", True),
+            "counter-float": lambda audit: audit.__setitem__("candidate_eligible_calls", 344.0),
+            "shape-floats": lambda audit: audit.__setitem__("first_ne4096_shape", [4096.0, 1.0, 1.0, 1.0]),
+        }
+        for name, mutate_audit in audit_type_mutations.items():
+            fixture = root / f"correctness-audit-{name}"
+            write_correctness(fixture, common / "correctness-bin", common, compare=False)
+            path = fixture / "candidate" / "audit.jsonl"
+            audit = json.loads(path.read_text())
+            mutate_audit(audit)
+            path.write_text(json.dumps(audit) + "\n")
+            assert run_correctness_comparator(fixture) == 2
 
         assert run_tg_case(root / "pass", correctness, common / "bench", common) == 0
         assert run_tg_case(root / "no-gain", correctness, common / "bench", common, gain=1.01) == 1

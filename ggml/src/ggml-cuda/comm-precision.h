@@ -130,8 +130,8 @@ struct ggml_cuda_allreduce_precision_input {
 inline bool ggml_cuda_is_rdna2_bf16_hidden_shape(const ggml_cuda_allreduce_precision_input & input) {
     return input.candidate_topology &&
         input.n_backends == 4 &&
-        input.nelements == 7168 &&
-        input.ne[0] == 7168 && input.ne[1] == 1 && input.ne[2] == 1 && input.ne[3] == 1 &&
+        input.nelements == 4096 &&
+        input.ne[0] == 4096 && input.ne[1] == 1 && input.ne[2] == 1 && input.ne[3] == 1 &&
         input.all_f32 && input.all_contiguous && input.all_same_shape;
 }
 

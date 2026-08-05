@@ -114,6 +114,16 @@ def percentile(sorted_values: list[float], fraction: float) -> float:
     return sorted_values[max(0, min(index, len(sorted_values) - 1))]
 
 
+def strict_json_equal(actual: Any, expected: Any) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(strict_json_equal(a, b) for a, b in zip(actual, expected))
+    if isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(strict_json_equal(actual[key], value) for key, value in expected.items())
+    return actual == expected
+
+
 def load_arm(directory: pathlib.Path, expected_candidate: str) -> dict[str, Any]:
     result_path = directory / "result.json"
     audit_path = directory / "audit.jsonl"
@@ -140,8 +150,8 @@ def load_arm(directory: pathlib.Path, expected_candidate: str) -> dict[str, Any]
     }
     for key, expected in exact.items():
         actual = result.get(key)
-        if actual != expected or (type(expected) is bool and type(actual) is not bool):
-            errors.append(f"result.{key}={actual!r}, expected {expected!r}")
+        if not strict_json_equal(actual, expected):
+            errors.append(f"result.{key}={actual!r}, expected type-strict {expected!r}")
 
     depths = result.get("depths")
     if not isinstance(depths, list) or len(depths) != 1:
@@ -150,7 +160,7 @@ def load_arm(directory: pathlib.Path, expected_candidate: str) -> dict[str, Any]
     records: list[dict[str, Any]] = []
     if depths:
         depth = depths[0]
-        if depth.get("depth") != EXPECTED_DEPTH:
+        if not strict_json_equal(depth.get("depth"), EXPECTED_DEPTH):
             errors.append("depth record mismatch")
         inputs = depth.get("generation_input_tokens")
         if not isinstance(inputs, list) or len(inputs) != EXPECTED_N_GEN or any(type(v) is not int for v in inputs):
@@ -165,21 +175,22 @@ def load_arm(directory: pathlib.Path, expected_candidate: str) -> dict[str, Any]
     raw = logits_path.read_bytes() if logits_path.is_file() else b""
     if not raw:
         errors.append("missing or empty logits.f32")
-    if result.get("expected_logits_bytes") != len(raw):
-        errors.append("expected_logits_bytes does not match file size")
+    if not strict_json_equal(result.get("expected_logits_bytes"), len(raw)):
+        errors.append("expected_logits_bytes does not type-strictly match file size")
 
     expected_offset = 0
     for index, record in enumerate(records):
-        if record.get("step") != index:
+        if not strict_json_equal(record.get("step"), index):
             errors.append(f"record {index}: step mismatch")
         n_vocab = record.get("n_vocab")
         byte_length = record.get("byte_length")
-        if type(n_vocab) is not int or n_vocab <= 0 or byte_length != n_vocab * 4:
+        if type(n_vocab) is not int or n_vocab <= 0 or type(byte_length) is not int or byte_length != n_vocab * 4:
             errors.append(f"record {index}: invalid vocabulary/length")
             continue
-        if record.get("byte_offset") != expected_offset:
+        if not strict_json_equal(record.get("byte_offset"), expected_offset):
             errors.append(f"record {index}: noncontiguous byte offset")
-        if record.get("input_token") != depths[0].get("generation_input_tokens", [None] * EXPECTED_N_GEN)[index]:
+        if not strict_json_equal(
+                record.get("input_token"), depths[0].get("generation_input_tokens", [None] * EXPECTED_N_GEN)[index]):
             errors.append(f"record {index}: input token mismatch")
         if type(record.get("argmax_token")) is not int:
             errors.append(f"record {index}: invalid argmax")
@@ -217,15 +228,18 @@ def load_arm(directory: pathlib.Path, expected_candidate: str) -> dict[str, Any]
             "candidate_eligible_calls": EXPECTED_CANDIDATE_CALLS,
             "candidate_bf16_calls": EXPECTED_CANDIDATE_CALLS if expected_candidate == "1" else 0,
             "candidate_disabled_fp32_calls": EXPECTED_CANDIDATE_CALLS if expected_candidate == "0" else 0,
+            "force_fp32_calls": 0,
             "force_candidate_conflict_calls": 0,
+            "ne4096_calls": EXPECTED_CANDIDATE_CALLS,
+            "ne4096_all_f32_calls": EXPECTED_CANDIDATE_CALLS,
+            "ne4096_same_shape_calls": EXPECTED_CANDIDATE_CALLS,
+            "first_ne4096_shape": [4096, 1, 1, 1],
             "complete": True,
         }
         for key, expected in audit_exact.items():
             actual = audit.get(key)
-            if actual != expected or (type(expected) is bool and type(actual) is not bool):
-                errors.append(f"audit.{key}={actual!r}, expected {expected!r}")
-        if type(audit.get("force_fp32_calls")) is not int or audit.get("force_fp32_calls", 0) <= 0:
-            errors.append("audit.force_fp32_calls must be a positive integer")
+            if not strict_json_equal(actual, expected):
+                errors.append(f"audit.{key}={actual!r}, expected type-strict {expected!r}")
         for key in (
             "allreduce_calls", "zero_element_calls", "legacy_fp32_calls", "legacy_bf16_calls",
             "force_fp32_calls",
