@@ -1,0 +1,95 @@
+# Tessera Studio: server-side data layer
+#
+# Postgres 16 + pgvector + pg_trgm    -- durable knowledge graph, constitutional
+#                                       receipts, materials slices, hybrid
+#                                       search (graph + vector + keyword RRF).
+# Valkey 7                            -- ephemeral cache: agent scratchpad,
+#                                       capture cache, decay windows, session
+#                                       state, idempotency keys.
+#
+# The data layer sits ALONGSIDE SwiftData (which remains the local app
+# store on-device). Postgres + Valkey are dev/staging infra for the
+# productivity surface; the data-layer docs (docs/tessera-data-layer-
+# design.md) spell out the boundary.
+#
+# Privacy posture: no SaaS, no API keys, no third-party hosted services.
+# Both services run on the user's own machine; pgvector and pg_trgm are
+# Postgres extensions (no separate service).
+#
+# Usage:
+#   cp .env.example .env       # then edit if you want non-default creds
+#   make -C tools/tessera/db db/up
+#   make -C tools/tessera/db db/migrate
+#   make -C tools/tessera/db db/seed
+#   make -C tools/tessera/db db/down
+#
+# Apple Silicon: every service pins `platform: linux/arm64` so Rosetta is
+# not invoked. The pgvector image is the official pgvector/pgvector:pg16
+# build (multi-arch: arm64 + amd64). Valkey ships native arm64 images.
+#
+# Health checks: both services gate `db/seed` and the Swift integration
+# tests behind a healthy status. The Makefile waits for `pg_isready` /
+# `valkey-cli PING` before applying migrations.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    platform: linux/arm64
+    container_name: tessera-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tessera}
+      POSTGRES_USER: ${POSTGRES_USER:-tessera}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tessera}
+      # pgvector / pg_trgm are created in 0001_init.sql with CREATE EXTENSION,
+      # not at container start, so the migration is the single source of truth.
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - tessera_postgres_data:/var/lib/postgresql/data
+      # Bind-mount the migrations so the same SQL is visible to the
+      # `db/migrate` make target and to psql inside the container.
+      - ./migrations:/docker-entrypoint-initdb.d/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tessera} -d ${POSTGRES_DB:-tessera}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  valkey:
+    image: valkey/valkey:7.2-alpine
+    platform: linux/arm64
+    container_name: tessera-valkey
+    restart: unless-stopped
+    # No password by default; the data layer is dev/staging only and runs
+    # on localhost. A future production hardening pass will add AUTH +
+    # TLS; the configuration surface (VALKEY_PASSWORD, VALKEY_PORT) is in
+    # place so that pass is additive.
+    command: >
+      valkey-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+        --protected-mode no
+    ports:
+      - "${VALKEY_PORT:-6379}:6379"
+    volumes:
+      - tessera_valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+volumes:
+  tessera_postgres_data:
+    name: tessera_postgres_data
+  tessera_valkey_data:
+    name: tessera_valkey_data
+
+networks:
+  default:
+    name: tessera-data-layer

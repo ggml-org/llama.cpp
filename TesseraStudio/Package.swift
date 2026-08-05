@@ -70,6 +70,15 @@ let package = Package(
         // Pure-Swift HTML parser used by the keyless web-search providers
         // (DuckDuckGo HTML endpoint). No WebKit, works headless in tests.
         .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.6.0"),
+        // Postgres client (SwiftNIO-based, maintained by Vapor). Used by
+        // TesseraDataStore for the durable knowledge-graph + receipts store.
+        // Pinned 1.21.x because the PostgresClient API stabilized there;
+        // see docs/tessera-data-layer-design.md §6.1 for the dependency
+        // choice and the alternatives considered.
+        .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.21.2"),
+        // Redis / Valkey client (SwiftNIO-based, maintained by swift-server).
+        // Used by TesseraCache for the ephemeral scratchpad / decay windows.
+        .package(url: "https://github.com/swift-server/RediStack.git", from: "1.6.2"),
     ],
     targets: [
         .target(
@@ -89,6 +98,14 @@ let package = Package(
                 "CLlama",
                 "CTesseraFFI",
                 .product(name: "SwiftSoup", package: "SwiftSoup"),
+                // Data layer: Postgres (durable graph + receipts) and
+                // RediStack (Valkey/Redis cache). Only TesseraDataStore /
+                // TesseraCache import these; TesseraDataLayer is the
+                // facade the rest of the app depends on. See
+                // docs/tessera-data-layer-design.md §6 for the
+                // hexagonal boundary rationale.
+                .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "RediStack", package: "RediStack"),
             ],
             path: "Sources/TesseraCore",
             // Ships the Skills format doc so the target has a resource bundle
