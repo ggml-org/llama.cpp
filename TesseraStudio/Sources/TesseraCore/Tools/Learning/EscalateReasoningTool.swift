@@ -73,10 +73,17 @@ public struct EscalateReasoningTool: TesseraTool {
                 responded.append(proposal.teacherId)
             }
             let teachers = responded.joined(separator: ", ")
-            let output = "Escalated to \(result.fannedOutTo.count) teacher(s); received \(result.proposals.count) proposal(s) from: \(teachers.isEmpty ? "none" : teachers)."
+            // Surface each proposal's id (paired with its teacher) so a later
+            // record_outcome can pass it as proposal_id and the trial lands on
+            // the teacher that produced it instead of the "unknown" bucket.
+            let ids = result.proposals.map { "\($0.id) (\($0.teacherId))" }.joined(separator: ", ")
+            let output = "Escalated to \(result.fannedOutTo.count) teacher(s); received \(result.proposals.count) proposal(s) from: \(teachers.isEmpty ? "none" : teachers). Proposal ids: \(ids.isEmpty ? "none" : ids). Pass a proposal id to record_outcome to attribute the verifying outcome to its teacher."
             return .ok(output, data: [
                 "proposals": .number(Double(result.proposals.count)),
                 "teachers": .string(teachers),
+                "proposals_detail": .array(result.proposals.map { proposal in
+                    .object(["id": .string(proposal.id), "teacher_id": .string(proposal.teacherId)])
+                }),
             ])
         } catch {
             return .fail(error.localizedDescription)
