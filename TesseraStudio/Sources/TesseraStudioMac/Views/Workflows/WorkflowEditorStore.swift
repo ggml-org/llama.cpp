@@ -149,6 +149,16 @@ final class WorkflowEditorStore {
         )
     }
 
+    /// Replace the node list, preserving schema / name / edges.
+    func setNodes(_ nodes: [WorkflowNode]) {
+        workflow = Workflow(
+            schema: workflow.schema,
+            name: workflow.name,
+            nodes: nodes,
+            edges: workflow.edges
+        )
+    }
+
     // MARK: - Run lifecycle
 
     /// Drive the executor. Builds a per-run context (silent

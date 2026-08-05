@@ -71,6 +71,13 @@ struct WorkflowsView: View {
             // canvas itself never animates; nil under Reduce
             // Motion makes the banner appear / disappear instantly.
             .animation(reduceMotion ? nil : .default, value: connectionError)
+            // HIG 14.6: the palette drags a node-type id string;
+            // add the node at the drop point, rejecting ids the
+            // registry doesn't know.
+            .dropDestination(for: String.self) { items, location in
+                guard let typeId = items.first else { return false }
+                return addNode(typeId: typeId, at: location)
+            }
             // The parameter panel is a HIG inspector: supplementary
             // detail about the canvas selection, toggleable from
             // View > Show/Hide Inspector.
@@ -282,6 +289,44 @@ struct WorkflowsView: View {
             undo: { editor.setEdges(oldEdges) },
             redo: { editor.setEdges(oldEdges + [newEdge]) }
         )
+    }
+
+    /// Insert a node of a registered type at the drop point and
+    /// register undo. Returns false (drop rejected) for ids the
+    /// registry doesn't know.
+    private func addNode(typeId: String, at position: CGPoint) -> Bool {
+        guard editor.registry.nodeType(for: typeId) != nil else { return false }
+        let oldNodes = editor.workflow.nodes
+        let oldPositions = editor.positions
+        let node = WorkflowNode(id: makeNodeId(for: typeId), type: typeId)
+        var newPositions = oldPositions
+        newPositions[node.id] = position
+        editor.setNodes(oldNodes + [node])
+        editor.positions = newPositions
+        let editor = self.editor
+        registerUndoPair(
+            name: "Add Node",
+            undo: {
+                editor.setNodes(oldNodes)
+                editor.positions = oldPositions
+            },
+            redo: {
+                editor.setNodes(oldNodes + [node])
+                editor.positions = newPositions
+            }
+        )
+        return true
+    }
+
+    /// First free id of the form <typeId>, <typeId>-2, ...
+    private func makeNodeId(for typeId: String) -> String {
+        var id = typeId
+        var suffix = 2
+        while editor.workflow.node(id: id) != nil {
+            id = "\(typeId)-\(suffix)"
+            suffix += 1
+        }
+        return id
     }
 
     // MARK: - Run progress sheet
