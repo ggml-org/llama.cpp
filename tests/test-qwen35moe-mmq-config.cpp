@@ -1,3 +1,4 @@
+#include "deepseek4-mmq-config.h"
 #include "qwen35moe-mmq-config.h"
 #include "mmq-auto-config.h"
 
@@ -45,6 +46,31 @@ void test_model_selector() {
     split[3] = std::numeric_limits<float>::quiet_NaN(); negative(config, "NaN split accepted");
 }
 
+void test_deepseek4_model_selector() {
+    float split[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    deepseek4_mmq_model_config config = {
+        43, 4096, 2048, 256, 6, true, 4, split,
+    };
+    check(deepseek4_use_auto_rdna2_mmq_j16(config), "exact DeepSeek-V4 signature rejected");
+
+    auto negative = [&](deepseek4_mmq_model_config value, const char * message) {
+        check(!deepseek4_use_auto_rdna2_mmq_j16(value), message);
+    };
+    auto changed = config; changed.n_layer = 42; negative(changed, "wrong DSV4 layer count accepted");
+    changed = config; changed.n_embd = 3072; negative(changed, "wrong DSV4 embedding accepted");
+    changed = config; changed.n_ff_exp = 1024; negative(changed, "wrong DSV4 expert width accepted");
+    changed = config; changed.n_expert = 128; negative(changed, "wrong DSV4 expert count accepted");
+    changed = config; changed.n_expert_used = 8; negative(changed, "wrong DSV4 top-k accepted");
+    changed = config; changed.tensor_parallel = false; negative(changed, "wrong DSV4 topology accepted");
+    changed = config; changed.n_devices = 2; negative(changed, "wrong DSV4 device count accepted");
+    changed = config; changed.tensor_split = nullptr; negative(changed, "implicit DSV4 split accepted");
+
+    split[3] = 2.0f; negative(config, "unequal DSV4 split accepted");
+    split[3] = 0.0f; negative(config, "zero DSV4 split accepted");
+    split[3] = std::numeric_limits<float>::infinity(); negative(config, "infinite DSV4 split accepted");
+    split[3] = std::numeric_limits<float>::quiet_NaN(); negative(config, "NaN DSV4 split accepted");
+}
+
 void test_environment_parser() {
     using mode = ggml_cuda_mmq_J_setting::mode;
     check(ggml_cuda_mmq_parse_J_setting(nullptr).state == mode::absent, "unset setting not absent");
@@ -87,14 +113,29 @@ void test_backend_selector() {
     changed = input; changed.ncols_max = 255; negative(changed, "unvalidated ubatch accepted");
     changed = input; changed.ncols_dst = 1792; negative(changed, "top-7 accepted");
     changed = input; changed.ncols_dst = 2049; negative(changed, "non-integral top-k accepted");
+
+    input = {
+        true, true, false, true, true,
+        4096, 512, 1536, 256, 256, 1, 1, 256,
+    };
+    check(ggml_cuda_mmq_auto_J(input) == 16, "DSV4 gate/up PP signature rejected");
+    input.ncols_x = 2048; input.nrows_x = 1024;
+    check(ggml_cuda_mmq_auto_J(input) == 16, "DSV4 down PP signature rejected");
+    input.ncols_max = 1; input.ncols_dst = 6;
+    check(ggml_cuda_mmq_auto_J(input) == 16, "DSV4 decode signature rejected");
+    changed = input; changed.ncols_dst = 8; negative(changed, "DSV4 top-8 accepted");
+    changed = input; changed.nrows_x = 512; negative(changed, "DSV4 wrong local N accepted");
+    changed = input; changed.rdna2 = false; negative(changed, "DSV4 non-RDNA2 accepted");
+    changed = input; changed.hint_j16 = false; negative(changed, "DSV4 missing hint accepted");
 }
 
 } // namespace
 
 int main() {
     test_model_selector();
+    test_deepseek4_model_selector();
     test_environment_parser();
     test_backend_selector();
-    std::puts("Qwen3.5 automatic RDNA2 MMQ config tests: PASS");
+    std::puts("Qwen3.5/DeepSeek-V4 automatic RDNA2 MMQ config tests: PASS");
     return 0;
 }

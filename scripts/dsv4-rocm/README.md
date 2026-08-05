@@ -414,17 +414,20 @@ execution does not need either variable.
 
 Qwen3.5-122B-A10B automatically marks separate Q4_K routed gate/up tensors only
 when its exact 3072/1024/256/top-8 metadata and an explicit equal four-way
-tensor-parallel split match the validated model. The HIP backend selects J16 only for RDNA2 PP
-ubatches with the exact per-rank K=3072, N=256, 256-expert, top-8, batch-256
+tensor-parallel split match the validated model. The HIP backend selects J16
+only for RDNA2 PP ubatches with the exact per-rank K=3072, N=256, 256-expert,
+top-8, batch-256
 signature. It emits a one-time `source=automatic` attestation. Q5_K down,
 fused/shared/MTP tensors, decode and remainder batches, other splits, other
 models, and other backends retain the original heuristic.
 
-The preceding explicit Q4_K-only candidate passed the exact 2K/4-token gate
-across all 248,320 F32 logits and improved 512, 2K, and 8K PP by 14.41%, 13.84%,
-and 13.88%. The automatic dispatch must reproduce exact equality and the PP
-gain before its replacement is accepted; neither result makes J16 a general
-Q4_K default.
+At commit `a4f2d56f0`, automatic dispatch passed the exact 2K/4-token gate
+across all 248,320 F32 logits with one candidate attestation and none in the
+`default` control. Three-repetition A/B/A screens improved 512, 2K, and 8K PP
+by 12.33%, 14.37%, and 13.41%; control drift was -1.21%, +0.38%, and -1.65%.
+The 2K value is from the stable focused rerun that replaced an initial arm with
+-2.28% control drift. This acceptance remains limited to the guarded model,
+topology, and PP signature; it does not make J16 a general Q4_K default.
 
 `test-mmid-rdna2` defaults to a fast prototype-weight fixture for performance
 screens. Its `--fixture unique` mode independently quantizes every
@@ -444,20 +447,28 @@ GGML_HIP_RDNA2_MMQ_J=16 build/bin/test-mmid-rdna2 \
 
 ## RDNA2 DSV4 hidden-channel mixer screening
 
-`GGML_HIP_RDNA2_HC_MIXES=1` opts the exact contiguous F32
-M=24,N=256,K=16384 DSV4 hidden-channel mixer shape into a 12x16x256 LDS-tiled
-kernel on wave32 RDNA2. Unset/`0`, other devices, other types/layouts/shapes,
-and all non-HIP backends keep the existing dispatcher and rocBLAS/generic
-fallbacks. Values other than `0` or `1` fail closed.
+Normal DeepSeek-V4-Flash execution needs none of the MMQ/HC/LID tuning
+environment variables. For the exact 43-layer, 4096/2048, 256-expert/top-6
+model with an explicit equal four-way tensor-parallel split, the loader marks
+only trunk routed expert tensors for automatic J16. The HIP selector still
+requires RDNA2, routed bounds/IDs, 256 experts, top-6, and the exact per-rank
+gate/up or down shapes. Explicit MMQ J settings remain diagnostic overrides.
 
-The setting is still a screening control, not a general F32 GEMM default. Run
+The exact contiguous F32 M=24,N=256,K=16384 DSV4 hidden-channel mixer shape
+automatically uses the 12x16x256 LDS-tiled kernel on wave32 RDNA2. Setting
+`GGML_HIP_RDNA2_HC_MIXES=0` selects the generic control; `1` explicitly selects
+the same guarded optimization. Other devices, types/layouts/shapes, and all
+non-HIP backends keep the existing dispatcher and rocBLAS/generic fallbacks.
+Empty or other values fail closed.
+
+The setting is not a general F32 GEMM default. Run
 the focused benchmark through the normal GGML backend graph before whole-model
 A/B:
 
 ```bash
-unset GGML_HIP_RDNA2_HC_MIXES
+GGML_HIP_RDNA2_HC_MIXES=0 \
 build/bin/test-hc-mixes-rdna2 --iterations 100 --dump-output /tmp/hc-mixes.bin
-GGML_HIP_RDNA2_HC_MIXES=1 \
+unset GGML_HIP_RDNA2_HC_MIXES
 build/bin/test-hc-mixes-rdna2 --iterations 100 \
   --compare-output /tmp/hc-mixes.bin
 ```
@@ -468,11 +479,12 @@ the hidden-channel path changes.
 
 ## RDNA2 DSV4 lightning-indexer subwave path
 
-`GGML_HIP_RDNA2_LID_SUBWAVE=4` enables the bitwise-preserving four-lane
-subwave reduction for the guarded DSV4 F16 shape: 128 embedding values, 64
-heads, batch 256, one stream, and KV 1–4096 on wave32 RDNA2. Unset/`0` and all
+The bitwise-preserving four-lane subwave reduction is automatic for the
+guarded DSV4 F16 shape: 128 embedding values, 64 heads, batch 256, one stream,
+and KV 1–4096 on wave32 RDNA2. `GGML_HIP_RDNA2_LID_SUBWAVE=0` selects the
+generic control; `4` explicitly selects the same guarded optimization. All
 other devices, shapes, types, and backends keep the generic vector kernel.
-Other values fail closed. The manual fixture requires explicit path identity;
+Empty or other values fail closed. The manual fixture requires explicit path identity;
 run reference and candidate in separate processes:
 
 ```bash

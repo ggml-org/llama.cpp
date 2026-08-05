@@ -11,7 +11,10 @@ static bool lightning_indexer_rdna2_subwave4_enabled() {
 #if defined(GGML_USE_HIP)
     static const bool value = []() {
         const char * env = std::getenv("GGML_HIP_RDNA2_LID_SUBWAVE");
-        if (!env || !env[0] || std::strcmp(env, "0") == 0) {
+        if (!env) {
+            return true;
+        }
+        if (std::strcmp(env, "0") == 0) {
             return false;
         }
         if (std::strcmp(env, "4") == 0) {

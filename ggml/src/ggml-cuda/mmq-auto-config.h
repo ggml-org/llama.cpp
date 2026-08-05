@@ -54,12 +54,18 @@ struct ggml_cuda_mmq_auto_J_input {
 };
 
 inline int ggml_cuda_mmq_auto_J(const ggml_cuda_mmq_auto_J_input & input) {
-    if (!input.hint_j16 || !input.rdna2 || !input.q4_k || !input.routed_ids || !input.routed_bounds ||
-            input.ncols_x != 3072 || input.nrows_x != 256 || input.nchannels_x != 256 ||
-            input.nchannels_y != 256 || input.nsamples_x != 1 || input.nsamples_y != 1 ||
-            input.ncols_max != 256 || input.ncols_dst <= 0 || input.ncols_dst % input.ncols_max != 0 ||
-            input.ncols_dst / input.ncols_max != 8) {
+    if (!input.hint_j16 || !input.rdna2 || !input.routed_ids || !input.routed_bounds ||
+            input.nchannels_x != 256 || input.nchannels_y != 256 ||
+            input.nsamples_x != 1 || input.nsamples_y != 1 || input.ncols_max <= 0 ||
+            input.ncols_dst <= 0 || input.ncols_dst % input.ncols_max != 0) {
         return 0;
     }
-    return 16;
+
+    const int64_t top_k = input.ncols_dst / input.ncols_max;
+    const bool qwen35_122b_q4_k = input.q4_k && input.ncols_x == 3072 && input.nrows_x == 256 &&
+        input.ncols_max == 256 && top_k == 8;
+    const bool deepseek_v4 = top_k == 6 &&
+        ((input.ncols_x == 4096 && input.nrows_x == 512) ||
+         (input.ncols_x == 2048 && input.nrows_x == 1024));
+    return qwen35_122b_q4_k || deepseek_v4 ? 16 : 0;
 }

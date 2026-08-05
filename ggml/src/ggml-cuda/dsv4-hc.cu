@@ -12,7 +12,10 @@ static bool dsv4_hc_mixes_override_enabled() {
 #if defined(GGML_USE_HIP)
     static const bool value = []() {
         const char * env = std::getenv("GGML_HIP_RDNA2_HC_MIXES");
-        if (!env || !env[0] || std::strcmp(env, "0") == 0) {
+        if (!env) {
+            return true;
+        }
+        if (std::strcmp(env, "0") == 0) {
             return false;
         }
         if (std::strcmp(env, "1") == 0) {
@@ -28,7 +31,7 @@ static bool dsv4_hc_mixes_override_enabled() {
 #endif
 }
 
-// Specialized opt-in kernel for the DSV4 hidden-channel mixer:
+// Specialized kernel for the exact DSV4 hidden-channel mixer shape; env 0 is a diagnostic control:
 // C[M,N] = A[K,M]^T * B[K,N], with M=24, N=256, K=16384.
 // Each thread owns one output and the block cooperatively stages A/B in LDS.
 template <int tile_m, int tile_n, int tile_k>
