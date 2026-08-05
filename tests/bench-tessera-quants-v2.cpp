@@ -340,6 +340,200 @@ int bench_outlier(int64_t n_rows, int64_t k, int64_t n_outliers_per_row) {
     return 0;
 }
 
+// Cost model calibration: measure v2_setup_tax, v2_per_row,
+// c_per_row for the two batched v2 functions (outlier addback
+// and meta decode). Print the constants so the dispatch
+// header can be calibrated. The "per row" units depend on the
+// function: outlier addback is per outlier (n_total), meta
+// decode is per row (n_rows).
+//
+// Method: linear fit through the (n=1, n=1024) endpoints.
+//   slope     = (cost_at_1024 - cost_at_1) / (1024 - 1)
+//   intercept = cost_at_1 - slope * 1
+// The intercept is the "setup tax" (the cost that doesn't
+// scale with n). The slope is the "per row" cost.
+void bench_cost_model(void) {
+    // Outlier addback: n_total = n_rows * n_outliers_per_row.
+    // We use n_outliers_per_row = 204 (5% of 4096, the
+    // canonical Phase 0 shape). n_total ranges from 51 (n=1,
+    // k=1024) to 208896 (n=1024, k=4096).
+    constexpr int64_t kOutlierNRowsSmall = 1;
+    constexpr int64_t kOutlierNRowsLarge = 1024;
+    constexpr int64_t kOutlierK          = 4096;
+    constexpr int64_t kOutlierPerRow     = 204;
+
+    auto measure_outlier = [&](int64_t n_rows) {
+        const int64_t n_total = n_rows * kOutlierPerRow;
+        std::vector<float> rows((size_t) (n_rows * kOutlierK), 0.0f);
+        std::vector<int32_t> cols((size_t) n_total);
+        std::vector<uint16_t> vals((size_t) n_total, (uint16_t) 0x3C00u);
+        std::vector<int32_t> row_offsets((size_t) (n_rows + 1));
+        for (int64_t r = 0; r < n_rows; r++) {
+            row_offsets[(size_t) r] = (int32_t) (r * kOutlierPerRow);
+        }
+        row_offsets[(size_t) n_rows] = (int32_t) n_total;
+        std::mt19937 rng(kSeed);
+        std::uniform_int_distribution<int64_t> col_dist(0, kOutlierK - 1);
+        for (int64_t i = 0; i < n_total; i++) {
+            cols[(size_t) i] = (int32_t) col_dist(rng);
+        }
+        std::vector<float> rows_c = rows;
+        std::vector<float> rows_v2 = rows;
+        volatile float sink = 0.0f;
+        auto scalar_ref = [&]() {
+            for (int64_t r = 0; r < n_rows; r++) {
+                const int32_t lo = row_offsets[(size_t) r];
+                const int32_t hi = row_offsets[(size_t) r + 1];
+                float * GGML_RESTRICT row = rows_c.data() + r * kOutlierK;
+                for (int32_t k2 = lo; k2 < hi; k2++) {
+                    const int32_t col = cols[(size_t) k2];
+                    if (col >= 0 && col < kOutlierK) {
+                        row[(size_t) col] = GGML_FP16_TO_FP32(vals[(size_t) k2]);
+                    }
+                }
+            }
+            sink += rows_c[0];
+        };
+        auto v2_fn = [&]() {
+            apply_outlier_addback_v2(rows_v2.data(), kOutlierK, n_rows,
+                                     row_offsets.data(),
+                                     cols.data(), vals.data());
+            sink += rows_v2[0];
+        };
+        auto time_fn = [&](auto fn) {
+            for (int i = 0; i < kWarmup; i++) fn();
+            std::vector<double> us;
+            us.reserve((size_t) kRuns);
+            for (int i = 0; i < kRuns; i++) {
+                const auto t0 = std::chrono::steady_clock::now();
+                fn();
+                const auto t1 = std::chrono::steady_clock::now();
+                us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+            }
+            return median_us(us);
+        };
+        return std::pair<double, double>{ time_fn(scalar_ref), time_fn(v2_fn) };
+    };
+    const auto [us_c_small, us_v2_small] = measure_outlier(kOutlierNRowsSmall);
+    const auto [us_c_large, us_v2_large] = measure_outlier(kOutlierNRowsLarge);
+    // Per-outlier slopes (us per outlier in n_total).
+    const double n_total_small = (double) (kOutlierNRowsSmall * kOutlierPerRow);
+    const double n_total_large = (double) (kOutlierNRowsLarge * kOutlierPerRow);
+    const double c_per_outlier   = (us_c_large  - us_c_small) / (n_total_large - n_total_small);
+    const double v2_per_outlier  = (us_v2_large - us_v2_small) / (n_total_large - n_total_small);
+    const double c_setup_tax     = us_c_small  - c_per_outlier  * n_total_small;
+    const double v2_setup_tax    = us_v2_small - v2_per_outlier * n_total_small;
+
+    printf("cost model constants (linear fit, n=1 and n=1024 endpoints):\n");
+    printf("  outlier addback (per outlier in n_total):\n");
+    printf("    C:  setup_tax=%6.3f us  per_outlier=%9.6f us\n", c_setup_tax, c_per_outlier);
+    printf("    v2: setup_tax=%6.3f us  per_outlier=%9.6f us\n", v2_setup_tax, v2_per_outlier);
+    if (c_per_outlier > v2_per_outlier) {
+        const double crossover = v2_setup_tax / (c_per_outlier - v2_per_outlier);
+        printf("    crossover (n_total): %.1f (v2 wins below this)\n", crossover);
+    } else {
+        printf("    C is faster per outlier; v2 never wins on per-row cost\n");
+    }
+    // Note: the v2 has an internal n_total <= 1024 NEON path
+    // threshold. Above that the v2 falls back to scalar (same
+    // as the C ref) and the function call is wasted. The
+    // dispatch picks v2 iff n_total <= 1024 regardless of
+    // the per-row crossover.
+
+    // Meta decode: n_pages = 16, sweep n_rows.
+    constexpr int64_t kMetaNRowsSmall = 1;
+    constexpr int64_t kMetaNRowsLarge = 1024;
+    constexpr int64_t kMetaNPages     = 16;
+
+    auto measure_meta = [&](int64_t n_rows) {
+        const int64_t n_lanes_per_row = kMetaNPages * TILE640_LANES_PER_PAGE;
+        std::vector<uint16_t> page_scales((size_t) (n_rows * kMetaNPages), (uint16_t) 0x3C00u);
+        std::vector<int8_t> lane_scales((size_t) (n_rows * n_lanes_per_row));
+        std::mt19937 rng(kSeed);
+        std::uniform_int_distribution<int> ls_dist(-127, 127);
+        for (int64_t i = 0; i < (int64_t) lane_scales.size(); i++) {
+            lane_scales[(size_t) i] = (int8_t) ls_dist(rng);
+        }
+        std::vector<float> page_max((size_t) (n_rows * kMetaNPages));
+        std::vector<float> lane_scale((size_t) (n_rows * n_lanes_per_row));
+        volatile float sink = 0.0f;
+        auto scalar_ref = [&]() {
+            for (int64_t i = 0; i < n_rows * kMetaNPages; i++) {
+                page_max[(size_t) i] = GGML_FP16_TO_FP32(page_scales[(size_t) i]);
+            }
+            for (int64_t i = 0; i < n_rows * n_lanes_per_row; i++) {
+                lane_scale[(size_t) i] = ((float) lane_scales[(size_t) i]) * (1.0f / 127.0f);
+            }
+            sink += lane_scale[0];
+        };
+        auto v2_fn = [&]() {
+            decode_per_row_meta_v2(page_scales.data(), lane_scales.data(),
+                                   n_rows, kMetaNPages,
+                                   page_max.data(), lane_scale.data());
+            sink += lane_scale[0];
+        };
+        auto time_fn = [&](auto fn) {
+            for (int i = 0; i < kWarmup; i++) fn();
+            std::vector<double> us;
+            us.reserve((size_t) kRuns);
+            for (int i = 0; i < kRuns; i++) {
+                const auto t0 = std::chrono::steady_clock::now();
+                fn();
+                const auto t1 = std::chrono::steady_clock::now();
+                us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+            }
+            return median_us(us);
+        };
+        return std::pair<double, double>{ time_fn(scalar_ref), time_fn(v2_fn) };
+    };
+    const auto [us_c_meta_small, us_v2_meta_small] = measure_meta(kMetaNRowsSmall);
+    const auto [us_c_meta_large, us_v2_meta_large] = measure_meta(kMetaNRowsLarge);
+    const double c_per_row  = (us_c_meta_large  - us_c_meta_small)  / (double) (kMetaNRowsLarge - kMetaNRowsSmall);
+    const double v2_per_row = (us_v2_meta_large - us_v2_meta_small) / (double) (kMetaNRowsLarge - kMetaNRowsSmall);
+    const double c_meta_setup  = us_c_meta_small  - c_per_row  * (double) kMetaNRowsSmall;
+    const double v2_meta_setup = us_v2_meta_small - v2_per_row * (double) kMetaNRowsSmall;
+    printf("  meta decode (per row in n_rows, n_pages=16):\n");
+    printf("    C:  setup_tax=%6.3f us  per_row=%9.6f us\n", c_meta_setup, c_per_row);
+    printf("    v2: setup_tax=%6.3f us  per_row=%9.6f us\n", v2_meta_setup, v2_per_row);
+    if (c_per_row > v2_per_row) {
+        const double crossover = v2_meta_setup / (c_per_row - v2_per_row);
+        printf("    crossover (n_rows): %.1f (v2 wins below this)\n", crossover);
+    } else {
+        printf("    C is faster per row; v2 never wins on per-row cost\n");
+    }
+}
+
+// Cost model dispatch picks: for each bench shape, print
+// what the dispatch would choose (v2 or C ref) based on the
+// cost model thresholds. The outlier threshold is the v2's
+// internal NEON path threshold (n_total <= 1024). The meta
+// threshold is "always C ref" (v2 never wins).
+void bench_dispatch_picks(void) {
+    printf("dispatch picks (what the cost model would choose per shape):\n");
+    printf("  meta decode (always C ref; v2 is 0.41-0.65x of C):\n");
+    for (int64_t n_rows : { (int64_t) 1, (int64_t) 16, (int64_t) 64, (int64_t) 256, (int64_t) 1024 }) {
+        printf("    n_rows=%-4lld n_pages=16 -> C ref\n", (long long) n_rows);
+    }
+    printf("  outlier addback (v2 iff n_total in (0, 1024]):\n");
+    struct Shape { int64_t n_rows; int64_t k; int64_t n_per_row; };
+    const Shape shapes[] = {
+        {   1, 1024,  51 },  // n_total=51
+        {   1, 4096, 204 },  // n_total=204
+        {   1, 8192, 409 },  // n_total=409
+        {  16, 4096, 204 },  // n_total=3264
+        {  64, 4096, 204 },  // n_total=13056
+        { 256, 4096, 204 },  // n_total=52224
+        {1024, 4096, 204 },  // n_total=208896
+    };
+    for (const auto & s : shapes) {
+        const int64_t n_total = s.n_rows * s.n_per_row;
+        const bool use_v2 = (n_total > 0 && n_total <= 1024);
+        printf("    n_rows=%-4lld k=%-5lld n/row=%-5lld n_total=%-7lld -> %s\n",
+               (long long) s.n_rows, (long long) s.k, (long long) s.n_per_row,
+               (long long) n_total, use_v2 ? "v2" : "C ref");
+    }
+}
+
 }  // namespace
 
 int main(void) {
@@ -386,5 +580,7 @@ int main(void) {
     bench_outlier(64, 4096, 204);  // 64 rows of k=4096
     bench_outlier(256, 4096, 204); // 256 rows of k=4096 (typical)
     bench_outlier(1024, 4096, 204); // 1024 rows of k=4096 (large)
+    bench_cost_model();
+    bench_dispatch_picks();
     return 0;
 }
