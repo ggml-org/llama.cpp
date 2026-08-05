@@ -648,9 +648,11 @@ const char * llama_grammar_parser::parse_sequence(
             } else {
                 throw std::runtime_error(std::string("expecting ',' at ") + pos);
             }
-            bool has_max = max_times != UINT64_MAX;
-            if (min_times > MAX_REPETITION_THRESHOLD || (has_max && max_times > MAX_REPETITION_THRESHOLD)) {
+            if (min_times > MAX_REPETITION_THRESHOLD) {
                 throw std::runtime_error(std::string("number of repetitions exceeds sane defaults, please reduce the number of repetitions"));
+            }
+            if (max_times != UINT64_MAX && max_times > MAX_REPETITION_THRESHOLD) {
+                max_times = UINT64_MAX;
             }
             handle_repetitions(min_times, max_times);
         } else {
