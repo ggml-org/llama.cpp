@@ -602,7 +602,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan_ssd_mma
     char name[256];
 
     snprintf(base, 256, "kernel_ssm_scan_ssd_mma_%s", ggml_type_name(op->src[0]->type));
-    snprintf(name, 256, "%s_cs=%d_nsg=%d", base, GGML_METAL_SSM_SCAN_SSD_CS, GGML_METAL_SSM_SCAN_SSD_MMA_NSG);
+    snprintf(name, 256, "%s", base, OP_SSM_SCAN_SSD_CS, OP_SSM_SCAN_SSD_NSG);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -610,10 +610,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan_ssd_mma
     }
 
     // acs/exp(acs)/state-decay vectors + dtX + SAM rows + two 8x8 tiles per simdgroup
-    res.smem = (3*GGML_METAL_SSM_SCAN_SSD_CS +
-                GGML_METAL_SSM_SCAN_SSD_CS*64 +
-                GGML_METAL_SSM_SCAN_SSD_MMA_NSG*8*GGML_METAL_SSM_SCAN_SSD_CS +
-                GGML_METAL_SSM_SCAN_SSD_MMA_NSG*2*8*8)*sizeof(float);
+    res.smem = (3*OP_SSM_SCAN_SSD_CS +
+                OP_SSM_SCAN_SSD_CS*64 +
+                OP_SSM_SCAN_SSD_NSG*8*OP_SSM_SCAN_SSD_CS +
+                OP_SSM_SCAN_SSD_NSG*2*8*8)*sizeof(float);
 
     return res;
 }
