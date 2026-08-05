@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FolderOpen, Sparkles } from '@lucide/svelte';
-	import { KeyboardKey } from '$lib/enums';
 	import { MODEL_SELECTOR_ICON } from '$lib/constants';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import type { ChatFormCommand, ChatFormCommandAction } from '$lib/types';
 	import {
 		ChatFormPickerList,
@@ -32,11 +32,6 @@
 	}
 
 	let { class: className = '', isOpen, query, commands, onClose, onSelect }: Props = $props();
-
-	let hoveredIndex = $state(-1);
-	// Bump on ArrowUp/ArrowDown only; the list's auto-scroll never fires on
-	// hover (see `scrollTrigger` prop on ChatFormPickerList).
-	let scrollTrigger = $state(0);
 
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
 		prompt: Sparkles,
@@ -74,21 +69,30 @@
 		return -1;
 	}
 
+	const nav = usePickerNavigation({
+		isOpen: () => isOpen,
+		count: () => filteredCommands.length,
+		// Skip disabled commands; from a cleared highlight, land on the first.
+		step: (from, dir) => (from < 0 ? firstEnabledIndex() : stepEnabled(from, dir)),
+		onClose: () => onClose(),
+		onSelect: (index) => handleSelect(filteredCommands[index])
+	});
+
 	$effect(() => {
 		if (isOpen) {
-			hoveredIndex = firstEnabledIndex();
+			nav.reset(firstEnabledIndex());
 		}
 	});
 
 	// Keep the highlight on an enabled command when the filtered list
 	// changes (typing more chars, availability flipping).
 	$effect(() => {
-		if (hoveredIndex < 0 || hoveredIndex >= filteredCommands.length) {
-			hoveredIndex = firstEnabledIndex();
+		if (nav.hoveredIndex < 0 || nav.hoveredIndex >= filteredCommands.length) {
+			nav.reset(firstEnabledIndex());
 			return;
 		}
-		if (filteredCommands[hoveredIndex].disabled) {
-			hoveredIndex = firstEnabledIndex();
+		if (filteredCommands[nav.hoveredIndex].disabled) {
+			nav.reset(firstEnabledIndex());
 		}
 	});
 
@@ -99,45 +103,7 @@
 	}
 
 	export function handleKeydown(event: KeyboardEvent): boolean {
-		if (!isOpen) return false;
-
-		if (event.key === KeyboardKey.ESCAPE) {
-			event.preventDefault();
-			onClose();
-			return true;
-		}
-
-		if (event.key === KeyboardKey.ARROW_DOWN) {
-			event.preventDefault();
-			const next = hoveredIndex < 0 ? firstEnabledIndex() : stepEnabled(hoveredIndex, 1);
-			if (next >= 0) {
-				hoveredIndex = next;
-				scrollTrigger++;
-			}
-			return true;
-		}
-
-		if (event.key === KeyboardKey.ARROW_UP) {
-			event.preventDefault();
-			const next = hoveredIndex < 0 ? firstEnabledIndex() : stepEnabled(hoveredIndex, -1);
-			if (next >= 0) {
-				hoveredIndex = next;
-				scrollTrigger++;
-			}
-			return true;
-		}
-
-		if (event.key === KeyboardKey.ENTER) {
-			if (hoveredIndex >= 0 && filteredCommands[hoveredIndex]) {
-				event.preventDefault();
-				handleSelect(filteredCommands[hoveredIndex]);
-				return true;
-			}
-			// No selectable command - let the textarea's Enter-to-submit run.
-			return false;
-		}
-
-		return false;
+		return nav.handleKeydown(event);
 	}
 </script>
 
@@ -151,12 +117,12 @@
 	<ChatFormPickerList
 		items={filteredCommands}
 		isLoading={false}
-		selectedIndex={hoveredIndex}
+		selectedIndex={nav.hoveredIndex}
 		showSearchInput={false}
 		searchQuery={query ?? ''}
 		emptyMessage="No matching command"
 		itemKey={(command) => command.name}
-		{scrollTrigger}
+		scrollTrigger={nav.scrollTrigger}
 	>
 		{#snippet item(command, index, isSelected)}
 			{@const Icon = commandIcon[command.action]}
@@ -166,7 +132,7 @@
 				disabled={command.disabled}
 				onclick={() => handleSelect(command)}
 				onmouseenter={() => {
-					if (!command.disabled) hoveredIndex = index;
+					if (!command.disabled) nav.setHover(index);
 				}}
 			>
 				<Icon class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />

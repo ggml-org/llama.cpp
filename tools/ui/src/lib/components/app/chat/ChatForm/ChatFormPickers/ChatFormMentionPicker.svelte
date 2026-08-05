@@ -9,7 +9,7 @@
 		runGlobSearch
 	} from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { GlobSearchType, KeyboardKey } from '$lib/enums';
+	import { GlobSearchType } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { recentMentionsStore } from '$lib/stores/recent-mentions.svelte';
@@ -18,6 +18,7 @@
 	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
 	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import type { FileMentionEntry } from '$lib/types';
 	import {
 		FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
@@ -70,11 +71,12 @@
 		onOpened
 	}: Props = $props();
 
-	let hoveredIndex = $state(0);
-	// Bump on ArrowUp/ArrowDown only; mouse hover does NOT change this,
-	// so the list's auto-scroll never fires on hover (see
-	// `scrollTrigger` prop on ChatFormPickerList).
-	let scrollTrigger = $state(0);
+	const nav = usePickerNavigation({
+		isOpen: () => isOpen,
+		count: () => displayedItems.length,
+		onClose: () => onClose(),
+		onSelect: (index) => handleSelect(displayedItems[index])
+	});
 
 	let searchResults = $state<FileMentionEntry[]>([]);
 	let searchError = $state<string | null>(null);
@@ -167,7 +169,7 @@
 
 	$effect(() => {
 		if (isOpen) {
-			hoveredIndex = 0;
+			nav.reset(0);
 		}
 	});
 
@@ -205,45 +207,7 @@
 	}
 
 	export function handleKeydown(event: KeyboardEvent): boolean {
-		if (!isOpen) return false;
-
-		const results = displayedItems;
-
-		if (event.key === KeyboardKey.ESCAPE) {
-			event.preventDefault();
-			onClose();
-			return true;
-		}
-
-		if (event.key === KeyboardKey.ARROW_DOWN) {
-			event.preventDefault();
-			if (results.length > 0) {
-				hoveredIndex = (hoveredIndex + 1) % results.length;
-				scrollTrigger++;
-			}
-			return true;
-		}
-
-		if (event.key === KeyboardKey.ARROW_UP) {
-			event.preventDefault();
-			if (results.length > 0) {
-				hoveredIndex = hoveredIndex === 0 ? results.length - 1 : hoveredIndex - 1;
-				scrollTrigger++;
-			}
-			return true;
-		}
-
-		if (event.key === KeyboardKey.ENTER) {
-			if (results[hoveredIndex]) {
-				event.preventDefault();
-				handleSelect(results[hoveredIndex]);
-				return true;
-			}
-			// No result selected - let the textarea's Enter-to-submit run.
-			return false;
-		}
-
-		return false;
+		return nav.handleKeydown(event);
 	}
 </script>
 
@@ -292,19 +256,19 @@
 		<ChatFormPickerList
 			items={displayedItems}
 			isLoading={isShowingRecents ? false : search.isSearching}
-			selectedIndex={hoveredIndex}
+			selectedIndex={nav.hoveredIndex}
 			showSearchInput={false}
 			searchQuery={query ?? ''}
 			{emptyMessage}
 			itemKey={(entry) => entry.type + ':' + entry.path}
-			{scrollTrigger}
+			scrollTrigger={nav.scrollTrigger}
 		>
 			{#snippet item(entry, index, isSelected)}
 				<ChatFormPickerListItem
 					dataIndex={index}
 					{isSelected}
 					onclick={() => handleSelect(entry)}
-					onmouseenter={() => (hoveredIndex = index)}
+					onmouseenter={() => nav.setHover(index)}
 				>
 					{@const Icon = entry.type === 'directory' ? Folder : File}
 					<Icon

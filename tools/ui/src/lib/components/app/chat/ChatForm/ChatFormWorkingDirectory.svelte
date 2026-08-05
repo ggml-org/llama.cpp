@@ -18,6 +18,7 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
 	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
 	import {
@@ -88,11 +89,17 @@
 
 	let queryResults = $state<string[]>([]);
 	let searchError = $state<string | null>(null);
-	let hoveredIndex = $state(-1);
-	// Bumped only by ArrowUp/ArrowDown handlers; the list scrolls the
-	// highlighted row into view only via this trigger, never on hover.
-	let scrollTrigger = $state(0);
 	let listContainer = $state<HTMLDivElement | null>(null);
+
+	// Highlight + keyboard-nav state (ArrowUp/Down, Escape, Enter). The
+	// scroll trigger is bumped only on keyboard nav, so the results list
+	// never auto-scrolls on mouse hover or result replacement.
+	const nav = usePickerNavigation({
+		isOpen: () => isOpen,
+		count: () => queryResults.length,
+		onClose: closePicker,
+		onSelect: (index) => commit(queryResults[index])
+	});
 
 	// Absolute home directory on the server, resolved once per session by
 	// the tools store. Anchors both the search scope and the chip's `~`
@@ -122,14 +129,14 @@
 	$effect(() => {
 		if (!isOpen) return;
 		const q = query.trim();
-		hoveredIndex = -1;
+		nav.reset(-1);
 		if (q) {
 			search.run(q);
 		} else {
 			search.cancel();
 			queryResults = [];
 			searchError = null;
-			hoveredIndex = -1;
+			nav.reset(-1);
 			searchScope = homeBase ?? HOME_TILDE;
 		}
 	});
@@ -142,17 +149,17 @@
 		// Skip the initial run on mount: scrolling here fires before the popover
 		// is positioned, which scrolls the whole page to the top.
 		if (lastScrollTrigger === null) {
-			lastScrollTrigger = scrollTrigger;
+			lastScrollTrigger = nav.scrollTrigger;
 			return;
 		}
 
-		if (scrollTrigger === lastScrollTrigger) return;
-		lastScrollTrigger = scrollTrigger;
+		if (nav.scrollTrigger === lastScrollTrigger) return;
+		lastScrollTrigger = nav.scrollTrigger;
 		untrack(() => {
 			if (!listContainer) return;
-			if (hoveredIndex < 0 || hoveredIndex >= queryResults.length) return;
+			if (nav.hoveredIndex < 0 || nav.hoveredIndex >= queryResults.length) return;
 			const selectedElement = listContainer.querySelector(
-				`[data-result-index="${hoveredIndex}"]`
+				`[data-result-index="${nav.hoveredIndex}"]`
 			) as HTMLElement | null;
 			selectedElement?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 		});
@@ -192,7 +199,7 @@
 			if (!trimmed) {
 				queryResults = [];
 				searchError = null;
-				hoveredIndex = -1;
+				nav.reset(-1);
 				searchScope = homeBase ?? HOME_TILDE;
 				return;
 			}
@@ -205,7 +212,7 @@
 				if (!isCurrent()) return;
 				if (res.error) {
 					queryResults = [];
-					hoveredIndex = -1;
+					nav.reset(-1);
 					searchError = res.error;
 					return;
 				}
@@ -234,14 +241,18 @@
 				}
 
 				queryResults = results.slice(0, MAX_RESULTS_SHOWN);
-				hoveredIndex = queryResults.length > 0 ? 0 : -1;
-				// new results: scroll the list back to the top (first item is hovered)
-				if (hoveredIndex === 0) scrollTrigger++;
+				if (queryResults.length > 0) {
+					nav.reset(0);
+					// new results: scroll the list back to the top (first item is hovered)
+					nav.bumpScroll();
+				} else {
+					nav.reset(-1);
+				}
 				searchError = null;
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;
 				queryResults = [];
-				hoveredIndex = -1;
+				nav.reset(-1);
 				searchError = err instanceof Error ? err.message : String(err);
 			}
 		}
@@ -323,22 +334,20 @@
 			event.preventDefault();
 			// Commit the highlighted result, falling back to the raw input
 			// only when the query returned no matches.
-			if (hoveredIndex >= 0 && queryResults[hoveredIndex]) {
-				commit(queryResults[hoveredIndex]);
+			if (nav.hoveredIndex >= 0 && queryResults[nav.hoveredIndex]) {
+				commit(queryResults[nav.hoveredIndex]);
 			} else if (queryResults.length === 0) {
 				handleSubmit();
 			}
 		} else if (event.key === KeyboardKey.ARROW_DOWN) {
 			if (queryResults.length > 0) {
 				event.preventDefault();
-				hoveredIndex = (hoveredIndex + 1) % queryResults.length;
-				scrollTrigger++;
+				nav.move(1);
 			}
 		} else if (event.key === KeyboardKey.ARROW_UP) {
 			if (queryResults.length > 0) {
 				event.preventDefault();
-				hoveredIndex = hoveredIndex <= 0 ? queryResults.length - 1 : hoveredIndex - 1;
-				scrollTrigger++;
+				nav.move(-1);
 			}
 		}
 	}
@@ -429,13 +438,13 @@
 			{#if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
 				<ChatFormWorkingDirectoryResultsList
 					results={queryResults}
-					{hoveredIndex}
+					hoveredIndex={nav.hoveredIndex}
 					isSearching={search.isSearching}
 					error={searchError}
 					rawQuery={query}
 					bind:container={listContainer}
 					onCommit={commit}
-					onHover={(index) => (hoveredIndex = index)}
+					onHover={(index) => nav.setHover(index)}
 				/>
 			{/if}
 
