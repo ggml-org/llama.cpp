@@ -621,10 +621,6 @@ bool socket_t::flush() {
     return pimpl->flush();
 }
 
-bool socket_t::is_rdma() const {
-    return pimpl->use_rdma;
-}
-
 bool socket_t::is_broken() const {
     return pimpl->is_broken();
 }
