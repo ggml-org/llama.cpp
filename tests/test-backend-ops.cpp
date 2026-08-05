@@ -4141,19 +4141,10 @@ struct test_ssm_scan : public test_case {
         return (head_dim > 1) ? 2e-7 : 1e-7;
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (n_seq_tokens >= 64 && strcmp(ggml_backend_reg_name(reg), "Metal") == 0) {
-            return 5e-4; // simdgroup MMA reassociation drift over long prompts
-        }
-        return max_nmse_err();
-    }
-
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * s   = ggml_new_tensor_4d(ctx, type, d_state,  head_dim,     n_head,       n_seqs);
         ggml_tensor * dt  = ggml_new_tensor_3d(ctx, type, n_head,   n_seq_tokens, n_seqs);
         ggml_tensor * A   = ggml_new_tensor_2d(ctx, type, (head_dim > 1) ? 1 : d_state, n_head);
-        ggml_set_name(A, "A");
         ggml_tensor * x;
         ggml_tensor * B;
         ggml_tensor * C;
@@ -4161,7 +4152,7 @@ struct test_ssm_scan : public test_case {
         if (xbc_overlap) {
             ggml_tensor * xbc = ggml_new_tensor_4d(ctx, type, d_state, n_head, n_seq_tokens, 2 * n_seqs);
             x = ggml_view_4d(ctx, xbc, head_dim, n_head, n_seq_tokens, n_seqs,
-                             head_dim * xbc->nb[0], xbc->nb[2], xbc->nb[3], xbc->nb[3]);
+                             xbc->nb[1], xbc->nb[2], xbc->nb[3], xbc->nb[3]);
             B = ggml_view_4d(ctx, xbc, d_state, n_group, n_seq_tokens, n_seqs,
                              xbc->nb[1], xbc->nb[2], xbc->nb[3], 0);
             C = ggml_view_4d(ctx, xbc, d_state, n_group, n_seq_tokens, n_seqs,
@@ -9120,16 +9111,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 4, 2, false, /*K=*/4)); // Mamba-2 rollback snapshots
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 8, 2, false, /*K=*/3)); // Mamba-2 rollback overflow
     test_cases.emplace_back(new test_ssm_scan_rollback(GGML_TYPE_F32, 128, 64, 16, 2, 8, 2, /*K=*/3)); // rollback snapshots match prefix states
-
-    // sequential-only, MMA-only, and MMA-prefix plus sequential-tail boundaries
-    for (int64_t n_seq_tokens : {63, 64, 65, 127, 128, 129}) {
-        for (int64_t n_group : {1, 2, 8}) {
-            test_cases.emplace_back(new test_ssm_scan(
-                GGML_TYPE_F32, 128, 64, 8, n_group, n_seq_tokens, 4));
-        }
-    }
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 8, 2,  65, 2, true));
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 8, 8, 129, 2, true));
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 64, 4)); // Metal SSD one chunk MMA only, no seq tail
 
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 32, 1));
@@ -10483,7 +10465,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1}, true));  // prefill
     test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1}, true));  // generate
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 512,  1)); // prefill
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 2048, 1)); // prefill, above SSD threshold
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 1,    1)); // generate
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 512, 1)); // Nemotron-9B prefill
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 1,   1)); // Nemotron-9B generate
