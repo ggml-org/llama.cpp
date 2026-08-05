@@ -1056,6 +1056,17 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
     return nullptr;
 }
 
+// some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
+// the tensor is duplicated
+// to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
+static llm_tensor resolve_tn_tensor(const LLM_TN_IMPL & tn, int flags) {
+    if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && (flags & llama_model_loader::TENSOR_DUPLICATED)) {
+        return LLM_TENSOR_OUTPUT;
+    }
+
+    return tn.tensor;
+}
+
 struct ggml_tensor * llama_model_loader::create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
         const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
@@ -1097,17 +1108,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
         }
 
-        // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
-        // the tensor is duplicated
-        // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
-        llm_tensor tn_tensor = tn.tensor;
-        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && (flags & TENSOR_DUPLICATED)) {
-            tn_tensor = LLM_TENSOR_OUTPUT;
-        }
-
         llm_tensor_info info;
         try {
-            info = llm_tensor_info_for(tn_tensor);
+            info = llm_tensor_info_for(resolve_tn_tensor(tn, flags));
         } catch (const std::out_of_range & e) {
             throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
         }
@@ -1295,6 +1298,15 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
     struct ggml_tensor * tensor = ggml_dup_tensor(ctx, &t_meta);
     ggml_set_name(tensor, ggml_get_name(&t_meta));
+
+    // flag the weights that feed a matrix multiplication, backends may pad their row stride
+    const bool is_weight = tn.suffix == nullptr || strcmp(tn.suffix, "weight") == 0;
+    if (is_weight) {
+        const ggml_op op = llm_tensor_info_for(resolve_tn_tensor(tn, flags)).op;
+        if (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID) {
+            tensor->flags |= GGML_TENSOR_FLAG_PAD_ROWS;
+        }
+    }
 
     if (duplicated) {
         size_data += ggml_nbytes(&t_meta);
@@ -1524,7 +1536,12 @@ bool llama_model_loader::load_all_data(
             }
         }
 
-        size_t n_size = ggml_nbytes(cur);
+        // the file data is packed, a destination with a padded row stride needs a 2D copy
+        const size_t  packed_row_size = ggml_row_size(cur->type, cur->ne[0]);
+        const int64_t n_rows          = ggml_nelements(cur) / cur->ne[0];
+        const bool    row_padded      = cur->nb[1] != packed_row_size;
+
+        const size_t n_size = row_padded ? packed_row_size*n_rows : ggml_nbytes(cur);
 
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
@@ -1551,6 +1568,8 @@ bool llama_model_loader::load_all_data(
                 auto & mmap_used = mmaps_used[weight->idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+            } else if (row_padded) {
+                ggml_backend_tensor_set_2d(cur, data, 0, packed_row_size, n_rows, cur->nb[1], packed_row_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
@@ -1567,7 +1586,7 @@ bool llama_model_loader::load_all_data(
                 }
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
-                if (upload_backend) {
+                if (upload_backend && !row_padded) {
                     size_t offset = weight->offs;
                     alignment = file->read_alignment();
                     size_t aligned_offset = offset & ~(alignment - 1);
@@ -1623,7 +1642,11 @@ bool llama_model_loader::load_all_data(
                     read_buf.resize(n_size);
                     file->seek(weight->offs, SEEK_SET);
                     file->read_raw(read_buf.data(), n_size);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                    if (row_padded) {
+                        ggml_backend_tensor_set_2d(cur, read_buf.data(), 0, packed_row_size, n_rows, cur->nb[1], packed_row_size);
+                    } else {
+                        ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                    }
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
                     }
