@@ -78,30 +78,6 @@ constexpr uint32_t kSeed = 0xBEEFu;
 constexpr float kAbsTolerance = 2.0e-2f;
 constexpr float kRelTolerance = 1.0e-1f;
 
-fs::path resolve_fixture_path() {
-    if (const char * env = std::getenv("TESSERA_ANE_TILE640_FIXTURE");
-            env != nullptr && env[0] != '\0') {
-        return fs::path(env);
-    }
-    fs::path candidate = fs::current_path();
-    for (int i = 0; i < 8; ++i) {
-        fs::path try_path = candidate /
-            "tools/ane-mtp/fixtures/tile640-matmul-256x256x1/tile640-matmul-256x256x1.mlmodelc";
-        if (fs::is_directory(try_path)) {
-            return try_path;
-        }
-        if (!candidate.has_parent_path()) {
-            break;
-        }
-        candidate = candidate.parent_path();
-    }
-    std::fprintf(stderr,
-        "tile640-matmul fixture not found. Build it via:\n"
-        "  /tmp/tessera-venv311/bin/python tools/ane-mtp/build-tile640-matmul-fixture.py "
-        "--out-dim 256 --in-dim 256 --n-tokens 1\n");
-    return {};
-}
-
 void make_weight(std::vector<float> & w, int64_t out_dim, int64_t in_dim,
                  uint32_t seed, float outlier_frac = 0.0f) {
     std::mt19937 rng(seed);
@@ -403,82 +379,199 @@ bool run_parity_case(int64_t out_dim, int64_t in_dim, int64_t n_tokens,
     return ok;
 }
 
-} // namespace
-
-int main() {
-    const fs::path fixture = resolve_fixture_path();
-    if (fixture.empty()) {
-        return 2;
+// Resolve the path to <bundle>.mlmodelc by walking up from cwd
+// looking for the canonical tools/ane-mtp/fixtures/<bundle>/
+// layout. The TESSERA_ANE_TILE640_FIXTURE_DIR env var, if set,
+// points to the directory containing the per-shape
+// tile640-matmul-* subdirs (typically tools/ane-mtp/fixtures).
+//
+// The per-shape fixture path resolution is the
+// open-question-#2 resolution from Phase 0 (deep-study Part
+// 6.7): production graphs hit CPU/Metal for unmatched shapes.
+// The 5-shape coverage below eliminates that fallback for the
+// 5 shape combos the gemma 4 12B model uses (256x256 decoder,
+// 512x512, 1024x1024, 128x4096 attention-proj, 4096x4096 FFN
+// down-proj).
+fs::path resolve_fixture_path_for_shape(const char * bundle_name) {
+    const std::string mlmodelc = std::string(bundle_name) + ".mlmodelc";
+    fs::path root = fs::current_path();
+    if (const char * env = std::getenv("TESSERA_ANE_TILE640_FIXTURE_DIR");
+            env != nullptr && env[0] != '\0') {
+        root = fs::path(env);
+        fs::path try_path = root / bundle_name / mlmodelc;
+        if (fs::is_directory(try_path)) return try_path;
+        return {};
     }
-    std::printf("tile640-matmul fixture: %s\n", fixture.string().c_str());
+    for (int i = 0; i < 8; ++i) {
+        fs::path try_path = root / "tools/ane-mtp/fixtures" / bundle_name / mlmodelc;
+        if (fs::is_directory(try_path)) return try_path;
+        if (!root.has_parent_path()) break;
+        root = root.parent_path();
+    }
+    return {};
+}
 
+// Load the per-shape fixture, bind it to the ANE backend, and
+// run one parity case. The dispatch's shape-match check
+// (ggml-ane.mm:1907-1918) returns false on shape mismatch; the
+// subsequent graph_compute would then fail with "advertised op
+// has no compute path" because TILE640_MATMUL has no fall-
+// through path. The graph_compute SUCCESS return is therefore
+// the implicit "dispatch returned true" signal; this wrapper
+// surfaces it explicitly via run_parity_case's printed bars.
+//
+// One bundle is bound per call; the wrapper owns the program
+// for the duration of the call and frees it before returning.
+// The dispatch's atomic store (ggml-ane.mm:2148) does not free
+// the previously bound program, so this is leak-free.
+bool run_parity_test(int64_t out_dim, int64_t in_dim, int64_t n_tokens,
+                     uint32_t seed, float outlier_frac,
+                     ggml_backend_t ane_backend,
+                     const char * case_name) {
+    char bundle[64];
+    std::snprintf(bundle, sizeof(bundle),
+                  "tile640-matmul-%lldx%lldx%lld",
+                  (long long) out_dim, (long long) in_dim,
+                  (long long) n_tokens);
+    const fs::path fixture = resolve_fixture_path_for_shape(bundle);
+    if (fixture.empty()) {
+        std::fprintf(stderr,
+            "FAIL: %s: fixture %s not found. Build it via:\n"
+            "  /tmp/tessera-venv311/bin/python tools/ane-mtp/build-tile640-matmul-fixture.py "
+            "--out-dim %lld --in-dim %lld --n-tokens %lld\n",
+            case_name, bundle,
+            (long long) out_dim, (long long) in_dim, (long long) n_tokens);
+        return false;
+    }
+    std::printf("\n=== %s: %s ===\n", case_name, fixture.string().c_str());
     ggml_backend_ane_program * program =
         ggml_backend_ane_program_load_from_dir(fixture.string().c_str(), "main");
     if (!program) {
-        std::fprintf(stderr, "failed to load .mlmodelc\n");
-        return 1;
+        std::fprintf(stderr, "FAIL: %s: load %s\n",
+                     case_name, fixture.string().c_str());
+        return false;
     }
+    if (!ggml_backend_ane_set_program(ane_backend, program)) {
+        std::fprintf(stderr, "FAIL: %s: set_program\n", case_name);
+        ggml_backend_ane_program_free(program);
+        return false;
+    }
+    const bool ok = run_parity_case(out_dim, in_dim, n_tokens, seed,
+                                    outlier_frac, ane_backend, program,
+                                    case_name);
+    ggml_backend_ane_program_free(program);
+    return ok;
+}
 
+} // namespace
+
+int main() {
     ggml_backend_dev_t dev = ggml_backend_dev_by_name("ANE");
     if (!dev) {
         std::fprintf(stderr, "no ANE device available (non-macOS?)\n");
-        ggml_backend_ane_program_free(program);
         return 1;
     }
     ggml_backend_t ane_backend = ggml_backend_dev_init(dev, nullptr);
     if (!ane_backend || !ggml_backend_is_ane(ane_backend)) {
         std::fprintf(stderr, "ANE backend init failed\n");
         if (ane_backend) ggml_backend_free(ane_backend);
-        ggml_backend_ane_program_free(program);
-        return 1;
-    }
-    if (!ggml_backend_ane_set_program(ane_backend, program)) {
-        std::fprintf(stderr, "failed to bind bundle to ANE backend\n");
-        ggml_backend_free(ane_backend);
-        ggml_backend_ane_program_free(program);
         return 1;
     }
 
     int failures = 0;
 
-    // (1-5) Canonical 256x256 parity case.
-    if (!run_parity_case(256, 256, 1, kSeed, 0.0f,
-                          ane_backend, program, "dense 256x256")) {
-        std::fprintf(stderr, "FAIL: dense 256x256 parity\n");
-        ++failures;
+    // The 5-shape parity table (per Phase 0's open question
+    // #2 resolution in deep-study Part 6.7):
+    //   256x256x1   = canonical Phase 0 spike
+    //   512x512x1   = first follow-on
+    //   1024x1024x1 = second follow-on
+    //   128x4096x1  = gemma 4 12B attention-projection shape
+    //                 (the [head_dim * n_heads, hidden] weight in
+    //                 the qkv_proj / o_proj)
+    //   4096x4096x1 = gemma 4 12B FFN down-projection shape
+    //                 (the [hidden, ffn_hidden] weight in the
+    //                 swiglu gate/down)
+    //
+    // Each shape is bound to a different .mlmodelc; the
+    // dispatch's shape-match check (ggml-ane.mm:1907-1918)
+    // returns true when the bound bundle's baked shape matches
+    // the ggml op's shape, false otherwise. Production graphs
+    // route unmatched shapes to ggml-cpu/Metal; the 5-shape
+    // coverage here eliminates that fallback for the gemma 4
+    // 12B weight shape set.
+    struct ShapeCase {
+        int64_t out_dim;
+        int64_t in_dim;
+        int64_t n_tokens;
+        uint32_t seed;
+    };
+    const ShapeCase shapes[] = {
+        {   256,   256, 1, kSeed            },
+        {   512,   512, 1, kSeed ^ 0x1111u   },
+        {  1024,  1024, 1, kSeed ^ 0x2222u   },
+        {   128,  4096, 1, kSeed ^ 0x3333u   },
+        {  4096,  4096, 1, kSeed ^ 0x4444u   },
+    };
+    constexpr int n_shapes = sizeof(shapes) / sizeof(shapes[0]);
+
+    // (1) Dense parity: 5 shape cases, one per (out_dim, in_dim).
+    // The dispatch's shape-match check is the "dispatch returned
+    // true" assertion: a non-matching fixture would fail
+    // graph_compute with "advertised op has no compute path"
+    // because TILE640_MATMUL has no fall-through path; SUCCESS
+    // therefore implies the bundle's baked shape matched the
+    // ggml op's shape.
+    std::printf("\n--- Dense parity: %d shape cases ---\n", n_shapes);
+    for (int i = 0; i < n_shapes; ++i) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "dense %lldx%lldx%lld",
+                      (long long) shapes[i].out_dim,
+                      (long long) shapes[i].in_dim,
+                      (long long) shapes[i].n_tokens);
+        if (!run_parity_test(shapes[i].out_dim, shapes[i].in_dim,
+                             shapes[i].n_tokens, shapes[i].seed,
+                             /*outlier_frac=*/0.0f,
+                             ane_backend, name)) {
+            std::fprintf(stderr, "FAIL: %s parity\n", name);
+            ++failures;
+        }
     }
-    // (6) Multiple shape combos. The 256x256 is bundled; the
-    // 512x512 requires a separate fixture (Phase 0.5). For
-    // Phase 0, we assert the dispatch policy for the larger
-    // shapes (returns false on shape mismatch so the scheduler
-    // routes to ggml-cpu/Metal).
-    if (!run_parity_case(256, 256, 1, kSeed ^ 0x1234u, 0.0f,
-                          ane_backend, program, "dense 256x256 (re-run)")) {
-        std::fprintf(stderr, "FAIL: dense 256x256 re-run\n");
-        ++failures;
+
+    // (2) 5% outliers parity: 5 shape cases, one per (out_dim,
+    // in_dim). The outlier path (sparse outlier addback in fp32
+    // on the host) is the architect's documented loss
+    // mechanism for TILE640; it must be verified per shape
+    // because the outlier-row-pointer arithmetic scales with
+    // out_dim and the outlier-Vec size scales with in_dim.
+    std::printf("\n--- 5%% outlier parity: %d shape cases ---\n", n_shapes);
+    for (int i = 0; i < n_shapes; ++i) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "5%% outliers %lldx%lldx%lld",
+                      (long long) shapes[i].out_dim,
+                      (long long) shapes[i].in_dim,
+                      (long long) shapes[i].n_tokens);
+        if (!run_parity_test(shapes[i].out_dim, shapes[i].in_dim,
+                             shapes[i].n_tokens,
+                             shapes[i].seed ^ 0x7777u,
+                             /*outlier_frac=*/0.05f,
+                             ane_backend, name)) {
+            std::fprintf(stderr, "FAIL: %s parity\n", name);
+            ++failures;
+        }
     }
-    // (7) Outlier path: 5% outliers.
-    if (!run_parity_case(256, 256, 1, kSeed ^ 0x77u, 0.05f,
-                          ane_backend, program, "5% outliers 256x256")) {
-        std::fprintf(stderr, "FAIL: 5%% outliers 256x256 parity\n");
-        ++failures;
-    }
-    // (8) No-outlier path: same shape, zero outliers, different seed.
-    if (!run_parity_case(256, 256, 1, kSeed ^ 0xAAu, 0.0f,
-                          ane_backend, program, "no outliers 256x256")) {
-        std::fprintf(stderr, "FAIL: no outliers 256x256 parity\n");
-        ++failures;
-    }
-    // (10) IOSurface-state plumbing: the L1 path reads the
+
+    // (3) IOSurface-state plumbing: the L1 path reads the
     // per-row meta (page_scales, lane_scales) and the
     // activations from the ggml graph's src[1..6] on every
-    // dispatch, not from a cached pinned-slot value. To
-    // verify this, we run two consecutive dispatches with
-    // different per-row meta (different seeds produce
-    // different page_scales / lane_scales) and assert the
-    // ANE outputs differ accordingly. If the dispatch
-    // cached the meta from the first call, the second
-    // would return the first's output.
+    // dispatch, not from a cached pinned-slot value. The
+    // 10 dispatches above (5 dense + 5 outliers, all with
+    // different seeds) produce different page_scales /
+    // lane_scales per case; the per-shape parity bars
+    // passing is the structural assertion that the dispatch
+    // re-reads the meta on every call. If the dispatch
+    // cached the meta from a prior call, the second output
+    // would equal the first; the per-shape variation
+    // exercises this across all 5 shape combos.
     //
     // Note on the per-layer alpha: the alpha is the AWQ
     // exponent applied at quantization time. The AWQ
@@ -489,30 +582,21 @@ int main() {
     // default ts_quantize_2d parameters (no AWQ search
     // grid), the per-row meta for the same weight is
     // independent of alpha, so a "same weight, different
-    // alpha" test would be degenerate. The "different
-    // seed" test below exercises the per-row meta plumbing
-    // directly; the per-layer alpha plumbing is covered
-    // by the parity checks (each weight's ternary
-    // encoding reflects the alpha at quantization time).
-    {
-        std::printf("\n=== IOSurface-state plumbing: different "
-                    "page_scales across dispatches ===\n");
-        // The re-run case above already exercises this
-        // (different seed = different page_scales = ANE
-        // output differs). The structural assertion here
-        // is that the dispatch reads src[1] from the ggml
-        // graph on every call.
-        std::printf("  per-row meta re-supplied per dispatch: "
-                    "covered by the dense 256x256 (re-run) case\n");
-    }
+    // alpha" test would be degenerate. The per-shape seed
+    // variation above exercises the per-row meta plumbing
+    // directly; the per-layer alpha plumbing is covered by
+    // the parity checks (each weight's ternary encoding
+    // reflects the alpha at quantization time).
+    std::printf("\n=== IOSurface-state plumbing: per-row meta "
+                "re-supplied per dispatch (covered by 10 dispatches "
+                "above with different per-shape seeds) ===\n");
 
     ggml_backend_free(ane_backend);
-    ggml_backend_ane_program_free(program);
 
     if (failures > 0) {
         std::fprintf(stderr, "\nFAIL: %d test case(s) failed\n", failures);
         return 1;
     }
-    std::printf("\nANE TILE640_MATMUL dispatch: OK\n");
+    std::printf("\nANE TILE640_MATMUL dispatch: OK (5 shapes, dense + outliers)\n");
     return 0;
 }
