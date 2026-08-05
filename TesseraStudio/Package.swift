@@ -43,12 +43,13 @@ let repoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()   // repo root
 let llamaHeaderDir = repoRoot.appendingPathComponent("include")
 let ggmlHeaderDir = repoRoot.appendingPathComponent("ggml/include")
+let commonHeaderDir = repoRoot.appendingPathComponent("common")
 let hasLlamaHeaders = FileManager.default
     .fileExists(atPath: llamaHeaderDir.appendingPathComponent("llama.h").path)
 
 let cllamaCSettings: [CSetting] = hasLlamaHeaders
     ? [
-        .unsafeFlags(["-I", llamaHeaderDir.path, "-I", ggmlHeaderDir.path]),
+        .unsafeFlags(["-I", llamaHeaderDir.path, "-I", ggmlHeaderDir.path, "-I", commonHeaderDir.path]),
     ]
     : [
         .define("CLLAMA_NO_HEADERS"),

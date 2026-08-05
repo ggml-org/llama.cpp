@@ -32,6 +32,7 @@ const char *cllama_last_error(void) {
 #ifndef CLLAMA_NO_HEADERS
 
 #include <llama.h>
+#include <tessera-runtime.h>
 
 #include <dlfcn.h>
 #include <pthread.h>
@@ -55,6 +56,7 @@ static struct {
     typeof(llama_n_batch)                    * n_batch;
     typeof(llama_tokenize)                   * tokenize;
     typeof(llama_token_to_piece)             * token_to_piece;
+    typeof(llama_detokenize)                 * detokenize;
     typeof(llama_vocab_is_eog)               * vocab_is_eog;
     typeof(llama_batch_get_one)              * batch_get_one;
     typeof(llama_decode)                     * decode;
@@ -69,6 +71,21 @@ static struct {
 static void *g_handle = NULL;
 static int   g_backend_initialized = 0;
 static pthread_mutex_t g_load_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// the candidate that successfully loaded libllama, kept so the spec library
+// loader can look for libllama-common.dylib next to it (pairing pattern:
+// both ship from the same build)
+static char g_llama_path[1024];
+
+// Resolved tessera_rt_* symbols from libllama-common.dylib.
+static struct {
+    typeof(tessera_rt_load)       * rt_load;
+    typeof(tessera_rt_generate)   * rt_generate;
+    typeof(tessera_rt_free)       * rt_free;
+    typeof(tessera_rt_last_error) * rt_last_error;
+} g_spec;
+
+static void *g_spec_handle = NULL;
 
 int cllama_is_available(void) {
     return g_handle != NULL;
@@ -113,6 +130,7 @@ int cllama_load_library(const char *dylib_path_override) {
     for (int i = 0; i < n_candidates; ++i) {
         g_handle = dlopen(candidates[i], RTLD_NOW | RTLD_LOCAL);
         if (g_handle != NULL) {
+            snprintf(g_llama_path, sizeof(g_llama_path), "%s", candidates[i]);
             break;
         }
     }
@@ -135,6 +153,7 @@ int cllama_load_library(const char *dylib_path_override) {
     RESOLVE(n_batch,                    "llama_n_batch");
     RESOLVE(tokenize,                   "llama_tokenize");
     RESOLVE(token_to_piece,             "llama_token_to_piece");
+    RESOLVE(detokenize,                 "llama_detokenize");
     RESOLVE(vocab_is_eog,               "llama_vocab_is_eog");
     RESOLVE(batch_get_one,              "llama_batch_get_one");
     RESOLVE(decode,                     "llama_decode");
@@ -156,6 +175,152 @@ int cllama_load_library(const char *dylib_path_override) {
 }
 
 #undef RESOLVE
+
+// MARK: - Spec library (libllama-common.dylib, tessera_rt_* entry points)
+
+int cllama_is_spec_available(void) {
+    return g_spec_handle != NULL;
+}
+
+int cllama_load_spec_library(const char *dylib_path_override) {
+    pthread_mutex_lock(&g_load_mutex);
+    if (g_spec_handle != NULL) {
+        pthread_mutex_unlock(&g_load_mutex);
+        return 1;
+    }
+
+    // Sibling of the resolved libllama.dylib, when it was loaded from an
+    // explicit path (bare-name loads fall through to the default search).
+    char sibling[1024];
+    sibling[0] = '\0';
+    {
+        const char *slash = strrchr(g_llama_path, '/');
+        if (slash != NULL && (size_t)(slash - g_llama_path) + 1 < sizeof(sibling)) {
+            snprintf(sibling, sizeof(sibling), "%.*slibllama-common.dylib",
+                     (int)(slash - g_llama_path + 1), g_llama_path);
+        }
+    }
+
+    // Candidates: explicit override, env var, sibling of libllama, default
+    // loader search.
+    const char *candidates[4];
+    int n_candidates = 0;
+    if (dylib_path_override != NULL && dylib_path_override[0] != '\0') {
+        candidates[n_candidates++] = dylib_path_override;
+    }
+    const char *env_path = getenv("TESSERA_LLAMA_COMMON_DYLIB");
+    if (env_path != NULL && env_path[0] != '\0') {
+        candidates[n_candidates++] = env_path;
+    }
+    if (sibling[0] != '\0') {
+        candidates[n_candidates++] = sibling;
+    }
+    candidates[n_candidates++] = "libllama-common.dylib";
+
+    for (int i = 0; i < n_candidates; ++i) {
+        g_spec_handle = dlopen(candidates[i], RTLD_NOW | RTLD_LOCAL);
+        if (g_spec_handle != NULL) {
+            break;
+        }
+    }
+
+    if (g_spec_handle == NULL) {
+        set_error_dl("cllama: could not load libllama-common.dylib");
+        pthread_mutex_unlock(&g_load_mutex);
+        return 0;
+    }
+
+#define RESOLVE_SPEC(field, name)                                           \
+    do {                                                                    \
+        *(void **)(&g_spec.field) = dlsym(g_spec_handle, name);             \
+        if (g_spec.field == NULL) {                                         \
+            set_error("cllama: missing symbol " name);                      \
+            dlclose(g_spec_handle);                                         \
+            g_spec_handle = NULL;                                           \
+            pthread_mutex_unlock(&g_load_mutex);                            \
+            return 0;                                                       \
+        }                                                                   \
+    } while (0)
+
+    RESOLVE_SPEC(rt_load,       "tessera_rt_load");
+    RESOLVE_SPEC(rt_generate,   "tessera_rt_generate");
+    RESOLVE_SPEC(rt_free,       "tessera_rt_free");
+    RESOLVE_SPEC(rt_last_error, "tessera_rt_last_error");
+
+#undef RESOLVE_SPEC
+
+    g_error[0] = '\0';
+    pthread_mutex_unlock(&g_load_mutex);
+    return 1;
+}
+
+// The spec engine handle is the opaque tessera_rt pointer; the Swift side
+// only ever passes it back into the shim.
+struct cllama_spec_engine;
+
+cllama_spec_engine *cllama_engine_load_spec(const char *trunk_path,
+                                            const char *draft_path,
+                                            uint32_t n_ctx,
+                                            int32_t n_threads,
+                                            int32_t n_gpu_layers,
+                                            int32_t draft_max) {
+    if (!cllama_is_spec_available()) {
+        set_error("cllama: spec library not loaded; call cllama_load_spec_library first");
+        return NULL;
+    }
+
+    tessera_rt *rt = g_spec.rt_load(trunk_path, draft_path, n_ctx,
+                                    n_threads, n_gpu_layers, draft_max);
+    if (rt == NULL) {
+        const char *reason = g_spec.rt_last_error();
+        snprintf(g_error, sizeof(g_error), "cllama: spec load failed: %s",
+                 (reason != NULL && reason[0] != '\0') ? reason : "unknown error");
+        return NULL;
+    }
+
+    g_error[0] = '\0';
+    return (cllama_spec_engine *)rt;
+}
+
+int32_t cllama_engine_generate_spec(cllama_spec_engine *eng,
+                                    const char *prompt,
+                                    int32_t max_tokens,
+                                    int32_t telemetry_topk,
+                                    cllama_token_callback on_token,
+                                    cllama_trace_callback on_trace,
+                                    void *user_data) {
+    if (!cllama_is_spec_available()) {
+        set_error("cllama: spec library not loaded; call cllama_load_spec_library first");
+        return -1;
+    }
+    if (eng == NULL) {
+        set_error("cllama: null spec engine");
+        return -1;
+    }
+
+    // cllama_token_callback and tessera_rt_token_cb have identical
+    // signatures; same for cllama_trace_callback / tessera_rt_trace_cb
+    const int32_t n = g_spec.rt_generate(
+            (tessera_rt *)eng, prompt, max_tokens, telemetry_topk,
+            (tessera_rt_token_cb)on_token, (tessera_rt_trace_cb)on_trace,
+            user_data);
+    if (n < 0) {
+        const char *reason = g_spec.rt_last_error();
+        snprintf(g_error, sizeof(g_error), "cllama: spec generate failed: %s",
+                 (reason != NULL && reason[0] != '\0') ? reason : "unknown error");
+        return -1;
+    }
+
+    g_error[0] = '\0';
+    return n;
+}
+
+void cllama_engine_free_spec(cllama_spec_engine *eng) {
+    if (eng == NULL || !cllama_is_spec_available()) {
+        return;
+    }
+    g_spec.rt_free((tessera_rt *)eng);
+}
 
 // MARK: - Engine
 
@@ -329,6 +494,35 @@ void cllama_engine_free(cllama_engine *eng) {
     free(eng);
 }
 
+int32_t cllama_detokenize(const cllama_engine *eng,
+                          const int32_t *tokens,
+                          int32_t n_tokens,
+                          char *out_buf,
+                          int32_t out_len) {
+    if (!cllama_is_available()) {
+        set_error("cllama: library not loaded; call cllama_load_library first");
+        return -1;
+    }
+    if (eng == NULL || tokens == NULL || out_buf == NULL || n_tokens < 0 || out_len <= 0) {
+        set_error("cllama: invalid detokenize arguments");
+        return -1;
+    }
+
+    const int32_t n = g_llama.detokenize(
+            eng->vocab, tokens, n_tokens, out_buf, out_len,
+            /*remove_special=*/false, /*unparse_special=*/false);
+    if (n < 0) {
+        // negative = required buffer size; pass it through to the caller
+        return n;
+    }
+    if (n < out_len) {
+        out_buf[n] = '\0';
+    }
+
+    g_error[0] = '\0';
+    return n;
+}
+
 #else // CLLAMA_NO_HEADERS - stub used when built without the llama.cpp headers
 
 int cllama_load_library(const char *dylib_path_override) {
@@ -362,6 +556,55 @@ int32_t cllama_engine_generate(cllama_engine *eng,
 
 void cllama_engine_free(cllama_engine *eng) {
     (void)eng;
+}
+
+int cllama_load_spec_library(const char *dylib_path_override) {
+    (void)dylib_path_override;
+    set_error("cllama: built without llama.cpp headers (CLLAMA_NO_HEADERS)");
+    return 0;
+}
+
+int cllama_is_spec_available(void) {
+    return 0;
+}
+
+cllama_spec_engine *cllama_engine_load_spec(const char *trunk_path,
+                                            const char *draft_path,
+                                            uint32_t n_ctx,
+                                            int32_t n_threads,
+                                            int32_t n_gpu_layers,
+                                            int32_t draft_max) {
+    (void)trunk_path; (void)draft_path; (void)n_ctx; (void)n_threads;
+    (void)n_gpu_layers; (void)draft_max;
+    set_error("cllama: built without llama.cpp headers (CLLAMA_NO_HEADERS)");
+    return NULL;
+}
+
+int32_t cllama_engine_generate_spec(cllama_spec_engine *eng,
+                                    const char *prompt,
+                                    int32_t max_tokens,
+                                    int32_t telemetry_topk,
+                                    cllama_token_callback on_token,
+                                    cllama_trace_callback on_trace,
+                                    void *user_data) {
+    (void)eng; (void)prompt; (void)max_tokens; (void)telemetry_topk;
+    (void)on_token; (void)on_trace; (void)user_data;
+    set_error("cllama: built without llama.cpp headers (CLLAMA_NO_HEADERS)");
+    return -1;
+}
+
+void cllama_engine_free_spec(cllama_spec_engine *eng) {
+    (void)eng;
+}
+
+int32_t cllama_detokenize(const cllama_engine *eng,
+                          const int32_t *tokens,
+                          int32_t n_tokens,
+                          char *out_buf,
+                          int32_t out_len) {
+    (void)eng; (void)tokens; (void)n_tokens; (void)out_buf; (void)out_len;
+    set_error("cllama: built without llama.cpp headers (CLLAMA_NO_HEADERS)");
+    return -1;
 }
 
 #endif // CLLAMA_NO_HEADERS

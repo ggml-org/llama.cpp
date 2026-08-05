@@ -68,6 +68,64 @@ int32_t cllama_engine_generate(cllama_engine *eng,
 // Free the context, sampler, and model. NULL-safe.
 void cllama_engine_free(cllama_engine *eng);
 
+// Opaque speculative-decoding engine: trunk + drafter models, contexts, and
+// the spec handle, owned by libllama-common's tessera_rt runtime.
+typedef struct cllama_spec_engine cllama_spec_engine;
+
+// Per-step trace callback: `jsonl_line` is one NUL-terminated
+// llama.tessera.spec.v1 record (provenance "runtime", session sid attached).
+// The string is only valid for the duration of the call - copy it if you
+// need to keep it.
+typedef void (*cllama_trace_callback)(const char *jsonl_line, void *user_data);
+
+// Load libllama-common.dylib and resolve the tessera_rt_* entry points.
+// Candidates, in order: dylib_path_override, the TESSERA_LLAMA_COMMON_DYLIB
+// env var, a sibling of the already-resolved libllama.dylib (both ship from
+// the same build), then the default loader search.
+// Returns non-zero on success. Idempotent: a successful load is cached.
+// A failure here is not fatal for the app: the provider degrades to the
+// single-model path (see cllama_is_spec_available()).
+int cllama_load_spec_library(const char *dylib_path_override);
+
+// Non-zero once cllama_load_spec_library() has succeeded.
+int cllama_is_spec_available(void);
+
+// Load trunk + drafter and build the runtime spec engine.
+// draft_max: max drafted tokens per step.
+// Returns NULL on error (see cllama_last_error()). Requires the spec library.
+cllama_spec_engine *cllama_engine_load_spec(const char *trunk_path,
+                                            const char *draft_path,
+                                            uint32_t n_ctx,
+                                            int32_t n_threads,
+                                            int32_t n_gpu_layers,
+                                            int32_t draft_max);
+
+// Tokenize + decode `prompt` with speculative decoding, streaming accepted
+// pieces through on_token. telemetry_topk: 0 = no trace emission (cheap
+// path); > 0 = one spec.v1 record per spec step through on_trace (may be
+// NULL). Returns the number of tokens generated, or -1 on error.
+int32_t cllama_engine_generate_spec(cllama_spec_engine *eng,
+                                    const char *prompt,
+                                    int32_t max_tokens,
+                                    int32_t telemetry_topk,
+                                    cllama_token_callback on_token,
+                                    cllama_trace_callback on_trace,
+                                    void *user_data);
+
+// Free the spec engine. NULL-safe.
+void cllama_engine_free_spec(cllama_spec_engine *eng);
+
+// Detokenize `n_tokens` token ids into UTF-8 text using the engine's vocab
+// (stateless, no context needed - used by the trace curation stage to decode
+// accepted token sequences). Returns the number of bytes written excluding
+// the NUL on success; if out_buf is too small, returns the negative required
+// size; -1 on any other error.
+int32_t cllama_detokenize(const cllama_engine *eng,
+                          const int32_t *tokens,
+                          int32_t n_tokens,
+                          char *out_buf,
+                          int32_t out_len);
+
 #ifdef __cplusplus
 }
 #endif
