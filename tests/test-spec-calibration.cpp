@@ -257,28 +257,17 @@ static int test_with_model(common_params & params_in, const std::string & teleme
     // "need at least n_ctx + 4 tokens" check.
     common_params run_params = params;
     if (run_params.prompt.empty()) {
-        // Repeat a stable token sequence so the calibration has something
-        // to chew on without depending on a specific tokenization.
-        run_params.prompt = "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. "
-                            "the quick brown fox jumps over the lazy dog. ";
+        // Repeat a stable token sequence and grow it until it clears
+        // the n_ctx + 4 floor for whatever context the fixture model
+        // exposes (the tinyllamas fixture runs at n_ctx 512, which a
+        // fixed 20x repeat does not clear).
+        const std::string sentence = "the quick brown fox jumps over the lazy dog. ";
+        run_params.prompt = sentence;
+        const int32_t n_ctx_check = llama_n_ctx(ctx_v);
+        while ((int) common_tokenize(ctx_v, run_params.prompt, true,
+                                     run_params.parse_special).size() < n_ctx_check + 8) {
+            run_params.prompt += sentence;
+        }
     }
 
     // Set up the run options.  We use a small n_steps so the test
