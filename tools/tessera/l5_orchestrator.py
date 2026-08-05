@@ -992,6 +992,10 @@ class OrchestratorLoop:
         divergence_threshold: float | None = None,
         sidecar: Path | None = None,
         verbose: bool = False,
+        auto_converge: bool = True,
+        converge_tolerance_delta: float = 1e-6,
+        converge_tolerance_storage: float = 0.01,
+        converge_window: int = 2,
     ) -> None:
         self.scorer = scorer
         self.planner = planner
@@ -1002,6 +1006,29 @@ class OrchestratorLoop:
         )
         self.sidecar = Path(sidecar) if sidecar is not None else None
         self.verbose = bool(verbose)
+        # Auto-converge: when enabled (the new default), the
+        # orchestrator stops the iteration loop on three new
+        # signals in addition to the existing planner-level
+        # termination paths:
+        #   * delta-converged: the largest abs(expected_mse_delta)
+        #     across the most recent K plans is below
+        #     converge_tolerance_delta (default 1e-6, FP16 noise floor).
+        #     Catches the "hover near threshold" case the existing
+        #     all-tensors-below-threshold check misses.
+        #   * storage-stable: the relative change in storage bits
+        #     across the most recent K plans is below
+        #     converge_tolerance_storage (default 1%). Catches the
+        #     "still proposing tiny bit tweaks" case.
+        #   * the existing max-iterations safety cap (raised to 16
+        #     from 5 when --auto-converge is on).
+        # --no-auto-converge preserves byte-identical pre-task behavior:
+        # max_iterations=5 default, divergence_threshold default is
+        # whatever the caller passed, the new convergence checks are
+        # never evaluated.
+        self.auto_converge = bool(auto_converge)
+        self.converge_tolerance_delta = float(converge_tolerance_delta)
+        self.converge_tolerance_storage = float(converge_tolerance_storage)
+        self.converge_window = max(1, int(converge_window))
         self.history: list[RequantPlan] = []
 
     # -- public API --------------------------------------------------------
@@ -1058,6 +1085,52 @@ class OrchestratorLoop:
                 plan.termination_reason = "no-actions-possible"
                 self._log("  no actions possible; stopping")
                 break
+
+            # Auto-converge: when enabled, evaluate the sliding-window
+            # delta and storage-stability checks before running another
+            # iteration. These catch the "near-threshold hover" and
+            # "tiny bit tweaks" cases the existing planner-level
+            # termination does not. The K most recent plans (including
+            # the current one) must all satisfy the predicate.
+            if self.auto_converge:
+                window = self.converge_window
+                # The window covers the most recent K plans
+                # INCLUDING the current one. With K=2 the check
+                # looks at the current plan + 1 prior. We need at
+                # least K-1 prior plans in history before the
+                # check evaluates; on the first iteration the
+                # window is just the current plan, so the check
+                # is permissive (one plan can never satisfy a
+                # multi-plan convergence predicate).
+                prior = self.history[-(window - 1):] if window > 1 else []
+                recent = prior + [plan]
+                if len(recent) >= window:
+                    max_delta = max(
+                        (abs(a.expected_mse_delta) for p in recent for a in p.actions),
+                        default=0.0,
+                    )
+                    if max_delta < self.converge_tolerance_delta:
+                        plan.termination_reason = "delta-converged"
+                        self._log(
+                            f"  converged: delta-converged "
+                            f"(window={window}, max_delta={max_delta:.3e} < "
+                            f"{self.converge_tolerance_delta:.3e})"
+                        )
+                        break
+                    storage_rel = [
+                        abs(p.storage_after_bits - p.storage_before_bits)
+                        / max(p.storage_before_bits, 1)
+                        for p in recent
+                    ]
+                    max_storage_rel = max(storage_rel) if storage_rel else 0.0
+                    if max_storage_rel < self.converge_tolerance_storage:
+                        plan.termination_reason = "storage-stable"
+                        self._log(
+                            f"  converged: storage-stable "
+                            f"(window={window}, max_rel_change={max_storage_rel:.3e} < "
+                            f"{self.converge_tolerance_storage:.3e})"
+                        )
+                        break
 
             # Apply the plan.  The applier is responsible for writing the
             # updated policy (or calling per_tensor_calibrate.py).
@@ -1480,8 +1553,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=5,
-        help="Maximum number of requantization passes (default 5)",
+        default=None,
+        help=(
+            "Maximum number of requantization passes. Default 16 when "
+            "--auto-converge is on (the recommended mode); default 5 "
+            "when --no-auto-converge is set (legacy mode)."
+        ),
     )
     parser.add_argument(
         "--top-fraction",
@@ -1499,7 +1576,62 @@ def _build_parser() -> argparse.ArgumentParser:
         "--divergence-threshold",
         type=float,
         default=None,
-        help="MSE threshold below which a tensor is considered converged",
+        help=(
+            "MSE threshold below which a tensor is considered converged. "
+            "Default 1e-4 when --auto-converge is on (the recommended "
+            "mode); default None when --no-auto-converge is set "
+            "(legacy mode = no per-tensor MSE gate)."
+        ),
+    )
+    parser.add_argument(
+        "--auto-converge",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Drive the iteration loop until the per-tensor "
+            "expected_mse deltas and storage bits stabilize, with a "
+            "hard max-iterations cap. ON by default. The loop stops on "
+            "the first of: planner-level termination (existing), "
+            "delta-converged (max abs(expected_mse_delta) over the "
+            "last K iterations < --converge-tolerance), "
+            "storage-stable (max relative storage change over the last "
+            "K iterations < --converge-storage-tolerance), or "
+            "max-iterations reached. --no-auto-converge preserves the "
+            "legacy pre-task behavior (max-iterations=5, no new "
+            "convergence checks)."
+        ),
+    )
+    parser.add_argument(
+        "--converge-tolerance",
+        type=float,
+        default=1e-6,
+        help=(
+            "Max abs(expected_mse_delta) per tensor across the "
+            "convergence window below which the loop terminates with "
+            "delta-converged. Default 1e-6 (FP16 noise floor). "
+            "Only consulted when --auto-converge is on."
+        ),
+    )
+    parser.add_argument(
+        "--converge-storage-tolerance",
+        type=float,
+        default=0.01,
+        help=(
+            "Max relative change in storage bits across the "
+            "convergence window below which the loop terminates with "
+            "storage-stable. Default 0.01 (one percent). Only "
+            "consulted when --auto-converge is on."
+        ),
+    )
+    parser.add_argument(
+        "--converge-window",
+        type=int,
+        default=2,
+        help=(
+            "Number of consecutive iterations the delta and storage "
+            "checks must all satisfy before the loop terminates. "
+            "Default 2. Only consulted when --auto-converge is on."
+        ),
     )
     parser.add_argument(
         "--budget-bits",
@@ -1886,10 +2018,27 @@ def main(argv: list[str] | None = None) -> int:
         scorer=scorer,
         planner=planner,
         apply=apply_fn,
-        max_iterations=args.max_iterations,
-        divergence_threshold=args.divergence_threshold,
+        # Auto-converge resolves the new defaults: when --auto-converge
+        # is on (the default), max-iterations bumps to 16 (was 5) and
+        # divergence_threshold gets a meaningful 1e-4 default. When
+        # --no-auto-converge is set, both stay at their legacy values
+        # (5 and None) so the byte-equivalent pre-task behavior holds.
+        max_iterations=(
+            args.max_iterations
+            if args.max_iterations is not None
+            else (16 if args.auto_converge else 5)
+        ),
+        divergence_threshold=(
+            args.divergence_threshold
+            if args.divergence_threshold is not None
+            else (1e-4 if args.auto_converge else None)
+        ),
         sidecar=args.policy,
         verbose=args.verbose,
+        auto_converge=args.auto_converge,
+        converge_tolerance_delta=args.converge_tolerance,
+        converge_tolerance_storage=args.converge_storage_tolerance,
+        converge_window=args.converge_window,
     )
     plans = orchestrator.run(l4_report, imatrix)
 
@@ -1901,6 +2050,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # Print a short summary to stdout for shell pipelines.
     last = plans[-1]
+    # Print the termination reason on its own line for operator
+    # visibility (the JSON block at the end is the parseable
+    # contract; this is for humans reading the terminal).
+    term = last.termination_reason or "no-termination-recorded"
+    print(
+        f"termination: {term} "
+        f"(auto_converge={'on' if args.auto_converge else 'off'}, "
+        f"window={args.converge_window if args.auto_converge else 'n/a'})",
+        file=sys.stderr,
+    )
     summary = {
         "schema": SCHEMA,
         "iterations": len(plans),
@@ -1912,6 +2071,10 @@ def main(argv: list[str] | None = None) -> int:
         "retune_source": retune_source,
         "policy": str(args.policy) if args.policy else None,
         "history": str(args.history) if args.history else None,
+        "auto_converge": args.auto_converge,
+        "converge_tolerance_delta": args.converge_tolerance,
+        "converge_tolerance_storage": args.converge_storage_tolerance,
+        "converge_window": args.converge_window,
     }
     print(json.dumps(summary, indent=2))
     return 0
