@@ -708,9 +708,10 @@ ggml_tensor * clip_graph::build_attn(
         ggml_tensor * sinks) const {
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
-    ggml_build_forward_expand(gf, q_cur);
-    ggml_build_forward_expand(gf, k_cur);
-    ggml_build_forward_expand(gf, v_cur);
+    // the order is fixed without the compute flag, so an unselected branch stays out of the compute set
+    ggml_build_forward_order(gf, q_cur);
+    ggml_build_forward_order(gf, k_cur);
+    ggml_build_forward_order(gf, v_cur);
 
     ggml_tensor * q = ggml_permute(ctx0, q_cur, 0, 2, 1, 3);
     //cb(q, "q", il);
