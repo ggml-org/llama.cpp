@@ -1,52 +1,52 @@
 import Foundation
 
-/// Orchestrates the drafter training pipeline: accumulate traces -> prepare
-/// dataset -> run finetune -> export-lora -> gate on capability eval.
-/// All heavy steps shell out to the llama.cpp CLI tools; this service
-/// manages the lifecycle and records the outcome.
+/// Orchestrates the drafter training pipeline: accumulate traces -> shell
+/// out to the native tessera-train-lk driver -> record the outcome. The
+/// driver reads llama.tessera.spec.v1 traces, builds the dense-label LK
+/// dataset in-process, trains the drafter with GGML_OPT_LOSS_TYPE_LK, and
+/// saves the trained GGUF (docs/tessera-lk-training-design.md). One binary,
+/// one step - the old dataset-prep/finetune/export-lora split is gone.
 ///
 /// Plug-in points (clearly marked, not faked):
-/// - finetune and export-lora require a real model + GPU; the orchestrator
-///   shells out and reports the result honestly
-/// - LK loss training is not wired in v1; standard cross-entropy is used
+/// - the driver binary must be built and reachable at Config.trainBinary;
+///   a missing binary is reported with the expected path and the build
+///   command, never silently skipped
+/// - the standard finetune-style knobs (epochs, learning rate) stay at the
+///   driver's defaults for now
 /// - the capability-eval guard is owned by TesseraAdaptationScheduler; v1
-///   run() stops at export and leaves guardPassed/guardFailed reserved
+///   run() stops at the trained drafter and leaves guardPassed/guardFailed
+///   reserved
 public final class TesseraTrainingOrchestrator: @unchecked Sendable {
     public struct Config: Sendable {
         public var minTracesForTraining: Int
-        public var finetuneBinary: String
-        public var exportLoraBinary: String
-        public var datasetPrepBinary: String    // llama-quantize, tessera-dataset op
-        public var baseModelPath: String?       // nil = not configured, training disabled
-        public var loraOutPath: String?         // nil = default next to base model
-        public var adamIterations: Int
-        public var dryRun: Bool                 // record intent, don't run
+        public var trainBinary: String        // tessera-train-lk
+        public var baseModelPath: String?     // drafter GGUF to train; nil = training disabled
+        public var drafterOutPath: String?    // nil = default next to base model
+        public var maxExamples: Int           // dataset cap (--max-examples)
+        public var dryRun: Bool               // pass --dry-run: build dataset only
 
         public init(
             minTracesForTraining: Int = 1000,
-            finetuneBinary: String = "/usr/local/bin/llama-finetune",
-            exportLoraBinary: String = "/usr/local/bin/llama-export-lora",
-            datasetPrepBinary: String = "/usr/local/bin/llama-quantize",
+            trainBinary: String = "/usr/local/bin/tessera-train-lk",
             baseModelPath: String? = nil,
-            loraOutPath: String? = nil,
-            adamIterations: Int = 100,
+            drafterOutPath: String? = nil,
+            maxExamples: Int = 512,
             dryRun: Bool = true
         ) {
             self.minTracesForTraining = minTracesForTraining
-            self.finetuneBinary = finetuneBinary
-            self.exportLoraBinary = exportLoraBinary
-            self.datasetPrepBinary = datasetPrepBinary
+            self.trainBinary = trainBinary
             self.baseModelPath = baseModelPath
-            self.loraOutPath = loraOutPath
-            self.adamIterations = adamIterations
+            self.drafterOutPath = drafterOutPath
+            self.maxExamples = maxExamples
             self.dryRun = dryRun
         }
     }
 
     /// Outcome of one training cycle. The v1 terminal set returned by run()
     /// is {skippedInsufficientTraces, skippedNoModel, dryRun, trainingFailed,
-    /// trainingCompleted, exportCompleted}; datasetPrepared and the guard
-    /// cases are reserved for the wired capability-eval gate (plug-in point).
+    /// trainingCompleted}; datasetPrepared and exportCompleted are legacy
+    /// outcomes persisted by the old three-step pipeline, and the guard cases
+    /// are reserved for the wired capability-eval gate (plug-in point).
     public enum TrainingOutcome: String, Codable, Sendable {
         case skippedInsufficientTraces
         case skippedNoModel
@@ -63,29 +63,33 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
         public let timestamp: Date
         public let outcome: TrainingOutcome
         public let traceCount: Int
-        public let datasetPath: String?
-        public let loraPath: String?
-        public let mergedModelPath: String?
+        public let drafterPath: String?
+        public let stdout: String?
+        public let stderr: String?
         public let note: String
 
         public init(
             timestamp: Date = Date(),
             outcome: TrainingOutcome,
             traceCount: Int,
-            datasetPath: String? = nil,
-            loraPath: String? = nil,
-            mergedModelPath: String? = nil,
+            drafterPath: String? = nil,
+            stdout: String? = nil,
+            stderr: String? = nil,
             note: String
         ) {
             self.timestamp = timestamp
             self.outcome = outcome
             self.traceCount = traceCount
-            self.datasetPath = datasetPath
-            self.loraPath = loraPath
-            self.mergedModelPath = mergedModelPath
+            self.drafterPath = drafterPath
+            self.stdout = stdout
+            self.stderr = stderr
             self.note = note
         }
     }
+
+    /// Per-stream cap on captured driver output, so the persisted record
+    /// stays small. The tail is kept - final losses and errors land there.
+    static let outputCap = 4000
 
     public let traceStore: TesseraTraceStore
     private let config: Config
@@ -93,10 +97,14 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
     private let lock = NSLock()
     private static let recordFile = "training-record.json"
 
-    public init(config: Config = Config(), traceStore: TesseraTraceStore = TesseraTraceStore()) {
+    public init(
+        config: Config = Config(),
+        traceStore: TesseraTraceStore = TesseraTraceStore(),
+        storeDirectory: URL? = nil
+    ) {
         self.config = config
         self.traceStore = traceStore
-        self.store = TesseraLearningStore()
+        self.store = storeDirectory.map { TesseraLearningStore(directory: $0) } ?? TesseraLearningStore()
     }
 
     /// The most recent persisted record, if any.
@@ -106,9 +114,10 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
     }
 
     /// Run one training cycle. `overrideDryRun` wins when non-nil; otherwise
-    /// the configured dryRun applies. Every branch persists and returns an
-    /// honest record - nothing is fabricated.
-    public func run(overrideDryRun: Bool? = nil) async -> TrainingRecord {
+    /// the configured dryRun applies. `maxExamples` overrides the configured
+    /// dataset cap when non-nil. Every branch persists and returns an honest
+    /// record - nothing is fabricated.
+    public func run(overrideDryRun: Bool? = nil, maxExamples: Int? = nil) async -> TrainingRecord {
         let dryRun = overrideDryRun ?? config.dryRun
         let traceCount = traceStore.totalRecords()
 
@@ -121,7 +130,7 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
             ))
         }
 
-        // Gate 2: a base model to fine-tune.
+        // Gate 2: a drafter model to train.
         guard let base = config.baseModelPath, !base.isEmpty else {
             return finish(TrainingRecord(
                 outcome: .skippedNoModel,
@@ -130,20 +139,26 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
             ))
         }
 
-        // Dry run: record intent without shelling out to anything, so it
-        // stays meaningful even when the CLI tools are not installed.
-        if dryRun {
-            let lora = resolvedLoraPath(base: base)
+        // Gate 3: the native driver binary, checked up front so a missing
+        // build is an actionable message, not a bare process-launch error.
+        guard FileManager.default.isExecutableFile(atPath: config.trainBinary) else {
             return finish(TrainingRecord(
-                outcome: .dryRun,
+                outcome: .trainingFailed,
                 traceCount: traceCount,
-                loraPath: lora,
-                note: "would prepare a dataset from \(traceCount) trace(s), fine-tune a LoRA on \(base) "
-                    + "(adam-iter \(config.adamIterations)), and export the merged model; dry run, nothing executed"
+                note: Self.missingBinaryNote(path: config.trainBinary)
             ))
         }
 
-        // Stage all trace files into one JSONL the dataset op can read.
+        let cap = maxExamples ?? config.maxExamples
+        guard cap > 0 else {
+            return finish(TrainingRecord(
+                outcome: .trainingFailed,
+                traceCount: traceCount,
+                note: "max-examples must be > 0 (got \(cap))"
+            ))
+        }
+
+        // Stage all trace files into one JSONL the driver reads.
         let staged: String
         do {
             staged = try stageCombinedTraces()
@@ -151,59 +166,80 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
             return finish(TrainingRecord(
                 outcome: .trainingFailed,
                 traceCount: traceCount,
-                note: "could not stage traces for dataset prep: \(error.localizedDescription)"
+                note: "could not stage traces for tessera-train-lk: \(error.localizedDescription)"
             ))
         }
         defer { try? FileManager.default.removeItem(atPath: staged) }
 
-        let datasetPath = Self.datasetPath()
+        let out = resolvedDrafterPath(base: base)
+        let arguments = Self.trainArguments(
+            traces: staged, model: base, out: out, maxExamples: cap, dryRun: dryRun
+        )
 
-        // Step 3: dataset prep (llama-quantize tessera-dataset op).
-        let prep = await runStep(binary: config.datasetPrepBinary, arguments: [
-            "--tessera-dataset", staged,
-            "--tessera-dataset-out", datasetPath,
-        ])
-        if let failure = failureNote("dataset prep", prep) {
+        let result = await runStep(binary: config.trainBinary, arguments: arguments)
+        switch result {
+        case .failure(let error):
             return finish(TrainingRecord(
-                outcome: .trainingFailed, traceCount: traceCount, note: failure
+                outcome: .trainingFailed,
+                traceCount: traceCount,
+                note: "tessera-train-lk could not start (\(error.localizedDescription)); expected at \(config.trainBinary)"
+            ))
+        case .success(let res) where res.exitCode != 0:
+            return finish(TrainingRecord(
+                outcome: .trainingFailed,
+                traceCount: traceCount,
+                stdout: Self.capped(res.stdout),
+                stderr: Self.capped(res.stderr),
+                note: "tessera-train-lk exited \(res.exitCode)"
+            ))
+        case .success(let res) where dryRun:
+            return finish(TrainingRecord(
+                outcome: .dryRun,
+                traceCount: traceCount,
+                stdout: Self.capped(res.stdout),
+                stderr: Self.capped(res.stderr),
+                note: "dry run: tessera-train-lk built the dataset from \(traceCount) trace(s) against \(base); nothing trained or saved"
+            ))
+        case .success(let res):
+            return finish(TrainingRecord(
+                outcome: .trainingCompleted,
+                traceCount: traceCount,
+                drafterPath: out,
+                stdout: Self.capped(res.stdout),
+                stderr: Self.capped(res.stderr),
+                note: "drafter trained with tessera-train-lk (max-examples \(cap)) and saved to \(out)"
             ))
         }
+    }
 
-        // Step 5: fine-tune the LoRA adapter.
-        let lora = resolvedLoraPath(base: base)
-        let finetune = await runStep(binary: config.finetuneBinary, arguments: [
-            "--model-base", base,
-            "--train-data", datasetPath,
-            "--lora-out", lora,
-            "--adam-iter", String(config.adamIterations),
-        ])
-        if let failure = failureNote("finetune", finetune) {
-            return finish(TrainingRecord(
-                outcome: .trainingFailed, traceCount: traceCount, datasetPath: datasetPath, note: failure
-            ))
-        }
+    // MARK: - Driver contract
 
-        // Step 6: merge the adapter into an exportable model. A failed export
-        // still reports trainingCompleted - the LoRA exists, the merge did not.
-        let merged = mergedPath(base: base)
-        let export = await runStep(binary: config.exportLoraBinary, arguments: [
-            "-m", base,
-            "--lora", lora,
-            "-o", merged,
-        ])
-        if let failure = failureNote("export-lora", export) {
-            return finish(TrainingRecord(
-                outcome: .trainingCompleted, traceCount: traceCount,
-                datasetPath: datasetPath, loraPath: lora,
-                note: "LoRA trained; export did not complete: \(failure)"
-            ))
-        }
+    /// The exact tessera-train-lk invocation for one training cycle. Pure so
+    /// the flag wiring is testable without a binary; flags per the driver's
+    /// contract (tools/quantize/tessera/tessera-train-lk.cpp).
+    static func trainArguments(
+        traces: String,
+        model: String,
+        out: String,
+        maxExamples: Int,
+        dryRun: Bool
+    ) -> [String] {
+        var args = [
+            "-m", model,
+            "--traces", traces,
+            "-o", out,
+            "--max-examples", String(maxExamples),
+        ]
+        if dryRun { args.append("--dry-run") }
+        return args
+    }
 
-        return finish(TrainingRecord(
-            outcome: .exportCompleted, traceCount: traceCount,
-            datasetPath: datasetPath, loraPath: lora, mergedModelPath: merged,
-            note: "dataset prepared, LoRA trained (adam-iter \(config.adamIterations)), merged model exported"
-        ))
+    /// Actionable message for a missing driver binary: names the expected
+    /// path and the build command that produces it.
+    static func missingBinaryNote(path: String) -> String {
+        "tessera-train-lk not found at \(path); build it in the llama.cpp checkout "
+            + "(cmake -B build && cmake --build build --target tessera-train-lk) "
+            + "and install it at that path"
     }
 
     // MARK: - Shell-out
@@ -213,20 +249,6 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
             return .success(try await ProcessRunner().run(executable: binary, arguments: arguments))
         } catch {
             return .failure(error)
-        }
-    }
-
-    /// nil on success (exit 0); an honest note on a non-zero exit or a process
-    /// that could not start (missing binary).
-    private func failureNote(_ step: String, _ result: Result<ProcessResult, Error>) -> String? {
-        switch result {
-        case .failure(let error):
-            return "\(step) unavailable (\(error.localizedDescription))"
-        case .success(let res) where res.exitCode != 0:
-            let detail = res.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            return "\(step) exited \(res.exitCode)\(detail.isEmpty ? "" : ": " + String(detail.prefix(200)))"
-        case .success:
-            return nil
         }
     }
 
@@ -245,32 +267,19 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
         return path
     }
 
-    private static func datasetPath() -> String {
-        let dir = TesseraLearningStore.defaultDirectory().appendingPathComponent("training", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("train-\(stamp(Date())).txt").path
-    }
-
-    private func resolvedLoraPath(base: String) -> String {
-        if let configured = config.loraOutPath, !configured.isEmpty { return configured }
+    private func resolvedDrafterPath(base: String) -> String {
+        if let configured = config.drafterOutPath, !configured.isEmpty { return configured }
         let url = URL(fileURLWithPath: base)
         let stem = url.deletingPathExtension().lastPathComponent
         return url.deletingLastPathComponent()
-            .appendingPathComponent("\(stem)-tessera-lora.gguf").path
+            .appendingPathComponent("\(stem)-tessera-trained.gguf").path
     }
 
-    private func mergedPath(base: String) -> String {
-        let url = URL(fileURLWithPath: base)
-        let stem = url.deletingPathExtension().lastPathComponent
-        return url.deletingLastPathComponent()
-            .appendingPathComponent("\(stem)-tessera-merged.gguf").path
-    }
-
-    private static func stamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter.string(from: date)
+    /// Keep the tail of a driver stream within outputCap.
+    private static func capped(_ text: String) -> String? {
+        guard !text.isEmpty else { return nil }
+        guard text.count > outputCap else { return text }
+        return String(text.suffix(outputCap))
     }
 
     // MARK: - Persistence
