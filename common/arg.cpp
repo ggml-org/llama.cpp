@@ -2705,7 +2705,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_EXPERT_HEAT_DECAY"));
     add_opt(common_arg(
         {"--expert-heat-log-period"}, "N",
-        "expert heatmap log interval in updates (default: 100, 0 = off)",
+        "expert heatmap log interval in updates (default: 0, 0 = off)",
         [](common_params & params, int value) {
             params.expert_heat_log_period = value;
         }
@@ -2732,7 +2732,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_EXPERT_HOT_S"));
     add_opt(common_arg(
-        {"-ecf", "--expert-cache-force"},
+        {"--ecf", "--expert-cache-force"},
         {},
         "enable the expert cache (hot store) on non-CUDA backends (testing/emergency only)",
         [](common_params & params, bool value) {

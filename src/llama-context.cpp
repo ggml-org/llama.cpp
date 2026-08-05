@@ -499,7 +499,7 @@ llama_context::llama_context(
         }
         // launch hint: cache did not engage, usually a non-CUDA (or no) accelerator
         if (!cache_enabled && !force) {
-            LLAMA_LOG_WARN("%s: expert cache is OFF: %d slots requested but no CUDA backend in use (use -ecf to force it on)\n",
+            LLAMA_LOG_WARN("%s: expert cache is OFF: %d slots requested but no CUDA backend in use (use --ecf to force it on)\n",
                 __func__, params.expert_hot_s);
         }
         expert_hotstore->log();
