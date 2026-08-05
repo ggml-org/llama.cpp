@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Security
 
 /// Keychain-backed storage for the encrypted-volume password.
@@ -14,6 +15,15 @@ import Security
 /// The account name is namespaced under `TesseraSecretStore.service`
 /// (`com.tessera.studio`) so the wipe and reset paths can enumerate
 /// everything the app owns if they ever need to.
+///
+/// **Receipt signing key** (per
+/// `docs/tessera-productivity-foundations-design.md` §5): the
+/// productivity surface uses the volume password bytes as the
+/// ed25519 seed for receipt signing. Same Keychain entry, same
+/// crypto-shred event (`PleadTheFifthExecutor` step 3 destroys it).
+/// This is the constitutional property that makes signed receipts
+/// "unverifiable after a wipe" -- the per-device key that signed
+/// them is gone, so verification must fail.
 public enum TesseraKeychainVolume {
     /// Account name for the volume password. The Keychain service
     /// namespace is shared with ``TesseraSecretStore`` (same bundle,
@@ -100,5 +110,48 @@ public enum TesseraKeychainVolume {
         }
         guard status == errSecSuccess else { return nil }
         return bytes.base64EncodedString()
+    }
+
+    // MARK: - Receipt signing key (per productivity foundations design)
+
+    /// Derive the receipt-signing ed25519 private key from the stored
+    /// volume password. The volume password is 32 random bytes
+    /// (`SecRandomCopyBytes`) which is exactly the ed25519 seed size
+    /// (32 bytes). We base64-decode the stored password to recover
+    /// the raw bytes, then hand them to ``Curve25519/Signing/PrivateKey``
+    /// via `rawRepresentation`.
+    ///
+    /// **Constitutional property:** the volume password lives in
+    /// macOS Keychain under the same entry that
+    /// ``PleadTheFifthExecutor`` step 3 (`destroy_volume_password`)
+    /// destroys. Once that entry is gone, the next call to this
+    /// function returns `nil` and prior signed receipts are
+    /// unverifiable -- by design. There is no separate signing-key
+    /// entry to forget to destroy.
+    ///
+    /// Returns nil when:
+    /// - the volume password has not been generated yet (first run)
+    /// - the Keychain entry is unreadable (locked keychain, missing
+    ///   entitlements, ...)
+    /// - the stored value is not valid base64
+    /// - the decoded byte count is not 32 (corrupted or wrong-format
+    ///   entry)
+    /// - ``Curve25519/Signing/PrivateKey`` rejects the seed (should
+    ///   not happen for any 32-byte input; defensive)
+    public static func receiptSigningKey() -> Curve25519.Signing.PrivateKey? {
+        guard let password = storedVolumePassword(),
+              let rawBytes = Data(base64Encoded: password),
+              rawBytes.count == 32 else {
+            return nil
+        }
+        return try? Curve25519.Signing.PrivateKey(rawRepresentation: rawBytes)
+    }
+
+    /// Public counterpart of ``receiptSigningKey()``. The receipt
+    /// store embeds the public key alongside the chain so a future
+    /// verifier can check a receipt without the device's signing
+    /// key. Returns nil when the signing key is unavailable.
+    public static func receiptVerificationKey() -> Curve25519.Signing.PublicKey? {
+        receiptSigningKey()?.publicKey
     }
 }

@@ -646,6 +646,181 @@ public actor TesseraDataStore {
         return out
     }
 
+    // MARK: - Productivity surface: receipt chain + chat queue
+
+    /// Append a receipt to the document's chain. The receipt is
+    /// first written to `graph_receipts` (the constitutional
+    /// receipt log) and then linked into the per-document
+    /// `receipt_chain` table at the next monotonic `chain_index`.
+    /// The two writes are NOT in a single transaction (postgres-nio
+    /// does not expose explicit transactions on the simple-query
+    /// path); a crash between them leaves the receipt in
+    /// `graph_receipts` but not in `receipt_chain`. The
+    /// `rebuildReceiptChain(documentID:)` helper fixes this on
+    /// document open.
+    public func appendReceiptToChain(
+        documentID: UUID,
+        receiptType: String,
+        payload: [String: JSONValue],
+        signature: Data? = nil
+    ) async throws -> GraphReceipt {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let payloadJSON = try Self.encodePayload(payload)
+
+        // 1. Insert into graph_receipts. We do this first to get
+        //    the server-side defaults (id, witnessed_at) populated
+        //    before we link the row into the chain.
+        let insertReceipt: PostgresQuery = try """
+            INSERT INTO graph_receipts (entity_id, receipt_type, payload, signature)
+            VALUES (\(documentID), \(receiptType), \(payloadJSON)::jsonb, \(signature))
+            RETURNING id, entity_id, receipt_type, payload::text, signature, witnessed_at
+            """
+        var inserted: GraphReceipt?
+        let receiptRows = try await client.query(insertReceipt, logger: logger)
+        for try await r in receiptRows {
+            inserted = try decodeReceipt(r)
+        }
+        guard let inserted else {
+            throw TesseraDataStoreError.queryFailed(reason: "appendReceiptToChain: insert returned no rows")
+        }
+
+        // 2. Append to receipt_chain. COALESCE on the next index
+        //    gives us atomic monotonic ordering at the per-document
+        //    granularity (the chain_index is per-document, not
+        //    global, so two documents in parallel don't collide).
+        let nextIndex: Int64 = try await nextChainIndex(documentID: documentID)
+        let insertChain: PostgresQuery = """
+            INSERT INTO receipt_chain (document_id, chain_index, receipt_id)
+            VALUES (\(documentID), \(nextIndex), \(inserted.id))
+            """
+        do {
+            _ = try await client.query(insertChain, logger: logger)
+        } catch {
+            // Roll back the receipt insert (best-effort). If this
+            // also fails, the receipt is orphaned in graph_receipts
+            // but not in the chain; rebuildReceiptChain repairs it.
+            _ = try? await client.query(
+                PostgresQuery(stringLiteral: "DELETE FROM graph_receipts WHERE id = \(inserted.id)"),
+                logger: logger
+            )
+            throw TesseraDataStoreError.queryFailed(
+                reason: "appendReceiptToChain: chain insert failed: \(String(describing: error))"
+            )
+        }
+        return inserted
+    }
+
+    /// The next monotonic chain index for a document. Returns 0
+    /// when the document has no chain entries yet. The query is
+    /// `MAX(chain_index) + 1` on the document's chain rows,
+    /// COALESCE'd to 0 for the empty case.
+    private func nextChainIndex(documentID: UUID) async throws -> Int64 {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let query: PostgresQuery = """
+            SELECT COALESCE(MAX(chain_index), -1) + 1
+              FROM receipt_chain
+             WHERE document_id = \(documentID)
+            """
+        let rows = try await client.query(query, logger: logger)
+        for try await row in rows {
+            let ra = row.makeRandomAccess()
+            return try ra[0].decode(Int64.self)
+        }
+        return 0
+    }
+
+    /// The chain for one document, oldest first by `chain_index`.
+    /// Joins `receipt_chain` to `graph_receipts` so the caller
+    /// gets the full constitutional receipt row.
+    public func receiptChain(
+        documentID: UUID,
+        limit: Int? = nil
+    ) async throws -> [(chainIndex: Int64, receipt: GraphReceipt)] {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let limitClause: String = limit.map { " LIMIT \(Int32($0))" } ?? ""
+        let query: PostgresQuery = """
+            SELECT rc.chain_index,
+                   gr.id, gr.entity_id, gr.receipt_type, gr.payload::text, gr.signature, gr.witnessed_at
+              FROM receipt_chain rc
+              JOIN graph_receipts gr ON gr.id = rc.receipt_id
+             WHERE rc.document_id = \(documentID)
+             ORDER BY rc.chain_index ASC\(limitClause)
+            """
+        let rows = try await client.query(query, logger: logger)
+        var out: [(Int64, GraphReceipt)] = []
+        for try await row in rows {
+            let ra = row.makeRandomAccess()
+            let chainIndex: Int64 = try ra[0].decode(Int64.self)
+            // The remaining columns are a GraphReceipt; we rebuild
+            // by re-running decodeReceipt on a synthetic row is
+            // awkward, so we just decode the cells directly.
+            let id: UUID = try ra[1].decode(UUID.self)
+            let entityID: UUID = try ra[2].decode(UUID.self)
+            let receiptType: String = try ra[3].decode(String.self)
+            let payloadText: String = try ra[4].decode(String.self)
+            let signature: Data? = try ra[5].decode(Data?.self)
+            let witnessedAt: Date = try ra[6].decode(Date.self)
+            let payload: [String: JSONValue] = Self.decodePayloadText(payloadText) ?? [:]
+            let receipt = GraphReceipt(
+                id: id,
+                entityID: entityID,
+                receiptType: receiptType,
+                payload: payload,
+                signature: signature,
+                witnessedAt: witnessedAt
+            )
+            out.append((chainIndex, receipt))
+        }
+        return out
+    }
+
+    /// The latest `chain_index` for a document. Returns nil if
+    /// the document has no chain entries.
+    public func latestChainIndex(documentID: UUID) async throws -> Int64? {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let query: PostgresQuery = """
+            SELECT MAX(chain_index) FROM receipt_chain WHERE document_id = \(documentID)
+            """
+        let rows = try await client.query(query, logger: logger)
+        for try await row in rows {
+            let ra = row.makeRandomAccess()
+            let value: Int64? = try ra[0].decode(Int64?.self)
+            return value
+        }
+        return nil
+    }
+
+    /// Load the per-document chat queue. Returns an empty queue
+    /// when no row exists.
+    public func loadChatQueue(documentID: UUID) async throws -> String {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let query: PostgresQuery = """
+            SELECT items::text
+              FROM chat_queues
+             WHERE document_id = \(documentID)
+            """
+        let rows = try await client.query(query, logger: logger)
+        for try await row in rows {
+            let ra = row.makeRandomAccess()
+            return try ra[0].decode(String.self)
+        }
+        return "[]"
+    }
+
+    /// Upsert the per-document chat queue. The `itemsJSON` is
+    /// the JSON-serialized `ChatQueue` (or just its `items` array).
+    public func saveChatQueue(documentID: UUID, itemsJSON: String) async throws {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let query: PostgresQuery = """
+            INSERT INTO chat_queues (document_id, items, updated_at)
+            VALUES (\(documentID), \(itemsJSON)::jsonb, now())
+            ON CONFLICT (document_id) DO UPDATE
+                SET items = EXCLUDED.items,
+                    updated_at = now()
+            """
+        _ = try await client.query(query, logger: logger)
+    }
+
     // MARK: - Hybrid search
 
     /// RRF over graph + vector + keyword. The query embedding is optional

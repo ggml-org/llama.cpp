@@ -215,6 +215,59 @@ public actor TesseraDataLayer {
         try await dataStore.receipts(forEntity: entityID)
     }
 
+    // MARK: - Productivity surface pass-through: receipt chain + chat queue
+
+    /// Append a receipt to the document's chain. The receipt is
+    /// written to `graph_receipts` AND linked into the per-document
+    /// `receipt_chain` table at the next monotonic index. The
+    /// payload is a `[String: JSONValue]` map; the chain table
+    /// stores the linkage, the receipt row stores the payload.
+    @discardableResult
+    public func appendReceiptToChain(
+        documentID: UUID,
+        receiptType: String,
+        payload: [String: JSONValue],
+        signature: Data? = nil
+    ) async throws -> GraphReceipt {
+        try await dataStore.appendReceiptToChain(
+            documentID: documentID,
+            receiptType: receiptType,
+            payload: payload,
+            signature: signature
+        )
+    }
+
+    /// The chain for one document, oldest first by `chain_index`.
+    /// Each element pairs the monotonic position with the
+    /// underlying `GraphReceipt` row.
+    public func receiptChain(
+        documentID: UUID,
+        limit: Int? = nil
+    ) async throws -> [(chainIndex: Int64, receipt: GraphReceipt)] {
+        try await dataStore.receiptChain(documentID: documentID, limit: limit)
+    }
+
+    /// The latest chain index for a document (nil if the document
+    /// has no receipts yet). Used by the productivity surface to
+    /// compute the `priorReceiptID` for the next append.
+    public func latestChainIndex(documentID: UUID) async throws -> Int64? {
+        try await dataStore.latestChainIndex(documentID: documentID)
+    }
+
+    /// Load the per-document chat queue as a JSON string (the
+    /// serialized form of a `ChatQueue`). Returns `"[]"` when no
+    /// queue exists yet. The caller decodes the string into a
+    /// `ChatQueue`.
+    public func loadChatQueue(documentID: UUID) async throws -> String {
+        try await dataStore.loadChatQueue(documentID: documentID)
+    }
+
+    /// Upsert the per-document chat queue. The `itemsJSON` is the
+    /// JSON-serialized form of a `ChatQueue.items` array.
+    public func saveChatQueue(documentID: UUID, itemsJSON: String) async throws {
+        try await dataStore.saveChatQueue(documentID: documentID, itemsJSON: itemsJSON)
+    }
+
     /// RRF over graph + vector + keyword.
     public func hybridSearch(
         anchor: UUID,
