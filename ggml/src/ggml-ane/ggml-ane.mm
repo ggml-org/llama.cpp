@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
+#include "ggml-quants-v2-dispatch.h"
 
 #import <CoreML/CoreML.h>
 #import <Foundation/Foundation.h>
@@ -1305,35 +1306,55 @@ static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> 
 //                         GGML_TESSERA_T640_V2_MIN_K (1024);
 //                         the C reference in ggml-quants.c is
 //                         the documented fallback. The v2
-//                         path batches the per-row meta
-//                         decode + per-row outlier addback
-//                         into single tile-wide calls (one
-//                         decode_per_row_meta_v2 for the
-//                         whole tile's meta, one
-//                         apply_outlier_addback_v2 for the
-//                         whole buffer of outliers) to
-//                         amortise the vDSP / NEON setup
-//                         cost. v2 speedup on A15-class
-//                         hardware is 1.3-1.6x for the
-//                         dequant (the radix-243 trit decode
-//                         is the bottleneck); the v2 quant
-//                         and v2 act_scale are faster (3-4x
-//                         and 1.9x respectively). The v2
-//                         batched meta decode and outlier
-//                         addback are competitive with the
-//                         C scalar refs at the dispatch's
-//                         typical shape (256x4096 with 5%
-//                         sparsity) and win at single-row
-//                         shapes (1.5-2x for outlier, 1.01x
-//                         for meta at the 1024-row sweep
-//                         point). For the meta decode, the
-//                         v2 stays as the regression-suite
-//                         target; the C ref is the dispatch
-//                         default for the meta (the vDSP
-//                         setup cost is ~26us of fixed
-//                         overhead the C ref doesn't pay).
-//                         See tests/bench-tessera-quants-v2.cpp
-//                         for the per-shape numbers.
+//                         dequant is 1.3-1.6x faster than the
+//                         C ref at in_dim >= 1024 on M1 Pro
+//                         (the radix-243 trit decode is the
+//                         bottleneck); the v2 quant and
+//                         act_scale are 3-4x and 1.9x faster
+//                         respectively. These three keep
+//                         static dispatch rules
+//                         (v2 above the cutoff, C ref
+//                         below).
+//
+//                         Dynamic dispatch (v2 cost model):
+//                         the two batched v2 functions
+//                         (decode_per_row_meta_v2,
+//                         apply_outlier_addback_v2) are
+//                         decided per call by the helpers in
+//                         ggml/src/ggml-quants-v2-dispatch.h:
+//
+//                           apply_outlier_addback_v2:
+//                             v2 iff n_total in (0, 1024].
+//                             The v2's NEON bulk fp16->fp32
+//                             path is active for n_total
+//                             <= 1024 (the 4 KB stack
+//                             scratch cap); above that the
+//                             v2 falls back to a scalar
+//                             convert + scatter that is
+//                             identical to the C ref. The
+//                             dispatch calls the C ref
+//                             directly above the threshold
+//                             to avoid a wasted function
+//                             call + the n_total > 1024
+//                             check inside v2.
+//
+//                           decode_per_row_meta_v2:
+//                             always C ref. v2 is 0.41-0.65x
+//                             of C across all measured
+//                             shapes on M1 Pro (the vDSP
+//                             bulk calls don't amortise for
+//                             the typical Phase 0 shapes).
+//
+//                         The v2 dequant takes pre-decoded
+//                         meta as separate inputs; the C ref
+//                         meta produces those pre-decoded
+//                         arrays via ts_decode_per_row_meta_ref.
+//                         The C ref outlier scatters into the
+//                         v2 dequant's output buffer via
+//                         ts_apply_outlier_addback_ref. See
+//                         tests/bench-tessera-quants-v2.cpp
+//                         for the per-shape numbers and the
+//                         cost model constants.
 //   MUL_MAT (BF16/fp16)-> ANE if the bound bundle's function matches
 //                         the op's shape; otherwise fall through
 //                         to Accelerate BLAS (the W0 spike's path
@@ -2095,29 +2116,60 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             const bool use_v2 = ggml_tessera_t640_v2_enabled() &&
                                 in_dim >= GGML_TESSERA_T640_V2_MIN_K;
             if (use_v2) {
-                // v2 path: bulk meta decode + per-row dequant with
-                // pre-decoded meta + bulk outlier addback.
-                // weight_f32 is the contiguous (out_dim * in_dim)
-                // fp32 buffer; per-row dequant writes into
-                // weight_f32[r * in_dim : (r+1) * in_dim]; the
-                // batched outlier addback scatters into the same
-                // buffer; the per-row fp16 cast reads from it.
+                // Dynamic dispatch (v2 cost model):
+                //   - dequant: v2 per-row (with pre-decoded meta).
+                //     The v2 dequant is always faster than the
+                //     C ref at in_dim >= 1024 (1.30-1.63x on M1
+                //     Pro). Static rule; no per-call decision.
+                //   - meta decode: v2 batched or C ref batched.
+                //     v2 is 0.41-0.65x of C across all shapes
+                //     (the vDSP bulk calls don't amortise for
+                //     the typical Phase 0 shapes). The cost
+                //     model always picks the C ref.
+                //   - outlier addback: v2 batched or C ref
+                //     batched. v2 wins iff n_total in
+                //     (0, 1024] (the v2's internal NEON path
+                //     scratch cap; above it the v2 falls back
+                //     to scalar which is the same as the C
+                //     ref, so calling v2 wastes a function
+                //     call).
+                // The v2 dequant takes pre-decoded meta as
+                // separate inputs (the v2's API); the C ref
+                // meta produces those pre-decoded arrays. The
+                // C ref outlier scatters into the v2 dequant's
+                // output buffer. The per-row fp16 cast is
+                // unchanged.
                 std::vector<float> weight_f32((size_t) out_dim * in_dim);
                 std::vector<float> page_max_f32((size_t) out_dim * pages_per_row);
                 std::vector<float> lane_scale_f32(
                     (size_t) out_dim * pages_per_row * TILE640_LANES_PER_PAGE);
-                // 1. Bulk meta decode: one vDSP call for the
-                // whole tile's lane_scales + one NEON sweep
-                // for the whole tile's page_scales.
-                decode_per_row_meta_v2(page_scales, lane_scales,
-                                       (int64_t) out_dim, pages_per_row,
-                                       page_max_f32.data(),
-                                       lane_scale_f32.data());
-                // 2. Per-row dequant with pre-decoded meta.
-                // The v2 dequant takes the packed words directly
-                // (the flat [packed | page_scales | lane_scales]
-                // buffer is no longer needed for the dequant;
-                // we extract the per-row packed words view).
+                const int64_t n_total_outliers =
+                    (int64_t) outlier_row_offsets[out_dim] -
+                    (int64_t) outlier_row_offsets[0];
+                const bool use_v2_meta    = ts_v2_dispatch_should_use_v2_meta(
+                    (int64_t) out_dim, pages_per_row);
+                const bool use_v2_outlier = ts_v2_dispatch_should_use_v2_outlier(
+                    n_total_outliers);
+                // 1. Meta decode: v2 batched or C ref batched.
+                // The C ref is a scalar loop over the whole
+                // tile's meta (fp16->fp32 for page_scales,
+                // int8->fp32/127 for lane_scales).
+                if (use_v2_meta) {
+                    decode_per_row_meta_v2(page_scales, lane_scales,
+                                           (int64_t) out_dim, pages_per_row,
+                                           page_max_f32.data(),
+                                           lane_scale_f32.data());
+                } else {
+                    ts_decode_per_row_meta_ref(
+                        (const uint16_t *) page_scales, lane_scales,
+                        (int64_t) out_dim, pages_per_row,
+                        page_max_f32.data(),
+                        lane_scale_f32.data());
+                }
+                // 2. Per-row v2 dequant with pre-decoded meta
+                // (the v2 dequant takes the packed words + the
+                // per-row page_max + lane_scale views from the
+                // pre-decoded arrays).
                 for (int32_t r = 0; r < out_dim; ++r) {
                     const uint32_t * row_packed = (const uint32_t *) &packed[
                         r * pages_per_row * words_per_page];
@@ -2130,14 +2182,24 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                                                    row_lane_scale,
                                                    in_dim, row_y);
                 }
-                // 3. Bulk outlier addback: one NEON bulk convert
-                // for all n_total outliers + one scalar scatter
-                // pass.
-                apply_outlier_addback_v2(weight_f32.data(), in_dim,
-                                         (int64_t) out_dim,
-                                         outlier_row_offsets,
-                                         outlier_cols,
-                                         outlier_vals);
+                // 3. Outlier addback: v2 batched or C ref
+                // batched. The C ref is a scalar convert +
+                // scatter over the whole buffer; the v2 does
+                // a NEON bulk fp16->fp32 + scalar scatter when
+                // n_total <= 1024.
+                if (use_v2_outlier) {
+                    apply_outlier_addback_v2(weight_f32.data(), in_dim,
+                                             (int64_t) out_dim,
+                                             outlier_row_offsets,
+                                             outlier_cols,
+                                             outlier_vals);
+                } else {
+                    ts_apply_outlier_addback_ref(weight_f32.data(), in_dim,
+                                                 (int64_t) out_dim,
+                                                 outlier_row_offsets,
+                                                 outlier_cols,
+                                                 (const uint16_t *) outlier_vals);
+                }
                 // 4. Per-row fp16 cast (the bundle's pinned slot
                 // dtype is fp16; the dequant is fp32).
                 for (int32_t r = 0; r < out_dim; ++r) {
