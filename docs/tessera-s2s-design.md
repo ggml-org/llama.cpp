@@ -3,8 +3,9 @@
 Status: design. Architect decisions landed 2026-08-05: Talker quant via
 Tessera pipelines with chained end-to-end calibration (3.4), CustomVoice
 presets with voice cloning on indefinite hold (3.1, 7), trace code storage
-default-on with no opt-out (4). Route B consent lane under deep research:
-Talker-as-anonymizer for voice-bearing pairs (section 8).
+default-on with no opt-out (4). Route B consent lane researched 2026-08-05:
+Talker resynthesis is a voice-release lane, viable under eight binding
+conditions (section 8).
 Date: 2026-08-05
 
 ## 0. Driving decisions
@@ -221,10 +222,13 @@ Talker chain instrumented together, so:
   Codec codes at 12.5 Hz are highly predictable, so drafter acceptance on the
   speech segment should be strong.
 
-Open decision flagged, not resolved here: Route B training consumes
-voice-bearing pairs. That data cannot flow through the anonymous egress lane;
-if training happens on architect infrastructure, contributed pairs need a
-separate, explicit opt-in consent lane distinct from the T&Cs collection.
+Open decision RESOLVED by the section 8 research verdict (2026-08-05): the
+acoustic channel of voice-bearing pairs is severed by construction under the
+lane conditions (preset-voice resynthesis, original audio deleted), and the
+remaining gate is the content layer. With content transformation plus the
+versioned adversarial battery, pairs flow under the T&Cs disclosure with no
+per-pair opt-in lane; records that fail the battery stay Tier B local-only.
+See section 8.5.
 
 ### 5.1 Readiness gate (versioned tuning knobs, shipped with gate v1)
 
@@ -256,25 +260,165 @@ Voice cloning: on indefinite hold (architect 2026-08-05). No wave assigned;
 resurrecting it requires the Tokenizer-12Hz encoder graph (section 3.1) and
 revisits the consent lane from scratch.
 
-## 8. Open questions for the architect
+## 8. Route B consent lane: research verdict (2026-08-05)
 
-Resolved 2026-08-05:
+Question (architect research direction): can the Talker itself anonymize
+voice-bearing pairs - transcribe user speech, re-synthesize with a preset
+synthetic voice, keep (text, synthetic codes), discard the original voice -
+so pairs can flow into Route B training without a separate opt-in lane?
 
-- Talker quantization: Tessera pipelines, ternary-dequant-on-arrival
-  multimodal target, chained end-to-end calibration (section 3.4).
-- Voice mode: CustomVoice presets; voice cloning on indefinite hold.
-- Code storage: default-on, no opt-out (mandatory collection doctrine);
-  codes stay Tier B local-only.
+Verdict: the lane is viable, under a precise name. The Talker releases the
+voice from the pair; it does not anonymize the pair. The acoustic channel is
+severed by construction; the linguistic channel is untouched, and content is
+a measured, exploitable identifier. The lane produces anonymous data only if
+the content layer is separately transformed and evaluated before anything is
+retained, trained on, or shipped. Name it a voice-release lane
+(biometric-modality-removal lane), not an anonymization lane. Full evidence
+record (41 sources, primary legal texts verified):
+docs/research/tessera-route-b-consent-lane-research.md.
 
-Under research (architect direction 2026-08-05):
+Resolved alongside (architect decisions, 2026-08-05, unchanged): Talker
+quantization via Tessera pipelines with chained end-to-end calibration
+(section 3.4); CustomVoice presets with voice cloning on indefinite hold;
+code storage default-on with no opt-out (mandatory collection doctrine),
+codes Tier B local-only.
 
-- Route B consent lane via Talker-as-anonymizer: use the Talker itself to
-  anonymize voice-bearing pairs - transcribe user speech, re-synthesize with
-  a preset synthetic voice, keep (text, synthetic codes), discard the
-  original voice. Question: does re-synthesis through the text bottleneck
-  meet the irreversibility standard (Recital 26 / WP216) for voice data, so
-  anonymized pairs can flow without a separate opt-in lane? Deep research
-  pending; result lands here before W4 ships capture defaults.
+### 8.1 Acoustic channel: severed by construction
+
+- Text-bottleneck resynthesis is the effective class of voice anonymization.
+  VoicePrivacy 2024 (semi-informed attacker whose speaker-verification model
+  is retrained on the anonymized corpus itself): cascaded ASR->TTS systems
+  reach near-chance privacy scores (EER ~48%, where 50% is chance); voice
+  conversion systems that condition directly on the user's audio leak
+  speaker identity (EER 8-20%).
+- The Talker variant is strictly stronger than any evaluated cascade: code
+  generation is conditioned ONLY on text and a fixed preset voice embedding.
+  No F0 path, no duration path, no emotion path from the user's audio into
+  the retained codes, because there is no path at all.
+- Binding constraint: presets-only is load-bearing. If reference-audio
+  conditioning returns (cloning, prosody transfer), the lane reopens exactly
+  the channel the voice-conversion literature shows to be leaky. Route B
+  data generation must forbid the reference-audio path as a hard constraint,
+  not a product default. Consistent with the cloning hold (3.1, 7).
+
+### 8.2 Content channel: untouched, and it identifies
+
+- Author-attribution models re-identify speakers from transcripts at
+  macro-F1 0.87-0.90, from as few as five transcripts in open-set
+  conditions; stylometry survives punctuation stripping; ASR errors do not
+  protect (attribution on errorful output performs as well as on clean
+  transcripts).
+- LLM-era attacks: zero-shot named-speaker identification from dialogue
+  (52% -> 98% recall with GPT-4 on a named corpus); anonymous forum users
+  re-identified from writing alone at 25-67% recall and 70-90% precision;
+  agentic inference-driven linkage reconstructs identities from individually
+  non-identifying cues (79.2% vs 56.0% for classical matching).
+- The constructive results define the mitigation: named-entity masking alone
+  fails; LLM paraphrase that alters STYLE, not just entities, cuts attacker
+  performance by more than 50%; contextual rewriting is the recommended
+  defense for ASR-TTS pipelines. Because the Talker synthesizes from the
+  transformed text, the (text, codes) pair stays training-aligned AFTER the
+  transformation: the anonymizer and the training-data generator are the
+  same pipeline stage.
+
+### 8.3 Legal frame (EDPB Guidelines 02/2026 on Anonymisation)
+
+- Governing test: No Record Isolation, No Linkage, No Inference; all three
+  passed means the data can safely be considered anonymous. Relative
+  approach (CJEU EDPS v SRB): the same dataset can be personal for the
+  vendor and anonymous for a keyless public recipient.
+- Preset-voice codes with the original audio destroyed pass all three by
+  construction. Raw transcripts fail all three. Transformed text is where
+  the lane earns anonymity or documents residual risk - the further-analysis
+  posture the guidelines prescribe.
+- Anonymization is itself processing of personal data: the whole chain
+  (capture -> transcribe -> transform -> resynthesize -> pool -> egress)
+  needs a lawful basis, disclosure at collection time, and retained
+  documentation, regardless of how anonymous the final artifact is.
+- Wording rule: never label data "anonymous", "de-identified" or
+  "de-personalised" while any component remains attributable.
+- Models trained on retained pairs are a second retention site: if a trained
+  drafter or TTS model can be prompted to regurgitate a user utterance, the
+  lane fails No Inference through the model even if the dataset passed
+  (EDPB Opinion 28/2024 extraction/query test). Memorization control is a
+  release gate (C5).
+- Immediate anonymization plus immediate deletion of the original data is an
+  explicit positive factor in the legitimate-interest balancing test. C6 is
+  recognized mitigation, not just hygiene.
+
+### 8.4 Lane conditions (binding for W4 capture defaults)
+
+- C1 Scrub-before-synthesize: deterministic PII scrub first, then
+  style-transforming paraphrase with a local model, then Talker synthesis
+  from the transformed text.
+- C2 No user-audio conditioning: Talker input is transformed text plus the
+  fixed preset voice embedding only; no F0/duration/emotion passthrough;
+  cloning stays forbidden for Route B data generation.
+- C3 No-key pooling: no device, session, or contributor identifier anywhere
+  in the pipeline; sid stripped before retention; batches shuffled before
+  local training and before egress (NO-KEY invariant).
+- C4 Adversarial evaluation gate: run attribute-inference and authorship
+  attacks locally against transformed text; drop failing records; version
+  the battery as a tuning knob.
+- C5 Memorization control: train only on transformed content, deduplicate,
+  gate released models against extraction and regurgitation.
+- C6 Immediate-deletion semantics: original voice discarded after
+  transcription, before transformation; deletion logged in pipeline
+  telemetry.
+- C7 Disclosure at capture: versioned consent receipt names every stage of
+  the chain; never claim anonymity while content remains attributable.
+- C8 Irrevocability disclosure: contributions cannot be individually removed
+  once past the no-key pooling boundary; state this.
+
+The conditions are mutually dependent: C1 without C4 ships content that
+resists attack only probabilistically; C4 without C3 still lets an attacker
+aggregate one user's records within a batch by style (No Linkage looks
+across datasets); C5 without C1 trains models on identifiable content and
+bets on the model not leaking it, which the membership-inference literature
+says is a losing bet for ASR/TTS systems.
+
+Draft disclosure (for legal review; doubles as the binding contract for what
+the pipeline may do - a pipeline version change requires a receipt version
+change):
+
+"When you use voice mode, your speech is transcribed on this device and the
+recording is deleted immediately. Before anything is kept, the transcript is
+rewritten to remove personal details and your individual turns of phrase,
+and the rewritten text is re-synthesized in a synthetic voice that is not
+yours. The resulting pairs of rewritten text and synthetic-voice codes may
+be used to improve speech models on this device and, in batches containing
+no device, account, or contributor identifiers, may be published to improve
+speech models elsewhere. Your voice is never stored and never leaves your
+device."
+
+### 8.5 Effect on the section 5 open decision
+
+The acoustic channel no longer blocks the lane: under C2 + C6 the retained
+codes are preset-voice synthetic and the user's voice never persists. The
+remaining gate is the content layer: if C1 + C4 pass the versioned battery,
+transformed pairs are in the documented-residual-risk posture the guidelines
+prescribe, and the T&Cs disclosure (C7) covers the chain - no per-pair
+opt-in lane is needed for local training or keyless pooled egress. If the
+battery fails for a record class, those records stay Tier B local-only; the
+lane degrades gracefully and does not block Route B training on local pairs.
+
+Precedents reviewed: Apple's Siri program (kept text, dropped audio, human
+listening opt-in only) and Mozilla Common Voice (real-voice donation with a
+persistent client_id - exactly what the NO-KEY invariant rejects). The
+proposed lane is novel relative to both; its disclosure cannot borrow
+existing wording.
+
+### 8.6 Residual risk posture
+
+Content-channel risk is managed, not proven away: best single-pass
+anonymizers leave ~27% residual re-identification against LLM attackers in
+benchmark; public individuals are disproportionately exposed; agentic
+re-identification improves with every attributable record, so per-user
+contribution caps per published batch belong in the battery design.
+Guidelines 02/2026 are v1.0 in consultation until 2026-10-30; the lane is
+built on the framework's durable parts (three criteria, further-analysis
+posture, process-compliance duties), with periodic reassessment as both the
+final text and attacker capabilities evolve.
 
 ## Appendix A: staged assets (source-manifest)
 
