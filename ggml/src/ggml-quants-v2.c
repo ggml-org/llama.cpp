@@ -265,17 +265,23 @@ void quantize_row_tessera_t640_v2(const float * GGML_RESTRICT x,
         for (int l = 0; l < TILE640_LANES_PER_PAGE; l++) {
             const int col0 = base + l * TILE640_LANE_SIZE;
 
-            // Per-lane: lane_max.
+            // Per-lane: lane_max. For the partial last lane
+            // (col0 + TILE640_LANE_SIZE > k) we must bounds-
+            // check; the C ref's per-element loop does this
+            // with `if (col < k)`, but vDSP_maxmgv reads the
+            // full 20 elements unconditionally and would
+            // include uninitialised memory beyond k. We use
+            // the smaller lane_len for the partial lane so
+            // the vDSP call only reads valid cols.
+            const int lane_len = (col0 + TILE640_LANE_SIZE <= k)
+                ? TILE640_LANE_SIZE : (int)(k - col0);
             float lane_max_f = 0.0f;
 #if defined(__APPLE__)
-            vDSP_maxmgv(x + col0, 1, &lane_max_f, (vDSP_Length) TILE640_LANE_SIZE);
+            vDSP_maxmgv(x + col0, 1, &lane_max_f, (vDSP_Length) lane_len);
 #else
-            for (int j = 0; j < TILE640_LANE_SIZE; j++) {
-                const int col = col0 + j;
-                if (col < k) {
-                    const float a = fabsf(x[col]);
-                    if (a > lane_max_f) lane_max_f = a;
-                }
+            for (int j = 0; j < lane_len; j++) {
+                const float a = fabsf(x[col0 + j]);
+                if (a > lane_max_f) lane_max_f = a;
             }
 #endif
 
@@ -309,7 +315,12 @@ void quantize_row_tessera_t640_v2(const float * GGML_RESTRICT x,
                 // (col 4). The encoding is group-local: a single
                 // 4-trit chunk packs to 4 trit-positions in the
                 // current group, the 5th is the scalar tail.
-                const int valid = (gcol + 4 < k) ? 4 : (k - gcol);
+                // For the partial last lane of the partial last
+                // page, the last group may have fewer than 4
+                // valid cols. The bounds-check uses < not <=
+                // because we need 4 contiguous valid cols to
+                // safely vld1q_f32.
+                const int valid = (gcol + 4 <= k) ? 4 : (k - gcol);
                 if (valid >= 4) {
                     float32x4_t vf = vld1q_f32(x + gcol);
                     // trit: v > +threshold -> 1; v < -threshold -> 2; else 0
