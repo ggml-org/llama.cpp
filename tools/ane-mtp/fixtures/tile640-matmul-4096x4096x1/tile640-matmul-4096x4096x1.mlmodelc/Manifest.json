@@ -1,0 +1,18 @@
+{
+    "fileFormatVersion": "1.0.0",
+    "itemInfoEntries": {
+        "00000000-0000-0000-0000-000000000001": {
+            "author": "com.apple.CoreML",
+            "description": "CoreML Model Specification",
+            "name": "model.mlmodel",
+            "path": "model.mil"
+        },
+        "00000000-0000-0000-0000-000000000002": {
+            "author": "com.apple.CoreML",
+            "description": "CoreML Model Weights",
+            "name": "weights",
+            "path": "coremldata.bin"
+        }
+    },
+    "rootModelIdentifier": "00000000-0000-0000-0000-000000000001"
+}
