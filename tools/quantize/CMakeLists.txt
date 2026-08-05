@@ -68,6 +68,14 @@ add_library(${TARGET}
     tessera/tessera-regime.cpp
     tessera/tessera-higgs.cpp
     tessera/tessera-higgs-cache.cpp
+    # HIGGS structural proxy (C++ first-class port of the
+    # tools/ane-mtp/estimate_higgs_alpha.py sidecar). Phase 3.5
+    # of docs/tessera-ane-ios-demo-design.md: the proxy is the
+    # default "L1-agnostic by design" t_l^2 -> alpha_l estimator;
+    # the family-prior table mirrors the NumPy FAMILY_PRIOR dict
+    # byte-for-byte so a sidecar produced by the C++ binary is
+    # interchangeable with one produced by the Python path.
+    tessera/tessera-higgs-proxy.cpp
     # policy I/O + dispatch + GGUF writer
     tessera/tessera-policy.cpp
     tessera/tessera-dispatch.cpp
@@ -257,6 +265,24 @@ if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
 
+# tessera-higgs-proxy: native HIGGS structural proxy. CLI entry point for
+# the ane.alpha-coefficients.v1 sidecar producer. The Python
+# tools/tessera/estimate_higgs_alpha.py wrapper subprocesses this binary
+# when present on PATH and falls back to the in-process NumPy path when
+# the binary is not built. See docs/tessera-ane-ios-demo-design.md
+# Phase 3.5 for the design and docs/tessera-higgs-estimator.md for the
+# sidecar shape.
+
+set(TARGET tessera-higgs-proxy)
+
+add_executable(${TARGET} tessera/tessera-higgs-proxy-main.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
+
 # tessera-train-dflash: native DFlash / D-PACE block-drafter training driver.
 # Reads llama.tessera.dflash-block.v1 records (from tessera-dataset
 # --tessera-dataset-mode dflash) and trains a drafter with weighted
@@ -410,6 +436,17 @@ if(LLAMA_BUILD_TESTS)
     # modules + libgguf/libggml).
     set(TARGET test-tessera-l5-dispatch)
     add_executable(${TARGET} tessera/test_l5_dispatch.cpp)
+    target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+
+    # Phase 3.5 HIGGS structural proxy C++ test suite: family
+    # classification, structural alpha, uniform fallback,
+    # measurement-function swap, byte-equivalence with the
+    # NumPy sidecar, GGUF round-trip, model_hash, JSON I/O.
+    # 30+ tests, runs in <1s on a tiny synthetic GGUF.
+    set(TARGET test-tessera-higgs-proxy)
+    add_executable(${TARGET} tessera/test_higgs_proxy.cpp)
     target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
     add_test(NAME ${TARGET} COMMAND ${TARGET})
