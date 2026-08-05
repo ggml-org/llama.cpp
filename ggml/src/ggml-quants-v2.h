@@ -65,6 +65,21 @@ GGML_API void quantize_row_tessera_t640_v2(const float * GGML_RESTRICT x,
                                            void * GGML_RESTRICT y,
                                            int64_t k);
 
+// Function C: apply_outlier_addback_v2
+//   Replaces row[col] = fp16_to_fp32(outlier_vals[k]) for the
+//   CSR-indexed outliers in [lo, hi). The v2 path batches the
+//   fp16->fp32 conversion with NEON vcvt_f32_f16 (4 fp16 -> 4
+//   fp32 per chunk) so the outlier_vals are read once and
+//   converted in bulk, not per-scatter scalar. The sparse
+//   scatter is per-element and vDSP-incompatible, so the
+//   scatter stays scalar (the C version's documented
+//   behaviour).
+GGML_API void apply_outlier_addback_v2(float * GGML_RESTRICT row,
+                                       int64_t row_len,
+                                       int32_t lo, int32_t hi,
+                                       const int32_t * GGML_RESTRICT outlier_cols,
+                                       const void * GGML_RESTRICT outlier_vals);
+
 // Feature flag accessor: tests and the dispatch read this to
 // decide whether to use v2 or the C reference. Default ON for
 // Apple Silicon builds; can be disabled with the
