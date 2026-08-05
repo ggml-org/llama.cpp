@@ -227,52 +227,78 @@ ranking from HIGGS should agree with at least one independent
 estimator. **EXL2** is the natural choice: it's the current
 quality-per-bit leader on NVIDIA (open source, MIT, turboderp's
 implementation of GPTQ-style calibration error with per-layer bit
-allocation), runs on consumer GPUs, and produces a per-layer
-sensitivity ranking as a side-effect of its calibration pass.
+allocation). The cross-check is "do the two per-layer sensitivity
+estimators — Tessera's HIGGS and the EXL2-style algorithm — agree on
+which layers are sensitive?"
+
+**Important distinction: the algorithm vs the inference engine**.
+- **ExLlamaV2** (turboderp's CUDA runtime that loads `.exl2` files)
+  is NVIDIA-only and irrelevant to the cross-check. We are NOT
+  loading `.exl2` files.
+- **The EXL2 calibration algorithm** (quantize each layer at
+  multiple bpw, measure error, choose the combination under a
+  target average bpw) is pure math and hardware-agnostic. The
+  GPTQ paper (Frantar et al. 2022, open access) documents the
+  math; turboderp's README documents the per-layer allocation.
+  We **reimplement** the algorithm in pure NumPy on Apple Silicon.
+  No CUDA, no external hardware dependency.
+
+This is strictly better than running ExLlamaV2 on a separate box:
+both estimators run on the **same Mac, same corpus, same model**,
+removing the hardware confound from the cross-check. The Spearman
+comparison is a clean head-to-head between two algorithms with
+different math and different proxies.
 
 The two estimators measure different things:
 - **HIGGS (Tessera)**: per-layer alpha via the Linearity Theorem,
   weighting the L1 kernel-dequant reconstruction error by the
-  per-tensor Hessian. This is the kernel-direct fidelity measurement.
-- **EXL2 (turboderp)**: per-layer sensitivity via GPTQ-style
+  per-tensor Hessian. This is the kernel-direct fidelity measurement
+  (proxy: offline ternary MSE until L1 lands).
+- **EXL2-style (reimplemented)**: per-layer sensitivity via GPTQ-style
   calibration error, where the algorithm quantizes each layer at
-  multiple bpw (2, 3, 4, 5, 6, 8) and chooses the combination that
-  minimizes max quantization error under a target average bpw.
+  multiple bpw (2, 3, 4, 5, 6, 8) and measures the L2 reconstruction
+  error. The bpw EXL2's allocator would choose for that layer is a
+  side-effect of the search.
 
-Different math, different proxy, different hardware — but both
-estimate the same underlying signal: **which transformer layers are
-the most sensitive to quantization error?** If the two rankings
-agree, that's evidence the design is shaped by SOTA. If they
-disagree on specific layers, that's a research finding (the
-disagreement is a paper, not a bug).
+Different math, different proxy, same hardware — both estimate
+the same underlying signal: **which transformer layers are the
+most sensitive to quantization error?** If the two rankings agree,
+that's evidence the design is shaped by SOTA. If they disagree on
+specific layers, that's a research finding (the disagreement is a
+paper, not a bug).
 
-**This phase is orthogonal to the iPhone demo work** but runs in
-parallel. It can start as soon as the calibration corpus is
-available (no ANE work required; runs on a separate NVIDIA box or
-in the cloud). The agreement measurement is published alongside
-the iPhone demo as the research-credibility layer.
+**This phase is orthogonal to the iPhone demo work** and runs
+locally on the architect's Mac. No external hardware, no CUDA,
+no cloud cost. Starts immediately in parallel with Phase 0/1/2/3.
 
 **Definition of done**:
 - A new `exl2_layer_stats` table in the unified DuckDB with columns:
   `model_hash`, `layer_index`, `exl2_per_layer_error` (the per-layer
   quantization error at the EXL2-chosen bpw), `exl2_per_layer_bpw`
-  (the bpw EXL2's allocator chose for that layer), `exl2_calibration_corpus`
+  (the bpw the allocator chose for that layer), `exl2_calibration_corpus`
   (the corpus the EXL2 calibration was run against, for audit
   trail). One row per (model_hash, layer_index).
-- A `tools/tessera/exl2_calibrate.py` (or under `tools/ane-mtp/`)
-  that runs ExLlamaV2's calibration on the same corpus
-  Tessera uses (Wikitext-103 + COCO + LibriSpeech for the
-  multimodal case), captures the per-layer error + per-layer
-  bpw, and writes to `exl2_layer_stats`. Emits a sidecar JSON
-  in the same shape as the L5 retune sidecar so the L5 loop can
-  consume it without a custom reader.
+- A `tools/tessera/exl2_calibrate.py` that:
+  1. **Reimplements** the GPTQ-style calibration in pure NumPy
+     (column-wise quantization with error correction; calibration
+     data + Hessian-weighted reconstruction error). The math is
+     from Frantar et al. 2022.
+  2. Reimplements the EXL2 per-layer bit allocation (search for
+     the best bpw combination under a target average bpw; minimize
+     max per-layer error). The algorithm is in turboderp's
+     README.
+  3. Runs both on the same calibration corpus Tessera uses
+     (Wikitext-103 + COCO + LibriSpeech for the multimodal case).
+  4. Captures the per-layer error + per-layer bpw, writes to
+     `exl2_layer_stats`, and emits a sidecar JSON in the L5 retune
+     shape.
 - The L5 orchestrator reads `exl2_layer_stats` and folds the
   EXL2 per-layer error into the per-tensor sensitivity score as
   a third evidence signal (alongside HIGGS alpha and the
   imatrix stats). The fold is **independent** — the orchestrator
   does not bias toward either estimator; both are evidence, the
   disagreement is logged.
-- A `tests/test_exl2_cross_check.py` that:
+- A `tools/tessera/test_exl2_cross_check.py` that:
   1. Runs both estimators on a known model (gemma 4 12B at BF16
      is the gold standard).
   2. Computes the per-layer Spearman rank correlation between
@@ -289,7 +315,8 @@ the iPhone demo as the research-credibility layer.
 - `tools/tessera/tessera_db.py` (new `exl2_layer_stats` table +
   additive column on the per-tensor sensitivity path; no
   destructive schema change)
-- `tools/tessera/exl2_calibrate.py` (new, ~300 lines)
+- `tools/tessera/exl2_calibrate.py` (new, ~400-500 lines: the
+  reimplemented GPTQ + EXL2 allocation algorithm in NumPy)
 - `tools/tessera/l5_orchestrator.py` (extend the per-tensor
   sensitivity score to consume EXL2 as a third evidence signal;
   log disagreement)
@@ -298,39 +325,46 @@ the iPhone demo as the research-credibility layer.
 
 **Estimated scope**: 1.5-2 weeks (1 week coding + integration, 3-5
 days running the calibration + writing the report, 1-2 days for
-the cross-validation test).
+the cross-validation test). The GPTQ reimplementation is the bulk;
+the EXL2 allocation is a small search algorithm on top.
 
 **Open questions**:
-- Where does the EXL2 calibration run? Option A: a separate
-  NVIDIA box / cloud instance (since ExLlamaV2 is CUDA-only).
-  Option B: deferred until the iPhone demo is public, run the
-  EXL2 calibration on whatever's available at that point. The
-  architect's call. My recommendation: Option A in parallel with
-  Phase 0-2 on the Apple side; the work is fully independent.
 - Is the per-tensor EXL2 error useful, or only the per-layer
-  ranking? Per-tensor gives finer granularity for the L5
-  loop's per-tensor verdicts; per-layer is what the cross-check
-  needs. Both fit in the same `exl2_layer_stats` table (one row
-  per tensor, with the layer index as a column).
+  ranking? Per-tensor gives finer granularity for the L5 loop's
+  per-tensor verdicts; per-layer is what the cross-check needs.
+  Both fit in the same `exl2_layer_stats` table (one row per
+  tensor, with the layer index as a column).
 - The Spearman threshold (0.6) is a guess. The actual floor is
   determined empirically on a known model. The test should
   report the Spearman value and let the architect set the
   threshold after the first run.
+- **Why the reimplementation, not ExLlamaV2's exact algorithm?**
+  ExLlamaV2's per-layer allocator has implementation details
+  not in the README (the exact search strategy, the per-tensor
+  vs per-layer granularity, the outlier handling). The
+  reimplementation captures the documented intent (search for
+  best bpw combination under target average bpw, minimize max
+  per-layer error) using the math the GPTQ paper makes explicit.
+  If turboderp's specific search heuristic matters, the
+  reimplementation can be tuned to match. The Spearman threshold
+  will tell us.
 
 **Research claim**:
 
 > *"The HIGGS Linearity Theorem per-layer sensitivity ranking
-> agrees with the EXL2 (turboderp) GPTQ-style per-layer sensitivity
-> ranking at Spearman ρ > 0.6 on gemma 4 12B. The top-5
-> disagreements are in layers that EXL2 over-allocates bits to
-> (early attention QKV) and HIGGS under-weights (late FFN down
-> projections); the disagreement is consistent with the
-> kernel-direct vs. offline-proxy measurement difference."*
+> agrees with the EXL2-style GPTQ-based per-layer sensitivity
+> ranking (reimplemented in NumPy, run on the same Apple Silicon
+> hardware as the HIGGS estimator) at Spearman ρ > 0.6 on gemma
+> 4 12B. The top-5 disagreements are in layers that the EXL2
+> allocator over-allocates bits to (early attention QKV) and
+> HIGGS under-weights (late FFN down projections); the
+> disagreement is consistent with the kernel-direct vs.
+> offline-proxy measurement difference."*
 
 If true, this is a real paper. The two estimators are independent
-(Tessera's HIGGS is kernel-direct, EXL2's is offline Hessian
-proxy), and the agreement validates the architect's design
-direction.
+(Tessera's HIGGS is kernel-direct, the EXL2-style is GPTQ Hessian
+proxy), same hardware, same corpus, same model — the cross-check
+is a clean validation of the design direction.
 
 ### Phase 1: transformer body ops on ANE
 
@@ -611,16 +645,18 @@ release cycle.
 
 ### 6. EXL2 cross-check (Phase 0.5): ship with the iPhone demo or follow-on?
 
-**Recommend: ship with the demo, but in parallel.** Phase 0.5 runs
-on a separate NVIDIA box / cloud instance and does not block the
-Apple-side work. The cross-validation result (Spearman ρ between
-HIGGS and EXL2 per-layer sensitivity rankings) is the research
-credibility layer that the demo's public story rests on. Without
-it, the demo is "Tessera 2-bit on iPhone." With it, the demo is
-"Tessera 2-bit on iPhone, and our per-layer sensitivity estimator
-agrees with the SOTA NVIDIA reference at ρ > 0.6." The second
-version is a paper. Run it in parallel; the cost is 1.5-2 weeks
-of CUDA-box time.
+**Recommend: ship with the demo, runs locally.** Phase 0.5 is a
+reimplementation of the EXL2 algorithm (GPTQ calibration +
+per-layer bit allocation) in pure NumPy. It runs on the same
+Apple Silicon Mac the architect already has. No CUDA, no cloud
+cost, no external hardware. The cross-validation result (Spearman
+ρ between HIGGS and EXL2 per-layer sensitivity rankings) is the
+research credibility layer that the demo's public story rests
+on. Without it, the demo is "Tessera 2-bit on iPhone." With it,
+the demo is "Tessera 2-bit on iPhone, and our per-layer
+sensitivity estimator agrees with the SOTA per-layer allocation
+algorithm at ρ > 0.6 on the same hardware." The second version
+is a paper.
 
 Override: skip if the iPhone demo needs to ship faster than the
 research-credibility work can be done. The demo still works
@@ -650,7 +686,7 @@ behind the HIGGS claim.
 | Phase | Work | Estimated scope | Dependency |
 |---|---|---|---|
 | 0 | L1 kernel-dequant on ANE | 2-3 weeks | - |
-| 0.5 | EXL2 cross-check (research credibility) | 1.5-2 weeks | runs in parallel; needs the calibration corpus |
+| 0.5 | EXL2 cross-check (reimplemented, local) | 1.5-2 weeks | runs in parallel; no external hardware |
 | 1 | Transformer body ops | 2-3 weeks | Phase 0 (uses L1 path) |
 | 2 | GGUF-to-IOSurface weight streaming | 1-2 weeks | Phase 0+1 (multifunction bundle) |
 | 3 | HIGGS per-layer alpha | 1-2 weeks | Phase 0 (measurement source) |
@@ -659,15 +695,16 @@ behind the HIGGS claim.
 
 **Total: 12-14 weeks for Path A on iPhone, 14-16 weeks for Path B
 on iPhone.** iPad M-series first: 6-8 weeks for the iPad demo,
-then iPhone port as a follow-on. Phase 0.5 runs in parallel on a
-separate NVIDIA box / cloud instance; it does not block the Apple-side
-work.
+then iPhone port as a follow-on. Phase 0.5 runs in parallel on
+the same Apple Silicon Mac the architect already has; it does not
+block the Apple-side work and there is no external hardware
+dependency.
 
 **Critical path**: Phase 0 (L1) is the long pole and the
 architect's research differentiator. Every other phase assumes
 L1-on-ANE works. If it doesn't, the architecture pivots early.
-Phase 0.5 is independent and can run on whatever schedule the
-calibration-corpus + a CUDA-capable box allows.
+Phase 0.5 is independent and runs in parallel on the same Mac;
+no external hardware.
 
 ## What lands first, in priority
 
@@ -714,9 +751,14 @@ Phase 5 is data.
    CUDA-box time; the value is the research-credibility layer
    that turns the demo into a paper. Override: skip if the
    demo needs to ship faster than the cross-check can be done.
-7. **NVIDIA box for EXL2 calibration**: do you have one in
+7. ~~**NVIDIA box for EXL2 calibration**: do you have one in
    your environment, or does this need to run on a rented
-   instance (vast.ai, RunPod, etc.)? Affects the timeline and
-   the cost estimate for Phase 0.5.
+   instance (vast.ai, RunPod, etc.)?~~ **Resolved: not needed.**
+   Phase 0.5 reimplements the EXL2 algorithm locally on Apple
+   Silicon (no CUDA, no ExLlamaV2, no external hardware). The
+   earlier NVIDIA assumption was wrong; the calibration algorithm
+   is hardware-agnostic and we don't need ExLlamaV2 to produce
+   the per-layer error vector. The Spearman comparison is now
+   head-to-head on the same Mac, removing the hardware confound.
 
 The doc is the scope. Pick the decision points and we go.
