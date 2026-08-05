@@ -19,6 +19,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 //
 // llama_context
@@ -578,6 +579,41 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
     }
 }
 
+// count the number of tensors in the graph that are flagged as inputs
+// this includes the graph nodes themselves as well as their src tensors
+static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
+    // map each input tensor to the graph nodes that use it
+    std::unordered_map<const ggml_tensor *, std::vector<ggml_tensor *>> users;
+    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+        ggml_tensor * node = ggml_graph_node(gf, i);
+        if (node->flags & GGML_TENSOR_FLAG_INPUT) {
+            users[node].push_back(node);
+        }
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            ggml_tensor * src = node->src[j];
+            if (!src) {
+                break;
+            }
+            if (src->flags & GGML_TENSOR_FLAG_INPUT) {
+                users[src].push_back(node);
+            }
+        }
+    }
+
+    for (const auto & [tensor, nodes] : users) {
+        if (tensor->op != GGML_OP_NONE) {
+            LLAMA_LOG_WARN("%s: input tensor '%s' has op %s, expected GGML_OP_NONE\n",
+                    __func__, tensor->name, ggml_op_name(tensor->op));
+        }
+        for (const ggml_tensor * node : nodes) {
+            LLAMA_LOG_DEBUG("%s: input tensor '%s' is used by node '%s' (%s)\n",
+                    __func__, tensor->name, node->name, ggml_op_name(node->op));
+        }
+    }
+
+    return (int) users.size();
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
@@ -620,11 +656,15 @@ void llama_context::sched_reserve() {
     resolve_fused_ops(mctx.get(), n_seqs);
 
     // reserve worst-case graph
-    int n_splits_pp = -1;
-    int n_nodes_pp  = -1;
+    int n_splits_pp        = -1;
+    int n_nodes_pp         = -1;
+    int n_inputs_pp        = -1;
+    int n_input_tensors_pp = -1;
 
-    int n_splits_tg = -1;
-    int n_nodes_tg  = -1;
+    int n_splits_tg        = -1;
+    int n_nodes_tg         = -1;
+    int n_inputs_tg        = -1;
+    int n_input_tensors_tg = -1;
 
     const uint32_t n_outputs_pp = std::min(n_tokens, cparams.n_outputs_max);
 
@@ -644,8 +684,10 @@ void llama_context::sched_reserve() {
             }
         }
 
-        n_splits_pp = ggml_backend_sched_get_n_splits(sched.get());
-        n_nodes_pp  = ggml_graph_n_nodes(gf);
+        n_splits_pp        = ggml_backend_sched_get_n_splits(sched.get());
+        n_nodes_pp         = ggml_graph_n_nodes(gf);
+        n_inputs_pp        = get_gf_res_reserve()->inputs.size();
+        n_input_tensors_pp = llama_graph_n_input_tensors(gf);
     }
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
@@ -655,8 +697,10 @@ void llama_context::sched_reserve() {
             throw std::runtime_error("failed to allocate compute tg buffers");
         }
 
-        n_splits_tg = ggml_backend_sched_get_n_splits(sched.get());
-        n_nodes_tg  = ggml_graph_n_nodes(gf);
+        n_splits_tg        = ggml_backend_sched_get_n_splits(sched.get());
+        n_nodes_tg         = ggml_graph_n_nodes(gf);
+        n_inputs_tg        = get_gf_res_reserve()->inputs.size();
+        n_input_tensors_tg = llama_graph_n_input_tensors(gf);
     }
 
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
@@ -687,13 +731,25 @@ void llama_context::sched_reserve() {
     if (n_nodes_pp == n_nodes_tg) {
         LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, n_nodes_pp);
     } else {
-        LLAMA_LOG_INFO("%s: graph nodes  = %d (with bs=%d), %d (with bs=1)\n", __func__, n_nodes_pp, n_tokens, n_nodes_tg);
+        LLAMA_LOG_INFO("%s: graph nodes  = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_nodes_pp, n_tokens, n_nodes_tg, n_seqs);
     }
 
     if (n_splits_pp == n_splits_tg) {
         LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits_pp);
     } else {
-        LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
+        LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_splits_pp, n_tokens, n_splits_tg, n_seqs);
+    }
+
+    if (n_inputs_pp == n_inputs_tg) {
+        LLAMA_LOG_INFO("%s: graph inputs = %d\n", __func__, n_inputs_pp);
+    } else {
+        LLAMA_LOG_INFO("%s: graph inputs = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_inputs_pp, n_tokens, n_inputs_tg, n_seqs);
+    }
+
+    if (n_input_tensors_pp == n_input_tensors_tg) {
+        LLAMA_LOG_INFO("%s: graph input tensors = %d\n", __func__, n_input_tensors_pp);
+    } else {
+        LLAMA_LOG_INFO("%s: graph input tensors = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_input_tensors_pp, n_tokens, n_input_tensors_tg, n_seqs);
     }
 
     const int64_t t_end_us = ggml_time_us();
