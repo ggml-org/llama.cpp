@@ -151,6 +151,21 @@ PER_LAYER_ERROR_COLS: tuple[str, ...] = (
     "model_hash", "name", "layer",
     "epsilon", "reference_qtype", "updated_at",
 )
+# Phase 0.5: the EXL2 per-layer sensitivity table. One row
+# per (model_hash, layer_index, exl2_calibration_corpus); the
+# corpus discriminator lets multiple calibration runs (e.g.
+# wikitext-103 and COCO) coexist for the same model. The
+# ``exl2_chosen_bpw`` integer mirrors ``exl2_per_layer_bpw``
+# (the latter is REAL to match the HIGGS sidecar's per-tensor
+# binarity-discriminator convention; the integer form is the
+# primary column and the REAL is a backwards-compat alias).
+EXL2_LAYER_STATS_COLS: tuple[str, ...] = (
+    "model_hash", "layer_index", "layer_name",
+    "family", "n_elements",
+    "exl2_per_layer_error", "exl2_per_layer_bpw",
+    "exl2_chosen_bpw", "exl2_calibration_corpus",
+    "created_at",
+)
 
 
 @dataclass
@@ -228,6 +243,24 @@ class TesseraDB:
             # opener picking up a C++-created DB sees the
             # column without an explicit migration step.
             self._ensure_tensor_stats_columns()
+            # Phase 15: the per-tensor component columns
+            # on l5_plan_summary are additive; the
+            # migration is idempotent and runs on every
+            # open so a C++-created DB without them sees
+            # them added on the Python side's first open.
+            # The same hook covers the Phase 0.5
+            # ``exl2_error`` column.
+            self._ensure_l5_plan_columns()
+            # Phase 0.5: the EXL2 per-layer stats table
+            # and the additive ``exl2_error`` column on
+            # l5_plan_summary. The migration is idempotent
+            # (CREATE TABLE IF NOT EXISTS for the table;
+            # ADD COLUMN IF NOT EXISTS for the column);
+            # a C++-created DB without these sees them
+            # added on the Python side's first open. Old
+            # data is intact: the migration is
+            # forward-only.
+            self._ensure_exl2_layer_stats()
 
     @classmethod
     def open(
@@ -559,6 +592,26 @@ class TesseraDB:
             sys.stderr.write(
                 f"tessera-db: ALTER TABLE l5_plan_summary "
                 f"ADD COLUMN model_role failed: {e}\n"
+            )
+        # Phase 0.5: the EXL2 per-layer error folded into the
+        # per-tensor sensitivity path. The column is additive:
+        # NULL when the EXL2 estimator has not been run on this
+        # tensor, a per-tensor real when it has. The L5
+        # orchestrator's SensitivityScorer reads it via
+        # ``get_exl2_per_layer_error_for_tensors`` (a separate
+        # query helper) and folds the value into the
+        # ``sensitivity_score`` when ``w_exl2 > 0``. The
+        # orchestrator's default ``w_exl2 = 0.0`` keeps the
+        # path opt-in until the first EXL2 run lands.
+        try:
+            self._conn.execute(
+                "ALTER TABLE l5_plan_summary "
+                "ADD COLUMN IF NOT EXISTS exl2_error DOUBLE"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE l5_plan_summary "
+                f"ADD COLUMN exl2_error failed: {e}\n"
             )
         self._l5_plan_columns_ensured = True
 
@@ -1164,6 +1217,189 @@ class TesseraDB:
             )
             buf.append(row)
         return len(rows)
+
+    # ---- Phase 0.5: EXL2 per-layer stats (additive table) ---------
+
+    def _ensure_exl2_layer_stats(self) -> None:
+        """Create the ``exl2_layer_stats`` table on first open.
+
+        The Phase 0.5 EXL2 cross-check writes per-layer
+        GPTQ-derived errors to this table. The schema is
+        additive (a pre-Phase-0.5 DB has no such table; the
+        ``CREATE TABLE IF NOT EXISTS`` creates it without
+        touching the existing 7 tables). The PK is
+        ``(model_hash, layer_index, exl2_calibration_corpus)``
+        so multiple corpus runs (wikitext-103, COCO, the
+        ``no_calibration_diagonal_unit`` fallback) coexist
+        for the same model.
+
+        Idempotent and cheap: ``CREATE TABLE IF NOT EXISTS``
+        is a no-op on a subsequent open. Cached on the
+        instance so the round-trip is paid once per
+        ``TesseraDB`` lifetime, not once per insert. The
+        C++ side mirrors the same statement in
+        ``TS_QDB_SCHEMA_SQL``; on a C++-created DB the
+        table is already present and the Python side's
+        statement is a no-op.
+        """
+        if self._read_only:
+            return
+        if getattr(self, "_exl2_layer_stats_ensured", False):
+            return
+        try:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS exl2_layer_stats (
+                    model_hash              TEXT NOT NULL,
+                    layer_index             INTEGER NOT NULL,
+                    layer_name              TEXT,
+                    family                  TEXT,
+                    n_elements              BIGINT,
+                    exl2_per_layer_error    DOUBLE,
+                    exl2_per_layer_bpw      DOUBLE,
+                    exl2_chosen_bpw         INTEGER,
+                    exl2_calibration_corpus TEXT NOT NULL,
+                    created_at              TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (
+                        model_hash, layer_index, exl2_calibration_corpus
+                    )
+                )
+                """
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: CREATE TABLE exl2_layer_stats "
+                f"failed: {e}\n"
+            )
+        self._exl2_layer_stats_ensured = True
+
+    def insert_exl2_layer_stats(
+        self,
+        model_hash: str,
+        rows: Sequence[dict],
+        *,
+        calibration_corpus: str | None = None,
+    ) -> int:
+        """Push rows into the ``exl2_layer_stats`` table.
+
+        Bypasses the per-table buffer and uses a direct
+        ``INSERT ... ON CONFLICT DO UPDATE`` because the
+        table has a primary key on ``(model_hash,
+        layer_index, exl2_calibration_corpus)``. The
+        upsert pattern mirrors ``insert_tensor_stats``:
+        a re-run against the same ``(model, layer,
+        corpus)`` tuple overwrites the prior values
+        without a manual delete (the audit trail is in
+        the PK; the value reflects the most recent run).
+
+        ``calibration_corpus`` may be supplied as a
+        method-level default for callers that compute one
+        run; per-row ``r["exl2_calibration_corpus"]``
+        overrides it when both are present (the per-row
+        form lets a single insert batch carry rows from
+        multiple corpus runs). When neither is supplied,
+        the insert fails closed: every row must declare
+        which corpus it belongs to.
+
+        Returns the number of rows upserted.
+        """
+        if not rows or self._read_only:
+            return 0
+        # Schema migration: ensure the table exists.
+        self._ensure_exl2_layer_stats()
+        sql = (
+            "INSERT INTO exl2_layer_stats ("
+            "  model_hash, layer_index, layer_name, family, "
+            "  n_elements, exl2_per_layer_error, exl2_per_layer_bpw, "
+            "  exl2_chosen_bpw, exl2_calibration_corpus"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (model_hash, layer_index, exl2_calibration_corpus) "
+            "DO UPDATE SET "
+            "  layer_name           = excluded.layer_name, "
+            "  family               = excluded.family, "
+            "  n_elements           = excluded.n_elements, "
+            "  exl2_per_layer_error = excluded.exl2_per_layer_error, "
+            "  exl2_per_layer_bpw   = excluded.exl2_per_layer_bpw, "
+            "  exl2_chosen_bpw      = excluded.exl2_chosen_bpw, "
+            "  created_at           = now()"
+        )
+        n_upserted = 0
+        for r in rows:
+            corpus = (
+                r.get("exl2_calibration_corpus")
+                or calibration_corpus
+            )
+            if not corpus:
+                sys.stderr.write(
+                    "tessera-db: insert_exl2_layer_stats row "
+                    "missing exl2_calibration_corpus; "
+                    "skipped\n"
+                )
+                continue
+            try:
+                self._conn.execute(sql, [
+                    str(model_hash),
+                    int(r.get("layer_index", 0)),
+                    str(r.get("layer_name", "")),
+                    str(r.get("family", "")) or None,
+                    int(r.get("n_elements", 0) or 0),
+                    r.get("exl2_per_layer_error"),
+                    r.get("exl2_per_layer_bpw"),
+                    int(r.get("exl2_chosen_bpw", 0) or 0),
+                    str(corpus),
+                ])
+                n_upserted += 1
+            except Exception as e:
+                sys.stderr.write(
+                    f"tessera-db: insert_exl2_layer_stats on "
+                    f"({model_hash}, {r.get('layer_index')}, "
+                    f"{corpus}) failed: {e}\n"
+                )
+        return n_upserted
+
+    def get_exl2_per_layer_errors(
+        self,
+        model_hash: str,
+        *,
+        calibration_corpus: str | None = None,
+    ) -> dict[int, float]:
+        """Read the per-layer EXL2 errors for ``model_hash``.
+
+        Returns ``{layer_index: per_layer_error}`` for the
+        most recent row per (model_hash, layer_index). When
+        ``calibration_corpus`` is given, the result is
+        filtered to that corpus only. The L5 orchestrator
+        reads this map to fold the EXL2 per-layer error
+        into the per-tensor sensitivity score (the
+        ``w_exl2 > 0`` path); the empty-dict return
+        signals "EXL2 has not been run on this model" and
+        the fold is skipped.
+
+        The ``most recent row per layer`` clause is
+        important: a re-run against the same
+        ``(model, layer, corpus)`` updates the row
+        in-place (the PK upsert), so the most-recent
+        value is the only value. For multiple corpus
+        runs, the caller passes ``calibration_corpus``
+        to disambiguate.
+        """
+        if self._read_only is False and not getattr(
+            self, "_exl2_layer_stats_ensured", False,
+        ):
+            self._ensure_exl2_layer_stats()
+        params: list = [str(model_hash)]
+        sql = (
+            "SELECT layer_index, exl2_per_layer_error "
+            "FROM exl2_layer_stats WHERE model_hash = ?"
+        )
+        if calibration_corpus is not None:
+            sql += " AND exl2_calibration_corpus = ?"
+            params.append(str(calibration_corpus))
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except Exception:
+            return {}
+        return {int(li): float(err) for li, err in rows}
 
     # ---- Phase 16.7: per-component (model_role, name) covering index ----
 
