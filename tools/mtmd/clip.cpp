@@ -4013,17 +4013,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                         tt->to_float(raw.data(), pe_host.data(), (int64_t) nemb * pgrid * pgrid);
                     }
                 }
-                // NOTE: the reference uses meshgrid(ys, xs, indexing="xy") which yields a
-                // [grid_w, grid_h] grid (width-outer) and grid_sample maps coord0=ys->W axis,
-                // coord1=xs->H axis (a transposed sampling). Token t decomposes as
-                // i=t/grid_h (width), j=t%grid_h (height); sample row a from i (grid_w scale),
-                // col b from j (grid_h scale). This matches the trained convention exactly.
+                // Token layout is row-major with grid_w as the inner stride (matches the sparse
+                // window loop below). H axis samples pe rows scaled by grid_h; W axis samples
+                // pe cols scaled by grid_w. Self-cancelling on square grids.
                 std::vector<float> pos_emb((size_t) nemb * n_tok, 0.0f);
                 for (int t = 0; t < n_tok; t++) {
-                    const int   i = t / grid_h;   // width index  (0..grid_w-1)
-                    const int   j = t % grid_h;   // height index (0..grid_h-1)
-                    const float af = (i + 0.5f) * pgrid / grid_w - 0.5f; // row / H axis
-                    const float bf = (j + 0.5f) * pgrid / grid_h - 0.5f; // col / W axis
+                    const int   gy = t / grid_w;   // height index (0..grid_h-1)
+                    const int   gx = t % grid_w;   // width index  (0..grid_w-1)
+                    const float af = (gy + 0.5f) * pgrid / grid_h - 0.5f; // H axis
+                    const float bf = (gx + 0.5f) * pgrid / grid_w - 0.5f; // W axis
                     const int   a0 = (int) std::floor(af); const float wa = af - a0;
                     const int   b0 = (int) std::floor(bf); const float wb = bf - b0;
                     const int   as[2] = { a0, a0 + 1 }; const float was[2] = { 1.0f - wa, wa };
