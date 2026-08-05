@@ -274,6 +274,44 @@ public final class TesseraTraceStore: @unchecked Sendable {
         return try trimExpiredUnlocked(retentionDays: retentionDays, exemptSids: exemptSids, now: now)
     }
 
+    /// User-initiated purge of one session (spec sections 9 and 12.4):
+    /// remove every runtime record carrying the sid, rewriting the affected
+    /// files in place and deleting any file left empty. Quarantined
+    /// sessions are exempt from automatic retention entirely; this is the
+    /// ONLY path that removes them. Calibration and replay files are never
+    /// touched (a promoted session loses its sid before replay, so no
+    /// replay record can carry it). Returns the number of records removed.
+    @discardableResult
+    public func purgeSession(sid: String) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard !sid.isEmpty else { return 0 }
+        let fm = FileManager.default
+        var removed = 0
+        for entry in runtimeIndexUnlocked() where entry.sids.contains(sid) {
+            guard let text = try? String(contentsOf: entry.url, encoding: .utf8) else { continue }
+            var kept: [String] = []
+            text.enumerateLines { line, _ in
+                guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                if let parsed = Self.parseRuntimeLine(line), parsed.sid == sid {
+                    removed += 1
+                    return
+                }
+                kept.append(line)
+            }
+            if kept.isEmpty {
+                try fm.removeItem(at: entry.url)
+            } else {
+                try (kept.joined(separator: "\n") + "\n")
+                    .write(to: entry.url, atomically: true, encoding: .utf8)
+            }
+        }
+        if removed > 0 {
+            cachedRecordCount = nil
+            runtimeIndexCache = nil
+        }
+        return removed
+    }
+
     // MARK: - Trimming (caller holds the lock)
 
     @discardableResult

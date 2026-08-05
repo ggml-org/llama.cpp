@@ -204,8 +204,7 @@ public actor LlamaLLMProvider: LLMProvider {
             // Quarantined sessions are exempt from automatic retention
             // entirely (spec section 12.4); the ledger under the same
             // learning root names them.
-            let ledger = TesseraCurationLedger(
-                directory: traceStore.directoryURL.deletingLastPathComponent())
+            let ledger = TesseraCurationLedger.forStore(traceStore)
             try traceStore.appendRuntime(
                 records: sessionTraceBuffer, exemptSids: ledger.quarantinedSids())
             sessionTraceBuffer.removeAll()

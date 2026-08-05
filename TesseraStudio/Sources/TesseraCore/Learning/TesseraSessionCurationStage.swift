@@ -175,6 +175,7 @@ public final class TesseraSessionCurationStage: @unchecked Sendable {
                 decodedTexts[session.sid] = text
             case .quarantined: report.quarantined += 1
             case .dropped: report.dropped += 1
+            case .purged: break // only user-initiated purge emits this
             }
         }
 

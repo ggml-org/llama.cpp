@@ -152,6 +152,62 @@ public final class TesseraCurationLedger: @unchecked Sendable {
             .sorted { $0.ts > $1.ts }
     }
 
+    /// Display infos for the dashboard quarantine list, newest first.
+    public func quarantinedSessionInfos() -> [TesseraQuarantinedSessionInfo] {
+        quarantinedSessions().map { entry in
+            TesseraQuarantinedSessionInfo(
+                sid: entry.sid,
+                date: Self.date(fromTimestamp: entry.ts),
+                tokenCount: entry.score.tokens,
+                probeClasses: TesseraProbeClass.classes(forLedgerReasons: entry.reasons))
+        }
+    }
+
+    /// Append a user-initiated purge verdict (spec section 12.4). Latest
+    /// wins, so the session leaves the quarantine list and a future sweep
+    /// never re-analyzes it.
+    public func markPurged(sid: String) throws {
+        try append(TesseraCurationLedgerEntry(
+            sid: sid,
+            verdict: .purged,
+            reasons: ["user-purge"],
+            score: .init(acceptance: 0, tokens: 0, repetition: 0)))
+    }
+
+    /// The ledger that serves a trace store: the store directory is
+    /// <learning>/traces and the ledger lives directly under <learning>.
+    public static func forStore(_ store: TesseraTraceStore) -> TesseraCurationLedger {
+        TesseraCurationLedger(directory: store.directoryURL.deletingLastPathComponent())
+    }
+
+    /// Curation state over the sessions currently present in the runtime
+    /// store (spec section 10): promoted / quarantined totals plus sessions
+    /// captured but not judged yet. Dropped and purged sessions count
+    /// toward neither; judged sessions whose records were already trimmed
+    /// do not appear at all.
+    public func curationCounts(sessionSids: Set<String>) -> TesseraCurationCounts {
+        let latest = latestVerdicts()
+        var counts = TesseraCurationCounts()
+        for sid in sessionSids {
+            switch latest[sid]?.verdictValue {
+            case .promoted:    counts.promoted += 1
+            case .quarantined: counts.quarantined += 1
+            case nil:          counts.pending += 1
+            case .dropped, .purged: break
+            }
+        }
+        return counts
+    }
+
+    /// Inverse of ``timestamp(_:)``; nil on foreign formats.
+    public static func date(fromTimestamp ts: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.date(from: ts)
+    }
+
     /// Ledger ISO8601 UTC timestamps: 2026-08-04T22:30:00Z.
     public static func timestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -159,5 +215,37 @@ public final class TesseraCurationLedger: @unchecked Sendable {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "UTC")
         return formatter.string(from: date)
+    }
+}
+
+/// Curation state counts for the dashboard capture row (spec section 10).
+public struct TesseraCurationCounts: Sendable, Equatable {
+    public var promoted: Int
+    public var quarantined: Int
+    public var pending: Int
+
+    public init(promoted: Int = 0, quarantined: Int = 0, pending: Int = 0) {
+        self.promoted = promoted
+        self.quarantined = quarantined
+        self.pending = pending
+    }
+}
+
+/// Display model for the dashboard quarantine list (spec section 10):
+/// session date, token count, and the probe class that quarantined it -
+/// never the matched content itself.
+public struct TesseraQuarantinedSessionInfo: Sendable, Equatable, Identifiable {
+    public let sid: String
+    public let date: Date?
+    public let tokenCount: Int
+    public let probeClasses: [String]
+
+    public var id: String { sid }
+
+    public init(sid: String, date: Date?, tokenCount: Int, probeClasses: [String]) {
+        self.sid = sid
+        self.date = date
+        self.tokenCount = tokenCount
+        self.probeClasses = probeClasses
     }
 }

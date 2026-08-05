@@ -36,6 +36,11 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.learningTrainBinary) private var learningTrainBinary = TesseraSettingsDefault.learningTrainBinary
     @AppStorage(TesseraSettingsKey.learningTrainingDryRun) private var learningTrainingDryRun = TesseraSettingsDefault.learningTrainingDryRun
     @AppStorage(TesseraSettingsKey.learningAutoTrain) private var learningAutoTrain = TesseraSettingsDefault.learningAutoTrain
+    // Runtime speculative decoding + trace capture (runtime-traces spec 7, 10).
+    @AppStorage(TesseraSettingsKey.learningRuntimeDraftModel) private var learningRuntimeDraftModel = TesseraSettingsDefault.learningRuntimeDraftModel
+    @AppStorage(TesseraSettingsKey.learningRuntimeCapture) private var learningRuntimeCapture = TesseraSettingsDefault.learningRuntimeCapture
+    @AppStorage(TesseraSettingsKey.learningRuntimeCaptureTopk) private var learningRuntimeCaptureTopk = TesseraSettingsDefault.learningRuntimeCaptureTopk
+    @AppStorage(TesseraSettingsKey.learningRuntimeDraftMax) private var learningRuntimeDraftMax = TesseraSettingsDefault.learningRuntimeDraftMax
 
     // Autonomy (autonomy-calibration-design.md 13): snapshots of the learned-
     // permission store, refreshed on appear and after every mutation.
@@ -145,7 +150,18 @@ struct SettingsView: View {
                 Toggle("Dry run (build the dataset only)", isOn: $learningTrainingDryRun)
                     .help("Idle cycles validate the dataset without training or saving a drafter; the dashboard's Train Drafter button always trains")
                 trainBinaryStateRow
-                Text("Auto-train applies immediately. The paths above are read when the app launches.")
+                PathField("Runtime drafter (GGUF)", text: $learningRuntimeDraftModel,
+                          picks: .file(types: [.init(filenameExtension: "gguf")].compactMap { $0 }))
+                runtimeDrafterStateRow
+                Toggle("Capture runtime traces", isOn: $learningRuntimeCapture)
+                    .help("Records speculative-decoding telemetry while you use the Playground; sessions are curated locally before any training use")
+                Stepper("Capture top-k: \(learningRuntimeCaptureTopk)",
+                        value: $learningRuntimeCaptureTopk, in: 1...128)
+                    .help("Depth of the per-position verifier/drafter distributions captured per spec step; the replay stage deepens promoted sessions offline")
+                Stepper("Draft depth: \(learningRuntimeDraftMax)",
+                        value: $learningRuntimeDraftMax, in: 1...8)
+                    .help("Maximum tokens the runtime drafter proposes per speculative step")
+                Text("Auto-train applies immediately. Training paths are read when the app launches; the runtime drafter is read when the Playground provider initializes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -185,6 +201,40 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         } else {
             Label("Driver not found; expected at \(resolved)", systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Live resolution status of the runtime drafter (runtime-traces spec
+    /// section 10): the same found/not-found pattern as the training driver,
+    /// showing the auto-derived value when the field is empty. Pairs a
+    /// symbol with the text so the state is not color-only.
+    @ViewBuilder
+    private var runtimeDrafterStateRow: some View {
+        let setting = learningRuntimeDraftModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if setting == TesseraRuntimeDrafterResolver.disableSentinel {
+            Label("Auto-derive is off; the Playground runs trunk-only", systemImage: "minus.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if let candidate = TesseraRuntimeDrafterResolver.resolve(
+            setting: learningRuntimeDraftModel, trunkPath: learningBaseModelPath) {
+            let exists = FileManager.default.fileExists(atPath: candidate)
+            if exists {
+                Label("Runtime drafter found at \(candidate)", systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if setting.isEmpty {
+                Label("No trained drafter yet; will use \(candidate) once training produces it", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("Runtime drafter not found at \(candidate); the Playground runs trunk-only", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Label("Set a drafter model above to derive the runtime drafter from it", systemImage: "minus.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

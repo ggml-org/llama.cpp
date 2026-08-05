@@ -97,3 +97,56 @@ public enum TesseraScrubRules {
         return regex.stringByReplacingMatches(in: input, options: [], range: range, withTemplate: template)
     }
 }
+
+/// Display classes for sensitivity probes (runtime-traces spec section 10):
+/// the quarantine list names the CLASS that quarantined a session, never the
+/// matched content. The mapping is keyed on the rule ids from
+/// ``TesseraScrubRules/all`` so the quarantine surface and the scrub wall
+/// share one vocabulary and cannot drift.
+public enum TesseraProbeClass {
+    public static let secrets = "Secrets"
+    public static let contactInfo = "Contact info"
+    public static let paths = "Paths"
+    public static let modelMismatch = "Model mismatch"
+
+    /// Human class for one scrub rule id. Unknown ids (a future rule the
+    /// mapping has not caught up with) surface their own id: honest, and
+    /// still never the matched content.
+    public static func label(forRule id: String) -> String {
+        switch id {
+        case "pem-key", "bearer-token", "secret-key", "credential-assignment":
+            return secrets
+        case "email", "phone":
+            return contactInfo
+        case "fs-path":
+            return paths
+        default:
+            return id
+        }
+    }
+
+    /// Classes for one ledger entry's reasons: `probe:<id>` entries map
+    /// through ``label(forRule:)``, `model-mismatch` maps to its own class,
+    /// anything else is not a probe signal. Deduplicated in first-seen
+    /// order.
+    public static func classes(forLedgerReasons reasons: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for reason in reasons {
+            let label: String
+            if reason.hasPrefix("probe:") {
+                let id = String(reason.dropFirst("probe:".count))
+                guard id != "none" else { continue }
+                label = self.label(forRule: id)
+            } else if reason == "model-mismatch" {
+                label = modelMismatch
+            } else {
+                continue
+            }
+            if seen.insert(label).inserted {
+                out.append(label)
+            }
+        }
+        return out
+    }
+}

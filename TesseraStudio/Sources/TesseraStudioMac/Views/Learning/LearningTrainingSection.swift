@@ -15,6 +15,9 @@ struct LearningTrainingSection: View {
     @State private var record: TesseraTrainingOrchestrator.TrainingRecord?
     @State private var traceCount = 0
     @State private var capture = TesseraRuntimeCaptureSummary()
+    @State private var curationCounts = TesseraCurationCounts()
+    @State private var quarantinedSessions: [TesseraQuarantinedSessionInfo] = []
+    @State private var pendingPurgeSid: String?
     @State private var minTraces = TesseraSettingsDefault.learningMinTracesForTraining
     @State private var baseModel = ""
     @State private var binaryPath = ""
@@ -30,6 +33,9 @@ struct LearningTrainingSection: View {
         Section("Drafter Training") {
             traceGaugeRow
             runtimeCaptureRow
+            if !quarantinedSessions.isEmpty {
+                quarantineList
+            }
             if !setupComplete {
                 setupRow
             } else if running {
@@ -44,6 +50,22 @@ struct LearningTrainingSection: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        .confirmationDialog(
+            "Purge this session?",
+            isPresented: Binding(
+                get: { pendingPurgeSid != nil },
+                set: { if !$0 { pendingPurgeSid = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Purge session", role: .destructive) {
+                if let sid = pendingPurgeSid {
+                    purgeSession(sid: sid)
+                }
+                pendingPurgeSid = nil
+            }
+        } message: {
+            Text("The session's captured records are permanently deleted from this Mac. This cannot be undone.")
         }
         .onAppear { load() }
         .onChange(of: refreshID) { load() }
@@ -73,9 +95,9 @@ struct LearningTrainingSection: View {
     }
 
     /// Runtime capture status (runtime-traces spec section 10): this
-    /// session's record count, the lifetime runtime record total, and the
-    /// live acceptance rate across captured steps. Read-only; the curation
-    /// state row lands with the replay stage.
+    /// session's record count, the lifetime runtime record total, the live
+    /// acceptance rate across captured steps, and the curation state
+    /// (promoted / quarantined / pending session counts). Read-only.
     private var runtimeCaptureRow: some View {
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("runtime capture") {
@@ -108,7 +130,46 @@ struct LearningTrainingSection: View {
         if let rate = capture.acceptanceRate {
             parts.append("\(rate.formatted(.percent.precision(.fractionLength(0)))) accepted")
         }
+        parts.append(curationStateSummary)
         return parts.joined(separator: " · ")
+    }
+
+    /// Curation state for the capture row (runtime-traces spec section 10):
+    /// promoted / quarantined / pending session counts.
+    private var curationStateSummary: String {
+        "\(curationCounts.promoted) promoted · "
+            + "\(curationCounts.quarantined) quarantined · "
+            + "\(curationCounts.pending) pending"
+    }
+
+    /// The quarantine list (runtime-traces spec section 10): session date,
+    /// token count, and the probe class that quarantined it - never the
+    /// matched content. Purge uses the app's destructive-confirmation
+    /// pattern (the confirmationDialog attached to the section).
+    private var quarantineList: some View {
+        DisclosureGroup("Quarantined sessions (\(quarantinedSessions.count))") {
+            ForEach(quarantinedSessions) { session in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.date?.formatted(date: .abbreviated, time: .shortened) ?? "unknown date")
+                        Text("\(session.tokenCount.formatted()) tokens · \(session.probeClasses.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Purge", role: .destructive) {
+                        pendingPurgeSid = session.sid
+                    }
+                    .controlSize(.small)
+                    .help("Permanently delete this session's captured records")
+                }
+                .padding(.vertical, 2)
+            }
+            Text("Quarantined sessions stay local and never enter training; only purge removes them.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .help("Sessions a sensitivity probe quarantined; listed by date, token count, and probe class only")
     }
 
     private var setupComplete: Bool {
@@ -280,12 +341,34 @@ struct LearningTrainingSection: View {
         let orchestrator = TesseraLearningCenter.shared.training
         record = orchestrator?.lastTraining()
         traceCount = orchestrator?.traceStore.totalRecords() ?? 0
-        capture = (orchestrator?.traceStore ?? TesseraTraceStore()).runtimeSummary()
+        let store = orchestrator?.traceStore ?? TesseraTraceStore()
+        capture = store.runtimeSummary()
+        let ledger = TesseraCurationLedger.forStore(store)
+        curationCounts = ledger.curationCounts(
+            sessionSids: Set(capture.sessions.map { $0.sid }))
+        quarantinedSessions = ledger.quarantinedSessionInfos()
         minTraces = TesseraSettings.learningMinTracesForTraining
         baseModel = TesseraSettings.learningBaseModelPath
         dryRunConfigured = TesseraSettings.learningTrainingDryRun
         autoTrain = TesseraSettings.learningAutoTrain
         binaryPath = TesseraTrainBinaryResolver.resolve(override: TesseraSettings.learningTrainBinary)
         binaryOK = FileManager.default.isExecutableFile(atPath: binaryPath)
+    }
+
+    // MARK: - Quarantine purge
+
+    /// User-initiated purge (spec section 12.4): remove the session's
+    /// runtime records from the store and record the purge verdict so it
+    /// leaves the quarantine list and is never re-analyzed. Only reached
+    /// through the destructive-confirmation dialog.
+    private func purgeSession(sid: String) {
+        guard let store = TesseraLearningCenter.shared.training?.traceStore else { return }
+        do {
+            try store.purgeSession(sid: sid)
+            try TesseraCurationLedger.forStore(store).markPurged(sid: sid)
+        } catch {
+            print("[tessera.curation] purge failed for \(sid): \(error.localizedDescription)")
+        }
+        load()
     }
 }

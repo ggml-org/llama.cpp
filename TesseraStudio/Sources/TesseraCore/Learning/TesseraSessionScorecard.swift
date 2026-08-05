@@ -60,6 +60,12 @@ public enum TesseraSessionVerdict: String, Codable, Sendable {
     case promoted
     case quarantined
     case dropped
+    /// User-initiated purge (spec section 12.4): the session's records were
+    /// removed from the trace store on request. Quarantined sessions are
+    /// exempt from automatic retention entirely, so this verdict is the
+    /// only path that removes them. Latest-wins keeps the session out of
+    /// the quarantine list and out of any future re-analysis.
+    case purged
 }
 
 /// A verdict plus the reasons that produced it, in ledger form.
