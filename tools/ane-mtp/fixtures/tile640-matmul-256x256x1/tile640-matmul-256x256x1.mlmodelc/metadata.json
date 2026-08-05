@@ -5,8 +5,8 @@
       {
         "hasShapeFlexibility" : "0",
         "isOptional" : "0",
-        "dataType" : "Float16",
-        "formattedType" : "MultiArray (Float16 256 × 1)",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 256 × 1)",
         "shortDescription" : "",
         "shape" : "[256, 1]",
         "name" : "y",
@@ -18,9 +18,10 @@
     ],
     "specificationVersion" : 9,
     "mlProgramOperationTypeHistogram" : {
+      "Ios18.cast" : 1,
       "Ios18.matmul" : 1
     },
-    "computePrecision" : "Float16",
+    "computePrecision" : "Mixed (Float16, Float32)",
     "isUpdatable" : "0",
     "stateSchema" : [
 

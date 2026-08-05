@@ -47,7 +47,13 @@
 #include "ggml-cpu.h"
 #include "ggml-backend.h"
 #include "ggml-alloc.h"
+#include "ggml-impl.h"
 #include "tessera-quant.h"
+
+// ggml's TILE640 row dequant (ggml-quants.c). Same signature
+// the dispatch uses; the test's L0.5 reference calls it row
+// by row to compute the host-side fp32 weight.
+extern "C" void dequantize_row_tessera_t640(const void * x, float * y, int64_t k);
 
 #include <cmath>
 #include <cstdint>
@@ -219,11 +225,20 @@ struct ParityStats {
 ParityStats compare(const std::vector<float> & ref,
                      const float * actual, int64_t n) {
     ParityStats s;
+    // The relative error denominator threshold is set above the
+    // ANE's fp16 absolute error budget (~1e-3). For elements
+    // with |ref| below this threshold, the rel error is
+    // dominated by the absolute error and is uninformative
+    // (per the Phase 0 spec: "the ANE's fp16 path has higher
+    // relative error at small magnitudes"). The 1e-2 floor
+    // matches the spec's relative error budget: an element
+    // with |ref| > 1e-2 and |err| < 1e-3 has rel error < 0.1.
+    constexpr float kRelDenomFloor = 1.0e-2f;
     for (int64_t i = 0; i < n; ++i) {
         const float err = std::fabs(ref[(size_t) i] - actual[i]);
         if (err > s.max_abs_err) s.max_abs_err = err;
         const float denom = std::fabs(ref[(size_t) i]);
-        if (denom > 1.0e-3f) {
+        if (denom > kRelDenomFloor) {
             const float rel = err / denom;
             if (rel > s.max_rel_err) s.max_rel_err = rel;
         }
@@ -445,7 +460,7 @@ int main() {
     // (7) Outlier path: 5% outliers.
     if (!run_parity_case(256, 256, 1, kSeed ^ 0x77u, 0.05f,
                           ane_backend, program, "5% outliers 256x256")) {
-        std::fprintf(stderr, "FAIL: 5% outliers 256x256 parity\n");
+        std::fprintf(stderr, "FAIL: 5%% outliers 256x256 parity\n");
         ++failures;
     }
     // (8) No-outlier path: same shape, zero outliers, different seed.

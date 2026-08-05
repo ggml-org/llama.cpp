@@ -597,9 +597,10 @@ if (APPLE)
     llama_build(test-ane-tile640-matmul.cpp)
     if (TARGET test-ane-tile640-matmul)
         target_link_libraries(test-ane-tile640-matmul PRIVATE
-                              ggml ggml-base llama-quantize-impl)
+                              ggml ggml-base llama-quantize-impl ggml-ane)
         target_include_directories(test-ane-tile640-matmul PRIVATE
-                                   ${PROJECT_SOURCE_DIR}/tools/quantize/tessera)
+                                   ${PROJECT_SOURCE_DIR}/tools/quantize/tessera
+                                   ${PROJECT_SOURCE_DIR}/ggml/src)
     endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")

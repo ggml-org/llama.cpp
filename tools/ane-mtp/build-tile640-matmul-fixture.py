@@ -149,8 +149,14 @@ def _build_mlpackage(out_dir: Path, out_dim: int, in_dim: int,
     def prog(w, x):
         # y[i, t] = sum_j w[i, j] * x[j, t]
         # mb.matmul on fp16 inputs: ANE-NATIVE, maps to ios18.conv 1x1
-        # on A15+ (~3x faster than the matmul op).
-        y = mb.matmul(x=w, y=x, name="y")
+        # on A15+ (~3x faster than the matmul op). The accumulator
+        # is fp16; we cast the output to fp32 so the bundle's
+        # declared y dtype matches the dispatch's expectation
+        # (the dispatch writes y into op->data which is fp32).
+        # Without the cast, the MIL output is fp16 and the
+        # dispatch's dtype check fails.
+        y_fp16 = mb.matmul(x=w, y=x, name="y_fp16")
+        y = mb.cast(x=y_fp16, dtype="fp32", name="y")
         return y
 
     model = ct.convert(

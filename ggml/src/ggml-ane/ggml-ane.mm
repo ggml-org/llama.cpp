@@ -9,6 +9,16 @@
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
 
+// ggml's TILE640 row dequant (ggml-quants.c). The L1 dispatch
+// path calls this per row to dequant the TILE640 weight into
+// the bundle's pinned fp16 slot. The function is extern "C"
+// and declared in ggml-quants.h (which is included transitively
+// via ggml.h). The forward declaration below is a defensive
+// include-guard for the case where the header is unavailable.
+extern "C" void dequantize_row_tessera_t640(const void * GGML_RESTRICT x,
+                                             float * GGML_RESTRICT y,
+                                             int64_t k);
+
 #include <Accelerate/Accelerate.h>
 
 #include <atomic>
@@ -802,24 +812,6 @@ struct ggml_ane_typed_input {
     const void * data;
     ggml_ane_input_dtype dtype;
 };
-
-static size_t ggml_ane_input_dtype_size(ggml_ane_input_dtype d) {
-    switch (d) {
-        case GGML_ANE_INPUT_FP32: return 4;
-        case GGML_ANE_INPUT_FP16: return 2;
-        case GGML_ANE_INPUT_I32:  return 4;
-    }
-    return 4;
-}
-
-static size_t ggml_ane_multi_array_element_size(MLMultiArrayDataType d) {
-    switch (d) {
-        case MLMultiArrayDataTypeFloat32: return 4;
-        case MLMultiArrayDataTypeFloat16: return 2;
-        case MLMultiArrayDataTypeInt32:   return 4;
-        default: return 4;
-    }
-}
 
 // Write a host buffer into a pinned slot, converting from the
 // host dtype to the slot's dtype when they differ. For
@@ -2209,10 +2201,17 @@ static ggml_backend_buffer_type_t ggml_backend_ane_device_get_buffer_type(ggml_b
 static bool ggml_ane_supported_tensor_type(enum ggml_type type) {
     // The elementwise/Accelerate path and the fp16 IOSurface->MLMultiArray
     // wrapping both need one of these host-convertible dtypes.
+    // GGML_TYPE_I8 is included for the TILE640_MATMUL path
+    // (the lane_scales are int8 and are consumed by the
+    // dispatch's host dequant; the slot is never written to
+    // the bundle's pinned IOSurface, so the dtype
+    // conversion in ggml_ane_write_array_* is never called
+    // for I8).
     switch (type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
         case GGML_TYPE_I32:
+        case GGML_TYPE_I8:
             return true;
         default:
             return false;
