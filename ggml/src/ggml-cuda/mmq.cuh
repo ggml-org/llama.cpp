@@ -1467,7 +1467,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 }
 
 static bool mmq_use_routed_moe_ncols_picker(const int cc) {
-    return GGML_CUDA_CC_IS_CDNA(cc) ||
+    return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA) ||
+           GGML_CUDA_CC_IS_CDNA(cc) ||
            GGML_CUDA_CC_IS_RDNA2(cc) ||
            GGML_CUDA_CC_IS_RDNA3(cc) ||
            GGML_CUDA_CC_IS_RDNA4(cc);
