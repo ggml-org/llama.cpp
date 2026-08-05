@@ -14,6 +14,10 @@ public enum TesseraLearningServices {
     /// the UI layer can attach a completion hook (notification, refresh).
     public private(set) static var trainingScheduler: TesseraTrainingScheduler?
 
+    /// Held for the process lifetime so the recurring session-curation loop
+    /// is not deallocated; installDefaults owns the only reference.
+    public private(set) static var curationScheduler: TesseraSessionCurationScheduler?
+
     public static func installDefaults(into center: TesseraLearningCenter = .shared) {
         center.install(escalation: TesseraEscalationService())
         center.install(curation: TesseraCurationService())
@@ -39,6 +43,11 @@ public enum TesseraLearningServices {
         let idleTrainer = TesseraTrainingScheduler(orchestrator: training)
         idleTrainer.start()
         trainingScheduler = idleTrainer
+
+        let sessionCuration = TesseraSessionCurationScheduler(
+            stage: TesseraSessionCurationStage())
+        sessionCuration.start()
+        curationScheduler = sessionCuration
 
         let scheduler = TesseraAssessmentScheduler(assessor: center.assessor)
         scheduler.start()

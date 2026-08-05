@@ -433,7 +433,11 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
         let path = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("tessera-train-\(UUID().uuidString).traces.jsonl")
         var out = Data()
-        for file in traceStore.traceFiles() {
+        // Training consumes calibration + promoted replay records only
+        // (runtime-traces spec section 12.5): raw runtime captures enter the
+        // pipeline exclusively through the curation stage's replay.
+        for file in traceStore.traceFiles()
+        where !file.lastPathComponent.hasPrefix(TesseraTraceStore.runtimeFilePrefix) {
             guard let data = try? Data(contentsOf: file) else { continue }
             out.append(data)
             if data.last != 0x0A { out.append(0x0A) }   // keep records on separate lines

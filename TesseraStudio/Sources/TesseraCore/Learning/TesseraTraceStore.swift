@@ -69,6 +69,11 @@ public final class TesseraTraceStore: @unchecked Sendable {
         self.directory = directory
     }
 
+    /// The store's traces/ directory. Exposed so siblings under the same
+    /// learning root (the curation ledger, the curation stage state) resolve
+    /// to matching locations in tests and in the app alike.
+    public var directoryURL: URL { directory }
+
     public static func defaultDirectory() -> URL {
         TesseraLearningStore.defaultDirectory().appendingPathComponent("traces", isDirectory: true)
     }
@@ -128,6 +133,46 @@ public final class TesseraTraceStore: @unchecked Sendable {
         try trimRuntimeUnlocked(
             budgetBytes: Self.runtimeBudgetBytesDefault, exemptSids: exemptSids)
         return dest
+    }
+
+    /// Append replay-derived telemetry records (runtime-traces spec section
+    /// 12.2). Records are imatrix calibration output over a decoded session
+    /// corpus, stamped by the curation stage with "provenance":"replay" and
+    /// "replayed_from":"runtime"; they carry no sid (the sid is stripped at
+    /// promotion). Written verbatim as traces-replay-<date>.jsonl. Date-based
+    /// retention applies to replay files; the runtime rolling cap never does.
+    /// Returns the stored file URL, or nil when there was nothing to write.
+    @discardableResult
+    public func appendReplay(records: [String], exemptSids: Set<String> = []) throws -> URL? {
+        lock.lock(); defer { lock.unlock() }
+        guard !records.isEmpty else { return nil }
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let stem = Self.datedStem(Date(), prefix: Self.replayFilePrefix)
+        var name = "\(stem).jsonl"
+        var n = 1
+        while fm.fileExists(atPath: directory.appendingPathComponent(name).path) {
+            name = "\(stem)-\(n).jsonl"
+            n += 1
+        }
+        let dest = directory.appendingPathComponent(name)
+        try (records.joined(separator: "\n") + "\n")
+            .write(to: dest, atomically: true, encoding: .utf8)
+        cachedRecordCount = nil
+        runtimeIndexCache = nil
+
+        // Retention covers every provenance; quarantined sessions stay exempt.
+        try trimExpiredUnlocked(
+            retentionDays: TesseraSettings.learningDataRetentionDays,
+            exemptSids: exemptSids, now: Date())
+        return dest
+    }
+
+    /// Replay trace files, oldest-first.
+    public func replayFiles() -> [URL] {
+        lock.lock(); defer { lock.unlock() }
+        return traceFilesUnlocked()
+            .filter { $0.lastPathComponent.hasPrefix(Self.replayFilePrefix) }
     }
 
     /// Stored trace files, oldest-first (the dated names sort chronologically).
@@ -231,6 +276,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
 
     // MARK: - Trimming (caller holds the lock)
 
+    @discardableResult
     private func trimRuntimeUnlocked(budgetBytes: Int, exemptSids: Set<String>) throws -> Int {
         let entries = runtimeIndexUnlocked()
         var total = entries.reduce(0) { $0 + $1.bytes }
@@ -249,6 +295,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
         return removed
     }
 
+    @discardableResult
     private func trimExpiredUnlocked(retentionDays: Int, exemptSids: Set<String>, now: Date) throws -> Int {
         guard retentionDays > 0 else { return 0 }
         let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86_400)

@@ -58,6 +58,8 @@ public enum TesseraSettingsKey {
     public static let learningTrainBinary = "tessera.settings.learningTrainBinary"
     public static let learningAutoTrain = "tessera.settings.learningAutoTrain"
     public static let learningTrainingIntervalHours = "tessera.settings.learningTrainingIntervalHours"
+    // Session replay / curation stage (runtime-traces spec section 12)
+    public static let learningSessionCuration = "tessera.settings.learningSessionCuration"
     // Runtime speculative decoding + trace capture (runtime-traces spec section 7)
     public static let learningRuntimeDraftModel = "tessera.settings.learningRuntimeDraftModel"
     public static let learningRuntimeCapture = "tessera.settings.learningRuntimeCapture"
@@ -122,6 +124,10 @@ public enum TesseraSettingsDefault {
     // dry-run default keep it harmless until the flywheel is supplied.
     public static let learningAutoTrain = true
     public static let learningTrainingIntervalHours = 24
+    // Idle session curation sweep (analysis + verdicts + replay). On by
+    // default like auto-train; the stage's own gates (trunk model, captured
+    // sessions) keep it a no-op until the flywheel is supplied.
+    public static let learningSessionCuration = true
     // Runtime speculative decoding + trace capture. The drafter path is read
     // when the Playground provider initializes: empty auto-derives
     // "<base>-tessera-trained.gguf" next to the base model, the sentinel "-"
@@ -214,6 +220,7 @@ public enum TesseraSettings {
             TesseraSettingsKey.learningTrainBinary: TesseraSettingsDefault.learningTrainBinary,
             TesseraSettingsKey.learningAutoTrain: TesseraSettingsDefault.learningAutoTrain,
             TesseraSettingsKey.learningTrainingIntervalHours: TesseraSettingsDefault.learningTrainingIntervalHours,
+            TesseraSettingsKey.learningSessionCuration: TesseraSettingsDefault.learningSessionCuration,
             TesseraSettingsKey.learningRuntimeDraftModel: TesseraSettingsDefault.learningRuntimeDraftModel,
             TesseraSettingsKey.learningRuntimeCapture: TesseraSettingsDefault.learningRuntimeCapture,
             TesseraSettingsKey.learningRuntimeCaptureTopk: TesseraSettingsDefault.learningRuntimeCaptureTopk,
@@ -449,6 +456,13 @@ public enum TesseraSettings {
     public static var learningTrainingIntervalHours: Int {
         let v = UserDefaults.standard.integer(forKey: TesseraSettingsKey.learningTrainingIntervalHours)
         return v > 0 ? v : TesseraSettingsDefault.learningTrainingIntervalHours
+    }
+
+    /// Whether the idle scheduler runs session-curation sweeps (analysis,
+    /// verdicts, replay). The stage's own gates still apply on every sweep.
+    public static var learningSessionCuration: Bool {
+        // register(defaults:) seeds this, so the bool read is meaningful.
+        UserDefaults.standard.bool(forKey: TesseraSettingsKey.learningSessionCuration)
     }
 
     /// Runtime speculative drafter GGUF. Empty auto-derives

@@ -115,6 +115,11 @@ int32_t cllama_engine_generate_spec(cllama_spec_engine *eng,
 // Free the spec engine. NULL-safe.
 void cllama_engine_free_spec(cllama_spec_engine *eng);
 
+// Vocab size of the engine's model (llama_vocab_n_tokens). Used by the
+// curation stage's compatibility check: captured token ids must fall inside
+// the current trunk's vocab. Returns -1 on error.
+int32_t cllama_engine_n_vocab(const cllama_engine *eng);
+
 // Detokenize `n_tokens` token ids into UTF-8 text using the engine's vocab
 // (stateless, no context needed - used by the trace curation stage to decode
 // accepted token sequences). Returns the number of bytes written excluding

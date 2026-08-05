@@ -201,7 +201,13 @@ public actor LlamaLLMProvider: LLMProvider {
     private func flushSessionTraces() {
         guard !sessionTraceBuffer.isEmpty else { return }
         do {
-            try traceStore.appendRuntime(records: sessionTraceBuffer)
+            // Quarantined sessions are exempt from automatic retention
+            // entirely (spec section 12.4); the ledger under the same
+            // learning root names them.
+            let ledger = TesseraCurationLedger(
+                directory: traceStore.directoryURL.deletingLastPathComponent())
+            try traceStore.appendRuntime(
+                records: sessionTraceBuffer, exemptSids: ledger.quarantinedSids())
             sessionTraceBuffer.removeAll()
         } catch {
             print("[tessera.runtime] trace flush failed, keeping \(sessionTraceBuffer.count) record(s) buffered: \(error.localizedDescription)")

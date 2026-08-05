@@ -57,6 +57,7 @@ static struct {
     typeof(llama_tokenize)                   * tokenize;
     typeof(llama_token_to_piece)             * token_to_piece;
     typeof(llama_detokenize)                 * detokenize;
+    typeof(llama_vocab_n_tokens)             * vocab_n_tokens;
     typeof(llama_vocab_is_eog)               * vocab_is_eog;
     typeof(llama_batch_get_one)              * batch_get_one;
     typeof(llama_decode)                     * decode;
@@ -154,6 +155,7 @@ int cllama_load_library(const char *dylib_path_override) {
     RESOLVE(tokenize,                   "llama_tokenize");
     RESOLVE(token_to_piece,             "llama_token_to_piece");
     RESOLVE(detokenize,                 "llama_detokenize");
+    RESOLVE(vocab_n_tokens,             "llama_vocab_n_tokens");
     RESOLVE(vocab_is_eog,               "llama_vocab_is_eog");
     RESOLVE(batch_get_one,              "llama_batch_get_one");
     RESOLVE(decode,                     "llama_decode");
@@ -494,6 +496,21 @@ void cllama_engine_free(cllama_engine *eng) {
     free(eng);
 }
 
+int32_t cllama_engine_n_vocab(const cllama_engine *eng) {
+    if (!cllama_is_available()) {
+        set_error("cllama: library not loaded; call cllama_load_library first");
+        return -1;
+    }
+    if (eng == NULL || eng->vocab == NULL) {
+        set_error("cllama: null engine");
+        return -1;
+    }
+
+    const int32_t n = g_llama.vocab_n_tokens(eng->vocab);
+    g_error[0] = '\0';
+    return n;
+}
+
 int32_t cllama_detokenize(const cllama_engine *eng,
                           const int32_t *tokens,
                           int32_t n_tokens,
@@ -595,6 +612,12 @@ int32_t cllama_engine_generate_spec(cllama_spec_engine *eng,
 
 void cllama_engine_free_spec(cllama_spec_engine *eng) {
     (void)eng;
+}
+
+int32_t cllama_engine_n_vocab(const cllama_engine *eng) {
+    (void)eng;
+    set_error("cllama: built without llama.cpp headers (CLLAMA_NO_HEADERS)");
+    return -1;
 }
 
 int32_t cllama_detokenize(const cllama_engine *eng,
