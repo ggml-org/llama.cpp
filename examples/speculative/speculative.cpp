@@ -61,7 +61,7 @@ int main(int argc, char ** argv) {
     const auto output_limits = common_speculative_get_output_limits(
             params.n_batch, params.n_parallel, params.speculative.draft.n_max);
     params.n_outputs_max = output_limits.total;
-    params.n_sampling_outputs_per_seq_max = output_limits.per_seq;
+    params.n_outputs_max_per_seq = output_limits.per_seq;
 
     // probability threshold for splitting a draft branch (only for n_seq_dft > 1)
     const float p_draft_split = params.speculative.draft.p_split;
@@ -90,7 +90,7 @@ int main(int argc, char ** argv) {
     params.model = params.speculative.draft.mparams;
     params.n_gpu_layers = params.speculative.draft.n_gpu_layers;
     params.n_outputs_max = params.n_parallel;
-    params.n_sampling_outputs_per_seq_max = 1;
+    params.n_outputs_max_per_seq = 1;
     if (params.speculative.draft.cpuparams.n_threads > 0) {
         params.cpuparams.n_threads = params.speculative.draft.cpuparams.n_threads;
     }

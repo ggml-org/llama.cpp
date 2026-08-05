@@ -302,7 +302,6 @@ struct server_slot {
     json json_schema;
 
     common_sampler_ptr smpl;
-    bool backend_sampling = false;
 
     llama_token sampled; // in speculative mode, this is the last accepted token
 
@@ -364,7 +363,6 @@ struct server_slot {
         task.reset();
 
         llama_set_sampler(ctx_tgt, id, nullptr);
-        backend_sampling = false;
 
         // clear alora start
         alora_invocation_start = -1;
@@ -1066,7 +1064,7 @@ private:
         params_base = params;
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
-        params_base.n_sampling_outputs_per_seq_max = output_limits.per_seq;
+        params_base.n_outputs_max_per_seq = output_limits.per_seq;
 
         const bool has_mmproj = !params.mmproj.path.empty();
         const bool has_draft = params.speculative.has_dft();
@@ -1842,10 +1840,9 @@ private:
 
             // TODO: tmp until backend sampling is fully implemented
             if (use_backend_sampling) {
-                slot.backend_sampling = llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
+                llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
             } else {
                 llama_set_sampler(ctx_tgt, slot.id, nullptr);
-                slot.backend_sampling = false;
             }
 
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
@@ -3914,12 +3911,7 @@ private:
                         slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1);
 
                         slot.prompt.tokens.keep_first(ckpt.n_tokens);
-                        if (slot.backend_sampling) {
-                            slot.backend_sampling = llama_set_sampler(
-                                slot.ctx_tgt, slot.id, common_sampler_get(smpl_save.get()));
-                        }
-
-                        slot.smpl = std::move(smpl_save);
+                        common_sampler_copy(smpl_save.get(), slot.smpl.get());
 
                         return;
                     }
