@@ -62,6 +62,11 @@ ROLE_HYBRID = "hybrid"
 ROLE_SYNC = "sync"
 ROLE_RESET = "reset"
 ROLE_MATMUL = "matmul"
+ROLE_RMS_NORM = "rms_norm"
+ROLE_SOFT_MAX = "soft_max"
+ROLE_ROPE = "rope"
+ROLE_GLU = "glu"
+ROLE_GET_ROWS = "get_rows"
 
 # Core ML model type. Determines whether MLModelConfiguration.functionName
 # is settable at load time. The W0 spike's matmul is a NeuralNetwork
@@ -128,7 +133,9 @@ class FunctionSpec:
     def validate(self) -> None:
         if self.role not in (ROLE_UNKNOWN, ROLE_PREFILL, ROLE_MTP,
                              ROLE_DFLASH, ROLE_HYBRID, ROLE_SYNC,
-                             ROLE_RESET, ROLE_MATMUL):
+                             ROLE_RESET, ROLE_MATMUL,
+                             ROLE_RMS_NORM, ROLE_SOFT_MAX, ROLE_ROPE,
+                             ROLE_GLU, ROLE_GET_ROWS):
             raise ValueError(f"function {self.name}: bad role {self.role!r}")
         if len(self.input_slots) > 8 or len(self.output_slots) > 8:
             raise ValueError(
@@ -210,6 +217,179 @@ class StateLayout:
                 core_ml_function_name="main",
                 use_ane=True,
             )],
+            dependencies=[],
+        )
+
+    # ---- body-op constructors ----
+    #
+    # Phase 1 of docs/tessera-ane-ios-demo-design.md adds five
+    # transformer body ops to the ANE backend: RMS_NORM, SOFT_MAX,
+    # ROPE (gemma 4 variant), GLU (split form), GET_ROWS. Each
+    # fixture is a single-function .mlmodelc shaped for the test
+    # harness; the multifunction bundle (for_transformer_body)
+    # glues them together as one stateless .mlmodelc with one
+    # functionName per op.
+
+    @classmethod
+    def for_body_op(cls,
+                    bundle_name: str,
+                    role: str,
+                    function_name: str,
+                    inputs: list,
+                    outputs: list,
+                    state_size_bytes: int = ANE_MIN_ALLOC_BYTES) -> "StateLayout":
+        """Single-function body-op layout: stateless, one slot per
+        input/output, no STATE slots, no cross-function dependencies.
+
+        ``inputs`` and ``outputs`` are lists of (name, dtype, shape)
+        tuples. Slots are 16 KB-page-aligned (ANE page size); the
+        state_size_bytes defaults to the 64 KB ANE minimum and is
+        rounded up to the next 16 KB page.
+        """
+        if role not in (ROLE_RMS_NORM, ROLE_SOFT_MAX, ROLE_ROPE,
+                        ROLE_GLU, ROLE_GET_ROWS):
+            raise ValueError(f"for_body_op: bad role {role!r}")
+
+        def _slot(name: str, kind: str, dtype: str, shape: list, offset: int) -> StateSlot:
+            esize = DTYPE_BYTES[dtype]
+            count = 1
+            for d in shape:
+                count *= d
+            raw = count * esize
+            size = ((raw + ANE_SIMD_ALIGN - 1) // ANE_SIMD_ALIGN) * ANE_SIMD_ALIGN
+            return StateSlot(
+                name=name,
+                kind=kind,
+                dtype=dtype,
+                shape=list(shape),
+                offset=offset,
+                size_bytes=size,
+            )
+
+        slots = []
+        offset = 0
+        in_names = []
+        for (name, dtype, shape) in inputs:
+            slots.append(_slot(name, SLOT_KIND_INPUT, dtype, shape, offset))
+            offset += slots[-1].size_bytes
+            # Pad each input to a full 16 KB page so the model's
+            # IOSurface read is page-aligned (ANE read constraint).
+            offset = ((offset + ANE_PAGE_BYTES - 1) // ANE_PAGE_BYTES) * ANE_PAGE_BYTES
+            in_names.append(name)
+        out_names = []
+        for (name, dtype, shape) in outputs:
+            slots.append(_slot(name, SLOT_KIND_OUTPUT, dtype, shape, offset))
+            offset += slots[-1].size_bytes
+            offset = ((offset + ANE_PAGE_BYTES - 1) // ANE_PAGE_BYTES) * ANE_PAGE_BYTES
+            out_names.append(name)
+
+        # Round the total state up to a 16 KB page and clamp to the
+        # 64 KB ANE minimum. for_w0_matmul does the same.
+        state_size = ((offset + ANE_PAGE_BYTES - 1) // ANE_PAGE_BYTES) * ANE_PAGE_BYTES
+        if state_size < ANE_MIN_ALLOC_BYTES:
+            state_size = ANE_MIN_ALLOC_BYTES
+        if state_size_bytes > state_size:
+            state_size = state_size_bytes
+
+        return cls(
+            version=SCHEMA_VERSION,
+            bundle_name=bundle_name,
+            state_size_bytes=state_size,
+            model_type=MODEL_TYPE_ML_PROGRAM,
+            slots=slots,
+            functions=[FunctionSpec(
+                name=function_name,
+                role=role,
+                bucket=0,
+                stateful=False,
+                input_slots=in_names,
+                output_slots=out_names,
+                core_ml_function_name=function_name,
+                use_ane=True,
+            )],
+            dependencies=[],
+        )
+
+    @classmethod
+    def for_transformer_body(cls,
+                             bundle_name: str,
+                             functions: list) -> "StateLayout":
+        """Multifunction transformer-body layout: one .mlmodelc with
+        N functions, one slot per function input/output, no cross-
+        function dependencies (the bundle is stateless from the
+        ANE's perspective; per-iteration state is supplied by the
+        host via IOSurface).
+
+        ``functions`` is a list of dicts with keys:
+          - name: functionName in the .mlmodelc
+          - role: one of ROLE_RMS_NORM / ROLE_SOFT_MAX / ROLE_ROPE /
+                  ROLE_GLU / ROLE_GET_ROWS
+          - inputs: list of (name, dtype, shape)
+          - outputs: list of (name, dtype, shape)
+        """
+        slots = []
+        offset = 0
+        func_specs = []
+        seen_names = set()
+        for spec in functions:
+            fname = spec["name"]
+            if fname in seen_names:
+                raise ValueError(f"duplicate function name {fname!r}")
+            seen_names.add(fname)
+
+            def _slot(name: str, kind: str, dtype: str, shape: list, offset: int) -> StateSlot:
+                esize = DTYPE_BYTES[dtype]
+                count = 1
+                for d in shape:
+                    count *= d
+                raw = count * esize
+                size = ((raw + ANE_SIMD_ALIGN - 1) // ANE_SIMD_ALIGN) * ANE_SIMD_ALIGN
+                return StateSlot(
+                    name=f"{fname}.{name}",
+                    kind=kind,
+                    dtype=dtype,
+                    shape=list(shape),
+                    offset=offset,
+                    size_bytes=size,
+                )
+
+            in_names = []
+            for (n, dtype, shape) in spec["inputs"]:
+                full = f"{fname}.{n}"
+                slots.append(_slot(n, SLOT_KIND_INPUT, dtype, shape, offset))
+                offset += slots[-1].size_bytes
+                offset = ((offset + ANE_PAGE_BYTES - 1) // ANE_PAGE_BYTES) * ANE_PAGE_BYTES
+                in_names.append(full)
+            out_names = []
+            for (n, dtype, shape) in spec["outputs"]:
+                full = f"{fname}.{n}"
+                slots.append(_slot(n, SLOT_KIND_OUTPUT, dtype, shape, offset))
+                offset += slots[-1].size_bytes
+                offset = ((offset + ANE_PAGE_BYTES - 1) // ANE_PAGE_BYTES) * ANE_PAGE_BYTES
+                out_names.append(full)
+
+            func_specs.append(FunctionSpec(
+                name=fname,
+                role=spec["role"],
+                bucket=0,
+                stateful=False,
+                input_slots=in_names,
+                output_slots=out_names,
+                core_ml_function_name=fname,
+                use_ane=True,
+            ))
+
+        state_size = ((offset + ANE_PAGE_BYTES - 1) // ANE_PAGE_BYTES) * ANE_PAGE_BYTES
+        if state_size < ANE_MIN_ALLOC_BYTES:
+            state_size = ANE_MIN_ALLOC_BYTES
+
+        return cls(
+            version=SCHEMA_VERSION,
+            bundle_name=bundle_name,
+            state_size_bytes=state_size,
+            model_type=MODEL_TYPE_ML_PROGRAM,
+            slots=slots,
+            functions=func_specs,
             dependencies=[],
         )
 

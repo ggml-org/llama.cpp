@@ -101,6 +101,23 @@ typedef enum {
     // Generic matmul (the W0/W1 spike's path). Stateless;
     // input "x" and output "y" only.
     ANE_ROLE_MATMUL   = 7,
+    // Per-row RMSNorm. Stateless, one input row and one output
+    // row of the same length (the W2 body-op spike's path).
+    ANE_ROLE_RMS_NORM = 8,
+    // Row softmax. Stateless, one input row and one output row
+    // of the same length.
+    ANE_ROLE_SOFT_MAX = 9,
+    // Rotary position embedding (gemma 4 variant). Reads the
+    // query/key tensor and the positions; writes the rotated
+    // tensor in place.
+    ANE_ROLE_ROPE     = 10,
+    // Gated linear unit (gemma 4 split-form: input is the
+    // concatenated [gate | up] row, output is gate_act * up).
+    // Stateless.
+    ANE_ROLE_GLU      = 11,
+    // Embedding lookup (get_rows). Reads the embedding matrix
+    // and a vector of token ids; writes the looked-up rows.
+    ANE_ROLE_GET_ROWS = 12,
 } ane_role_t;
 
 // Core ML model spec type. Determines whether

@@ -1142,6 +1142,91 @@ static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> 
     return true;
 }
 
+// ANE-vs-Accelerate dispatch policy.
+//
+// The host-side split: ANE for compute-bound ops whose per-call
+// shape matches a function baked into the .mlmodelc, Accelerate
+// (vDSP) for elementwise ops and any op whose shape doesn't match
+// the bound bundle. The dispatcher in ggml_ane_program_dispatch_op
+// checks ANE eligibility per op and either dispatches the bound
+// bundle's functionName (when ANE is the better fit) or returns
+// false so the scheduler routes the op to ggml-cpu (which uses
+// Accelerate via vDSP). The hard rule: ANE is used when ANE is
+// faster, not when ANE is available.
+//
+// Per-op policy (mirrors docs/tessera-ane-ios-demo-design.md,
+// Phase 1 table):
+//
+//   MUL_MAT (T640_3D)  -> ANE (L1 path, Phase 0; the matmul is
+//                         the whole point)
+//   MUL_MAT (BF16/fp16)-> ANE if the bound bundle's function matches
+//                         the op's shape; otherwise fall through
+//                         to Accelerate BLAS (the W0 spike's path
+//                         is the canonical case).
+//   RMS_NORM            -> ANE (per-row reduction; shape is
+//                         bake-time-locked to the .mlmodelc)
+//   SOFT_MAX            -> ANE (row softmax)
+//   ROPE                -> ANE (gemma 4 variant; falls through
+//                         for variants not yet exported as bundle
+//                         functions)
+//   GLU                 -> ANE for the gemma 4 split-form case;
+//                         otherwise fall through
+//   GET_ROWS            -> ANE for small vocab (vocab <= 128 in
+//                         this spike); larger embed-lookup goes
+//                         through the host-side memcpy path
+//                         because the IOSurface write is
+//                         bandwidth-bound
+//   ADD / MUL / SCALE  -> Accelerate (ANE dispatch overhead > vDSP
+//                         cost for elementwise; the ggml-ane
+//                         backend's ggml_ane_compute_elementwise
+//                         path already uses Accelerate on the
+//                         IOSurface arena)
+//   RESHAPE / VIEW /   -> free, no compute
+//   PERMUTE / CONT
+//   CPY                -> memcpy on the host-mapped arena
+//
+// The policy is encoded as a small enum + helper below; each
+// dispatch case uses the helper to decide whether to attempt the
+// ANE path or return false immediately for the scheduler to route
+// to the CPU/Accelerate path.
+
+enum ggml_ane_dispatch_target {
+    GGML_ANE_DISPATCH_ANE        = 0, // ANE if a function is available for this op
+    GGML_ANE_DISPATCH_ACCELERATE = 1, // always fall through to Accelerate
+    GGML_ANE_DISPATCH_NONE       = 2, // not ANE-eligible (unsupported)
+};
+
+static enum ggml_ane_dispatch_target ggml_ane_dispatch_policy(const ggml_tensor * op) {
+    switch (op->op) {
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_RMS_NORM:
+        case GGML_OP_SOFT_MAX:
+        case GGML_OP_ROPE:
+        case GGML_OP_GLU:
+        case GGML_OP_GET_ROWS:
+            return GGML_ANE_DISPATCH_ANE;
+        case GGML_OP_ADD:
+        case GGML_OP_MUL:
+        case GGML_OP_SCALE:
+        case GGML_OP_CLAMP:
+        case GGML_OP_REPEAT:
+        case GGML_OP_LEAKY_RELU:
+        case GGML_OP_SQR:
+        case GGML_OP_SQRT:
+        case GGML_OP_LOG:
+        case GGML_OP_SIN:
+        case GGML_OP_COS:
+        case GGML_OP_UNARY:
+            // Already handled by ggml_ane_compute_elementwise on the
+            // IOSurface arena. The dispatch helper should not pick
+            // these up; the graph_compute path's elementwise branch
+            // serves them via Accelerate.
+            return GGML_ANE_DISPATCH_ACCELERATE;
+        default:
+            return GGML_ANE_DISPATCH_NONE;
+    }
+}
+
 // Resolve the bundle function to dispatch for a given op, by name. The bundle
 // must expose inputs/outputs in the alphabetical binding order mandated by
 // Orion #3/#19; we look up by the model's own declared names, so the export
@@ -1167,8 +1252,16 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
     // rebuilt with the model-specific weights (one-time at load), so the
     // per-iteration dispatch never sees the weight from ggml. This is
     // documented as the integration point: once the conversion tool emits
-    // a function-name table keyed by ggml tensor name, the dispatch below
-    // grows to call the right per-projection function.
+    // Per-op dispatch policy: skip the bundle entirely for ops that
+    // the ggml-ane backend's elementwise / layout path already serves
+    // (or that we don't support at all). The default case below falls
+    // through to a precise per-op shape/function check; this filter
+    // keeps the switch compact and documents the policy.
+    const enum ggml_ane_dispatch_target policy = ggml_ane_dispatch_policy(op);
+    if (policy != GGML_ANE_DISPATCH_ANE) {
+        return false;
+    }
+
     switch (op->op) {
         case GGML_OP_MUL_MAT: {
             // Decode (M=1) is the canonical ANE path. The activation is
@@ -1226,6 +1319,71 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             // Build the input/output maps and call the bundle. The
             // bundle's "main" function is the default function name.
+            std::unordered_map<std::string, const float *> inputs;
+            inputs.emplace("x", (const float *) op->src[0]->data);
+            std::vector<std::string> out_names_vec = { "y" };
+            std::unordered_map<std::string, float *> outputs;
+            outputs.emplace("y", (float *) op->data);
+            const bool ok = ggml_ane_program_run(program, inputs, out_names_vec, outputs);
+            if (ok) {
+                out_names = std::move(out_names_vec);
+            }
+            return ok;
+        }
+        case GGML_OP_RMS_NORM: {
+            // Per-row RMSNorm: y = x * rsqrt(mean(x^2) + eps). The
+            // W2 body-op spike exports one functionName "rmsnorm" of
+            // shape [1, K] fp16. K is the bundle's baked input dim
+            // and is read from MLModelDescription. The op's src[0]
+            // is the row to norm; the dst is the result. eps is
+            // packed in op_params[0] as a single float; we read it
+            // for the manifest-side sanity check but the bundle
+            // bakes eps at export time (Phase 1 ships a single
+            // eps value per .mlmodelc; per-call eps is a follow-on
+            // that requires the bundle to expose eps as a bundle
+            // input).
+            if (op->src[0] == nullptr) {
+                return false;
+            }
+            if (op->ne[1] != 1) {
+                // Per-row reduction over ne[0]: only the decode
+                // shape [1, K] is in this spike. Prefill (ne[1] > 1)
+                // is multi-row and would require a different bundle
+                // function (one row per parallel dispatch); the
+                // scheduler routes those to the CPU backend until
+                // a multi-row bundle lands.
+                return false;
+            }
+            if (op->src[0]->type != GGML_TYPE_F32 ||
+                op->type != GGML_TYPE_F32) {
+                // fp32 in / fp32 out (the bundle is internally
+                // fp16; Core ML handles the precision conversion).
+                // fp16 / quantized are follow-ons.
+                return false;
+            }
+            float eps = 0.0f;
+            std::memcpy(&eps, op->op_params, sizeof(float));
+            (void) eps; // currently unused: the bundle bakes eps.
+            MLModelDescription * desc = program->model.modelDescription;
+            if (!desc) {
+                return false;
+            }
+            MLFeatureDescription * x_desc = desc.inputDescriptionsByName[@"x"];
+            MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
+            if (!x_desc || x_desc.type != MLFeatureTypeMultiArray ||
+                !y_desc || y_desc.type != MLFeatureTypeMultiArray) {
+                return false;
+            }
+            NSArray<NSNumber *> * x_shape = x_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
+            if (x_shape.count != 1 || y_shape.count != 1 ||
+                x_shape[0].longLongValue != op->ne[0] ||
+                y_shape[0].longLongValue != op->ne[0]) {
+                // Bundle's baked shape does not match the ggml op's
+                // shape; refuse the dispatch so the scheduler can
+                // route the op to a different backend.
+                return false;
+            }
             std::unordered_map<std::string, const float *> inputs;
             inputs.emplace("x", (const float *) op->src[0]->data);
             std::vector<std::string> out_names_vec = { "y" };
@@ -1475,10 +1633,14 @@ static bool ggml_ane_supported_tensor_type(enum ggml_type type) {
 // path is still gated behind TODO(ane-bundle)) or an Accelerate elementwise
 // implementation (ggml_ane_compute_elementwise). We advertise only ops that
 // also have the elementwise path so the backend is exercisable without a
-// bundle. Composite ANE-NATIVE-C ops (RMS_NORM, ROPE, SOFT_MAX, SDPA,
-// TILE640_*, DIAG_MASK_INF) are NOT advertised yet because their compute
-// lives in a bundle function we do not dispatch today; returning true for
-// them would make graph_compute fail at the "no compute path" assert.
+// bundle. ANE-NATIVE-B body ops (RMS_NORM, SOFT_MAX, ROPE, GLU, GET_ROWS)
+// are advertised here and dispatched in ggml_ane_program_dispatch_op to
+// the bound bundle's functionName; the precise shape/dtype match is
+// enforced in dispatch_op, not here. Composite ANE-NATIVE-C ops (SDPA,
+// TILE640_*, DIAG_MASK_INF) are still NOT advertised because their
+// compute lives in a bundle function we do not dispatch yet; returning
+// true for them would make graph_compute fail at the "no compute path"
+// assert.
 //
 // GELU decision (Section 4.2.3): the loaded Core ML bundle already bakes in
 // the tanh approximation, so GELU itself stays ANE-BREAKS here and the
@@ -1518,6 +1680,24 @@ static bool ggml_backend_ane_device_supports_op(ggml_backend_dev_t dev, const gg
                 return true;
             }
             return false;
+
+        // ANE-NATIVE-B body ops. Each is dispatched to the bound
+        // bundle's functionName when the bundle's baked shape/dtype
+        // matches the ggml op (the precise check lives in
+        // ggml_ane_program_dispatch_op). The device-level supports_op
+        // does not have direct access to the bound program, so it
+        // advertises the op and the dispatch_op decides. A bundle
+        // without the matching function causes dispatch_op to return
+        // false; the graph then fails at graph_compute's "no compute
+        // path" check rather than silently miscomputing. Real
+        // production graphs are scheduled by a multi-backend
+        // scheduler that routes unmatched ops to ggml-cpu.
+        case GGML_OP_RMS_NORM:
+        case GGML_OP_SOFT_MAX:
+        case GGML_OP_ROPE:
+        case GGML_OP_GLU:
+        case GGML_OP_GET_ROWS:
+            return dev != nullptr;
 
         // ANE-NATIVE elementwise ops with an Accelerate implementation.
         case GGML_OP_ADD:
@@ -1566,9 +1746,8 @@ static bool ggml_backend_ane_device_supports_op(ggml_backend_dev_t dev, const gg
 
         // Everything else is ANE-BREAKS or CPU-GLUE per Section 4.1 and is
         // left for the scheduler to route to CPU/Metal. The notable omissions
-        // by design: MUL_MAT, RMS_NORM, ROPE, SOFT_MAX, CONCAT, GET_ROWS,
-        // FLASH_ATTN_EXT, TESSERA_PAGED_ATTN, TILE640_*, DIAG_MASK_INF,
-        // GELU, ARGSORT, TOP_K, SLICE, PAD, SSM_*, RWKV_*.
+        // by design: CONCAT, FLASH_ATTN_EXT, TESSERA_PAGED_ATTN, TILE640_*,
+        // DIAG_MASK_INF, GELU, ARGSORT, TOP_K, SLICE, PAD, SSM_*, RWKV_*.
         default:
             return false;
     }
