@@ -1361,6 +1361,280 @@ class TestTesseraDB(unittest.TestCase):
             self.assertEqual(df.height, 1)
 
 
+# ---- 9. Phase 0.5: exl2_layer_stats migration -------------------
+
+class TestExl2LayerStatsMigration(unittest.TestCase):
+    """Phase 0.5: the additive exl2_layer_stats table and
+    the exl2_error column on l5_plan_summary. The migration
+    is forward-only:
+
+      - A pre-Phase-0.5 DB (no exl2_layer_stats, no
+        exl2_error) sees the new table and the new
+        column on TesseraDB.open; old data is intact.
+      - A fresh DB sees the new table on the first
+        ``insert_exl2_layer_stats`` call (the
+        ``_ensure_exl2_layer_stats`` hook fires).
+      - The PK upsert pattern lets a re-run update
+        the prior value without a manual delete.
+      - ``get_exl2_per_layer_errors`` returns the
+        per-layer map; the ``calibration_corpus``
+        filter is honored when set.
+    """
+
+    def setUp(self) -> None:
+        self.paths: list[str] = []
+
+    def tearDown(self) -> None:
+        for p in self.paths:
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass
+
+    def _fresh_pre_phase_0_5_db(self, idx: int) -> str:
+        """Create a pre-Phase-0.5 DB: tensor_stats +
+        l5_plan_summary with the Phase 16 schema, but
+        no exl2_layer_stats table and no exl2_error
+        column on l5_plan_summary. One row in each
+        table for the migration's "old data is intact"
+        assertion."""
+        p = f"/tmp/tessera-db-py-test-exl2-{idx}.duckdb"
+        self.paths.append(p)
+        con = duckdb.connect(p)
+        try:
+            con.execute(
+                """
+                CREATE TABLE tensor_stats (
+                    model_hash TEXT NOT NULL,
+                    model_role TEXT NOT NULL DEFAULT 'trunk',
+                    name TEXT NOT NULL,
+                    family TEXT,
+                    layer_depth INTEGER,
+                    out_dim BIGINT,
+                    in_dim BIGINT,
+                    n_elements BIGINT,
+                    dtype TEXT,
+                    kurtosis DOUBLE,
+                    eff_rank DOUBLE,
+                    rms DOUBLE,
+                    mean_abs DOUBLE,
+                    tail_ratio DOUBLE,
+                    source TEXT,
+                    recommended_action TEXT,
+                    updated_at TIMESTAMP,
+                    backfill_count INTEGER DEFAULT NULL,
+                    PRIMARY KEY (model_hash, model_role, name)
+                );
+                CREATE TABLE l5_plan_summary (
+                    model_hash TEXT NOT NULL,
+                    model_role TEXT NOT NULL DEFAULT 'trunk',
+                    name TEXT NOT NULL,
+                    layer INTEGER,
+                    iteration INTEGER,
+                    plan_id TEXT,
+                    sensitivity_score DOUBLE,
+                    recommended_qtype TEXT,
+                    recommended_alpha DOUBLE,
+                    recommended_clip DOUBLE,
+                    imatrix_magnitude DOUBLE,
+                    gradient_proxy DOUBLE,
+                    layer_position_prior DOUBLE,
+                    updated_at TIMESTAMP,
+                    PRIMARY KEY (model_hash, model_role, name, iteration, plan_id)
+                );
+                INSERT INTO tensor_stats VALUES
+                    ('pre_phase_0_5_model', 'trunk',
+                     'blk.0.attn_q.weight', 'attn_q',
+                     0, 4096, 4096, 16777216, 'F16',
+                     3.0, 0.8, 0.1, 0.05, 5.0, 'cpp', 'protect',
+                     '2026-01-01 00:00:00', NULL);
+                INSERT INTO l5_plan_summary VALUES
+                    ('pre_phase_0_5_model', 'trunk',
+                     'blk.0.attn_q.weight', 0, 0, 'p0',
+                     0.5, 'Q4_K', 0.5, 1.0, 0.7, 0.4, 0.2,
+                     '2026-01-01 00:00:00');
+                """
+            )
+        finally:
+            con.close()
+        return p
+
+    def test_migration_creates_table_and_column(self) -> None:
+        """The migration adds the exl2_layer_stats
+        table and the exl2_error column on
+        l5_plan_summary; old data is intact."""
+        path = self._fresh_pre_phase_0_5_db(1)
+        with TesseraDB.open(path) as db:
+            names = db.table_names()
+            self.assertIn(
+                "exl2_layer_stats", names,
+                "exl2_layer_stats table not created")
+            # The additive column on l5_plan_summary.
+            df = db.query("SELECT * FROM l5_plan_summary")
+            self.assertIn(
+                "exl2_error", df.columns,
+                "exl2_error column not added")
+            # Old data intact: the original row is
+            # still readable with its pre-migration
+            # values.
+            df_old = db.query(
+                "SELECT kurtosis FROM tensor_stats "
+                "WHERE model_hash = 'pre_phase_0_5_model'"
+            )
+            self.assertEqual(len(df_old), 1)
+            self.assertAlmostEqual(
+                float(df_old["kurtosis"][0]), 3.0, places=4)
+            df_old_plan = db.query(
+                "SELECT sensitivity_score FROM l5_plan_summary "
+                "WHERE model_hash = 'pre_phase_0_5_model'"
+            )
+            self.assertEqual(len(df_old_plan), 1)
+            self.assertAlmostEqual(
+                float(df_old_plan["sensitivity_score"][0]),
+                0.5, places=4)
+
+    def test_insert_and_read_exl2_layer_stats(self) -> None:
+        """Insert a few rows, read them back via
+        ``get_exl2_per_layer_errors``, verify the
+        per-layer map shape."""
+        path = self._fresh_pre_phase_0_5_db(2)
+        with TesseraDB.open(path) as db:
+            n = db.insert_exl2_layer_stats(
+                "m1",
+                [
+                    {"layer_index": 0,
+                     "layer_name": "blk.0.attn_q.weight",
+                     "family": "attn_q",
+                     "n_elements": 16777216,
+                     "exl2_per_layer_error": 0.10,
+                     "exl2_per_layer_bpw": 4.0,
+                     "exl2_chosen_bpw": 4},
+                    {"layer_index": 1,
+                     "layer_name": "blk.1.attn_k.weight",
+                     "family": "attn_k",
+                     "n_elements": 16777216,
+                     "exl2_per_layer_error": 0.20,
+                     "exl2_per_layer_bpw": 5.0,
+                     "exl2_chosen_bpw": 5},
+                    {"layer_index": 2,
+                     "layer_name": "blk.2.ffn_down.weight",
+                     "family": "ffn_down",
+                     "n_elements": 45088768,
+                     "exl2_per_layer_error": 0.30,
+                     "exl2_per_layer_bpw": 3.0,
+                     "exl2_chosen_bpw": 3},
+                ],
+                calibration_corpus="wikitext-103",
+            )
+            self.assertEqual(n, 3)
+            errs = db.get_exl2_per_layer_errors(
+                "m1", calibration_corpus="wikitext-103")
+            self.assertEqual(
+                errs, {0: 0.10, 1: 0.20, 2: 0.30})
+            # No filter: returns all rows for the
+            # model across all corpora.
+            errs_all = db.get_exl2_per_layer_errors("m1")
+            self.assertEqual(
+                errs_all, {0: 0.10, 1: 0.20, 2: 0.30})
+
+    def test_pk_upsert_pattern(self) -> None:
+        """Re-inserting the same (model, layer, corpus)
+        row updates the prior value (the PK upsert
+        pattern; ``ON CONFLICT DO UPDATE``)."""
+        path = self._fresh_pre_phase_0_5_db(3)
+        with TesseraDB.open(path) as db:
+            db.insert_exl2_layer_stats(
+                "m1",
+                [{
+                    "layer_index": 0,
+                    "layer_name": "blk.0.attn_q.weight",
+                    "exl2_per_layer_error": 0.10,
+                    "exl2_per_layer_bpw": 4.0,
+                    "exl2_chosen_bpw": 4,
+                }],
+                calibration_corpus="wikitext-103",
+            )
+            # Re-insert: same PK, different value.
+            db.insert_exl2_layer_stats(
+                "m1",
+                [{
+                    "layer_index": 0,
+                    "layer_name": "blk.0.attn_q.weight",
+                    "exl2_per_layer_error": 0.99,
+                    "exl2_per_layer_bpw": 5.0,
+                    "exl2_chosen_bpw": 5,
+                }],
+                calibration_corpus="wikitext-103",
+            )
+            # Only one row, value updated.
+            errs = db.get_exl2_per_layer_errors(
+                "m1", calibration_corpus="wikitext-103")
+            self.assertEqual(errs, {0: 0.99})
+
+    def test_multiple_corpora_coexist(self) -> None:
+        """The PK includes ``exl2_calibration_corpus``,
+        so multiple corpus runs (wikitext-103, COCO)
+        coexist for the same model + layer."""
+        path = self._fresh_pre_phase_0_5_db(4)
+        with TesseraDB.open(path) as db:
+            db.insert_exl2_layer_stats(
+                "m1",
+                [{
+                    "layer_index": 0,
+                    "layer_name": "blk.0.attn_q.weight",
+                    "exl2_per_layer_error": 0.10,
+                    "exl2_per_layer_bpw": 4.0,
+                    "exl2_chosen_bpw": 4,
+                }],
+                calibration_corpus="wikitext-103",
+            )
+            db.insert_exl2_layer_stats(
+                "m1",
+                [{
+                    "layer_index": 0,
+                    "layer_name": "blk.0.attn_q.weight",
+                    "exl2_per_layer_error": 0.20,
+                    "exl2_per_layer_bpw": 5.0,
+                    "exl2_chosen_bpw": 5,
+                }],
+                calibration_corpus="coco",
+            )
+            # Both rows exist; the corpus filter
+            # picks the right one.
+            errs_wiki = db.get_exl2_per_layer_errors(
+                "m1", calibration_corpus="wikitext-103")
+            errs_coco = db.get_exl2_per_layer_errors(
+                "m1", calibration_corpus="coco")
+            self.assertEqual(errs_wiki, {0: 0.10})
+            self.assertEqual(errs_coco, {0: 0.20})
+
+    def test_migration_idempotent_on_reopen(self) -> None:
+        """Re-opening a post-migration DB is a no-op
+        (the migration is idempotent; the table and
+        column are present, the second open's
+        ``CREATE TABLE IF NOT EXISTS`` and
+        ``ADD COLUMN IF NOT EXISTS`` are no-ops)."""
+        path = self._fresh_pre_phase_0_5_db(5)
+        # First open: migration runs.
+        with TesseraDB.open(path) as db:
+            db.insert_exl2_layer_stats(
+                "m1",
+                [{
+                    "layer_index": 0,
+                    "layer_name": "blk.0.attn_q.weight",
+                    "exl2_per_layer_error": 0.5,
+                    "exl2_per_layer_bpw": 4.0,
+                    "exl2_chosen_bpw": 4,
+                }],
+                calibration_corpus="wikitext-103",
+            )
+        # Second open: idempotent.
+        with TesseraDB.open(path) as db:
+            errs = db.get_exl2_per_layer_errors(
+                "m1", calibration_corpus="wikitext-103")
+            self.assertEqual(errs, {0: 0.5})
+
+
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(TestTesseraDB)
     runner = unittest.TextTestRunner(verbosity=2)
