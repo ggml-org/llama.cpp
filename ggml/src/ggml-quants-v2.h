@@ -80,6 +80,21 @@ GGML_API void apply_outlier_addback_v2(float * GGML_RESTRICT row,
                                        const int32_t * GGML_RESTRICT outlier_cols,
                                        const void * GGML_RESTRICT outlier_vals);
 
+// Function D: decode_per_row_meta_v2
+//   Per-page: fp16 page_scale -> fp32 page_max via NEON
+//             vcvt_f32_f16 (4 fp16 -> 4 fp32 per chunk).
+//   Per-lane: int8 lane_scale -> fp32 / 127 via vDSP_vflt8
+//             (int8 -> fp32) + vDSP_vsdiv (/ 127).
+//   Writes page_max[p] and lane_scale[p, l] into caller
+//   buffers. Used by the dispatch when it needs the per-row
+//   meta as a pre-computed fp32 buffer (e.g. for a downstream
+//   per-row scaling step the v2 dequant does not do).
+GGML_API void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
+                                     const void * GGML_RESTRICT lane_scales_packed,
+                                     int64_t n_pages,
+                                     float * GGML_RESTRICT page_max_out,
+                                     float * GGML_RESTRICT lane_scale_out);
+
 // Feature flag accessor: tests and the dispatch read this to
 // decide whether to use v2 or the C reference. Default ON for
 // Apple Silicon builds; can be disabled with the

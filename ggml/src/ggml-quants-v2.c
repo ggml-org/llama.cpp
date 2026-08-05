@@ -437,3 +437,62 @@ void apply_outlier_addback_v2(float * GGML_RESTRICT row,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Function D: decode_per_row_meta_v2
+// ---------------------------------------------------------------------------
+//
+// Per-page: fp16 page_scale -> fp32 page_max via NEON
+// vcvt_f32_f16 (4 fp16 -> 4 fp32 per chunk). For pages < 4
+// the tail is handled scalar.
+//
+// Per-lane: int8 lane_scale -> fp32 / 127. vDSP_vflt8 (int8 ->
+// fp32, sign-extending) for the bulk conversion, vDSP_vsdiv
+// (divide by 127) for the normalisation. Output is
+// [n_pages * TILE640_LANES_PER_PAGE] floats.
+//
+// v2 is functionally identical to the C scalar loop in the
+// dispatch (the scalar path reads each page_scale and
+// lane_scale individually). The bulk conversion is the speedup.
+
+void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
+                            const void * GGML_RESTRICT lane_scales_packed,
+                            int64_t n_pages,
+                            float * GGML_RESTRICT page_max_out,
+                            float * GGML_RESTRICT lane_scale_out) {
+    const uint16_t * ps = (const uint16_t *) page_scales_packed;
+    const int8_t   * ls = (const int8_t   *) lane_scales_packed;
+    const int64_t n_lanes = n_pages * TILE640_LANES_PER_PAGE;
+
+    // page_max: NEON vcvt_f32_f16, 4 fp16 -> 4 fp32 per chunk.
+    int64_t p = 0;
+#if GGML_TESSERA_T640_V2_NEON
+    for (; p + 4 <= n_pages; p += 4) {
+        // Load 4 fp16 (each is a uint16_t) as a 64-bit value, then
+        // cast to float16x4_t for vcvt.
+        uint64_t bits;
+        memcpy(&bits, &ps[p], sizeof(bits));
+        float16x4_t vh = vreinterpret_f16_u64(vdup_n_u64(bits));
+        float32x4_t vf = vcvt_f32_f16(vh);
+        vst1q_f32(&page_max_out[p], vf);
+    }
+#endif
+    for (; p < n_pages; p++) {
+        page_max_out[p] = GGML_FP16_TO_FP32(ps[p]);
+    }
+
+    // lane_scale: int8 -> fp32, divide by 127.
+#if defined(__APPLE__)
+    // vDSP_vflt8: int8 -> float (sign-extending). Then /127.
+    // vDSP_vflt8 takes const char * (sign-extending), so we cast
+    // from int8_t * via a uintptr_t roundtrip to silence the
+    // pointer-sign warning.
+    vDSP_vflt8((const char *) ls, 1, lane_scale_out, 1, (vDSP_Length) n_lanes);
+    float inv127 = 1.0f / 127.0f;
+    vDSP_vsdiv(lane_scale_out, 1, &inv127, lane_scale_out, 1, (vDSP_Length) n_lanes);
+#else
+    for (int64_t i = 0; i < n_lanes; i++) {
+        lane_scale_out[i] = ((float) ls[i]) * (1.0f / 127.0f);
+    }
+#endif
+}
