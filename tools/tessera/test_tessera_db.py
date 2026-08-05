@@ -253,6 +253,58 @@ class TestTesseraDB(unittest.TestCase):
         # After close, the sync-on-exit drain must have landed all rows.
         self.assertEqual(_count(path, "tensor_stats"), 3)
 
+    # ---- 1a. Crash-safe close: explicit CHECKPOINT on TesseraDB.close
+    #          (and __exit__) must drain the WAL to the main file, so a
+    #          SIGKILL after close leaves no stale .wal blocking a
+    #          subsequent read-only open.
+
+    def test_close_checkpoints_wal(self) -> None:
+        path = self._fresh(101)
+        # Write a chunk of rows so the WAL is non-empty.
+        rows = [
+            {"name": f"blk.{i}.attn_q.weight", "family": "attn_q",
+             "layer_depth": i, "kurtosis": 3.0, "eff_rank": 0.8,
+             "dtype": "f16", "out_dim": 64, "in_dim": 64,
+             "n_elements": 4096}
+            for i in range(64)
+        ]
+        with TesseraDB.open(path) as db:
+            db.insert_tensor_stats(model_hash="wal-test", rows=rows)
+        wal_path = path + ".wal"
+        # The CHECKPOINT before close must have drained the WAL.
+        # DuckDB writes a .wal only if there is uncommitted data; with
+        # the explicit CHECKPOINT in close() the .wal is gone on a
+        # clean exit. A stale .wal is what blocks subsequent
+        # read-only opens and forces recovery.
+        self.assertFalse(
+            os.path.exists(wal_path),
+            f"stale WAL left on disk after TesseraDB.close: {wal_path}",
+        )
+        # The main file must be openable read-only after close
+        # (a stale .wal would block this).
+        with duckdb.connect(path, read_only=True) as ro:
+            count = ro.execute(
+                "SELECT count(*) FROM tensor_stats"
+            ).fetchone()[0]
+            self.assertEqual(count, 64)
+
+    def test_context_manager_exit_checkpoints_wal(self) -> None:
+        # Same as above but exercises the __exit__ path explicitly.
+        path = self._fresh(102)
+        with TesseraDB.open(path) as db:
+            db.insert_tensor_stats(
+                model_hash="ctx-test",
+                rows=[{"name": "blk.0.attn_q.weight", "family": "attn_q",
+                       "layer_depth": 0, "kurtosis": 3.0, "eff_rank": 0.8,
+                       "dtype": "f16", "out_dim": 64, "in_dim": 64,
+                       "n_elements": 4096}],
+            )
+        # __exit__ invoked; CHECKPOINT must have run.
+        self.assertFalse(
+            os.path.exists(path + ".wal"),
+            "stale WAL left on disk after TesseraDB context manager exit",
+        )
+
     # ---- 2. Multi-table writes (calibration + analytics) -------------
 
     def test_multi_table_writes(self) -> None:

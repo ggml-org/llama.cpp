@@ -1347,6 +1347,21 @@ class TesseraDB:
             self._buffers.clear()
         for b in bufs:
             b.close()
+        # Crash-safe shutdown: force a CHECKPOINT before closing the
+        # connection. DuckDB will checkpoint on a clean shutdown, but
+        # not on a SIGKILL (jetsam) - the WAL is left on disk and the
+        # next read-only open fails until something forces a flush.
+        # Issuing CHECKPOINT here guarantees a clean .duckdb and no
+        # stale .wal on every TesseraDB.close, including exception
+        # paths that go through __exit__.
+        try:
+            if not self._read_only:
+                self._conn.execute("CHECKPOINT")
+        except Exception as exc:  # pragma: no cover - best effort
+            sys.stderr.write(
+                "tessera-db: warning: CHECKPOINT before close failed: "
+                f"{exc!r}\n"
+            )
         try:
             self._conn.close()
         except Exception:
