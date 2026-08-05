@@ -19,7 +19,6 @@ struct socket_t {
     // writes into fixed-size frames and posts the trailing partial frame only
     // here. No-op on TCP.
     bool flush();
-    bool is_rdma() const;
     // True once the RDMA connection has failed; the caller should drop the socket.
     bool is_broken() const;
 

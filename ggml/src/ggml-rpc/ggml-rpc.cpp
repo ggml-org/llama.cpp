@@ -311,14 +311,6 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
     if (!sock->send_data(input, input_size)) {
         return false;
     }
-    // SET_TENSOR is the only command issued repeatedly with no reply in between:
-    // the scheduler uploads every graph input before calling graph_compute. Not
-    // flushing lets those uploads share transport frames instead of each ending
-    // one. Everything still buffered is flushed by the graph_compute that
-    // follows, by any command that reads a reply, or by synchronize().
-    if (cmd == RPC_CMD_SET_TENSOR) {
-        return true;
-    }
     return sock->flush();
 }
 
@@ -369,18 +361,16 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
     static std::unordered_map<std::string, std::weak_ptr<socket_t>> sockets;
-    // RDMA connections are expensive to setup/teardown, so keep them alive
-    // for the process lifetime, otherwise we see spam setups/teardowns on startup
-    static std::vector<std::shared_ptr<socket_t>> pinned;
 
     auto it = sockets.find(endpoint);
     if (it != sockets.end()) {
         if (auto sock = it->second.lock()) {
+            // there is no transparent reconnect, so a socket whose transport has
+            // failed is dropped here and replaced by a fresh connection
             if (!sock->is_broken()) {
                 return sock;
             }
             sockets.erase(it);
-            pinned.erase(std::remove(pinned.begin(), pinned.end(), sock), pinned.end());
         }
     }
     std::string host;
@@ -402,9 +392,6 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
     }
     LOG_DBG("[%s] connected to %s\n", __func__, endpoint.c_str());
     sockets[endpoint] = sock;
-    if (sock->is_rdma()) {
-        pinned.push_back(sock);
-    }
     return sock;
 }
 
@@ -692,13 +679,8 @@ static void ggml_backend_rpc_free(ggml_backend_t backend) {
 }
 
 static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
-    // There are no async operations, but the transport may be holding buffered
-    // writes (see send_rpc_cmd), so flush here for safety
-    ggml_backend_rpc_context * ctx = (ggml_backend_rpc_context *)backend->context;
-    auto sock = get_socket(ctx->endpoint);
-    if (sock != nullptr) {
-        sock->flush();
-    }
+    GGML_UNUSED(backend);
+    // this is no-op because we don't have any async operations
 }
 
 static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
