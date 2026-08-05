@@ -1,0 +1,471 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "title": "llama-server — rainbow",
+  "uid": "llama-rainbow",
+  "tags": ["llama.cpp", "llm", "gpu"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "timezone": "",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(up{job=\"llama-server\"}, host)",
+        "refresh": 2,
+        "current": {},
+        "includeAll": false,
+        "sort": 1
+      },
+      {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(llamacpp:kv_cache_k_bytes{host=\"$host\"}, model)",
+        "refresh": 2,
+        "current": {},
+        "includeAll": false,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Memory & KV cache",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "VRAM used",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "fixed", "fixedColor": "#2a78d6" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nvidia_smi_memory_used_bytes{host=\"$host\"}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "VRAM utilisation",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 85 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showThresholdMarkers": true },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * nvidia_smi_memory_used_bytes{host=\"$host\"} / nvidia_smi_memory_total_bytes{host=\"$host\"}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "KV total (K+V)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 10, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "fixed", "fixedColor": "#1baf7a" }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "area" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llamacpp:kv_cache_k_bytes{host=\"$host\",model=\"$model\"} + llamacpp:kv_cache_v_bytes{host=\"$host\",model=\"$model\"}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "K cache type",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#2a78d6" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "name", "colorMode": "none" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llamacpp:kv_cache_type{host=\"$host\",model=\"$model\",cache=\"k\"}",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "V cache type",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#eb6834" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "name", "colorMode": "none" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llamacpp:kv_cache_type{host=\"$host\",model=\"$model\",cache=\"v\"}",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "KV cache bytes vs free VRAM",
+      "description": "K and V cache footprint against free GPU memory. The headline tuning view: how much VRAM the KV cache costs, and how much headroom remains.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "K cache" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#2a78d6" } } ] },
+          { "matcher": { "id": "byName", "options": "V cache" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#eb6834" } } ] },
+          { "matcher": { "id": "byName", "options": "Free VRAM" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#1baf7a" } } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "llamacpp:kv_cache_k_bytes{host=\"$host\",model=\"$model\"}", "legendFormat": "K cache" },
+        { "refId": "B", "expr": "llamacpp:kv_cache_v_bytes{host=\"$host\",model=\"$model\"}", "legendFormat": "V cache" },
+        { "refId": "C", "expr": "nvidia_smi_memory_total_bytes{host=\"$host\"} - nvidia_smi_memory_used_bytes{host=\"$host\"}", "legendFormat": "Free VRAM" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "GPU & host",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "GPU utilisation",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 14 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "#2a78d6" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "refId": "A", "expr": "nvidia_smi_utilization_gpu_ratio{host=\"$host\"}", "legendFormat": "GPU util" }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "GPU temperature & power",
+      "description": "Two different scales are intentionally split into two panels — never a dual y-axis.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 14 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "#eb6834" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "refId": "A", "expr": "nvidia_smi_temperature_gpu{host=\"$host\"}", "legendFormat": "Temp" }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "GPU power draw",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 14 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "#1baf7a" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "refId": "A", "expr": "nvidia_smi_power_draw_watts{host=\"$host\"}", "legendFormat": "Power" }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Host CPU load & memory",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "#2a78d6" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Load 1m" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#2a78d6" } } ] }
+        ]
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "system_cpu_load_average_1m{host=\"$host\"}", "legendFormat": "Load 1m" }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Host memory used",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "#eb6834" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "refId": "A", "expr": "system_memory_usage_bytes{host=\"$host\",state=\"used\"}", "legendFormat": "Used" }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Latency & distribution",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "collapsed": false
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Prompt size (tokens) — p50/p95/p99",
+      "description": "Distribution of prompt tokens processed. Read p95 to place laddering rung boundaries.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#1baf7a" } } ] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#eb6834" } } ] },
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#2a78d6" } } ] }
+        ]
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(llamacpp:prompt_tokens_size_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(llamacpp:prompt_tokens_size_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(llamacpp:prompt_tokens_size_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Context used (tokens) — p50/p95/p99",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#1baf7a" } } ] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#eb6834" } } ] },
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#2a78d6" } } ] }
+        ]
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(llamacpp:context_used_tokens_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(llamacpp:context_used_tokens_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(llamacpp:context_used_tokens_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Time to first token (s) — p50/p95/p99",
+      "description": "Prompt-eval latency. The p95 tail is where re-prefill cost on a laddering rung switch shows up.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#1baf7a" } } ] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#eb6834" } } ] },
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#2a78d6" } } ] }
+        ]
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(llamacpp:time_to_first_token_seconds_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(llamacpp:time_to_first_token_seconds_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(llamacpp:time_to_first_token_seconds_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Generation latency (s) — p50/p95",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#1baf7a" } } ] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#eb6834" } } ] }
+        ]
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(llamacpp:generation_latency_seconds_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(llamacpp:generation_latency_seconds_bucket{host=\"$host\",model=\"$model\"}[$__rate_interval])))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Throughput & speculative decoding",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "collapsed": false
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Throughput (tokens/s)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 44 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Prompt" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#2a78d6" } } ] },
+          { "matcher": { "id": "byName", "options": "Generation" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#eb6834" } } ] }
+        ]
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "llamacpp:prompt_tokens_seconds{host=\"$host\",model=\"$model\"}", "legendFormat": "Prompt" },
+        { "refId": "B", "expr": "llamacpp:predicted_tokens_seconds{host=\"$host\",model=\"$model\"}", "legendFormat": "Generation" }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Speculative-decode acceptance rate",
+      "description": "accepted / drafted, windowed. Higher = the draft/MTP is earning its keep.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 44 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "#1baf7a" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(llamacpp:draft_tokens_accepted_total{host=\"$host\",model=\"$model\"}[$__rate_interval]) / clamp_min(rate(llamacpp:draft_tokens_total{host=\"$host\",model=\"$model\"}[$__rate_interval]), 1)", "legendFormat": "accept rate" }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Context-shift rate (per s)",
+      "description": "Rate of context shifts (oldest tokens discarded). Sustained non-zero means a rung is undersized for its traffic.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 44 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "#eb6834" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(llamacpp:n_ctx_shift_total{host=\"$host\",model=\"$model\"}[$__rate_interval])", "legendFormat": "ctx shifts/s" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+# OTel Collector agent — runs on the Fedora GPU host, ships directly to Mimir.
+# Deploy as a systemd service alongside llama-server. See README-metrics.md.
+#
+# Verified against otelcol-contrib v0.156.0 (installed from the GitHub release
+# RPM — NOT in Fedora repos; `dnf search otelcol` finds nothing). Component
+# names below use the v0.156.0 canonical underscore forms; the older aliases
+# (prometheusremotewrite / hostmetrics / resourcedetection) still work but log
+# deprecation warnings.
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        # llama-server. In ROUTER MODE scrape ONLY the router port (it proxies
+        # /metrics for the active child and labels series by model). Do NOT list
+        # child ports — they are internal, come and go, and a child started
+        # without --metrics returns HTTP 501. The router must be started with
+        # --metrics (children inherit it).
+        - job_name: llama-server
+          scrape_interval: 15s
+          static_configs:
+            - targets: ['127.0.0.1:8080']   # router port — set to yours
+        # GPU metrics via nvidia_gpu_exporter (see README). The contrib build
+        # has NO dcgm receiver, and DCGM is awkward on consumer GeForce cards,
+        # so we scrape the exporter's /metrics instead of using a dcgm receiver.
+        - job_name: nvidia-gpu
+          scrape_interval: 15s
+          static_configs:
+            - targets: ['127.0.0.1:9835']   # nvidia_gpu_exporter default port
+  host_metrics:
+    collection_interval: 15s
+    scrapers: { cpu: {}, memory: {}, load: {}, filesystem: {}, network: {} }
+
+processors:
+  resource_detection:
+    detectors: [system]
+    system: { hostname_sources: [os] }
+  batch: {}
+
+exporters:
+  prometheus_remote_write:
+    endpoint: "http://<mimir-host>:9009/api/v1/push"
+    # external_labels apply to ALL series (llama, gpu, host), so host="..."
+    # tags every metric from this box — join llama and GPU series on it.
+    external_labels: { host: "<gpuhost>" }
+    # headers: { X-Scope-OrgID: "<tenant>" }   # required only if Mimir has multitenancy_enabled: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus, host_metrics]
+      processors: [resource_detection, batch]
+      exporters: [prometheus_remote_write]
