@@ -2390,7 +2390,7 @@ kernel void kernel_ssm_scan_f32(
     device const int32_t * ids = (device const int32_t *) src6;
 
     device       float * s_buff  = (device       float *) ((device       char *) dst  + ir*args.nb02 +      i3*args.nb03 + s_off);
-    device const float * s0_buff = args.state_from_dst ?
+    device const float * s0_buff = t_off != 0 ?
         s_buff :
         (device const float *) ((device const char *) src0 + ir*args.nb02 + ids[i3]*args.nb03);
 
@@ -2484,10 +2484,10 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
         ushort  tiitg[[thread_index_in_threadgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]]) {
-    constexpr short CS  = GGML_METAL_SSM_SCAN_SSD_CS;
+    constexpr short CS  = OP_SSM_SCAN_SSD_CS;
     constexpr short TC  = 8;
     constexpr short HD  = 64;
-    constexpr short NSG = GGML_METAL_SSM_SCAN_SSD_MMA_NSG;
+    constexpr short NSG = OP_SSM_SCAN_SSD_NSG;
 
     // acs/exp(acs)/state-decay vectors, dtX[CS][HD], four private SAM row tiles [8][CS],
     // and two 8x8 scratch tiles per simdgroup. Total: 26.75 KiB.

@@ -155,6 +155,9 @@
 #define OP_SUM_ROWS_NUM_SUM_ROWS 10
 #define OP_SUM_ROWS_NUM_MEAN     11
 
+#define OP_SSM_SCAN_SSD_CS 64
+#define OP_SSM_SCAN_SSD_NSG 4
+
 // kernel argument structs
 //
 // - element counters (e.g. ne00) typically use int32_t to reduce register usage
@@ -870,10 +873,6 @@ typedef struct {
     uint64_t nb2;
 } ggml_metal_kargs_ssm_conv;
 
-// chunk length for the MMA SSD path; shared between the kernel and host-side memory sizing
-#define GGML_METAL_SSM_SCAN_SSD_CS 64
-#define GGML_METAL_SSM_SCAN_SSD_MMA_NSG 4
-
 typedef struct {
     int64_t  d_state;
     int64_t  d_inner;
@@ -883,7 +882,6 @@ typedef struct {
     int64_t  n_seq_tokens_total;
     int64_t  token_offset;
     int64_t  n_seqs;
-    bool     state_from_dst;
     uint64_t s_off;
     uint64_t nb00;
     uint64_t nb01;

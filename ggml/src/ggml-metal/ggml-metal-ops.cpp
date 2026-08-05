@@ -1721,7 +1721,6 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         /*.n_seq_tokens_total =*/ n_seq_tokens,
         /*.token_offset =*/ 0,
         /*.n_seqs       =*/ n_seqs,
-        /*.state_from_dst =*/ false,
         /*.s_off        =*/ ggml_nelements(op->src[1]) * sizeof(float),
         /*.nb00         =*/ nb00,
         /*.nb01         =*/ nb01,
@@ -1749,7 +1748,7 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         /*.nb0          =*/ nb0,
     };
 
-    constexpr int64_t CHUNK = GGML_METAL_SSM_SCAN_SSD_CS;
+    constexpr int64_t CHUNK = OP_SSM_SCAN_SSD_CS;
 
     const int64_t mma_tokens = n_seq_tokens / CHUNK * CHUNK;
     const bool use_mma =
@@ -1784,7 +1783,7 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
     args.n_seq_tokens = mma_tokens;
     dispatch(
         ggml_metal_library_get_pipeline_ssm_scan_ssd_mma(lib, op),
-        GGML_METAL_SSM_SCAN_SSD_MMA_NSG*32,
+        OP_SSM_SCAN_SSD_NSG*32,
         1);
 
     if (mma_tokens < n_seq_tokens) {
@@ -1792,7 +1791,6 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
 
         args.n_seq_tokens = n_seq_tokens - mma_tokens;
         args.token_offset = mma_tokens;
-        args.state_from_dst = true;
         dispatch(ggml_metal_library_get_pipeline_ssm_scan(lib, op), d_state, d_inner);
     }
 
