@@ -408,8 +408,8 @@ static void initialize_expert_cache(tiered_buffer_context * ctx) {
     }
     ctx->expert_cache_initialized = true;
 
-    const size_t budget = ctx->plan->options.ssd_cache_bytes;
-    if (budget == 0) {
+    const size_t requested_budget = ctx->plan->options.ssd_cache_bytes;
+    if (requested_budget == 0) {
         return;
     }
 
@@ -447,35 +447,53 @@ static void initialize_expert_cache(tiered_buffer_context * ctx) {
             return std::strcmp(lhs.tensor->name, rhs.tensor->name) < 0;
         });
 
+        // Losing the cache costs about half the decode rate, so back the budget
+        // off and retry instead of giving up on the first allocation failure.
+        set_device(ctx->device);
+        size_t budget = requested_budget;
         size_t used = 0;
-        bool made_progress = true;
-        while (made_progress) {
-            made_progress = false;
+        cudaError_t allocation_status = cudaErrorMemoryAllocation;
+        for (int attempt = 0; attempt < 8 && !ctx->expert_cache; ++attempt) {
             for (cache_candidate & candidate : candidates) {
-                if (candidate.n_slots >= static_cast<size_t>(candidate.tensor->ne[2]) ||
-                        candidate.slot_size > budget - used) {
-                    continue;
+                candidate.n_slots = 0;
+            }
+            used = 0;
+            bool made_progress = true;
+            while (made_progress) {
+                made_progress = false;
+                for (cache_candidate & candidate : candidates) {
+                    if (candidate.n_slots >= static_cast<size_t>(candidate.tensor->ne[2]) ||
+                            candidate.slot_size > budget - used) {
+                        continue;
+                    }
+                    ++candidate.n_slots;
+                    used += candidate.slot_size;
+                    made_progress = true;
                 }
-                ++candidate.n_slots;
-                used += candidate.slot_size;
-                made_progress = true;
+            }
+
+            if (used == 0) {
+                GGML_LOG_WARN("tiered-memory: expert cache budget %.2f MiB is too small for one slot\n",
+                        budget / 1024.0 / 1024.0);
+                return;
+            }
+
+            allocation_status = cudaMalloc(&ctx->expert_cache, used);
+            if (allocation_status != cudaSuccess) {
+                (void) cudaGetLastError();
+                ctx->expert_cache = nullptr;
+                budget = budget / 4 * 3;
             }
         }
 
-        if (used == 0) {
-            GGML_LOG_WARN("tiered-memory: expert cache budget %.2f MiB is too small for one slot\n",
-                    budget / 1024.0 / 1024.0);
+        if (!ctx->expert_cache) {
+            GGML_LOG_WARN("tiered-memory: could not allocate an expert cache within %.2f MiB (%s); cache disabled\n",
+                    requested_budget / 1024.0 / 1024.0, cudaGetErrorString(allocation_status));
             return;
         }
-
-        set_device(ctx->device);
-        const cudaError_t allocation_status = cudaMalloc(&ctx->expert_cache, used);
-        if (allocation_status != cudaSuccess) {
-            GGML_LOG_WARN("tiered-memory: could not allocate %.2f MiB expert cache (%s); cache disabled\n",
-                    used / 1024.0 / 1024.0, cudaGetErrorString(allocation_status));
-            (void) cudaGetLastError();
-            ctx->expert_cache = nullptr;
-            return;
+        if (budget != requested_budget) {
+            GGML_LOG_WARN("tiered-memory: expert cache reduced to %.2f MiB of the requested %.2f MiB to fit VRAM\n",
+                    used / 1024.0 / 1024.0, requested_budget / 1024.0 / 1024.0);
         }
         ctx->expert_cache_size = used;
 
@@ -509,7 +527,7 @@ static void initialize_expert_cache(tiered_buffer_context * ctx) {
 
         GGML_LOG_INFO("tiered-memory: expert cache %.2f/%.2f MiB, %zu slots across %zu tensors\n",
                 used / 1024.0 / 1024.0,
-                budget / 1024.0 / 1024.0,
+                requested_budget / 1024.0 / 1024.0,
                 total_slots,
                 prepared.size());
     } catch (const std::exception & error) {
