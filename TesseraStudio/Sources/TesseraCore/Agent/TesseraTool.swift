@@ -98,19 +98,25 @@ public struct SchemaProperty: Codable, Sendable, Equatable, Hashable {
     public let description: String?
     public let enumValues: [String]?
     public let defaultValue: String?
+    public let minimum: Double?
+    public let maximum: Double?
 
     enum CodingKeys: String, CodingKey {
         case type
         case description
         case enumValues = "enum"
         case defaultValue = "default"
+        case minimum
+        case maximum
     }
 
-    public init(type: String, description: String? = nil, enumValues: [String]? = nil, defaultValue: String? = nil) {
+    public init(type: String, description: String? = nil, enumValues: [String]? = nil, defaultValue: String? = nil, minimum: Double? = nil, maximum: Double? = nil) {
         self.type = type
         self.description = description
         self.enumValues = enumValues
         self.defaultValue = defaultValue
+        self.minimum = minimum
+        self.maximum = maximum
     }
 }
 

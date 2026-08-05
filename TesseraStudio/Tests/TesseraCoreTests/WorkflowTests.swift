@@ -629,3 +629,63 @@ final class WorkflowNumericParameterTests: XCTestCase {
             current: "250", value: .number(250), isEditing: false))
     }
 }
+
+// MARK: - Stepper pairing for bounded integers (HIG 13.16)
+
+/// A bounded integer gets a Stepper paired with its text field;
+/// open or half-known ranges stay a plain numeric field. The
+/// decision lives in `WorkflowNumericInput` so it is testable
+/// without rendering the panel.
+final class WorkflowNumericStepperTests: XCTestCase {
+    func testFullyBoundedIntegerGetsStepper() {
+        let prop = SchemaProperty(type: "integer", minimum: 1, maximum: 100)
+        XCTAssertTrue(WorkflowNumericInput.usesStepper(for: prop))
+        XCTAssertEqual(WorkflowNumericInput.stepperBounds(for: prop), 1...100)
+    }
+
+    func testUnboundedIntegerStaysTextField() {
+        XCTAssertFalse(WorkflowNumericInput.usesStepper(
+            for: SchemaProperty(type: "integer")))
+        // A half-known range is not bounded enough for a stepper.
+        XCTAssertFalse(WorkflowNumericInput.usesStepper(
+            for: SchemaProperty(type: "integer", minimum: 1)))
+        XCTAssertFalse(WorkflowNumericInput.usesStepper(
+            for: SchemaProperty(type: "integer", maximum: 100)))
+    }
+
+    func testNumberAndStringNeverGetStepper() {
+        XCTAssertFalse(WorkflowNumericInput.usesStepper(
+            for: SchemaProperty(type: "number", minimum: 0, maximum: 1)))
+        XCTAssertFalse(WorkflowNumericInput.usesStepper(
+            for: SchemaProperty(type: "string", minimum: 0, maximum: 1)))
+    }
+
+    func testInvertedBoundsYieldNoStepper() {
+        XCTAssertNil(WorkflowNumericInput.stepperBounds(
+            for: SchemaProperty(type: "integer", minimum: 10, maximum: 1)))
+    }
+
+    func testSchemaPropertyBoundsRoundTrip() throws {
+        let prop = SchemaProperty(type: "integer", minimum: 0, maximum: 64)
+        let data = try JSONEncoder().encode(prop)
+        let decoded = try JSONDecoder().decode(SchemaProperty.self, from: data)
+        XCTAssertEqual(decoded.minimum, 0)
+        XCTAssertEqual(decoded.maximum, 64)
+        // Documents written before the keys existed decode with
+        // nil bounds.
+        let old = try JSONDecoder().decode(
+            SchemaProperty.self, from: Data(#"{"type": "integer"}"#.utf8))
+        XCTAssertNil(old.minimum)
+        XCTAssertNil(old.maximum)
+    }
+
+    func testWrappedToolSchemasAnnotateObviousMinimums() {
+        // Sample counts floor at 1...
+        XCTAssertEqual(CalibrateTool().parameters.properties?["n_tokens"]?.minimum, 1)
+        XCTAssertEqual(EvaluateTool().parameters.properties?["n_tokens"]?.minimum, 1)
+        // ...and thread counts at 0 (0 = all cores).
+        XCTAssertEqual(QuantizeTool().parameters.properties?["n_threads"]?.minimum, 0)
+        // The annotations survive the node schema split.
+        XCTAssertEqual(CalibrateNode.parameterSchema.properties?["n_tokens"]?.minimum, 1)
+    }
+}

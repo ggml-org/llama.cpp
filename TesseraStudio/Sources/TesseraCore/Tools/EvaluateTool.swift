@@ -20,7 +20,8 @@ public struct EvaluateTool: TesseraTool {
             "n_tokens": SchemaProperty(
                 type: "integer",
                 description: "Number of tokens to evaluate. Default 512.",
-                defaultValue: "512"
+                defaultValue: "512",
+                minimum: 1
             ),
             "runtime": SchemaProperty(
                 type: "string",

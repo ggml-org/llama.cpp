@@ -72,4 +72,23 @@ public enum WorkflowNumericInput {
         let display = displayText(for: value)
         return display == current ? nil : display
     }
+
+    /// HIG 13.16: bounded integers pair a Stepper with the text
+    /// field. A property is stepper-worthy only when BOTH ends of
+    /// the range are known; an open or half-known range (sample
+    /// counts, context lengths) stays a plain numeric field.
+    public static func usesStepper(for prop: SchemaProperty) -> Bool {
+        stepperBounds(for: prop) != nil
+    }
+
+    /// The stepper's clamped range, or nil when the property is
+    /// not a fully-bounded integer (or its bounds are inverted).
+    public static func stepperBounds(for prop: SchemaProperty) -> ClosedRange<Double>? {
+        guard prop.type == "integer",
+              let lower = prop.minimum, let upper = prop.maximum,
+              lower <= upper else {
+            return nil
+        }
+        return lower...upper
+    }
 }

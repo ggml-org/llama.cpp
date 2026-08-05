@@ -28,7 +28,8 @@ public struct QuantizeTool: TesseraTool {
             "n_threads": SchemaProperty(
                 type: "integer",
                 description: "Number of threads for quantization. Default: all cores.",
-                defaultValue: "0"
+                defaultValue: "0",
+                minimum: 0
             ),
         ],
         required: ["model_path", "output_path", "policy_path"]

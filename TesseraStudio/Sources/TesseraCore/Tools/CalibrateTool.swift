@@ -24,7 +24,8 @@ public struct CalibrateTool: TesseraTool {
             "n_tokens": SchemaProperty(
                 type: "integer",
                 description: "Number of calibration tokens. Default 5000.",
-                defaultValue: "5000"
+                defaultValue: "5000",
+                minimum: 1
             ),
             "modality": SchemaProperty(
                 type: "string",

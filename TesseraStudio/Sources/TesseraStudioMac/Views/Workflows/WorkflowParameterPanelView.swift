@@ -102,7 +102,8 @@ struct WorkflowParameterPanelView: View {
             case "integer", "number":
                 NumericParameterField(
                     isInteger: prop.type == "integer",
-                    value: bindingForValue(key: key)
+                    value: bindingForValue(key: key),
+                    bounds: WorkflowNumericInput.stepperBounds(for: prop)
                 )
             case "string":
                 TextField(
@@ -179,26 +180,42 @@ struct WorkflowParameterPanelView: View {
     }
 }
 
-/// A numeric parameter field. The display is a plain text field,
-/// but valid parses write through to the stored value as a
-/// `.number` JSONValue (tools read `numberValue`). The text is
-/// kept in field-local state so a mid-typing entry ("12.", "-")
-/// survives the parse; the write-through rule itself lives in
+/// A numeric parameter field. The display is a text field, but
+/// valid parses write through to the stored value as a `.number`
+/// JSONValue (tools read `numberValue`). The text is kept in
+/// field-local state so a mid-typing entry ("12.", "-") survives
+/// the parse; the write-through rule itself lives in
 /// ``WorkflowNumericInput`` so the tests can drive it directly.
+/// When the schema gives a full min/max range, a Stepper is
+/// paired with the text field (HIG 13.16).
 private struct NumericParameterField: View {
     let isInteger: Bool
+    let bounds: ClosedRange<Double>?
     @Binding var value: JSONValue?
     @State private var text: String
     @FocusState private var isEditing: Bool
 
-    init(isInteger: Bool, value: Binding<JSONValue?>) {
+    init(isInteger: Bool, value: Binding<JSONValue?>, bounds: ClosedRange<Double>? = nil) {
         self.isInteger = isInteger
+        self.bounds = bounds
         self._value = value
         self._text = State(
             initialValue: WorkflowNumericInput.displayText(for: value.wrappedValue))
     }
 
     var body: some View {
+        if let bounds {
+            HStack(spacing: 4) {
+                textField
+                Stepper("", value: stepperValue(in: bounds), step: 1)
+                    .labelsHidden()
+            }
+        } else {
+            textField
+        }
+    }
+
+    private var textField: some View {
         TextField("", text: $text)
             .textFieldStyle(.roundedBorder)
             .focused($isEditing)
@@ -221,5 +238,20 @@ private struct NumericParameterField: View {
                     text = synced
                 }
             }
+    }
+
+    /// The stepper's clamped view of the stored value. Writes are
+    /// `.number` by construction, so the text field follows via
+    /// the value-change sync above.
+    private func stepperValue(in bounds: ClosedRange<Double>) -> Binding<Double> {
+        Binding(
+            get: {
+                let number = value?.numberValue ?? bounds.lowerBound
+                return Swift.min(Swift.max(number, bounds.lowerBound), bounds.upperBound)
+            },
+            set: { newValue in
+                value = .number(newValue)
+            }
+        )
     }
 }
