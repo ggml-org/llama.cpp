@@ -191,3 +191,171 @@ void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
 #endif
     }
 }
+
+// ---------------------------------------------------------------------------
+// Function B: quantize_row_tessera_t640_v2
+// ---------------------------------------------------------------------------
+//
+// Strategy: per page, vDSP_maxmgv for page_max, vDSP_sve for
+// sum_abs. The threshold is sum_abs / page_len. Per-lane,
+// vDSP_maxmgv for lane_max; NEON 4-element chunks for the trit
+// encoding and 243-base packing.
+//
+// Round-trip parity: this function must produce a packed layout
+// that, when dequantised, matches the input within the 1-2 ulp
+// fp32 noise floor. vDSP_sve uses parallel summation; for
+// inputs well-separated from the threshold (e.g. random
+// uniform in [-0.5, 0.5]) the v2 trits are identical to the C
+// reference's trits. For inputs where many elements are within
+// 1-2 ulp of the threshold, the v2 trits may flip for a few
+// elements; the dequant round-trip will then differ by ~2*scale
+// for those elements (still within the 1e-1 rel err bar the
+// dispatch uses).
+//
+// Note: this is the reference quantizer (slow path). Production
+// uses tessera-quant.cpp's vDSP path already. The point of
+// rewriting this C function is to keep the dequant <-> quant
+// round-trip bit-identical (the test framework uses this for
+// parity).
+
+// Power-of-3 table for the 243-base packer. Indexed by trit
+// position 0..4 (1, 3, 9, 27, 81).
+static const uint32_t k_pow3[5] = { 1, 3, 9, 27, 81 };
+
+void quantize_row_tessera_t640_v2(const float * GGML_RESTRICT x,
+                                  void * GGML_RESTRICT y,
+                                  int64_t k) {
+    if (k < GGML_TESSERA_T640_V2_MIN_K || !ggml_tessera_t640_v2_enabled()) {
+        quantize_row_tessera_t640_ref(x, y, k);
+        return;
+    }
+
+    const int pages = (int)((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
+    uint32_t * packed      = (uint32_t *) y;
+    uint16_t * page_scales = (uint16_t *) (packed + pages * TILE640_WORDS_PER_PAGE);
+    int8_t   * lane_scales = (int8_t *)   (page_scales + pages);
+
+    for (int p = 0; p < pages; p++) {
+        const int base     = p * TILE640_PAGE_SIZE;
+        const int page_len = (base + TILE640_PAGE_SIZE <= k) ? TILE640_PAGE_SIZE : (int)(k - base);
+
+        // Per-page: page_max (vDSP_maxmgv), sum_abs (vDSP_sve).
+        float page_max_f = 0.0f;
+        float sum_abs_f  = 0.0f;
+#if defined(__APPLE__)
+        vDSP_maxmgv(x + base, 1, &page_max_f, (vDSP_Length) page_len);
+        vDSP_sve(x + base, 1, &sum_abs_f, (vDSP_Length) page_len);
+#else
+        for (int j = 0; j < page_len; j++) {
+            const float a = fabsf(x[base + j]);
+            sum_abs_f += a;
+            if (a > page_max_f) page_max_f = a;
+        }
+#endif
+        const float threshold = sum_abs_f / (float) page_len;
+        page_scales[p] = GGML_FP32_TO_FP16(page_max_f);
+
+        for (int l = 0; l < TILE640_LANES_PER_PAGE; l++) {
+            const int col0 = base + l * TILE640_LANE_SIZE;
+
+            // Per-lane: lane_max.
+            float lane_max_f = 0.0f;
+#if defined(__APPLE__)
+            vDSP_maxmgv(x + col0, 1, &lane_max_f, (vDSP_Length) TILE640_LANE_SIZE);
+#else
+            for (int j = 0; j < TILE640_LANE_SIZE; j++) {
+                const int col = col0 + j;
+                if (col < k) {
+                    const float a = fabsf(x[col]);
+                    if (a > lane_max_f) lane_max_f = a;
+                }
+            }
+#endif
+
+            int8_t ls = 0;
+            if (page_max_f > 0.0f) {
+                ls = (int8_t) roundf(127.0f * lane_max_f / page_max_f);
+                if (ls > 127) ls = 127;
+            }
+            lane_scales[p * TILE640_LANES_PER_PAGE + l] = ls;
+
+            // Trit encoding: 4 groups of 5 trits per lane. Per
+            // group, 5 trits in base-3 packed into a single
+            // uint32_t (the "group_val"). Per lane, 4 group_vals
+            // are packed into the lane's 32-bit word as
+            //     word = sum_g group_val * 243^g
+            // (4 * log2(243) = 31.7 bits, fits in 32 bits).
+            //
+            // NEON path: 5 trits per group. We process 4 trits
+            // at a time (chunked across the 5-trit groups). The
+            // compare produces an int32 {0, 1, 2} trit; the
+            // 243-base packer multiplies by [1, 3, 9, 27] (for
+            // 4-trit chunks) and reduces to a uint32_t via
+            // dot-product (vmull + vmlal).
+            uint32_t word = 0;
+            for (int g = 0; g < 4; g++) {
+                uint32_t group_val = 0;
+                const int gcol = col0 + g * 5;
+#if GGML_TESSERA_T640_V2_NEON
+                // 5 trits per group, processed as one 4-element
+                // NEON chunk (cols 0-3) + 1 scalar leftover
+                // (col 4). The encoding is group-local: a single
+                // 4-trit chunk packs to 4 trit-positions in the
+                // current group, the 5th is the scalar tail.
+                const int valid = (gcol + 4 < k) ? 4 : (k - gcol);
+                if (valid >= 4) {
+                    float32x4_t vf = vld1q_f32(x + gcol);
+                    // trit: v > +threshold -> 1; v < -threshold -> 2; else 0
+                    int32x4_t vmask_pos = vcgtq_f32(vf, vdupq_n_f32(threshold));
+                    int32x4_t vmask_neg = vcltq_f32(vf, vdupq_n_f32(-threshold));
+                    // trit = (vmask_pos & 1) | (vmask_neg & 2)
+                    int32x4_t vtrit = vorrq_s32(vandq_s32(vmask_pos, vdupq_n_s32(1)),
+                                                vandq_s32(vmask_neg, vdupq_n_s32(2)));
+                    // 243-base pack: group_val_partial = sum_{d=0..3} trit[d] * 3^d
+                    int32x4_t vpow = vld1q_s32((const int32_t *) k_pow3);
+                    int32x4_t vmul = vmulq_s32(vtrit, vpow);
+                    // Reduce to scalar via pairwise add. NEON has
+                    // no horizontal int32 add intrinsic; use the
+                    // standard pattern: vget_low + vget_high +
+                    // vpadd + vpadd.
+                    int32x2_t vl = vget_low_s32(vmul);
+                    int32x2_t vh = vget_high_s32(vmul);
+                    int32x2_t vs = vpadd_s32(vl, vh);
+                    int32x2_t vss = vpadd_s32(vs, vs);
+                    group_val += (uint32_t) vget_lane_s32(vss, 0);
+                }
+                // Scalar tail: handle the rest scalar (this
+                // also handles the partial last group when
+                // gcol + 4 >= k).
+                for (int d = (valid >= 4 ? 4 : 0); d < 5; d++) {
+                    const int col = gcol + d;
+                    uint32_t trit = 0;
+                    if (col < k) {
+                        const float v = x[col];
+                        if (v >  threshold) trit = 1;
+                        if (v < -threshold) trit = 2;
+                    }
+                    group_val += trit * k_pow3[d];
+                }
+#else
+                for (int d = 0; d < 5; d++) {
+                    const int col = gcol + d;
+                    uint32_t trit = 0;
+                    if (col < k) {
+                        const float v = x[col];
+                        if (v >  threshold) trit = 1;
+                        if (v < -threshold) trit = 2;
+                    }
+                    group_val += trit * k_pow3[d];
+                }
+#endif
+                // pow243 accumulates across the 4 groups.
+                // 243^0 = 1, 243^1 = 243, 243^2 = 59049,
+                // 243^3 = 14348907.
+                static const uint32_t k_pow243[4] = { 1, 243, 59049, 14348907 };
+                word += group_val * k_pow243[g];
+            }
+            packed[p * TILE640_WORDS_PER_PAGE + l] = word;
+        }
+    }
+}

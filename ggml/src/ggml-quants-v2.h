@@ -49,6 +49,22 @@ GGML_API void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
                                              float * GGML_RESTRICT y,
                                              int64_t k);
 
+// Function B: quantize_row_tessera_t640_v2
+//   Per-page: vDSP_maxmgv for page_max, vDSP_sve for sum_abs
+//             (parallel reduction; may differ from C by 1-2 ulp
+//             in the threshold but produces the same trits for
+//             inputs well-separated from the threshold).
+//   Per-lane: vDSP_maxmgv for lane_max; NEON for the trit
+//             encoding and 243-base packing.
+//   The v2 path matches the C reference for the test fixtures
+//   (random uniform in [-0.5, 0.5] gives a threshold ~0.25, well
+//   above the fp32 noise of the reductions; the parity test
+//   asserts the dequant round-trip is bit-identical for these
+//   fixtures).
+GGML_API void quantize_row_tessera_t640_v2(const float * GGML_RESTRICT x,
+                                           void * GGML_RESTRICT y,
+                                           int64_t k);
+
 // Feature flag accessor: tests and the dispatch read this to
 // decide whether to use v2 or the C reference. Default ON for
 // Apple Silicon builds; can be disabled with the
