@@ -55,6 +55,7 @@ enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_TEXT,
     MTMD_INPUT_CHUNK_TYPE_IMAGE,
     MTMD_INPUT_CHUNK_TYPE_AUDIO,
+    MTMD_INPUT_CHUNK_TYPE_MAX, // for validation
 };
 
 // opaque types

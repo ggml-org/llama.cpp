@@ -45,7 +45,7 @@ struct mtmd_serialization {
         data.assign(buf, buf + len);
         uint64_t ver_in = read<uint64_t>();
         if (ver_in != version) {
-            throw std::runtime_error("mtmd_serialization: version mismatch");
+            throw std::runtime_error("version mismatch");
         }
         this->version = ver_in;
     }
@@ -63,7 +63,7 @@ struct mtmd_serialization {
         static_assert(std::is_trivially_copyable<T>::value && !std::is_same<T, bool>::value,
             "T must be trivially copyable and not bool");
         if (read_pos + sizeof(T) > data.size()) {
-            throw std::runtime_error("mtmd_serialization: read OOB");
+            throw std::runtime_error("read OOB");
         }
         T value;
         std::memcpy(&value, data.data() + read_pos, sizeof(T));
@@ -91,7 +91,7 @@ template <>
 std::string mtmd_serialization::read<std::string>() {
     uint64_t len = read<uint64_t>();
     if (read_pos + len > data.size()) {
-        throw std::runtime_error("mtmd_serialization: read_string OOB");
+        throw std::runtime_error("read_string OOB");
     }
     std::string str(data.data() + read_pos, len);
     read_pos += len;
@@ -126,6 +126,10 @@ void clip_image_f32_batch::serialize(mtmd_serialization & ser) const {
 void clip_image_f32_batch::deserialize(mtmd_serialization & ser) {
     is_audio = ser.read<bool>();
     uint64_t n = ser.read<uint64_t>();
+    constexpr size_t min_entry_bytes = sizeof(uint8_t) * 2 + sizeof(int32_t) * 2;
+    if (n > (ser.data.size() - ser.read_pos) / min_entry_bytes) {
+        throw std::runtime_error("entries count exceeds buffer size");
+    }
     entries.clear();
     entries.reserve(n);
     for (uint64_t i = 0; i < n; i++) {
@@ -194,6 +198,7 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
     MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
     MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_MAX,       // for validation
 };
 
 struct mtmd_image_tokens {
@@ -261,7 +266,11 @@ struct mtmd_image_tokens {
     void deserialize(mtmd_serialization & ser) {
         nx = ser.read<uint32_t>();
         ny = ser.read<uint32_t>();
-        pos = (mtmd_pos_type)ser.read<uint32_t>();
+        uint32_t pos_raw = ser.read<uint32_t>();
+        if (pos_raw >= MTMD_POS_TYPE_MAX) {
+            throw std::runtime_error("invalid pos type");
+        }
+        pos = (mtmd_pos_type)pos_raw;
         image_idx = ser.read<uint32_t>();
         n_temporal_merge = ser.read<uint32_t>();
         id = ser.read<std::string>();
@@ -356,9 +365,17 @@ struct mtmd_input_chunk {
         }
     }
     void deserialize(mtmd_serialization & ser) {
-        type = (mtmd_input_chunk_type)ser.read<uint32_t>();
+        uint32_t type_raw = ser.read<uint32_t>();
+        if (type_raw >= MTMD_INPUT_CHUNK_TYPE_MAX) {
+            throw std::runtime_error("invalid chunk type");
+        }
+        type = (mtmd_input_chunk_type)type_raw;
 
         uint64_t n_tokens_text = ser.read<uint64_t>();
+        // reject before resize() so a tiny corrupted/malicious buffer can't force a huge allocation
+        if (n_tokens_text > (ser.data.size() - ser.read_pos) / sizeof(int32_t)) {
+            throw std::runtime_error("tokens_text length exceeds buffer size");
+        }
         tokens_text.resize(n_tokens_text);
         for (uint64_t i = 0; i < n_tokens_text; i++) {
             tokens_text[i] = (llama_token)ser.read<int32_t>();
@@ -376,6 +393,15 @@ struct mtmd_input_chunk {
             tokens_audio->deserialize(ser);
         } else {
             tokens_audio.reset();
+        }
+
+        // catch buffers where the declared type doesn't match which payload is actually present,
+        // so a mismatched chunk can't slip through and null-deref/abort later in an accessor
+        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE && !tokens_image) {
+            throw std::runtime_error("type is IMAGE but tokens_image is missing");
+        }
+        if (type == MTMD_INPUT_CHUNK_TYPE_AUDIO && !tokens_audio) {
+            throw std::runtime_error("type is AUDIO but tokens_audio is missing");
         }
     }
 };
