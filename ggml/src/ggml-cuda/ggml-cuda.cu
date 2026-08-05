@@ -979,13 +979,19 @@ struct ggml_backend_cuda_comm_context {
 
     ggml_cuda_ar_pipeline *     ar_pipeline = nullptr;
 
-    bool rdna2_bf16_hidden_enabled  = false;
-    bool rdna2_bf16_hidden_topology = false;
-    bool rdna2_bf16_hidden_logged   = false;
+    bool rdna2_bf16_hidden_enabled     = false;
+    bool rdna2_bf16_hidden_topology    = false;
+    bool rdna2_bf16_hidden_logged      = false;
+    bool rdna2_bf16_hidden_miss_logged = false;
 
     std::string                        rdna2_bf16_hidden_audit_path;
     uint64_t                           audit_context_id = 0;
     ggml_cuda_allreduce_audit_counters audit;
+    uint64_t audit_ne7168_calls           = 0;
+    uint64_t audit_ne7168_all_f32_calls   = 0;
+    uint64_t audit_ne7168_same_shape_calls = 0;
+    int64_t  audit_first_ne7168_shape[4]  = { 0, 0, 0, 0 };
+    bool     audit_first_ne7168_recorded  = false;
 
 #ifdef GGML_USE_NCCL
     std::vector<ncclComm_t>     comms;
@@ -1032,6 +1038,12 @@ void ggml_backend_cuda_comm_context::write_rdna2_bf16_hidden_audit() const {
          << ",\"force_candidate_conflict_calls\":" << audit.force_candidate_conflicts
          << ",\"legacy_fp32_calls\":" << audit.legacy_fp32_calls
          << ",\"legacy_bf16_calls\":" << audit.legacy_bf16_calls
+         << ",\"ne7168_calls\":" << audit_ne7168_calls
+         << ",\"ne7168_all_f32_calls\":" << audit_ne7168_all_f32_calls
+         << ",\"ne7168_same_shape_calls\":" << audit_ne7168_same_shape_calls
+         << ",\"first_ne7168_shape\":[" << audit_first_ne7168_shape[0] << ","
+         << audit_first_ne7168_shape[1] << "," << audit_first_ne7168_shape[2] << ","
+         << audit_first_ne7168_shape[3] << "]"
          << ",\"complete\":true}\n";
 
     std::lock_guard<std::mutex> lock(ggml_cuda_rdna2_bf16_hidden_audit_mutex);
@@ -1096,14 +1108,36 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
     const bool candidate_eligible = ggml_cuda_is_rdna2_bf16_hidden_shape(precision_input);
     const ggml_cuda_allreduce_precision precision = ggml_cuda_select_allreduce_precision(precision_input);
 
+    if (audit_enabled && ne == 7168) {
+        ++comm_ctx->audit_ne7168_calls;
+        comm_ctx->audit_ne7168_all_f32_calls += all_f32;
+        comm_ctx->audit_ne7168_same_shape_calls += all_same_shape;
+        if (!comm_ctx->audit_first_ne7168_recorded) {
+            for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+                comm_ctx->audit_first_ne7168_shape[dim] = tensors[0]->ne[dim];
+            }
+            comm_ctx->audit_first_ne7168_recorded = true;
+        }
+    }
     if (audit_enabled) {
         ggml_cuda_audit_record_decision(
             comm_ctx->audit, candidate_eligible, comm_ctx->rdna2_bf16_hidden_enabled, force_fp32, precision);
     }
 
+    if (comm_ctx->rdna2_bf16_hidden_enabled && ne == 7168 &&
+            precision != ggml_cuda_allreduce_precision::candidate_bf16 &&
+            !comm_ctx->rdna2_bf16_hidden_miss_logged) {
+        std::fprintf(stderr,
+                "guarded RDNA2 BF16 hidden AllReduce guard miss: ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
+                "] backends=%zu all_f32=%d contiguous=%d same_shape=%d force_fp32=%d\n",
+                tensors[0]->ne[0], tensors[0]->ne[1], tensors[0]->ne[2], tensors[0]->ne[3], n_backends,
+                all_f32, all_contiguous, all_same_shape, force_fp32);
+        comm_ctx->rdna2_bf16_hidden_miss_logged = true;
+    }
     if (precision == ggml_cuda_allreduce_precision::candidate_bf16 && !comm_ctx->rdna2_bf16_hidden_logged) {
-        GGML_LOG_INFO("using guarded RDNA2 BF16 hidden AllReduce: ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
-                      "] backends=%zu force_fp32=0\n",
+        std::fprintf(stderr,
+                "using guarded RDNA2 BF16 hidden AllReduce: ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
+                "] backends=%zu force_fp32=0\n",
                 tensors[0]->ne[0], tensors[0]->ne[1], tensors[0]->ne[2], tensors[0]->ne[3], n_backends);
         comm_ctx->rdna2_bf16_hidden_logged = true;
     }
@@ -1275,11 +1309,11 @@ static bool ggml_backend_cuda_comm_is_four_distinct_rdna2(
 static void ggml_backend_cuda_comm_log_rdna2_bf16_topology(
         const ggml_backend_cuda_comm_context * comm_ctx) {
     const ggml_cuda_device_info & info = ggml_cuda_info();
-    GGML_LOG_INFO("guarded RDNA2 BF16 hidden AllReduce armed across %zu devices\n", comm_ctx->dev_ids.size());
+    std::fprintf(stderr, "guarded RDNA2 BF16 hidden AllReduce armed across %zu devices\n", comm_ctx->dev_ids.size());
     for (size_t rank = 0; rank < comm_ctx->dev_ids.size(); ++rank) {
         const int dev_id = comm_ctx->dev_ids[rank];
         const auto & device = info.devices[dev_id];
-        GGML_LOG_INFO("  rank %zu: logical=%d physical=%d cc=%d share_count=%d\n",
+        std::fprintf(stderr, "  rank %zu: logical=%d physical=%d cc=%d share_count=%d\n",
                 rank, dev_id, device.physical_device, device.cc, device.physical_share_count);
     }
 }
