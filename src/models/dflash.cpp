@@ -519,9 +519,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
 }
 
-// Gemma4-backbone DSpark decoder, dual-mode by batch type (see the DFlash decoder above).
-// Gemma4 flavor: sandwich norms, V = the K projection through a scale-less RMS norm (no rope),
-// GELU, scaled token embeddings, per-layer output scale and final-logit softcapping
+// Gemma4-backbone DSpark decoder, dual-mode by batch type (see the DFlash decoder above)
 llama_model_dflash::graph_gemma4::graph_gemma4(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 

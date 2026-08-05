@@ -103,8 +103,7 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
 `--spec-draft-p-min P` also gates the DSpark confidence head: each drafted block is truncated at
 the first position whose predicted acceptance falls below `P` (default 0 = disabled).
 
-DSpark drafts come with either a Qwen3-style or a Gemma4-style backbone; the backbone is detected
-from the checkpoint, and both convert and run the same way.
+DSpark drafts support multiple backbones; the backbone is detected from the checkpoint, and all of them convert and run the same way.
 
 See:
 
