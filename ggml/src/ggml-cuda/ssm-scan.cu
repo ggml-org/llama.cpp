@@ -218,8 +218,9 @@ __global__ void __launch_bounds__(d_state, 1)
             y_warp[i * stride_y] = state_sum;
         }
 
+        // Slot 0 is the final state written below; slots 1..K-1 are rollback snapshots.
         const int64_t slot = n_tok - 1 - i;
-        if (slot < K) {
+        if (K > 1 && slot > 0 && slot < K) {
             float * s_snapshot_warp = (float *) ((char *) dst + s_off + (slot * gridDim.y + seq_idx) * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
 #pragma unroll
             for (int j = 0; j < c_factor; j++) {
@@ -781,6 +782,10 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t n_s = src1->ne[3];  // number of sequences in the batch
     const int32_t K_param = ggml_get_op_params_i32(dst, 0);
     const int64_t K = K_param > 0 ? K_param : 1;
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+    // Multi-snapshot SSM rollback is implemented only for NVIDIA CUDA.
+    GGML_ASSERT(K == 1);
+#endif
 
     const int64_t s_off = ggml_nelements(src1) * sizeof(float);
 

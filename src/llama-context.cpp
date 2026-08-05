@@ -32,6 +32,34 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     throw std::runtime_error("Unsupported ctx type");
 }
 
+static bool llama_backend_dev_is_cuda(ggml_backend_dev_t dev) {
+    if (dev == nullptr) {
+        return false;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    return reg != nullptr && std::strcmp(ggml_backend_reg_name(reg), "CUDA") == 0;
+}
+
+static bool llama_model_supports_rs_rollback(const llama_model & model) {
+    if (!llm_arch_supports_rs_rollback(model.arch)) {
+        return false;
+    }
+
+    if (model.arch != LLM_ARCH_NEMOTRON_H && model.arch != LLM_ARCH_NEMOTRON_H_MOE) {
+        return true;
+    }
+
+    // Nemotron-H SSM rollback snapshots are currently produced only by the CUDA backend.
+    for (int il = 0; il < model.hparams.n_layer_all; ++il) {
+        if (model.hparams.is_recr(il) && !llama_backend_dev_is_cuda(model.dev_layer(il))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 struct llm_fused_op_probe {
     llm_fused_op op;
     const char * name;
@@ -102,8 +130,8 @@ llama_context::llama_context(
     }
 
     cparams.n_rs_seq = params.n_rs_seq;
-    if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
-        LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model arch does not support recurrent partial rollback; clamping to 0\n",
+    if (cparams.n_rs_seq > 0 && !llama_model_supports_rs_rollback(model)) {
+        LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model/backend does not support recurrent partial rollback; clamping to 0\n",
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
     }
