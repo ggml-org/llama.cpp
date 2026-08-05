@@ -31,8 +31,22 @@ public actor LlamaLLMProvider: LLMProvider {
     private let threadCount: Int
     private let maxTokens: Int
 
+    // Runtime spec decoding (runtime-traces spec section 7). The drafter
+    // path is resolved once at init; nil means trunk-only.
+    private let drafterPath: String?
+    private let runtimeCapture: Bool
+    private let runtimeCaptureTopk: Int
+    private let runtimeDraftMax: Int
+
     private var engine: OpaquePointer?
+    private var specEngine: OpaquePointer?
     private var libraryLoaded = false
+    private var specLibraryLoaded = false
+
+    // Per-session runtime trace records (llama.tessera.spec.v1 JSONL lines,
+    // provenance "runtime"). Flushed to the trace store per completed
+    // generation.
+    private(set) var sessionTraceBuffer: [String] = []
 
     public init(
         modelPath: String,
@@ -40,19 +54,36 @@ public actor LlamaLLMProvider: LLMProvider {
         contextLength: Int = 4096,
         gpuLayers: Int = -1,
         threadCount: Int = 0,
-        maxTokens: Int = 1024
+        maxTokens: Int = 1024,
+        runtimeDraftModelSetting: String? = nil,
+        runtimeCapture: Bool? = nil,
+        runtimeCaptureTopk: Int? = nil,
+        runtimeDraftMax: Int? = nil
     ) {
-        self.modelPath = NSString(string: modelPath).expandingTildeInPath
+        let expanded = NSString(string: modelPath).expandingTildeInPath
+        self.modelPath = expanded
         self.libraryPath = libraryPath
         self.contextLength = contextLength
         self.gpuLayers = gpuLayers
         self.threadCount = threadCount
         self.maxTokens = maxTokens
+
+        // v1 reads the drafter path at provider init (spec section 7);
+        // hot-swapping after a training cycle is a follow-up.
+        let setting = runtimeDraftModelSetting ?? TesseraSettings.learningRuntimeDraftModel
+        self.drafterPath = TesseraRuntimeDrafterResolver.resolvedDrafter(
+            setting: setting, trunkPath: expanded)
+        self.runtimeCapture = runtimeCapture ?? TesseraSettings.learningRuntimeCapture
+        self.runtimeCaptureTopk = runtimeCaptureTopk ?? TesseraSettings.learningRuntimeCaptureTopk
+        self.runtimeDraftMax = runtimeDraftMax ?? TesseraSettings.learningRuntimeDraftMax
     }
 
     deinit {
         if let engine {
             cllama_engine_free(engine)
+        }
+        if let specEngine {
+            cllama_engine_free_spec(specEngine)
         }
     }
 
@@ -62,15 +93,28 @@ public actor LlamaLLMProvider: LLMProvider {
         cllama_load_library(libraryPath) != 0
     }
 
+    /// Whether the spec library (libllama-common.dylib, tessera_rt_*) can be
+    /// loaded. Degrades open: a false here just keeps the single-model path.
+    public nonisolated static func probeSpecLibrary(libraryPath: String = "") -> Bool {
+        cllama_load_spec_library(libraryPath) != 0
+    }
+
+    /// Pure routing decision: spec mode needs BOTH a resolved drafter and a
+    /// usable spec library. Either missing keeps today's single-model path.
+    static func usesSpecEngine(drafterPath: String?, specLibraryAvailable: Bool) -> Bool {
+        drafterPath != nil && specLibraryAvailable
+    }
+
+    /// The drafter this provider resolved at init (nil = trunk-only).
+    /// Exposed for the Settings UI status row and tests.
+    public var resolvedRuntimeDrafter: String? { drafterPath }
+
     public func complete(
         system: String,
         messages: [LLMMessage],
         tools: [ToolDescriptor]
     ) async throws -> LLMResponse {
         try ensureReady()
-        guard let engine else {
-            throw LlamaLLMError.modelLoadFailed(lastError())
-        }
 
         let prompt = Self.buildPrompt(system: system, messages: messages, tools: tools)
 
@@ -79,6 +123,52 @@ public actor LlamaLLMProvider: LLMProvider {
         // closure can accumulate without capturing Swift state directly.
         let box = TokenBox()
         let boxPtr = Unmanaged.passUnretained(box).toOpaque()
+
+        if let specEngine {
+            // Spec mode: capture on -> topk > 0, one trace record per spec
+            // step; capture off -> telemetry_topk 0 (the genuinely-cheap
+            // path, no trace callbacks). Both callbacks share the single
+            // user-data pointer, so one box carries text and trace lines.
+            let topk = runtimeCapture ? Int32(runtimeCaptureTopk) : 0
+            let specBox = SpecGenerationBox()
+            let specPtr = Unmanaged.passUnretained(specBox).toOpaque()
+
+            let generated = cllama_engine_generate_spec(
+                specEngine, prompt, Int32(maxTokens), topk,
+                { piece, _, ctx in
+                    guard let ctx, let piece else { return }
+                    let box = Unmanaged<SpecGenerationBox>.fromOpaque(ctx).takeUnretainedValue()
+                    box.text += String(cString: piece)
+                },
+                topk > 0 ? { line, ctx in
+                    guard let ctx, let line else { return }
+                    let box = Unmanaged<SpecGenerationBox>.fromOpaque(ctx).takeUnretainedValue()
+                    box.traceLines.append(String(cString: line))
+                } : nil,
+                specPtr
+            )
+
+            if generated < 0 {
+                throw LlamaLLMError.generationFailed(lastError())
+            }
+
+            // Session buffer: flushed to the trace store per completed
+            // generation (section 8).
+            if !specBox.traceLines.isEmpty {
+                sessionTraceBuffer.append(contentsOf: specBox.traceLines)
+            }
+
+            let parsed = Self.parse(specBox.text)
+            return LLMResponse(
+                content: parsed.content,
+                toolCalls: parsed.toolCalls,
+                tokenCount: Int(generated)
+            )
+        }
+
+        guard let engine else {
+            throw LlamaLLMError.modelLoadFailed(lastError())
+        }
 
         let generated = cllama_engine_generate(engine, prompt, Int32(maxTokens), { piece, _, ctx in
             guard let ctx, let piece else { return }
@@ -104,6 +194,10 @@ public actor LlamaLLMProvider: LLMProvider {
             cllama_engine_free(engine)
             self.engine = nil
         }
+        if let specEngine = self.specEngine {
+            cllama_engine_free_spec(specEngine)
+            self.specEngine = nil
+        }
     }
 
     // MARK: - Setup
@@ -115,10 +209,34 @@ public actor LlamaLLMProvider: LLMProvider {
             }
             libraryLoaded = true
         }
-        if engine == nil {
+        if engine == nil && specEngine == nil {
             guard FileManager.default.fileExists(atPath: modelPath) else {
                 throw LlamaLLMError.modelLoadFailed("model not found at \(modelPath)")
             }
+
+            // Spec mode when a drafter resolved AND the spec library loads;
+            // otherwise today's single-model path, unchanged.
+            if !specLibraryLoaded {
+                specLibraryLoaded = cllama_load_spec_library(libraryPath) != 0
+            }
+            if Self.usesSpecEngine(drafterPath: drafterPath,
+                                   specLibraryAvailable: specLibraryLoaded),
+               let drafterPath {
+                let handle = cllama_engine_load_spec(
+                    modelPath,
+                    drafterPath,
+                    UInt32(contextLength),
+                    Int32(threadCount),
+                    Int32(gpuLayers),
+                    Int32(runtimeDraftMax)
+                )
+                guard let handle else {
+                    throw LlamaLLMError.modelLoadFailed(lastError())
+                }
+                specEngine = handle
+                return
+            }
+
             let handle = cllama_engine_load(
                 modelPath,
                 UInt32(contextLength),
@@ -222,4 +340,12 @@ public actor LlamaLLMProvider: LLMProvider {
 /// Reference box used to accumulate streamed token pieces from the C callback.
 private final class TokenBox: @unchecked Sendable {
     var text = ""
+}
+
+/// Reference box for spec-mode generation: streamed pieces plus one
+/// llama.tessera.spec.v1 JSONL line per spec step. Both callbacks share the
+/// single C user-data pointer.
+private final class SpecGenerationBox: @unchecked Sendable {
+    var text = ""
+    var traceLines: [String] = []
 }

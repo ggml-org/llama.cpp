@@ -58,6 +58,11 @@ public enum TesseraSettingsKey {
     public static let learningTrainBinary = "tessera.settings.learningTrainBinary"
     public static let learningAutoTrain = "tessera.settings.learningAutoTrain"
     public static let learningTrainingIntervalHours = "tessera.settings.learningTrainingIntervalHours"
+    // Runtime speculative decoding + trace capture (runtime-traces spec section 7)
+    public static let learningRuntimeDraftModel = "tessera.settings.learningRuntimeDraftModel"
+    public static let learningRuntimeCapture = "tessera.settings.learningRuntimeCapture"
+    public static let learningRuntimeCaptureTopk = "tessera.settings.learningRuntimeCaptureTopk"
+    public static let learningRuntimeDraftMax = "tessera.settings.learningRuntimeDraftMax"
     // Web search (agent research tool)
     public static let searchProvider = "tessera.settings.searchProvider"
     public static let searxngBaseURL = "tessera.settings.searxngBaseURL"
@@ -117,6 +122,14 @@ public enum TesseraSettingsDefault {
     // dry-run default keep it harmless until the flywheel is supplied.
     public static let learningAutoTrain = true
     public static let learningTrainingIntervalHours = 24
+    // Runtime speculative decoding + trace capture. The drafter path is read
+    // when the Playground provider initializes: empty auto-derives
+    // "<base>-tessera-trained.gguf" next to the base model, the sentinel "-"
+    // disables the auto-derive, and an explicit path always wins.
+    public static let learningRuntimeDraftModel = ""
+    public static let learningRuntimeCapture = true
+    public static let learningRuntimeCaptureTopk = 16
+    public static let learningRuntimeDraftMax = 3
     // Web search. Keyless DuckDuckGo is the default; SearXNG (self-hosted) and
     // Tavily (vendor key) are explicit opt-ins that stay off until configured.
     public static let searchProvider = "duckduckgo"
@@ -201,6 +214,10 @@ public enum TesseraSettings {
             TesseraSettingsKey.learningTrainBinary: TesseraSettingsDefault.learningTrainBinary,
             TesseraSettingsKey.learningAutoTrain: TesseraSettingsDefault.learningAutoTrain,
             TesseraSettingsKey.learningTrainingIntervalHours: TesseraSettingsDefault.learningTrainingIntervalHours,
+            TesseraSettingsKey.learningRuntimeDraftModel: TesseraSettingsDefault.learningRuntimeDraftModel,
+            TesseraSettingsKey.learningRuntimeCapture: TesseraSettingsDefault.learningRuntimeCapture,
+            TesseraSettingsKey.learningRuntimeCaptureTopk: TesseraSettingsDefault.learningRuntimeCaptureTopk,
+            TesseraSettingsKey.learningRuntimeDraftMax: TesseraSettingsDefault.learningRuntimeDraftMax,
             TesseraSettingsKey.searchProvider: TesseraSettingsDefault.searchProvider,
             TesseraSettingsKey.searxngBaseURL: TesseraSettingsDefault.searxngBaseURL,
             TesseraSettingsKey.tavilyAPIKey: TesseraSettingsDefault.tavilyAPIKey,
@@ -432,6 +449,38 @@ public enum TesseraSettings {
     public static var learningTrainingIntervalHours: Int {
         let v = UserDefaults.standard.integer(forKey: TesseraSettingsKey.learningTrainingIntervalHours)
         return v > 0 ? v : TesseraSettingsDefault.learningTrainingIntervalHours
+    }
+
+    /// Runtime speculative drafter GGUF. Empty auto-derives
+    /// `<base>-tessera-trained.gguf` next to the base model; the sentinel
+    /// "-" disables the auto-derive; an explicit path always wins. Read when
+    /// the Playground provider initializes.
+    public static var learningRuntimeDraftModel: String {
+        UserDefaults.standard.string(forKey: TesseraSettingsKey.learningRuntimeDraftModel) ?? TesseraSettingsDefault.learningRuntimeDraftModel
+    }
+
+    /// When spec decoding runs, emit runtime traces (topk > 0). Off means
+    /// spec decoding with telemetry_topk 0.
+    public static var learningRuntimeCapture: Bool {
+        if UserDefaults.standard.object(forKey: TesseraSettingsKey.learningRuntimeCapture) == nil {
+            return TesseraSettingsDefault.learningRuntimeCapture
+        }
+        return UserDefaults.standard.bool(forKey: TesseraSettingsKey.learningRuntimeCapture)
+    }
+
+    /// Top-k depth for runtime records. Light records at interactive volume;
+    /// the replay stage deepens promoted sessions offline.
+    public static var learningRuntimeCaptureTopk: Int {
+        let v = UserDefaults.standard.integer(forKey: TesseraSettingsKey.learningRuntimeCaptureTopk)
+        return v > 0 ? v : TesseraSettingsDefault.learningRuntimeCaptureTopk
+    }
+
+    /// Max drafted tokens per spec step. Matches the fork's
+    /// params.speculative.draft.n_max default so runtime acceptance
+    /// semantics match what calibration measured.
+    public static var learningRuntimeDraftMax: Int {
+        let v = UserDefaults.standard.integer(forKey: TesseraSettingsKey.learningRuntimeDraftMax)
+        return v > 0 ? v : TesseraSettingsDefault.learningRuntimeDraftMax
     }
 
     // MARK: Web search
