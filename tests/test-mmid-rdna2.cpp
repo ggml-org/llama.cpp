@@ -48,6 +48,7 @@ struct params {
     float atol = 1e-3f;
     float rtol = 1e-4f;
     bool disable_graphs = false;
+    bool auto_j16_hint = false;
 };
 
 struct output_file_header {
@@ -94,6 +95,7 @@ void usage(const char * program) {
     std::printf("  --iterations N          timed graph executions (50)\n");
     std::printf("  --device NAME           exact ROCm GGML device name; defaults to the first GPU\n");
     std::printf("  --disable-graphs        set GGML_CUDA_DISABLE_GRAPHS before backend initialization\n");
+    std::printf("  --auto-j16-hint         mark weights with the model-selected MMQ J16 advisory flag\n");
     std::printf("  --dump-output FILE      write deterministic F32 output for later A/B comparison\n");
     std::printf("  --compare-output FILE   compare output against a matching baseline\n");
     std::printf("  --atol X                absolute A/B tolerance (1e-3)\n");
@@ -218,6 +220,8 @@ params parse_args(int argc, char ** argv) {
             result.rtol = parse_nonnegative_float(arg, require_value(arg));
         } else if (std::strcmp(arg, "--disable-graphs") == 0) {
             result.disable_graphs = true;
+        } else if (std::strcmp(arg, "--auto-j16-hint") == 0) {
+            result.auto_j16_hint = true;
         } else if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -454,11 +458,11 @@ int main(int argc, char ** argv) {
     }
 
     std::printf("backend: %s (%s)\n", ggml_backend_name(backend.get()), ggml_backend_dev_description(device));
-    std::printf("routed MMID case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s fixture=%s\n",
+    std::printf("routed MMID case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s fixture=%s auto_j16_hint=%d\n",
                 ggml_type_name(p.type), static_cast<long long>(p.k), static_cast<long long>(p.n),
                 static_cast<long long>(p.batch), static_cast<long long>(p.experts), static_cast<long long>(p.top_k),
                 p.routing == routing_mode::uniform ? "uniform" : "hot",
-                p.fixture == weight_fixture::prototypes ? "prototypes" : "unique");
+                p.fixture == weight_fixture::prototypes ? "prototypes" : "unique", int(p.auto_j16_hint));
 
     const size_t row_bytes = ggml_row_size(p.type, p.k);
     const size_t weight_bytes = row_bytes * static_cast<size_t>(p.n) * static_cast<size_t>(p.experts);
@@ -481,6 +485,9 @@ int main(int argc, char ** argv) {
     }
 
     ggml_tensor * expert_weights = ggml_new_tensor_3d(ctx_weights.get(), p.type, p.k, p.n, p.experts);
+    if (p.auto_j16_hint) {
+        expert_weights->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMQ_J16;
+    }
     ggml_tensor * ids_full = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, p.experts, p.batch);
     ggml_tensor * ids = ggml_view_2d(ctx.get(), ids_full, p.top_k, p.batch, ids_full->nb[1], 0);
     ggml_tensor * activation = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, 1, p.batch);

@@ -386,10 +386,12 @@ and untracked-file hashes. Verify resolved DSO paths before accepting an A/B.
 
 ## RDNA2 routed-MMQ screening
 
-`GGML_HIP_RDNA2_MMQ_J` is an experimental, opt-in tile-width override for
-routed MMQ on RDNA2 only. The default dispatch is unchanged when it is unset.
-Valid values are supported multiples of eight from 8 through 128; an
-unsupported type/configuration fails rather than silently changing the test.
+`GGML_HIP_RDNA2_MMQ_J` is an experimental tile-width override for routed MMQ
+on RDNA2 only. Supported multiples of eight from 8 through 128 force a tile;
+`default` or `0` explicitly selects the original heuristic. An unsupported
+value or configuration fails rather than silently changing the test. When the
+variable is unset, the default dispatch is unchanged except for a narrowly
+model-selected automatic path described below.
 For example:
 
 ```bash
@@ -404,20 +406,25 @@ expert routing changes the optimum. Keep the variable and its value in the
 manifest, use complete paired runs, and do not carry this setting to unrelated
 models without screening their routing shape.
 
-`GGML_HIP_RDNA2_MMQ_J_Q4_K` is a narrower experimental override for routed
-Q4_K MMQ only. It has the same numeric value contract and is mutually exclusive
-with the global `GGML_HIP_RDNA2_MMQ_J`. It exists for mixed-quant MoE models
-where Q4_K J16 is bitwise-stable but another expert type is not; all non-Q4_K
-types retain default J selection. Do not enable both variables.
+`GGML_HIP_RDNA2_MMQ_J_Q4_K` is the corresponding diagnostic override for
+routed Q4_K only. It has the same forced/`default`/`0` contract and is mutually
+exclusive with the global variable. Explicit settings take precedence over
+automatic selection; use `default` for a correctness-control arm. Normal model
+execution does not need either variable.
 
-For Qwen3.5-122B-A10B UD-Q4_K_M on four V620s, commit `61aae0bb6`
-passed the exact 2K/4-token gate across all 248,320 F32 logits. The isolated
-Q4_K path was exact under uniform and hot routing; Q5_K J16 was not exact under
-hot routing and therefore remains on default J. In three-repetition A/B/A PP
-screens, Q4_K-only J16 improved 512, 2K, and 8K prompt processing by 14.41%,
-13.84%, and 13.88% versus the control midpoint, with control drift of +0.13%,
--0.59%, and -1.33%. This acceptance is specific to that model, quantization,
-four-way split, and PP workload; it does not make J16 a general Q4_K default.
+Qwen3.5-122B-A10B automatically marks separate Q4_K routed gate/up tensors only
+when its exact 3072/1024/256/top-8 metadata and an explicit equal four-way row
+split match the validated model. The HIP backend selects J16 only for RDNA2 PP
+ubatches with the exact per-rank K=3072, N=256, 256-expert, top-8, batch-256
+signature. It emits a one-time `source=automatic` attestation. Q5_K down,
+fused/shared/MTP tensors, decode and remainder batches, other splits, other
+models, and other backends retain the original heuristic.
+
+The preceding explicit Q4_K-only candidate passed the exact 2K/4-token gate
+across all 248,320 F32 logits and improved 512, 2K, and 8K PP by 14.41%, 13.84%,
+and 13.88%. The automatic dispatch must reproduce exact equality and the PP
+gain before its replacement is accepted; neither result makes J16 a general
+Q4_K default.
 
 `test-mmid-rdna2` defaults to a fast prototype-weight fixture for performance
 screens. Its `--fixture unique` mode independently quantizes every

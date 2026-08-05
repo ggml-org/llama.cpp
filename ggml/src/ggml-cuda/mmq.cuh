@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.cuh"
+#include "mmq-auto-config.h"
 
 #include <climits>
 #include <cstdint>
@@ -1467,7 +1468,10 @@ struct mmq_args {
     int64_t nchannels_x; int64_t nchannels_y; int64_t stride_channel_x; int64_t stride_channel_y; int64_t stride_channel_dst;
     int64_t nsamples_x; int64_t nsamples_y; int64_t stride_sample_x; int64_t stride_sample_y; int64_t stride_sample_dst;
     int64_t ncols_max;
+    int J_hint;
 };
+
+void ggml_cuda_rdna2_mmq_attest_auto(const mmq_args & args, int cc);
 
 static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
     const size_t nbs_ids = config.J*sizeof(int);
@@ -1594,37 +1598,67 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
          ntx_fd);
 }
 
-static int ggml_cuda_rdna2_mmq_J_parse_override(const char * env_name) {
+static ggml_cuda_mmq_J_setting ggml_cuda_rdna2_mmq_J_load_setting(const char * env_name) {
 #if defined(GGML_USE_HIP)
     const char * env = std::getenv(env_name);
-    if (!env || !env[0]) {
-        return 0;
+    const ggml_cuda_mmq_J_setting setting = ggml_cuda_mmq_parse_J_setting(env);
+    if (setting.state == ggml_cuda_mmq_J_setting::mode::invalid) {
+        fprintf(stderr, "%s must be 'default', 0, or a multiple of 8 in [8, 128] (got '%s')\n",
+                env_name, env ? env : "<unset>");
+        GGML_ABORT("invalid RDNA2 MMQ J setting");
     }
-
-    char * end = nullptr;
-    const long parsed = std::strtol(env, &end, 10);
-    if (end == env || *end != '\0' || parsed < 8 || parsed > 128 || parsed % 8 != 0) {
-        fprintf(stderr, "%s must be a multiple of 8 in [8, 128] (got '%s')\n", env_name, env);
-        GGML_ABORT("invalid RDNA2 MMQ J override");
-    }
-    return int(parsed);
+    return setting;
 #else
     GGML_UNUSED(env_name);
-    return 0;
+    return {ggml_cuda_mmq_J_setting::mode::absent, 0};
 #endif
 }
 
-static int ggml_cuda_rdna2_mmq_J_override(ggml_type type) {
+struct ggml_cuda_rdna2_mmq_J_selection {
+    int J;
+    bool automatic;
+};
+
+static ggml_cuda_rdna2_mmq_J_selection ggml_cuda_rdna2_mmq_J_select(
+        ggml_type type, const mmq_args & args, int cc) {
 #if defined(GGML_USE_HIP)
-    static const int global_value = ggml_cuda_rdna2_mmq_J_parse_override("GGML_HIP_RDNA2_MMQ_J");
-    static const int q4_k_value   = ggml_cuda_rdna2_mmq_J_parse_override("GGML_HIP_RDNA2_MMQ_J_Q4_K");
-    if (global_value && q4_k_value) {
+    static const ggml_cuda_mmq_J_setting global =
+        ggml_cuda_rdna2_mmq_J_load_setting("GGML_HIP_RDNA2_MMQ_J");
+    static const ggml_cuda_mmq_J_setting q4_k =
+        ggml_cuda_rdna2_mmq_J_load_setting("GGML_HIP_RDNA2_MMQ_J_Q4_K");
+    if (global.state != ggml_cuda_mmq_J_setting::mode::absent &&
+            q4_k.state != ggml_cuda_mmq_J_setting::mode::absent) {
         GGML_ABORT("GGML_HIP_RDNA2_MMQ_J and GGML_HIP_RDNA2_MMQ_J_Q4_K are mutually exclusive");
     }
-    return type == GGML_TYPE_Q4_K && q4_k_value ? q4_k_value : global_value;
+    if (global.state != ggml_cuda_mmq_J_setting::mode::absent) {
+        return {global.value, false};
+    }
+    if (type == GGML_TYPE_Q4_K && q4_k.state != ggml_cuda_mmq_J_setting::mode::absent) {
+        return {q4_k.value, false};
+    }
+
+    const ggml_cuda_mmq_auto_J_input input = {
+        /*.hint_j16      =*/ args.J_hint == 16,
+        /*.rdna2         =*/ GGML_CUDA_CC_IS_RDNA2(cc),
+        /*.q4_k          =*/ type == GGML_TYPE_Q4_K,
+        /*.routed_ids    =*/ args.ids_dst != nullptr,
+        /*.routed_bounds =*/ args.expert_bounds != nullptr,
+        /*.ncols_x       =*/ args.ncols_x,
+        /*.nrows_x       =*/ args.nrows_x,
+        /*.ncols_dst     =*/ args.ncols_dst,
+        /*.nchannels_x   =*/ args.nchannels_x,
+        /*.nchannels_y   =*/ args.nchannels_y,
+        /*.nsamples_x    =*/ args.nsamples_x,
+        /*.nsamples_y    =*/ args.nsamples_y,
+        /*.ncols_max     =*/ args.ncols_max,
+    };
+    const int automatic_J = ggml_cuda_mmq_auto_J(input);
+    return {automatic_J, automatic_J != 0};
 #else
     GGML_UNUSED(type);
-    return 0;
+    GGML_UNUSED(args);
+    GGML_UNUSED(cc);
+    return {0, false};
 #endif
 }
 
@@ -1655,15 +1689,18 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
         }
     }
 
-    const int J_override = ggml_cuda_rdna2_mmq_J_override(type);
-    if (J_override && GGML_CUDA_CC_IS_RDNA2(cc) && args.ids_dst) {
-        const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J_override, fallback, cc);
+    const ggml_cuda_rdna2_mmq_J_selection selection = ggml_cuda_rdna2_mmq_J_select(type, args, cc);
+    if (selection.J && GGML_CUDA_CC_IS_RDNA2(cc) && args.ids_dst) {
+        const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, selection.J, fallback, cc);
         if (config.type == GGML_TYPE_COUNT || mmq_get_nbytes_shared(config, cc) > smpbo) {
-            fprintf(stderr, "RDNA2 MMQ J override=%d is unsupported for type=%d fallback=%d\n",
-                    J_override, int(type), int(fallback));
-            GGML_ABORT("unsupported RDNA2 MMQ J override");
+            fprintf(stderr, "RDNA2 MMQ J selection=%d is unsupported for type=%d fallback=%d\n",
+                    selection.J, int(type), int(fallback));
+            GGML_ABORT("unsupported RDNA2 MMQ J selection");
         }
-        J_best = J_override;
+        J_best = selection.J;
+        if (selection.automatic) {
+            ggml_cuda_rdna2_mmq_attest_auto(args, cc);
+        }
     }
 
     switch (J_best) {
