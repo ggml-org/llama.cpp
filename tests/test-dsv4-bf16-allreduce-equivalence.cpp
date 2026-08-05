@@ -23,7 +23,7 @@
 
 using json = nlohmann::ordered_json;
 
-static uint64_t fnv1a(const void * data, size_t size, uint64_t hash = 1469598103934665603ULL) {
+static uint64_t fnv1a(const void * data, size_t size, uint64_t hash = 14695981039346656037ULL) {
     const auto * bytes = static_cast<const uint8_t *>(data);
     for (size_t i = 0; i < size; ++i) {
         hash ^= bytes[i];
