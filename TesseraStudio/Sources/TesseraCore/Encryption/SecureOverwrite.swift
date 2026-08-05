@@ -73,8 +73,45 @@ public enum SecureOverwrite {
         randomFill: RandomFill = defaultRandomFill
     ) throws {
         for url in paths {
-            try overwriteAndDelete(url: url, passes: passes, randomFill: randomFill)
+            try overwriteAndDelete(url: url, passes: passes, delete: true, randomFill: randomFill)
         }
+    }
+
+    /// Walk `root` recursively and overwrite every regular file in
+    /// place with `passes` random passes plus a final zero pass, then
+    /// fsync. The file is left on disk at its original size - this
+    /// helper does not delete anything. Used by the volume migrator
+    /// to scrub the sandbox before copying data into the new bundle,
+    /// and by the volume reset path to scrub the bands before
+    /// recreating the bundle.
+    public static func randomPasses(
+        under root: URL,
+        passes: Int = 3,
+        randomFill: RandomFill = defaultRandomFill
+    ) throws {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            try overwriteAndDelete(url: fileURL, passes: passes, delete: false, randomFill: randomFill)
+        }
+    }
+
+    /// Synchronous variant of ``randomPasses(under:passes:randomFill:)``
+    /// for callers that are not in an async context (the volume
+    /// migrator's pre-migration scrub). Same semantics: overwrite in
+    /// place, do not delete.
+    public static func randomPassesSync(
+        under root: URL,
+        passes: Int = 1,
+        randomFill: RandomFill = defaultRandomFill
+    ) throws {
+        try randomPasses(under: root, passes: passes, randomFill: randomFill)
     }
 
     /// fsync the directory that contains `path`. Important on Unix:
@@ -108,6 +145,7 @@ public enum SecureOverwrite {
     private static func overwriteAndDelete(
         url: URL,
         passes: Int,
+        delete: Bool,
         randomFill: RandomFill
     ) throws {
         let path = url.path
@@ -121,7 +159,7 @@ public enum SecureOverwrite {
         }
         let size = Int(st.st_size)
         if size == 0 {
-            try unlink(path: path)
+            if delete { try unlink(path: path) }
             return
         }
 
@@ -156,11 +194,15 @@ public enum SecureOverwrite {
         if fsync(fd) != 0 {
             throw OverwriteError.fsyncFailed(path: path, underlying: currentErrno())
         }
-        if ftruncate(fd, 0) != 0 {
-            throw OverwriteError.writeFailed(path: path, underlying: currentErrno())
+        if delete {
+            if ftruncate(fd, 0) != 0 {
+                throw OverwriteError.writeFailed(path: path, underlying: currentErrno())
+            }
         }
-        // 6. Unlink.
-        try unlink(path: path)
+        // 6. Unlink (only when requested).
+        if delete {
+            try unlink(path: path)
+        }
     }
 
     private static func writeRandomPass(

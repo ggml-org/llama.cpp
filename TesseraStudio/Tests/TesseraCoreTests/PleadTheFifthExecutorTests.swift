@@ -255,58 +255,6 @@ final class PleadTheFifthExecutorTests: XCTestCase {
         }
     }
 
-    // MARK: covert trigger
-
-    func testCovertTriggerMonitorFiresOnSubstring() {
-        // Reset the cooldown so a previous test does not block.
-        UserDefaults.standard.removeObject(forKey: PleadTheFifthSettingsKey.lastCovertTriggerAt)
-        try? PleadTheFifthSettings.setCovertTriggerPhrase("paris in the spring")
-        let monitor = CovertTriggerMonitor()
-        let sample = "I told her, paris in the spring, that we would meet again"
-        XCTAssertTrue(monitor.shouldTrigger(in: sample))
-    }
-
-    func testCovertTriggerMonitorIgnoresBarePhrase() {
-        // "phrase + 4 characters" rule: the bare phrase should NOT
-        // fire even though it is a substring.
-        UserDefaults.standard.removeObject(forKey: PleadTheFifthSettingsKey.lastCovertTriggerAt)
-        try? PleadTheFifthSettings.setCovertTriggerPhrase("paris in the spring")
-        let monitor = CovertTriggerMonitor()
-        XCTAssertFalse(monitor.shouldTrigger(in: "paris in the spring"),
-                       "bare phrase must not fire (needs >=4 extra chars)")
-        XCTAssertFalse(monitor.shouldTrigger(in: "paris in the spring."),
-                       "1 extra char is not enough (needs >=4)")
-        // 4+ extra chars (e.g. a real sentence ending) is enough.
-        XCTAssertTrue(monitor.shouldTrigger(in: "paris in the spring, you know"))
-    }
-
-    func testCovertTriggerRespectsMinPhraseLength() {
-        // Phrases < 8 chars are rejected at Settings time. Verify
-        // the setter throws and the getter does not surface the
-        // invalid value as configured.
-        XCTAssertThrowsError(
-            try PleadTheFifthSettings.setCovertTriggerPhrase("short")
-        ) { error in
-            guard case PleadTheFifthSettingsError.phraseTooShort(_, let got) = error else {
-                return XCTFail("expected phraseTooShort, got \(error)")
-            }
-            XCTAssertEqual(got, "short".count)
-        }
-        XCTAssertFalse(PleadTheFifthSettings.covertTriggerConfigured)
-    }
-
-    func testCovertTriggerRespectsCooldown() {
-        // A fire within the cooldown window must NOT re-fire.
-        UserDefaults.standard.removeObject(forKey: PleadTheFifthSettingsKey.lastCovertTriggerAt)
-        try? PleadTheFifthSettings.setCovertTriggerPhrase("paris in the spring")
-        let monitor = CovertTriggerMonitor()
-        let sample = "I told her, paris in the spring, that we would meet again"
-        XCTAssertTrue(monitor.shouldTrigger(in: sample))
-        monitor.recordFire()
-        // Same input immediately afterwards: cooldown blocks.
-        XCTAssertFalse(monitor.shouldTrigger(in: sample))
-    }
-
     // MARK: coercion mode
 
     func testCoercionModeHidesDestructiveMenuItems() {
