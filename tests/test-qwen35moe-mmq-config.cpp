@@ -24,7 +24,7 @@ void check(bool condition, const char * message) {
 void test_model_selector() {
     float split[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     qwen35moe_mmq_model_config config = {
-        true, 3072, 1024, 256, 8, true, 4, split,
+        false, true, 3072, 1024, 256, 8, true, false, 4, split,
     };
     check(qwen35moe_use_auto_rdna2_q4_k_j16(config), "exact model signature rejected");
 
@@ -32,11 +32,13 @@ void test_model_selector() {
         check(!qwen35moe_use_auto_rdna2_q4_k_j16(value), message);
     };
     auto changed = config; changed.is_122b_a10b = false; negative(changed, "wrong model accepted");
+    changed = config; changed.is_35b_a3b = true; negative(changed, "ambiguous model accepted");
     changed = config; changed.n_embd = 4096; negative(changed, "wrong embedding accepted");
     changed = config; changed.n_ff_exp = 2048; negative(changed, "wrong expert width accepted");
     changed = config; changed.n_expert = 128; negative(changed, "wrong expert count accepted");
     changed = config; changed.n_expert_used = 4; negative(changed, "wrong top-k accepted");
     changed = config; changed.tensor_parallel = false; negative(changed, "non-tensor-parallel split accepted");
+    changed = config; changed.layer_split = true; negative(changed, "122B layer split accepted");
     changed = config; changed.n_devices = 2; negative(changed, "non-four-way split accepted");
     changed = config; changed.tensor_split = nullptr; negative(changed, "implicit split accepted");
 
@@ -44,6 +46,36 @@ void test_model_selector() {
     split[3] = 0.0f; negative(config, "zero split accepted");
     split[3] = std::numeric_limits<float>::infinity(); negative(config, "infinite split accepted");
     split[3] = std::numeric_limits<float>::quiet_NaN(); negative(config, "NaN split accepted");
+}
+
+void test_qwen36_35b_model_selector() {
+    float split[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    qwen35moe_mmq_model_config config = {
+        true, false, 2048, 512, 256, 8, false, true, 4, split,
+    };
+    check(qwen35moe_use_auto_rdna2_q4_k_j16(config), "exact Qwen3.6 35B layer signature rejected");
+    config.layer_split = false;
+    config.tensor_parallel = true;
+    check(qwen35moe_use_auto_rdna2_q4_k_j16(config), "exact Qwen3.6 35B tensor signature rejected");
+
+    auto negative = [&](qwen35moe_mmq_model_config value, const char * message) {
+        check(!qwen35moe_use_auto_rdna2_q4_k_j16(value), message);
+    };
+    auto changed = config; changed.is_35b_a3b = false; negative(changed, "missing 35B model type accepted");
+    changed = config; changed.is_122b_a10b = true; negative(changed, "ambiguous 35B model accepted");
+    changed = config; changed.n_embd = 3072; negative(changed, "wrong 35B embedding accepted");
+    changed = config; changed.n_ff_exp = 1024; negative(changed, "wrong 35B expert width accepted");
+    changed = config; changed.n_expert = 128; negative(changed, "wrong 35B expert count accepted");
+    changed = config; changed.n_expert_used = 4; negative(changed, "wrong 35B top-k accepted");
+    changed = config; changed.tensor_parallel = false; negative(changed, "35B missing split mode accepted");
+    changed = config; changed.layer_split = true; negative(changed, "35B dual split mode accepted");
+    changed = config; changed.n_devices = 2; negative(changed, "35B non-four-way split accepted");
+    changed = config; changed.tensor_split = nullptr; negative(changed, "35B implicit split accepted");
+
+    split[3] = 2.0f; negative(config, "35B unequal split accepted");
+    split[3] = 0.0f; negative(config, "35B zero split accepted");
+    split[3] = std::numeric_limits<float>::infinity(); negative(config, "35B infinite split accepted");
+    split[3] = std::numeric_limits<float>::quiet_NaN(); negative(config, "35B NaN split accepted");
 }
 
 void test_deepseek4_model_selector() {
@@ -115,6 +147,18 @@ void test_backend_selector() {
     changed = input; changed.ncols_dst = 2049; negative(changed, "non-integral top-k accepted");
 
     input = {
+        true, true, true, true, true,
+        2048, 512, 2048, 256, 256, 1, 1, 256,
+    };
+    check(ggml_cuda_mmq_auto_J(input) == 16, "Qwen3.6 35B layer signature rejected");
+    input.nrows_x = 128;
+    check(ggml_cuda_mmq_auto_J(input) == 16, "Qwen3.6 35B tensor signature rejected");
+    changed = input; changed.nrows_x = 256; negative(changed, "Qwen3.6 wrong local N accepted");
+    changed = input; changed.q4_k = false; negative(changed, "Qwen3.6 Q5_K accepted");
+    changed = input; changed.ncols_x = 512; negative(changed, "Qwen3.6 down shape accepted");
+    changed = input; changed.ncols_max = 1; changed.ncols_dst = 8; negative(changed, "Qwen3.6 decode accepted");
+
+    input = {
         true, true, false, true, true,
         4096, 512, 1536, 256, 256, 1, 1, 256,
     };
@@ -133,9 +177,10 @@ void test_backend_selector() {
 
 int main() {
     test_model_selector();
+    test_qwen36_35b_model_selector();
     test_deepseek4_model_selector();
     test_environment_parser();
     test_backend_selector();
-    std::puts("Qwen3.5/DeepSeek-V4 automatic RDNA2 MMQ config tests: PASS");
+    std::puts("Qwen3.5/Qwen3.6/DeepSeek-V4 automatic RDNA2 MMQ config tests: PASS");
     return 0;
 }

@@ -101,15 +101,21 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), { n_ff_exp, n_embd, n_expert }, flags);
         create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, flags);
 
+        const bool tensor_parallel = split_mode() == LLAMA_SPLIT_MODE_TENSOR &&
+            devices.size() == 1 && devices[0].is_meta;
+        const bool layer_split = split_mode() == LLAMA_SPLIT_MODE_LAYER && devices.size() == 4 &&
+            !devices[0].is_meta && !devices[1].is_meta && !devices[2].is_meta && !devices[3].is_meta;
         const qwen35moe_mmq_model_config mmq_config = {
-            /*.is_122b_a10b =*/ type == LLM_TYPE_122B_A10B,
-            /*.n_embd        =*/ n_embd,
-            /*.n_ff_exp      =*/ n_ff_exp,
-            /*.n_expert      =*/ n_expert,
-            /*.n_expert_used =*/ n_expert_used,
-            /*.tensor_parallel =*/ split_mode() == LLAMA_SPLIT_MODE_TENSOR && devices.size() == 1 && devices[0].is_meta,
-            /*.n_devices       =*/ get_split_state_ud.n_devices,
-            /*.tensor_split  =*/ tensor_split(),
+            /*.is_35b_a3b     =*/ type == LLM_TYPE_35B_A3B,
+            /*.is_122b_a10b   =*/ type == LLM_TYPE_122B_A10B,
+            /*.n_embd          =*/ n_embd,
+            /*.n_ff_exp        =*/ n_ff_exp,
+            /*.n_expert        =*/ n_expert,
+            /*.n_expert_used   =*/ n_expert_used,
+            /*.tensor_parallel =*/ tensor_parallel,
+            /*.layer_split     =*/ layer_split,
+            /*.n_devices       =*/ tensor_parallel ? get_split_state_ud.n_devices : devices.size(),
+            /*.tensor_split    =*/ tensor_split(),
         };
         if (qwen35moe_use_auto_rdna2_q4_k_j16(mmq_config)) {
             for (ggml_tensor * tensor : { layer.ffn_gate_exps, layer.ffn_up_exps }) {

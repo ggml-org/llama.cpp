@@ -64,8 +64,10 @@ inline int ggml_cuda_mmq_auto_J(const ggml_cuda_mmq_auto_J_input & input) {
     const int64_t top_k = input.ncols_dst / input.ncols_max;
     const bool qwen35_122b_q4_k = input.q4_k && input.ncols_x == 3072 && input.nrows_x == 256 &&
         input.ncols_max == 256 && top_k == 8;
+    const bool qwen36_35b_q4_k = input.q4_k && input.ncols_x == 2048 &&
+        (input.nrows_x == 512 || input.nrows_x == 128) && input.ncols_max == 256 && top_k == 8;
     const bool deepseek_v4 = top_k == 6 &&
         ((input.ncols_x == 4096 && input.nrows_x == 512) ||
          (input.ncols_x == 2048 && input.nrows_x == 1024));
-    return qwen35_122b_q4_k || deepseek_v4 ? 16 : 0;
+    return qwen35_122b_q4_k || qwen36_35b_q4_k || deepseek_v4 ? 16 : 0;
 }
