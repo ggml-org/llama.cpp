@@ -1397,6 +1397,67 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             return ok;
         }
+        case GGML_OP_SOFT_MAX: {
+            // Row softmax: y = exp(x - max(x)) / sum(exp(x - max(x)))
+            // computed in fp16 inside the bundle, fp32 in/out at
+            // the IOSurface boundary. Same shape constraint as
+            // RMS_NORM: per-row over ne[0], M=1 for decode. The
+            // W2 body-op spike uses [1, 1024].
+            if (op->src[0] == nullptr) {
+                return false;
+            }
+            if (op->ne[1] != 1) {
+                // Multi-row softmax (M>1) is prefill; the bundle
+                // bakes M=1 for the decode spike. Real prefill
+                // softmax goes through the layer-slab function.
+                return false;
+            }
+            if (op->src[0]->type != GGML_TYPE_F32 ||
+                op->type != GGML_TYPE_F32) {
+                return false;
+            }
+            // scale and max_bias are packed in op_params by
+            // ggml_soft_max_ext; we don't currently expose them
+            // to the bundle (Phase 1 ships a vanilla softmax
+            // with no scale/max_bias; an op variant with those
+            // is a follow-on that would require a second
+            // functionName in the bundle).
+            float scale = 0.0f;
+            float max_bias = 0.0f;
+            std::memcpy(&scale, op->op_params, sizeof(float));
+            std::memcpy(&max_bias, op->op_params + sizeof(float), sizeof(float));
+            (void) scale;
+            (void) max_bias;
+            MLModelDescription * desc = program->model.modelDescription;
+            if (!desc) {
+                return false;
+            }
+            MLFeatureDescription * x_desc = desc.inputDescriptionsByName[@"x"];
+            MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
+            if (!x_desc || x_desc.type != MLFeatureTypeMultiArray ||
+                !y_desc || y_desc.type != MLFeatureTypeMultiArray) {
+                return false;
+            }
+            NSArray<NSNumber *> * x_shape = x_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
+            if (x_shape.count != 2 || y_shape.count != 2 ||
+                x_shape[0].longLongValue != op->ne[0] ||
+                x_shape[1].longLongValue != op->ne[1] ||
+                y_shape[0].longLongValue != op->ne[0] ||
+                y_shape[1].longLongValue != op->ne[1]) {
+                return false;
+            }
+            std::unordered_map<std::string, const float *> inputs;
+            inputs.emplace("x", (const float *) op->src[0]->data);
+            std::vector<std::string> out_names_vec = { "y" };
+            std::unordered_map<std::string, float *> outputs;
+            outputs.emplace("y", (float *) op->data);
+            const bool ok = ggml_ane_program_run(program, inputs, out_names_vec, outputs);
+            if (ok) {
+                out_names = std::move(out_names_vec);
+            }
+            return ok;
+        }
         case GGML_OP_TILE640_MATMUL:
             // TODO(ane-bundle): dispatch matmul to the bound bundle's matmul
             // function once the conversion tool names one. Today the matmul
