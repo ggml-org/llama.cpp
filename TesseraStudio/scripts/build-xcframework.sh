@@ -88,17 +88,64 @@ echo "  merged -> $MERGED ($(du -h "$MERGED" | cut -f1))"
 # -----------------------------------------------------------------------
 echo "--- assemble framework bundle ---"
 rm -rf "$FW"
-mkdir -p "$FW/Headers" "$FW/Modules"
+mkdir -p "$FW/Versions/A/Headers" "$FW/Versions/A/Modules" "$FW/Versions/A/Resources"
 
-cp "$STUDIO_DIR/Sources/CTesseraFFI/include/tessera_ffi.h" "$FW/Headers/tessera_ffi.h"
-cp "$MERGED" "$FW/tessera"
+cp "$STUDIO_DIR/Sources/CTesseraFFI/include/tessera_ffi.h" "$FW/Versions/A/Headers/tessera_ffi.h"
+cp "$MERGED" "$FW/Versions/A/tessera"
 
-cat > "$FW/Modules/module.modulemap" << 'EOF'
+cat > "$FW/Versions/A/Modules/module.modulemap" << 'EOF'
 framework module tessera {
     header "tessera_ffi.h"
     export *
 }
 EOF
+
+# The framework's Info.plist is required for `xcodebuild`'s
+# `builtin-validateFramework` step when the xcframework is embedded
+# into the app (CFBundlePackageType=FMWK tells the linker this is a
+# framework, not a regular bundle; CFBundleExecutable matches the
+# static-archive name written above). The xcframework's own
+# top-level Info.plist is the xcframework manifest, not this.
+cat > "$FW/Versions/A/Resources/Info.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>tessera</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.tessera.engine</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>tessera</string>
+    <key>CFBundlePackageType</key>
+    <string>FMWK</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+</dict>
+</plist>
+EOF
+
+# macOS frameworks use a versioned bundle layout (Versions/A/...) and
+# expose the current version via Versions/Current. The top-level entries
+# (Headers, Modules, Resources, tessera) are symlinks into Versions/Current
+# so consumers and the embed step both find them at the canonical path.
+ln -sfn A "$FW/Versions/Current"
+ln -sfn Versions/Current/Headers "$FW/Headers"
+ln -sfn Versions/Current/Modules "$FW/Modules"
+ln -sfn Versions/Current/Resources "$FW/Resources"
+ln -sfn Versions/Current/tessera "$FW/tessera"
 
 echo "  framework -> $FW"
 
