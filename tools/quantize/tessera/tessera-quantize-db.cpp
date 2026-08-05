@@ -524,6 +524,23 @@ std::string ts_now_ts() {
 // ---------------------------------------------------------------------------
 
 ts_tessera_db::~ts_tessera_db() {
+    // Crash-safe shutdown: force a CHECKPOINT before tearing down the
+    // connection. DuckDB will checkpoint on a clean shutdown, but not
+    // on a SIGKILL (jetsam) - the WAL is left on disk and the next
+    // read-only open fails until something forces a flush. Issuing
+    // CHECKPOINT here guarantees a clean .duckdb and no stale .wal
+    // on every destructor path.
+    // Best-effort: a failed CHECKPOINT (read-only connection, open
+    // transaction, etc.) is not fatal; the conn reset below still
+    // cleans up. DuckDB aborts the CHECKPOINT cleanly on its own.
+    if (conn) {
+        try {
+            auto res = conn->Query("CHECKPOINT");
+            (void) res;  // best-effort
+        } catch (...) {
+            // ignore; teardown proceeds
+        }
+    }
     // Order matters: a Connection holds a reference to its DuckDB; tear it
     // down before the database goes away. Both unique_ptrs reset in
     // declaration order (conn declared after db in the header), which is the

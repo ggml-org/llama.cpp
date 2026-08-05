@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -937,6 +938,77 @@ int main(int argc, char ** argv) {
                 delete pre_db;
             }
         }
+    }
+
+    // ---- Crash-safe shutdown: ~ts_tessera_db() must CHECKPOINT
+    //      before tearing down the connection so a SIGKILL on
+    //      llama-quantize exit does not leave a stale .wal
+    //      blocking subsequent read-only opens. We verify by
+    //      writing a row, deleting the db (which triggers the
+    //      explicit CHECKPOINT in the destructor), and then
+    //      opening the path again to confirm the data is in
+    //      the main file (not pending in a stale WAL).
+    {
+        const std::string ckpt_path = std::string(path) + ".ckpt";
+        std::string ckpt_err;
+        ts_tessera_db * ckpt_db = ts_tessera_db_open(
+            ckpt_path.c_str(), &ckpt_err
+        );
+        CHECK(ckpt_db != nullptr,
+              ("CHECKPOINT test: open failed: " + ckpt_err).c_str());
+        if (ckpt_db != nullptr) {
+            ts_tessera_db_tensor_stat row;
+            row.model_hash         = "ckpt_model";
+            row.model_role         = "trunk";
+            row.name               = "blk.0.attn_q.weight";
+            row.family             = "attn_q";
+            row.layer_depth        = 0;
+            row.out_dim            = 4096;
+            row.in_dim             = 4096;
+            row.n_elements         = 16777216;
+            row.dtype              = "f16";
+            row.kurtosis           = 3.0f;
+            row.eff_rank           = 0.8f;
+            row.rms                = 0.10f;
+            row.mean_abs           = 0.08f;
+            row.tail_ratio         = 4.0f;
+            row.source             = "py_cal";
+            row.recommended_action = "protect";
+            std::string ins_err;
+            CHECK(ts_tessera_db_upsert_tensor_stat(
+                ckpt_db, row, &ins_err) == 0,
+                ("CHECKPOINT test: upsert failed: " + ins_err).c_str());
+            // Destructor: must CHECKPOINT before tearing down.
+            delete ckpt_db;
+        }
+        // After the destructor, the .wal must be gone (CHECKPOINT
+        // flushed it; on a SIGKILL between here and the next
+        // open this is what would be missing and would block
+        // a subsequent read-only open).
+        const std::string wal_path = ckpt_path + ".wal";
+        const bool wal_exists = (std::ifstream(wal_path).good());
+        CHECK(!wal_exists,
+              ("CHECKPOINT test: stale WAL left on disk: " + wal_path).c_str());
+        // Reopen the path and confirm the row is in the main
+        // file (not stranded in a WAL that the destructor
+        // failed to flush).
+        std::string reopen_err;
+        ts_tessera_db * ro_db = ts_tessera_db_open(ckpt_path.c_str(),
+                                                   &reopen_err);
+        CHECK(ro_db != nullptr,
+              ("CHECKPOINT test: reopen failed: " + reopen_err).c_str());
+        if (ro_db != nullptr) {
+            int64_t n = ts_tessera_db_debug_count(
+                ro_db, "SELECT COUNT(*) FROM tensor_stats "
+                       "WHERE model_hash = 'ckpt_model'"
+            );
+            CHECK(n == 1,
+                  "CHECKPOINT test: post-destructor reopen row count");
+            delete ro_db;
+        }
+        // Clean up
+        std::remove(ckpt_path.c_str());
+        std::remove(wal_path.c_str());
     }
 
     if (failures == 0) {
