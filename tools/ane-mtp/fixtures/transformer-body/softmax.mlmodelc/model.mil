@@ -1,0 +1,19 @@
+program(1.3)
+[buildInfo = dict<string, string>({{"coremlc-component-MIL", "3520.4.1"}, {"coremlc-version", "3520.5.1"}, {"coremltools-component-milinternal", ""}, {"coremltools-version", "9.0"}})]
+{
+    func main<ios18>(tensor<fp32, [1024, 1]> x) {
+            tensor<int32, [1]> mx_axes_0 = const()[name = string("mx_axes_0"), val = tensor<int32, [1]>([-2])];
+            bool mx_keep_dims_0 = const()[name = string("mx_keep_dims_0"), val = bool(true)];
+            string x_to_fp16_dtype_0 = const()[name = string("x_to_fp16_dtype_0"), val = string("fp16")];
+            tensor<fp16, [1024, 1]> x_to_fp16 = cast(dtype = x_to_fp16_dtype_0, x = x)[name = string("cast_1")];
+            tensor<fp16, [1, 1]> mx_cast_fp16 = reduce_max(axes = mx_axes_0, keep_dims = mx_keep_dims_0, x = x_to_fp16)[name = string("mx_cast_fp16")];
+            tensor<fp16, [1024, 1]> sub_cast_fp16 = sub(x = x_to_fp16, y = mx_cast_fp16)[name = string("sub_cast_fp16")];
+            tensor<fp16, [1024, 1]> ex_cast_fp16 = exp(x = sub_cast_fp16)[name = string("ex_cast_fp16")];
+            tensor<int32, [1]> sm_axes_0 = const()[name = string("sm_axes_0"), val = tensor<int32, [1]>([-2])];
+            bool sm_keep_dims_0 = const()[name = string("sm_keep_dims_0"), val = bool(true)];
+            tensor<fp16, [1, 1]> sm_cast_fp16 = reduce_sum(axes = sm_axes_0, keep_dims = sm_keep_dims_0, x = ex_cast_fp16)[name = string("sm_cast_fp16")];
+            tensor<fp16, [1024, 1]> y_cast_fp16 = real_div(x = ex_cast_fp16, y = sm_cast_fp16)[name = string("y_cast_fp16")];
+            string y_cast_fp16_to_fp32_dtype_0 = const()[name = string("y_cast_fp16_to_fp32_dtype_0"), val = string("fp32")];
+            tensor<fp32, [1024, 1]> y = cast(dtype = y_cast_fp16_to_fp32_dtype_0, x = y_cast_fp16)[name = string("cast_0")];
+        } -> (y);
+}

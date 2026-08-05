@@ -1,0 +1,25 @@
+program(1.3)
+[buildInfo = dict<string, string>({{"coremlc-component-MIL", "3520.4.1"}, {"coremlc-version", "3520.5.1"}, {"coremltools-component-milinternal", ""}, {"coremltools-version", "9.0"}})]
+{
+    func main<ios18>(tensor<fp32, [4]> ids, tensor<fp32, [64, 128]> table) {
+            int32 y_batch_dims_0 = const()[name = string("y_batch_dims_0"), val = int32(0)];
+            bool y_validate_indices_0 = const()[name = string("y_validate_indices_0"), val = bool(false)];
+            string table_to_fp16_dtype_0 = const()[name = string("table_to_fp16_dtype_0"), val = string("fp16")];
+            string ids_i_to_int16_dtype_0 = const()[name = string("ids_i_to_int16_dtype_0"), val = string("int16")];
+            string cast_0_dtype_0 = const()[name = string("cast_0_dtype_0"), val = string("int32")];
+            int32 greater_equal_0_y_0 = const()[name = string("greater_equal_0_y_0"), val = int32(0)];
+            tensor<int16, [4]> ids_to_int16 = cast(dtype = ids_i_to_int16_dtype_0, x = ids)[name = string("cast_4")];
+            tensor<int32, [4]> cast_0 = cast(dtype = cast_0_dtype_0, x = ids_to_int16)[name = string("cast_3")];
+            tensor<bool, [4]> greater_equal_0 = greater_equal(x = cast_0, y = greater_equal_0_y_0)[name = string("greater_equal_0")];
+            int32 slice_by_index_0 = const()[name = string("slice_by_index_0"), val = int32(128)];
+            tensor<int32, [4]> add_0 = add(x = cast_0, y = slice_by_index_0)[name = string("add_0")];
+            tensor<int32, [4]> select_0 = select(a = cast_0, b = add_0, cond = greater_equal_0)[name = string("select_0")];
+            int32 y_cast_fp16_cast_uint16_axis_0 = const()[name = string("y_cast_fp16_cast_uint16_axis_0"), val = int32(1)];
+            string select_0_to_int16_dtype_0 = const()[name = string("select_0_to_int16_dtype_0"), val = string("int16")];
+            tensor<int16, [4]> select_0_to_int16 = cast(dtype = select_0_to_int16_dtype_0, x = select_0)[name = string("cast_2")];
+            tensor<fp16, [64, 128]> table_to_fp16 = cast(dtype = table_to_fp16_dtype_0, x = table)[name = string("cast_5")];
+            tensor<fp16, [64, 4]> y_cast_fp16_cast_uint16_cast_uint16 = gather(axis = y_cast_fp16_cast_uint16_axis_0, batch_dims = y_batch_dims_0, indices = select_0_to_int16, validate_indices = y_validate_indices_0, x = table_to_fp16)[name = string("y_cast_fp16_cast_uint16_cast_uint16")];
+            string y_cast_fp16_to_fp32_dtype_0 = const()[name = string("y_cast_fp16_to_fp32_dtype_0"), val = string("fp32")];
+            tensor<fp32, [64, 4]> y = cast(dtype = y_cast_fp16_to_fp32_dtype_0, x = y_cast_fp16_cast_uint16_cast_uint16)[name = string("cast_1")];
+        } -> (y);
+}

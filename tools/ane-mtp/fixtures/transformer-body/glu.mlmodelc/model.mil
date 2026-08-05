@@ -1,0 +1,15 @@
+program(1.3)
+[buildInfo = dict<string, string>({{"coremlc-component-MIL", "3520.4.1"}, {"coremlc-version", "3520.5.1"}, {"coremltools-component-milinternal", ""}, {"coremltools-version", "9.0"}})]
+{
+    func main<ios18>(tensor<fp32, [11008, 1]> gate, tensor<fp32, [11008, 1]> up) {
+            string gelu_mode_0 = const()[name = string("gelu_mode_0"), val = string("EXACT")];
+            string gate_to_fp16_dtype_0 = const()[name = string("gate_to_fp16_dtype_0"), val = string("fp16")];
+            tensor<fp16, [11008, 1]> gate_to_fp16 = cast(dtype = gate_to_fp16_dtype_0, x = gate)[name = string("cast_2")];
+            tensor<fp16, [11008, 1]> gelu_cast_fp16 = gelu(mode = gelu_mode_0, x = gate_to_fp16)[name = string("gelu_cast_fp16")];
+            string up_to_fp16_dtype_0 = const()[name = string("up_to_fp16_dtype_0"), val = string("fp16")];
+            tensor<fp16, [11008, 1]> up_to_fp16 = cast(dtype = up_to_fp16_dtype_0, x = up)[name = string("cast_1")];
+            tensor<fp16, [11008, 1]> y_cast_fp16 = mul(x = gelu_cast_fp16, y = up_to_fp16)[name = string("y_cast_fp16")];
+            string y_cast_fp16_to_fp32_dtype_0 = const()[name = string("y_cast_fp16_to_fp32_dtype_0"), val = string("fp32")];
+            tensor<fp32, [11008, 1]> y = cast(dtype = y_cast_fp16_to_fp32_dtype_0, x = y_cast_fp16)[name = string("cast_0")];
+        } -> (y);
+}

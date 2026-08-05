@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "bundle_name": "transformer-body",
+  "state_size_bytes": 327680,
+  "model_type": "ml_program",
+  "slots": [
+    {
+      "name": "rmsnorm.x",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 0,
+      "size_bytes": 16384
+    },
+    {
+      "name": "rmsnorm.y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 16384,
+      "size_bytes": 16384
+    },
+    {
+      "name": "softmax.x",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        1024,
+        1
+      ],
+      "offset": 32768,
+      "size_bytes": 4096
+    },
+    {
+      "name": "softmax.y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        1024,
+        1
+      ],
+      "offset": 49152,
+      "size_bytes": 4096
+    },
+    {
+      "name": "rope.x",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 65536,
+      "size_bytes": 16384
+    },
+    {
+      "name": "rope.pos",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        1,
+        1
+      ],
+      "offset": 81920,
+      "size_bytes": 16
+    },
+    {
+      "name": "rope.y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 98304,
+      "size_bytes": 16384
+    },
+    {
+      "name": "glu.gate",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        11008,
+        1
+      ],
+      "offset": 114688,
+      "size_bytes": 44032
+    },
+    {
+      "name": "glu.up",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        11008,
+        1
+      ],
+      "offset": 163840,
+      "size_bytes": 44032
+    },
+    {
+      "name": "glu.y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        11008,
+        1
+      ],
+      "offset": 212992,
+      "size_bytes": 44032
+    },
+    {
+      "name": "get_rows.table",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        64,
+        128
+      ],
+      "offset": 262144,
+      "size_bytes": 32768
+    },
+    {
+      "name": "get_rows.ids",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        4
+      ],
+      "offset": 294912,
+      "size_bytes": 16
+    },
+    {
+      "name": "get_rows.y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        64,
+        4
+      ],
+      "offset": 311296,
+      "size_bytes": 1024
+    }
+  ],
+  "functions": [
+    {
+      "name": "rmsnorm",
+      "role": "rms_norm",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "rmsnorm.x"
+      ],
+      "output_slots": [
+        "rmsnorm.y"
+      ],
+      "core_ml_function_name": "rmsnorm",
+      "use_ane": true
+    },
+    {
+      "name": "softmax",
+      "role": "soft_max",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "softmax.x"
+      ],
+      "output_slots": [
+        "softmax.y"
+      ],
+      "core_ml_function_name": "softmax",
+      "use_ane": true
+    },
+    {
+      "name": "rope",
+      "role": "rope",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "rope.x",
+        "rope.pos"
+      ],
+      "output_slots": [
+        "rope.y"
+      ],
+      "core_ml_function_name": "rope",
+      "use_ane": true
+    },
+    {
+      "name": "glu",
+      "role": "glu",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "glu.gate",
+        "glu.up"
+      ],
+      "output_slots": [
+        "glu.y"
+      ],
+      "core_ml_function_name": "glu",
+      "use_ane": true
+    },
+    {
+      "name": "get_rows",
+      "role": "get_rows",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "get_rows.table",
+        "get_rows.ids"
+      ],
+      "output_slots": [
+        "get_rows.y"
+      ],
+      "core_ml_function_name": "get_rows",
+      "use_ane": true
+    }
+  ],
+  "dependencies": []
+}

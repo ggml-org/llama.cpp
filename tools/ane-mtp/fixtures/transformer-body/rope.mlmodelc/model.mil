@@ -1,0 +1,31 @@
+program(1.3)
+[buildInfo = dict<string, string>({{"coremlc-component-MIL", "3520.4.1"}, {"coremlc-version", "3520.5.1"}, {"coremltools-component-milinternal", ""}, {"coremltools-version", "9.0"}})]
+{
+    func main<ios18>(tensor<fp32, [1, 1]> pos, tensor<fp32, [4096, 1]> x) {
+            string pos_to_fp16_dtype_0 = const()[name = string("pos_to_fp16_dtype_0"), val = string("fp16")];
+            tensor<fp16, [2048, 1]> inv_to_fp16 = const()[name = string("inv_to_fp16"), val = tensor<fp16, [2048, 1]>(BLOBFILE(path = string("@model_path/weights/weight.bin"), offset = uint64(64)))];
+            tensor<fp16, [1, 1]> pos_to_fp16 = cast(dtype = pos_to_fp16_dtype_0, x = pos)[name = string("cast_2")];
+            tensor<fp16, [2048, 1]> theta_cast_fp16 = mul(x = pos_to_fp16, y = inv_to_fp16)[name = string("theta_cast_fp16")];
+            tensor<fp16, [2048, 1]> cos_cast_fp16 = cos(x = theta_cast_fp16)[name = string("cos_cast_fp16")];
+            tensor<fp16, [2048, 1]> sin_cast_fp16 = sin(x = theta_cast_fp16)[name = string("sin_cast_fp16")];
+            tensor<int32, [2]> first_begin_0 = const()[name = string("first_begin_0"), val = tensor<int32, [2]>([0, 0])];
+            tensor<int32, [2]> first_end_0 = const()[name = string("first_end_0"), val = tensor<int32, [2]>([2048, 1])];
+            string x_to_fp16_dtype_0 = const()[name = string("x_to_fp16_dtype_0"), val = string("fp16")];
+            tensor<fp16, [4096, 1]> x_to_fp16 = cast(dtype = x_to_fp16_dtype_0, x = x)[name = string("cast_1")];
+            tensor<fp16, [2048, 1]> first_cast_fp16 = slice_by_index(begin = first_begin_0, end = first_end_0, x = x_to_fp16)[name = string("first_cast_fp16")];
+            tensor<int32, [2]> second_begin_0 = const()[name = string("second_begin_0"), val = tensor<int32, [2]>([2048, 0])];
+            tensor<int32, [2]> second_end_0 = const()[name = string("second_end_0"), val = tensor<int32, [2]>([4096, 1])];
+            tensor<fp16, [2048, 1]> second_cast_fp16 = slice_by_index(begin = second_begin_0, end = second_end_0, x = x_to_fp16)[name = string("second_cast_fp16")];
+            tensor<fp16, [2048, 1]> fcos_cast_fp16 = mul(x = first_cast_fp16, y = cos_cast_fp16)[name = string("fcos_cast_fp16")];
+            tensor<fp16, [2048, 1]> ssin_cast_fp16 = mul(x = second_cast_fp16, y = sin_cast_fp16)[name = string("ssin_cast_fp16")];
+            tensor<fp16, [2048, 1]> new_first_cast_fp16 = sub(x = fcos_cast_fp16, y = ssin_cast_fp16)[name = string("new_first_cast_fp16")];
+            tensor<fp16, [2048, 1]> fsin_cast_fp16 = mul(x = first_cast_fp16, y = sin_cast_fp16)[name = string("fsin_cast_fp16")];
+            tensor<fp16, [2048, 1]> scos_cast_fp16 = mul(x = second_cast_fp16, y = cos_cast_fp16)[name = string("scos_cast_fp16")];
+            tensor<fp16, [2048, 1]> new_second_cast_fp16 = add(x = fsin_cast_fp16, y = scos_cast_fp16)[name = string("new_second_cast_fp16")];
+            int32 y_axis_0 = const()[name = string("y_axis_0"), val = int32(0)];
+            bool y_interleave_0 = const()[name = string("y_interleave_0"), val = bool(false)];
+            tensor<fp16, [4096, 1]> y_cast_fp16 = concat(axis = y_axis_0, interleave = y_interleave_0, values = (new_first_cast_fp16, new_second_cast_fp16))[name = string("y_cast_fp16")];
+            string y_cast_fp16_to_fp32_dtype_0 = const()[name = string("y_cast_fp16_to_fp32_dtype_0"), val = string("fp32")];
+            tensor<fp32, [4096, 1]> y = cast(dtype = y_cast_fp16_to_fp32_dtype_0, x = y_cast_fp16)[name = string("cast_0")];
+        } -> (y);
+}
