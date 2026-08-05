@@ -165,3 +165,8 @@ AGENTS.local.md
 # data/calibration/ (text, vision/ images, audio/ FLACs). The builder
 # is checked in; the downloaded contents are not.
 /data/calibration/
+
+# Tessera Studio packaging output. The `packaging/build-and-notarize.sh`
+# script writes the final .pkg installer here. It is rebuilt by the
+# packaging script on every release.
+/dist/
