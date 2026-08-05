@@ -268,3 +268,86 @@ final class TesseraProbeClassTests: XCTestCase {
             TesseraProbeClass.classes(forLedgerReasons: ["probe:future-rule"]), ["future-rule"])
     }
 }
+
+// MARK: - Stage + scheduler integration with purge
+
+final class TesseraSessionPurgeIntegrationTests: XCTestCase {
+    private var dirs: [URL] = []
+
+    override func tearDown() {
+        for dir in dirs { try? FileManager.default.removeItem(at: dir) }
+        dirs.removeAll()
+        super.tearDown()
+    }
+
+    private func makeTempDir(_ label: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tessera-\(label)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        dirs.append(dir)
+        return dir
+    }
+
+    func testStageSkipsPurgedSessions() async throws {
+        let root = try makeTempDir("purge-stage")
+        let store = TesseraTraceStore(directory: root.appendingPathComponent("traces"))
+        let ledger = TesseraCurationLedger.forStore(store)
+        try store.appendRuntime(records: [runtimeRecord(sid: "P1", step: 0)])
+        try ledger.markPurged(sid: "P1")
+
+        let stage = TesseraSessionCurationStage(store: store, ledger: ledger)
+        let report = await stage.sweep()
+
+        // Purged is a terminal verdict: the session is neither re-analyzed
+        // nor counted as pending.
+        XCTAssertEqual(report.sessionsSeen, 1)
+        XCTAssertEqual(report.analyzed, 0)
+        XCTAssertTrue(report.pendingReplay.isEmpty)
+        XCTAssertEqual(ledger.verdict(for: "P1"), .purged)
+    }
+
+    func testQuarantineExemptionReadsLedgerAtTrimTime() throws {
+        // The provider and the stage pass ledger.quarantinedSids() into the
+        // store trimmers at each flush/sweep, so a session quarantined AFTER
+        // capture becomes exempt from the rolling cap on the next trim
+        // without re-flushing.
+        let root = try makeTempDir("purge-exempt")
+        let store = TesseraTraceStore(directory: root.appendingPathComponent("traces"))
+        let ledger = TesseraCurationLedger.forStore(store)
+        try store.appendRuntime(records: [runtimeRecord(sid: "Q", step: 0)])
+        try ledger.append(TesseraCurationLedgerEntry(
+            sid: "Q", verdict: .quarantined, reasons: ["probe:email"],
+            score: .init(acceptance: 0.5, tokens: 100, repetition: 0.0)))
+
+        let exempt = TesseraCurationLedger.forStore(store).quarantinedSids()
+        XCTAssertEqual(exempt, ["Q"])
+
+        // A budget of 1 byte would trim everything not exempt; the
+        // quarantined session survives.
+        try store.trimRuntimeToBudget(budgetBytes: 1, exemptSids: exempt)
+        XCTAssertEqual(store.runtimeSummary().totalRecords, 1)
+        XCTAssertEqual(store.runtimeSummary().sessions.map(\.sid), ["Q"])
+    }
+}
+
+// MARK: - Replay stamp idempotence
+
+final class TesseraReplayStampTests: XCTestCase {
+    func testStampIsIdempotent() {
+        let once = TesseraSessionCurationStage.stampReplayLine(
+            "{\"schema\":\"llama.tessera.spec.v1\",\"step_idx\":0}")
+        let twice = once.flatMap { TesseraSessionCurationStage.stampReplayLine($0) }
+        XCTAssertEqual(once, twice)
+        XCTAssertEqual(twice?.contains("\"replayed_from\":\"runtime\""), true)
+    }
+
+    func testStampRejectsForeignProvenance() {
+        let stamped = TesseraSessionCurationStage.stampReplayLine(
+            "{\"schema\":\"llama.tessera.spec.v1\",\"provenance\":\"calibration\"}")
+        XCTAssertNil(stamped, "foreign provenance must not be re-stamped as replay")
+    }
+
+    func testStampRejectsMalformedJson() {
+        XCTAssertNil(TesseraSessionCurationStage.stampReplayLine("not json"))
+    }
+}

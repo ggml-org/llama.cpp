@@ -221,10 +221,19 @@ public final class TesseraSessionCurationStage: @unchecked Sendable {
     /// Stamp one imatrix calibration record with the replay provenance.
     /// Calibration emits no provenance/sid fields (spec section 12.2: the
     /// sid is stripped at promotion), so the fields are appended before the
-    /// closing brace. Lines that are not JSON objects are dropped.
+    /// closing brace. Idempotent: a line already stamped as replay passes
+    /// through byte-identical. A line carrying any other provenance is
+    /// dropped (the egress guard only accepts the exact promotion stamp).
+    /// Lines that are not JSON objects are dropped.
     public static func stampReplayLine(_ line: String) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasSuffix("}") else { return nil }
+        guard trimmed.hasSuffix("}"),
+              let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data),
+              let dict = obj as? [String: Any] else { return nil }
+        if let provenance = dict["provenance"] as? String {
+            return provenance == "replay" ? trimmed : nil
+        }
         return String(trimmed.dropLast())
             + ",\"provenance\":\"replay\",\"replayed_from\":\"runtime\"}"
     }
