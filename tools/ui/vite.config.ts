@@ -76,8 +76,7 @@ export default defineConfig({
 				extends: './vite.config.ts',
 				test: {
 					name: 'ui',
-					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
-					setupFiles: ['./.storybook/vitest.setup.ts']
+					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] }
 				},
 				plugins: [
 					storybookTest({
