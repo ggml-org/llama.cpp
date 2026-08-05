@@ -1,0 +1,36 @@
+#version 450
+
+#extension GL_EXT_shader_realtime_clock : require
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly  buffer A {uint data_a[];};
+layout (binding = 1) writeonly buffer D {uint data_d[];};
+
+layout (push_constant) uniform parameter {
+    uint ne;
+    uint ticks;
+} p;
+
+// bounds the spin in case the clock does not advance, turning a hang into a too-short sleep
+const uint MAX_ITER = 1u << 27;
+
+void main() {
+    // the dispatch is a single workgroup, so all invocations spin concurrently and the delay does not accumulate
+    const uvec2 t0 = clockRealtime2x32EXT();
+
+    for (uint iter = 0; iter < MAX_ITER; ++iter) {
+        const uvec2 t = clockRealtime2x32EXT();
+
+        const uint lo = t.x - t0.x;
+        const uint hi = t.y - t0.y - (t.x < t0.x ? 1u : 0u);
+
+        if (hi != 0u || lo >= p.ticks) {
+            break;
+        }
+    }
+
+    for (uint i = gl_LocalInvocationID.x; i < p.ne; i += gl_WorkGroupSize.x) {
+        data_d[i] = data_a[i];
+    }
+}
