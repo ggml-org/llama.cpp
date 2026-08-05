@@ -248,6 +248,12 @@ than 4% gain at 8K is a NO-GO. A pass is only
 not launch 16K, 32K, or 64K. Any later confirmation is a separate explicit
 user decision.
 
+The completed corrected gate at commit `3e2861d85` is NO-GO:
+`$HOME/llama-jobs/dsv4-rocm-bf16-equivalence/20260805T003241.023493282Z-bf16-hidden-short-correctness-3e2861d85e15-11945/`.
+Audit proves the exact 344-call control/candidate dispatch split, but all four
+full-vocabulary records exceed tolerance and RMSE is 0.06170-0.18557 versus
+the 0.02 limit. The TG screen was therefore not run.
+
 ## Target-only raw-decode profile
 
 `profile-tg.sh` is the disk-safe M5.3 profile wrapper. It requires exactly one

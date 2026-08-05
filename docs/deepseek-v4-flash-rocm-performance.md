@@ -4,8 +4,8 @@ Status: living canonical engineering record
 Owner branch: `perf/dsv4-rocm-pp-20260803`  
 Base: `b88a59fbc6ac255e6bf5e2dd790f559c89ce911c` in Edwin's llama.cpp fork  
 Target host: `edwin@192.168.1.161` (`webhie`)  
-Last updated: 2026-08-04
-Current phase: PP plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selects communication at 16K/64K and routine profiling is frozen. M5.4 Tree+LL and Ring+LL runtime candidates failed screen advancement, so the next predeclared work is the guarded RDNA2/four-way BF16 hidden-reduction source candidate; no decode optimization is accepted yet and indexed CSA is held.
+Last updated: 2026-08-05
+Current phase: PP plus M5.0/M5.1 raw-decode baseline/residency are accepted; M5.3 selected communication and routine profiling remains frozen. M5.4 Tree+LL and Ring+LL failed screen advancement, and the final predeclared guarded BF16 hidden-reduction candidate failed its short numerical correctness gate before performance. No decode optimization is accepted; no longer run is authorized; indexed CSA remains held.
 
 ## 1. Objective and success criteria
 
@@ -954,11 +954,13 @@ The repaired forced screens are complete but produce no candidate eligible for a
 
 Both repaired artifacts have three JSON/three timestamps, zero malformed/excessive output, capture rc0, twelve exact algorithm plus twelve LL acknowledgements, no forbidden per-collective diagnostics, clean process status, and graph build/runtime attestation. They are **NO-GO for advancement**; no matched comparison JSON, 31-repetition validation, or optimization acceptance is allowed. This exhausts only the predeclared runtime-control branch, not generic RCCL behavior.
 
-The next and only predeclared source candidate is a shape-scoped RDNA2/four-way guard that tests BF16 for these unforced hidden reductions, halving collective input to 8,192 bytes while paying conversion kernels. Exact opt-in `GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1` requires HIP+RCCL, explicit `GGML_CUDA_ALLREDUCE=nccl`, four distinct unshared physical RDNA2 devices, and contiguous F32 rank tensors of exact shape `[4096,1,1,1]`; every miss retains the old size heuristic. Force-FP32 is ORed across ranks and wins before the candidate. The implementation reuses the existing F32-to-BF16 / BF16 RCCL sum / BF16-to-F32 body, cleans partially initialized communicators before any fallback, and offers a correctness-only per-context audit. It does not collapse the two dependency-separated reductions.
+The final predeclared source candidate is a shape-scoped RDNA2/four-way guard that tests BF16 for these unforced hidden reductions, halving collective input to 8,192 bytes while paying conversion kernels. Exact opt-in `GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1` requires HIP+RCCL, explicit `GGML_CUDA_ALLREDUCE=nccl`, four distinct unshared physical RDNA2 devices, and contiguous F32 rank tensors of exact shape `[4096,1,1,1]`; every miss retains the old size heuristic. Force-FP32 is ORed across ranks and wins before the candidate. The implementation reuses the existing F32-to-BF16 / BF16 RCCL sum / BF16-to-F32 body, cleans partially initialized communicators before any fallback, and offers a correctness-only per-context audit. It does not collapse the two dependency-separated reductions.
 
 Per the user's iteration-time override, the initial gate is intentionally short and can reject or select further work but cannot accept the optimization. Correctness runs one explicit FP32 control and one BF16 candidate at only 2K context with four deterministic fixed target inputs. It captures raw full-vocabulary F32 logits and requires identical argmax tokens, finite values, every element within `0.05 + 0.01*scale`, RMSE <=0.02, exactly 344 eligible hidden reductions, zero candidate dispatches in control, 344 in candidate, and the observed exact dynamic force-FP32 count of zero; rank-wise force precedence is covered by the pure host selector test because this model path does not emit a forced AllReduce in the capture. Only a correctness pass permits a matched 0/2K/8K screen using tg8, six raw/one discarded/five retained samples per arm. Any >2% regression is a NO-GO; less than 4% gain at 8K is not worth longer testing. A pass is only `PROMISING_SHORT_SCREEN`, with `optimization_accepted=0`. No 16K/32K/64K run occurs in this stage; any longer confirmation requires a new explicit user decision.
 
 The first post-commit 2K A/B artifact at source `19373e2bf` is **invalid candidate-path evidence**, not a BF16 correctness result: `$HOME/llama-jobs/dsv4-rocm-bf16-equivalence/20260805T001143.656347516Z-bf16-hidden-short-correctness-19373e2bfb15-293/`. Both arms completed in about 70 seconds and produced logits, but the candidate audit recorded 1,032 total AllReduce calls, zero candidate-eligible calls, zero BF16 candidate calls, and no dispatch marker; the control was identical. The 344 small FP32 plus 688 legacy BF16 calls across four target inputs show the original 7,168-element premise was wrong. A diagnostic rerun at `d4cec50f5`, `$HOME/llama-jobs/dsv4-rocm-bf16-equivalence/20260805T001920.668484789Z-bf16-hidden-short-correctness-d4cec50f54af-17349/`, again proved zero 7,168-element calls while explicitly attesting the four-device RDNA2 topology. Direct GGUF metadata then showed this model's hidden width is 4,096, not 7,168. No numeric or performance conclusion is allowed from either artifact. Correct the exact guard and audit to `[4096,1,1,1]`, require 344 matching calls and 344 dispatches, and rerun the same short correctness gate.
+
+The corrected clean run at source `3e2861d85` is a complete, provenance-valid **NO-GO**: `$HOME/llama-jobs/dsv4-rocm-bf16-equivalence/20260805T003241.023493282Z-bf16-hidden-short-correctness-3e2861d85e15-11945/`. Audit proves the intended path exactly: both arms have 1,032 total calls, 344 exact `[4096,1,1,1]` eligible F32 reductions, and 688 unchanged legacy BF16 reductions; control routes all 344 eligible calls to FP32 while candidate routes all 344 to candidate BF16. All four argmax tokens match and no value is nonfinite, but every record fails the numerical gate. RMSE is 0.07808 / 0.18557 / 0.06170 / 0.17095 versus the 0.02 limit, with 35,662 / 83,471 / 24,359 / 81,175 combined-tolerance violations out of 129,280 logits per record; maximum absolute differences are 0.3744 / 1.0524 / 0.3635 / 1.0006. Therefore no 0/2K/8K TG performance screen is permitted. The guarded BF16 candidate is rejected, and no 16K/32K/64K confirmation or acceptance run is allowed.
 
 ### M5.6 / P2 - mandatory 32K and 64K raw TG
 
@@ -1049,6 +1051,7 @@ A dense mask is not a sparse performance implementation. The first gather proof 
 | 2026-08-04 | Freeze routine profiling and pivot to unprofiled communication candidates. | Four independent 16K/64K profiles already select NCCL in 30/30 ranks; later GGUF metadata plus dispatch audit identify 86 FP32 16,384-byte layer collectives/token. More attribution cannot establish a TG gain. | tree-ll first; matched auto only if promising |
 | 2026-08-04 | Invalidate the first Tree+LL attempt and harden stdout/graph/identity evidence. | `ENV,TUNING` emitted 1,497,247 non-JSON lines and the old consumer spawned `date` per line. `a9c80dd84`/`4b8caa954` add raw capture/classification, ENV-only acknowledgement, normalized manifests, compiled/runtime graph gates, and adversarial fixtures; repaired smoke passes. | invalid instrumentation; never throughput evidence |
 | 2026-08-04 | Do not advance Tree+LL or Ring+LL and do not run auto. | Repaired Tree has 64K median 14.847 t/s and 15.576% MAD; Ring has stable 64K 18.318 t/s (-0.460% historical) but unstable/regressed 32K. Neither meets preliminary plausibility/stability, so conditional auto and matched comparison are not allowed. | runtime-control branch exhausted; guarded BF16 source candidate next |
+| 2026-08-05 | Reject guarded BF16 hidden AllReduce before performance. | Corrected exact `[4096,1,1,1]` audit proves 344/344 candidate dispatches, but all four full-vocabulary records exceed the numerical tolerance and RMSE limit (0.06170-0.18557 vs 0.02). Argmax equality alone is insufficient. | final predeclared decode candidate closed NO-GO; 0/2K/8K TG screen skipped |
 | 2026-08-04 | Bound communication evidence without inventing payload or critical-path claims. | Exact cadence is 86 AllReduce groups/token and 11,008 rank calls/device kernels per tg32 rep. RCCL schema lacks message arguments; API/kernel correlation IDs are disjoint. Long intervals and near-zero same-agent compute overlap do not prove cause/dependencies. | accepted forensics `fa1e98ba2`; critical path open |
 
 ## 10. Closed decisions and open questions
@@ -1323,12 +1326,11 @@ Invalid/repaired M5.4 runtime artifacts:
   Tree+LL NO-GO: $HOME/llama-jobs/dsv4-rocm-tg/20260804T214837.068203556Z-raw-tg-rccl-screen-tree-ll-performance-4b8caa954627-16362/
   Ring+LL NO-GO: $HOME/llama-jobs/dsv4-rocm-tg/20260804T221418.737155192Z-raw-tg-rccl-screen-ring-ll-performance-4b8caa954627-214/
 Current next action:
-  Routine profiling remains frozen. Runtime Tree+LL/Ring+LL candidates are
-  NO-GO and conditional auto was correctly skipped. Implement only the
-  predeclared guarded RDNA2/four-way BF16 hidden-reduction source candidate;
-  retain force-FP32 outputs and the two dependency-separated reductions. Pass
-  deterministic output/logit correctness before a matched 16K/32K/64K tg32
-  screen. M5.2 is not triggered; indexed CSA remains held.
+  Routine profiling remains frozen. Runtime Tree+LL/Ring+LL and guarded BF16
+  candidates are all NO-GO. The BF16 failure occurred at the deterministic 2K
+  logit gate, so its 0/2K/8K TG screen and every longer run are skipped. No
+  predeclared decode candidate remains and no decode optimization is accepted.
+  M5.2 is not triggered; indexed CSA remains held pending a new user decision.
 
 Purpose:
   Ralph files contain per-iteration checkpoints, rejected variants, commands,
@@ -1407,7 +1409,7 @@ Purpose:
 - Depth-0/tg1 metadata smoke proves installed RCCL's ENV-only behavior with 27 diagnostics, exact Tree/LL acknowledgements, no per-collective markers, and clean capture/process/graph state. It is validation only, not performance evidence.
 - Repaired Tree+LL screen exits 4: medians 22.7059/16.4285/14.8470 t/s; MAD 0.137%/4.668%/15.576%. It fails preliminary plausibility and stability; auto is correctly skipped.
 - Ring+LL fallback exits 4: medians 23.0775/16.4675/18.3176 t/s; MAD 0.364%/14.023%/0.352%. Its stable 64K result is -0.460% historical, not >=3%, and 32K is unstable/regressed. No candidate advances, no matched comparator is run, and no optimization is accepted.
-- Next: implement the already-declared guarded RDNA2/four-way BF16 conversion/reduction path for the 86 hidden reductions/token, retaining force-FP32 outputs and all dependency boundaries; correctness precedes performance.
+- Implemented the guarded RDNA2/four-way BF16 conversion/reduction path, corrected the original 7,168-width assumption to GGUF-proven 4,096, and proved exactly 344 eligible/dispatch calls in the four-target gate. Full-vocabulary correctness is NO-GO despite identical argmax: all four records exceed tolerance and RMSE 0.02. The 0/2K/8K screen is intentionally skipped; no decode optimization is accepted and no predeclared candidate remains.
 
 **Exact accepted GPU commands:**
 
