@@ -15459,13 +15459,31 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         // alternating SWA layers (gpt-oss: swa_period=2, window 128) sit at
         // n_kv == 256 on half their layers and so never reach any KV-sharing
         // kernel at any depth -- they run the legacy per-head q1 instead.
-        // Opt-in (GGML_OPENCL_FD_MIN_N_KV_MQ=128): worth ~+1.2% tg32 on
-        // gpt-oss-20b/X2-90 once the partials buffer is pooled, but it changes
-        // decode routing for every model below FD_MIN_N_KV and has only been
-        // measured on one. Default is unchanged.
+        // This defaulted to FD_MIN_N_KV (2048) and was left opt-in on the grounds
+        // that it changes decode routing for every model below that and had only
+        // been measured on one. It has now been measured on four, and inheriting
+        // the split-tuned constant was simply wrong: below 2048 the MQ routes --
+        // including the dk=128 gqa=8 head split -- did not engage AT ALL, so a
+        // model spent its whole shallow-context life on the legacy per-head q1.
+        //
+        // X2-90 tg128, floor 2048 -> 32, each arm bracketed by an off arm either
+        // side:
+        //
+        //   Qwen3-30B-A3B  d0 41.3 -> 46.5 (+12%)  d1024 25.7 -> 41.8 (+63%)
+        //   Qwen3-4B       d0 38.8 -> 42.6 (+10%)  d1024 27.2 -> 39.0 (+43%)
+        //   gpt-oss-20b    d0 39.1 -> 39.6 (+1%)   d1024 35.8 -> 38.6 (+8%)
+        //   gemma-4-26B    d0 37.7 -> 37.5         d1024 33.8 -> 33.4
+        //
+        // and d4096 is flat everywhere (-0.9% to +2.0%), which is the control:
+        // above the old floor the routing is unchanged, so those columns should
+        // not move and they do not. gemma-4-26B is the neutral case rather than a
+        // regression -- its deltas sit inside the spread of its own two off arms.
+        //
+        // 32 rather than 128 because the d0 win needs a floor below n_kv there.
+        // GGML_OPENCL_FD_MIN_N_KV_MQ restores any value, including the old 2048.
         static const int fd_min_n_kv_mq = []{
             const char * e = getenv("GGML_OPENCL_FD_MIN_N_KV_MQ");
-            return (e && e[0]) ? atoi(e) : FD_MIN_N_KV;
+            return (e && e[0]) ? atoi(e) : 32;
         }();
         // A shape with a narrow (purpose-built) MQ kernel carries its own,
         // much lower n_kv floor. Those kernels exist only for shapes whose
