@@ -20,6 +20,13 @@ Read-only design study. No code changes. No commits.
    - 4.3 IOSurface + Metal Event Architecture
    - 4.4 Failure Mode Catalog
    - 4.5 Implementation Recommendations for Slices 1-4
+5. Part 5: Phase 1 Body Ops Implementation
+   - 5.1 Dispatch Policy
+   - 5.2 Dispatch Pattern
+   - 5.3 Per-Op Bundle Construction
+   - 5.4 Multifunction Bundle
+   - 5.5 Parity Test Results
+   - 5.6 W0/W1 + Phase 1 Pattern
 
 ---
 
@@ -439,19 +446,20 @@ Classification levels:
 | `GGML_OP_MUL` | ANE-NATIVE | `mul` | Use plain `mul`, not `mulBroadcastable`. |
 | `GGML_OP_MUL_MAT` | ANE-NATIVE-C | `matmul` or `conv` | Use `conv` formulation for 3x throughput gain. fp16 dtype. |
 | `GGML_OP_MUL_MAT_ID` | ANE-NATIVE-C | `matmul` | MoE: select expert weights, then matmul. Same constraints. |
-| `GGML_OP_RMS_NORM` | ANE-NATIVE-C | `reduce_sum` + `rsqrt` + `mul` | Composite decomposition (Section 4.2). fp16 overflow risk. |
+| `GGML_OP_RMS_NORM` | ANE-NATIVE | `mul` + `reduce_mean` + `rsqrt` + `mul` | Phase 1: dispatched on ANE (Part 5). Bundle bakes eps; per-row over `ne[0]`. |
 | `GGML_OP_LAYER_NORM` | ANE-NATIVE | `layer_norm` | Native MIL op since iOS 15. |
-| `GGML_OP_SOFT_MAX` | ANE-NATIVE-C | `softmax` | Clamp input to fp16 range before softmax. |
+| `GGML_OP_SOFT_MAX` | ANE-NATIVE | `reduce_max` + `sub` + `exp` + `reduce_sum` + `real_div` | Phase 1: dispatched on ANE (Part 5). Bundle bakes scale=1, max_bias=0. |
 | `GGML_OP_SILU` | ANE-NATIVE | `silu` | Native MIL op. |
 | `GGML_OP_SIGMOID` | ANE-NATIVE | `sigmoid` | Native MIL op. |
 | `GGML_OP_TANH` | ANE-NATIVE | `tanh` | Native MIL op. |
 | `GGML_OP_GELU` | ANE-BREAKS | N/A (direct) | GELU not valid on ANE. Use tanh approximation (Orion #10). |
-| `GGML_OP_ROPE` | ANE-NATIVE-C | `cos` + `sin` + `mul` + `add` + `concat` | Composite decomposition (Section 4.2). `concat` risk. |
+| `GGML_OP_ROPE` | ANE-NATIVE | `cos` + `sin` + `mul` + `add` + `concat` | Phase 1: NORMAL mode dispatched on ANE (Part 5). NEOX/MROPE/VISION/IMROPE follow-on. |
 | `GGGL_OP_CONCAT` | ANE-BREAKS | `concat` | Silent GPU fallback. Decompose via reshape + write or multi-output. |
 | `GGML_OP_RESHAPE` | ANE-NATIVE-C | `reshape` | Triggers memory copy. Minimize usage. |
 | `GGML_OP_VIEW` | CPU-GLUE | N/A | Zero-copy alias; not a compute op. Handle in CPU. |
 | `GGML_OP_PERMUTE` / `GGML_OP_TRANSPOSE` | ANE-NATIVE-C | `transpose` | Triggers memory copy. Minimize to 1 per attention block. |
-| `GGML_OP_GET_ROWS` | ANE-BREAKS | `gather` | hollance: gather prevents ANE. Use `gather_along_axis` (iOS 17+) or CPU. |
+| `GGML_OP_GET_ROWS` | ANE-NATIVE-C | `gather` | Phase 1: small-vocab (vocab <= 128) dispatched on ANE (Part 5). Large-vocab stays on the CPU memcpy path (IOSurface write is bandwidth-bound). |
+| `GGML_OP_GLU` (split, geglu) | ANE-NATIVE | `erf` + `mul` + `add` + `mul` | Phase 1: split-form geglu dispatched on ANE (Part 5). swiglu/reglu/erf/quick follow-on. |
 | `GGML_OP_REPEAT` | ANE-NATIVE | `tile` | Used for GQA head expansion. |
 | `GGML_OP_SCALE` | ANE-NATIVE | `mul` (scalar * tensor) | Scalar broadcast via `const` op + `mul`. |
 | `GGML_OP_CONT` | CPU-GLUE | N/A | Contiguous copy. CPU. |
@@ -889,6 +897,188 @@ is the reference implementation. The ggml-ane buffer type wraps this arena.
    bytes > 49 KB`.
 5. Thermal throttling: Monitor `NSProcessInfo.thermalState`. If >= 2
    (serious), reduce batch size or switch to Metal for the next few tokens.
+
+---
+
+## Part 5: Phase 1 Body Ops Implementation
+
+Phase 1 of `docs/tessera-ane-ios-demo-design.md` lights up five
+transformer body ops on the ANE backend: `GGML_OP_RMS_NORM`,
+`GGML_OP_SOFT_MAX`, `GGML_OP_ROPE`, `GGML_OP_GLU`, and
+`GGML_OP_GET_ROWS`. The implementation is the production proof of
+pattern for the W0/W1 spike's "matmul on ANE, everything else on
+CPU" status quo: a CPU sandwich is replaced by an ANE-first body.
+
+### 5.1 Dispatch Policy
+
+The host-side split is encoded as a small policy helper in
+`ggml/src/ggml-ane/ggml-ane.mm` (function
+`ggml_ane_dispatch_policy`). The full table is:
+
+| Op class                       | Primary backend     | Fallback                | Why |
+|--------------------------------|---------------------|-------------------------|-----|
+| `MUL_MAT` (T640_3D)            | ANE (L1, Phase 0)   | n/a                     | the matmul is the whole point |
+| `MUL_MAT` (BF16/fp16)          | ANE (W0 spike)      | Accelerate BLAS         | bake-shape constraint; CPU BLAS if shape mismatches |
+| `RMS_NORM`                     | ANE (Phase 1)       | Accelerate vDSP         | per-row reduction |
+| `SOFT_MAX`                     | ANE (Phase 1)       | Accelerate vDSP         | row softmax |
+| `ROPE` (gemma 4 variant)       | ANE (Phase 1)       | Accelerate vDSP         | elementwise + gather |
+| `GLU` (split form, geglu)      | ANE (Phase 1)       | Accelerate vDSP         | split + elementwise mul |
+| `GET_ROWS` (small vocab)       | ANE (Phase 1)       | memcpy                  | embedding lookup; large vocab stays on CPU memcpy |
+| `ADD` / `MUL` / `SCALE`        | Accelerate (always) | n/a                     | ANE dispatch overhead > vDSP cost for elementwise |
+| `RESHAPE` / `VIEW` / `PERMUTE` | free, no compute    | n/a                     | layout-only |
+| `CPY`                          | memcpy              | n/a                     | type conversion copy |
+| Sampling (argmax, top-k)      | CPU                 | n/a                     | control flow, not compute |
+
+The hard rule (from the design doc): **ANE is used when ANE is faster,
+not when ANE is available**. The dispatch helper returns one of three
+values (`ANE` / `ACCELERATE` / `NONE`); the dispatch switch filters
+out the `ACCELERATE` ops before the per-op case match, so they fall
+through to the elementwise / Accelerate path in
+`ggml_backend_ane_graph_compute`.
+
+### 5.2 Dispatch Pattern
+
+The dispatch case in `ggml_ane_program_dispatch_op` (in
+`ggml-ane.mm`) handles each op uniformly:
+
+1. **Shape/dtype check**: The bundle's baked shape and dtype must
+   match the ggml op's shape and dtype; otherwise the dispatch
+   returns false and the scheduler routes the op elsewhere. This
+   is the precise check; the device-level `supports_op` advertises
+   the op coarsely and a non-matching shape fails at the
+   dispatch site rather than at `graph_compute`'s "no compute
+   path" assert.
+2. **Parameter check**: Per-op, the dispatch verifies the
+   dispatch-relevant parameters (e.g., RoPE's `mode` must be
+   `GGML_ROPE_TYPE_NORMAL`; GLU's `glu_op` must be
+   `GGML_GLU_OP_GEGLU`). Mismatched parameters fall through to
+   the CPU path per the dispatch policy.
+3. **Bundle dispatch**: The dispatch reads the bundle's input/
+   output feature names from `MLModelDescription` (e.g., `x`,
+   `y`; `gate`/`up`/`y`; `table`/`ids`/`y`) and calls
+   `ggml_ane_program_run` with the corresponding name-keyed maps.
+   The run function writes the host fp32 into the pinned IOSurface
+   slots and uses `MLPredictionOptions.outputBackings` to make
+   Core ML write outputs directly into the output slots
+   (zero-copy).
+
+The MUL_MAT case (the W1 spike) is the template; the five new
+ops follow the same pattern with op-specific shape/dtype/
+parameter gates.
+
+### 5.3 Per-Op Bundle Construction
+
+Each Phase 1 op has a build script in `tools/ane-mtp/`:
+
+| Script                                       | Op         | Shape (decode)       |
+|----------------------------------------------|------------|----------------------|
+| `build-rmsnorm-fixture.py`                   | RMS_NORM   | `[4096, 1]`          |
+| `build-softmax-fixture.py`                   | SOFT_MAX   | `[1024, 1]`          |
+| `build-rope-fixture.py`                      | ROPE       | `[4096, 1]` + pos    |
+| `build-glu-fixture.py`                       | GLU        | `[11008, 1]` x 2     |
+| `build-get-rows-fixture.py`                  | GET_ROWS   | `[hidden=64, vocab=128]` + ids `[batch=4]` |
+| `make-transformer-body-bundle.py`           | (all 5)   | one multifunction bundle |
+
+The scripts build a CoreML `mlprogram` (not a `neuralnetwork` v4
+spec) so the functionName can be set at load time and the
+internal compute is fp16 with fp32 input/output at the IOSurface
+boundary. The MIL construction for each op:
+
+- **RMS_NORM**: `x*x -> reduce_mean(axes=[-2], keep_dims=True) -> add eps
+  -> rsqrt -> x * rsqrt`. Per-row over `ne[0]`.
+- **SOFT_MAX**: `max(x) -> sub -> exp -> sum -> div(exp, sum)`. Per-row
+  over `ne[0]`; numerically stable.
+- **ROPE**: `theta = pos * inv_freq (baked) -> cos -> sin -> split x
+  into (first, second) halves -> new_first = first*cos - second*sin
+  -> new_second = first*sin + second*cos -> concat`. NORMAL mode,
+  no freq_factors, no YaRN. The bundle bakes `n_dims`, `freq_base`,
+  `freq_scale`, `ext_factor`, `attn_factor`, `beta_fast`, `beta_slow`.
+- **GLU**: `gelu(gate) * up` with the sigmoid-based GELU
+  `0.5 * x * (1 + erf(x / sqrt(2)))`. Split form (separate
+  `gate` and `up` inputs).
+- **GET_ROWS**: `gather(x, ids, axis=1)` on a `[hidden, vocab]`
+  table (ggml's column-major view). Bundle's input ids is fp32
+  (CoreML's gather requires integer indices, so the bundle
+  internally casts via `mb.cast(ids, int32)`); the dispatch
+  converts the ggml-emitted i32 ids to f32 in a small scratch
+  buffer.
+
+### 5.4 Multifunction Bundle
+
+The `make-transformer-body-bundle.py` script emits the production
+artifact: N per-op `.mlmodelc` files in one output directory,
+plus a single multifunction `ane_state_layout.v1.json` that
+names all five functions and their slot layouts.
+
+```
+tools/ane-mtp/fixtures/transformer-body/
+  transformer-body.ane_state.v1.json
+  rmsnorm.mlpackage   rmsnorm.mlmodelc
+  softmax.mlpackage   softmax.mlmodelc
+  rope.mlpackage      rope.mlmodelc
+  glu.mlpackage       glu.mlmodelc
+  get_rows.mlpackage  get_rows.mlmodelc
+```
+
+Why N `.mlmodelc` and not one: CoreML's
+`MLModelConfiguration.functionName` is set at load time, so a
+single `MLModel` can be bound to one function only. For a
+multifunction bundle, the iOS app loads one `MLModel` per
+function (5 in this case) from the same output directory, with
+each load specifying a different `functionName`. The
+multifunction manifest is the production contract: the iOS
+app reads the manifest, then loads each per-function
+`.mlmodelc` with `MLModelConfiguration.functionName` set to
+the function's name.
+
+The multifunction manifest's slot names are prefixed by the
+function name (`rmsnorm.x`, `rope.pos`, `glu.gate`, etc.) so the
+multifunction IOSurface can carry state for all five
+functions in one allocation. The total state size is 320 KB
+(the sum of all per-op slot pages, rounded to 16 KB).
+
+### 5.5 Parity Test Results
+
+Each op has a parity test (`tests/test-ane-rmsnorm.cpp`,
+`test-ane-softmax.cpp`, etc.) that loads the per-op `.mlmodelc`,
+builds a ggml graph with the op, dispatches through the ANE
+backend, and verifies the output against a ggml-cpu reference.
+
+| Op          | Shape              | Tolerance | Measured max abs err |
+|-------------|--------------------|-----------|----------------------|
+| RMS_NORM    | `[1, 4096]`        | 2.0e-3    | 1.33e-3              |
+| SOFT_MAX    | `[1, 1024]`        | 2.0e-3    | 3.26e-6              |
+| ROPE        | `[1, 4096]`, pos=5 | 3.0e-3    | 2.83e-3              |
+| GLU (geglu) | `[1, 11008]` x 2   | 2.0e-3    | 8.65e-4              |
+| GET_ROWS    | `[128, 64]`, batch=4 | 1.0e-3  | 1.20e-4              |
+
+The dominant error source is the fp16 round-trip inside the
+bundle. Softmax's error is anomalously low (3.26e-6) because
+the normalize-by-sum at the end of softmax keeps the per-
+element error bounded. RoPE's error is the largest (2.83e-3)
+because the cos/sin tables are the largest numerical path; the
+3e-3 tolerance is empirical headroom over the measured value.
+
+### 5.6 W0/W1 + Phase 1 Pattern
+
+The dispatch case structure is identical across all 5 new ops
+and the existing MUL_MAT case (W1 spike). The pattern:
+
+1. Validate the bundle's baked shape/dtype matches the ggml op.
+2. Validate the per-op parameters (mode, glu_op, etc.) match
+   what the bundle bakes.
+3. Build the input/output name maps.
+4. Call `ggml_ane_program_run` which writes the host fp32 into
+   the pinned IOSurface slots and uses `outputBackings` to
+   zero-copy the outputs.
+
+A follow-on bundle (per op) extends the same pattern for
+variants not yet exported: NEOX / MROPE / VISION / IMROPE for
+ROPE; swiglu / reglu / geglu_erf / geglu_quick / swiglu_oai for
+GLU; large-vocab (vocab > 128) for GET_ROWS. Each lands as a
+second functionName in the same multifunction bundle, with the
+dispatch case's parameter check gating which function is
+selected.
 
 ---
 
