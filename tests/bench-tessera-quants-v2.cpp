@@ -158,6 +158,8 @@ int bench_meta(int64_t n_rows, int64_t n_pages) {
     for (int64_t i = 0; i < n_rows * n_lanes_per_row; i++) {
         lane_scales[(size_t) i] = (int8_t) ls_dist(rng);
     }
+    // Sink so the compiler can't DCE the writes.
+    volatile float sink = 0.0f;
     // Scalar reference: inline the C dispatch's per-element
     // pattern, but over the whole batch (the per-row C
     // pattern would call this in a loop, paying the function
@@ -173,11 +175,13 @@ int bench_meta(int64_t n_rows, int64_t n_pages) {
         for (int64_t i = 0; i < nlanes; i++) {
             lane_scale[(size_t) i] = ((float) lane_scales[(size_t) i]) * (1.0f / 127.0f);
         }
+        sink += lane_scale[0];
     };
     auto v2_fn = [&]() {
         decode_per_row_meta_v2(page_scales.data(), lane_scales.data(),
                                n_rows, n_pages,
                                page_max.data(), lane_scale.data());
+        sink += lane_scale[0];
     };
     auto time_fn = [&](auto fn) {
         for (int i = 0; i < kWarmup; i++) fn();
@@ -200,6 +204,7 @@ int bench_meta(int64_t n_rows, int64_t n_pages) {
     printf("  meta   n_rows=%-4lld n_pages=%-3lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx  elems=%lld\n",
            (long long) n_rows, (long long) n_pages, us_c, us_v2, speedup,
            (long long) elems);
+    (void) sink;
     return 0;
 }
 
@@ -235,29 +240,50 @@ int bench_act_scale(int64_t n) {
     return 0;
 }
 
-int bench_outlier(int64_t k, int64_t n_outliers) {
-    std::vector<float> row((size_t) k, 0.0f);
-    std::vector<int32_t> cols((size_t) n_outliers);
-    std::vector<uint16_t> vals((size_t) n_outliers);
+int bench_outlier(int64_t n_rows, int64_t k, int64_t n_outliers_per_row) {
+    const int64_t n_total = n_rows * n_outliers_per_row;
+    std::vector<float> rows((size_t) (n_rows * k), 0.0f);
+    std::vector<int32_t> cols((size_t) n_total);
+    std::vector<uint16_t> vals((size_t) n_total);
+    std::vector<int32_t> row_offsets((size_t) (n_rows + 1));
     std::mt19937 rng(kSeed);
     std::uniform_int_distribution<int64_t> col_dist(0, k - 1);
-    for (int64_t i = 0; i < n_outliers; i++) {
+    for (int64_t r = 0; r < n_rows; r++) {
+        row_offsets[(size_t) r] = (int32_t) (r * n_outliers_per_row);
+    }
+    row_offsets[(size_t) n_rows] = (int32_t) n_total;
+    for (int64_t i = 0; i < n_total; i++) {
         cols[(size_t) i] = (int32_t) col_dist(rng);
         vals[(size_t) i] = (uint16_t) 0x3C00u;
     }
-    std::vector<float> row_c = row;
-    std::vector<float> row_v2 = row;
+    std::vector<float> rows_c = rows;
+    std::vector<float> rows_v2 = rows;
+    // Sink so the compiler can't DCE the writes.
+    volatile float sink = 0.0f;
+    // Scalar ref: per-element scalar convert + scatter over
+    // all rows. This is the apples-to-apples comparison: the
+    // batched v2 does ONE NEON bulk convert + scalar scatter;
+    // the scalar ref does scalar convert + scatter over the
+    // same total outlier count.
     auto scalar_ref = [&]() {
-        for (int64_t k2 = 0; k2 < n_outliers; k2++) {
-            const int32_t col = cols[(size_t) k2];
-            if (col >= 0 && col < k) {
-                row_c[(size_t) col] = GGML_FP16_TO_FP32(vals[(size_t) k2]);
+        for (int64_t r = 0; r < n_rows; r++) {
+            const int32_t lo = row_offsets[(size_t) r];
+            const int32_t hi = row_offsets[(size_t) r + 1];
+            float * GGML_RESTRICT row = rows_c.data() + r * k;
+            for (int32_t k2 = lo; k2 < hi; k2++) {
+                const int32_t col = cols[(size_t) k2];
+                if (col >= 0 && col < k) {
+                    row[(size_t) col] = GGML_FP16_TO_FP32(vals[(size_t) k2]);
+                }
             }
         }
+        sink += rows_c[0];
     };
     auto v2_fn = [&]() {
-        apply_outlier_addback_v2(row_v2.data(), k, 0, (int32_t) n_outliers,
+        apply_outlier_addback_v2(rows_v2.data(), k, n_rows,
+                                 row_offsets.data(),
                                  cols.data(), vals.data());
+        sink += rows_v2[0];
     };
     auto time_fn = [&](auto fn) {
         for (int i = 0; i < kWarmup; i++) fn();
@@ -274,8 +300,10 @@ int bench_outlier(int64_t k, int64_t n_outliers) {
     const double us_c  = time_fn(scalar_ref);
     const double us_v2 = time_fn(v2_fn);
     const double speedup = (us_v2 > 0.0) ? us_c / us_v2 : 0.0;
-    printf("  outlier k=%-5lld n=%-5lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx\n",
-           (long long) k, (long long) n_outliers, us_c, us_v2, speedup);
+    printf("  outlier n_rows=%-4lld k=%-5lld n/row=%-5lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx  total=%lld\n",
+           (long long) n_rows, (long long) k, (long long) n_outliers_per_row,
+           us_c, us_v2, speedup, (long long) n_total);
+    (void) sink;
     return 0;
 }
 
@@ -313,9 +341,17 @@ int main(void) {
     bench_act_scale(1024);
     bench_act_scale(4096);
     bench_act_scale(8192);
-    printf("outlier addback (per row, sparse 5%%):\n");
-    bench_outlier(1024, 51);
-    bench_outlier(4096, 204);
-    bench_outlier(8192, 409);
+    printf("outlier addback (batched, sparse 5%%, n_rows rows per call):\n");
+    // Sweep n_rows at the canonical in_dim=4096 plus the
+    // dispatch's small-shape cases. The v2 path makes ONE
+    // NEON bulk convert for the whole buffer; the C ref
+    // makes scalar convert per element.
+    bench_outlier(1, 1024, 51);    // 1 row, k=1024
+    bench_outlier(1, 4096, 204);   // 1 row, k=4096
+    bench_outlier(1, 8192, 409);   // 1 row, k=8192
+    bench_outlier(16, 4096, 204);  // 16 rows of k=4096
+    bench_outlier(64, 4096, 204);  // 64 rows of k=4096
+    bench_outlier(256, 4096, 204); // 256 rows of k=4096 (typical)
+    bench_outlier(1024, 4096, 204); // 1024 rows of k=4096 (large)
     return 0;
 }

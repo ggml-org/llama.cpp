@@ -140,16 +140,19 @@ int test_outlier_addback(int64_t k) {
         cols.push_back((int32_t) c);
         vals.push_back((uint16_t) GGML_FP32_TO_FP16(5.0f * v));
     }
+    // Batched v2: pass (rows, row_len, n_rows=1, offsets=[0, n_outliers], cols, vals).
+    std::vector<float> row_v2 = row;
+    std::vector<int32_t> row_offsets = { 0, (int32_t) n_outliers };
+    apply_outlier_addback_v2(row_v2.data(), k, 1,
+                             row_offsets.data(), cols.data(), vals.data());
+    // Reference: scalar per-element.
     std::vector<float> row_ref = row;
-    std::vector<float> row_v2  = row;
     for (int64_t i = 0; i < n_outliers; i++) {
         const int32_t col = cols[(size_t) i];
         if (col >= 0 && col < k) {
             row_ref[(size_t) col] = GGML_FP16_TO_FP32(vals[(size_t) i]);
         }
     }
-    apply_outlier_addback_v2(row_v2.data(), k, 0, (int32_t) n_outliers,
-                             cols.data(), vals.data());
     int mismatches = 0;
     float max_diff = 0.0f;
     for (int64_t i = 0; i < k; i++) {

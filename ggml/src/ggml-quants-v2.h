@@ -66,17 +66,33 @@ GGML_API void quantize_row_tessera_t640_v2(const float * GGML_RESTRICT x,
                                            int64_t k);
 
 // Function C: apply_outlier_addback_v2
-//   Replaces row[col] = fp16_to_fp32(outlier_vals[k]) for the
-//   CSR-indexed outliers in [lo, hi). The v2 path batches the
-//   fp16->fp32 conversion with NEON vcvt_f32_f16 (4 fp16 -> 4
-//   fp32 per chunk) so the outlier_vals are read once and
-//   converted in bulk, not per-scatter scalar. The sparse
-//   scatter is per-element and vDSP-incompatible, so the
-//   scatter stays scalar (the C version's documented
-//   behaviour).
-GGML_API void apply_outlier_addback_v2(float * GGML_RESTRICT row,
+//   Batched: the dispatch caller has the full BUFFER worth of
+//             outliers (n_rows rows, each with its own CSR
+//             range via outlier_row_offsets, sparse 5% non-
+//             zero). The v2 path makes ONE NEON bulk
+//             conversion of all n_total outlier_vals (fp16 ->
+//             fp32, 4 elements per NEON chunk) and ONE scalar
+//             scatter pass that walks outlier_row_offsets to
+//             figure out which row each col belongs to.
+//   rows[r, col] = fp16_to_fp32(outlier_vals[k])
+//              for r in [0, n_rows),
+//                  k in [outlier_row_offsets[r], outlier_row_offsets[r+1]),
+//                  col = outlier_cols[k] in [0, row_len).
+//   The previous per-row API (lo, hi, single row) is the v2
+//   implementation's evolution: the public contract is
+//   "addback the whole buffer of outliers" not "addback one
+//   row's outliers" (per architect's "evolve, don't version"
+//   rule). The buffer is contiguous rows = n_rows * row_len
+//   floats; the scatter does the (r, col) -> rows[r*row_len+col]
+//   index math internally.
+//   Sparse scatter is per-element and vDSP-incompatible, so
+//   the scatter stays scalar (the C version's documented
+//   behaviour). The bulk conversion is what dominates the
+//   work for the typical 5% sparsity pattern.
+GGML_API void apply_outlier_addback_v2(float * GGML_RESTRICT rows,
                                        int64_t row_len,
-                                       int32_t lo, int32_t hi,
+                                       int64_t n_rows,
+                                       const int32_t * GGML_RESTRICT outlier_row_offsets,
                                        const int32_t * GGML_RESTRICT outlier_cols,
                                        const void * GGML_RESTRICT outlier_vals);
 
