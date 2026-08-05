@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "bundle_name": "tile640-matmul-1024x1024x1",
+  "state_size_bytes": 2129920,
+  "model_type": "ml_program",
+  "slots": [
+    {
+      "name": "w",
+      "kind": "input",
+      "dtype": "f16",
+      "shape": [
+        1024,
+        1024
+      ],
+      "offset": 0,
+      "size_bytes": 2097152
+    },
+    {
+      "name": "x",
+      "kind": "input",
+      "dtype": "f16",
+      "shape": [
+        1024,
+        1
+      ],
+      "offset": 2097152,
+      "size_bytes": 2048
+    },
+    {
+      "name": "y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        1024,
+        1
+      ],
+      "offset": 2113536,
+      "size_bytes": 4096
+    }
+  ],
+  "functions": [
+    {
+      "name": "main",
+      "role": "matmul",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "w",
+        "x"
+      ],
+      "output_slots": [
+        "y"
+      ],
+      "core_ml_function_name": "main",
+      "use_ane": true
+    }
+  ],
+  "dependencies": []
+}
