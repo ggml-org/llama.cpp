@@ -1699,6 +1699,10 @@ struct llama_model_bailingmoe3 : public llama_model_base {
         const llama_model & model;
     };
 
+    struct graph_mtp : public llm_graph_context {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
