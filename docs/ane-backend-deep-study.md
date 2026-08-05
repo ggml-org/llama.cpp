@@ -1736,15 +1736,19 @@ matmul, so the 0.3-1.3 ms prologue the host dequant pays
 host-side cost.
 
 `ggml/src/ggml-quants-v2.c` (added in this worktree) ships
-five Accelerate + NEON implementations:
+five Accelerate + NEON implementations. The 2026-08-05
+call-pattern refactor hoists the per-row meta decode and
+the per-row outlier addback into single tile-wide calls;
+the dequant uses the pre-decoded meta arrays as separate
+inputs (no longer reads page_scales / lane_scales inline).
 
 | Function | Strategy | Speedup vs C (M1) |
 |---|---|---|
-| `dequantize_row_tessera_t640_v2` | NEON 4-element chunks for sign + scale; vDSP_vmul per page | 1.3-1.58x |
+| `dequantize_row_tessera_t640_v2` | NEON 4-element chunks for sign + scale; vDSP_vmul per page; takes pre-decoded page_max + lane_scale as separate inputs (dispatch's hoisted meta decode produces them) | 1.29-1.75x |
 | `quantize_row_tessera_t640_v2` | vDSP_maxmgv + vDSP_meamgv for per-page reductions; NEON 4-element chunks for trit encoding and 243-base packing | 2.76-4.31x |
-| `apply_outlier_addback_v2` | NEON vcvt_f32_f16 (4 fp16 -> 4 fp32) for the bulk conversion; scatter is per-element scalar (sparse, vDSP-incompatible) | 0.13-0.51x (slower; NEON chunk overhead dominates) |
-| `decode_per_row_meta_v2` | vDSP_vflt8 (int8 -> fp32) + vDSP_vsdiv for lane scales; NEON vcvt_f32_f16 for page scales | 0.51-1.0x (no win; per-row work too small to amortize vDSP setup) |
-| `apply_act_scale_v2` | NEON vcvt_f32_f16 + vDSP_vmul for the bulk multiply | 1.86-1.96x |
+| `apply_outlier_addback_v2` | Batched: one NEON vcvt_f32_f16 (4 fp16 -> 4 fp32) for the whole BUFFER of outliers; one scalar scatter pass walking the per-row CSR offsets. The scatter stays scalar (sparse, vDSP-incompatible) | 1.23-1.98x (single-row) / 0.98-1.23x (multi-row) |
+| `decode_per_row_meta_v2` | Batched: one vDSP_vflt8 (int8 -> fp32) + one vDSP_vsdiv for the whole TILE of lane_scales; one NEON vcvt_f32_f16 sweep for the whole TILE of page_scales | 0.39-0.60x (still slower; vDSP setup ~26us of fixed cost the C auto-vectorised loop doesn't pay). C ref is the dispatch default for the meta; v2 stays as the regression suite + opt-in for very large future tiles |
+| `apply_act_scale_v2` | NEON vcvt_f32_f16 + vDSP_vmul for the bulk multiply | 0.79-1.93x |
 
 `tests/bench-tessera-quants-v2.cpp` is the throughput
 benchmark (median of 10 runs, 5 warmup, on the M1 MacBook
@@ -1762,6 +1766,31 @@ the same NEON 4-element chunk pattern as the v2 dequant
 but for the encode direction (trit comparison + 243-base
 packing), where there is no serial dependency.
 
+**Batched-call-pattern refactor (2026-08-05)**: the v2
+meta decode and outlier addback previously paid vDSP /
+NEON setup cost per row. The refactor hoists them into
+single tile-wide calls:
+- `decode_per_row_meta_v2(page_scales, lane_scales,
+  n_rows, n_pages, ...)` makes one vDSP_vflt8 +
+  vDSP_vsdiv for all rows' lane_scales and one NEON
+  sweep for all rows' page_scales. Bench at n_rows=256,
+  n_pages=16: v2 20.04 us, C 10.04 us, 0.50x. The v2
+  catches up at the 1024-row sweep point (n_rows=1024:
+  v2 73.88 us, C 42.38 us, 0.57x) but does not beat the
+  C ref at any measured size. The vDSP setup is ~26us
+  of fixed cost the C ref doesn't pay. The C ref is the
+  dispatch default for the meta; the v2 stays as the
+  regression suite target.
+- `apply_outlier_addback_v2(rows, row_len, n_rows,
+  offsets, cols, vals)` makes one NEON bulk convert
+  for all n_total outliers and one scalar scatter pass.
+  Bench at n_rows=256, k=4096, n/row=204 (52k total):
+  v2 64.62 us, C 63.42 us, 0.98x. The v2 is competitive
+  across all measured sizes and wins at single-row /
+  small-buffer shapes (1.23-1.98x). The win is modest
+  because the C ref's auto-vectorised scalar loop is
+  already near memory bandwidth.
+
 **Parity**: `tests/test-tessera-quants-v2.cpp` verifies
 bit-identical output (within fp32 noise) for the 5
 functions on the canonical Phase 0 shapes. The vDSP
@@ -1778,15 +1807,19 @@ versions are the documented behaviour; v2 is the same
 math with a NEON bulk conversion for fp16).
 
 **Dispatch wiring**: `ggml-ane.mm`'s
-`GGML_OP_TILE640_MATMUL` case now calls
-`dequantize_row_tessera_t640_v2` when
-`ggml_tessera_t640_v2_enabled()` is true and `in_dim >=
-GGML_TESSERA_T640_V2_MIN_K` (1024). The C reference in
-`ggml-quants.c` is the documented fallback when v2 is
-disabled (env var `GGML_TESSERA_T640_V2_DISABLE=1`) or
-`in_dim` is below the cutoff. The dispatch policy table
-at the top of `ggml-ane.mm` (Part 6.5 above) is updated
-to document the v2 path and the per-function speedup.
+`GGML_OP_TILE640_MATMUL` case wires the v2 path for all
+three functions when `ggml_tessera_t640_v2_enabled()`
+is true and `in_dim >= GGML_TESSERA_T640_V2_MIN_K` (1024):
+1. bulk `decode_per_row_meta_v2` for the whole tile,
+2. per-row `dequantize_row_tessera_t640_v2` with the
+   pre-decoded meta,
+3. bulk `apply_outlier_addback_v2` for the whole buffer.
+The C reference in `ggml-quants.c` is the documented
+fallback when v2 is disabled (env var
+`GGML_TESSERA_T640_V2_DISABLE=1`) or `in_dim` is below
+the cutoff. The dispatch policy table at the top of
+`ggml-ane.mm` (Part 6.5 above) is updated to document
+the v2 path and the per-function speedup.
 
 **Hard rules observed**:
 - No NaN/Inf filters. The v2 paths use the same math as
