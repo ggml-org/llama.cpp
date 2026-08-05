@@ -247,7 +247,7 @@ class StateLayout:
         rounded up to the next 16 KB page.
         """
         if role not in (ROLE_RMS_NORM, ROLE_SOFT_MAX, ROLE_ROPE,
-                        ROLE_GLU, ROLE_GET_ROWS):
+                        ROLE_GLU, ROLE_GET_ROWS, ROLE_MATMUL):
             raise ValueError(f"for_body_op: bad role {role!r}")
 
         def _slot(name: str, kind: str, dtype: str, shape: list, offset: int) -> StateSlot:

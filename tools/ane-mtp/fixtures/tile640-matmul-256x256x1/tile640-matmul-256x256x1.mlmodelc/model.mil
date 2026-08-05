@@ -1,0 +1,9 @@
+program(1.3)
+[buildInfo = dict<string, string>({{"coremlc-component-MIL", "3520.4.1"}, {"coremlc-version", "3520.5.1"}, {"coremltools-component-milinternal", ""}, {"coremltools-version", "9.0"}})]
+{
+    func main<ios18>(tensor<fp16, [256, 256]> w, tensor<fp16, [256, 1]> x) {
+            bool y_transpose_x_0 = const()[name = string("y_transpose_x_0"), val = bool(false)];
+            bool y_transpose_y_0 = const()[name = string("y_transpose_y_0"), val = bool(false)];
+            tensor<fp16, [256, 1]> y = matmul(transpose_x = y_transpose_x_0, transpose_y = y_transpose_y_0, x = w, y = x)[name = string("y")];
+        } -> (y);
+}
