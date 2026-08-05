@@ -586,6 +586,21 @@ if (APPLE)
         target_link_libraries(test-ane-get-rows PRIVATE
                               ggml ggml-base)
     endif()
+    # Phase 0 L1 matmul on ANE: end-to-end parity test for
+    # GGML_OP_TILE640_MATMUL dispatch. The test packs a TILE640
+    # weight via the existing ts_quantize_2d (the
+    # llama-quantize-impl library), dequants on the host via
+    # dequantize_row_tessera_t640, and asserts the ANE fp16
+    # matmul matches the L0.5 reference (CPU dequant + matmul)
+    # within 1e-2 abs / 1e-1 rel. The fixture is
+    # tools/ane-mtp/fixtures/tile640-matmul-256x256x1/.
+    llama_build(test-ane-tile640-matmul.cpp)
+    if (TARGET test-ane-tile640-matmul)
+        target_link_libraries(test-ane-tile640-matmul PRIVATE
+                              ggml ggml-base llama-quantize-impl)
+        target_include_directories(test-ane-tile640-matmul PRIVATE
+                                   ${PROJECT_SOURCE_DIR}/tools/quantize/tessera)
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
