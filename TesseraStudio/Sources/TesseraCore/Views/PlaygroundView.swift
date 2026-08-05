@@ -76,6 +76,15 @@ public struct PlaygroundView: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .onSubmit { send() }
+                // Explicit observation for the covert trigger
+                // (docs/tessera-plead-the-fifth-design.md 8.3).
+                // The NSTextView/UITextField swizzle in
+                // TextInputInterceptor also catches this
+                // field; the explicit call is the documented
+                // contract that the unit tests rely on.
+                .onChange(of: inputText) { _, newValue in
+                    Task { await CovertTriggerMonitor.shared.observe(text: newValue) }
+                }
                 .accessibilityLabel("Message")
 
             Button(action: send) {

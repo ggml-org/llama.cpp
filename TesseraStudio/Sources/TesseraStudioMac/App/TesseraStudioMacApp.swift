@@ -9,6 +9,15 @@ struct TesseraStudioMacApp: App {
     init() {
         TesseraSettings.registerDefaults()
         TesseraLearningServices.installDefaults()
+        // "Plea the Fifth" composition root (phase 3). Loads
+        // the user's covert trigger phrase from the Keychain
+        // and installs the AppKit text-input swizzle so every
+        // text input in the app feeds `CovertTriggerMonitor`.
+        // The actual wipe executor (phase 2) is wired in here
+        // once it lands; for now the `onFire` callback is left
+        // unset so the trigger is silent.
+        Task { await CovertTriggerMonitor.shared.loadFromKeychain() }
+        TextInputInterceptor.install()
         // Idle training sweeps are global (one orchestrator per app), so
         // their completion ping is posted from here, not from a window.
         // The notifier suppresses the ping while the Learning surface is

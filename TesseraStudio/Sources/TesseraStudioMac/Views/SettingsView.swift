@@ -41,6 +41,15 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.learningRuntimeCapture) private var learningRuntimeCapture = TesseraSettingsDefault.learningRuntimeCapture
     @AppStorage(TesseraSettingsKey.learningRuntimeCaptureTopk) private var learningRuntimeCaptureTopk = TesseraSettingsDefault.learningRuntimeCaptureTopk
     @AppStorage(TesseraSettingsKey.learningRuntimeDraftMax) private var learningRuntimeDraftMax = TesseraSettingsDefault.learningRuntimeDraftMax
+    // "Plea the Fifth" coercion-resistant destruction. The
+    // phrase itself lives in the Keychain (see
+    // ``CovertTriggerMonitor``); only the coercion-mode flag
+    // and the local UI state live in UserDefaults / @State.
+    @AppStorage(TesseraSettingsKey.coercionMode) private var coercionMode = TesseraSettingsDefault.coercionMode
+    @State private var covertTriggerPhraseDraft = ""
+    @State private var covertTriggerIsSet = false
+    @State private var covertTriggerEditing = false
+    @State private var covertTriggerTestNote: String?
 
     // Autonomy (autonomy-calibration-design.md 13): snapshots of the learned-
     // permission store, refreshed on appear and after every mutation.
@@ -71,11 +80,32 @@ struct SettingsView: View {
                 // the agent is ALLOWED to do on its own - permissions
                 // is the word users scan for.
                 .tabItem { Label("Permissions", systemImage: "hand.raised") }
+            // "Plea the Fifth" tab. Collapsed by default when
+            // coercion mode is on so the visible state matches
+            // the "an adversary wouldn't notice it" threat
+            // model (design section 9.5).
+            pleadTheFifthTab
+                .tabItem { Label("Plea the Fifth", systemImage: "lock.shield") }
             advancedTab
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
-        .frame(width: 520, height: 420)
-        .onAppear { loadAPIKey() }
+        .frame(width: 520, height: 460)
+        .onAppear {
+            loadAPIKey()
+            loadCovertTrigger()
+        }
+        .onChange(of: coercionMode) { _, newValue in
+            // When coercion mode flips ON, collapse the
+            // "Plea the Fifth" section by default so an
+            // adversary wouldn't notice it. When it flips
+            // OFF, expand it so the user can confirm the
+            // trigger is still configured.
+            if newValue {
+                pleadTheFifthExpanded = false
+            } else {
+                pleadTheFifthExpanded = true
+            }
+        }
     }
 
     private var generalTab: some View {
@@ -511,6 +541,236 @@ struct SettingsView: View {
             netNote = "Retrained net failed the calibration guard; rolled back to the previous weights."
         } else {
             netNote = "Not trained yet: needs at least \(TesseraAutonomyService.warmupThreshold) approval receipts, or the guard rolled back."
+        }
+    }
+
+    // MARK: Plea the Fifth tab (docs/tessera-plead-the-fifth-design.md 8.3, 9)
+
+    /// "Plea the Fifth" tab. The covert trigger phrase, the
+    /// test button, and the coercion-mode toggle. Collapsed
+    /// by default when coercion mode is on (design section 9.5).
+    private var pleadTheFifthTab: some View {
+        // Coercion mode ON: the section is collapsed (no
+        // icon, just a single-line section header) so an
+        // adversary who glances at the Settings window
+        // wouldn't notice the trigger controls (design 9.5).
+        // The user can expand the section manually.
+        DisclosureGroup(isExpanded: $pleadTheFifthExpanded) {
+            pleadTheFifthSection
+        } label: {
+            HStack {
+                Text("Plea the Fifth")
+                if coercionMode {
+                    // Subtle indicator - a small "armed" dot,
+                    // visible only to the user who knows what
+                    // it means.
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 6, height: 6)
+                        .accessibilityLabel("Covert trigger armed")
+                }
+            }
+        }
+    }
+
+    /// Tracks whether the "Plea the Fifth" section is expanded
+    /// in the Settings UI. Defaults to false when coercion mode
+    /// is on (design 9.5: "a user who is being watched wouldn't
+    /// notice it"), true otherwise. Updated via onChange when
+    /// the coercion mode flag flips.
+    @State private var pleadTheFifthExpanded: Bool = false
+
+    @ViewBuilder
+    private var pleadTheFifthSection: some View {
+        Form {
+            Section("Covert trigger phrase") {
+                covertTriggerField
+                if !covertTriggerPhraseDraft.isEmpty &&
+                    covertTriggerPhraseDraft.count < CovertTriggerMonitor.minPhraseLength {
+                    Label(
+                        "Phrase must be at least \(CovertTriggerMonitor.minPhraseLength) characters.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Text("Choose something you can type naturally. Don't choose a famous quote. \(CovertTriggerMonitor.minPhraseLength) characters minimum.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Test") { testCovertTrigger() }
+                        .disabled(!canTestCovertTrigger)
+                    if let note = covertTriggerTestNote {
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Covert trigger - for use when you can't visibly destroy your data. External security audit pending.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Section {
+                Toggle("Coercion mode", isOn: $coercionMode)
+                    .help("Hide the visible 'Plea the Fifth' menu item. The hot-key and covert trigger still work.")
+                if coercionMode {
+                    Label(
+                        "Coercion mode: the visible 'Plea the Fifth' controls are hidden. Make sure you remember the hot-key and the covert trigger phrase.",
+                        systemImage: "eye.slash"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// The phrase field. SecureField so the user's typing
+    /// isn't visible; once set, the field is masked to a row
+    /// of bullets with an "Edit" button to reveal it. The
+    /// draft is the local editing copy; the stored phrase
+    /// lives in the Keychain.
+    @ViewBuilder
+    private var covertTriggerField: some View {
+        if covertTriggerIsSet && !covertTriggerEditing {
+            HStack {
+                Text("Phrase is set (\(String(repeating: "\u{2022}", count: 12)))")
+                Spacer()
+                Button("Edit") {
+                    // When the user clicks Edit, we read the
+                    // stored phrase into the draft so they can
+                    // continue editing. After Edit, the field
+                    // is a SecureField bound to the draft.
+                    Task { await loadCovertTriggerForEditing() }
+                    covertTriggerEditing = true
+                }
+                Button("Clear", role: .destructive) {
+                    Task { await clearCovertTrigger() }
+                }
+            }
+        } else {
+            SecureField("Covert trigger phrase", text: $covertTriggerPhraseDraft)
+                .onSubmit { commitCovertTrigger() }
+                .onDisappear { commitCovertTrigger() }
+            HStack {
+                Button("Save") { commitCovertTrigger() }
+                    .disabled(covertTriggerPhraseDraft.trimmingCharacters(in: .whitespacesAndNewlines).count < CovertTriggerMonitor.minPhraseLength)
+                if covertTriggerIsSet {
+                    Button("Cancel") {
+                        // Exit edit mode without saving.
+                        covertTriggerPhraseDraft = ""
+                        covertTriggerEditing = false
+                        loadCovertTrigger()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether the Test button is enabled. We test against the
+    /// saved phrase, not the draft, so a half-typed phrase
+    /// can't be tested. A draft phrase is also testable if it
+    /// meets the length minimum.
+    private var canTestCovertTrigger: Bool {
+        let draft = covertTriggerPhraseDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draft.isEmpty {
+            return draft.count >= CovertTriggerMonitor.minPhraseLength
+        }
+        return covertTriggerIsSet
+    }
+
+    /// Initial load: ask the monitor if a phrase is set (so
+    /// the field renders the masked "is set" state). The
+    /// actual phrase stays in the Keychain; we only read the
+    /// presence flag.
+    private func loadCovertTrigger() {
+        Task { @MainActor in
+            let isSet = await CovertTriggerMonitor.shared.isArmed
+            self.covertTriggerIsSet = isSet
+            // Collapse the section by default when coercion
+            // mode is on (design 9.5). On a fresh load, the
+            // user hasn't expanded it yet; flipping the flag
+            // later goes through the onChange handler.
+            if coercionMode {
+                self.pleadTheFifthExpanded = false
+            } else {
+                self.pleadTheFifthExpanded = isSet
+            }
+        }
+    }
+
+    /// Load the stored phrase into the draft for editing.
+    /// This reads the phrase from the Keychain into the
+    /// local @State; the phrase is in-memory only while the
+    /// edit dialog is open. SecureField keeps the screen
+    /// pixels safe.
+    private func loadCovertTriggerForEditing() async {
+        let stored = TesseraSecretStore.secret(
+            account: CovertTriggerMonitor.keychainAccount
+        ) ?? ""
+        await MainActor.run {
+            self.covertTriggerPhraseDraft = stored
+        }
+    }
+
+    /// Commit the draft to the Keychain via the monitor.
+    /// Empty draft clears; short drafts are rejected.
+    private func commitCovertTrigger() {
+        let draft = covertTriggerPhraseDraft
+        Task {
+            let ok = await CovertTriggerMonitor.shared.setPhrase(draft)
+            await MainActor.run {
+                if ok {
+                    self.covertTriggerIsSet = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    self.covertTriggerPhraseDraft = ""
+                    self.covertTriggerEditing = false
+                    if let note = self.covertTriggerTestNote,
+                       note.contains("would have fired") {
+                        self.covertTriggerTestNote = nil
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clear the stored phrase. Disables the monitor.
+    private func clearCovertTrigger() async {
+        _ = await CovertTriggerMonitor.shared.setPhrase("")
+        await MainActor.run {
+            self.covertTriggerIsSet = false
+            self.covertTriggerEditing = false
+            self.covertTriggerPhraseDraft = ""
+        }
+    }
+
+    /// Simulate a fire. We invoke the monitor's `testObserve`
+    /// with a synthetic text containing the phrase (draft or
+    /// stored). `testObserve` runs the same matching rules as
+    /// `observe` but doesn't fire the callback - the dev
+    /// preview leaves the real wipe executor unwired; the
+    /// test button just confirms the matching logic works
+    /// for the user's phrase.
+    private func testCovertTrigger() {
+        let draft = covertTriggerPhraseDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stored = TesseraSecretStore.secret(
+            account: CovertTriggerMonitor.keychainAccount
+        ) ?? ""
+        let phrase: String = draft.isEmpty ? stored : draft
+        guard phrase.count >= CovertTriggerMonitor.minPhraseLength else {
+            covertTriggerTestNote = "Phrase too short to test."
+            return
+        }
+        let observed = "Test fire: today the user said '\(phrase)' in chat."
+        Task {
+            let didFire = await CovertTriggerMonitor.shared.testObserve(
+                candidate: phrase, text: observed
+            )
+            await MainActor.run {
+                if didFire {
+                    self.covertTriggerTestNote = "The trigger would have fired. Make sure the phrase isn't likely to come up in your normal use."
+                } else {
+                    self.covertTriggerTestNote = "Trigger did not fire - the phrase didn't match the test text."
+                }
+            }
         }
     }
 

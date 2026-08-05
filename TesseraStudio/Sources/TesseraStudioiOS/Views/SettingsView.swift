@@ -28,6 +28,14 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.onDeviceLibraryPath) private var onDeviceLibraryPath = TesseraSettingsDefault.onDeviceLibraryPath
     @AppStorage(TesseraSettingsKey.onDeviceContextLength) private var onDeviceContextLength = TesseraSettingsDefault.onDeviceContextLength
     @AppStorage(TesseraSettingsKey.onDeviceGPULayers) private var onDeviceGPULayers = TesseraSettingsDefault.onDeviceGPULayers
+    // "Plea the Fifth" coercion-resistant destruction. Same
+    // shape as the macOS view: phrase in Keychain, mode flag
+    // in UserDefaults, local draft + isSet for the UI.
+    @AppStorage(TesseraSettingsKey.coercionMode) private var coercionMode = TesseraSettingsDefault.coercionMode
+    @State private var covertTriggerPhraseDraft = ""
+    @State private var covertTriggerIsSet = false
+    @State private var covertTriggerEditing = false
+    @State private var covertTriggerTestNote: String?
 
     var body: some View {
         Form {
@@ -72,6 +80,87 @@ struct SettingsView: View {
                 }
             }
 
+            // "Plea the Fifth" section. Same shape as macOS
+            // but rendered as a collapsible Form Section. The
+            // coercion mode toggle is here too, so the user
+            // can flip it from either platform's Settings.
+            // Collapsed by default when coercion mode is on
+            // (design section 9.5).
+            Section {
+                if coercionMode && !pleadTheFifthExpandedIOS {
+                    // Collapsed: only the section header
+                    // is visible. The user can tap to expand.
+                    Text("Plea the Fifth")
+                        .foregroundStyle(.secondary)
+                        .onTapGesture { pleadTheFifthExpandedIOS = true }
+                } else {
+                    if covertTriggerIsSet && !covertTriggerEditing {
+                        HStack {
+                            Text("Phrase is set (\(String(repeating: "\u{2022}", count: 12)))")
+                            Spacer()
+                            Button("Edit") {
+                                Task { await loadCovertTriggerForEditing() }
+                                covertTriggerEditing = true
+                            }
+                            Button("Clear", role: .destructive) {
+                                Task { await clearCovertTrigger() }
+                            }
+                        }
+                    } else {
+                        SecureField("Covert trigger phrase", text: $covertTriggerPhraseDraft)
+                        HStack {
+                            Button("Save") { commitCovertTrigger() }
+                                .disabled(covertTriggerPhraseDraft.trimmingCharacters(in: .whitespacesAndNewlines).count < CovertTriggerMonitor.minPhraseLength)
+                            if covertTriggerIsSet {
+                                Button("Cancel") {
+                                    covertTriggerPhraseDraft = ""
+                                    covertTriggerEditing = false
+                                    loadCovertTrigger()
+                                }
+                            }
+                        }
+                    }
+                    if !covertTriggerPhraseDraft.isEmpty &&
+                        covertTriggerPhraseDraft.count < CovertTriggerMonitor.minPhraseLength {
+                        Label(
+                            "Phrase must be at least \(CovertTriggerMonitor.minPhraseLength) characters.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    Text("Choose something you can type naturally. Don't choose a famous quote. \(CovertTriggerMonitor.minPhraseLength) characters minimum.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button("Test") { testCovertTrigger() }
+                            .disabled(!canTestCovertTrigger)
+                        if let note = covertTriggerTestNote {
+                            Text(note).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("Covert trigger - for use when you can't visibly destroy your data. External security audit pending.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Toggle("Coercion mode", isOn: $coercionMode)
+                    if coercionMode {
+                        Text("Coercion mode: the visible 'Plea the Fifth' controls are hidden. Make sure you remember the hot-key and the covert trigger phrase.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Plea the Fifth")
+                    if coercionMode {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 6, height: 6)
+                            .accessibilityLabel("Covert trigger armed")
+                    }
+                }
+            }
+
             Section("Advanced") {
                 Toggle("Enable telemetry", isOn: $telemetryEnabled)
                 Picker("Log level", selection: $logLevel) {
@@ -83,74 +172,100 @@ struct SettingsView: View {
                 TextField("tessera-cli path", text: $tesseraCLIPath)
                 TextField("Python interpreter path", text: $tesseraPythonPath)
             }
-
-            Section {
-                Text("Plea the Fifth")
-                    .font(.headline)
-                Text("Architecture reviewed against the design spec. External security audit pending - to be completed before public release.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                // iOS does not have a global hot-key. The covert
-                // trigger is the only way to invoke the wipe from a
-                // text field on iOS.
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Covert trigger phrase (advanced)")
-                        .font(.subheadline)
-                    TextField("At least 8 characters", text: $covertTriggerDraft)
-                    Text("Choose something you can type naturally. Don't choose a famous quote.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let err = covertTriggerError {
-                        Text(err).font(.caption).foregroundStyle(.red)
-                    }
-                    HStack {
-                        Button("Save") { saveCovertTrigger() }
-                            .disabled(covertTriggerDraft.trimmingCharacters(in: .whitespacesAndNewlines).count < PleadTheFifthSettings.minCovertPhraseLength)
-                        Button("Test") { testCovertTrigger() }
-                            .disabled(!PleadTheFifthSettings.covertTriggerConfigured)
-                    }
-                    if let note = covertTriggerTestNote {
-                        Text(note).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Toggle("Coercion mode", isOn: $coercionMode)
-                Text("On iOS, coercion mode hides the in-app 'Plea the Fifth' shortcut. The covert trigger still works.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("Plea the Fifth")
-            }
         }
         .navigationTitle("Settings")
-        .onAppear { covertTriggerDraft = PleadTheFifthSettings.covertTriggerPhrase }
+        .onAppear { loadCovertTrigger() }
+        .onChange(of: coercionMode) { _, newValue in
+            if newValue {
+                pleadTheFifthExpandedIOS = false
+            } else {
+                pleadTheFifthExpandedIOS = true
+            }
+        }
     }
 
-    @AppStorage(PleadTheFifthSettingsKey.coercionMode)
-    private var coercionMode: Bool = false
+    /// Whether the "Plea the Fifth" section is expanded. Set
+    /// to false when coercion mode flips on (design 9.5).
+    @State private var pleadTheFifthExpandedIOS: Bool = false
 
-    @State private var covertTriggerDraft: String = ""
-    @State private var covertTriggerError: String?
-    @State private var covertTriggerTestNote: String?
+    /// Whether the Test button is enabled. Same logic as
+    /// macOS: a non-empty draft of the minimum length is
+    /// testable, otherwise the stored phrase must be set.
+    private var canTestCovertTrigger: Bool {
+        let draft = covertTriggerPhraseDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draft.isEmpty {
+            return draft.count >= CovertTriggerMonitor.minPhraseLength
+        }
+        return covertTriggerIsSet
+    }
 
-    private func saveCovertTrigger() {
-        do {
-            try PleadTheFifthSettings.setCovertTriggerPhrase(covertTriggerDraft)
-            covertTriggerError = nil
-            covertTriggerTestNote = "Saved."
-        } catch {
-            covertTriggerError = "\(error.localizedDescription)"
+    private func loadCovertTrigger() {
+        Task { @MainActor in
+            let isSet = await CovertTriggerMonitor.shared.isArmed
+            self.covertTriggerIsSet = isSet
+            if coercionMode {
+                self.pleadTheFifthExpandedIOS = false
+            } else {
+                self.pleadTheFifthExpandedIOS = isSet
+            }
+        }
+    }
+
+    private func loadCovertTriggerForEditing() async {
+        let stored = TesseraSecretStore.secret(
+            account: CovertTriggerMonitor.keychainAccount
+        ) ?? ""
+        await MainActor.run {
+            self.covertTriggerPhraseDraft = stored
+        }
+    }
+
+    private func commitCovertTrigger() {
+        let draft = covertTriggerPhraseDraft
+        Task {
+            let ok = await CovertTriggerMonitor.shared.setPhrase(draft)
+            await MainActor.run {
+                if ok {
+                    self.covertTriggerIsSet = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    self.covertTriggerPhraseDraft = ""
+                    self.covertTriggerEditing = false
+                }
+            }
+        }
+    }
+
+    private func clearCovertTrigger() async {
+        _ = await CovertTriggerMonitor.shared.setPhrase("")
+        await MainActor.run {
+            self.covertTriggerIsSet = false
+            self.covertTriggerEditing = false
+            self.covertTriggerPhraseDraft = ""
         }
     }
 
     private func testCovertTrigger() {
-        let phrase = PleadTheFifthSettings.covertTriggerPhrase
-        let sample = "I said '\(phrase)' yesterday"
-        let monitor = CovertTriggerMonitor()
-        let wouldFire = monitor.shouldTrigger(in: sample)
-        covertTriggerTestNote = wouldFire
-            ? "The trigger would have fired on the sample sentence."
-            : "The trigger did not fire. The phrase is set but the sample did not match."
+        let draft = covertTriggerPhraseDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stored = TesseraSecretStore.secret(
+            account: CovertTriggerMonitor.keychainAccount
+        ) ?? ""
+        let phrase: String = draft.isEmpty ? stored : draft
+        guard phrase.count >= CovertTriggerMonitor.minPhraseLength else {
+            covertTriggerTestNote = "Phrase too short to test."
+            return
+        }
+        let observed = "Test fire: today the user said '\(phrase)' in chat."
+        Task {
+            let didFire = await CovertTriggerMonitor.shared.testObserve(
+                candidate: phrase, text: observed
+            )
+            await MainActor.run {
+                if didFire {
+                    self.covertTriggerTestNote = "The trigger would have fired. Make sure the phrase isn't likely to come up in your normal use."
+                } else {
+                    self.covertTriggerTestNote = "Trigger did not fire - the phrase didn't match the test text."
+                }
+            }
+        }
     }
 }
 #endif

@@ -69,6 +69,11 @@ public enum TesseraSettingsKey {
     public static let searchProvider = "tessera.settings.searchProvider"
     public static let searxngBaseURL = "tessera.settings.searxngBaseURL"
     public static let tavilyAPIKey = "tessera.settings.tavilyAPIKey"
+    // "Plea the Fifth" (coercion-resistant destruction). The
+    // phrase itself lives in the Keychain (see
+    // ``TesseraSecretStore`` account ``covertTriggerPhrase``);
+    // only the coercion-mode flag lives in UserDefaults.
+    public static let coercionMode = "tessera.settings.coercionMode"
 }
 
 /// Factory defaults, registered at app launch.
@@ -141,6 +146,11 @@ public enum TesseraSettingsDefault {
     public static let searchProvider = "duckduckgo"
     public static let searxngBaseURL = ""
     public static let tavilyAPIKey = ""
+    // "Plea the Fifth" coercion mode. Off by default; the
+    // Settings view can flip it; Phase 2's menu bar item also
+    // flips it. When on, the "Plea the Fifth" Settings section
+    // is collapsed by default.
+    public static let coercionMode = false
 }
 
 /// Log levels offered in Advanced settings.
@@ -228,6 +238,7 @@ public enum TesseraSettings {
             TesseraSettingsKey.searchProvider: TesseraSettingsDefault.searchProvider,
             TesseraSettingsKey.searxngBaseURL: TesseraSettingsDefault.searxngBaseURL,
             TesseraSettingsKey.tavilyAPIKey: TesseraSettingsDefault.tavilyAPIKey,
+            TesseraSettingsKey.coercionMode: TesseraSettingsDefault.coercionMode,
         ])
     }
 
@@ -518,5 +529,19 @@ public enum TesseraSettings {
         let explicit = UserDefaults.standard.string(forKey: TesseraSettingsKey.tavilyAPIKey) ?? TesseraSettingsDefault.tavilyAPIKey
         if !explicit.isEmpty { return explicit }
         return ProcessInfo.processInfo.environment["TAVILY_API_KEY"] ?? ""
+    }
+
+    // MARK: "Plea the Fifth"
+
+    /// Coercion mode. When true, the visible "Plea the Fifth"
+    /// controls (the menu bar item, the Settings section) are
+    /// hidden or collapsed. The hot-key and the covert trigger
+    /// still work - the user knows them, the adversary doesn't.
+    /// The menu bar item is Phase 2; the Settings view here
+    /// also reads this flag so the user can flip it from
+    /// either surface.
+    public static var coercionMode: Bool {
+        // register(defaults:) seeds this, so the bool read is meaningful.
+        UserDefaults.standard.bool(forKey: TesseraSettingsKey.coercionMode)
     }
 }
