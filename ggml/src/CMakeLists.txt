@@ -208,6 +208,8 @@ add_library(ggml-base
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
+            ggml-quants-v2.c
+            ggml-quants-v2.h
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES
@@ -218,6 +220,22 @@ set_target_properties(ggml-base PROPERTIES
 target_include_directories(ggml-base PRIVATE .)
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
+endif()
+
+# Link Accelerate framework on Apple for the vDSP calls in
+# ggml-quants-v2.c. Only on Apple + Accelerate enabled. The
+# functions fall back to scalar loops when Accelerate is not
+# available; the build never fails for the absence of vDSP
+# (a Linux or non-Accelerate build just compiles out the vDSP
+# path). The pattern mirrors ggml-cpu's link to Accelerate.
+if (APPLE AND GGML_ACCELERATE)
+    find_library(ACCELERATE_FRAMEWORK Accelerate)
+    if (ACCELERATE_FRAMEWORK)
+        target_link_libraries(ggml-base PRIVATE ${ACCELERATE_FRAMEWORK})
+        target_compile_definitions(ggml-base PRIVATE GGML_USE_ACCELERATE)
+    else()
+        message(WARNING "Accelerate framework not found; v2 vDSP paths disabled")
+    endif()
 endif()
 
 if (GGML_SCHED_NO_REALLOC)
