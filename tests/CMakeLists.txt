@@ -647,6 +647,15 @@ if (NOT GGML_BACKEND_DL)
         target_include_directories(bench-tessera-quants-v2 PRIVATE
             ${PROJECT_SOURCE_DIR}/ggml/src)
     endif()
+    # TILE640 v2 dynamic dispatch test. Asserts the cost model
+    # helpers in ggml/src/ggml-quants-v2-dispatch.h return the
+    # right bool per shape, and that the C ref fallback helpers
+    # are self-consistent with the v2's scalar fallback.
+    llama_build_and_test(test-ane-tile640-dispatch.cpp)
+    if (TARGET test-ane-tile640-dispatch)
+        target_include_directories(test-ane-tile640-dispatch PRIVATE
+            ${PROJECT_SOURCE_DIR}/ggml/src)
+    endif()
 endif()
 
 # libmtmd
