@@ -94,14 +94,30 @@ enum class list_kind {
     all,   // both
 };
 
+// a narrow path uses the active code page on Windows, so every crossing between
+// a std::string (always UTF-8 here) and fs::path is converted explicitly
+static fs::path path_from_utf8(const std::string & s) {
+    return fs::u8path(s);
+}
+
+// '/' separators on every platform: Windows accepts them, the web UI needs them
+static std::string path_to_utf8(const fs::path & p) {
+    const auto s = p.generic_u8string();
+    return std::string(s.begin(), s.end());
+}
+
 // home directory, read once at first use (getenv is not thread safe against setenv)
 static const std::string & home_dir() {
     static const std::string home = [] {
-        const char * h = getenv("HOME");
 #ifdef _WIN32
-        if (h == nullptr) h = getenv("USERPROFILE");
-#endif
+        // the narrow getenv would return the profile path in the active code page
+        const wchar_t * w = _wgetenv(L"HOME");
+        if (w == nullptr) w = _wgetenv(L"USERPROFILE");
+        return w ? path_to_utf8(fs::path(w)) : std::string();
+#else
+        const char * h = getenv("HOME");
         return h ? std::string(h) : std::string();
+#endif
     }();
     return home;
 }
@@ -167,7 +183,7 @@ public:
     std::string resolve(const std::string & path) const override {
         const std::string p = expand_home(path);
 
-        fs::path full(p);
+        fs::path full = path_from_utf8(p);
         if (!full.is_absolute()) {
             if (cwd.empty()) {
                 std::error_code ec;
@@ -175,7 +191,7 @@ public:
                 if (ec) return p;
                 full = cur / full;
             } else {
-                full = fs::path(cwd) / full;
+                full = path_from_utf8(cwd) / full;
             }
         }
 
@@ -185,28 +201,27 @@ public:
         if (!full.has_filename() && full != full.root_path()) {
             full = full.parent_path();
         }
-        // '/' separators on every platform: Windows accepts them, the web UI needs them
-        return full.generic_string();
+        return path_to_utf8(full);
     }
 
     bool is_directory(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_directory(resolve(path), ec) && !ec;
+        return fs::is_directory(path_from_utf8(resolve(path)), ec) && !ec;
     }
 
     bool is_regular_file(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_regular_file(resolve(path), ec) && !ec;
+        return fs::is_regular_file(path_from_utf8(resolve(path)), ec) && !ec;
     }
 
     bool file_size(const std::string & path, uintmax_t & out_size) const override {
         std::error_code ec;
-        out_size = fs::file_size(resolve(path), ec);
+        out_size = fs::file_size(path_from_utf8(resolve(path)), ec);
         return !ec;
     }
 
     bool read_file(const std::string & path, std::string & out) const override {
-        std::ifstream f(resolve(path), std::ios::binary);
+        std::ifstream f(path_from_utf8(resolve(path)), std::ios::binary);
         if (!f) return false;
         std::ostringstream ss;
         ss << f.rdbuf();
@@ -216,7 +231,7 @@ public:
 
     bool write_file(const std::string & path, const std::string & content) const override {
         std::error_code ec;
-        fs::path fpath(resolve(path));
+        fs::path fpath = path_from_utf8(resolve(path));
         if (fpath.has_parent_path()) {
             fs::create_directories(fpath.parent_path(), ec);
             if (ec) return false;
@@ -252,7 +267,7 @@ public:
                     if (line.empty()) continue;
                     std::replace(line.begin(), line.end(), '\\', '/');
                     if (max_depth > 0 && entry_depth(line) > max_depth) continue;
-                    if (is_regular_file((fs::path(base) / line).string())) {
+                    if (is_regular_file(path_to_utf8(path_from_utf8(base) / path_from_utf8(line)))) {
                         out.entries.push_back({line, false});
                     }
                 }
@@ -389,7 +404,7 @@ private:
         std::vector<list_entry> result;
 
         std::vector<std::tuple<fs::path, fs::path, int>> stack;
-        stack.emplace_back(fs::path(base), fs::path(), 0);
+        stack.emplace_back(path_from_utf8(base), fs::path(), 0);
 
         while (!stack.empty()) {
             if (std::chrono::steady_clock::now() >= deadline) {
@@ -418,26 +433,22 @@ private:
                     return result;
                 }
                 const fs::directory_entry & entry = *it;
-                std::string fname = entry.path().filename().string();
+                const fs::path fname = entry.path().filename();
                 std::error_code tec;
                 const bool is_dir = entry.is_directory(tec);
                 if (tec) continue;
                 if (is_dir) {
-                    std::string rel = (rel_dir / fname).string();
-                    std::replace(rel.begin(), rel.end(), '\\', '/');
                     if (kind == list_kind::dirs || kind == list_kind::all) {
-                        result.push_back({rel, true});
+                        result.push_back({path_to_utf8(rel_dir / fname), true});
                     }
                     // junk directories stay selectable but are never walked: they can be enormous
-                    if (junk_dir_names().count(get_effective_name(fname)) > 0) continue;
+                    if (junk_dir_names().count(get_effective_name(path_to_utf8(fname))) > 0) continue;
                     if (!is_link(entry) && (max_depth == 0 || depth + 1 < max_depth)) {
                         stack.emplace_back(entry.path(), rel_dir / fname, depth + 1);
                     }
                 } else if (entry.is_regular_file(tec)) {
-                    std::string rel = (rel_dir / fname).string();
-                    std::replace(rel.begin(), rel.end(), '\\', '/');
                     if (kind == list_kind::files || kind == list_kind::all) {
-                        result.push_back({rel, false});
+                        result.push_back({path_to_utf8(rel_dir / fname), false});
                     }
                 }
             }
@@ -455,7 +466,7 @@ static std::unique_ptr<tools_io> make_tools_io(const json & params) {
 // no '/' in pattern -> match basename at any depth; else match full relative path
 static bool path_glob_match(const std::string & pattern, const std::string & rel_path) {
     if (pattern.find('/') == std::string::npos) {
-        return glob_match(pattern, fs::path(rel_path).filename().string());
+        return glob_match(pattern, path_to_utf8(path_from_utf8(rel_path).filename()));
     }
     if (pattern == "**" || pattern.rfind("**/", 0) == 0 || pattern.rfind('/', 0) == 0) {
         return glob_match(pattern, rel_path);
@@ -755,7 +766,7 @@ struct server_tool_grep_search : server_tool {
             for (const auto & entry : listing.entries) {
                 if (!path_glob_match(include, entry.rel)) continue;
                 if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
-                files.emplace_back((fs::path(abs_path) / entry.rel).string(), entry.rel);
+                files.emplace_back(path_to_utf8(path_from_utf8(abs_path) / path_from_utf8(entry.rel)), entry.rel);
             }
         } else {
             return {{"error", "path does not exist: " + path}};
@@ -1364,7 +1375,7 @@ struct server_tool_get_info : server_tool {
         std::string cwd = json_value(params, "cwd", std::string());
         if (cwd.empty()) {
             std::error_code ec;
-            cwd = fs::current_path(ec).string();
+            cwd = path_to_utf8(fs::current_path(ec));
         }
 
         return {
