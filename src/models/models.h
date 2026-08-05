@@ -1296,6 +1296,10 @@ struct llama_model_dflash : public llama_model_base {
         ggml_tensor * build_inp_embd_enc() const;
     };
 
+    struct graph_gemma4 : public llm_graph_context {
+        graph_gemma4(const llama_model & model, const llm_graph_params & params);
+    };
+
     struct graph_dsv4 : public llama_model_deepseek4::graph {
         graph_dsv4(const llama_model & model, const llm_graph_params & params);
     };
