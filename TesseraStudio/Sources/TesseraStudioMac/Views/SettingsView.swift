@@ -30,6 +30,10 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.onDeviceLibraryPath) private var onDeviceLibraryPath = TesseraSettingsDefault.onDeviceLibraryPath
     @AppStorage(TesseraSettingsKey.onDeviceContextLength) private var onDeviceContextLength = TesseraSettingsDefault.onDeviceContextLength
     @AppStorage(TesseraSettingsKey.onDeviceGPULayers) private var onDeviceGPULayers = TesseraSettingsDefault.onDeviceGPULayers
+    // Learning (drafter training). Read by TesseraLearningServices at launch.
+    @AppStorage(TesseraSettingsKey.learningBaseModelPath) private var learningBaseModelPath = TesseraSettingsDefault.learningBaseModelPath
+    @AppStorage(TesseraSettingsKey.learningTrainBinary) private var learningTrainBinary = TesseraSettingsDefault.learningTrainBinary
+    @AppStorage(TesseraSettingsKey.learningTrainingDryRun) private var learningTrainingDryRun = TesseraSettingsDefault.learningTrainingDryRun
 
     // Autonomy (autonomy-calibration-design.md 13): snapshots of the learned-
     // permission store, refreshed on appear and after every mutation.
@@ -129,6 +133,18 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Learning (drafter training)") {
+                PathField("Drafter model (GGUF)", text: $learningBaseModelPath,
+                          picks: .file(types: [.init(filenameExtension: "gguf")].compactMap { $0 }))
+                PathField("Training driver (tessera-train-lk)", text: $learningTrainBinary,
+                          picks: .file(types: [.unixExecutable]))
+                Toggle("Dry run (build the dataset only)", isOn: $learningTrainingDryRun)
+                trainBinaryStateRow
+                Text("These paths are read when the app launches.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Text("Changes apply the next time the Playground is opened.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -148,6 +164,22 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         case .missing:
             Label("No key stored yet", systemImage: "key.slash")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Live resolution status of the training driver. Pairs a symbol
+    /// with the text so the state is not color-only.
+    @ViewBuilder
+    private var trainBinaryStateRow: some View {
+        let resolved = TesseraTrainBinaryResolver.resolve(override: learningTrainBinary)
+        if FileManager.default.isExecutableFile(atPath: resolved) {
+            Label("Driver found at \(resolved)", systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Label("Driver not found; expected at \(resolved)", systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
