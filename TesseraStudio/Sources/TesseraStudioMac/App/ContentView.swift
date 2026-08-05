@@ -65,6 +65,9 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        // HIG 4.1: keep the nested split views from collapsing to
+        // nothing; the window can still grow past the default size.
+        .frame(minWidth: 900, minHeight: 560)
         .overlay(alignment: .leading) {
             if showHistory {
                 historyDrawer
