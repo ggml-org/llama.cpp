@@ -3451,6 +3451,12 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
 struct llama_sampler * llama_sampler_init_dry_testing(float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const std::vector<std::vector<llama_token>>& seq_breakers) {
     llama_vocab dummy_vocab;
     auto * result = llama_sampler_init_dry(&dummy_vocab, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, NULL, 0);
+
+    // when DRY is disabled, llama_sampler_init_dry() returns a no-op sampler whose ctx is not a llama_sampler_dry
+    if (result->iface != &llama_sampler_dry_i) {
+        return result;
+    }
+
     auto * ctx = (llama_sampler_dry *) result->ctx;
 
     // Process the token-based sequence breakers
