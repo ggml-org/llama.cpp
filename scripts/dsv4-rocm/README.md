@@ -408,9 +408,16 @@ models without screening their routing shape.
 Q4_K MMQ only. It has the same numeric value contract and is mutually exclusive
 with the global `GGML_HIP_RDNA2_MMQ_J`. It exists for mixed-quant MoE models
 where Q4_K J16 is bitwise-stable but another expert type is not; all non-Q4_K
-types retain default J selection. Do not enable both variables. Qwen3.5-122B
-screening must prove isolated uniform/hot Q4_K equality, full-model logit
-equality, and retained whole-model performance before deployment.
+types retain default J selection. Do not enable both variables.
+
+For Qwen3.5-122B-A10B UD-Q4_K_M on four V620s, commit `61aae0bb6`
+passed the exact 2K/4-token gate across all 248,320 F32 logits. The isolated
+Q4_K path was exact under uniform and hot routing; Q5_K J16 was not exact under
+hot routing and therefore remains on default J. In three-repetition A/B/A PP
+screens, Q4_K-only J16 improved 512, 2K, and 8K prompt processing by 14.41%,
+13.84%, and 13.88% versus the control midpoint, with control drift of +0.13%,
+-0.59%, and -1.33%. This acceptance is specific to that model, quantization,
+four-way split, and PP workload; it does not make J16 a general Q4_K default.
 
 `test-mmid-rdna2` defaults to a fast prototype-weight fixture for performance
 screens. Its `--fixture unique` mode independently quantizes every
