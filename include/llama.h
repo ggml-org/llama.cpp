@@ -408,6 +408,7 @@ extern "C" {
         int   expert_hot_s;           // number of top-S expert slots for GPU hot store
         float expert_hyst;            // hysteresis ratio for slot swaps
         int   expert_dwell;           // min updates a resident slot keeps before swap
+        bool  expert_cache_force;      // bypass the CUDA-only hot store guard
 
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts

@@ -481,22 +481,27 @@ llama_context::llama_context(
             params.expert_hyst, params.expert_dwell);
         // the GPU hot store is only supported on CUDA. On CPU it buys nothing
         // and on Vulkan it corrupts output (see manuallog section 12).
-        // LLAMA_EXPERT_HOT_FORCE=1 overrides the guard (testing/emergency only).
-        const bool force = getenv("LLAMA_EXPERT_HOT_FORCE") != nullptr;
+        // --expert-cache-force (or LLAMA_EXPERT_CACHE_FORCE) overrides the
+        // guard (testing/emergency only).
+        const bool force = params.expert_cache_force || getenv("LLAMA_EXPERT_CACHE_FORCE") != nullptr;
+        bool cache_enabled = false;
         for (auto & backend : backends) {
             ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
             if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
                 continue;
             }
             const char * name = ggml_backend_dev_name(dev);
-            const bool is_cuda = name != nullptr && strncmp(name, "CUDA", 4) == 0;
-            if (!force && !is_cuda) {
-                LLAMA_LOG_WARN("%s: expert hot store skipped: backend %s is not CUDA (only CUDA is supported)\n",
-                    __func__, name ? name : "?");
+            const bool supported = name != nullptr && strncmp(name, "CUDA", 4) == 0;
+            if (!force && !supported) {
                 break;
             }
-            expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
+            cache_enabled = expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
             break;
+        }
+        // launch hint: cache did not engage, usually a non-CUDA (or no) accelerator
+        if (!cache_enabled && !force) {
+            LLAMA_LOG_WARN("%s: expert cache is OFF: %d slots requested but no CUDA backend in use (use -ecf to force it on)\n",
+                __func__, params.expert_hot_s);
         }
         expert_hotstore->log();
     }
@@ -3575,6 +3580,7 @@ llama_context_params llama_context_default_params() {
         /*.expert_hot_s                =*/ 0,
         /*.expert_hyst                 =*/ 1.3f,
         /*.expert_dwell                =*/ 0,
+        /*.expert_cache_force         =*/ false,
         /*.ctx_other                   =*/ nullptr,
     };
 

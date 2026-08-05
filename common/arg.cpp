@@ -2731,6 +2731,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.expert_hot_s = value;
         }
     ).set_env("LLAMA_ARG_EXPERT_HOT_S"));
+    add_opt(common_arg(
+        {"-ecf", "--expert-cache-force"},
+        {},
+        "enable the expert cache (hot store) on non-CUDA backends (testing/emergency only)",
+        [](common_params & params, bool value) {
+            params.expert_cache_force = value;
+        }
+    ));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
