@@ -43,6 +43,10 @@ struct WorkflowsView: View {
     /// converts its drop location into canvas coordinates.
     @State private var canvasZoom: CGFloat = 1
     @State private var canvasPan: CGSize = .zero
+    /// Canvas keyboard focus. Arrow keys nudge the selected
+    /// node (HIG T3-2); the canvas takes focus on open and
+    /// whenever a node is selected.
+    @FocusState private var canvasFocused: Bool
 
     @Environment(\.undoManager) private var undoManager
     /// HIG 2.7 / 3.6: under Reduce Motion the banner appears and
@@ -90,6 +94,23 @@ struct WorkflowsView: View {
                     fromViewport: location, zoom: canvasZoom, pan: canvasPan)
                 return addNode(typeId: typeId, at: canvasLocation)
             }
+            // HIG T3-2: arrow keys move the selected node (1pt,
+            // Shift for 10pt) - the keyboard alternative to
+            // drag-to-move. The canvas holds keyboard focus so
+            // the presses reach it.
+            .focusable()
+            .focused($canvasFocused)
+            .focusEffectDisabled()
+            .onKeyPress(
+                keys: [.upArrow, .downArrow, .leftArrow, .rightArrow],
+                phases: [.down, .repeat]
+            ) { press in
+                nudgeSelectedNode(press)
+            }
+            .onChange(of: editor.selectedNodeId) { _, newValue in
+                if newValue != nil { canvasFocused = true }
+            }
+            .defaultFocus($canvasFocused, true)
             // The parameter panel is a HIG inspector: supplementary
             // detail about the canvas selection, toggleable from
             // View > Show/Hide Inspector.
@@ -625,6 +646,33 @@ struct WorkflowsView: View {
         case .open(let url):
             openDocument(from: url)
         }
+    }
+
+    /// Nudge the selected node with the arrow keys (HIG T3-2):
+    /// 1pt per press, 10pt with Shift, one undoable step each.
+    /// Returns .ignored with no selection so the keys fall
+    /// through to whatever else handles them.
+    private func nudgeSelectedNode(_ press: KeyPress) -> KeyPress.Result {
+        guard let id = editor.selectedNodeId,
+              let current = editor.positions[id] else { return .ignored }
+        let step: CGFloat = press.modifiers.contains(.shift) ? 10 : 1
+        let delta: CGSize
+        switch press.key {
+        case .upArrow: delta = CGSize(width: 0, height: -step)
+        case .downArrow: delta = CGSize(width: 0, height: step)
+        case .leftArrow: delta = CGSize(width: -step, height: 0)
+        case .rightArrow: delta = CGSize(width: step, height: 0)
+        default: return .ignored
+        }
+        let moved = CGPoint(x: current.x + delta.width, y: current.y + delta.height)
+        let editor = self.editor
+        editor.positions[id] = moved
+        registerUndoPair(
+            name: "Move Node",
+            undo: { editor.positions[id] = current },
+            redo: { editor.positions[id] = moved }
+        )
+        return .handled
     }
 
     private func completeConnection(
