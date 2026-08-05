@@ -35,6 +35,15 @@ if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     done < <(git -C "$ROOT_DIR" ls-files --others --exclude-standard -z)
 fi
 
+: > "$OUT_DIR/model-identity.txt"
+for file in "${model_files[@]}"; do
+    stat -c 'size=%s mtime=%y inode=%i path=%n' "$file" >> "$OUT_DIR/model-identity.txt"
+done
+{
+    lspci -nn | grep -Ei 'VGA|Display|3D' || true
+    rocm-smi --showproductname --showuniqueid --showmeminfo vram --showtopo 2>&1 || true
+} > "$OUT_DIR/hardware-identity.txt"
+
 {
     section identity
     printf 'captured_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
@@ -51,6 +60,7 @@ fi
     if [ -f "$OUT_DIR/source.patch" ]; then
         sha256sum "$OUT_DIR/source.patch" "$OUT_DIR/source-status.txt" "$OUT_DIR/untracked-files.sha256"
     fi
+    sha256sum "$OUT_DIR/model-identity.txt" "$OUT_DIR/hardware-identity.txt"
 
     section binary
     printf 'bench=%s\n' "$BENCH"

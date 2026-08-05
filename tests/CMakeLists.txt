@@ -265,6 +265,10 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
 
+# Pure host-side selector contract for the guarded RDNA2 BF16 hidden AllReduce.
+llama_build_and_test(test-cuda-allreduce-precision.cpp)
+target_include_directories(test-cuda-allreduce-precision PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
+
 # Synthetic graph-level benchmarks for gfx1030/RDNA2 kernel tuning.
 # They are manual benchmarks rather than CTests because timing is device-dependent.
 if (GGML_HIP)
@@ -294,6 +298,10 @@ set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-down
 # Manual model-dependent gate for benchmark prefix-state reuse. This is not a
 # CTest because representative DSV4 depths require the external production GGUF.
 llama_build(test-state-restore-equivalence.cpp)
+
+# Manual short model-dependent A/B gate for the guarded DSV4 BF16 hidden
+# AllReduce. It captures raw full-vocabulary logits and uses an external GGUF.
+llama_build(test-dsv4-bf16-allreduce-equivalence.cpp)
 
 if (APPLE)
     llama_build(test-rset-release.cpp)

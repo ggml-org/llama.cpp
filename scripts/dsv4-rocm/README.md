@@ -61,6 +61,7 @@ Dry-run and non-GPU fixture validation:
 cd /home/edwin/llama.cpp-rdna2
 scripts/dsv4-rocm/test-tg-tools.py
 scripts/dsv4-rocm/test-tg-profile.py
+scripts/dsv4-rocm/test-bf16-screen.py
 scripts/dsv4-rocm/run-tg.sh --dry-run
 DSV4_TG_MODE=residency scripts/dsv4-rocm/run-tg.sh --dry-run
 DSV4_TG_DEPTHS=16384 scripts/dsv4-rocm/profile-tg.sh --dry-run
@@ -204,6 +205,48 @@ median). Neither candidate reaches the preliminary gate, so `auto` was not run
 and neither candidate advances. The canonical performance document records the
 exact artifacts. Next is the predeclared guarded RDNA2/four-way BF16 hidden
 reduction, not another runtime candidate or routine profile.
+
+## Short guarded BF16 hidden-AllReduce gate
+
+`GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1` is an experimental, fail-closed
+shape-scoped option. It requires a HIP build with RCCL/NCCL, explicit
+`GGML_CUDA_ALLREDUCE=nccl`, exactly four distinct physical RDNA2 devices, and
+contiguous F32 rank tensors of exact shape `[7168,1,1,1]`. The force-FP32 flag
+is ORed across all ranks and always wins. Qualifying calls reuse the existing
+F32-to-BF16, BF16 RCCL sum, and BF16-to-F32 implementation; all misses retain
+the existing size heuristic. Unset or exact `0` disables the candidate and any
+other value aborts. The optional
+`GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE_AUDIT=/path` writes one JSONL summary per
+communication context and is correctness-only; performance runs must leave it
+unset.
+
+The user-directed iteration gate is deliberately short:
+
+```bash
+cmake --build build --target test-cuda-allreduce-precision \
+  test-dsv4-bf16-allreduce-equivalence llama-bench -j 12
+build/bin/test-cuda-allreduce-precision
+scripts/dsv4-rocm/run-bf16-allreduce-equivalence.sh --dry-run
+scripts/dsv4-rocm/run-bf16-allreduce-equivalence.sh
+
+# Only after the correctness comparison reports PASS:
+DSV4_BF16_EQ_RESULT=/path/to/passing-correctness-artifact \
+  scripts/dsv4-rocm/screen-bf16-tg.sh
+```
+
+The deterministic correctness A/B uses only 2K context and four fixed target
+inputs. It captures raw full-vocabulary F32 logits, requires matching argmax
+tokens, finite values, every element within `0.05 + 0.01*scale`, RMSE at most
+0.02, exactly 344 eligible hidden reductions, zero candidate BF16 calls in the
+control, 344 in the candidate, and a positive force-FP32 count. It does not use
+state restore, sampling, a profiler, or speculative decoding.
+
+The matched performance triage uses only 0/2K/8K, tg8, six raw repetitions,
+one discarded, and five retained. A regression beyond 2% at any depth or less
+than 4% gain at 8K is a NO-GO. A pass is only
+`PROMISING_SHORT_SCREEN`; it never accepts the optimization. The script does
+not launch 16K, 32K, or 64K. Any later confirmation is a separate explicit
+user decision.
 
 ## Target-only raw-decode profile
 

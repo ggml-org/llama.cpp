@@ -227,9 +227,9 @@ printf 'Mode: %s; profile: %s\n' "$MODE" "$PROFILE"
 printf 'Planned command:'
 printf ' %q' "${bench_cmd[@]}"
 printf '\n'
-printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q DSV4_RCCL_CANDIDATE=%q NCCL_ALGO=%q NCCL_PROTO=%q NCCL_MIN_NCHANNELS=%q NCCL_MAX_NCHANNELS=%q GGML_CUDA_DISABLE_GRAPHS=%q\n' \
+printf 'Environment: GGML_SCHED_DEBUG=%q LLAMA_BENCH_DEPTH_STATE_API=%q GGML_HIP_RDNA2_MMQ_J=%q GGML_HIP_RDNA2_HC_MIXES=%q GGML_HIP_RDNA2_LID_SUBWAVE=%q GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=%q DSV4_RCCL_CANDIDATE=%q NCCL_ALGO=%q NCCL_PROTO=%q NCCL_MIN_NCHANNELS=%q NCCL_MAX_NCHANNELS=%q GGML_CUDA_DISABLE_GRAPHS=%q\n' \
     "$GGML_SCHED_DEBUG" "$LLAMA_BENCH_DEPTH_STATE_API" "$GGML_HIP_RDNA2_MMQ_J" "$GGML_HIP_RDNA2_HC_MIXES" "$GGML_HIP_RDNA2_LID_SUBWAVE" \
-    "$RCCL_CANDIDATE" "${NCCL_ALGO-<unset>}" "${NCCL_PROTO-<unset>}" "${NCCL_MIN_NCHANNELS-<unset>}" "${NCCL_MAX_NCHANNELS-<unset>}" "${GGML_CUDA_DISABLE_GRAPHS-<unset>}"
+    "${GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE-<unset>}" "$RCCL_CANDIDATE" "${NCCL_ALGO-<unset>}" "${NCCL_PROTO-<unset>}" "${NCCL_MIN_NCHANNELS-<unset>}" "${NCCL_MAX_NCHANNELS-<unset>}" "${GGML_CUDA_DISABLE_GRAPHS-<unset>}"
 printf 'Per-sample cap: %ss; per-setup cap: %ss\n' "$SAMPLE_TIMEOUT_S" "$SETUP_TIMEOUT_S"
 if [[ "$PROFILE" == kernel ]]; then
     printf 'Profiler: %s; selected accepted regions only; skip repetitions: %s\n' "$ROCPROF" "$DISCARD_FIRST"
@@ -293,7 +293,7 @@ PY
 
 write_repro_env_prefix() {
     local output=$1 name
-    local -a optional=(NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS GGML_CUDA_DISABLE_GRAPHS)
+    local -a optional=(NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS GGML_CUDA_DISABLE_GRAPHS GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE_AUDIT)
     printf 'env' > "$output"
     for name in "${optional[@]}"; do
         declare -p "$name" >/dev/null 2>&1 || printf ' -u %q' "$name" >> "$output"
@@ -347,7 +347,7 @@ chmod +x "$run_dir/executed-command.sh"
     printf 'DSV4_TG_MODE=%q\n' "$MODE"
     printf 'DSV4_TG_PROFILE=%q\n' "$PROFILE"
     printf 'DSV4_RCCL_CANDIDATE=%q\n' "$RCCL_CANDIDATE"
-    for name in NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS GGML_CUDA_DISABLE_GRAPHS; do
+    for name in NCCL_ALGO NCCL_PROTO NCCL_MIN_NCHANNELS NCCL_MAX_NCHANNELS NCCL_DEBUG NCCL_DEBUG_SUBSYS GGML_CUDA_DISABLE_GRAPHS GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE_AUDIT; do
         if declare -p "$name" >/dev/null 2>&1; then
             printf '%s_IS_SET=1\n' "$name"
             printf '%s=%q\n' "$name" "${!name}"
@@ -417,6 +417,7 @@ pathlib.Path(out).write_text(json.dumps({
     "profile_skip_repetitions": int(__import__("os").environ.get("LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS", "0")),
     "model_hash_mode": __import__("os").environ.get("DSV4_HASH_MODE", "metadata"),
     "require_accepted_stack": int(__import__("os").environ.get("DSV4_REQUIRE_ACCEPTED_STACK", "1")),
+    "allow_busy_gpus": int(__import__("os").environ.get("DSV4_ALLOW_BUSY_GPUS", "0")),
     "stdout_capture": {
         "schema_version": 1,
         "raw_stream": "bench.stdout.log",
@@ -435,6 +436,8 @@ pathlib.Path(out).write_text(json.dumps({
         "max_channels": __import__("os").environ.get("NCCL_MAX_NCHANNELS"),
         "debug": __import__("os").environ.get("NCCL_DEBUG"),
         "debug_subsys": __import__("os").environ.get("NCCL_DEBUG_SUBSYS"),
+        "bf16_hidden_allreduce": __import__("os").environ.get("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE"),
+        "bf16_hidden_allreduce_audit": __import__("os").environ.get("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE_AUDIT"),
     },
     "accepted_stack": {
         "mmq_j": int(__import__("os").environ["GGML_HIP_RDNA2_MMQ_J"]),
