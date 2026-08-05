@@ -805,7 +805,24 @@ struct common_params {
 
     // imatrix params
     int32_t n_out_freq  = 10; // output the imatrix every n_out_freq iterations
-    int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations
+    int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations (0 = dynamic ladder or none)
+    bool    dynamic_save_freq = true; // when n_save_freq == 0, use the dynamic
+                                      // save ladder (start paranoid, relax as
+                                      // runtime stability is proven over wall
+                                      // time). Set to false via --no-dynamic-save
+                                      // to fall back to the pre-2026-08 behaviour
+                                      // (0 == no intermediate saves).
+    float   memory_budget_fraction = 0.6f; // refuse to start if model_size >
+                                           // physmem * F (jetsam SIGKILL is
+                                           // likely on macOS / iOS when this
+                                           // is exceeded). 0 disables.
+    bool    no_memory_check = false; // skip the memory precheck
+    bool    no_pid_file     = false; // do not write <output>.pid
+    int32_t max_minutes     = 0;     // wall-time cap in minutes; 0 = no cap.
+                                     // When set, the binary installs a SIGALRM
+                                     // handler that exits at the next chunk
+                                     // boundary (atomic save on the next save
+                                     // boundary keeps the prior checkpoint).
     int32_t i_chunk     =  0; // start processing from this chunk
     int32_t imatrix_convergence_min_chunks = 0; // minimum chunks before adaptive stopping (0 = disabled)
     int32_t imatrix_convergence_interval   = 16; // chunks between convergence checks

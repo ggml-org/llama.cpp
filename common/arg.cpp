@@ -3399,9 +3399,44 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
         {"--save-frequency"}, "N",
-        string_format("save an imatrix copy every N iterations (default: %d)", params.n_save_freq),
+        string_format("save an imatrix copy every N iterations (default: %d = dynamic ladder; pass 0 to disable intermediate saves, N>0 for a fixed N)", params.n_save_freq),
         [](common_params & params, int value) {
             params.n_save_freq = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--no-dynamic-save"},
+        "disable the dynamic save ladder; 0 == no intermediate saves (pre-2026-08 behaviour)",
+        [](common_params & params) {
+            params.dynamic_save_freq = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--memory-budget-fraction"}, "F",
+        string_format("refuse to start if model_size / physmem > F (default: %.2f; pass 0 to disable)", params.memory_budget_fraction),
+        [](common_params & params, const std::string & value) {
+            params.memory_budget_fraction = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--no-memory-check"},
+        "skip the memory precheck (jetsam may follow on memory-constrained hosts)",
+        [](common_params & params) {
+            params.no_memory_check = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--no-pid-file"},
+        "do not write <output>.pid",
+        [](common_params & params) {
+            params.no_pid_file = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--max-minutes"}, "N",
+        string_format("wall-time cap in minutes; imatrix will exit cleanly at the next chunk boundary (default: %d = no cap)", params.max_minutes),
+        [](common_params & params, int value) {
+            params.max_minutes = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
