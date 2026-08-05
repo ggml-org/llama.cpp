@@ -56,6 +56,7 @@ struct WorkflowsView: View {
                     positions: $editor.positions,
                     pendingConnection: $pendingConnection,
                     selectedNodeId: $editor.selectedNodeId,
+                    pendingSourceType: pendingConnection?.source.portType,
                     onConnectionCompleted: { dropPoint, canvasSize in
                         completeConnection(at: dropPoint, in: canvasSize)
                     },
