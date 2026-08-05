@@ -18,9 +18,15 @@ struct TesseraStudioMacApp: App {
                 TrainingNotifier.post(record: record)
             }
         }
+        // If the encrypted volume is configured (Keychain has a
+        // password + a bundle exists), mount it on launch and repoint
+        // the data root redirector. This is the "subsequent launch"
+        // path from the design spec (Section 6.5).
+        TesseraAppLifecycle.bootstrapEncryptedVolume()
         do {
             let schema = Schema([ChatMessage.self, RunRecord.self, Conversation.self])
-            let config = ModelConfiguration("TesseraStudio", schema: schema)
+            let storeURL = TesseraDataRoot.appSupportStoreFile()
+            let config = ModelConfiguration("TesseraStudio", schema: schema, url: storeURL)
             container = try ModelContainer(for: schema, configurations: [config])
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")

@@ -530,6 +530,10 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("Plead the Fifth (encrypted volume)") {
+                PleadTheFifthSettingsView()
+                    .frame(minHeight: 320)
+            }
         }
         .formStyle(.grouped)
         .padding()
