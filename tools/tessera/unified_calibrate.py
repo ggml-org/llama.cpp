@@ -257,6 +257,180 @@ def _tag_policy(
     return tagged
 
 
+# ---------------------------------------------------------------------------
+# M2 follow-up: the embedding-budget producer integration
+# ---------------------------------------------------------------------------
+
+
+def _extract_policy_entries_from_unified(
+    unified: dict, tensor_stats_rows: list[dict],
+) -> list[dict]:
+    """Build the M2 producer's policy_entries from the merged
+    unified policy.
+
+    The per_tensor_calibrate output's tensor_families entries
+    carry ``model_role`` and the per-fitness metadata, but they
+    do NOT carry a direct ``dtype`` field (the qtype is
+    implicit in the fitness mode). The M2 producer's
+    policy_entries need a ``dtype`` to populate the verdicts
+    map; we use the source qtype from ``tensor_stats`` as the
+    verdict. This means the M2 producer's S_t(r) sum is
+    source-qtype-based (no per-fitness override). The richer
+    verdict-aware version requires the per_tensor_calibrate
+    output to carry a ``dtype`` field; that is a follow-on
+    outside the M2 scope.
+
+    The role "owns" a shared tensor iff the unified policy
+    has an entry for ``(role, shared_name)`` in either
+    tensor_families or a per-fitness tensors list. With the
+    source-qtype-as-verdict approach, the role also owns the
+    shared tensor iff tensor_stats has a row for it. We union
+    both: every tensor_stats row for a role is a "verdict"
+    at the source qtype, so the role owns the shared tensor
+    iff the DB has tensor_stats for it.
+
+    This is the "shape-only" integration: the M2 producer
+    provides the size-envelope budget based on source
+    dtypes. The per-fitness verdict override is a follow-on.
+
+    Args:
+      unified: the merged per-component policy dict (output
+        of the per-component merge). Currently unused at
+        the call site (we drive policy_entries purely from
+        tensor_stats); the parameter is kept for the
+        follow-on that DOES consume the per-fitness verdicts
+        so the call site does not have to change.
+      tensor_stats_rows: the tensor_stats rows read from
+        the unified DB. Each row is a dict with at least
+        ``model_role``, ``name``, ``n_elements``, ``dtype``.
+
+    Returns:
+      A list of policy_entries (one per tensor_stats row,
+      each carrying the source qtype as the verdict dtype).
+    """
+    del unified  # currently unused; see the docstring.
+    out: list[dict] = []
+    for row in tensor_stats_rows:
+        role = row.get("model_role")
+        name = row.get("name")
+        dtype = row.get("dtype")
+        if not role or not name or not dtype:
+            continue
+        out.append({
+            "model_role": role,
+            "name":       name,
+            "dtype":      str(dtype),
+        })
+    return out
+
+
+def _load_tensor_stats_from_db(
+    db_path: Path,
+) -> list[dict]:
+    """Read every tensor_stats row from the unified DB.
+
+    The M2 producer needs the source n_elements and dtype
+    per (model_role, name); both come from tensor_stats.
+    The DB read is independent of any per-component
+    calibration — it is the deployment-side measurement of
+    what the model is.
+
+    We do NOT filter by model_hash: the per_tensor_calibrate
+    flow calibrates one model at a time, but the DB can
+    carry multiple models. The producer's role_budgets is
+    per-role (not per-model); the per-role shape is the same
+    across models, so a multi-model DB just contributes
+    extra rows. The per-model filter is a follow-on.
+
+    Args:
+      db_path: path to the unified tessera.duckdb.
+
+    Returns:
+      A list of dicts with at least ``model_role``, ``name``,
+      ``n_elements``, ``dtype``. Empty when tensor_stats is
+      missing or empty.
+    """
+    from tessera_db import TesseraDB  # local import; the
+    # tessera_db module is heavy (duckdb) and we do not
+    # want every import of unified_calibrate to pay for it.
+
+    try:
+        with TesseraDB.open(db_path, read_only=True) as db:
+            names = set(db.table_names())
+            if "tensor_stats" not in names:
+                return []
+            df = db.query(
+                "SELECT model_role, name, n_elements, dtype "
+                "FROM tensor_stats"
+            )
+    except Exception:
+        # Missing DB / IO error / duckdb error -> the
+        # integration is a no-op (the CLI gates this with
+        # the args.no_embedding_budget / args.db check;
+        # this is defense-in-depth so a bad --db path
+        # does not crash the calibration driver).
+        return []
+    return df.to_dicts()
+
+
+def _build_role_budgets(
+    db_path: Path,
+    unified: dict,
+    budget_fraction: float,
+) -> list[dict]:
+    """The M2 integration: build the role_budgets sidecar.
+
+    The producer (``embedding_budget.compute_role_budgets``)
+    is the upstream of the Phase 16.8 writer's role_budgets
+    sidecar key. We read tensor_stats from ``db_path``,
+    build policy_entries from the unified policy's per-role
+    annotations (with source dtypes as the verdicts), and
+    call the producer. The result is flattened to the
+    writer's sidecar shape via
+    ``embedding_budget.flatten_role_budgets_for_sidecar``.
+
+    The function is a thin glue layer: the M2 producer is
+    pure and unit-tested in test_embedding_budget.py. The
+    integration is intentionally minimal so the failure
+    modes are easy to debug (a typo here breaks the
+    integration; a typo in the producer breaks the unit
+    tests).
+
+    Args:
+      db_path: path to the unified tessera.duckdb.
+      unified: the merged per-component policy dict.
+      budget_fraction: the role size envelope scaling.
+
+    Returns:
+      A list of ``{model_role, budget_bits, weight}`` dicts
+      (the writer's sidecar shape). Empty when the producer
+      returns no verdicts (e.g. base_budget_fraction <= 0,
+      no shared-tensor ownership, or insufficient data).
+    """
+    # Local import: the producer is optional (the
+    # pre-M2 contract is the no-embedding-budget path), and
+    # we want the producer to be a leaf module the
+    # test_embedding_budget.py tests can drive without
+    # pulling in unified_calibrate.
+    from embedding_budget import (
+        EnvelopeConfig,
+        compute_role_budgets,
+        flatten_role_budgets_for_sidecar,
+    )
+
+    tensor_stats_rows = _load_tensor_stats_from_db(db_path)
+    if not tensor_stats_rows:
+        return []
+    policy_entries = _extract_policy_entries_from_unified(
+        unified, tensor_stats_rows,
+    )
+    cfg = EnvelopeConfig(base_budget_fraction=budget_fraction)
+    verdicts = compute_role_budgets(
+        policy_entries, tensor_stats_rows, cfg,
+    )
+    return flatten_role_budgets_for_sidecar(verdicts)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
@@ -336,6 +510,62 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Extra CLI arg forwarded to per_tensor_calibrate.py on "
             "every component. May be specified multiple times."
+        ),
+    )
+    # M2 follow-up: the embedding-budget producer
+    # (``tools/tessera/embedding_budget.py``) computes per-role size
+    # budgets for the SHARED tensors (token_embd / output) in the
+    # now-singular-GGUF's mmproj pipeline. The producer is the
+    # upstream of the Phase 16.8 writer's ``role_budgets`` sidecar
+    # key. The M0a surface made the mmproj components first-class;
+    # M2 gives them a real budget. Three flags gate the integration:
+    #
+    #   --db PATH: optional path to the unified tessera.duckdb.
+    #     When provided, the producer reads tensor_stats from the
+    #     DB and uses it as the source for n_elements (the
+    #     producer's N(t) denominator) and the per-tensor dtype
+    #     (the source qtype for the role's size envelope). Without
+    #     --db, the integration is a no-op (the sidecar has no
+    #     role_budgets; --budget-fraction is ignored). The unified
+    #     Calibrate CLI does not require --db so the existing
+    #     per-component flow runs unchanged when the operator has
+    #     not yet calibrated tensor_stats.
+    #
+    #   --budget-fraction F: the role size envelope scaling.
+    #     Mirrors l5_retune's --budget-fraction flag (default 1.0).
+    #     A non-positive value opts out of the size envelope (the
+    #     sidecar has an empty role_budgets).
+    #
+    #   --no-embedding-budget: opt-out escape hatch. The sidecar
+    #     is emitted without the role_budgets key, preserving the
+    #     pre-M2 contract (plain worst-of, no per-role budget).
+    p.add_argument(
+        "--db", type=Path, default=None,
+        help=(
+            "Optional path to the unified tessera.duckdb. When "
+            "provided, the embedding-budget producer (M2) reads "
+            "tensor_stats from the DB and emits a role_budgets "
+            "sidecar for the writer. Without --db, no role_budgets "
+            "is emitted and --budget-fraction is a no-op."
+        ),
+    )
+    p.add_argument(
+        "--budget-fraction", type=float, default=1.0,
+        help=(
+            "Base fraction for the role size envelope: "
+            "E(r) = source_footprint_bits(r) * fraction. Mirrors "
+            "l5_retune's --budget-fraction flag. Default 1.0; a "
+            "non-positive value opts out of the size envelope "
+            "(emits an empty role_budgets)."
+        ),
+    )
+    p.add_argument(
+        "--no-embedding-budget", action="store_true",
+        help=(
+            "Opt out of the M2 embedding-budget integration. The "
+            "sidecar is emitted without the role_budgets key, "
+            "preserving the pre-M2 contract (plain worst-of, no "
+            "per-role budget)."
         ),
     )
     return p
@@ -534,6 +764,18 @@ def main(argv: list[str] | None = None) -> int:
             block["model_role"] = "unified"
             unified[only] = block
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    # M2 follow-up: the embedding-budget producer. Wired in here
+    # (additive; the existing merge is unchanged). The producer
+    # reads tensor_stats from the unified DB (--db) and emits a
+    # role_budgets sidecar for the Phase 16.8 writer. The
+    # integration is gated by --no-embedding-budget (opt-out) and
+    # --db (data source). Without --db, the sidecar has no
+    # role_budgets (the pre-M2 contract; --budget-fraction is a
+    # no-op in that case).
+    if not args.no_embedding_budget and args.db is not None:
+        unified["role_budgets"] = _build_role_budgets(
+            args.db, unified, args.budget_fraction,
+        )
     with args.output.open("w") as f:
         json.dump(unified, f, indent=2, sort_keys=True)
         f.write("\n")
@@ -544,10 +786,12 @@ def main(argv: list[str] | None = None) -> int:
         f"{role}={meta['fitness']}"
         for role, meta in components_meta.items()
     )
+    role_budgets_n = len(unified.get("role_budgets", []))
     print(
         f"wrote unified policy: {args.output} "
         f"({len(unified['tensor_families'])} tensor families, "
-        f"{len(roles_in_order)} components: {fitness_summary})"
+        f"{len(roles_in_order)} components: {fitness_summary}, "
+        f"{role_budgets_n} role_budgets)"
     )
     return 0
 
