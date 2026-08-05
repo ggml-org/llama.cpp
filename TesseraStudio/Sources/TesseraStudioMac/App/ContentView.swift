@@ -58,6 +58,10 @@ struct ContentView: View {
     // running run survive the switch. WorkflowsView is a shell
     // over it and is recreated freely.
     @State private var workflowEditor = WorkflowEditorStore()
+    // Per-window identity for the Learning-surface visibility tally
+    // (training runs are global, so the ping decision looks across
+    // all windows; see LearningSurfaceTracker).
+    @State private var windowID = UUID()
 
     var body: some View {
         NavigationSplitView {
@@ -104,6 +108,12 @@ struct ContentView: View {
         // is NOT looking at the result (see WorkflowRunNotifier).
         .onChange(of: selection, initial: true) { _, newValue in
             workflowEditor.workflowsSurfaceVisible = (newValue == .workflows)
+            LearningSurfaceTracker.shared.setVisible(newValue == .learning, for: windowID)
+        }
+        .onDisappear {
+            // A closed window must not keep claiming the Learning
+            // surface is visible; drop its tally entry.
+            LearningSurfaceTracker.shared.setVisible(false, for: windowID)
         }
     }
 

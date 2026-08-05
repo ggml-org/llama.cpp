@@ -9,6 +9,15 @@ struct TesseraStudioMacApp: App {
     init() {
         TesseraSettings.registerDefaults()
         TesseraLearningServices.installDefaults()
+        // Idle training sweeps are global (one orchestrator per app), so
+        // their completion ping is posted from here, not from a window.
+        // The notifier suppresses the ping while the Learning surface is
+        // visible and never pings for routine skips.
+        TesseraLearningServices.trainingScheduler?.onFinished = { record in
+            Task { @MainActor in
+                TrainingNotifier.post(record: record)
+            }
+        }
         do {
             let schema = Schema([ChatMessage.self, RunRecord.self, Conversation.self])
             let config = ModelConfiguration("TesseraStudio", schema: schema)

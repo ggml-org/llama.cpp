@@ -10,9 +10,13 @@ struct LearningDashboardView: View {
     @State private var teachers: [TesseraTeacherAssessment] = []
     @State private var foraging = TesseraForagingSummary()
     @State private var curation = TesseraCurationSummary()
+    /// Regenerated on Refresh so the training section reloads its
+    /// read-only state without disturbing any in-flight run.
+    @State private var refreshID = UUID()
 
     var body: some View {
         List {
+            LearningTrainingSection(refreshID: refreshID)
             capabilitySection
             adaptationSection
             teachersSection
@@ -92,6 +96,7 @@ struct LearningDashboardView: View {
     }
 
     private func load() {
+        refreshID = UUID()
         capability = TesseraCapabilityEvalStore().latest()
         adaptation = TesseraLearningCenter.shared.scheduler.lastAdaptation()
         teachers = TesseraLearningCenter.shared.assessor.assessments()
