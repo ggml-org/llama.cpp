@@ -1720,3 +1720,104 @@ result = mb.conv(x, W_conv, pad_type="valid", strides=[1, 1], dilations=[1, 1])
 # Add bias separately (Orion #13):
 result = mb.add(result, bias)  # if needed
 ```
+
+### 6.7 TILE640 v2 host-side quant (Accelerate + NEON)
+
+The TILE640 dequant that the Phase 0 dispatch calls per row
+(see Part 6.2 and `ggml-ane.mm` `GGML_OP_TILE640_MATMUL`
+case) was a plain C loop in `ggml/src/ggml-quants.c` with no
+SIMD, no Accelerate. For the iPhone demo this is the hot
+host-side path (ANE runs the matmul; the host dequants the
+weight row, applies the sparse outlier addback, casts to
+fp16, writes the weight into the bundle's pinned slot). The
+dequant is on the critical path for every dispatched
+matmul, so the 0.3-1.3 ms prologue the host dequant pays
+(per the Part 2.1 research-doc figure) was the dominant
+host-side cost.
+
+`ggml/src/ggml-quants-v2.c` (added in this worktree) ships
+five Accelerate + NEON implementations:
+
+| Function | Strategy | Speedup vs C (M1) |
+|---|---|---|
+| `dequantize_row_tessera_t640_v2` | NEON 4-element chunks for sign + scale; vDSP_vmul per page | 1.3-1.58x |
+| `quantize_row_tessera_t640_v2` | vDSP_maxmgv + vDSP_meamgv for per-page reductions; NEON 4-element chunks for trit encoding and 243-base packing | 2.76-4.31x |
+| `apply_outlier_addback_v2` | NEON vcvt_f32_f16 (4 fp16 -> 4 fp32) for the bulk conversion; scatter is per-element scalar (sparse, vDSP-incompatible) | 0.13-0.51x (slower; NEON chunk overhead dominates) |
+| `decode_per_row_meta_v2` | vDSP_vflt8 (int8 -> fp32) + vDSP_vsdiv for lane scales; NEON vcvt_f32_f16 for page scales | 0.51-1.0x (no win; per-row work too small to amortize vDSP setup) |
+| `apply_act_scale_v2` | NEON vcvt_f32_f16 + vDSP_vmul for the bulk multiply | 1.86-1.96x |
+
+`tests/bench-tessera-quants-v2.cpp` is the throughput
+benchmark (median of 10 runs, 5 warmup, on the M1 MacBook
+Pro host = A15-class hardware). The dequant speedup is
+below the 2-4x target because the radix-243 trit decode
+has a serial `idx` dependency (each trit extraction divides
+by 3) and cannot be SIMDed. The v2 speedup on the dequant
+is the sign conversion (NEON 4-element chunks, ~4x on
+that part) and the vDSP_vmul bulk multiply (~4x on that
+part); the serial decode caps the total speedup at
+~1.5-2x. The quant 4x speedup pays off the full budget
+because the vDSP_maxmgv + vDSP_meamgv reduce the per-page
+work that the C version does scalar; the v2 quant uses
+the same NEON 4-element chunk pattern as the v2 dequant
+but for the encode direction (trit comparison + 243-base
+packing), where there is no serial dependency.
+
+**Parity**: `tests/test-tessera-quants-v2.cpp` verifies
+bit-identical output (within fp32 noise) for the 5
+functions on the canonical Phase 0 shapes. The vDSP
+reductions (vDSP_meamgv uses parallel summation; vDSP_sve
+uses parallel summation) can differ from the C scalar
+loop by 1-2 ulp, but for the test fixtures the threshold
+is well above the noise and the resulting trits are
+identical (0 mismatches in the parity test). The
+vDSP_vsdiv / 127 path is exact (no rounding); the NEON
+sign conversion is bit-exact (the int8 -> int32 -> fp32
+widening preserves the -1, 0, +1 values exactly). The
+outlier addback and act_scale are bit-identical (the C
+versions are the documented behaviour; v2 is the same
+math with a NEON bulk conversion for fp16).
+
+**Dispatch wiring**: `ggml-ane.mm`'s
+`GGML_OP_TILE640_MATMUL` case now calls
+`dequantize_row_tessera_t640_v2` when
+`ggml_tessera_t640_v2_enabled()` is true and `in_dim >=
+GGML_TESSERA_T640_V2_MIN_K` (1024). The C reference in
+`ggml-quants.c` is the documented fallback when v2 is
+disabled (env var `GGML_TESSERA_T640_V2_DISABLE=1`) or
+`in_dim` is below the cutoff. The dispatch policy table
+at the top of `ggml-ane.mm` (Part 6.5 above) is updated
+to document the v2 path and the per-function speedup.
+
+**Hard rules observed**:
+- No NaN/Inf filters. The v2 paths use the same math as
+  the C references; no `isnan` or `isinf` checks were
+  added. The C version does not produce NaNs; v2 does not
+  either.
+- Bit-identical (within fp32 noise) for the parity tests.
+  The benchmark document in
+  `docs/ane-backend-deep-study.md` records any
+  differences; the v2 quant and dequant are 0 mismatches
+  for the standard fixtures.
+- The existing dequant-on-host path (Phase 0, FF-merged
+  at cd3a2a17f) still passes parity; the v2 paths are
+  additive. Setting `GGML_TESSERA_T640_V2_DISABLE=1` and
+  rebuilding gives the C path back; the v2 path is the
+  default.
+- The dispatch policy (matmul on ANE, elementwise on
+  Accelerate) is unchanged; v2 is the implementation of
+  the Accelerate side.
+
+**iPhone 13 Pro Max A15 measurements**: not measured in
+this worktree (the iPhone target is a follow-up worker;
+the v2 functions are byte-identical in instruction
+stream to the M1 host's, so the speedup should scale
+linearly with the dispatch's per-row call count). The
+M1 host numbers are the best estimate of the A15 numbers
+(both are 4-wide NEON with the same throughput on the
+quant kernels; the A15 has slightly lower memory
+bandwidth which would reduce the bulk-multiply speedup
+marginally).
+
+---
+
+## Appendix A: Source References
