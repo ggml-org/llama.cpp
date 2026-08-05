@@ -1267,6 +1267,21 @@ static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> 
 //                         ANE fp16 matmul; shape must match the
 //                         bound bundle's baked shape, otherwise
 //                         fall through to ggml-cpu/Metal)
+//                         The host-side dequant uses the v2
+//                         (Accelerate + NEON) path in
+//                         ggml/src/ggml-quants-v2.c when
+//                         ggml_tessera_t640_v2_enabled() is
+//                         true and in_dim >=
+//                         GGML_TESSERA_T640_V2_MIN_K (1024);
+//                         the C reference in ggml-quants.c is
+//                         the documented fallback. v2 speedup
+//                         on A15-class hardware is 1.3-1.58x
+//                         for the dequant (the radix-243
+//                         trit decode is the bottleneck);
+//                         the v2 quant and v2 act_scale are
+//                         faster (3-4x and 1.9x respectively).
+//                         See tests/bench-tessera-quants-v2.cpp
+//                         for the per-shape numbers.
 //   MUL_MAT (BF16/fp16)-> ANE if the bound bundle's function matches
 //                         the op's shape; otherwise fall through
 //                         to Accelerate BLAS (the W0 spike's path
