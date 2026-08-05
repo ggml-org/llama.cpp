@@ -8,7 +8,6 @@
 		rankEntries,
 		runGlobSearch
 	} from '$lib/utils';
-	import { debounce } from '$lib/utils/debounce';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
@@ -18,8 +17,13 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
 	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
+	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import type { FileMentionEntry } from '$lib/types';
-	import { FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH, HOME_TILDE } from '$lib/constants';
+	import {
+		FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
+		HOME_TILDE,
+		SEARCH_DEBOUNCE_MS
+	} from '$lib/constants';
 
 	/**
 	 * Floating file/folder mention picker.
@@ -73,7 +77,6 @@
 	let scrollTrigger = $state(0);
 
 	let searchResults = $state<FileMentionEntry[]>([]);
-	let isSearching = $state(false);
 	let searchError = $state<string | null>(null);
 
 	// Search depth from settings, coerced to a valid positive integer.
@@ -91,74 +94,43 @@
 	// abbreviation of result paths.
 	const home = $derived(toolsStore.serverHome);
 
-	// AbortController + sequence counter to discard stale responses when
-	// the user keeps typing; a newer call aborts the previous one.
-	let searchController: AbortController | null = null;
-	let searchSeq = 0;
-
-	function cancelSearch() {
-		searchController?.abort();
-		searchSeq++;
-		isSearching = false;
-	}
-
-	function resetSearch() {
-		cancelSearch();
-		searchResults = [];
-		searchError = null;
-	}
-
 	// The mention search shows a focused list; a smaller window than the
 	// working-directory picker is enough because entries are ranked client-side.
 	const MENTION_SEARCH_LIMIT = 50;
 
-	async function doSearch(query: string) {
-		const args = buildGlobSearchArgs(query, scopePath ?? home ?? HOME_TILDE, searchDepth);
-
-		cancelSearch();
-		const controller = new AbortController();
-		searchController = controller;
-		const mySeq = ++searchSeq;
-
-		isSearching = true;
-		try {
-			const res = await runGlobSearch(
-				args,
-				GlobSearchType.ALL,
-				MENTION_SEARCH_LIMIT,
-				controller.signal
-			);
-			if (mySeq !== searchSeq) return;
-			if (res.error) {
+	// Debounced, abortable glob search. The chat textarea is the search
+	// surface, so the fetcher maps each hit to a FileMentionEntry for the
+	// picker list; stale responses are dropped by the hook's isCurrent guard.
+	const search = useDebouncedSearch({
+		debounceMs: SEARCH_DEBOUNCE_MS,
+		canRun: () => isOpen,
+		getQuery: () => trimmedQuery,
+		run: async (query, signal, isCurrent) => {
+			const args = buildGlobSearchArgs(query, scopePath ?? home ?? HOME_TILDE, searchDepth);
+			try {
+				const res = await runGlobSearch(args, GlobSearchType.ALL, MENTION_SEARCH_LIMIT, signal);
+				if (!isCurrent()) return;
+				if (res.error) {
+					searchResults = [];
+					searchError = res.error;
+					return;
+				}
+				searchResults = rankEntries(res.entries, args.rankQuery).map((e) => {
+					const path = joinPath(res.base, e.path);
+					return {
+						path,
+						name: lastPathSegment(e.path),
+						type: e.type === 'dir' ? 'directory' : 'file'
+					};
+				});
+				searchError = null;
+			} catch (err) {
+				if (!isCurrent() || signal.aborted) return;
 				searchResults = [];
-				searchError = res.error;
-				return;
+				searchError = err instanceof Error ? err.message : String(err);
 			}
-			searchResults = rankEntries(res.entries, args.rankQuery).map((e) => {
-				const path = joinPath(res.base, e.path);
-				return {
-					path,
-					name: lastPathSegment(e.path),
-					type: e.type === 'dir' ? 'directory' : 'file'
-				};
-			});
-			searchError = null;
-		} catch (err) {
-			if (mySeq !== searchSeq) return;
-			searchResults = [];
-			if (controller.signal.aborted) return;
-			searchError = err instanceof Error ? err.message : String(err);
-		} finally {
-			if (mySeq === searchSeq) isSearching = false;
 		}
-	}
-
-	// Guard at fire time: a scheduled call that outlives a reset (picker
-	// closed or query changed within the debounce window) must not fetch.
-	const runSearch = debounce((q: string) => {
-		if (!isOpen || q !== trimmedQuery) return;
-		void doSearch(q);
-	}, 180);
+	});
 
 	// Most-recently-picked entries (deduped, capped, persisted to
 	// localStorage). Surfaced when the user opens the picker with no
@@ -214,11 +186,13 @@
 	$effect(() => {
 		const q = (query ?? '').trim();
 		if (!isOpen || !q) {
-			resetSearch();
+			search.cancel();
+			searchResults = [];
+			searchError = null;
 			return;
 		}
-		isSearching = true;
-		runSearch(q);
+		search.setLoading(true);
+		search.run(q);
 	});
 
 	function handleSelect(entry: FileMentionEntry) {
@@ -317,7 +291,7 @@
 
 		<ChatFormPickerList
 			items={displayedItems}
-			isLoading={isShowingRecents ? false : isSearching}
+			isLoading={isShowingRecents ? false : search.isSearching}
 			selectedIndex={hoveredIndex}
 			showSearchInput={false}
 			searchQuery={query ?? ''}

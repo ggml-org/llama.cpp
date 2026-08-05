@@ -15,9 +15,9 @@
 		type GlobEntry,
 		type GlobSearchResult
 	} from '$lib/utils';
-	import { debounce } from '$lib/utils/debounce';
 	import * as Popover from '$lib/components/ui/popover';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
+	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
 	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
 	import {
@@ -87,7 +87,6 @@
 	let searchInputRef: HTMLInputElement | null = $state(null);
 
 	let queryResults = $state<string[]>([]);
-	let isSearching = $state(false);
 	let searchError = $state<string | null>(null);
 	let hoveredIndex = $state(-1);
 	// Bumped only by ArrowUp/ArrowDown handlers; the list scrolls the
@@ -99,16 +98,6 @@
 	// the tools store. Anchors both the search scope and the chip's `~`
 	// abbreviation.
 	let homeBase = $derived(toolsStore.serverHome);
-
-	// AbortController + sequence counter to discard stale responses when the user
-	// keeps typing; a newer call aborts the previous one. The sequence counter
-	// also covers the gap between abort and the catch handler.
-	let searchController: AbortController | null = null;
-	let searchSeq = 0;
-
-	const runSearch = debounce((query: string) => {
-		void doSearch(query);
-	}, SEARCH_DEBOUNCE_MS);
 
 	// Resolve home eagerly on mount so the chip can abbreviate before the
 	// user opens the picker. resolveServerHome() is cached, so repeat calls
@@ -135,11 +124,11 @@
 		const q = query.trim();
 		hoveredIndex = -1;
 		if (q) {
-			runSearch(q);
+			search.run(q);
 		} else {
+			search.cancel();
 			queryResults = [];
 			searchError = null;
-			isSearching = false;
 			hoveredIndex = -1;
 			searchScope = homeBase ?? HOME_TILDE;
 		}
@@ -169,14 +158,8 @@
 		});
 	});
 
-	function cancelSearch() {
-		searchController?.abort();
-		searchSeq++;
-		isSearching = false;
-	}
-
 	// Effective directory the current search runs against (shown in the
-	// footer); updated by doSearch, including when an exactly-typed
+	// footer); updated by the search below, including when an exactly-typed
 	// directory is "entered".
 	let searchScope = $state(HOME_TILDE);
 
@@ -196,81 +179,73 @@
 		);
 	}
 
-	async function doSearch(query: string) {
-		const trimmed = query.trim();
-		if (!trimmed) {
-			queryResults = [];
-			searchError = null;
-			isSearching = false;
-			hoveredIndex = -1;
-			searchScope = homeBase ?? HOME_TILDE;
-			return;
-		}
-
-		cancelSearch();
-		const controller = new AbortController();
-		searchController = controller;
-		const mySeq = ++searchSeq;
-
-		const args = buildGlobSearchArgs(trimmed, homeBase ?? HOME_TILDE, SEARCH_MAX_DEPTH);
-
-		isSearching = true;
-		try {
-			// A generous limit is requested because ranking happens
-			// client-side; only the top 20 are shown.
-			const res = await searchDirs(args.path, args.include, args.maxDepth, controller.signal);
-			if (mySeq !== searchSeq) return;
-			if (res.error) {
+	// Debounced, abortable directory search backed by the shared cache. The
+	// query is two-way bound to the text after `/cwd `, so typing in either
+	// the search input or the chat input drives the same results. Stale
+	// responses are dropped by the hook's isCurrent guard.
+	const search = useDebouncedSearch({
+		debounceMs: SEARCH_DEBOUNCE_MS,
+		canRun: () => isOpen,
+		getQuery: () => query.trim(),
+		run: async (q, signal, isCurrent) => {
+			const trimmed = q.trim();
+			if (!trimmed) {
 				queryResults = [];
+				searchError = null;
 				hoveredIndex = -1;
-				searchError = res.error;
+				searchScope = homeBase ?? HOME_TILDE;
 				return;
 			}
-			const { base, entries } = res;
-			const ranked = rankEntries(entries, args.rankQuery);
-			let results = ranked.map((e) => joinPath(base, e.path));
-			searchScope = args.path;
 
-			// An exactly-typed directory is "entered": list its children too,
-			// so path navigation doesn't require a trailing slash.
-			const last = args.last;
-			const exact = last
-				? ranked.find((e) => lastPathSegment(e.path).toLowerCase() === last.toLowerCase())
-				: undefined;
-			if (exact) {
-				const exactDir = joinPath(base, exact.path);
-				const childRes = await searchDirs(
-					exactDir,
-					GLOB_WILDCARD,
-					PATH_NAV_MAX_DEPTH,
-					controller.signal
-				);
-				if (mySeq !== searchSeq) return;
-				if (!childRes.error) {
-					const children = childRes.entries
-						.map((e) => joinPath(childRes.base, e.path))
-						.sort((a, b) => a.localeCompare(b));
-					results = [...results, ...children];
-					searchScope = exactDir;
+			const args = buildGlobSearchArgs(trimmed, homeBase ?? HOME_TILDE, SEARCH_MAX_DEPTH);
+			try {
+				// A generous limit is requested because ranking happens
+				// client-side; only the top 20 are shown.
+				const res = await searchDirs(args.path, args.include, args.maxDepth, signal);
+				if (!isCurrent()) return;
+				if (res.error) {
+					queryResults = [];
+					hoveredIndex = -1;
+					searchError = res.error;
+					return;
 				}
+				const { base, entries } = res;
+				const ranked = rankEntries(entries, args.rankQuery);
+				let results = ranked.map((e) => joinPath(base, e.path));
+				searchScope = args.path;
+
+				// An exactly-typed directory is "entered": list its children too,
+				// so path navigation doesn't require a trailing slash.
+				const last = args.last;
+				const exact = last
+					? ranked.find((e) => lastPathSegment(e.path).toLowerCase() === last.toLowerCase())
+					: undefined;
+				if (exact) {
+					const exactDir = joinPath(base, exact.path);
+					const childRes = await searchDirs(exactDir, GLOB_WILDCARD, PATH_NAV_MAX_DEPTH, signal);
+					if (!isCurrent()) return;
+					if (!childRes.error) {
+						const children = childRes.entries
+							.map((e) => joinPath(childRes.base, e.path))
+							.sort((a, b) => a.localeCompare(b));
+						results = [...results, ...children];
+						searchScope = exactDir;
+					}
+				}
+
+				queryResults = results.slice(0, MAX_RESULTS_SHOWN);
+				hoveredIndex = queryResults.length > 0 ? 0 : -1;
+				// new results: scroll the list back to the top (first item is hovered)
+				if (hoveredIndex === 0) scrollTrigger++;
+				searchError = null;
+			} catch (err) {
+				if (!isCurrent() || signal.aborted) return;
+				queryResults = [];
+				hoveredIndex = -1;
+				searchError = err instanceof Error ? err.message : String(err);
 			}
-
-			queryResults = results.slice(0, MAX_RESULTS_SHOWN);
-			hoveredIndex = queryResults.length > 0 ? 0 : -1;
-			// new results: scroll the list back to the top (first item is hovered)
-			if (hoveredIndex === 0) scrollTrigger++;
-			searchError = null;
-		} catch (err) {
-			if (mySeq !== searchSeq) return;
-			queryResults = [];
-			hoveredIndex = -1;
-			if (controller.signal.aborted) return;
-			searchError = err instanceof Error ? err.message : String(err);
-		} finally {
-			if (mySeq === searchSeq) isSearching = false;
 		}
-	}
-
+	});
 	// Single funnel for every local close so the host refocus fires
 	// regardless of which commit/dismiss path ended the interaction.
 	function closePicker() {
@@ -391,7 +366,7 @@
 		if (open) {
 			void toolsStore.resolveServerHome();
 		} else {
-			cancelSearch();
+			search.cancel();
 			// bits-ui-initiated close (Escape on the content, outside-click) -
 			// the only path that bypasses closePicker().
 			onClose?.();
@@ -451,11 +426,11 @@
 				class="w-full"
 			/>
 
-			{#if query.trim() && (isSearching || queryResults.length > 0 || searchError)}
+			{#if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
 				<ChatFormWorkingDirectoryResultsList
 					results={queryResults}
 					{hoveredIndex}
-					{isSearching}
+					isSearching={search.isSearching}
 					error={searchError}
 					rawQuery={query}
 					bind:container={listContainer}
