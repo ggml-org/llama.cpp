@@ -126,6 +126,86 @@ The architecture:
    field on the sidecar changes when L1 lands (it goes
    from `"offline_ternary_mse"` to `"l1_kernel_dequant"`).
 
+### 2.1 C++ first-class path (Phase 3.5)
+
+As of Phase 3.5 of `docs/tessera-ane-ios-demo-design.md`,
+the proxy ships as a first-class C++ module alongside
+`tessera-higgs.cpp`. The C++ binary
+`tessera-higgs-proxy` is the production path; the Python
+implementation at `tools/ane-mtp/estimate_higgs_alpha.py`
+is the dev / test fallback. The Python wrapper at
+`tools/tessera/estimate_higgs_alpha.py` subprocesses the
+C++ binary when present on PATH and falls back to the
+in-process NumPy path otherwise.
+
+**Parity invariant**: a sidecar produced by the C++ path
+is byte-for-byte interchangeable with one produced by the
+Python path at the JSON-key level (same key order, same
+value types, same top-level schema discriminator). Floats
+agree to F32 precision (the C++ path computes in F64 then
+casts; the Python path keeps F64 inside NumPy and casts
+at JSON dump). The `t_squared`, `frobenius_norm`, and
+`alpha` fields agree to within 1e-5 relative tolerance on
+a fixed-seed fixture; the parity tests in
+`tools/tessera/test_estimate_higgs_alpha.py` enforce this.
+
+**C++ binary name**: `tessera-higgs-proxy`. CLI surface
+mirrors the Python wrapper's `--gguf`, `--output`,
+`--min-params-for-estimate`, `--alpha-floor-fraction`,
+`--report`, `--bundle-name`, `--verbose`, plus the
+C++-only `--alpha-floor` (absolute floor, default 1e-6).
+The C++ binary writes the sidecar and the markdown report
+itself; the Python wrapper just captures stdout / stderr
+and the exit code.
+
+**`t_squared_source` enum** (the sidecar's per-tensor
+"which measurement produced `t_squared`" field, and the
+top-level `measurement` field):
+
+| Value | Producer | When |
+|---|---|---|
+| `offline_ternary_mse` | C++ binary (default) | Normal run, above the size threshold |
+| `uniform_fallback` | C++ binary (fallback) | Total params below `min_params_for_estimate`; every alpha is 1.0 |
+| `l1_kernel_dequant` | C++ binary (Phase 0 future) | When the L1 measurement_fn is wired in; ``ts_higgs_proxy_measurement_fn`` returns the L1 sidecar's per-tensor error |
+| `offline_ternary_mse_numpy_fallback` | Python wrapper (dev fallback only) | The C++ binary is not on PATH and the wrapper fell back to the in-process NumPy path. A discriminator value, not a different math; the per-tensor math is identical to `offline_ternary_mse` |
+
+The discriminator `offline_ternary_mse_numpy_fallback`
+exists so a future consumer can audit the path: a sidecar
+with that value was produced by the slower, dev-only
+NumPy implementation. The C++ binary NEVER stamps
+`_numpy_fallback`; if the C++ path ran, the sidecar's
+measurement is one of `offline_ternary_mse`,
+`uniform_fallback`, or (Phase 0) `l1_kernel_dequant`.
+
+**Family prior table (one source of truth)**: the
+`FAMILY_PRIOR` table in the Python module and the
+`TS_HIGGS_PROXY_FAMILY_SUFFIXES` table in the C++ header
+contain the same values (same suffix map, same float
+values, same "other" fallback). The C++ table is a C
+array of `{suffix, family, prior}` triplets in the same
+order as the Python `FAMILY_SUFFIXES` tuple; a future
+test can cross-check by hashing both tables and comparing.
+
+**L1-agnostic measurement function**: the C++ API is
+
+```c
+typedef float (*ts_higgs_proxy_measurement_fn)(
+    const float * W_flat, int64_t n_elem,
+    int64_t layer_idx, void * ctx);
+
+int ts_higgs_proxy_estimate(
+    const char * gguf_path,
+    const ts_higgs_proxy_params * params,
+    ts_higgs_proxy_measurement_fn measurement_fn,
+    void * measurement_ctx,
+    ts_higgs_proxy_result * result);
+```
+
+The default measurement function is the offline ternary
+MSE (same as the Python `measure_t_squared_offline`).
+The L1 path is a function-pointer change, not a code
+rewrite.
+
 ## 3. The structural Hessian-trace proxy (the L1-agnostic alpha)
 
 The Linearity-Theorem theoretical form is
@@ -406,13 +486,49 @@ Phase 0.5).
 
 ## 9. File map
 
-- `tools/ane-mtp/estimate_higgs_alpha.py` - the
-  estimator (CLI + orchestrator + sidecar writer).
+- `tools/ane-mtp/estimate_higgs_alpha.py` - the NumPy
+  estimator (CLI + orchestrator + sidecar writer). The
+  dev / test fallback; the C++ binary
+  `tessera-higgs-proxy` is the production path (Phase 3.5).
+- `tools/quantize/tessera/tessera-higgs-proxy.h` -
+  C++ first-class proxy header (the API surface:
+  `ts_higgs_proxy_params`, `ts_higgs_proxy_layer_result`,
+  `ts_higgs_proxy_result`, the `ts_higgs_proxy_measurement_fn`
+  callback, the JSON I/O, the model_hash, the atomic
+  file writer). Phase 3.5.
+- `tools/quantize/tessera/tessera-higgs-proxy.cpp` -
+  C++ implementation: family prior table (same values as
+  the Python `FAMILY_PRIOR` dict), GGUF reading + dequant
+  (via the same `ggml_get_type_traits` path the dispatch
+  uses), offline ternary MSE measurement function
+  (default), structural alpha, JSON I/O, model_hash
+  (FIPS 180-4 SHA-256, matches `hashlib` byte-for-byte).
+  Phase 3.5.
+- `tools/quantize/tessera/tessera-higgs-proxy-main.cpp` -
+  C++ CLI binary. Subprocessed by the Python wrapper
+  when on PATH. Phase 3.5.
+- `tools/quantize/tessera/test_higgs_proxy.cpp` -
+  138 C++ tests: family classification, family prior
+  rank + exact values, offline ternary MSE, estimator
+  family rank on a tinyllamas-shaped fixture, uniform
+  fallback, alpha_floor, model_hash (bit-equal to
+  `shasum -a 256`), JSON round-trip + key order, atomic
+  file write, L1-agnostic measurement function (constant
+  + ctx), robustness, extract_alphas, parity with
+  NumPy, guard rails. Phase 3.5.
+- `tools/tessera/estimate_higgs_alpha.py` - the thin
+  Python wrapper. Subprocesses the C++ binary on PATH,
+  falls back to the in-process NumPy path otherwise,
+  stamps `offline_ternary_mse_numpy_fallback` for the
+  fallback path. Phase 3.5.
 - `tools/tessera/test_estimate_higgs_alpha.py` - the
-  test suite (52 tests, runs in <2s with the fixture,
-  <0.1s without).
+  test suite (52 NumPy tests for the dev fallback + 4
+  parity tests that compare C++ and NumPy sidecars;
+  parity tests skip when the C++ binary is not on PATH).
+  Runs in <2s with the fixture.
 - `docs/tessera-ane-ios-demo-design.md` - the design
-  doc, Phase 3 section.
+  doc, Phase 3 (NumPy sidecar) and Phase 3.5 (C++
+  first-class port) sections.
 - `docs/research-higgs-alpha-2026-07-30.md` - the
   research spine, the math and the cross-check
   acceptance.
