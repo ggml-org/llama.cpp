@@ -74,6 +74,7 @@ def byteswap_tq2_0(tensor, block_offs):
     delta = tensor.data[block_offs + 64:block_offs + 66].view(dtype=np.uint16)
     delta.byteswap(inplace=True)
 
+
 byteswap_tensors = {
     gguf.GGMLQuantizationType.Q1_0:  byteswap_q1_0,
     gguf.GGMLQuantizationType.Q4_0:  byteswap_q4_0,
