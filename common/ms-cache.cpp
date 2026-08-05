@@ -2,6 +2,7 @@
 
 #include "build-info.h"
 #include "common.h"
+#include "file-lock.h"
 #include "log.h"
 #include "http.h"
 
@@ -44,8 +45,7 @@ static fs::path get_cache_directory() {
             {HOME_DIR,            fs::path(".cache") / "modelscope" / "hub"}
         };
         for (const auto & entry : entries) {
-            if (auto * p = std::getenv(entry.var); p && *p) {
-                fs::path base(p);
+            if (fs::path base = common_get_path_from_env(entry.var); !base.empty()) {
                 return entry.path.empty() ? base : base / entry.path;
             }
         }
@@ -139,7 +139,7 @@ static bool is_valid_oid(const std::string & oid) {
 }
 
 std::string get_cache_path() {
-    return fs_path_to_utf8(get_cache_directory());
+    return get_cache_directory().string();
 }
 
 // Lock file path for a blob: <cache>/.locks/<repo folder>/<oid>.lock
@@ -163,27 +163,6 @@ static bool is_valid_subpath(const fs::path & path, const fs::path & subpath) {
     return b_end == b.end();
 }
 
-static void safe_write_file(const fs::path & path, const std::string & data) {
-    fs::path path_tmp = path.string() + ".tmp";
-
-    if (path.has_parent_path()) {
-        fs::create_directories(path.parent_path());
-    }
-
-    std::ofstream file(path_tmp);
-    file << data;
-    file.close();
-
-    std::error_code ec;
-
-    if (!file.fail()) {
-        fs::rename(path_tmp, path, ec);
-    }
-    if (file.fail() || ec) {
-        fs::remove(path_tmp, ec);
-        throw std::runtime_error("failed to write file: " + path.string());
-    }
-}
 
 static const std::string & get_modelscope_endpoint() {
     static const std::string endpoint = []() {
@@ -262,7 +241,7 @@ ms_files get_repo_files(const std::string & repo_id,
         }
 
         fs::path refs_path = get_repo_path(repo_id) / "refs";
-        safe_write_file(refs_path / "master", ref);
+        fs_write_atomic(refs_path / "master", ref);
 
         for (const auto & item : response["Data"]["Files"]) {
             if (!item.contains("Path") || !item["Path"].is_string()) {
@@ -273,7 +252,9 @@ ms_files get_repo_files(const std::string & repo_id,
             file.repo_id = repo_id;
             file.path = item["Path"].get<std::string>();
 
-            if (!is_valid_subpath(commit_path, file.path)) {
+            const fs::path subpath = fs::u8path(file.path);
+
+            if (!is_valid_subpath(commit_path, subpath)) {
                 LOG_WRN("%s: skip invalid path: %s\n", __func__, file.path.c_str());
                 continue;
             }
@@ -289,7 +270,7 @@ ms_files get_repo_files(const std::string & repo_id,
 
             file.url = endpoint + "models/" + repo_id + "/resolve/master/" + file.path;
 
-            fs::path final_path = commit_path / file.path;
+            fs::path final_path = commit_path / subpath;
             file.final_path = final_path.string();
 
             if (!file.oid.empty() && !fs::exists(final_path)) {
@@ -399,18 +380,35 @@ ms_files get_cached_files(const std::string & repo_id) {
     return files;
 }
 
-std::string finalize_file(const ms_file & file) {
+std::string finalize_file(const ms_file & file, const std::function<bool()> & keep_waiting) {
     static std::atomic<bool> symlinks_disabled{false};
 
     std::error_code ec;
-    fs::path local_path(file.local_path);
-    fs::path final_path(file.final_path);
+    fs::path local_path = fs::u8path(file.local_path);
+    fs::path final_path = fs::u8path(file.final_path);
 
     if (local_path == final_path || fs::exists(final_path, ec)) {
         return file.final_path;
     }
 
     if (!fs::exists(local_path, ec)) {
+        return file.final_path;
+    }
+
+    // the lock file serializes concurrent finalization of the same blob
+    common_file_lock lock(get_lock_path(file.repo_id, file.oid));
+    if (!lock.acquire(keep_waiting)) {
+        // without the lock, another process could move the blob while we check it
+        throw std::runtime_error("failed to lock cache for finalization: " + file.final_path);
+    }
+
+    // acquire() only polls keep_waiting while waiting for a busy lock
+    if (keep_waiting && !keep_waiting()) {
+        throw std::runtime_error("download cancelled before finalization: " + file.final_path);
+    }
+
+    // re-check under the lock: the winner may have created the link already
+    if (fs::exists(final_path, ec)) {
         return file.final_path;
     }
 
@@ -440,6 +438,21 @@ std::string finalize_file(const ms_file & file) {
         }
     }
     return file.final_path;
+}
+
+bool remove_cached_repo(const std::string & repo_id) {
+    if (!is_valid_repo_id(repo_id)) {
+        LOG_WRN("%s: invalid repository: %s\n", __func__, repo_id.c_str());
+        return false;
+    }
+    fs::path repo_path = get_repo_path(repo_id);
+    std::error_code ec;
+    auto removed = fs::remove_all(repo_path, ec);
+    if (ec) {
+        LOG_ERR("%s: failed to remove repo cache %s: %s\n", __func__, repo_path.string().c_str(), ec.message().c_str());
+        return false;
+    }
+    return removed > 0;
 }
 
 } // namespace ms_cache
