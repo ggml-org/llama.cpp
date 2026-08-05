@@ -1,9 +1,6 @@
-// This file has been automatically migrated to valid ESM format by Storybook.
 import type { StorybookConfig } from '@storybook/sveltekit';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

@@ -100,7 +100,7 @@
 		"vitest": "4.1.10",
 		"vitest-browser-svelte": "2.1.1",
 		"workbox-window": "7.4.1",
-		"@storybook/addon-mcp": "^0.7.0"
+		"@storybook/addon-mcp": "0.7.0"
 	},
 	"overrides": {
 		"cookie": "1.1.1",
