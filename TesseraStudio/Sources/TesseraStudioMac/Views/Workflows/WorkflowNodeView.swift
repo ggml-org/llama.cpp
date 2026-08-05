@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import TesseraCore
 
 /// One node on the workflow canvas. Renders a rounded rectangle
@@ -85,6 +86,17 @@ struct WorkflowNodeView: View {
                     }
                 }
         )
+        // Grab cursor over the node body: the whole node is
+        // the drag handle. pointerStyle(.grabIdle) needs
+        // macOS 15 and the package targets macOS 14, so use
+        // the push-based NSCursor stack instead.
+        .onHover { hovering in
+            if hovering {
+                NSCursor.openHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(type.displayName) node")
         .accessibilityHint("Drag to move. Use the action menu to delete.")
