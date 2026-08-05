@@ -1630,6 +1630,85 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             return ok;
         }
+        case GGML_OP_GET_ROWS: {
+            // Token-embedding lookup: out[i, :] = table[ids[i], :]
+            // for each i in 0..batch. The Phase 1 spike covers
+            // the small-vocab case (vocab <= 128 in the bundled
+            // fixture); the production gemma 4 vocab=~256k goes
+            // through the ggml-cpu memcpy path per the dispatch
+            // policy (ANE-side gather on a 256k-row table is
+            // bandwidth-bound and the IOSurface write is the
+            // bottleneck).
+            if (op->src[0] == nullptr || op->src[1] == nullptr) {
+                return false;
+            }
+            if (op->src[0]->type != GGML_TYPE_F32 ||
+                op->src[1]->type != GGML_TYPE_I32 ||
+                op->type != GGML_TYPE_F32) {
+                return false;
+            }
+            if (op->src[1]->ne[0] != op->ne[1]) {
+                // The number of looked-up rows (ids->ne[0]) must
+                // match the bundle's baked batch dim. In ggml's
+                // view, the batch dim is op->ne[1] (output is
+                // [ne[0]=hidden, ne[1]=batch]).
+                return false;
+            }
+            MLModelDescription * desc = program->model.modelDescription;
+            if (!desc) {
+                return false;
+            }
+            MLFeatureDescription * t_desc = desc.inputDescriptionsByName[@"table"];
+            MLFeatureDescription * i_desc = desc.inputDescriptionsByName[@"ids"];
+            MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
+            if (!t_desc || t_desc.type != MLFeatureTypeMultiArray ||
+                !i_desc || i_desc.type != MLFeatureTypeMultiArray ||
+                !y_desc || y_desc.type != MLFeatureTypeMultiArray) {
+                return false;
+            }
+            NSArray<NSNumber *> * t_shape = t_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * i_shape = i_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
+            // The bundle declares the table and output in
+            // ggml's column-major view: [hidden, vocab] for the
+            // table, [hidden, batch] for the output. The
+            // flat data is the same; the shape just matches
+            // what ggml_get_rows's output looks like.
+            if (t_shape.count != 2 || y_shape.count != 2 ||
+                t_shape[0].longLongValue != op->src[0]->ne[0] ||
+                t_shape[1].longLongValue != op->src[0]->ne[1] ||
+                y_shape[0].longLongValue != op->ne[0] ||
+                y_shape[1].longLongValue != op->ne[1] ||
+                i_shape.count != 1 ||
+                i_shape[0].longLongValue != op->ne[1]) {
+                return false;
+            }
+            std::unordered_map<std::string, const float *> inputs;
+            inputs.emplace("table", (const float *) op->src[0]->data);
+            // The bundle's ids input is declared Float32 by
+            // CoreML's input schema (the int32 cast happens
+            // inside the bundle via mb.cast(ids, int32)). The
+            // dispatch must convert the ggml-emitted i32 ids
+            // to f32 in-place: allocate a small scratch buffer,
+            // cast each element, and pass the buffer to the
+            // bundle. For decode (batch=1..small) the cost is
+            // negligible.
+            const int64_t ids_n = op->src[1]->ne[0];
+            std::vector<float> ids_f(ids_n);
+            for (int64_t i = 0; i < ids_n; ++i) {
+                ids_f[i] = static_cast<float>(
+                    ((const int32_t *) op->src[1]->data)[i]);
+            }
+            inputs.emplace("ids", ids_f.data());
+            std::vector<std::string> out_names_vec = { "y" };
+            std::unordered_map<std::string, float *> outputs;
+            outputs.emplace("y", (float *) op->data);
+            const bool ok = ggml_ane_program_run(program, inputs, out_names_vec, outputs);
+            if (ok) {
+                out_names = std::move(out_names_vec);
+            }
+            return ok;
+        }
         case GGML_OP_TILE640_MATMUL:
             // TODO(ane-bundle): dispatch matmul to the bound bundle's matmul
             // function once the conversion tool names one. Today the matmul

@@ -581,6 +581,11 @@ if (APPLE)
         target_link_libraries(test-ane-glu PRIVATE
                               ggml ggml-base)
     endif()
+    llama_build(test-ane-get-rows.cpp)
+    if (TARGET test-ane-get-rows)
+        target_link_libraries(test-ane-get-rows PRIVATE
+                              ggml ggml-base)
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")

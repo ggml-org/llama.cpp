@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "bundle_name": "getrows-4x128x64",
+  "state_size_bytes": 65536,
+  "model_type": "ml_program",
+  "slots": [
+    {
+      "name": "table",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        64,
+        128
+      ],
+      "offset": 0,
+      "size_bytes": 32768
+    },
+    {
+      "name": "ids",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        4
+      ],
+      "offset": 32768,
+      "size_bytes": 16
+    },
+    {
+      "name": "y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        64,
+        4
+      ],
+      "offset": 49152,
+      "size_bytes": 1024
+    }
+  ],
+  "functions": [
+    {
+      "name": "main",
+      "role": "get_rows",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "table",
+        "ids"
+      ],
+      "output_slots": [
+        "y"
+      ],
+      "core_ml_function_name": "main",
+      "use_ane": true
+    }
+  ],
+  "dependencies": []
+}
