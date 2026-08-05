@@ -82,7 +82,7 @@ struct output_stats {
 void usage(const char * program) {
     std::printf("Synthetic routed quantized MUL_MAT_ID benchmark using the HIP GGML backend graph.\n\n");
     std::printf("usage: %s [options]\n\n", program);
-    std::printf("  --type TYPE             q4_k, q6_k, iq2_xxs, iq2_s, iq3_xxs, or iq3_s (q4_k)\n");
+    std::printf("  --type TYPE             q4_k, q5_k, q6_k, iq2_xxs, iq2_s, iq3_xxs, or iq3_s (q4_k)\n");
     std::printf("  --k N                   input width, divisible by the quant block size (4096)\n");
     std::printf("  --n N                   expert output rows (512)\n");
     std::printf("  --batch N               routed tokens, 1..256 (32)\n");
@@ -104,6 +104,10 @@ void usage(const char * program) {
 bool parse_type(const char * value, ggml_type & type) {
     if (std::strcmp(value, "q4_k") == 0) {
         type = GGML_TYPE_Q4_K;
+        return true;
+    }
+    if (std::strcmp(value, "q5_k") == 0) {
+        type = GGML_TYPE_Q5_K;
         return true;
     }
     if (std::strcmp(value, "q6_k") == 0) {
