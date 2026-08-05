@@ -18,6 +18,21 @@
 extern "C" void dequantize_row_tessera_t640(const void * GGML_RESTRICT x,
                                              float * GGML_RESTRICT y,
                                              int64_t k);
+// v2 variant (Accelerate + NEON). Same signature, same
+// contract; the dispatch calls the v2 variant when
+// ggml_tessera_t640_v2_enabled() is true and the vDSP path
+// is appropriate (k >= GGML_TESSERA_T640_V2_MIN_K). The C
+// reference is the documented fallback.
+extern "C" void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
+                                                float * GGML_RESTRICT y,
+                                                int64_t k);
+extern "C" int  ggml_tessera_t640_v2_enabled(void);
+
+// GGML_TESSERA_T640_V2_MIN_K is the v2 dispatch cutoff
+// (defined in ggml-quants-v2.h). We include the header
+// here for the constant; the v2 function declarations are
+// already covered by the extern "C" block above.
+#include "ggml-quants-v2.h"
 
 #include <Accelerate/Accelerate.h>
 
@@ -2022,9 +2037,18 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 }
                 // Dequant the row in fp32 (the L0.5 reference's
                 // precision; the ANE's fp16 path is downstream
-                // of this).
-                dequantize_row_tessera_t640(row_bytes.data(),
-                                            row_f32.data(), in_dim);
+                // of this). The v2 variant (Accelerate + NEON)
+                // is the host-side acceleration; the C reference
+                // is the documented fallback when v2 is disabled
+                // or k is below the v2 cutoff.
+                if (ggml_tessera_t640_v2_enabled() &&
+                    in_dim >= GGML_TESSERA_T640_V2_MIN_K) {
+                    dequantize_row_tessera_t640_v2(row_bytes.data(),
+                                                   row_f32.data(), in_dim);
+                } else {
+                    dequantize_row_tessera_t640(row_bytes.data(),
+                                                row_f32.data(), in_dim);
+                }
                 // Sparse outlier addback (fp32; matches the GPU
                 // kernel's outlier path).
                 const int32_t lo = outlier_row_offsets[r];
