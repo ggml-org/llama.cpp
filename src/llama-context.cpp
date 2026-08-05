@@ -2360,6 +2360,10 @@ void llama_context::output_reorder() {
             }
         }
 
+        if (draft_ids.size > 0) {
+            std::swap(draft_ids.data[i0], draft_ids.data[i1]);
+        }
+
         if (!sampling.samplers.empty()) {
             assert(sampling.logits.size > 0);
             assert(sampling.probs.size > 0);
