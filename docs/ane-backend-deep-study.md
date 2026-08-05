@@ -1364,6 +1364,58 @@ an ANE program bound whose role matches).
 | `RESHAPE` / `VIEW` / `TRANSPOSE` / `PERMUTE` / `CONT` | free | Implemented |
 | `CPY`                    | memcpy       | Implemented |
 
+### 6.6 Phase 0 L1 matmul parity results
+
+`tests/test-ane-tile640-matmul.cpp` exercises the dispatch
+end-to-end on the canonical 256x256 case. The fixture is
+`tools/ane-mtp/fixtures/tile640-matmul-256x256x1/` (a
+2-input fp16 matmul: w [256, 256] fp16 + x [256, 1] fp16
+-> y [256, 1] fp32). The parity bars are the spec's
+1e-2 abs / 1e-1 rel; the test uses 2e-2 abs / 1e-1 rel
+with a rel-error denominator floor of 1e-2 (the ANE's
+fp16 matmul has ~1e-3 absolute error, so the rel error
+budget applies only to elements with |ref| > 1e-2 per
+the spec's "small magnitudes" caveat).
+
+| Case                    | max abs err | max rel err | Status |
+|-------------------------|-------------|-------------|--------|
+| dense 256x256           | 1.02e-3     | 9.26e-3     | PASS   |
+| dense 256x256 (re-run)  | 9.05e-4     | 2.92e-2     | PASS   |
+| 5% outliers 256x256     | 3.57e-3     | 3.38e-2     | PASS   |
+| no outliers 256x256     | 8.51e-4     | 1.67e-2     | PASS   |
+| IOSurface-state plumbing (re-run with different seed -> different page_scales) | structural | structural | PASS |
+
+All 4 parity cases pass within the 2e-2 abs / 1e-1 rel
+budget. The 5% outliers case has the largest abs error
+(3.57e-3) because the outlier addback is applied in fp32
+on the host and the fp16 cast loses some precision on the
+large-magnitude values; the resulting error is well within
+the bar.
+
+The fixture is shape-locked to 256x256x1; the other shape
+combos the spec lists (512x512, 1024x1024, 128x4096,
+4096x4096) require additional fixtures built with
+`tools/ane-mtp/build-tile640-matmul-fixture.py
+--out-dim N --in-dim M --n-tokens K`. The dispatch's
+shape-mismatch check returns false so the scheduler
+routes those shapes to ggml-cpu/Metal until the matching
+.mlmodelc is built (Phase 0.5).
+
+### 6.7 Open question for Phase 0.5
+
+The 5-trit-base-243 dequant happens on the host in Phase
+0. The MIL graph for the equivalent dequant inside the
+bundle is ~50 elementwise ops per page (5-trit unpack via
+a 243-entry LUT, multiply by page_scale * lane_scale,
+scatter the sparse outlier vals). A Phase 0.5 spike
+should attempt the fused path: a 7-input .mlmodelc that
+takes the 6 weight components + activations and computes
+the matmul internally. The expected gain is the 0.3-1.3 ms
+prologue the host dequant pays (per the research doc
+Section 2.1), at the cost of a more complex MIL graph
+and per-shape fixture rebuilds. The architect decides
+whether the throughput win justifies the complexity.
+
 ---
 
 ## Appendix A: Source References
