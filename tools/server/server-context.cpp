@@ -23,6 +23,7 @@
 #include <exception>
 #include <memory>
 #include <filesystem>
+#include <set>
 #include <utility>
 #include <fstream>
 
@@ -2529,9 +2530,45 @@ private:
                     }
                     SRV_DBG("n_idle_slots = %d, n_processing_slots = %d\n", n_idle_slots, n_processing_slots);
 
+                    json memory_data = json::array();
+                    if (task.metrics_memory) {
+                        // the multimodal projector allocates outside the llama context
+                        std::map<std::string, size_t> mmproj_mem;
+                        if (mctx) {
+                            for (const auto & [dev, size] : mtmd_get_ctx_memory_usage(mctx)) {
+                                const bool is_host = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+                                mmproj_mem[is_host ? "Host" : ggml_backend_dev_name(dev)] += size;
+                            }
+                        }
+                        const std::vector<common_memory_breakdown_row> mb = common_memory_breakdown_get(ctx_tgt);
+                        for (const common_memory_breakdown_row & row : mb) {
+                            json entry = {
+                                { "name",    row.name        },
+                                { "model",   row.mem.model   },
+                                { "context", row.mem.context },
+                                { "compute", row.mem.compute },
+                            };
+                            const auto it = mmproj_mem.find(row.name);
+                            if (it != mmproj_mem.end()) {
+                                entry["mmproj"] = it->second;
+                                mmproj_mem.erase(it);
+                            }
+                            if (row.is_device) {
+                                entry["total"] = row.mem.total;
+                                entry["free"]  = row.mem.free;
+                            }
+                            memory_data.push_back(std::move(entry));
+                        }
+                        // devices used by the projector but not the model
+                        for (const auto & [name, size] : mmproj_mem) {
+                            memory_data.push_back(json {{ "name", name }, { "mmproj", size }});
+                        }
+                    }
+
                     auto res = std::make_unique<server_task_result_metrics>();
                     res->id                  = task.id;
                     res->slots_data          = std::move(slots_data);
+                    res->memory_data         = std::move(memory_data);
                     res->n_idle_slots        = n_idle_slots;
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
@@ -4044,6 +4081,7 @@ server_context_meta server_context::get_meta() const {
         /* model_vocab_type       */ llama_vocab_type(impl->vocab),
         /* model_vocab_n_tokens   */ llama_vocab_n_tokens(impl->vocab),
         /* model_n_ctx_train      */ llama_model_n_ctx_train(impl->model_tgt),
+        /* model_n_layer          */ llama_model_n_layer(impl->model_tgt),
         /* model_n_embd_inp       */ llama_model_n_embd(impl->model_tgt),
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
@@ -4394,6 +4432,7 @@ void server_routes::init_routes() {
         {
             server_task task(SERVER_TASK_TYPE_METRICS);
             task.id = res->rd.get_new_id();
+            task.metrics_memory = true;
             res->rd.post_task(std::move(task), true); // high-priority task
         }
 
@@ -4461,10 +4500,50 @@ void server_routes::init_routes() {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
                     {"value",  (float) res_task->n_busy_slots_total / std::max((float) res_task->n_decode_total, 1.f)}
+            },{
+                    {"name",  "model_n_layer"},
+                    {"help",  "Number of layers in the model."},
+                    {"value",  meta->model_n_layer}
             }}}
         };
 
+        // memory is reported per device, so several series share each metric name
+        {
+            struct mem_field {
+                const char * key;
+                const char * help;
+            };
+            static constexpr mem_field mem_fields[] = {
+                { "model",   "Memory allocated for the model weights, in bytes."          },
+                { "context", "Memory allocated for the context, in bytes."                },
+                { "compute", "Memory allocated for compute buffers, in bytes."            },
+                { "mmproj",  "Memory allocated for the multimodal projector, in bytes."   },
+                { "total",   "Total memory of the device, in bytes."                      },
+                { "free",    "Free memory of the device, in bytes."                       },
+            };
+
+            json & gauges = all_metrics_def.at("gauge");
+            for (const mem_field & field : mem_fields) {
+                for (const json & entry : res_task->memory_data) {
+                    // skip fields the row does not carry: mmproj is optional, total and free exist only on device rows
+                    const auto it = entry.find(field.key);
+                    if (it == entry.end()) {
+                        continue;
+                    }
+                    gauges.push_back(json {
+                        { "name",   std::string("memory_") + field.key + "_bytes" },
+                        { "help",   field.help                                    },
+                        { "labels", json {{ "device", entry.at("name") }}         },
+                        { "value",  *it                                           },
+                    });
+                }
+            }
+        }
+
         std::stringstream prometheus;
+
+        // a metric name may carry several label sets, but is only described once
+        std::set<std::string> described;
 
         for (const auto & el : all_metrics_def.items()) {
             const auto & type        = el.key();
@@ -4474,10 +4553,37 @@ void server_routes::init_routes() {
                 const std::string name = metric_def.at("name");
                 const std::string help = metric_def.at("help");
 
-                auto value = json_value(metric_def, "value", 0.);
-                prometheus << "# HELP llamacpp:" << name << " " << help  << "\n"
-                            << "# TYPE llamacpp:" << name << " " << type  << "\n"
-                            << "llamacpp:"        << name << " " << value << "\n";
+                if (described.insert(name).second) {
+                    prometheus << "# HELP llamacpp:" << name << " " << help << "\n"
+                               << "# TYPE llamacpp:" << name << " " << type << "\n";
+                }
+
+                std::string labels;
+                if (metric_def.contains("labels")) {
+                    for (const auto & label : metric_def.at("labels").items()) {
+                        // the exposition format requires backslash, quote and newline escaped in label values
+                        std::string value = label.value().get<std::string>();
+                        string_replace_all(value, "\\", "\\\\");
+                        string_replace_all(value, "\"", "\\\"");
+                        string_replace_all(value, "\n", "\\n");
+                        labels += labels.empty() ? "{" : ",";
+                        labels += label.key() + "=\"" + value + "\"";
+                    }
+                    if (!labels.empty()) {
+                        labels += "}";
+                    }
+                }
+
+                // dump() keeps integers exact, streaming them as double rounds to 6 significant digits
+                // floats stay on the stream because dump() writes inf and nan as null
+                const json value = json_value(metric_def, "value", json(0));
+                prometheus << "llamacpp:" << name << labels << " ";
+                if (value.is_number_integer()) {
+                    prometheus << value.dump();
+                } else {
+                    prometheus << value.get<double>();
+                }
+                prometheus << "\n";
             }
         }
 
@@ -4485,6 +4591,43 @@ void server_routes::init_routes() {
         res->content_type = "text/plain; version=0.0.4";
         res->status = 200;
         res->data = prometheus.str();
+        return res;
+    };
+
+    this->get_memory = [this](const server_http_req & req) {
+        auto res = create_response();
+        if (!params.endpoint_memory) {
+            res->error(format_error_response("This server does not support memory endpoint. Start it with `--memory`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        {
+            server_task task(SERVER_TASK_TYPE_METRICS);
+            task.id = res->rd.get_new_id();
+            task.metrics_memory = true;
+            res->rd.post_task(std::move(task), true); // high-priority task
+        }
+
+        auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        // TODO: get rid of this dynamic_cast
+        auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+        GGML_ASSERT(res_task != nullptr);
+
+        res->ok(json {
+            { "n_layer", meta->model_n_layer               },
+            { "data",    std::move(res_task->memory_data)  },
+        });
         return res;
     };
 
@@ -4597,6 +4740,7 @@ void server_routes::init_routes() {
             { "endpoint_slots",              params.endpoint_slots },
             { "endpoint_props",              params.endpoint_props },
             { "endpoint_metrics",            params.endpoint_metrics },
+            { "endpoint_memory",             params.endpoint_memory },
             { "ui",                          params.ui },
             { "ui_settings",                 meta->json_ui_settings },
             { "chat_template",               tmpl_default },
