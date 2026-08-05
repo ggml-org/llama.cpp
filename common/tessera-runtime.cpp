@@ -119,6 +119,9 @@ tessera_rt * tessera_rt_load(
 
     params.speculative.draft.n_max = draft_max;
     params.speculative.types       = { COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE };
+    // default (-1) means "auto", which would let the drafter float to a
+    // GPU even when the caller pinned the trunk to CPU; inherit instead
+    params.speculative.draft.n_gpu_layers = n_gpu_layers;
 
     rt->draft_max = draft_max;
 
