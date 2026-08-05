@@ -13,7 +13,20 @@ final class TesseraLLMProviderFactoryTests: XCTestCase {
     }
 
     func testMakeOnDevice() {
-        let provider = TesseraLLMProviderFactory.make(type: .onDevice, config: .init())
+        // The factory only requires a resolvable model path; GGUF validity
+        // is checked later, at model load. Point at a temp file so the test
+        // does not depend on the model library of the machine running it
+        // (with an empty config the factory scans ~/Models and falls back
+        // to PlaceholderLLMProvider when nothing is found).
+        let modelURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tessera-ondevice-factory-\(UUID().uuidString).gguf")
+        FileManager.default.createFile(atPath: modelURL.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: modelURL) }
+
+        let provider = TesseraLLMProviderFactory.make(
+            type: .onDevice,
+            config: TesseraLLMProviderConfig(onDeviceModelPath: modelURL.path)
+        )
         XCTAssertTrue(provider is LlamaLLMProvider)
     }
 
