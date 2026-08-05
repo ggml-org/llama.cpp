@@ -387,7 +387,7 @@ class SensitivityScorer:
         self,
         *,
         decay: float = 0.9,
-        weights: tuple[float, float, float] = metrics.DEFAULT_WEIGHTS,
+        weights: tuple[float, float, float, float] = metrics.DEFAULT_WEIGHTS,
         total_layers: int = 0,
         model_role: str = "trunk",
     ) -> None:
@@ -412,19 +412,32 @@ class SensitivityScorer:
         # DataFrame column is rebuilt each iteration from this dict
         # via a left-join.
         self._prev_scores: dict[str, float] = {}
-        # Most recent (im, grad, layer) component dicts, kept for
-        # debug / log output. Same contract as before.
+        # Phase 0.5: the raw_components tuple is now 4-tuple
+        # (im, grad, layer, exl2). The EXL2 component is
+        # the per-layer error from the EXL2 estimator
+        # (``exl2_layer_stats`` in the unified DuckDB);
+        # when no EXL2 data is available, the 4th element
+        # is an empty dict and the fold contributes zero
+        # (the default ``w_exl2 = 0.0`` keeps the math
+        # byte-equivalent to the 3-component path).
         self._raw_components: tuple[
-            metrics.ComponentScores, metrics.ComponentScores, metrics.ComponentScores
-        ] = ({}, {}, {})
+            metrics.ComponentScores,
+            metrics.ComponentScores,
+            metrics.ComponentScores,
+            metrics.ComponentScores,
+        ] = ({}, {}, {}, {})
 
     def raw_components(self) -> tuple[
-        metrics.ComponentScores, metrics.ComponentScores, metrics.ComponentScores
+        metrics.ComponentScores,
+        metrics.ComponentScores,
+        metrics.ComponentScores,
+        metrics.ComponentScores,
     ]:
-        """Return the most recent (imatrix, gradient, layer_prior) components.
+        """Return the most recent (imatrix, gradient, layer_prior, exl2) components.
 
         Exposed for debug; the EMA-tracked scores are what the planner
-        consumes.
+        consumes. The 4th element is the EXL2 per-layer error
+        (Phase 0.5); empty when no EXL2 data is available.
         """
         return self._raw_components
 
@@ -432,13 +445,15 @@ class SensitivityScorer:
         self,
         df: pl.DataFrame,
         imatrix: Mapping[str, float] | None,
+        exl2_per_layer_errors: Mapping[int, float] | None = None,
     ) -> pl.DataFrame:
         """Compute fresh sensitivity scores and update the EMA in-place.
 
         Returns the input DataFrame augmented with five columns:
         ``imatrix_magnitude``, ``gradient_proxy``,
-        ``layer_position_prior``, ``sensitivity_score`` (the
-        per-iteration weighted sum), and ``sensitivity_ema`` (the
+        ``layer_position_prior``, ``exl2_per_layer_error``
+        (Phase 0.5), ``sensitivity_score`` (the per-iteration
+        weighted sum), and ``sensitivity_ema`` (the
         EMA-tracked value). The EMA state is updated so the next
         iteration's ``sensitivity_ema`` continues smoothly from this
         one.
@@ -446,6 +461,16 @@ class SensitivityScorer:
         ``imatrix`` may be ``None`` if no imatrix is available; the
         scorer falls back to gradient + layer-prior only and
         rebalances the weights so the total still sums to 1.0.
+
+        ``exl2_per_layer_errors`` (Phase 0.5) is the optional
+        per-layer error map the EXL2 estimator writes to
+        ``exl2_layer_stats``. When ``None`` or empty, the
+        EXL2 component is all-zero and the fold contributes
+        nothing (the default ``w_exl2 = 0.0`` keeps the
+        math byte-equivalent to the 3-component path).
+        When the map has entries, the EXL2 component is the
+        per-tensor peak-1 normalization of the per-layer
+        error, clipped to ``[0, 1]``.
         """
         names = df["tensor"].to_list()
         mse_list = df["mse"].to_list()
@@ -473,23 +498,41 @@ class SensitivityScorer:
                 names, total_layers=self.total_layers, floor=0.0, ceiling=1.0
             )
         )
-        self._raw_components = (im, grad, layer)
+        # Phase 0.5: the EXL2 per-layer error component.
+        # Empty when the caller doesn't pass the
+        # ``exl2_per_layer_errors`` map; the fold
+        # contributes zero (the default ``w_exl2 = 0.0``
+        # default means the term has no effect either
+        # way). The peak-1 normalization in
+        # ``metrics.exl2_per_layer_error`` matches the
+        # other components' scale.
+        exl2 = metrics.sanitise(
+            metrics.exl2_per_layer_error(exl2_per_layer_errors, names)
+        )
+        self._raw_components = (im, grad, layer, exl2)
 
         # Rebalance the weights when the imatrix is missing so the surviving
         # two components carry the full mass.  This is the only place that
         # knows about the original weights; the planner just sees the
-        # post-rebalance value.
+        # post-rebalance value. Phase 0.5: the EXL2 weight passes through
+        # unchanged (``w_exl2 = 0.0`` by default; the rebalance does not
+        # touch it because the EXL2 source is opt-in, not auto-derived
+        # from the imatrix / gradient / layer components).
         if not im:
-            w_im, w_grad, w_layer = (
+            w_im, w_grad, w_layer, w_exl2 = (
                 0.0,
                 self.weights[1] + self.weights[0] * 0.6,
                 self.weights[2] + self.weights[0] * 0.4,
+                self.weights[3],
             )
-            total = w_im + w_grad + w_layer
-            weights = (w_im / total, w_grad / total, w_layer / total)
+            total = w_im + w_grad + w_layer + w_exl2
+            weights = (
+                w_im / total, w_grad / total,
+                w_layer / total, w_exl2 / total,
+            )
         else:
             weights = self.weights
-        w_im, w_grad, w_layer = weights
+        w_im, w_grad, w_layer, w_exl2 = weights
 
         # Build the per-tensor score column. The polars expressions
         # reference the component dicts via a per-row lookup using
@@ -504,6 +547,7 @@ class SensitivityScorer:
         im_lookup = dict(im)
         grad_lookup = dict(grad)
         layer_lookup = dict(layer)
+        exl2_lookup = dict(exl2)
         out = df.with_columns(
             pl.col("tensor").replace_strict(
                 im_lookup, return_dtype=pl.Float64,
@@ -517,11 +561,24 @@ class SensitivityScorer:
                 layer_lookup, return_dtype=pl.Float64,
                 default=0.0,
             ).alias("layer_position_prior"),
+            # Phase 0.5: the EXL2 per-layer error
+            # component. The column is peak-1
+            # normalized in ``[0, 1]`` to match the
+            # scale of the other components; when
+            # the EXL2 source is empty the lookup
+            # defaults to 0.0 and the fold
+            # contributes nothing (the default
+            # ``w_exl2 = 0.0``).
+            pl.col("tensor").replace_strict(
+                exl2_lookup, return_dtype=pl.Float64,
+                default=0.0,
+            ).alias("exl2_per_layer_error"),
         )
         out = out.with_columns(
             (w_im * pl.col("imatrix_magnitude")
              + w_grad * pl.col("gradient_proxy")
              + w_layer * pl.col("layer_position_prior")
+             + w_exl2 * pl.col("exl2_per_layer_error")
             ).alias("sensitivity_score")
         )
 
@@ -565,7 +622,7 @@ class SensitivityScorer:
 
     def reset(self) -> None:
         self._prev_scores = {}
-        self._raw_components = ({}, {}, {})
+        self._raw_components = ({}, {}, {}, {})
 
 
 # ---------------------------------------------------------------------------
@@ -1111,6 +1168,7 @@ class OrchestratorLoop:
         self,
         l4_report: Mapping[str, object],
         imatrix: Mapping[str, float] | None = None,
+        exl2_per_layer_errors: Mapping[int, float] | None = None,
     ) -> list[RequantPlan]:
         """Execute the orchestrator loop until termination.
 
@@ -1162,7 +1220,19 @@ class OrchestratorLoop:
         ))
 
         for iteration in range(1, self.max_iterations + 1):
-            df = self.scorer.score(df, imatrix)
+            # Phase 0.5: pass the EXL2 per-layer
+            # errors to the scorer. The default
+            # ``None`` is the opt-in path (the
+            # 4th component is empty, the fold
+            # contributes zero). When the orchestrator
+            # has a DB reference and ``w_exl2 > 0``,
+            # the caller passes the per-layer map
+            # here; the next commit in this series
+            # wires the lookup.
+            df = self.scorer.score(
+                df, imatrix,
+                exl2_per_layer_errors=exl2_per_layer_errors,
+            )
             plan = self.planner.plan(iteration, df)
             self.history.append(plan)
 
@@ -1930,6 +2000,28 @@ def _build_parser() -> argparse.ArgumentParser:
         default=metrics.DEFAULT_WEIGHTS[2],
         help="Weight of the layer-position component (default 0.2)",
     )
+    # Phase 0.5: the EXL2 per-layer error is the 4th
+    # evidence signal. The default ``w_exl2 = 0.0``
+    # keeps the path opt-in until the first EXL2 run
+    # lands (the retune's l5_weights row is also a
+    # 3-tuple; the EXL2 weight is not retuned
+    # automatically; the operator sets it explicitly
+    # via this flag when the cross-check is on).
+    parser.add_argument(
+        "--w-exl2",
+        type=float,
+        default=metrics.DEFAULT_EXL2_WEIGHT,
+        help=(
+            "Weight of the EXL2 per-layer error component "
+            "(default 0.0, opt-in). When w_exl2 > 0, the "
+            "orchestrator reads the exl2_layer_stats DuckDB "
+            "table and folds the per-layer error into the "
+            "per-tensor sensitivity score. Set this flag to "
+            "e.g. 0.2 after the first EXL2 run lands to "
+            "weight the EXL2 signal alongside the "
+            "imatrix / gradient / layer components."
+        ),
+    )
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -2156,8 +2248,16 @@ def main(argv: list[str] | None = None) -> int:
     # the consumer half of the "did this requant plan reduce
     # error?" feedback loop: the previous generation's
     # residual determines this generation's weights.
-    w_im, w_grad, w_layer = (
+    # Phase 0.5: the 4th weight is the EXL2 per-layer
+    # error (``w_exl2``); the l5_weights row is still a
+    # 3-tuple (the retune does not learn the EXL2
+    # component; the operator sets ``w_exl2`` explicitly
+    # via the --w-exl2 flag when the cross-check is on).
+    # The aggregate_weights call below returns 3 values;
+    # the 4th is appended from ``args.w_exl2``.
+    w_im, w_grad, w_layer, w_exl2 = (
         args.w_imatrix, args.w_gradient, args.w_layer,
+        args.w_exl2,
     )
     retune_source = None
     per_family_top_fraction: dict[str, float] = {}
@@ -2281,6 +2381,10 @@ def main(argv: list[str] | None = None) -> int:
                 weights_df,
                 base_weights=(args.w_imatrix, args.w_gradient, args.w_layer),
             )
+            # Phase 0.5: w_exl2 stays at the flag value
+            # (the l5_weights row does not carry the EXL2
+            # component; the operator sets it explicitly
+            # via --w-exl2 when the cross-check is on).
             retune_source = str(args.retune_from_db)
             role_label = (
                 f" (role={args.model_role})" if args.model_role is not None else ""
@@ -2288,7 +2392,8 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"[l5] retune-from-db: {weights_df.height} family row(s)"
                 f"{role_label} "
-                f"-> w=({w_im:.3f}, {w_grad:.3f}, {w_layer:.3f})",
+                f"-> w=({w_im:.3f}, {w_grad:.3f}, {w_layer:.3f}, "
+                f"w_exl2={w_exl2:.3f})",
                 file=sys.stderr,
             )
 
@@ -2342,7 +2447,11 @@ def main(argv: list[str] | None = None) -> int:
 
     scorer = SensitivityScorer(
         decay=args.ema_decay,
-        weights=(w_im, w_grad, w_layer),
+        # Phase 0.5: 4-tuple weights (w_im, w_grad,
+        # w_layer, w_exl2). The default w_exl2=0.0
+        # keeps the EXL2 term zero; the operator
+        # opts in via --w-exl2.
+        weights=(w_im, w_grad, w_layer, w_exl2),
         total_layers=args.total_layers,
         # Phase 16: role is plumbed through the scorer;
         # every per-tensor RequantAction gets the role
@@ -2488,7 +2597,19 @@ def main(argv: list[str] | None = None) -> int:
                 "Pass --retune-from-db PATH or "
                 "--no-targeted-recal to bypass.\n"
             )
-    plans = orchestrator.run(l4_report, imatrix)
+    plans = orchestrator.run(
+        l4_report, imatrix,
+        # Phase 0.5: the EXL2 per-layer errors
+        # are passed through to the scorer when
+        # ``w_exl2 > 0`` and the DB has rows.
+        # The next commit in this series wires
+        # the TesseraDB.get_exl2_per_layer_errors
+        # call; for now the value is None
+        # (the path is opt-in; the operator
+        # sets --w-exl2 and the lookup will be
+        # wired in the next commit).
+        exl2_per_layer_errors=None,
+    )
 
     # History file defaults next to the policy file.
     if args.history is None and args.policy is not None:

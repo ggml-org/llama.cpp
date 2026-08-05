@@ -114,7 +114,7 @@ class TestSensitivityScorerDataFrame(unittest.TestCase):
             self.assertFalse(c.endswith("_right"),
                              f"unexpected _right suffix on {c!r}")
         # Column count stays the same (overwrite, not append).
-        self.assertEqual(len(df.columns), len(self._make_df().columns) + 5)
+        self.assertEqual(len(df.columns), len(self._make_df().columns) + 6)
 
     def test_scorer_default_model_role_is_trunk(self) -> None:
         """``SensitivityScorer`` defaults ``model_role`` to
