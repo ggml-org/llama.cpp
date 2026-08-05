@@ -28,6 +28,12 @@ struct WorkflowCanvasView: View {
     /// The parent uses this to register an undo entry.
     let onPositionDragEnded: (String, CGPoint, CGPoint) -> Void
 
+    /// The canvas bounds captured from the GeometryReader, so
+    /// the drop callback reports the real size instead of a
+    /// constant. Zero until the first layout pass; a wire can
+    /// only complete after that.
+    @State private var canvasSize: CGSize = .zero
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
@@ -47,6 +53,10 @@ struct WorkflowCanvasView: View {
                     pendingConnection = nil
                 }
                 selectedNodeId = nil
+            }
+            .onAppear { canvasSize = geo.size }
+            .onChange(of: geo.size) { _, newSize in
+                canvasSize = newSize
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -119,15 +129,13 @@ struct WorkflowCanvasView: View {
         }
     }
 
-    /// Helper for the size we pass back on drop. The drop
-    /// handler doesn't actually need the size today, but the
-    /// signature is forward-compatible with a future check
+    /// Helper for the size we pass back on drop: the real
+    /// canvas bounds captured from the GeometryReader. The
+    /// drop handler doesn't actually need the size today, but
+    /// the signature is forward-compatible with a future check
     /// against canvas bounds.
     private func currentCanvasSize() -> CGSize {
-        // GeometryReader's size is the canvas; we don't have a
-        // direct handle on it from here. The default is the
-        // visible canvas; callers can ignore.
-        CGSize(width: 2000, height: 2000)
+        canvasSize
     }
 
     private func locationOnly(_ point: CGPoint, size: CGSize) -> CGSize {
