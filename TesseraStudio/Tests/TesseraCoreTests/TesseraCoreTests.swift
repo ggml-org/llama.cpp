@@ -52,6 +52,75 @@ final class TesseraFFIBridgeStubTests: XCTestCase {
         XCTAssertFalse(caps.ffiAvailable)
         XCTAssertEqual(caps.ffiVersion, "tessera-ffi-stub")
     }
+
+    // Model-context stubs: the SwiftPM stub returns NULL from
+    // tessera_load_model and the "use the CLI" code from the *_model
+    // entry points. The bridge exposes that as TesseraEngineError
+    // (loadModel) and .fallbackToCLI (the model-context ops).
+    func testStubModelOpsFallBackToCLI() async {
+        // loadModel throws engineUnavailable because the stub returns NULL.
+        // (The check `!TesseraFFIBridge.isAvailable` runs before throwing
+        // modelLoadFailed, so the SwiftPM stub path is the engineUnavailable
+        // case rather than the generic "bad path" case.)
+        do {
+            _ = try await TesseraFFIBridge.loadModel(path: "/tmp/nonexistent.gguf")
+            XCTFail("expected throw from stub loadModel")
+        } catch TesseraEngineError.engineUnavailable {
+            // expected
+        } catch {
+            XCTFail("expected TesseraEngineError.engineUnavailable, got \(error)")
+        }
+
+        // Without a handle we still exercise the static *_model methods to
+        // confirm they handle a nil handle by returning the expected
+        // outcome. The bridge forwards to the actor; the actor's
+        // evolve/evaluate/convert call the C entry points, which the stub
+        // resolves to the fallback code. We synthesise a nil handle to
+        // exercise the early-return path inside the actor (the C stub
+        // also tolerates a NULL handle and returns 1 / NULL).
+        let nilHandle = TesseraModelHandle(raw: nil)
+        let evolveOutcome = await TesseraFFIBridge.evolveModel(handle: nilHandle)
+        XCTAssertEqual(evolveOutcome, .fallbackToCLI)
+        let evaluateOutcome = await TesseraFFIBridge.evaluateModel(handle: nilHandle)
+        XCTAssertEqual(evaluateOutcome, .fallbackToCLI)
+        let convertOutcome = await TesseraFFIBridge.convertModel(
+            handle: nilHandle, output: "/tmp/out.mlmodelc", format: "coreml"
+        )
+        XCTAssertEqual(convertOutcome, .fallbackToCLI)
+    }
+
+    // Exercise the actor's lifecycle: loadModel throws on the stub
+    // (engineUnavailable) and free is a no-op even with a nil handle.
+    // The actor's Box bookkeeping is verified by the test, which would
+    // crash if we double-freed (the stub is a no-op so it cannot tell).
+    func testEngineContextLifecycle() async {
+        // The actor is a singleton; the test is single-async so there is
+        // no contention on `live` from concurrent callers.
+        do {
+            _ = try await TesseraEngineContext.shared.loadModel(path: "/tmp/x.gguf")
+            XCTFail("expected throw from loadModel on stub")
+        } catch TesseraEngineError.engineUnavailable {
+            // expected on the SwiftPM stub
+        } catch {
+            XCTFail("expected TesseraEngineError.engineUnavailable, got \(error)")
+        }
+
+        // free is safe with a nil handle and a never-tracked handle -
+        // both must be silent no-ops, not crashes.
+        let nilHandle = TesseraModelHandle(raw: nil)
+        await TesseraEngineContext.shared.free(handle: nilHandle)
+        let randomHandle = TesseraModelHandle(raw: OpaquePointer(bitPattern: 0xDEADBEEF))
+        await TesseraEngineContext.shared.free(handle: randomHandle)
+    }
+
+    // TesseraModelHandle must be Sendable so it can cross the actor
+    // boundary. This is a compile-time check; the test exists to lock
+    // the surface so a future refactor does not silently drop the
+    // @unchecked Sendable conformance.
+    func testTesseraModelHandleIsSendable() {
+        let h: any Sendable = TesseraModelHandle(raw: nil)
+        XCTAssertNotNil(h)
+    }
 }
 
 final class QuantizationReceiptTests: XCTestCase {

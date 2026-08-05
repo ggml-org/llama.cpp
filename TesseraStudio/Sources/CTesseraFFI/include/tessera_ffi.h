@@ -23,6 +23,7 @@
 #define TESSERA_FFI_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +64,47 @@ char *tessera_inspect_sidecar(const char *sidecar_path);
 
 // List .gguf models in dir; returns a JSON array string (caller frees) or NULL.
 char *tessera_list_models(const char *dir);
+
+// Opaque handle to a loaded model context. Wraps a llama_model* on the
+// native side; the Swift side keeps it as an unowned OpaquePointer. The
+// matching tessera_free_model() call is mandatory - the handle owns the
+// underlying native object.
+typedef struct tessera_model * tessera_model_handle_t;
+
+// Load a model from a GGUF file. Returns NULL on failure (bad path, parse
+// error, OOM). The caller owns the returned handle and must release it
+// with tessera_free_model(). The optional n_gpu_layers parameter may be
+// NULL; when non-NULL it points to an int32_t with the GPU layer count
+// (0 = CPU only, matches llama.cpp's llama_model_default_params.n_gpu_layers
+// default of 0 for safety on first cut).
+tessera_model_handle_t tessera_load_model(const char *model_path,
+                                          const int32_t *n_gpu_layers);
+
+// Release a model context. NULL is a no-op. Calling with a handle already
+// freed is undefined behaviour; the Swift actor centralises ownership to
+// prevent double-free.
+void tessera_free_model(tessera_model_handle_t handle);
+
+// Run AWQ-evolve policy search against the loaded model. Returns 0 on
+// success, 1 when the FFI implementation is not yet wired (TODO marker - the
+// caller should fall back to the CLI), and a negative code on a hard error
+// (bad handle, malformed config).
+int tessera_evolve_model(tessera_model_handle_t handle,
+                         const char *config_json);
+
+// Run a perplexity / KL forward probe over the loaded model. Returns a
+// heap-allocated JSON string (caller frees via tessera_free_string) on
+// success, NULL on bad arguments, and a structured {"ok":false,...} JSON
+// when the implementation is not yet wired.
+char *tessera_evaluate_model(tessera_model_handle_t handle,
+                             const char *config_json);
+
+// Convert the loaded model to the named format (e.g. "coreml") and write
+// to output_path. Returns 0 on success, 1 when the FFI implementation is
+// not yet wired, and a negative code on a hard error.
+int tessera_convert_model(tessera_model_handle_t handle,
+                          const char *output_path,
+                          const char *format);
 
 // Free a string previously returned by this library. NULL is a no-op.
 void tessera_free_string(char *s);

@@ -1,10 +1,25 @@
 // tessera_ffi.cpp - real Tessera engine FFI implementation.
 //
 // Implements the C API declared in include/tessera_ffi.h by calling the
-// C++ engine modules compiled into llama-quantize-impl. Operations that
-// need a loaded model context (evolve, evaluate, convert) parse and
-// validate their inputs, then return a structured error so the Swift
-// layer can fall back to the CLI bridge for those specific calls.
+// C++ engine modules compiled into llama-quantize-impl.
+//
+// Two paths share this file:
+//
+//   1. No-handle path (tessera_quantize, tessera_calibrate,
+//      tessera_evolve, tessera_evaluate, tessera_convert). The first two
+//      are fully implemented; the rest parse and validate the input and
+//      return a structured "use the CLI" marker so the Swift layer can
+//      fall back when no model context is available.
+//
+//   2. Model-context path (tessera_load_model, tessera_free_model,
+//      tessera_evolve_model, tessera_evaluate_model,
+//      tessera_convert_model). The first two are fully implemented - they
+//      wrap llama.cpp's llama_model_load_from_file / llama_model_free.
+//      The *_model() variants validate the handle, parse the JSON config,
+//      and either run the engine or return a structured
+//      "TODO: requires engine impl ..." JSON so the caller can fall back.
+//      The TODO markers live in the *_model() bodies; grep for
+//      "TODO: requires engine impl" to find the wiring work.
 
 #include "include/tessera_ffi.h"
 
@@ -14,6 +29,9 @@
 #include "tessera-awq.h"
 #include "tessera-coreml-builder.h"
 #include "tessera-sidecar-v3.h"
+#include "tessera-ppl.h"
+
+#include "llama.h"
 
 #include <nlohmann/json.hpp>
 
@@ -22,9 +40,11 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <new>
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <cstdio>
 
 using json = nlohmann::json;
 
@@ -283,6 +303,205 @@ char * tessera_list_models(const char * dir) {
     closedir(d);
 
     return ts_ffi_strdup(arr.dump());
+}
+
+// --- model-context path (header added 2026-08) ---
+//
+// The native impl currently supports load/free plus argument validation on
+// the *_model() variants. The actual engine wiring (walk llama_model's
+// ggml tensors to feed ts_awq_layer / ts_coreml_builder_tensor, build a
+// ts_ppl_forward_fn over a llama_context, ...) is staged work - the *_model
+// variants return a structured "TODO: requires engine impl ..." JSON so the
+// Swift layer can keep its fallback path live while that wiring lands.
+// Each TODO is a single line in the response so the next worker can grep
+// for "TODO: requires engine impl" to find what is missing.
+
+// Opaque model wrapper. Holds the llama_model* and the path it was loaded
+// from (used for the TODO note so users know which model triggered the
+// fallback). Allocated by tessera_load_model, freed by tessera_free_model.
+struct tessera_model {
+    llama_model * m;
+    std::string   path;
+};
+
+// Process-wide flag set the first time the FFI is exercised. Cached so the
+// env-var read happens once. When the user sets TESSERA_FFI_LOG=1 every
+// FFI entry point prints a one-line trace to stderr (useful for Worker's 3
+// e2e smoke test, which currently shells out to tessera-cli - this lets it
+// see the in-process calls too).
+static bool ts_ffi_log_enabled() {
+    static const int kState = []() {
+        const char * v = std::getenv("TESSERA_FFI_LOG");
+        return (v && v[0] && v[0] != '0') ? 1 : 0;
+    }();
+    return kState == 1;
+}
+
+static void ts_ffi_log(const char * op, const char * detail = nullptr) {
+    if (!ts_ffi_log_enabled()) {
+        return;
+    }
+    if (detail && detail[0]) {
+        std::fprintf(stderr, "[tessera-ffi] %s: %s\n", op, detail);
+    } else {
+        std::fprintf(stderr, "[tessera-ffi] %s\n", op);
+    }
+}
+
+// Build a structured "not yet implemented" JSON for a *_model() variant.
+// The Swift layer turns this into a .fallbackToCLI; the note is the single
+// source of truth for what is missing so the next worker can grep the
+// stderr trace to triage.
+static std::string ts_ffi_model_todo(const char * op, const std::string & note) {
+    json j;
+    j["ok"]        = false;
+    j["operation"] = std::string(op) + "_model";
+    j["note"]      = note;
+    return j.dump();
+}
+
+// Parse the GPU layers override from the (currently unused) extra JSON
+// fields. We accept the parameter for forward compatibility - Worker 1 may
+// add a "n_gpu_layers" key to the config, but keep the API stable.
+static int32_t ts_ffi_resolve_gpu_layers(const int32_t * n_gpu_layers_in) {
+    if (n_gpu_layers_in) {
+        return *n_gpu_layers_in;
+    }
+    return 0;
+}
+
+tessera_model_handle_t tessera_load_model(const char * model_path,
+                                          const int32_t * n_gpu_layers) {
+    if (!model_path) {
+        ts_ffi_log("load_model", "NULL model_path");
+        return nullptr;
+    }
+
+    // Use llama.cpp defaults; Worker 1 may want to add GPU layers later
+    // but the FFI surface is intentionally simple for the first cut.
+    llama_model_params params = llama_model_default_params();
+    params.n_gpu_layers = ts_ffi_resolve_gpu_layers(n_gpu_layers);
+
+    ts_ffi_log("load_model", model_path);
+    llama_model * m = llama_model_load_from_file(model_path, params);
+    if (!m) {
+        ts_ffi_log("load_model", "llama_model_load_from_file returned NULL");
+        return nullptr;
+    }
+
+    auto * wrapper = new (std::nothrow) tessera_model{m, model_path};
+    if (!wrapper) {
+        llama_model_free(m);
+        ts_ffi_log("load_model", "wrapper alloc failed");
+        return nullptr;
+    }
+    ts_ffi_log("load_model", "ok");
+    return reinterpret_cast<tessera_model_handle_t>(wrapper);
+}
+
+void tessera_free_model(tessera_model_handle_t handle) {
+    if (!handle) {
+        return;
+    }
+    auto * wrapper = reinterpret_cast<tessera_model *>(handle);
+    if (wrapper->m) {
+        llama_model_free(wrapper->m);
+    }
+    delete wrapper;
+}
+
+// parse a ts_awq_evolve_params from config_json. Mirrors the no-handle
+// tessera_evolve() parser so the two paths accept the same keys. Returns
+// false on malformed JSON; on true the caller can use params as-is.
+static bool ts_ffi_parse_awq_params(const char * config_json,
+                                    ts_awq_evolve_params * out) {
+    out->population         = 32;
+    out->generations        = 100;
+    out->islands            = 4;
+    out->migration_interval = 10;
+    out->mutation_sigma     = 0.1f;
+    out->crossover_rate     = 0.7f;
+    out->heldout_weight     = 2.0f;
+    out->seed               = 42;
+    out->verbose            = false;
+
+    if (!config_json || !config_json[0]) {
+        return true;
+    }
+    try {
+        json cfg = json::parse(config_json);
+        if (cfg.contains("population"))         out->population         = cfg["population"].get<int64_t>();
+        if (cfg.contains("generations"))        out->generations        = cfg["generations"].get<int64_t>();
+        if (cfg.contains("islands"))            out->islands            = cfg["islands"].get<int64_t>();
+        if (cfg.contains("migration_interval")) out->migration_interval = cfg["migration_interval"].get<int64_t>();
+        if (cfg.contains("mutation_sigma"))     out->mutation_sigma     = cfg["mutation_sigma"].get<float>();
+        if (cfg.contains("crossover_rate"))     out->crossover_rate     = cfg["crossover_rate"].get<float>();
+        if (cfg.contains("heldout_weight"))     out->heldout_weight     = cfg["heldout_weight"].get<float>();
+        if (cfg.contains("seed"))               out->seed               = cfg["seed"].get<uint32_t>();
+        if (cfg.contains("verbose"))            out->verbose            = cfg["verbose"].get<bool>();
+    } catch (const json::exception &) {
+        return false;
+    }
+    return true;
+}
+
+int tessera_evolve_model(tessera_model_handle_t handle, const char * config_json) {
+    if (!handle) {
+        return -1;
+    }
+    ts_awq_evolve_params params;
+    if (!ts_ffi_parse_awq_params(config_json, &params)) {
+        return -2;
+    }
+    auto * wrapper = reinterpret_cast<tessera_model *>(handle);
+    ts_ffi_log("evolve_model", wrapper->path.c_str());
+
+    // TODO: requires engine impl: walk llama_model's ggml tensors and feed
+    // them as ts_awq_layer (one per quantizable weight) into
+    // ts_awq_evolve_all() with a ts_awq_default_eval evaluator. The
+    // current path returns the fallback marker so the Swift layer can
+    // route to tessera-cli's evolve subcommand.
+    return 1;
+}
+
+char * tessera_evaluate_model(tessera_model_handle_t handle, const char * config_json) {
+    if (!handle) {
+        return nullptr;
+    }
+    (void)config_json;
+    auto * wrapper = reinterpret_cast<tessera_model *>(handle);
+    ts_ffi_log("evaluate_model", wrapper->path.c_str());
+
+    // TODO: requires engine impl: build a ts_ppl_forward_fn over a
+    // llama_context (decode probe tokens, copy logits row-major into the
+    // output buffer) and call ts_ppl_probe() on the F32 reference path.
+    return ts_ffi_strdup(ts_ffi_model_todo("evaluate",
+        "build ts_ppl_forward_fn over llama_context decode -> "
+        "ts_ppl_probe on F32 reference path"));
+}
+
+int tessera_convert_model(tessera_model_handle_t handle,
+                          const char * output_path,
+                          const char * format) {
+    if (!handle) {
+        return -1;
+    }
+    if (!output_path || !format) {
+        return -1;
+    }
+    if (std::strcmp(format, "coreml") != 0) {
+        return -2; // unsupported format
+    }
+    auto * wrapper = reinterpret_cast<tessera_model *>(handle);
+    ts_ffi_log("convert_model", wrapper->path.c_str());
+
+    // TODO: requires engine impl: dequantize each llama_model ggml tensor
+    // to fp16 (one ts_coreml_builder_tensor per quantizable weight) and
+    // hand the array to ts_coreml_convert() with output_path as
+    // mlpackage_path. Until this lands the FFI returns the fallback
+    // marker so the Swift layer routes to tessera-cli's convert
+    // subcommand.
+    return 1;
 }
 
 void tessera_free_string(char * s) {
