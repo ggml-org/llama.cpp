@@ -580,10 +580,7 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
     }
 }
 
-// count the number of tensors in the graph that are flagged as inputs
-// this includes the graph nodes themselves as well as their src tensors
 static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
-    // map each input tensor to the graph nodes that use it
     std::unordered_map<const ggml_tensor *, std::vector<ggml_tensor *>> users;
     for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
         ggml_tensor * node = ggml_graph_node(gf, i);
@@ -691,7 +688,7 @@ void llama_context::sched_reserve() {
         n_splits_pp        = ggml_backend_sched_get_n_splits(sched.get());
         n_nodes_pp         = ggml_graph_n_nodes(gf);
         n_inputs_pp        = get_gf_res_reserve()->inputs.size();
-        n_input_tensors_pp = llama_graph_n_input_tensors(gf);
+        n_input_tensors_pp = this->n_input_tensors;
     }
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
@@ -704,7 +701,7 @@ void llama_context::sched_reserve() {
         n_splits_tg        = ggml_backend_sched_get_n_splits(sched.get());
         n_nodes_tg         = ggml_graph_n_nodes(gf);
         n_inputs_tg        = get_gf_res_reserve()->inputs.size();
-        n_input_tensors_tg = llama_graph_n_input_tensors(gf);
+        n_input_tensors_tg = this->n_input_tensors;
     }
 
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
@@ -2531,6 +2528,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * gf = model.build_graph(gparams);
 
+    this->n_input_tensors = llama_graph_n_input_tensors(gf);
     this->n_outputs = save_n_outputs;
 
     // initialize scheduler with the specified graph
