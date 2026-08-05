@@ -812,15 +812,14 @@ class Gemma4DSparkModel(Gemma4Model):
 
     def set_vocab(self):
         if self.target_model_dir is None:
-            raise ValueError(
-                "DSpark draft model requires --target-model-dir to be specified. "
-                "Please provide the path to the target model directory containing the tokenizer."
-            )
-        logger.info(f"DSpark: Using tokenizer from target model: {self.target_model_dir}")
+            raise ValueError("Gemma4 DSpark requires --target-model-dir with the target tokenizer")
+
         original_dir = self.dir_model
-        self.dir_model = self.target_model_dir
-        super().set_vocab()
-        self.dir_model = original_dir
+        try:
+            self.dir_model = self.target_model_dir
+            super().set_vocab()
+        finally:
+            self.dir_model = original_dir
 
         mask_token_id = self.hparams.get("mask_token_id")
         if mask_token_id is not None:
