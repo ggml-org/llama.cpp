@@ -286,6 +286,14 @@ llama_build(test-imatrix-observer-epoch.cpp)
 llama_test(test-imatrix-observer-epoch)
 llama_build(test-imatrix-observer-scope.cpp)
 llama_test(test-imatrix-observer-scope)
+# Phase 16.9: unit tests for the imatrix crash-safety / long-run
+# safeguards (memory precheck, PID file, wall-time cap, dynamic
+# save-frequency ladder). The header is self-contained (header-only
+# inline functions); no llama / ggml link needed.
+llama_build(test-imatrix-safeguards.cpp)
+target_include_directories(test-imatrix-safeguards PRIVATE
+    ${PROJECT_SOURCE_DIR}/tools/imatrix)
+llama_test(test-imatrix-safeguards)
 llama_build_and_test(test-imatrix-ffn-down-coverage.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-imatrix-ffn-down-coverage PROPERTIES FIXTURES_REQUIRED test-download-model)
 llama_build_and_test(test-dflash-gemma4-base.cpp LABEL "model")
