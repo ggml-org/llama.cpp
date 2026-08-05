@@ -450,12 +450,19 @@ static std::string shasum_first_16(const std::string & path) {
     // SHA-256 hash of the GGUF header + tail, then truncate to
     // 16 hex chars (the same truncation the C++ model_hash and
     // the Python model_hash apply).
-    std::string cmd = "sh -c '";
-    cmd += "(head -c 65536 \"" + path + "\"; ";
-    cmd += "if [ \"$(stat -f%z \\\"" + path + "\\\" 2>/dev/null || stat -c%s \\\"" + path + "\\\")\" -gt 65536 ]; then ";
-    cmd += "tail -c 65536 \"" + path + "\"; fi) | shasum -a 256 | awk '{print $1}' | head -c 16";
-    cmd += "'";
-    FILE * p = ::popen(cmd.c_str(), "r");
+    //
+    // We avoid shell-level single-quote escaping by writing the
+    // command as a single pipeline. The awk '{print $1}' is
+    // safe inside the outer single-quoted string in sh.
+    char cmd[1024];
+    std::snprintf(cmd, sizeof(cmd),
+        "sh -c '"
+        "(head -c 65536 %s; "
+        " sz=$(stat -f%%z %s 2>/dev/null || stat -c%%s %s); "
+        " if [ \"$sz\" -gt 65536 ]; then tail -c 65536 %s; fi) "
+        "| shasum -a 256 | awk \"{print \\$1}\" | head -c 16'",
+        path.c_str(), path.c_str(), path.c_str(), path.c_str());
+    FILE * p = ::popen(cmd, "r");
     if (!p) return std::string();
     char buf[64] = {0};
     char * r = std::fgets(buf, sizeof(buf), p);

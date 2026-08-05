@@ -879,5 +879,240 @@ class FullPipelineTest(unittest.TestCase):
         self.assertIn("below", audit["fallback_reason"])
 
 
+# ---- Phase 3.5: parity tests for the C++ structural proxy ----
+#
+# The thin Python wrapper at tools/tessera/estimate_higgs_alpha.py
+# subprocesses the C++ binary (tools/quantize/tessera/tessera-higgs-proxy)
+# when present on PATH, and falls back to the in-process NumPy path
+# otherwise. These tests verify:
+#   1. the C++ path is taken when the binary is on PATH,
+#   2. the C++ and NumPy sidecars agree to the documented
+#      float tolerance (byte-for-byte at the JSON-key level;
+#      floats agree to F32 precision),
+#   3. the NumPy-fallback path stamps the
+#      offline_ternary_mse_numpy_fallback discriminator in the
+#      sidecar so the consumer can tell the two paths apart.
+#
+# Tests that exercise C++-only behavior (GGUF reading, family
+# classification, structural alpha math, L1-agnostic measurement
+# function) live in tools/quantize/tessera/test_higgs_proxy.cpp
+# (Phase 3.5 C++ test suite).
+
+import shutil
+import subprocess
+
+
+_CPP_BINARY = "tessera-higgs-proxy"
+
+
+def _has_cpp_binary() -> bool:
+    return shutil.which(_CPP_BINARY) is not None
+
+
+class CppParityTest(unittest.TestCase):
+    """Phase 3.5 parity tests: verify the C++ structural proxy
+    produces a sidecar that matches the NumPy path within the
+    documented float tolerance.
+
+    Skipped when the C++ binary is not on PATH (e.g. a dev
+    environment without a C++ build). The dev path is the
+    in-process NumPy path; this test class exercises the
+    C++ path, so skip is the right behavior.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if not _has_cpp_binary():
+            cls.skip_reason = "tessera-higgs-proxy binary not on PATH"
+        else:
+            cls.skip_reason = None
+
+    def setUp(self) -> None:
+        if self.skip_reason:
+            self.skipTest(self.skip_reason)
+
+    def test_cpp_path_stamps_offline_ternary_mse(self) -> None:
+        """When the C++ binary is on PATH, the wrapper uses it
+        and the sidecar's measurement is the C++ default
+        ``offline_ternary_mse`` (NOT the
+        ``offline_ternary_mse_numpy_fallback`` discriminator
+        that the in-process NumPy path stamps).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            gguf = Path(tmp) / "fixture.gguf"
+            sidecar = Path(tmp) / "sidecar.json"
+            # Build a tiny synthetic GGUF (one 64x64 F32 tensor).
+            self._build_fixture(gguf)
+            rc = subprocess.run(
+                ["python3", "tools/tessera/estimate_higgs_alpha.py",
+                 "--gguf", str(gguf),
+                 "--output", str(sidecar),
+                 "--min-params-for-estimate", "0"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(rc.returncode, 0,
+                f"wrapper failed: {rc.stderr}")
+            data = json.loads(sidecar.read_text())
+            self.assertEqual(data["measurement"], "offline_ternary_mse")
+            self.assertEqual(data["schema"],
+                             "ane.alpha-coefficients.v1")
+            self.assertEqual(data["version"], 1)
+
+    def test_cpp_path_agrees_with_numpy_to_f32(self) -> None:
+        """The C++ and NumPy sidecars agree to F32 precision
+        on every per-tensor numeric field. The wrapper stamps
+        ``offline_ternary_mse_numpy_fallback`` for the NumPy
+        path; the rest of the sidecar is byte-equivalent
+        (key order, value types) modulo the float-repr
+        tolerance.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            gguf = Path(tmp) / "fixture.gguf"
+            cpp_sidecar = Path(tmp) / "cpp.json"
+            np_sidecar  = Path(tmp) / "np.json"
+            self._build_fixture(gguf)
+
+            # C++ path (binary on PATH).
+            rc_cpp = subprocess.run(
+                ["python3", "tools/tessera/estimate_higgs_alpha.py",
+                 "--gguf", str(gguf),
+                 "--output", str(cpp_sidecar),
+                 "--min-params-for-estimate", "0"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(rc_cpp.returncode, 0, rc_cpp.stderr)
+
+            # NumPy path (binary off PATH). The wrapper
+            # should detect this and fall back.
+            env = {k: v for k, v in os.environ.items()
+                   if k != "PATH"}
+            env["PATH"] = "/usr/bin:/bin"
+            rc_np = subprocess.run(
+                ["python3", "tools/tessera/estimate_higgs_alpha.py",
+                 "--gguf", str(gguf),
+                 "--output", str(np_sidecar),
+                 "--min-params-for-estimate", "0"],
+                capture_output=True, text=True, env=env,
+            )
+            self.assertEqual(rc_np.returncode, 0, rc_np.stderr)
+
+            cpp = json.loads(cpp_sidecar.read_text())
+            np_ = json.loads(np_sidecar.read_text())
+
+            # The measurement field is the one explicit
+            # discriminator; the C++ path uses the default,
+            # the NumPy path stamps the fallback value.
+            self.assertEqual(cpp["measurement"], "offline_ternary_mse")
+            self.assertEqual(np_["measurement"],
+                             "offline_ternary_mse_numpy_fallback")
+
+            # Same top-level shape.
+            self.assertEqual(set(cpp.keys()), set(np_.keys()))
+
+            # Per-tensor numeric fields agree to F32.
+            self.assertEqual(len(cpp["layers"]), len(np_["layers"]))
+            for a, b in zip(cpp["layers"], np_["layers"]):
+                self.assertEqual(a["name"], b["name"])
+                self.assertEqual(a["family"], b["family"])
+                self.assertEqual(a["n_elements"], b["n_elements"])
+                self.assertEqual(a["alpha_floor_applied"],
+                                 b["alpha_floor_applied"])
+                self.assertEqual(a["fallback"], b["fallback"])
+                for k in ("alpha", "t_squared", "frobenius_norm"):
+                    diff = abs(a[k] - b[k])
+                    tol = max(1e-5, 1e-4 * abs(a[k]))
+                    self.assertLessEqual(
+                        diff, tol,
+                        f"field {k} disagrees: cpp={a[k]} np={b[k]} "
+                        f"diff={diff} tol={tol}")
+
+    def test_cpp_path_model_hash_matches(self) -> None:
+        """The C++ path's model_hash matches the NumPy
+        path's model_hash. The two implementations use the
+        same FIPS 180-4 algorithm; a parity check on the
+        same file must produce the same first-16-hex.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            gguf = Path(tmp) / "fixture.gguf"
+            cpp_sidecar = Path(tmp) / "cpp.json"
+            np_sidecar  = Path(tmp) / "np.json"
+            self._build_fixture(gguf)
+
+            subprocess.run(
+                ["python3", "tools/tessera/estimate_higgs_alpha.py",
+                 "--gguf", str(gguf),
+                 "--output", str(cpp_sidecar),
+                 "--min-params-for-estimate", "0"],
+                capture_output=True, text=True, check=True,
+            )
+            env = {k: v for k, v in os.environ.items()
+                   if k != "PATH"}
+            env["PATH"] = "/usr/bin:/bin"
+            subprocess.run(
+                ["python3", "tools/tessera/estimate_higgs_alpha.py",
+                 "--gguf", str(gguf),
+                 "--output", str(np_sidecar),
+                 "--min-params-for-estimate", "0"],
+                capture_output=True, text=True, env=env, check=True,
+            )
+
+            cpp = json.loads(cpp_sidecar.read_text())
+            np_ = json.loads(np_sidecar.read_text())
+            self.assertEqual(cpp["model_hash"], np_["model_hash"])
+            self.assertEqual(len(cpp["model_hash"]), 16)
+
+    def test_cpp_path_uniform_fallback_below_threshold(self) -> None:
+        """With the default 1B threshold, the C++ path
+        produces a uniform-fallback sidecar (every alpha is
+        1.0, t_squared_source is ``uniform_fallback``).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            gguf = Path(tmp) / "fixture.gguf"
+            sidecar = Path(tmp) / "sidecar.json"
+            self._build_fixture(gguf)
+            rc = subprocess.run(
+                ["python3", "tools/tessera/estimate_higgs_alpha.py",
+                 "--gguf", str(gguf),
+                 "--output", str(sidecar)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(rc.returncode, 0, rc.stderr)
+            data = json.loads(sidecar.read_text())
+            self.assertEqual(data["measurement"], "uniform_fallback")
+            self.assertTrue(data["fallback_global"])
+            for layer in data["layers"]:
+                self.assertEqual(layer["alpha"], 1.0)
+                self.assertEqual(layer["fallback"], "global_uniform")
+
+    @staticmethod
+    def _build_fixture(path: Path) -> None:
+        """Build a tiny synthetic F32 GGUF (one 64x64 tensor)
+        for parity testing. The C++ and NumPy paths both
+        read this and produce sidecars.
+        """
+        # Use the gguf-py library if available, else fall
+        # back to a small hand-rolled GGUF. The fixture
+        # must be a valid GGUF that both the C++ and NumPy
+        # paths can read.
+        try:
+            from gguf import GGUFReader  # type: ignore
+            import numpy as np
+            # Build a minimal GGUF in memory.
+            from gguf import GGUFWriter  # type: ignore
+            writer = GGUFWriter(str(path), "test")
+            data = np.arange(64 * 64, dtype=np.float32)
+            writer.add_tensor("blk.0.attn_v.weight", data.reshape(64, 64))
+            writer.write_header_to_file()
+            writer.write_kv_data_to_file()
+            writer.write_tensors_to_file()
+            writer.close()
+        except ImportError:
+            # gguf-py unavailable (e.g. CI without the
+            # optional dep). The parity tests are skipped
+            # in that environment; mark the fixture as
+            # unused.
+            raise unittest.SkipTest("gguf-py unavailable")
+
+
 if __name__ == "__main__":
     unittest.main()
