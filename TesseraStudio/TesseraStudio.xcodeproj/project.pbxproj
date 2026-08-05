@@ -20,6 +20,7 @@
 		561C364154E0918D86AD8D30 /* LearningDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD3045F308A4FC885C96939 /* LearningDashboardView.swift */; };
 		650C73FFFB02DBF42C52F402 /* WorkflowPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D222D5A75213DE4EA6FBB98 /* WorkflowPaletteView.swift */; };
 		716BCB07A97A34782A506338 /* WorkflowEditorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACDE06D68EFB3E03589167D6 /* WorkflowEditorStore.swift */; };
+		71B24AAF1C0BC834C013683B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6F4F9123B7EFA1C68054E8F5 /* Assets.xcassets */; };
 		7F44BF2A0ABEA00E653CD50D /* WorkflowMenuActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD514C99769025121FCA45B2 /* WorkflowMenuActions.swift */; };
 		9062010338171FA15B703C64 /* tessera.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 12E04ED6FBF1FCC3CA154CC7 /* tessera.xcframework */; };
 		94155ADF33A1FA2244B0096B /* TesseraCore in Frameworks */ = {isa = PBXBuildFile; productRef = 558253DF4AD709A6F954A1B9 /* TesseraCore */; };
@@ -28,6 +29,7 @@
 		C711E5902DC14E6DFA5B6BB3 /* LearningTrainingSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1FE0CD17FC666E463147E4 /* LearningTrainingSection.swift */; };
 		CA2FCD5D78AF4EDF4AAC29A0 /* WorkflowCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE2F125CEF082F7FA8395246 /* WorkflowCanvasView.swift */; };
 		D3B43A51CB7885704B6C80CE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9839F117CD5A6CC1C9C5F7DE /* SettingsView.swift */; };
+		D428353BC427BE01BF41BE3C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6F4F9123B7EFA1C68054E8F5 /* Assets.xcassets */; };
 		D4B9C1644A7E90A4302166CF /* TesseraStudioiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 437779B0DF7334909ED10304 /* TesseraStudioiOSApp.swift */; };
 		DE12AD035A9DEF1AA463F79F /* WorkflowDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F27831D331D02ACFE0F58B1 /* WorkflowDocument.swift */; };
 /* End PBXBuildFile section */
@@ -57,6 +59,7 @@
 		543C41C3EF0C82A41F740F1E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		55B00FB4A80A894E7D327A58 /* TesseraStudioiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TesseraStudioiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6F27831D331D02ACFE0F58B1 /* WorkflowDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowDocument.swift; sourceTree = "<group>"; };
+		6F4F9123B7EFA1C68054E8F5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		75205220F8E12273F58FC23E /* WorkflowNodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowNodeView.swift; sourceTree = "<group>"; };
 		7D222D5A75213DE4EA6FBB98 /* WorkflowPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowPaletteView.swift; sourceTree = "<group>"; };
 		9075FB059F1B04D32002C2F2 /* TesseraStudioMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TesseraStudioMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -99,6 +102,14 @@
 				3917A41E9C7063CEEF6F3C6A /* PrivacyInfo.xcprivacy */,
 			);
 			path = Mac;
+			sourceTree = "<group>";
+		};
+		0E77EEF6C4871B8C05BB02D4 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				6F4F9123B7EFA1C68054E8F5 /* Assets.xcassets */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		1CB356EEFE5F04B3E736C1B5 /* Views */ = {
@@ -207,6 +218,7 @@
 			isa = PBXGroup;
 			children = (
 				4B0BFA4088E866070226D74B /* Packages */,
+				0E77EEF6C4871B8C05BB02D4 /* Shared */,
 				BDB3D247610FB8EE2D45003A /* Sources */,
 				69E7A0D6C73684589F4E170E /* Support */,
 				B8364AA1085CB31A892616E1 /* Frameworks */,
@@ -242,6 +254,7 @@
 			buildConfigurationList = 4D4432793AE3CF2D4B78400D /* Build configuration list for PBXNativeTarget "TesseraStudioiOS" */;
 			buildPhases = (
 				5B65E49E08C43B3AE9743D40 /* Sources */,
+				F0DED35BA1ED26C027315623 /* Resources */,
 				9EE5FEF540331CE14B3DF1DA /* Frameworks */,
 			);
 			buildRules = (
@@ -319,7 +332,16 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				71B24AAF1C0BC834C013683B /* Assets.xcassets in Resources */,
 				26164F765A562AE012432E1D /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F0DED35BA1ED26C027315623 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D428353BC427BE01BF41BE3C /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

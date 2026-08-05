@@ -30,17 +30,14 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: Sources/TesseraStudioMac
-      # PrivacyInfo.xcprivacy must land in Copy Bundle Resources so it ends
-      # up at TesseraStudioMac.app/Contents/Resources/PrivacyInfo.xcprivacy.
-      # xcodegen 2.45.4 has no top-level `resources:` field; the only
-      # working way is `sources:` with `buildPhase: resources`. (The
-      # `resources:` block immediately below is silently ignored by
-      # 2.45.4, which is also why the asset catalog is not currently
-      # wired up - separate pre-existing issue, out of scope here.)
+      # Both PrivacyInfo.xcprivacy and Shared/Assets.xcassets must land
+      # in Copy Bundle Resources. xcodegen 2.45.4 has no top-level
+      # `resources:` field; the only working way is `sources:` with
+      # `buildPhase: resources`.
       - path: Support/Mac/PrivacyInfo.xcprivacy
         buildPhase: resources
-    resources:
       - path: Shared/Assets.xcassets
+        buildPhase: resources
     dependencies:
       - package: TesseraStudio
         product: TesseraCore
@@ -71,8 +68,8 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: Sources/TesseraStudioiOS
-    resources:
       - path: Shared/Assets.xcassets
+        buildPhase: resources
     dependencies:
       - package: TesseraStudio
         product: TesseraCore
