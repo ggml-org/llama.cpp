@@ -162,40 +162,42 @@ int test_outlier_addback(int64_t k) {
     return mismatches == 0 ? 0 : 1;
 }
 
-int test_meta_decode(int64_t n_pages) {
-    const int64_t n_lanes = n_pages * TILE640_LANES_PER_PAGE;
-    std::vector<uint16_t> page_scales((size_t) n_pages);
-    std::vector<int8_t> lane_scales((size_t) n_lanes);
+int test_meta_decode(int64_t n_rows, int64_t n_pages) {
+    const int64_t n_lanes_per_row = n_pages * TILE640_LANES_PER_PAGE;
+    std::vector<uint16_t> page_scales((size_t) (n_rows * n_pages));
+    std::vector<int8_t> lane_scales((size_t) (n_rows * n_lanes_per_row));
     std::mt19937 rng(kSeed);
     std::uniform_real_distribution<float> ps_dist(0.1f, 1.0f);
     std::uniform_int_distribution<int> ls_dist(-127, 127);
-    for (int64_t i = 0; i < n_pages; i++) {
+    for (int64_t i = 0; i < n_rows * n_pages; i++) {
         page_scales[(size_t) i] = (uint16_t) GGML_FP32_TO_FP16(ps_dist(rng));
     }
-    for (int64_t i = 0; i < n_lanes; i++) {
+    for (int64_t i = 0; i < n_rows * n_lanes_per_row; i++) {
         lane_scales[(size_t) i] = (int8_t) ls_dist(rng);
     }
-    std::vector<float> page_max_v2((size_t) n_pages);
-    std::vector<float> lane_scale_v2((size_t) n_lanes);
+    std::vector<float> page_max_v2((size_t) (n_rows * n_pages));
+    std::vector<float> lane_scale_v2((size_t) (n_rows * n_lanes_per_row));
     decode_per_row_meta_v2(page_scales.data(), lane_scales.data(),
-                           n_pages, page_max_v2.data(), lane_scale_v2.data());
+                           n_rows, n_pages,
+                           page_max_v2.data(), lane_scale_v2.data());
     // Reference: scalar.
     int mismatches = 0;
     float max_diff = 0.0f;
-    for (int64_t i = 0; i < n_pages; i++) {
+    for (int64_t i = 0; i < n_rows * n_pages; i++) {
         const float ref = GGML_FP16_TO_FP32(page_scales[(size_t) i]);
         const float d = std::fabs(ref - page_max_v2[(size_t) i]);
         if (d > max_diff) max_diff = d;
         if (d > 0.0f) mismatches++;
     }
-    for (int64_t i = 0; i < n_lanes; i++) {
+    for (int64_t i = 0; i < n_rows * n_lanes_per_row; i++) {
         const float ref = (float) lane_scales[(size_t) i] * (1.0f / 127.0f);
         const float d = std::fabs(ref - lane_scale_v2[(size_t) i]);
         if (d > max_diff) max_diff = d;
         if (d > 0.0f) mismatches++;
     }
-    printf("  meta decode n_pages=%lld max_diff=%g mismatches=%d/%lld\n",
-           (long long) n_pages, max_diff, mismatches, (long long) (n_pages + n_lanes));
+    printf("  meta decode n_rows=%lld n_pages=%lld max_diff=%g mismatches=%d/%lld\n",
+           (long long) n_rows, (long long) n_pages, max_diff,
+           mismatches, (long long) (n_rows * (n_pages + n_lanes_per_row)));
     return mismatches == 0 ? 0 : 1;
 }
 
@@ -247,9 +249,9 @@ int main(void) {
     rc |= test_outlier_addback(1024);
     rc |= test_outlier_addback(4096);
     printf("meta decode:\n");
-    rc |= test_meta_decode(1);
-    rc |= test_meta_decode(6);  // 4096 / 640
-    rc |= test_meta_decode(16);
+    rc |= test_meta_decode(1, 1);
+    rc |= test_meta_decode(1, 6);    // 4096 / 640
+    rc |= test_meta_decode(16, 16);  // batched: 16 rows of 16 pages
     printf("act_scale:\n");
     rc |= test_act_scale(256);
     rc |= test_act_scale(1024);

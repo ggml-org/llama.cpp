@@ -144,33 +144,40 @@ int bench_quant(int64_t k) {
     return 0;
 }
 
-int bench_meta(int64_t n_pages) {
-    const int64_t n_lanes = n_pages * TILE640_LANES_PER_PAGE;
-    std::vector<uint16_t> page_scales((size_t) n_pages);
-    std::vector<int8_t> lane_scales((size_t) n_lanes);
-    std::vector<float> page_max((size_t) n_pages);
-    std::vector<float> lane_scale((size_t) n_lanes);
+int bench_meta(int64_t n_rows, int64_t n_pages) {
+    const int64_t n_lanes_per_row = n_pages * TILE640_LANES_PER_PAGE;
+    std::vector<uint16_t> page_scales((size_t) (n_rows * n_pages));
+    std::vector<int8_t> lane_scales((size_t) (n_rows * n_lanes_per_row));
+    std::vector<float> page_max((size_t) (n_rows * n_pages));
+    std::vector<float> lane_scale((size_t) (n_rows * n_lanes_per_row));
     std::mt19937 rng(kSeed);
     std::uniform_int_distribution<int> ls_dist(-127, 127);
-    for (int64_t i = 0; i < n_pages; i++) {
+    for (int64_t i = 0; i < n_rows * n_pages; i++) {
         page_scales[(size_t) i] = (uint16_t) 0x3C00u;  // 1.0 in fp16
     }
-    for (int64_t i = 0; i < n_lanes; i++) {
+    for (int64_t i = 0; i < n_rows * n_lanes_per_row; i++) {
         lane_scales[(size_t) i] = (int8_t) ls_dist(rng);
     }
     // Scalar reference: inline the C dispatch's per-element
-    // pattern.
+    // pattern, but over the whole batch (the per-row C
+    // pattern would call this in a loop, paying the function
+    // call overhead per row, which the batched v2 also does
+    // via vDSP setup cost; we compare apples to apples on a
+    // single batch call).
     auto scalar_ref = [&]() {
-        for (int64_t i = 0; i < n_pages; i++) {
+        const int64_t npages = n_rows * n_pages;
+        const int64_t nlanes = n_rows * n_lanes_per_row;
+        for (int64_t i = 0; i < npages; i++) {
             page_max[(size_t) i] = GGML_FP16_TO_FP32(page_scales[(size_t) i]);
         }
-        for (int64_t i = 0; i < n_lanes; i++) {
+        for (int64_t i = 0; i < nlanes; i++) {
             lane_scale[(size_t) i] = ((float) lane_scales[(size_t) i]) * (1.0f / 127.0f);
         }
     };
     auto v2_fn = [&]() {
         decode_per_row_meta_v2(page_scales.data(), lane_scales.data(),
-                               n_pages, page_max.data(), lane_scale.data());
+                               n_rows, n_pages,
+                               page_max.data(), lane_scale.data());
     };
     auto time_fn = [&](auto fn) {
         for (int i = 0; i < kWarmup; i++) fn();
@@ -187,8 +194,12 @@ int bench_meta(int64_t n_pages) {
     const double us_c  = time_fn(scalar_ref);
     const double us_v2 = time_fn(v2_fn);
     const double speedup = (us_v2 > 0.0) ? us_c / us_v2 : 0.0;
-    printf("  meta   n_pages=%-3lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx\n",
-           (long long) n_pages, us_c, us_v2, speedup);
+    // Total elements processed (so the table is comparable
+    // across different (n_rows, n_pages) shapes).
+    const int64_t elems = n_rows * (n_pages + n_lanes_per_row);
+    printf("  meta   n_rows=%-4lld n_pages=%-3lld  C: %7.2f us  v2: %7.2f us  speedup: %.2fx  elems=%lld\n",
+           (long long) n_rows, (long long) n_pages, us_c, us_v2, speedup,
+           (long long) elems);
     return 0;
 }
 
@@ -289,11 +300,15 @@ int main(void) {
     bench_quant(2560);
     bench_quant(4096);
     bench_quant(8192);
-    printf("meta decode (per row, n_pages = ceil(in_dim/640)):\n");
-    bench_meta(1);
-    bench_meta(4);
-    bench_meta(8);
-    bench_meta(16);
+    printf("meta decode (batched, n_rows * n_pages pages per call):\n");
+    // Sweep n_rows at the canonical in_dim=4096 (16 pages) plus
+    // a couple of smaller shapes for context.
+    bench_meta(1, 1);    // 1 row, 1 page (noise floor check)
+    bench_meta(1, 16);   // 1 row, 16 pages
+    bench_meta(16, 16);  // 16 rows of 16 pages
+    bench_meta(64, 16);  // 64 rows of 16 pages
+    bench_meta(256, 16); // 256 rows of 16 pages (typical Phase 0)
+    bench_meta(1024, 16); // 1024 rows of 16 pages (large)
     printf("act_scale (per row, n = in_dim):\n");
     bench_act_scale(1024);
     bench_act_scale(4096);

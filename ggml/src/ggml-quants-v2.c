@@ -460,32 +460,54 @@ void apply_outlier_addback_v2(float * GGML_RESTRICT row,
 // Function D: decode_per_row_meta_v2
 // ---------------------------------------------------------------------------
 //
-// Per-page: fp16 page_scale -> fp32 page_max via NEON
-// vcvt_f32_f16 (4 fp16 -> 4 fp32 per chunk). For pages < 4
-// the tail is handled scalar.
+// Batched: the dispatch caller has n_rows * n_pages page_scales
+// and n_rows * n_lanes lane_scales (a flat TILE of meta for all
+// rows). The v2 path makes ONE vDSP_vflt8 + ONE vDSP_vsdiv
+// call for ALL rows' lane scales (flat int8 of size
+// n_rows * n_pages * LANES_PER_PAGE) and ONE NEON sweep for ALL
+// rows' page_scales (flat fp16 of size n_rows * n_pages).
 //
-// Per-lane: int8 lane_scale -> fp32 / 127. vDSP_vflt8 (int8 ->
-// fp32, sign-extending) for the bulk conversion, vDSP_vsdiv
-// (divide by 127) for the normalisation. Output is
-// [n_pages * TILE640_LANES_PER_PAGE] floats.
+// Old per-row call pattern was 0.04-0.08 us / row on M1; the
+// C scalar ref in the dispatch was 0.00-0.04 us / row
+// (noise floor). The per-row v2 loses to the C ref because
+// the vDSP setup overhead is larger than the per-row work
+// (~33 elements for a 1-page row). The batched v2 amortises
+// the vDSP setup across the whole tile (n_rows * n_pages
+// elements, e.g. 4096 elements for a 256-row, 16-page tile).
 //
-// v2 is functionally identical to the C scalar loop in the
-// dispatch (the scalar path reads each page_scale and
-// lane_scale individually). The bulk conversion is the speedup.
+// page_max: NEON vcvt_f32_f16, 4 fp16 -> 4 fp32 per chunk, in
+//           a flat loop over all (r, p) pages. Tail is scalar.
+// lane_scale: vDSP_vflt8 (int8 -> fp32, sign-extending) +
+//             vDSP_vsdiv (/ 127) on the flat int8 array. The
+//             scalar loop fallback is the documented behaviour
+//             for non-Apple platforms (the vDSP path is the
+//             host-side acceleration; the C ref in the
+//             dispatch is the fallback when v2 is disabled).
+//
+// The per-row output layout: page_max_out[r, p] and
+// lane_scale_out[r, p, l] (row-major: r changes slowest).
+// The dispatch indexes page_max_out[r * n_pages + p] and
+// lane_scale_out[r * n_lanes + p * LANES_PER_PAGE + l].
 
 void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
                             const void * GGML_RESTRICT lane_scales_packed,
+                            int64_t n_rows,
                             int64_t n_pages,
                             float * GGML_RESTRICT page_max_out,
                             float * GGML_RESTRICT lane_scale_out) {
     const uint16_t * ps = (const uint16_t *) page_scales_packed;
     const int8_t   * ls = (const int8_t   *) lane_scales_packed;
-    const int64_t n_lanes = n_pages * TILE640_LANES_PER_PAGE;
+    const int64_t n_total_pages = n_rows * n_pages;
+    const int64_t n_lanes_per_row = n_pages * TILE640_LANES_PER_PAGE;
+    const int64_t n_total_lanes = n_rows * n_lanes_per_row;
 
-    // page_max: NEON vcvt_f32_f16, 4 fp16 -> 4 fp32 per chunk.
+    if (n_total_pages == 0 || n_total_lanes == 0) return;
+
+    // page_max: NEON vcvt_f32_f16, 4 fp16 -> 4 fp32 per chunk,
+    // flat over the whole batch.
     int64_t p = 0;
 #if GGML_TESSERA_T640_V2_NEON
-    for (; p + 4 <= n_pages; p += 4) {
+    for (; p + 4 <= n_total_pages; p += 4) {
         // Load 4 fp16 (each is a uint16_t) as a 64-bit value, then
         // cast to float16x4_t for vcvt.
         uint64_t bits;
@@ -495,23 +517,22 @@ void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
         vst1q_f32(&page_max_out[p], vf);
     }
 #endif
-    for (; p < n_pages; p++) {
+    for (; p < n_total_pages; p++) {
         page_max_out[p] = GGML_FP16_TO_FP32(ps[p]);
     }
 
-    // lane_scale: int8 -> fp32, divide by 127.
+    // lane_scale: int8 -> fp32, divide by 127. One vDSP_vflt8 +
+    // one vDSP_vsdiv for the WHOLE batch (the win over the
+    // per-row API: amortise vDSP setup across n_rows).
 #if defined(__APPLE__)
-    // vDSP_vflt8: int8 -> float (sign-extending). Then /127
-    // (vDSP_vsdiv divides by its scalar; the divisor is 127,
-    // not 1/127).
     // vDSP_vflt8 takes const char * (sign-extending), so we
     // cast from int8_t * via a uintptr_t roundtrip to silence
     // the pointer-sign warning.
-    vDSP_vflt8((const char *) ls, 1, lane_scale_out, 1, (vDSP_Length) n_lanes);
+    vDSP_vflt8((const char *) ls, 1, lane_scale_out, 1, (vDSP_Length) n_total_lanes);
     float div127 = 127.0f;
-    vDSP_vsdiv(lane_scale_out, 1, &div127, lane_scale_out, 1, (vDSP_Length) n_lanes);
+    vDSP_vsdiv(lane_scale_out, 1, &div127, lane_scale_out, 1, (vDSP_Length) n_total_lanes);
 #else
-    for (int64_t i = 0; i < n_lanes; i++) {
+    for (int64_t i = 0; i < n_total_lanes; i++) {
         lane_scale_out[i] = ((float) ls[i]) / 127.0f;
     }
 #endif

@@ -81,16 +81,27 @@ GGML_API void apply_outlier_addback_v2(float * GGML_RESTRICT row,
                                        const void * GGML_RESTRICT outlier_vals);
 
 // Function D: decode_per_row_meta_v2
-//   Per-page: fp16 page_scale -> fp32 page_max via NEON
-//             vcvt_f32_f16 (4 fp16 -> 4 fp32 per chunk).
-//   Per-lane: int8 lane_scale -> fp32 / 127 via vDSP_vflt8
-//             (int8 -> fp32) + vDSP_vsdiv (/ 127).
-//   Writes page_max[p] and lane_scale[p, l] into caller
-//   buffers. Used by the dispatch when it needs the per-row
-//   meta as a pre-computed fp32 buffer (e.g. for a downstream
-//   per-row scaling step the v2 dequant does not do).
+//   Batched: the dispatch caller has the full TILE worth of
+//             meta to decode (n_rows * n_pages page_scales
+//             and n_rows * n_lanes lane_scales). The v2 path
+//             makes ONE vDSP_vflt8 + ONE vDSP_vsdiv call for
+//             all rows' lane scales (flat int8 of size
+//             n_rows * n_pages * LANES_PER_PAGE) and ONE NEON
+//             sweep for all rows' page_scales (flat fp16 of
+//             size n_rows * n_pages). This amortises the vDSP
+//             setup cost across the whole tile instead of
+//             paying it per row. The previous per-row API is
+//             the v2 implementation's evolution: the public
+//             contract is "decode all this meta" not "decode
+//             one row's meta" (per architect's "evolve, don't
+//             version" rule).
+//   page_max_out[r, p]   = fp16_to_fp32(page_scales[r, p])
+//                          for r in [0, n_rows), p in [0, n_pages).
+//   lane_scale_out[r, p, l] = int8_to_fp32(lane_scales[r, p, l]) / 127.0f
+//                          for r, p, l.
 GGML_API void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
                                      const void * GGML_RESTRICT lane_scales_packed,
+                                     int64_t n_rows,
                                      int64_t n_pages,
                                      float * GGML_RESTRICT page_max_out,
                                      float * GGML_RESTRICT lane_scale_out);
