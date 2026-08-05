@@ -79,6 +79,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
 
+    tok_embd        = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,       "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
     // DSpark = DFlash + a semi-autoregressive Markov head and Confidence head
     //
     // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)

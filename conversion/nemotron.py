@@ -347,7 +347,7 @@ class NemotronHModel(GraniteHybridModel):
         # The tokenizer _does_ add a BOS token (via post_processor type
         # TemplateProcessing) but does not set add_bos_token to true in the
         # config, so we need to explicitly override it here.
-        if not self.is_moe:
+        if not getattr(self, "is_moe", False):
             self.gguf_writer.add_add_bos_token(True)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
