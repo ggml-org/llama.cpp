@@ -187,6 +187,24 @@ class Keys:
         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
         BLOCK_SIZE                        = "{arch}.block_size"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
+        # qwen3-tts talker (speech code LM)
+        TTS_CODEC_VOCAB_SIZE              = "{arch}.codec_vocab_size"
+        TTS_NUM_CODE_GROUPS               = "{arch}.num_code_groups"
+        TTS_PREDICTOR_LAYERS              = "{arch}.predictor_layers"
+        TTS_CODEC_PAD_ID                  = "{arch}.codec_pad_id"
+        TTS_CODEC_BOS_ID                  = "{arch}.codec_bos_id"
+        TTS_CODEC_EOS_ID                  = "{arch}.codec_eos_id"
+        TTS_CODEC_THINK_ID                = "{arch}.codec_think_id"
+        TTS_CODEC_NOTHINK_ID              = "{arch}.codec_nothink_id"
+        TTS_CODEC_THINK_BOS_ID            = "{arch}.codec_think_bos_id"
+        TTS_CODEC_THINK_EOS_ID            = "{arch}.codec_think_eos_id"
+        TTS_POSITION_ID_PER_SECONDS       = "{arch}.position_id_per_seconds"
+        TTS_CODEC_LANGUAGE_IDS            = "{arch}.codec_language_ids"
+        TTS_CODEC_LANGUAGE_NAMES          = "{arch}.codec_language_names"
+        TTS_CP_HIDDEN_SIZE                = "{arch}.cp_hidden_size"
+        TTS_CP_FEED_FORWARD_LENGTH        = "{arch}.cp_feed_forward_length"
+        TTS_CP_HEAD_COUNT                 = "{arch}.cp_head_count"
+        TTS_CP_HEAD_COUNT_KV              = "{arch}.cp_head_count_kv"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -570,6 +588,7 @@ class MODEL_ARCH(IntEnum):
     KIMI_LINEAR      = auto()
     TALKIE           = auto()
     MELLUM           = auto()
+    QWEN3TTS_TALKER  = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1024,6 +1043,15 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # qwen3-tts talker
+    TTS_CODEC_EMBD         = auto()  # codec token input embedding
+    TTS_CODEC_HEAD         = auto()  # codebook-0 output head
+    TTS_TEXT_PROJ_1        = auto()  # text embedding projection, layer 1
+    TTS_TEXT_PROJ_2        = auto()  # text embedding projection, layer 2
+    TTS_CP_PROJ            = auto()  # code predictor: backbone hidden -> predictor hidden
+    TTS_CP_NORM            = auto()  # code predictor: final norm
+    TTS_CP_CODEC_EMBD      = auto()  # code predictor: per-codebook embeddings (suffix .{cid})
+    TTS_CP_HEAD            = auto()  # code predictor: per-codebook heads (suffix .{cid})
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1163,6 +1191,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
+    MODEL_ARCH.QWEN3TTS_TALKER:  "qwen3-tts-talker",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1612,6 +1641,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
     MODEL_TENSOR.DSPARK_CONF_PROJ:          "conf_proj",
     MODEL_TENSOR.D2T:                       "d2t",
+    MODEL_TENSOR.TTS_CODEC_EMBD:            "codec_embd",
+    MODEL_TENSOR.TTS_CODEC_HEAD:            "codec_head",
+    MODEL_TENSOR.TTS_TEXT_PROJ_1:           "text_proj_1",
+    MODEL_TENSOR.TTS_TEXT_PROJ_2:           "text_proj_2",
+    MODEL_TENSOR.TTS_CP_PROJ:               "cp_proj",
+    MODEL_TENSOR.TTS_CP_NORM:               "cp_norm",
+    MODEL_TENSOR.TTS_CP_CODEC_EMBD:         "cp_codec_embd",
+    MODEL_TENSOR.TTS_CP_HEAD:               "cp_head",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -4326,6 +4363,30 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DSPARK_MARKOV_W1,
         MODEL_TENSOR.DSPARK_MARKOV_W2,
         MODEL_TENSOR.DSPARK_CONF_PROJ,
+    ],
+    MODEL_ARCH.QWEN3TTS_TALKER: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TTS_CODEC_EMBD,
+        MODEL_TENSOR.TTS_TEXT_PROJ_1,
+        MODEL_TENSOR.TTS_TEXT_PROJ_2,
+        MODEL_TENSOR.TTS_CODEC_HEAD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        # code predictor ("subtalker"): layers 0..4 live at blk.{28+i}
+        MODEL_TENSOR.TTS_CP_PROJ,
+        MODEL_TENSOR.TTS_CP_NORM,
+        MODEL_TENSOR.TTS_CP_CODEC_EMBD,
+        MODEL_TENSOR.TTS_CP_HEAD,
     ],
     MODEL_ARCH.MISTRAL4: [
         MODEL_TENSOR.TOKEN_EMBD,

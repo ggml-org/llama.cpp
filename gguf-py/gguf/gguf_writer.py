@@ -962,6 +962,57 @@ class GGUFWriter:
     def add_norm_before_residual(self, value: bool) -> None:
         self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
 
+    def add_tts_codec_vocab_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_VOCAB_SIZE.format(arch=self.arch), value)
+
+    def add_tts_num_code_groups(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_NUM_CODE_GROUPS.format(arch=self.arch), value)
+
+    def add_tts_predictor_layers(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_PREDICTOR_LAYERS.format(arch=self.arch), value)
+
+    def add_tts_codec_pad_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_PAD_ID.format(arch=self.arch), id)
+
+    def add_tts_codec_bos_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_BOS_ID.format(arch=self.arch), id)
+
+    def add_tts_codec_eos_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_EOS_ID.format(arch=self.arch), id)
+
+    def add_tts_codec_think_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_THINK_ID.format(arch=self.arch), id)
+
+    def add_tts_codec_nothink_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_NOTHINK_ID.format(arch=self.arch), id)
+
+    def add_tts_codec_think_bos_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_THINK_BOS_ID.format(arch=self.arch), id)
+
+    def add_tts_codec_think_eos_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CODEC_THINK_EOS_ID.format(arch=self.arch), id)
+
+    def add_tts_position_id_per_seconds(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_POSITION_ID_PER_SECONDS.format(arch=self.arch), value)
+
+    def add_tts_codec_language_ids(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.LLM.TTS_CODEC_LANGUAGE_IDS.format(arch=self.arch), value)
+
+    def add_tts_codec_language_names(self, value: Sequence[str]) -> None:
+        self.add_array(Keys.LLM.TTS_CODEC_LANGUAGE_NAMES.format(arch=self.arch), value)
+
+    def add_tts_cp_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CP_HIDDEN_SIZE.format(arch=self.arch), value)
+
+    def add_tts_cp_feed_forward_length(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CP_FEED_FORWARD_LENGTH.format(arch=self.arch), value)
+
+    def add_tts_cp_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CP_HEAD_COUNT.format(arch=self.arch), value)
+
+    def add_tts_cp_head_count_kv(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TTS_CP_HEAD_COUNT_KV.format(arch=self.arch), value)
+
     def add_attention_output_group_count(self, count: int) -> None:
         self.add_uint32(Keys.Attention.OUTPUT_GROUP_COUNT.format(arch=self.arch), count)
 
