@@ -13,21 +13,12 @@
 import { EncryptionService } from '$lib/services/encryption.service';
 import {
 	ENCRYPTION_IDLE_TIMEOUT_LOCALSTORAGE_KEY,
-	ENCRYPTION_SESSION_LOCALSTORAGE_KEY
+	ENCRYPTION_SESSION_LOCALSTORAGE_KEY,
+	DEFAULT_IDLE_TIMEOUT_MINUTES,
+	IDLE_TIMEOUT_PRESETS,
+	SESSION_WRITE_THROTTLE_MS
 } from '$lib/constants';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-
-/** Default idle timeout in minutes */
-const DEFAULT_IDLE_TIMEOUT_MINUTES = 5;
-
-const IDLE_TIMEOUT_PRESETS = [
-	{ value: 0, label: 'Never' },
-	{ value: 1, label: '1 minute' },
-	{ value: 5, label: '5 minutes' },
-	{ value: 15, label: '15 minutes' },
-	{ value: 30, label: '30 minutes' },
-	{ value: 60, label: '1 hour' }
-] as const;
 
 export type IdleTimeoutMinutes = (typeof IDLE_TIMEOUT_PRESETS)[number]['value'];
 
@@ -41,9 +32,6 @@ interface SessionRecord {
 	dek: string;
 	lastActivity: number;
 }
-
-/** Activity bumps rewrite the session record at most this often */
-const SESSION_WRITE_THROTTLE_MS = 30_000;
 
 class EncryptionStore {
 	isSupported = $state(false);

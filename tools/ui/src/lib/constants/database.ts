@@ -27,3 +27,6 @@ export const IDXDB_STORES = {
 	[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
 	[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages
 } as const;
+
+/** Message fields encrypted at rest when encryption is enabled and unlocked */
+export const MESSAGE_SECRET_FIELDS = ['content', 'reasoningContent', 'toolCalls'] as const;

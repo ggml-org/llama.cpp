@@ -13,20 +13,21 @@
  * next session starts locked until the passphrase unlocks it again.
  */
 
-import { ENCRYPTION_META_LOCALSTORAGE_KEY } from '$lib/constants';
-
-const ENCRYPTION_FORMAT_VERSION = 1;
-const ENCRYPTED_VALUE_PREFIX = 'enc1:';
-const KDF_ITERATIONS = 600_000;
-const AES_GCM_IV_BYTES = 12;
-const PBKDF2_SALT_BYTES = 16;
-// 32-byte DEK + 16-byte GCM auth tag
-const WRAPPED_DEK_BYTES = 48;
-// Accepted iteration band for persisted/imported metadata; guards against
-// crafted imports freezing the tab on huge counts or weakening brute-force
-// resistance with tiny ones
-const KDF_MIN_ITERATIONS = 100_000;
-const KDF_MAX_ITERATIONS = 10_000_000;
+import {
+	ENCRYPTION_META_LOCALSTORAGE_KEY,
+	ENCRYPTION_FORMAT_VERSION,
+	ENCRYPTED_VALUE_PREFIX,
+	KDF_ITERATIONS,
+	AES_GCM_IV_BYTES,
+	PBKDF2_SALT_BYTES,
+	WRAPPED_DEK_BYTES,
+	KDF_MIN_ITERATIONS,
+	KDF_MAX_ITERATIONS,
+	KEK_KDF,
+	KEK_KDF_HASH,
+	AES_GCM,
+	BASE64_REGEX
+} from '$lib/constants';
 
 function bytesToBase64(bytes: Uint8Array): string {
 	const CHUNK = 0x8000;
@@ -48,7 +49,7 @@ function base64ToBytes(base64: string): Uint8Array {
 
 // Decoded byte length of a strict base64 string, or null when malformed
 function base64ByteLength(value: string): number | null {
-	if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return null;
+	if (value.length % 4 !== 0 || !BASE64_REGEX.test(value)) return null;
 	const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
 	return (value.length / 4) * 3 - padding;
 }
@@ -56,12 +57,12 @@ function base64ByteLength(value: string): number | null {
 function deriveKek(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
 	const encoder = new TextEncoder();
 	return globalThis.crypto.subtle
-		.importKey('raw', encoder.encode(passphrase), 'PBKDF2', false, ['deriveKey'])
+		.importKey('raw', encoder.encode(passphrase), KEK_KDF, false, ['deriveKey'])
 		.then((material) =>
 			globalThis.crypto.subtle.deriveKey(
-				{ name: 'PBKDF2', hash: 'SHA-256', salt: salt as BufferSource, iterations },
+				{ name: KEK_KDF, hash: KEK_KDF_HASH, salt: salt as BufferSource, iterations },
 				material,
-				{ name: 'AES-GCM', length: 256 },
+				{ name: AES_GCM, length: 256 },
 				false,
 				['wrapKey', 'unwrapKey']
 			)
@@ -102,7 +103,7 @@ export class EncryptionService {
 		this.dek = await globalThis.crypto.subtle.importKey(
 			'raw',
 			base64ToBytes(rawDek) as BufferSource,
-			{ name: 'AES-GCM', length: 256 },
+			{ name: AES_GCM, length: 256 },
 			true,
 			['encrypt', 'decrypt']
 		);
@@ -137,20 +138,20 @@ export class EncryptionService {
 		const kek = await deriveKek(passphrase, salt, KDF_ITERATIONS);
 
 		// extractable so it can be wrapped and exported for session resume
-		const dek = await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+		const dek = await globalThis.crypto.subtle.generateKey({ name: AES_GCM, length: 256 }, true, [
 			'encrypt',
 			'decrypt'
 		]);
 		const wrapIv = globalThis.crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
 		const wrappedDek = await globalThis.crypto.subtle.wrapKey('raw', dek, kek, {
-			name: 'AES-GCM',
+			name: AES_GCM,
 			iv: wrapIv as BufferSource
 		});
 
 		this.writeMeta({
 			version: ENCRYPTION_FORMAT_VERSION,
-			kdf: 'PBKDF2',
-			kdfHash: 'SHA-256',
+			kdf: KEK_KDF,
+			kdfHash: KEK_KDF_HASH,
 			kdfIterations: KDF_ITERATIONS,
 			salt: bytesToBase64(salt),
 			wrapIv: bytesToBase64(wrapIv),
@@ -161,7 +162,7 @@ export class EncryptionService {
 		this.dek = await globalThis.crypto.subtle.importKey(
 			'raw',
 			rawDek,
-			{ name: 'AES-GCM', length: 256 },
+			{ name: AES_GCM, length: 256 },
 			true,
 			['encrypt', 'decrypt']
 		);
@@ -194,8 +195,8 @@ export class EncryptionService {
 		const m = meta as Partial<EncryptionMeta>;
 		return (
 			m.version === ENCRYPTION_FORMAT_VERSION &&
-			m.kdf === 'PBKDF2' &&
-			m.kdfHash === 'SHA-256' &&
+			m.kdf === KEK_KDF &&
+			m.kdfHash === KEK_KDF_HASH &&
 			typeof m.kdfIterations === 'number' &&
 			Number.isInteger(m.kdfIterations) &&
 			m.kdfIterations >= KDF_MIN_ITERATIONS &&
@@ -228,8 +229,8 @@ export class EncryptionService {
 				'raw',
 				base64ToBytes(meta.wrappedDek) as BufferSource,
 				kek,
-				{ name: 'AES-GCM', iv: base64ToBytes(meta.wrapIv) as BufferSource },
-				{ name: 'AES-GCM', length: 256 },
+				{ name: AES_GCM, iv: base64ToBytes(meta.wrapIv) as BufferSource },
+				{ name: AES_GCM, length: 256 },
 				extractable,
 				['encrypt', 'decrypt']
 			);
@@ -258,8 +259,8 @@ export class EncryptionService {
 				'raw',
 				base64ToBytes(meta.wrappedDek) as BufferSource,
 				currentKek,
-				{ name: 'AES-GCM', iv: base64ToBytes(meta.wrapIv) as BufferSource },
-				{ name: 'AES-GCM', length: 256 },
+				{ name: AES_GCM, iv: base64ToBytes(meta.wrapIv) as BufferSource },
+				{ name: AES_GCM, length: 256 },
 				true,
 				['encrypt', 'decrypt']
 			);
@@ -274,19 +275,19 @@ export class EncryptionService {
 		const nextDek = await globalThis.crypto.subtle.importKey(
 			'raw',
 			rawDek,
-			{ name: 'AES-GCM', length: 256 },
+			{ name: AES_GCM, length: 256 },
 			true,
 			['encrypt', 'decrypt']
 		);
 		const wrappedDek = await globalThis.crypto.subtle.wrapKey('raw', nextDek, nextKek, {
-			name: 'AES-GCM',
+			name: AES_GCM,
 			iv: wrapIv as BufferSource
 		});
 
 		this.writeMeta({
 			version: ENCRYPTION_FORMAT_VERSION,
-			kdf: 'PBKDF2',
-			kdfHash: 'SHA-256',
+			kdf: KEK_KDF,
+			kdfHash: KEK_KDF_HASH,
 			kdfIterations: KDF_ITERATIONS,
 			salt: bytesToBase64(salt),
 			wrapIv: bytesToBase64(wrapIv),
@@ -296,7 +297,7 @@ export class EncryptionService {
 		this.dek = await globalThis.crypto.subtle.importKey(
 			'raw',
 			rawDek,
-			{ name: 'AES-GCM', length: 256 },
+			{ name: AES_GCM, length: 256 },
 			false,
 			['encrypt', 'decrypt']
 		);
@@ -324,7 +325,7 @@ export class EncryptionService {
 
 		const iv = globalThis.crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
 		const ciphertext = await globalThis.crypto.subtle.encrypt(
-			{ name: 'AES-GCM', iv: iv as BufferSource },
+			{ name: AES_GCM, iv: iv as BufferSource },
 			this.dek,
 			new TextEncoder().encode(plaintext)
 		);
@@ -347,7 +348,7 @@ export class EncryptionService {
 		const iv = base64ToBytes(body.slice(0, separator));
 		const ciphertext = base64ToBytes(body.slice(separator + 1));
 		const plaintext = await globalThis.crypto.subtle.decrypt(
-			{ name: 'AES-GCM', iv: iv as BufferSource },
+			{ name: AES_GCM, iv: iv as BufferSource },
 			dek,
 			ciphertext as BufferSource
 		);

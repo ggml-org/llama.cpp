@@ -1,6 +1,11 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
+import {
+	IDXDB_TABLES,
+	IDXDB_STORES,
+	MESSAGE_SECRET_FIELDS,
+	STORAGE_APP_NAME
+} from '$lib/constants';
 import { AttachmentType, MessageRole } from '$lib/enums';
 import { EncryptionService } from './encryption.service';
 import type { McpServerOverride } from '$lib/types/database';
@@ -26,8 +31,6 @@ const db = new LlamaUiDatabase();
 //
 // Transforms must run OUTSIDE Dexie transactions: awaiting WebCrypto inside a
 // transaction would commit it prematurely.
-
-const MESSAGE_SECRET_FIELDS = ['content', 'reasoningContent', 'toolCalls'] as const;
 
 function assertEncryptionWritable(): void {
 	if (EncryptionService.isEnabled() && !EncryptionService.isUnlocked()) {
