@@ -1071,6 +1071,13 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
         sum_cum += p;
     }
 
+    // degenerate logits (e.g. all -inf/NaN, seen with MTP draft heads on long contexts)
+    // - sample the last candidate instead of aborting
+    if (!std::isfinite(sum_cum) || sum_cum <= 0.0f) {
+        cur_p->selected = cur_p->size - 1;
+        return;
+    }
+
 #if 1
     // sample from the obtained probabilities and normalize the probs in a single pass
     // this is ~3x faster on Mac with full gpt-oss vocab than the version below
@@ -1096,8 +1103,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
         cur_p->data[i].p /= sum_cum;
     }
 
-    // fallback to the last token (don't think this can happen)
-    assert(found);
+    // fallback to the last token (can happen with degenerate logits)
     if (!found) {
         cur_p->selected = cur_p->size - 1;
     }
