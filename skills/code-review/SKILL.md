@@ -47,6 +47,7 @@ Mandatory on every review; any finding here is **blocking**. Rule of thumb: GGUF
 - **Sizes/counts from tensor dims:** validate before allocating. Products like `ne[i]*nb[i]`/nbytes can overflow on crafted dims into an undersized alloc then heap overflow. Overflow checks must run BEFORE the arithmetic they guard - padding/alignment macros wrap to 0 near `SIZE_MAX`, so a guard after the pad passes.
 - **GGUF strings/arrays:** cap declared lengths and element counts before using them to size a loop or buffer; validate element type and length before casting an array to a pointer or reading fixed indices (`[i+1]`, `[0..2]`).
 - **File-supplied counts indexing fixed arrays:** bound any count (e.g. layer/block count into a `LLAMA_MAX_*` array) before indexing; watch checks that only fire when an optional key is present.
+- **Declared vs actual array length:** check the declared length of a GGUF array against the count actually read, not just against a buffer size.
 - **Bounds comparisons:** flag narrowing casts (`size_t`->`int32_t`) and signed/unsigned mixing that can bypass a length check and copy past a buffer.
 - **Parsed/derived indices:** range-check `stoi`/`atoi` results and catch parse throws; never use a default or derived token id (EOS/BOS/...) as an index without a bounds check.
 - **Reused/reserved buffers:** recheck bounds after a buffer is shrunk or reused; watch `reserve()` then index-by-assumed-size, and header fields read before their length is checked.
@@ -110,6 +111,16 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Security: don't trust client-supplied headers (e.g. `X-Forwarded-For`) or add footguns; things like IP allowlisting belong at a reverse proxy unless there's a trusted-proxy design.
 - Wire new behavior into the existing request/response and checkpoint paths correctly; watch for resource leaks across requests.
 
+## Multimodal (`tools/mtmd/`)
+
+- Tensor names must be prefixed by `v.`, `a.`, `mm.` or `a.mm.` (legacy naming doesn't follow this convention - this is expected, but new code should follow it).
+- Do not use explicit sin/cos for RoPE; use `ggml_rope_ext` instead, see `HOWTO-add-model.md`. If it can't express the needed behavior, that's a design discussion, not a PR.
+- New GGML ops must not be introduced in the same PR, you must push it as a separate PR.
+- In most cases, `build_vit` should be enough to build the transformer graph for vision models. Do not add a loop to build the transformer graph manually, unless you have a very good reason to do so. If you do, please explain why in the PR description.
+- If you need a dedicated preprocessor, there is a high chance that it can be a derived class from one of the existing preprocessors. Check carefully before adding a new preprocessor class.
+- If the model need a new public API in `mtmd.h`, open a discussion first.
+- For audio generation models, see `tools/mtmd/README-dev.md`
+
 ## General (always)
 
 Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on every changed line - this is a distinct pass from checking that the code works, and matters just as much for review speed:
@@ -122,6 +133,8 @@ Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on ever
 - Reuse existing infrastructure over introducing new components; no new third-party dependencies, extra headers, or files unless clearly justified.
 - Keep it simple: a simpler change doing 90% is often preferable to a complex one doing 100%. Flag unnecessary templates/fancy STL; basic `for` loops are fine here.
 - Every added line should be something the contributor can explain and defend to a reviewer without AI help - flag anything that looks copied-in without understanding.
+- `Co-authored-by:` must be reserved for human co-authors; AI contributions (claude, cursor, codex, etc.) must use `Assisted-by:`; if this point is violated, it's a blocking finding.
+- Any mentions of Minja must be treated as blocking; see `AGENTS.md` for why.
 
 ## Reporting
 

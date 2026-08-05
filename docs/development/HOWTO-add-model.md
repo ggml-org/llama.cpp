@@ -133,6 +133,7 @@ Note:
 - To debug the multimodal preprocessor and encoder, you can use [llama-mtmd-debug](tools/mtmd/debug/mtmd-debug.cpp).
 - Adding a model-specific API or CLI is an anti-pattern in `libmtmd`. The goal of `libmtmd` is to provide an easy-to-use, model-agnostic library for multimodal pipeline.
 - In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
+- For audio generation models, see `tools/mtmd/README-dev.md`
 
 ## Tips and tricks
 
@@ -143,6 +144,8 @@ If the model contains constant modifications of tensors in the graph (for exampl
 Examples:
 - Gemma 3 folds the `1 +` of its `norm(1 + weight)` normalization into the weights at conversion time, so the graph just does a plain RMS norm.
 - Qwen3-Next applies its tensor permutation during conversion (in `modify_tensors`), so the graph can consume the already-permuted weights directly.
+
+Exception: a plain `weight * scale` with a constant scale is usually better left to inference time rather than folded into the weight at conversion. The scale conceptually applies to the activation, not the weight, so folding it into the weight can hurt numerical stability, and it shifts the weight's value range in a way that can make quantization worse. In this case, write the scale to GGUF as its own metadata key (e.g. `%s.attention.output_scale`, `%s.attention.value_scale`, `%s.embedding_scale`) and apply it in the graph, instead of pre-multiplying the weight tensor during conversion.
 
 ### Working with ggml_rope_ext
 

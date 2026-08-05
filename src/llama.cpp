@@ -54,6 +54,8 @@ const char * llama_load_mode_name(enum llama_load_mode load_mode) {
             return "mmap";
         case LLAMA_LOAD_MODE_MLOCK:
             return "mlock";
+        case LLAMA_LOAD_MODE_MMAP_MLOCK:
+            return "mmap+mlock";
         case LLAMA_LOAD_MODE_DIRECT_IO:
             return "dio";
     }
@@ -61,10 +63,11 @@ const char * llama_load_mode_name(enum llama_load_mode load_mode) {
 }
 
 enum llama_load_mode llama_load_mode_from_str(const char * str) {
-    if (std::strcmp(str, "none")  == 0) { return LLAMA_LOAD_MODE_NONE;      }
-    if (std::strcmp(str, "mmap")  == 0) { return LLAMA_LOAD_MODE_MMAP;      }
-    if (std::strcmp(str, "mlock") == 0) { return LLAMA_LOAD_MODE_MLOCK;     }
-    if (std::strcmp(str, "dio")   == 0) { return LLAMA_LOAD_MODE_DIRECT_IO; }
+    if (std::strcmp(str, "none") == 0)       { return LLAMA_LOAD_MODE_NONE;       }
+    if (std::strcmp(str, "mmap") == 0)       { return LLAMA_LOAD_MODE_MMAP;       }
+    if (std::strcmp(str, "mlock") == 0)      { return LLAMA_LOAD_MODE_MLOCK;      }
+    if (std::strcmp(str, "mmap+mlock") == 0) { return LLAMA_LOAD_MODE_MMAP_MLOCK; }
+    if (std::strcmp(str, "dio") == 0)        { return LLAMA_LOAD_MODE_DIRECT_IO;  }
     throw std::invalid_argument(std::string("unknown load mode: ") + str);
 }
 
@@ -302,7 +305,7 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model_params & params) {
     try {
         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.load_mode,
-            params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
+            params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.print_info();
         std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, params));

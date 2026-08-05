@@ -72,10 +72,10 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
-| `--mlock` | DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
+| `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
 | `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
 | `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
-| `-lm, --load-mode MODE` | model loading mode (default: mmap)<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
+| `-lm, --load-mode MODE` | model loading mode (default: mmap)<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
@@ -133,14 +133,14 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--xtc-probability N` | xtc probability (default: 0.00, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.10, 1.0 = disabled) |
 | `--typical, --typical-p N` | locally typical sampling, parameter p (default: 1.00, 1.0 = disabled) |
-| `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled, -1 = ctx_size) |
+| `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled) |
 | `--repeat-penalty N` | penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled) |
 | `--presence-penalty N` | repeat alpha presence penalty (default: 0.00, 0.0 = disabled) |
 | `--frequency-penalty N` | repeat alpha frequency penalty (default: 0.00, 0.0 = disabled) |
 | `--dry-multiplier N` | set DRY sampling multiplier (default: 0.00, 0.0 = disabled) |
 | `--dry-base N` | set DRY sampling base value (default: 1.75) |
 | `--dry-allowed-length N` | set allowed length for DRY sampling (default: 2) |
-| `--dry-penalty-last-n N` | set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 = context size) |
+| `--dry-penalty-last-n N` | set DRY penalty for the last n tokens (default: 64, 0 = disable) |
 | `--dry-sequence-breaker STRING` | add sequence breaker for DRY sampling, clearing out default breakers ('\n', ':', '"', '*') in the process; use "none" to not use any sequence breakers |
 | `--adaptive-target N` | adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) (default: -1.00)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927) |
 | `--adaptive-decay N` | adaptive-p: decay rate for target adaptation over time. lower values are more reactive, higher values are more stable.<br/>(valid range 0.0 to 0.99) (default: 0.90) |
@@ -198,7 +198,9 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
 | `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
 | `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
-| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
+| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime, get_info<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
+| `--mcp-servers-config PATH` | experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_CONFIG) |
+| `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
 | `--ui, --webui, --no-ui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
@@ -259,7 +261,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices |
 | `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
 | `--spec-draft-model, -md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL) |
-| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
+| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
 | `--spec-ngram-mod-n-min N` | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48) |
 | `--spec-ngram-mod-n-max N` | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64) |
 | `--spec-ngram-mod-n-match N` | ngram-mod lookup length (default: 24) |
@@ -474,7 +476,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `repeat_penalty`: Control the repetition of token sequences in the generated text. Default: `1.1`
 
-`repeat_last_n`: Last n tokens to consider for penalizing repetition. Default: `64`, where `0` is disabled and `-1` is ctx-size.
+`repeat_last_n`: Last n tokens to consider for penalizing repetition. Default: `64`, where `0` is disabled.
 
 `presence_penalty`: Repeat alpha presence penalty. Default: `0.0`, which is disabled.
 
@@ -486,7 +488,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `dry_allowed_length`: Tokens that extend repetition beyond this receive exponentially increasing penalty: multiplier * base ^ (length of repeating sequence before token - allowed length). Default: `2`
 
-`dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `-1`, where `0` is disabled and `-1` is context size.
+`dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `64`, where `0` is disabled.
 
 `dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. Default: `['\n', ':', '"', '*']`
 
@@ -794,7 +796,7 @@ By default, it is read-only. To make POST request to change global properties, y
       "dry_multiplier": 0.0,
       "dry_base": 1.75,
       "dry_allowed_length": 2,
-      "dry_penalty_last_n": -1,
+      "dry_penalty_last_n": 64,
       "dry_sequence_breakers": [
         "\n",
         ":",

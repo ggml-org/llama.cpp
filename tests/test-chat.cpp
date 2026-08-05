@@ -730,6 +730,71 @@ static common_chat_tool imaginary_number_tool{
     })",
 };
 
+static common_chat_tool nested_args_tool{
+    /* .name = */ "nested_args",
+    /* .description = */ "Tool with nested array arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "entries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "integer" },
+                        "label": { "type": "string" }
+                    },
+                    "required": ["id", "label"]
+                }
+            }
+        },
+        "required": ["tags", "entries"]
+    })",
+};
+
+static common_chat_tool union_args_tool{
+    /* .name = */ "union_args",
+    /* .description = */ "Tool with union arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "filter": {
+                "anyOf": [
+                    { "type": "array", "items": { "type": "string" } },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "field": { "type": "string" },
+                            "op": { "type": "string" }
+                        },
+                        "required": ["field", "op"]
+                    }
+                ]
+            },
+            "label": {
+                "oneOf": [
+                    { "type": "string" },
+                    { "type": "object", "properties": { "text": { "type": "string" } } }
+                ]
+            },
+            "limit": {
+                "oneOf": [
+                    { "type": "integer" },
+                    {
+                        "type": "object",
+                        "properties": { "max": { "type": "integer" } },
+                        "required": ["max"]
+                    }
+                ]
+            }
+        }
+    })",
+};
+
 static common_chat_tool nullable_string_tool{
     /* .name = */ "set_nullable_str",
     /* .description = */ "Set a nullable string value",
@@ -2213,46 +2278,39 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
-        // tool call segment in reasoning
+        // a tool call ends the prefilled thinking block, with or without a closing </think>
         tst.test(
-               "Let's call a tool: <tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Not the real call!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n</think>\n\n"
                "<tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Hello, world!\")\n"
-               "\n"
-               "hello()\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
                "</parameter>\n"
                "</function>\n"
                "</tool_call>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({
-                python_tool
-        })
-            .expect_reasoning(
-                "Let's call a tool: <tool_call>\n"
-                "<function=python>\n"
-                "<parameter=code>\n"
-                "def hello():\n"
-                "    print(\"Not the real call!\")\n"
-                "\n"
-                "hello()\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>")
+            .tools({ run_in_terminal_tool })
             .expect_tool_calls({
-                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
+            })
+            .run();
+
+        // ...including after the model has thought about it
+        tst.test(
+               "Need to inspect the current directory.\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ run_in_terminal_tool })
+            .expect_reasoning("Need to inspect the current directory.")
+            .expect_tool_calls({
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
             .run();
 
@@ -2394,17 +2452,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
-            .run();
-
-        tst.test(
-               "I might call <tool_call> later, but I am still thinking.\n"
-               "</think>\n\n"
-               "Final answer without tools.")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .enable_thinking(true)
-            .tools({ run_in_terminal_tool })
-            .expect_reasoning("I might call <tool_call> later, but I am still thinking.")
-            .expect_content("Final answer without tools.")
             .run();
 
         // Continuation tests
@@ -2709,49 +2756,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .json_schema(invoice_schema)
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
-            .run();
-
-        // tool call segment in reasoning
-        tst.test(
-               "Let's call a tool: <tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Not the real call!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n</think>\n"
-               "<tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Hello, world!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n"
-            )
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({
-                python_tool
-        })
-            .expect_reasoning("Let's call a tool: <tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Not the real call!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n")
-            .expect_tool_calls({
-                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
-            })
             .run();
 
         // Continuation tests
@@ -3507,6 +3511,61 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reconstruction()
             .run();
 
+        // Some models skip the opening <tool_call> and go straight to <function=>
+        tst.test(
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "Let me call it.\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect_content("Let me call it.\n")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Only the first call may omit it, the rest keep the </tool_call>\n<tool_call> separator
+        tst.test(
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "<tool_call>\n"
+               "<function=special_function_with_opt>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "<parameter=arg2>\n"
+               "2\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+        })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+
         tst.test(
                "<tool_call>\n"
                "<function=special_function>\n"
@@ -3611,6 +3670,37 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Test flexible required argument ordering (required args still come first, in any order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=newString>\n#include\n</parameter>\n"
+               "<parameter=filename>\nfoo.c\n</parameter>\n"
+               "<parameter=oldString>\n#iclunde\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ edit_tool })
+            .expect_tool_calls({
+                { "edit", R"({"newString": "#include", "filename": "foo.c", "oldString": "#iclunde"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_4opt>\n"
+               "<parameter=req2>\n42\n</parameter>\n"
+               "<parameter=req1>\nhello\n</parameter>\n"
+               "<parameter=opt2>\n200\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({
+                { "tool_2req_4opt", R"({"req2": 42, "req1": "hello", "opt2": 200})", {} },
             })
             .expect_reconstruction()
             .run();
@@ -3897,6 +3987,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
             })
+            .expect_reconstruction()
             .run();
 
         // Tool call with negative number
@@ -4122,6 +4213,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
             })
+            .expect_reconstruction()
             .run();
 
         // Tool call with multiple params (mixed types)
@@ -4161,6 +4253,38 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
             .expect_reasoning("I'm thinking")
             .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(
+            "Let me check the time\n\n"
+            "<｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke name=\"get_time\">\n"
+            "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>") // no </think> after the TC close because the grammar will immediately constrain it to end
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("Let me check the time")
+            .expect_tool_calls({ { "get_time", R"({"city": "Tokyo"})", {} } })
+            .run();
+    }
+
+    {
+        // The DSML separator belongs to the tool call block, not assistant content.
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja", detailed_debug);
+        tst.test(
+               "\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
             .run();
     }
 
@@ -4840,6 +4964,370 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(" thinking\n</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
+    // MiniMax-M3 tests - namespaced XML invoke format, the parameter name is the tag
+    // Format:
+    //   ]<]minimax[>[<tool_call>
+    //   ]<]minimax[>[<invoke name="get_time">]<]minimax[>[<city>Tokyo]<]minimax[>[</city>]<]minimax[>[</invoke>
+    //   ]<]minimax[>[</tool_call>
+    // Reasoning uses <mm:think>...</mm:think>. The generation prompt is only "]~b]ai\n", so the model
+    // opens the thinking block itself; a turn without reasoning is prefixed with a bare </mm:think>.
+    {
+        auto tst = peg_tester("models/templates/MiniMax-M3.jinja", detailed_debug);
+
+        // Content only (bare </mm:think> prefix)
+        tst.test("</mm:think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        // Thinking + content
+        tst.test("<mm:think>I'm\nthinking</mm:think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "<mm:think>Let me check the time</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>Tokyo]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .expect_reconstruction()
+            .run();
+
+        // Tool call without reasoning, integer param
+        tst.test(
+               "</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"special_function\">"
+               "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
+            .run();
+
+        // Tool call with no parameters
+        tst.test(
+               "<mm:think>Let's call a tool:</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"empty_args\">"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(message_with_reasoning_and_tool_call("Let's call a tool:", "empty_args", "{}"))
+            .expect_reconstruction()
+            .run();
+
+        // Multiple parallel tool calls in one block
+        tst.test(
+               "<mm:think>Calling both</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>Paris]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[<invoke name=\"get_weather\">"
+               "]<]minimax[>[<city>Paris]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .expect_reconstruction()
+            .run();
+
+        // Content before the tool call block
+        tst.test(
+               "<mm:think>Thinking about it</mm:think>"
+               "Let me call the function."
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"special_function\">"
+               "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Negative number
+        tst.test(
+               "<mm:think>Test negative</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"magic_int\">"
+               "]<]minimax[>[<ref>-14]<]minimax[>[</ref>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Test negative")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": -14})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Decimal number
+        tst.test(
+               "<mm:think>Test decimal</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"amount\">"
+               "]<]minimax[>[<orig>3.14]<]minimax[>[</orig>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ amount_tool })
+            .expect_reasoning("Test decimal")
+            .expect_tool_calls({
+                { "amount", R"({"orig": 3.14})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Boolean
+        tst.test(
+               "<mm:think>Test boolean</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"toggle\">"
+               "]<]minimax[>[<enabled>true]<]minimax[>[</enabled>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ toggle_tool })
+            .expect_reasoning("Test boolean")
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Multiple params of mixed types (required int first, then optional string)
+        tst.test(
+               "<mm:think>Multi-arg call</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"magic_int\">"
+               "]<]minimax[>[<ref>42]<]minimax[>[</ref>"
+               "]<]minimax[>[<name>foo bar]<]minimax[>[</name>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Nested object param, expanded into one element per key
+        tst.test(
+               "<mm:think>Nested object</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"imaginary_number\">"
+               "]<]minimax[>[<number>"
+               "]<]minimax[>[<real>1.5]<]minimax[>[</real>"
+               "]<]minimax[>[<imaginary>-2.5]<]minimax[>[</imaginary>"
+               "]<]minimax[>[</number>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ imaginary_number_tool })
+            .expect_reasoning("Nested object")
+            .expect_tool_calls({
+                { "imaginary_number", R"({"number": {"real": 1.5, "imaginary": -2.5}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Array params, expanded into <item> elements (of scalars and of objects)
+        tst.test(
+               "<mm:think>Nested arrays</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"nested_args\">"
+               "]<]minimax[>[<tags>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</tags>"
+               "]<]minimax[>[<entries>"
+               "]<]minimax[>[<item>"
+               "]<]minimax[>[<id>1]<]minimax[>[</id>"
+               "]<]minimax[>[<label>one]<]minimax[>[</label>"
+               "]<]minimax[>[</item>"
+               "]<]minimax[>[</entries>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ nested_args_tool })
+            .expect_reasoning("Nested arrays")
+            .expect_tool_calls({
+                { "nested_args", R"({"tags": ["alpha", "beta"], "entries": [{"id": 1, "label": "one"}]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Union params (anyOf/oneOf), expanded as a choice of the alternatives
+        tst.test(
+               "<mm:think>Union array</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<filter>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</filter>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union array")
+            .expect_tool_calls({
+                { "union_args", R"({"filter": ["alpha", "beta"]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // oneOf between a scalar and an object
+        tst.test(
+               "<mm:think>Union scalar</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>5]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union scalar")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": 5})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<mm:think>Union nested</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>"
+               "]<]minimax[>[<max>10]<]minimax[>[</max>"
+               "]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union nested")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": {"max": 10}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // A union with a string alternative is a string
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>hi]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "hi"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // ... even when the value looks structured
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>"
+               "]<]minimax[>[<text>hi]<]minimax[>[</text>"
+               "]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "]<]minimax[>[<text>hi]<]minimax[>[</text>"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Edge case: empty reasoning followed by a tool call
+        tst.test(
+               "<mm:think></mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>XYZCITY]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "XYZCITY"})"))
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</mm:think>Hello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
             .messages({ message_user, message_assist_prefill_reasoning })
@@ -5891,6 +6379,7 @@ static void test_template_generation_prompt() {
         std::vector<common_chat_msg> messages;
         bool                         add_generation_prompt  = true;
         common_chat_continuation     continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
+        bool                         enable_thinking        = true;
     };
 
     auto basic = [&]() {
@@ -5922,6 +6411,7 @@ static void test_template_generation_prompt() {
         inputs.messages               = opts.messages;
         inputs.add_generation_prompt  = opts.add_generation_prompt;
         inputs.continue_final_message = opts.continue_final_message;
+        inputs.enable_thinking        = opts.enable_thinking;
 
         auto params = common_chat_templates_apply(tmpls.get(), inputs);
 
@@ -6018,6 +6508,156 @@ static void test_template_generation_prompt() {
         check(tmpls, basic(),                  "<｜Assistant｜><think>");
         check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
+    }
+
+    const std::string deepseek_v4_reasoning_effort_max = "Reasoning Effort: Absolute maximum";
+    const std::string deepseek_v4_flash_0731_reasoning_effort_max = "Reasoning Effort: Beyond maximum";
+
+    {
+        auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+        check(tmpls, basic(),                  "<｜Assistant｜><think>");
+        check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
+        check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
+
+        auto continuation_content_no_thinking = continuation_content();
+        continuation_content_no_thinking.messages = { system_msg, message_user, simple_assist_msg("Hello, ") };
+        continuation_content_no_thinking.enable_thinking = false;
+        check(tmpls, continuation_content_no_thinking, "<｜Assistant｜></think>Hello, ");
+
+        common_chat_templates_inputs max_inputs;
+        max_inputs.messages = { system_msg, message_user };
+        max_inputs.chat_template_kwargs["reasoning_effort"] = R"("max")";
+        auto max_params = common_chat_templates_apply(tmpls.get(), max_inputs);
+        assert_contains(max_params.prompt, deepseek_v4_reasoning_effort_max);
+
+        auto high_inputs = max_inputs;
+        high_inputs.chat_template_kwargs["reasoning_effort"] = R"("high")";
+        auto high_params = common_chat_templates_apply(tmpls.get(), high_inputs);
+        assert_not_contains(high_params.prompt, deepseek_v4_reasoning_effort_max);
+
+        auto low_inputs = max_inputs;
+        low_inputs.chat_template_kwargs["reasoning_effort"] = R"("low")";
+        auto low_params = common_chat_templates_apply(tmpls.get(), low_inputs);
+        assert_not_contains(low_params.prompt, deepseek_v4_reasoning_effort_max);
+
+        common_chat_templates_inputs default_effort_inputs;
+        default_effort_inputs.messages = { system_msg, message_user };
+        auto default_effort_params = common_chat_templates_apply(tmpls.get(), default_effort_inputs);
+        assert_not_contains(default_effort_params.prompt, deepseek_v4_reasoning_effort_max);
+
+        auto non_thinking_max_inputs = max_inputs;
+        non_thinking_max_inputs.enable_thinking = false;
+        auto non_thinking_max_params = common_chat_templates_apply(tmpls.get(), non_thinking_max_inputs);
+        assert_not_contains(non_thinking_max_params.prompt, deepseek_v4_reasoning_effort_max);
+
+        common_chat_templates_inputs response_format_inputs;
+        response_format_inputs.messages = { system_msg, message_user };
+        response_format_inputs.tools = { get_time_tool };
+        response_format_inputs.json_schema =
+            R"({"type":"object","properties":{"answer":{"type":"string"}}})";
+        auto response_format_params = common_chat_templates_apply(tmpls.get(), response_format_inputs);
+        const auto tools_pos = response_format_params.prompt.find("## Tools");
+        const auto response_format_pos = response_format_params.prompt.find(
+            "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n");
+        if (tools_pos == std::string::npos || response_format_pos == std::string::npos || tools_pos > response_format_pos) {
+            LOG_ERR("Expected response format after tools\nActual: %s\n", response_format_params.prompt.c_str());
+            common_log_flush(common_log_main());
+            throw std::runtime_error("Test failed");
+        }
+        assert_contains(response_format_params.prompt, R"("answer": {"type": "string"})");
+
+        response_format_inputs.json_schema = "{}";
+        auto json_object_params = common_chat_templates_apply(tmpls.get(), response_format_inputs);
+        assert_contains(json_object_params.prompt,
+                        "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{}");
+
+        common_chat_msg assistant_history;
+        assistant_history.role              = "assistant";
+        assistant_history.content           = "Previous answer";
+        assistant_history.reasoning_content = "Previous reasoning";
+
+        common_chat_msg user_followup;
+        user_followup.role    = "user";
+        user_followup.content = "Follow up";
+
+        common_chat_templates_inputs default_history_inputs;
+        default_history_inputs.messages = { message_user, assistant_history, user_followup };
+        auto default_history_params = common_chat_templates_apply(tmpls.get(), default_history_inputs);
+        assert_contains(default_history_params.prompt, "<｜Assistant｜></think>Previous answer");
+
+        auto drop_thinking_inputs = default_history_inputs;
+        drop_thinking_inputs.chat_template_kwargs["drop_thinking"] = "false";
+        auto drop_thinking_params = common_chat_templates_apply(tmpls.get(), drop_thinking_inputs);
+        assert_contains(drop_thinking_params.prompt, "<｜Assistant｜><think>Previous reasoning</think>Previous answer");
+
+        auto preserve_reasoning_inputs = default_history_inputs;
+        preserve_reasoning_inputs.chat_template_kwargs["preserve_reasoning"] = "true";
+        auto preserve_reasoning_params = common_chat_templates_apply(tmpls.get(), preserve_reasoning_inputs);
+        assert_contains(preserve_reasoning_params.prompt, "<｜Assistant｜><think>Previous reasoning</think>Previous answer");
+        assert_equals(true, common_chat_templates_get_caps(tmpls.get()).at("supports_preserve_reasoning"));
+
+        auto no_preserve_reasoning_inputs = default_history_inputs;
+        no_preserve_reasoning_inputs.chat_template_kwargs["preserve_reasoning"] = "false";
+        auto no_preserve_reasoning_params = common_chat_templates_apply(tmpls.get(), no_preserve_reasoning_inputs);
+        assert_contains(no_preserve_reasoning_params.prompt, "<｜Assistant｜></think>Previous answer");
+
+        common_chat_msg empty_tool_call = simple_assist_msg("", "", "empty_args", "{}");
+        common_chat_templates_inputs empty_tool_inputs;
+        empty_tool_inputs.messages = { message_user, empty_tool_call };
+        empty_tool_inputs.tools    = { empty_args_tool };
+        auto empty_tool_params = common_chat_templates_apply(tmpls.get(), empty_tool_inputs);
+        assert_contains(empty_tool_params.prompt,
+                        "<｜DSML｜invoke name=\"empty_args\">\n\n</｜DSML｜invoke>");
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja");
+        check(tmpls, basic(),                  "<｜Assistant｜><think>");
+        check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
+        check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
+
+        auto continuation_content_no_thinking = continuation_content();
+        continuation_content_no_thinking.messages = { system_msg, message_user, simple_assist_msg("Hello, ") };
+        continuation_content_no_thinking.enable_thinking = false;
+        check(tmpls, continuation_content_no_thinking, "<｜Assistant｜></think>Hello, ");
+
+        common_chat_templates_inputs high_inputs;
+        high_inputs.messages = { system_msg, message_user };
+        high_inputs.chat_template_kwargs["reasoning_effort"] = R"("high")";
+        auto high_params = common_chat_templates_apply(tmpls.get(), high_inputs);
+        assert_contains(high_params.prompt, deepseek_v4_reasoning_effort_max);
+
+        auto max_inputs = high_inputs;
+        max_inputs.chat_template_kwargs["reasoning_effort"] = R"("max")";
+        auto max_params = common_chat_templates_apply(tmpls.get(), max_inputs);
+        assert_contains(max_params.prompt, deepseek_v4_flash_0731_reasoning_effort_max);
+
+        auto low_inputs = high_inputs;
+        low_inputs.chat_template_kwargs["reasoning_effort"] = R"("low")";
+        auto low_params = common_chat_templates_apply(tmpls.get(), low_inputs);
+        assert_not_contains(low_params.prompt, deepseek_v4_reasoning_effort_max);
+        assert_not_contains(low_params.prompt, deepseek_v4_flash_0731_reasoning_effort_max);
+
+        common_chat_templates_inputs default_effort_inputs;
+        default_effort_inputs.messages = { system_msg, message_user };
+        auto default_effort_params = common_chat_templates_apply(tmpls.get(), default_effort_inputs);
+        assert_not_contains(default_effort_params.prompt, deepseek_v4_reasoning_effort_max);
+        assert_not_contains(default_effort_params.prompt, deepseek_v4_flash_0731_reasoning_effort_max);
+
+        auto non_thinking_max_inputs = max_inputs;
+        non_thinking_max_inputs.enable_thinking = false;
+        auto non_thinking_max_params = common_chat_templates_apply(tmpls.get(), non_thinking_max_inputs);
+        assert_not_contains(non_thinking_max_params.prompt, deepseek_v4_flash_0731_reasoning_effort_max);
+
+        common_chat_templates_inputs response_format_inputs;
+        response_format_inputs.messages = { system_msg, message_user };
+        response_format_inputs.tools = { get_time_tool };
+        response_format_inputs.json_schema =
+            R"({"type":"object","properties":{"answer":{"type":"string"}}})";
+        auto response_format_params = common_chat_templates_apply(tmpls.get(), response_format_inputs);
+        assert_contains(response_format_params.prompt,
+                        "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n");
+        assert_contains(response_format_params.prompt, R"("answer": {"type": "string"})");
     }
 
     {
