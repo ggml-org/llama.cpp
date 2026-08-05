@@ -1,6 +1,7 @@
 # Tessera S2S: Route A (text bridge) + instrumentation for Route B
 
-Status: design, pending architect sign-off on open questions in section 8.
+Status: design. Talker quantization locked by architect 2026-08-05 (section
+3.4); sections 8.1/8.2/8.3 still open.
 Date: 2026-08-05
 
 ## 0. Driving decisions
@@ -13,6 +14,9 @@ Date: 2026-08-05
 3. Route B = extend Gemma 4's vocab with Qwen3-TTS codec code ids, finetune the
    trunk to speak codes directly, retire the Talker stage. Route B is gated on
    Route A's accumulated instrumentation data, not on a calendar date.
+4. The Talker is quantized through the Tessera calibration and quantization
+   pipelines, not plain offline quant. It doubles as the multimodal test
+   target for ternary-dequant-on-arrival (section 3.4).
 
 ## 1. Why instrumenting Route A makes Route B nearly free
 
@@ -114,6 +118,36 @@ packet within ~100 ms of Talker decode start on M-series.
 - CLI: tessera-s2s-cli for headless verification before Studio wiring
   (text in -> PCM out, timing report).
 
+### 3.4 Talker quantization (architect decision, 2026-08-05)
+
+The Talker goes through the Tessera calibration and quantization pipelines
+(calibration -> tessera quantizer -> ternary ANE weight encoding). Two
+purposes:
+
+- Ship-quality quantization of the Talker with the same machinery used for
+  trunks and towers.
+- Multimodal coverage for ternary-dequant-on-arrival. The ane-fused-dequant
+  campaign has only ever validated dequant on text matmul fixtures. The
+  Talker (TTS LM: codebook-feature inputs, MTP composition, 3,072-entry codec
+  head) is the first non-text model through the pipeline, and becomes the
+  multimodal parity fixture for dequant-on-arrival once that path lands.
+
+Campaign dependency, honest state at 2026-08-05: true fused
+dequant-on-arrival currently FAILS parity (ane-fused-dequant Phase 0.5
+finding: the MIL dequant chain is broken as a whole, individual constructs
+exonerated). The champion that passes the 4-seed gate is host-side dequant to
+F16 + plain ANE matmul, bit-identical to the dequant-on-host path.
+Consequences for this wave:
+
+- The W2 correctness gate runs code/logit parity against the F16 reference
+  through the host-dequant path (the one that passes today).
+- Ternary-dequant-on-arrival on the Talker is a tracking item gated on the
+  ane-fused-dequant campaign; it is deliberately NOT in the S2S critical
+  path. When the campaign lands on-arrival parity for text fixtures, the
+  Talker fixture is re-run as the multimodal proof.
+- Calibration data: TTS prompts + style/voice instructions (input side only;
+  imatrix observes activations, output codes are irrelevant to it).
+
 ## 4. Instrumentation contract
 
 ### 4.1 Per-utterance record: llama.tessera.s2s.v1 (NDJSON)
@@ -189,20 +223,26 @@ separate, explicit opt-in consent lane distinct from the T&Cs collection.
 ## 7. Sequencing
 
 - W1: this doc; lock decisions in section 8.
-- W2: Talker conversion + golden parity tests (HF vs GGUF logits and sampled
-  codes on fixed prompts).
+- W2: Talker conversion + calibration + tessera-pipeline quantization
+  (ternary ANE encoding, section 3.4) + golden parity tests (HF vs GGUF
+  logits and sampled codes on fixed prompts, host-dequant path).
 - W3: Code2Wav graph + streaming PCM + tessera-s2s-cli end to end.
 - W4: instrumentation + trace store + Studio audio node + session wiring.
 - W5 (optional, deferred): Tokenizer-12Hz encoder graph for voice clone.
 
 ## 8. Open questions for the architect
 
+Resolved 2026-08-05: Talker quantization goes through the Tessera
+calibration/quantization pipelines as the ternary-dequant-on-arrival
+multimodal test target (section 3.4). Plain offline quant (e.g. Q8_0) is off
+the table.
+
+Still open:
+
 1. Code storage in traces: zlib base64 by default; raw as opt-in?
-2. Talker quant: Q8_0 recommended (1.7B is small, voice quality is sensitive
-   to head precision). Confirm.
-3. First-ship voice mode: CustomVoice presets (no encoder graph needed) vs
+2. First-ship voice mode: CustomVoice presets (no encoder graph needed) vs
    Base voice clone. CustomVoice recommended for W2-W4, clone deferred to W5.
-4. Route B consent lane: opt-in contribution of voice-bearing pairs, separate
+3. Route B consent lane: opt-in contribution of voice-bearing pairs, separate
    from the anonymous dataset route. Confirm the lane exists before W4 ships
    capture defaults.
 
