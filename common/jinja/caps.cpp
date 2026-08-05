@@ -482,6 +482,7 @@ caps caps_get(jinja::program & prog) {
             });
         },
         [&](context & ctx) {
+            ctx.set_val("enable_thinking", mk_val<value_bool>(true));
             caps_apply_preserve_reasoning(ctx, true);
         },
         nullptr, // tools_fn
