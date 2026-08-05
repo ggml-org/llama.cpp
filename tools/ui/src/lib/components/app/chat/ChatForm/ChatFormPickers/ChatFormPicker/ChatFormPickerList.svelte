@@ -1,7 +1,8 @@
 <script lang="ts" generics="T">
-	import { untrack, type Snippet } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import { SearchInput } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
+	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { CHAT_FORM_POPOVER_MAX_HEIGHT } from '$lib/constants';
 
 	interface Props {
@@ -51,31 +52,14 @@
 		showSearchInput ? (isLoading || items.length > 0 ? 'pt-13' : 'pt-10') : ''
 	);
 
-	let lastScrollTrigger: number | null = null;
-
 	// selectedIndex/items.length are untracked so hover and result replacement
 	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger
-	$effect(() => {
-		if (scrollTrigger === undefined) return;
-
-		// Skip the initial run on mount: the list opens with the first row
-		// already in view, and scrolling here fires before the popover is
-		// positioned, which scrolls the whole page to the top.
-		if (lastScrollTrigger === null) {
-			lastScrollTrigger = scrollTrigger;
-			return;
-		}
-
-		if (scrollTrigger === lastScrollTrigger) return;
-		lastScrollTrigger = scrollTrigger;
-		untrack(() => {
-			if (!listContainer) return;
-			if (selectedIndex < 0 || selectedIndex >= items.length) return;
-			const selectedElement = listContainer.querySelector(
-				`[data-picker-index="${selectedIndex}"]`
-			) as HTMLElement | null;
-			selectedElement?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-		});
+	useScrollActiveRow({
+		getTrigger: () => scrollTrigger,
+		getContainer: () => listContainer,
+		getIndex: () => selectedIndex,
+		getCount: () => items.length,
+		dataIndex: 'picker'
 	});
 </script>
 

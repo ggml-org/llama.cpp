@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { FolderOpen } from '@lucide/svelte';
-	import { untrack } from 'svelte';
 	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
@@ -19,6 +18,7 @@
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
+	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
 	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
 	import {
@@ -141,28 +141,15 @@
 		}
 	});
 
-	let lastScrollTrigger: number | null = null;
-
-	// hoveredIndex/queryResults are untracked so hover and result replacement
-	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger
-	$effect(() => {
-		// Skip the initial run on mount: scrolling here fires before the popover
-		// is positioned, which scrolls the whole page to the top.
-		if (lastScrollTrigger === null) {
-			lastScrollTrigger = nav.scrollTrigger;
-			return;
-		}
-
-		if (nav.scrollTrigger === lastScrollTrigger) return;
-		lastScrollTrigger = nav.scrollTrigger;
-		untrack(() => {
-			if (!listContainer) return;
-			if (nav.hoveredIndex < 0 || nav.hoveredIndex >= queryResults.length) return;
-			const selectedElement = listContainer.querySelector(
-				`[data-result-index="${nav.hoveredIndex}"]`
-			) as HTMLElement | null;
-			selectedElement?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-		});
+	// Scrolls the highlighted row into view on keyboard nav only (and when
+	// a freshly prioritized list lands). Same behavior ChatFormPickerList
+	// provides for its own list.
+	useScrollActiveRow({
+		getTrigger: () => nav.scrollTrigger,
+		getContainer: () => listContainer,
+		getIndex: () => nav.hoveredIndex,
+		getCount: () => queryResults.length,
+		dataIndex: 'result'
 	});
 
 	// Effective directory the current search runs against (shown in the
