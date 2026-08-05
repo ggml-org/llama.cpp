@@ -68,6 +68,24 @@ target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
+if (APPLE)
+    # tessera: AudioToolbox is the production macOS audio decode
+    # path (WAV / MP3 / FLAC / AAC / ALAC). The clip-capture
+    # module's Apple branch uses ExtAudioFile to decode; the
+    # inline WAV parser remains as a final fallback. The
+    # find_library + target_link_libraries pattern is the
+    # standard CMake approach for system frameworks;
+    # AudioToolbox is a system framework, not a third-party dep.
+    # CoreFoundation is required by AudioToolbox's CFString /
+    # CFURL helpers.
+    find_library(AudioToolbox_FRAMEWORK AudioToolbox)
+    find_library(CoreFoundation_FRAMEWORK CoreFoundation)
+    target_link_libraries(mtmd PRIVATE
+        ${AudioToolbox_FRAMEWORK}
+        ${CoreFoundation_FRAMEWORK})
+    target_compile_definitions(mtmd PRIVATE TS_HAVE_AUDIOTOOLBOX)
+endif()
+
 if (MTMD_VIDEO)
     target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)
 endif()

@@ -1,13 +1,18 @@
 // tessera: llama-clip-capture CLI.
 //
 // Standalone binary that the Python multimodal_calibrate.py
-// driver invokes via subprocess when ``--source real`` is set.
-// Mirrors the imatrix CLI pattern: the binary is the surface
-// the orchestrator uses, the library is the reusable side.
+// driver invokes via subprocess. Mirrors the imatrix CLI
+// pattern: the binary is the surface the orchestrator uses, the
+// library is the reusable side.
 //
 // Usage:
 //   llama-clip-capture --model PATH --inputs PATH [repeat] \
 //                      --output PATH --mode vision|audio \
+//                      [--batch-size N] [--peak-rss-budget-gb N] \
+//                      [--threads N]
+//   llama-clip-capture --model PATH --mm-projector PATH \
+//                      --inputs PATH [repeat] \
+//                      --output PATH --mode mm_projector_via_vision|mm_projector_via_audio \
 //                      [--batch-size N] [--peak-rss-budget-gb N] \
 //                      [--threads N]
 //
@@ -32,25 +37,40 @@ static void usage(const char * prog) {
         "         [--batch-size N] [--peak-rss-budget-gb N]\n"
         "         [--threads N]\n"
         "\n"
+        "   or, for the mm_projector capture:\n"
+        "\n"
+        "%s --model PATH --mm-projector PATH --inputs PATH [repeat]\n"
+        "         --output PATH --mode mm_projector_via_vision|mm_projector_via_audio\n"
+        "         [--batch-size N] [--peak-rss-budget-gb N]\n"
+        "         [--threads N]\n"
+        "\n"
         "tessera: real forward-pass activation capture for the\n"
         "clip graph. Mirrors the imatrix CLI pattern; the\n"
         "Python multimodal_calibrate.py driver invokes this\n"
-        "binary via subprocess when --source real is set.\n"
+        "binary via subprocess.\n"
         "\n"
         "Options:\n"
         "  --model PATH              Path to the clip GGUF (vision\n"
-        "                            tower / audio tower / mmproj).\n"
+        "                            tower / audio tower).\n"
+        "  --mm-projector PATH       Path to the mm_projector GGUF\n"
+        "                            (required for mm_projector_*\n"
+        "                            modes; ignored otherwise).\n"
         "  --inputs PATH [repeat]    One or more image (vision) or\n"
         "                            audio (audio) files.\n"
         "  --output PATH             Where to write the JSON.\n"
-        "  --mode {vision,audio}     Modality (default: vision).\n"
+        "  --mode {vision,audio,mm_projector_via_vision,mm_projector_via_audio}\n"
+        "                            Modality (default: vision).\n"
         "  --batch-size N            Inputs per forward pass (default 1).\n"
+        "                            When the input list is larger than\n"
+        "                            N, the capture chunks the inputs\n"
+        "                            into multiple forward calls and\n"
+        "                            accumulates per-tensor stats.\n"
         "  --peak-rss-budget-gb N    Refuse to run if the estimated\n"
         "                            peak-RSS exceeds N GB (default 0 =\n"
         "                            no limit).\n"
         "  --threads N               Forward-pass thread count (default 4).\n"
         "  --help                    Show this help and exit.\n",
-        prog);
+        prog, prog);
 }
 
 int main(int argc, char ** argv) {
@@ -59,6 +79,7 @@ int main(int argc, char ** argv) {
         return 64;  // EX_USAGE
     }
     const char * model = nullptr;
+    const char * mm_projector = nullptr;
     const char * output = nullptr;
     std::vector<std::string> inputs;
     ts_clip_capture_mode mode = TS_CLIP_CAPTURE_MODE_VISION;
@@ -72,6 +93,8 @@ int main(int argc, char ** argv) {
             return 0;
         } else if (arg == "--model" && i + 1 < argc) {
             model = argv[++i];
+        } else if (arg == "--mm-projector" && i + 1 < argc) {
+            mm_projector = argv[++i];
         } else if (arg == "--output" && i + 1 < argc) {
             output = argv[++i];
         } else if (arg == "--inputs" && i + 1 < argc) {
@@ -90,6 +113,10 @@ int main(int argc, char ** argv) {
                 mode = TS_CLIP_CAPTURE_MODE_VISION;
             } else if (m == "audio") {
                 mode = TS_CLIP_CAPTURE_MODE_AUDIO;
+            } else if (m == "mm_projector_via_vision") {
+                mode = TS_CLIP_CAPTURE_MODE_MM_PROJECTOR_VIA_VISION;
+            } else if (m == "mm_projector_via_audio") {
+                mode = TS_CLIP_CAPTURE_MODE_MM_PROJECTOR_VIA_AUDIO;
             } else {
                 std::fprintf(stderr,
                     "llama-clip-capture: unknown --mode %s\n",
@@ -132,21 +159,18 @@ int main(int argc, char ** argv) {
             "one path\n");
         return 64;
     }
-    if (batch_size > 1) {
-        // The v2 capture path processes one input per forward
-        // pass (the v2 activation tap is shape-agnostic but the
-        // scheduler resets between passes). The --batch-size
-        // flag is reserved for a future v3 that batches; for
-        // now we just warn and proceed with batch_size=1.
+    if ((mode == TS_CLIP_CAPTURE_MODE_MM_PROJECTOR_VIA_VISION ||
+         mode == TS_CLIP_CAPTURE_MODE_MM_PROJECTOR_VIA_AUDIO) &&
+        mm_projector == nullptr) {
         std::fprintf(stderr,
-            "llama-clip-capture: --batch-size > 1 not yet "
-            "supported, proceeding with --batch-size 1\n");
-        batch_size = 1;
+            "llama-clip-capture: --mm-projector is required "
+            "for mm_projector_* modes\n");
+        return 64;
     }
     std::string err;
     int rc = ts_clip_capture_activations(
-            model, inputs, mode, output,
-            peak_rss_budget_bytes, n_threads, &err);
+            model, mm_projector, inputs, mode, output,
+            batch_size, peak_rss_budget_bytes, n_threads, &err);
     if (rc != 0) {
         std::fprintf(stderr, "llama-clip-capture: failed: %s\n",
                 err.c_str());
