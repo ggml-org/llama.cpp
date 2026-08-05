@@ -1088,9 +1088,13 @@ Phase 0 of `docs/tessera-ane-ios-demo-design.md` is the
 load-bearing research of the iPhone ANE demo. Until the L1
 matmul lands on the ANE, every other phase (HIGGS per-layer
 alpha accuracy, EXL2 cross-check at full fidelity, gguf to
-IOSurface streaming) operates on a proxy. This part documents
-the architectural decisions, the dispatch code, the parity
-test, and the IOSurface plumbing for the L1 path.
+IOSurface streaming) operates on a proxy. (Update: the HIGGS
+structural proxy's `t_l^2` default is now the L1 kernel-dequant
+measurement - `ts_higgs_proxy_measure_l1`, the same TILE640
+dispatch this part documents; see `docs/tessera-higgs-estimator.md`
+Section 2.1.) This part documents the architectural decisions,
+the dispatch code, the parity test, and the IOSurface plumbing
+for the L1 path.
 
 ### 6.1 Open Decisions and resolutions
 

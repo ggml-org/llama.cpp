@@ -607,13 +607,23 @@ NumPy path is interchangeable with one produced by the C++ path.
   design" section to document the C++ path and the parity
   invariant)
 
-**L1-agnostic invariant (preserved)**: when Phase 0's L1
-kernel-dequant lands, `ts_higgs_proxy_estimate` accepts a
-`ts_higgs_proxy_measurement_fn` callback (same shape as
+**L1-agnostic invariant (landed)**: `ts_higgs_proxy_estimate`
+accepts a `ts_higgs_proxy_measurement_fn` callback (same shape as
 `ts_higgs_metric_fn` in the existing `tessera-higgs.h`). The
-default measurement function is the offline ternary MSE proxy
-(unchanged); the L1 path is a function pointer change, not a
-code rewrite.
+default measurement is the L1-on-ANE kernel-dequant path
+(`ts_higgs_proxy_measure_l1`, `t_squared_source =
+"l1_kernel_dequant"`): each tensor is packed into the flat TILE640
+row layout and dequantized with the same dispatch the
+`GGML_OP_TILE640_MATMUL` inference path uses (v2 dequant at
+`in_dim >= GGML_TESSERA_T640_V2_MIN_K` when v2 is enabled, the C
+reference below the cutoff), round-tripped through fp16 (the ANE
+bundle's pinned slot dtype), and compared element-wise:
+`t_l^2 = mean |W - W_deq| / max |W|`. This captures the ternary
+quantization error AND the ANE fp16 precision loss.
+`TS_HIGGS_PROXY_LEGACY_OFFLINE=1` restores the legacy offline
+ternary MSE proxy (`t_squared_source = "offline_ternary_mse"`); a
+caller-supplied measurement function also keeps the legacy
+behavior bit-identical.
 
 **Estimated scope**: 1-2 weeks. The math is small; the work is
 the GGUF reader plumbing, the CMake wiring, the parity tests,

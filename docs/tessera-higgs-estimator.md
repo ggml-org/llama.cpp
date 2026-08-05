@@ -107,8 +107,9 @@ The architecture:
    pure numbers. They have no GGUF dependency and are
    unit-tested in isolation.
 2. The measurement function (`measure_t_squared_offline`
-   today; a future `measure_t_squared_l1` reads the L1
-   sidecar) is **parameterized into the orchestrator**. The
+   in the Python path; the C++ path measures L1-on-ANE
+   directly via `ts_higgs_proxy_measure_l1`) is
+   **parameterized into the orchestrator**. The
    orchestrator's signature is
 
        estimate(tensors, kv_keys, config, *, measurement)
@@ -164,9 +165,9 @@ top-level `measurement` field):
 
 | Value | Producer | When |
 |---|---|---|
-| `offline_ternary_mse` | C++ binary (default) | Normal run, above the size threshold |
+| `l1_kernel_dequant` | C++ binary (default) | Normal run, above the size threshold: per-tensor L1 distance between the fp32 weight and the TILE640-dequantized fp16 weight via the same dispatch the `GGML_OP_TILE640_MATMUL` inference path uses |
 | `uniform_fallback` | C++ binary (fallback) | Total params below `min_params_for_estimate`; every alpha is 1.0 |
-| `l1_kernel_dequant` | C++ binary (Phase 0 future) | When the L1 measurement_fn is wired in; ``ts_higgs_proxy_measurement_fn`` returns the L1 sidecar's per-tensor error |
+| `offline_ternary_mse` | C++ binary (legacy opt-in) | `TS_HIGGS_PROXY_LEGACY_OFFLINE=1`, or a caller-supplied `ts_higgs_proxy_measurement_fn` (custom functions keep the legacy behavior bit-identical) |
 | `offline_ternary_mse_numpy_fallback` | Python wrapper (dev fallback only) | The C++ binary is not on PATH and the wrapper fell back to the in-process NumPy path. A discriminator value, not a different math; the per-tensor math is identical to `offline_ternary_mse` |
 
 The discriminator `offline_ternary_mse_numpy_fallback`
@@ -174,8 +175,9 @@ exists so a future consumer can audit the path: a sidecar
 with that value was produced by the slower, dev-only
 NumPy implementation. The C++ binary NEVER stamps
 `_numpy_fallback`; if the C++ path ran, the sidecar's
-measurement is one of `offline_ternary_mse`,
-`uniform_fallback`, or (Phase 0) `l1_kernel_dequant`.
+measurement is one of `l1_kernel_dequant` (the default),
+`offline_ternary_mse` (legacy opt-in / custom fn), or
+`uniform_fallback`.
 
 **Family prior table (one source of truth)**: the
 `FAMILY_PRIOR` table in the Python module and the
@@ -201,10 +203,24 @@ int ts_higgs_proxy_estimate(
     ts_higgs_proxy_result * result);
 ```
 
-The default measurement function is the offline ternary
-MSE (same as the Python `measure_t_squared_offline`).
-The L1 path is a function-pointer change, not a code
-rewrite.
+The default measurement is the L1-on-ANE kernel dequant
+(`ts_higgs_proxy_measure_l1`): pack each tensor to the
+flat TILE640 row layout (`ts_higgs_proxy_pack_tile640`,
+C reference quantizer for deterministic packing),
+dequantize with the same dispatch the
+`GGML_OP_TILE640_MATMUL` inference path uses (v2 dequant
+at `in_dim >= GGML_TESSERA_T640_V2_MIN_K` when v2 is
+enabled, C reference below the cutoff; the meta decode
+follows the v2 dispatch cost model), round-trip through
+fp16 (the ANE bundle's pinned slot dtype), and report
+`t_l^2 = mean |W - W_deq| / max |W|`. This captures the
+ternary quantization error AND the ANE fp16 precision
+loss. `TS_HIGGS_PROXY_LEGACY_OFFLINE=1` restores the
+legacy offline ternary MSE proxy (same math as the
+Python `measure_t_squared_offline`); a caller-supplied
+measurement function also keeps the legacy behavior
+bit-identical. The L1 path is a function-pointer change,
+not a code rewrite.
 
 ## 3. The structural Hessian-trace proxy (the L1-agnostic alpha)
 
@@ -249,13 +265,12 @@ calculation. The proxy is the **ranking**; the
 magnitudes are not meaningful until Algorithm 3 (the
 perturbation-sweep fit) is wired in.
 
-When Algorithm 3 becomes cheap (L1-on-ANE), the
-orchestrator's measurement parameter switches from
-`measure_t_squared_offline` to `measure_t_squared_l1`
-(which reads the L1 sidecar's per-tensor relative
-error), and the structural proxy is replaced by the
-closed-form through-origin fit. The sidecar shape and
-the consumer's read path are unchanged.
+The proxy's `t_l^2` measurement already runs the
+L1-on-ANE path (`ts_higgs_proxy_measure_l1`, see Section
+2.1). When Algorithm 3 becomes cheap (L1-on-ANE), the
+structural proxy is replaced by the closed-form
+through-origin fit. The sidecar shape and the consumer's
+read path are unchanged.
 
 ## 4. The fallback ladder
 
@@ -340,7 +355,7 @@ tensor, in declaration order):
   "shape": [<int> ...],
   "n_elements": <int>,
   "frobenius_norm": <float>,
-  "t_squared": <float>,                 // offline ternary MSE today
+  "t_squared": <float>,                 // L1 kernel dequant today
   "t_squared_source": "<measurement function id>",
   "dtype_source": "<gguf dtype name>",  // e.g. "Q4_0", "F16", "F32"
   "alpha": <float>,                     // post-normalization, post-floor
@@ -386,6 +401,12 @@ test_estimate_with_synthetic_measurement`) pins the
 parameterization with a synthetic constant-measurement
 function. The orchestrator's contract is stable across
 measurement implementations.
+
+The C++ path has already made the L1 swap: the default
+measurement is `ts_higgs_proxy_measure_l1` (Section 2.1),
+which computes the L1 distance against the TILE640 kernel
+dequant directly (no sidecar indirection). The Python
+hook above stays offline-only; it is the dev fallback.
 
 ## 7. Operational notes
 
