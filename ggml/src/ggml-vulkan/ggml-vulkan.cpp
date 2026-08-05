@@ -818,6 +818,7 @@ struct vk_device_struct {
     bool shader_int64;
     bool buffer_device_address;
     bool vulkan_memory_model;
+    bool shader_clock;
 
     bool add_rms_fusion;
     uint32_t partials_binding_alignment;
@@ -1012,6 +1013,8 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_fill_f32;
     vk_pipeline pipeline_fill_f16;
+
+    vk_pipeline pipeline_sleep;
 
     vk_pipeline pipeline_geglu[2];
     vk_pipeline pipeline_reglu[2];
@@ -1392,6 +1395,11 @@ struct vk_op_push_constants {
     float param2;
     float param3;
     float param4;
+};
+
+struct vk_op_sleep_push_constants {
+    uint32_t ne;
+    uint32_t ticks;
 };
 
 struct vk_op_fwht_push_constants {
@@ -5675,6 +5683,12 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fill_f16, "fill_f16", fill_f16_len, fill_f16_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
+#if defined(GGML_VULKAN_SHADER_CLOCK_GLSLC_SUPPORT)
+    if (device->shader_clock) {
+        ggml_vk_create_pipeline(device, device->pipeline_sleep, "sleep", sleep_len, sleep_data, "main", 2, sizeof(vk_op_sleep_push_constants), {512, 1, 1}, {}, 1);
+    }
+#endif
+
 #define CREATE_GLU(name)  \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);
@@ -6203,6 +6217,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool dot2_f16_support = false;
         bool ocp_microscaling_extension = false;
         bool shader_float8_extension = false;
+        bool shader_clock_support = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
@@ -6252,6 +6267,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #if defined(GGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT)
             } else if (strcmp(VK_EXT_SHADER_FLOAT8_EXTENSION_NAME, properties.extensionName) == 0) {
                 shader_float8_extension = true;
+#endif
+#if defined(GGML_VULKAN_SHADER_CLOCK_GLSLC_SUPPORT)
+            } else if (strcmp("VK_KHR_shader_clock", properties.extensionName) == 0 &&
+                       !getenv("GGML_VK_DISABLE_SHADER_CLOCK")) {
+                shader_clock_support = true;
 #endif
             } else if (strcmp("VK_VALVE_shader_mixed_float_dot_product", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_DOT2")) {
@@ -6595,6 +6615,14 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_KHR_shader_integer_dot_product");
         }
 
+        VkPhysicalDeviceShaderClockFeaturesKHR shader_clock_features {};
+        shader_clock_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR;
+        if (shader_clock_support) {
+            last_struct->pNext = (VkBaseOutStructure *)&shader_clock_features;
+            last_struct = (VkBaseOutStructure *)&shader_clock_features;
+            device_extensions.push_back("VK_KHR_shader_clock");
+        }
+
         VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE dot2_features {};
         dot2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE;
         if (dot2_f16_support) {
@@ -6678,6 +6706,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->shader_int64 = device_features2.features.shaderInt64;
         device->buffer_device_address = vk12_features.bufferDeviceAddress;
         device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
+        device->shader_clock = shader_clock_support && shader_clock_features.shaderDeviceClock;
 
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;
@@ -11779,6 +11808,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_arange_f32;
         }
         return nullptr;
+    case GGML_OP_SLEEP:
+        return ctx->device->pipeline_sleep;
     case GGML_OP_FILL:
         if (dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_fill_f32;
@@ -12978,6 +13009,32 @@ static void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml
     std::array<uint32_t, 3> elements = { (uint32_t)ggml_nelements(dst), 1, 1 };
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, elements);
+}
+
+static void ggml_vk_sleep(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    VK_LOG_DEBUG("ggml_vk_sleep(dst=" << dst << ", us=" << ggml_get_op_params_i32(dst, 0) << ")");
+
+    // Vulkan does not specify the period of the shader realtime clock, assume it matches the timestamp counter
+    const float    ns_per_tick = ctx->device->properties.limits.timestampPeriod;
+    const uint64_t ns          = 1000 * (uint64_t) ggml_get_op_params_i32(dst, 0);
+    const uint64_t ticks       = std::min<uint64_t>(ns_per_tick > 0.0f ? (uint64_t)(ns / ns_per_tick) : ns, std::numeric_limits<uint32_t>::max());
+
+    vk_op_sleep_push_constants pc = {
+        (uint32_t)(ggml_nbytes(dst) / sizeof(uint32_t)),
+        (uint32_t) ticks,
+    };
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, nullptr, nullptr, dst, GGML_OP_SLEEP);
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    vk_subbuffer src_buf = ggml_vk_tensor_subbuffer(ctx, src0);
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
+
+    // dispatch a single workgroup, all of its invocations spin concurrently so the delay does not accumulate
+    std::array<uint32_t, 3> elements = { pipeline->wg_denoms[0], 1, 1 };
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src_buf, dst_buf }, pc, elements);
 }
 
 static void ggml_vk_sin(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -15385,6 +15442,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_FILL:
         ggml_vk_fill(ctx, compute_ctx, node);
+
+        break;
+    case GGML_OP_SLEEP:
+        ggml_vk_sleep(ctx, compute_ctx, src0, node);
 
         break;
     case GGML_OP_SCALE:
@@ -18349,6 +18410,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return op->type == GGML_TYPE_F32;
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
+        case GGML_OP_SLEEP:
+            // the shader copies 4-byte units, the delay comes from the device clock
+            return device->shader_clock && op->type == op->src[0]->type &&
+                   ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
+                   (ggml_nbytes(op) % sizeof(uint32_t)) == 0;
         case GGML_OP_SCALE:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_PAD:
@@ -19114,6 +19180,8 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         } else if (tensor->op == GGML_OP_FILL) {
             const float value = ggml_get_op_params_f32(tensor, 0);
             tensor_clone = ggml_fill(ggml_ctx, src_clone[0], value);
+        } else if (tensor->op == GGML_OP_SLEEP) {
+            tensor_clone = ggml_sleep(ggml_ctx, src_clone[0], ggml_get_op_params_i32(tensor, 0));
         } else if (tensor->op == GGML_OP_SQR) {
             tensor_clone = ggml_sqr(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_SQRT) {
