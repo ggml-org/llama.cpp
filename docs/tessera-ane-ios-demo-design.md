@@ -219,6 +219,119 @@ architecture pivots here and we know early.
   bundle at compile time? (Same question applies for Phase 2's
   streaming layer.)
 
+### Phase 0.5: EXL2 cross-check (research credibility layer)
+
+**Why**: Tessera's HIGGS per-layer alpha is the architect's research
+contribution. To claim it's well-founded, the per-layer sensitivity
+ranking from HIGGS should agree with at least one independent
+estimator. **EXL2** is the natural choice: it's the current
+quality-per-bit leader on NVIDIA (open source, MIT, turboderp's
+implementation of GPTQ-style calibration error with per-layer bit
+allocation), runs on consumer GPUs, and produces a per-layer
+sensitivity ranking as a side-effect of its calibration pass.
+
+The two estimators measure different things:
+- **HIGGS (Tessera)**: per-layer alpha via the Linearity Theorem,
+  weighting the L1 kernel-dequant reconstruction error by the
+  per-tensor Hessian. This is the kernel-direct fidelity measurement.
+- **EXL2 (turboderp)**: per-layer sensitivity via GPTQ-style
+  calibration error, where the algorithm quantizes each layer at
+  multiple bpw (2, 3, 4, 5, 6, 8) and chooses the combination that
+  minimizes max quantization error under a target average bpw.
+
+Different math, different proxy, different hardware — but both
+estimate the same underlying signal: **which transformer layers are
+the most sensitive to quantization error?** If the two rankings
+agree, that's evidence the design is shaped by SOTA. If they
+disagree on specific layers, that's a research finding (the
+disagreement is a paper, not a bug).
+
+**This phase is orthogonal to the iPhone demo work** but runs in
+parallel. It can start as soon as the calibration corpus is
+available (no ANE work required; runs on a separate NVIDIA box or
+in the cloud). The agreement measurement is published alongside
+the iPhone demo as the research-credibility layer.
+
+**Definition of done**:
+- A new `exl2_layer_stats` table in the unified DuckDB with columns:
+  `model_hash`, `layer_index`, `exl2_per_layer_error` (the per-layer
+  quantization error at the EXL2-chosen bpw), `exl2_per_layer_bpw`
+  (the bpw EXL2's allocator chose for that layer), `exl2_calibration_corpus`
+  (the corpus the EXL2 calibration was run against, for audit
+  trail). One row per (model_hash, layer_index).
+- A `tools/tessera/exl2_calibrate.py` (or under `tools/ane-mtp/`)
+  that runs ExLlamaV2's calibration on the same corpus
+  Tessera uses (Wikitext-103 + COCO + LibriSpeech for the
+  multimodal case), captures the per-layer error + per-layer
+  bpw, and writes to `exl2_layer_stats`. Emits a sidecar JSON
+  in the same shape as the L5 retune sidecar so the L5 loop can
+  consume it without a custom reader.
+- The L5 orchestrator reads `exl2_layer_stats` and folds the
+  EXL2 per-layer error into the per-tensor sensitivity score as
+  a third evidence signal (alongside HIGGS alpha and the
+  imatrix stats). The fold is **independent** — the orchestrator
+  does not bias toward either estimator; both are evidence, the
+  disagreement is logged.
+- A `tests/test_exl2_cross_check.py` that:
+  1. Runs both estimators on a known model (gemma 4 12B at BF16
+     is the gold standard).
+  2. Computes the per-layer Spearman rank correlation between
+     HIGGS alpha ranking and EXL2 error ranking.
+  3. Asserts Spearman > 0.6 (high agreement, expected outcome on
+     well-behaved models).
+  4. Reports the top-5 disagreeing layers as a research finding
+     (would be a paper, not a test failure).
+- Documentation: a `docs/tessera-higgs-vs-exl2-sensitivity.md`
+  report on the gemma 4 12B measurement, with the Spearman plot
+  and the top-5 disagreements.
+
+**Files**:
+- `tools/tessera/tessera_db.py` (new `exl2_layer_stats` table +
+  additive column on the per-tensor sensitivity path; no
+  destructive schema change)
+- `tools/tessera/exl2_calibrate.py` (new, ~300 lines)
+- `tools/tessera/l5_orchestrator.py` (extend the per-tensor
+  sensitivity score to consume EXL2 as a third evidence signal;
+  log disagreement)
+- `tools/tessera/test_exl2_cross_check.py` (new, ~200 lines)
+- `docs/tessera-higgs-vs-exl2-sensitivity.md` (the report)
+
+**Estimated scope**: 1.5-2 weeks (1 week coding + integration, 3-5
+days running the calibration + writing the report, 1-2 days for
+the cross-validation test).
+
+**Open questions**:
+- Where does the EXL2 calibration run? Option A: a separate
+  NVIDIA box / cloud instance (since ExLlamaV2 is CUDA-only).
+  Option B: deferred until the iPhone demo is public, run the
+  EXL2 calibration on whatever's available at that point. The
+  architect's call. My recommendation: Option A in parallel with
+  Phase 0-2 on the Apple side; the work is fully independent.
+- Is the per-tensor EXL2 error useful, or only the per-layer
+  ranking? Per-tensor gives finer granularity for the L5
+  loop's per-tensor verdicts; per-layer is what the cross-check
+  needs. Both fit in the same `exl2_layer_stats` table (one row
+  per tensor, with the layer index as a column).
+- The Spearman threshold (0.6) is a guess. The actual floor is
+  determined empirically on a known model. The test should
+  report the Spearman value and let the architect set the
+  threshold after the first run.
+
+**Research claim**:
+
+> *"The HIGGS Linearity Theorem per-layer sensitivity ranking
+> agrees with the EXL2 (turboderp) GPTQ-style per-layer sensitivity
+> ranking at Spearman ρ > 0.6 on gemma 4 12B. The top-5
+> disagreements are in layers that EXL2 over-allocates bits to
+> (early attention QKV) and HIGGS under-weights (late FFN down
+> projections); the disagreement is consistent with the
+> kernel-direct vs. offline-proxy measurement difference."*
+
+If true, this is a real paper. The two estimators are independent
+(Tessera's HIGGS is kernel-direct, EXL2's is offline Hessian
+proxy), and the agreement validates the architect's design
+direction.
+
 ### Phase 1: transformer body ops on ANE
 
 **Why**: the architect's W0 spike (`ggml-ane.mm`) covers matmul +
@@ -496,6 +609,24 @@ that just barely fits. The on-device download is the right
 production story anyway: the model changes faster than the app
 release cycle.
 
+### 6. EXL2 cross-check (Phase 0.5): ship with the iPhone demo or follow-on?
+
+**Recommend: ship with the demo, but in parallel.** Phase 0.5 runs
+on a separate NVIDIA box / cloud instance and does not block the
+Apple-side work. The cross-validation result (Spearman ρ between
+HIGGS and EXL2 per-layer sensitivity rankings) is the research
+credibility layer that the demo's public story rests on. Without
+it, the demo is "Tessera 2-bit on iPhone." With it, the demo is
+"Tessera 2-bit on iPhone, and our per-layer sensitivity estimator
+agrees with the SOTA NVIDIA reference at ρ > 0.6." The second
+version is a paper. Run it in parallel; the cost is 1.5-2 weeks
+of CUDA-box time.
+
+Override: skip if the iPhone demo needs to ship faster than the
+research-credibility work can be done. The demo still works
+without the cross-check; it just doesn't have the validation
+behind the HIGGS claim.
+
 ## What this is NOT
 
 - **Not a weight-baked bundle**. The `.mlmodelc` is stateless;
@@ -519,32 +650,44 @@ release cycle.
 | Phase | Work | Estimated scope | Dependency |
 |---|---|---|---|
 | 0 | L1 kernel-dequant on ANE | 2-3 weeks | - |
+| 0.5 | EXL2 cross-check (research credibility) | 1.5-2 weeks | runs in parallel; needs the calibration corpus |
 | 1 | Transformer body ops | 2-3 weeks | Phase 0 (uses L1 path) |
 | 2 | GGUF-to-IOSurface weight streaming | 1-2 weeks | Phase 0+1 (multifunction bundle) |
 | 3 | HIGGS per-layer alpha | 1-2 weeks | Phase 0 (measurement source) |
 | 4 | iOS app | 3-4 weeks | Phases 0-2 (uses the running bundle) |
 | 5 | Battery / thermal characterization | 1 week | Phase 4 (needs the running app) |
 
-**Total: 10-12 weeks for Path A on iPhone, 12-14 weeks for Path B
+**Total: 12-14 weeks for Path A on iPhone, 14-16 weeks for Path B
 on iPhone.** iPad M-series first: 6-8 weeks for the iPad demo,
-then iPhone port as a follow-on.
+then iPhone port as a follow-on. Phase 0.5 runs in parallel on a
+separate NVIDIA box / cloud instance; it does not block the Apple-side
+work.
 
 **Critical path**: Phase 0 (L1) is the long pole and the
 architect's research differentiator. Every other phase assumes
 L1-on-ANE works. If it doesn't, the architecture pivots early.
+Phase 0.5 is independent and can run on whatever schedule the
+calibration-corpus + a CUDA-capable box allows.
 
 ## What lands first, in priority
 
 If only one phase can be done: **Phase 0 (L1 on ANE)**. It
 validates the whole architecture; the rest is plumbing.
 
-If two: **Phase 0 + Phase 1** (L1 + body ops). Together they
-prove the L1 path is fully on ANE, which is the load-bearing claim.
+If two: **Phase 0 + Phase 0.5** (L1 + EXL2 cross-check). Together
+they validate the iPhone demo on the architect's research claim
+and the independent cross-check. The result is a paper-grade
+research claim: "HIGGS sensitivity agrees with EXL2 sensitivity
+at Spearman ρ > X on gemma 4 12B."
 
-If three: **+ Phase 4** (iOS app). The demo needs the app.
+If three: **+ Phase 1** (body ops). Together with the above, the
+L1 path is fully on ANE and the research credibility is published.
+
+If four: **+ Phase 4** (iOS app). The demo needs the app.
 
 The character of each phase: Phase 0 is the architect's research
-contribution, Phase 1 is engineering, Phase 2-4 are plumbing,
+contribution, Phase 0.5 is the research credibility layer (paper-grade
+cross-validation), Phase 1 is engineering, Phase 2-4 are plumbing,
 Phase 5 is data.
 
 ## Open questions for the architect (one round)
@@ -565,5 +708,15 @@ Phase 5 is data.
    to see to commit to L1-on-ANE as the architecture? CPU-vs-ANE
    parity within 1e-2? A full block forward pass at the model's
    actual shapes? Something else?
+6. **EXL2 cross-check (Phase 0.5) included in the demo or
+   follow-on?** My recommendation is ship with the demo, in
+   parallel on a separate CUDA box. The cost is 1.5-2 weeks of
+   CUDA-box time; the value is the research-credibility layer
+   that turns the demo into a paper. Override: skip if the
+   demo needs to ship faster than the cross-check can be done.
+7. **NVIDIA box for EXL2 calibration**: do you have one in
+   your environment, or does this need to run on a rented
+   instance (vast.ai, RunPod, etc.)? Affects the timeline and
+   the cost estimate for Phase 0.5.
 
 The doc is the scope. Pick the decision points and we go.
