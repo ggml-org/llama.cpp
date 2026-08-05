@@ -527,6 +527,109 @@ implementation is engineering).
   re-quantized at a different granularity, or is the estimate
   stable across quant settings?
 
+### Phase 3.5: HIGGS structural proxy -> C++ first-class
+
+**Why**: Phase 3 just landed the structural proxy as a sidecar-time
+NumPy script (`tools/ane-mtp/estimate_higgs_alpha.py`, 1002 lines,
+52 tests). The proxy math is small, but the wiring is exactly the
+shape the calibration + quantization pipeline has in C++ today:
+read GGUF, dequant, compute, write sidecar JSON. Shipping it as a
+sidecar NumPy script makes the "L1-agnostic by design" claim
+partial: the L1 measurement source for the calibration / imatrix
+path is C++; the proxy that consumes it is not. Phase 3.5 closes
+that gap so the iOS dispatch's input is produced by the same
+first-class C++ module that produces every other L5 input.
+
+The proxy stays a **proxy**: `tessera-higgs.cpp` (HIGGS Algorithm 3,
+the paper's gold standard) is the L1-aware fallback when the
+model is large enough. The structural proxy is the fast path for
+"iPhone demo on a 12B model" where the paper's J-level Gaussian
+sweep would be infeasible. The C++ port shares the sidecar JSON
+shape (`ane.alpha-coefficients.v1`) and the family prior with
+the NumPy version byte-for-byte, so a sidecar produced by the
+NumPy path is interchangeable with one produced by the C++ path.
+
+**Definition of done**:
+- A `tools/quantize/tessera/tessera-higgs-proxy.{h,cpp}` (new)
+  that exposes the same API shape as the existing
+  `tessera-higgs.cpp`:
+  - `ts_higgs_proxy_params { J, t_min, t_max, alpha_floor, ... }`
+  - `ts_higgs_proxy_layer_result { name, alpha_l, t_squared, n_elem, family }`
+  - `ts_higgs_proxy_result { layers, n_valid, n_fallback_uniform, mean_alpha }`
+  - `ts_higgs_proxy_estimate(gguf_path, params, result)` that reads
+    the GGUF, dequantizes each tensor to F32, computes `t_l^2`
+    against a ternary reference, and estimates `alpha_l` from the
+    Frobenius norm + family prior + Hessian-trace surrogate.
+  - `ts_higgs_proxy_to_json` / `ts_higgs_proxy_from_json` for the
+    sidecar shape.
+- A `tools/quantize/tessera/test_higgs_proxy.cpp` (new) that
+  asserts:
+  - The C++ output is **byte-equivalent** to the NumPy output
+    on a fixed-seed fixture (round-trip via
+    `ts_higgs_proxy_to_json` -> `ts_higgs_proxy_from_json`).
+  - The family-prior rank order (K/V > attn_output > attn_q >
+    norm > token_embd > ffn_down > ffn_gate/up) holds on a
+    tinyllamas fixture.
+  - Uniform fallback engages below
+    `min_params_for_pert_estimate` (the same threshold the
+    NumPy version uses).
+  - The sidecar JSON validates against
+    `docs/tessera-higgs-estimator.md` (schema version
+    `ane.alpha-coefficients.v1`).
+- A `tools/tessera/estimate_higgs_alpha.py` (rewritten, thin
+  wrapper) that:
+  - Subprocesses the C++ binary (`tessera-higgs-proxy --gguf ...
+    --output ...`) and exposes the same CLI surface as today's
+    NumPy script.
+  - Falls back to the in-process NumPy implementation if the
+    C++ binary is not on PATH (e.g. dev environment without a
+    C++ build). The fallback is logged and tagged in the
+    sidecar so the consumer knows which path produced the
+    estimate.
+  - The 52 existing tests in
+    `tools/ane-mtp/test_estimate_higgs_alpha.py` are migrated
+    to the new layout: the parity tests assert the C++ and
+    NumPy paths produce the same sidecar; the C++-specific
+    tests move to `tests/test-higgs-proxy.cpp`.
+
+**Files**:
+- `tools/quantize/tessera/tessera-higgs-proxy.h` (new, ~80 lines)
+- `tools/quantize/tessera/tessera-higgs-proxy.cpp` (new,
+  ~600-700 lines, mirrors the structure of `tessera-higgs.cpp`)
+- `tools/quantize/tessera/CMakeLists.txt` (register the new
+  source + a new `tessera-higgs-proxy` binary target)
+- `tools/quantize/tessera/test_higgs_proxy.cpp` (new, ~30 tests)
+- `tools/tessera/estimate_higgs_alpha.py` (rewritten as thin
+  wrapper; the in-process NumPy path stays as the dev fallback)
+- `tools/ane-mtp/test_estimate_higgs_alpha.py` (migrated to
+  parity tests; the C++-only tests move out)
+- `docs/tessera-higgs-estimator.md` (extend the "L1-agnostic
+  design" section to document the C++ path and the parity
+  invariant)
+
+**L1-agnostic invariant (preserved)**: when Phase 0's L1
+kernel-dequant lands, `ts_higgs_proxy_estimate` accepts a
+`ts_higgs_proxy_measurement_fn` callback (same shape as
+`ts_higgs_metric_fn` in the existing `tessera-higgs.h`). The
+default measurement function is the offline ternary MSE proxy
+(unchanged); the L1 path is a function pointer change, not a
+code rewrite.
+
+**Estimated scope**: 1-2 weeks. The math is small; the work is
+the GGUF reader plumbing, the CMake wiring, the parity tests,
+and the Python wrapper migration. No external dependencies.
+
+**Open questions**:
+- Does the iOS dispatch need a C ABI for the proxy (callable
+  from Swift), or does it only need the sidecar JSON? Today the
+  Swift side reads the JSON; the C ABI is a future
+  optimization, not a Phase 3.5 deliverable.
+- Should the family prior live in C++ as a static table (same
+  shape as the NumPy `FAMILY_PRIOR_*` constants), or read from a
+  TOML sidecar alongside `ane.alpha-coefficients.v1`? C++ table
+  is the path of least resistance and matches the calibration
+  pipeline's prior encoding.
+
 ### Phase 4: iOS app
 
 **Why**: macOS development is the algorithm work; iOS is the
