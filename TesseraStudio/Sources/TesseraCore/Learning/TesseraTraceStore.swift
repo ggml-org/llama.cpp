@@ -91,6 +91,12 @@ public final class TesseraTraceStore: @unchecked Sendable {
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// Number of non-empty JSONL records in a single trace file. Public so a
+    /// producer can report honestly how many records it just appended.
+    public static func recordCount(inFile file: URL) -> Int {
+        countRecords(in: file)
+    }
+
     private static func countRecords(in file: URL) -> Int {
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { return 0 }
         var count = 0
