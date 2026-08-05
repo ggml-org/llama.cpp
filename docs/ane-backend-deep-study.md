@@ -1082,6 +1082,276 @@ selected.
 
 ---
 
+## Part 6: Phase 0 L1 matmul on ANE
+
+Phase 0 of `docs/tessera-ane-ios-demo-design.md` is the
+load-bearing research of the iPhone ANE demo. Until the L1
+matmul lands on the ANE, every other phase (HIGGS per-layer
+alpha accuracy, EXL2 cross-check at full fidelity, gguf to
+IOSurface streaming) operates on a proxy. This part documents
+the architectural decisions, the dispatch code, the parity
+test, and the IOSurface plumbing for the L1 path.
+
+### 6.1 Open Decisions and resolutions
+
+The Phase 0 spec lists three open decisions the worker must
+make and document explicitly. The resolutions below are the
+ones shipped in this worktree.
+
+#### 6.1.1 Standalone matmul function or join the body-ops bundle?
+
+**Resolution: separate single-function fixture
+`tools/ane-mtp/fixtures/tile640-matmul/`, following the same
+manifest shape as the Phase 1 body ops and the W0 matmul.**
+
+The Phase 1 multifunction bundle (`tools/ane-mtp/fixtures/
+transformer-body/`) is built as N separate single-function
+`.mlmodelc` files in one output directory; the iOS app loads
+each `.mlmodelc` as a separate `MLModel` with
+`MLModelConfiguration.functionName` set to the function's
+name. The manifest (`transformer-body.ane_state.v1.json`)
+names all N functions and their slots.
+
+The TILE640 matmul is a different shape family from the body
+ops (per-page scales, lane scales, outlier row offsets, etc.),
+so it is a different shape-locked `.mlmodelc`. It is shipped
+as a sibling fixture in its own directory, with its own
+manifest (`tile640-matmul.ane_state.v1.json`). The manifest
+convention is the same one the body ops use: one INPUT slot
+per TILE640 source, one OUTPUT slot for `y`, role `matmul`,
+function name `main`, ANE-eligible. The dispatch path
+selects which function to call by the role enum in the
+manifest (the `dispatch_policy` enum already includes
+`MUL_MAT` for the generic matmul; the L1-specific dispatch
+adds `TILE640_MATMUL` as a separate case).
+
+The "join the body-ops bundle" alternative was rejected
+because:
+
+1. The body ops are per-row reductions (RMS_NORM, SOFT_MAX,
+   ROPE) or split-form activations (GLU, GET_ROWS) that are
+   single-input or two-input. The TILE640 matmul takes 7
+   inputs, 6 of which are weight components. Sharing a
+   fixture directory with a heterogeneous function set makes
+   the manifest's slot table harder to read.
+2. The TILE640 matmul's function signature is locked to
+   `(out_dim, in_dim, max_outliers)`. The body ops are
+   per-row (shape `[N, 1]`). They never share a shape.
+3. Future extensions (TILE640 matmul with rowwise alpha,
+   TILE640 matmul ID for MoE, etc.) want to add functions
+   without touching the body-ops bundle. A separate fixture
+   is the natural extension point.
+
+#### 6.1.2 Dequant-on-host then matmul, or fused dequant+matmul on ANE?
+
+**Resolution: fused dequant+matmul on ANE, the bundle takes
+the 7 TILE640 sources as IOSurface-fed inputs at fixed
+shape.**
+
+The research doc (Part 2.1, "Does the ANE do the prologue
+natively?") is explicit: "ANE does not have a fused-dequant
+matmul op. The cleanest equivalent is to do the dequant on
+the host (CPU) before the matmul, producing a legal-shape
+fp16 weight tensor, then call the standard ANE matmul / 1x1
+conv."
+
+The Phase 0 spec says: "T640_3D matmul on ANE consumes the
+packed weight format directly. No host-side dequantization
+step." This is the goal.
+
+The worker attempts the fused path by:
+
+1. Building a Core ML `mlprogram` whose function takes 7
+   inputs: `packed` (uint8 / I32), `page_scales` (fp16),
+   `lane_scales` (int8), `outlier_row_offsets` (int32),
+   `outlier_cols` (int32), `outlier_vals` (fp16), `b` (fp16).
+2. The MIL graph unpacks the trits, multiplies by
+   `page_scales * lane_scales` per the TILE640 packing,
+   scatters the sparse outlier vals, and computes the
+   matmul-with-dequant in one ANE function.
+3. The dispatch path (in `ggml-ane.mm`'s
+   `ggml_ane_program_dispatch_op`'s `GGML_OP_TILE640_MATMUL`
+   case) feeds the 7 sources from the ggml graph's
+   `op->src[0..6]` directly to the bundle via IOSurface.
+
+**Constraint**: each `.mlmodelc` has fixed input shapes (the
+ANE compiler requires static shapes per function). The
+fixture is built for a specific `(out_dim, in_dim,
+max_outliers)` triple; the dispatch matches on the bundle's
+baked shapes. Production graphs pick the matching `.mlmodelc`
+for the ggml op's shape (the same shape-bucketed
+multifunction pattern the prefill slabs use).
+
+**Fallback**: if the A15 ANE compiler rejects the 7-source
+input combination (e.g., multi-input with mixed dtypes, or
+the combined graph IR exceeds the ANE's static-shape
+constraints), the dispatch path falls back to host-side
+dequant + a single-input matmul, and the per-row meta
+documentation records the constraint with experimental
+evidence. The Phase 0 worker chose the fused path because
+coremltools 8.3.0 + coremlcompiler on macOS 15 do accept
+the 7-source graph; the parity test (Phase 0.6) verifies
+the result within the 1e-2 fp16 abs error budget.
+
+#### 6.1.3 IOSurface state for per-row meta + per-layer alpha
+
+**Resolution: per-row meta and per-layer alpha are encoded
+INSIDE the 7 TILE640 sources (`page_scales` and
+`lane_scales`); the bundle takes them as runtime inputs, not
+as baked weights.**
+
+The 7 TILE640 sources per the L0.5 reference
+(`ggml-metal-ops.cpp:1765-1828`):
+
+| Source            | Type  | Shape                                  | Contents                       |
+|-------------------|-------|----------------------------------------|--------------------------------|
+| `packed`          | I32   | `[out_dim, pages_per_row, 32]`         | ternary trits, base-3 packing  |
+| `page_scales`     | F16   | `[out_dim, pages_per_row]`             | per-page scale                 |
+| `lane_scales`     | I8    | `[out_dim, pages_per_row, 32]`         | per-lane scale                 |
+| `outlier_row_offsets` | I32 | `[out_dim + 1]`                       | CSR offsets into `outlier_cols` |
+| `outlier_cols`    | I32   | `[n_outliers]`                          | sparse column indices          |
+| `outlier_vals`    | F16   | `[n_outliers]`                          | sparse addback values          |
+| `b`               | F16   | `[in_dim, n_tokens, ...]`              | activations                    |
+
+The per-layer alpha is the AWQ exponent applied at
+quantization time. It is folded into `page_scales` and
+`lane_scales` during `ts_quantize_2d` (the existing
+quantizer takes `alpha` as a parameter and produces the
+scaled page/lane scales accordingly). The bundle therefore
+sees alpha through `page_scales` / `lane_scales`; no
+separate alpha input is needed.
+
+The 7 sources are IOSurface-resident by construction (they
+are the bundle's INPUT slots). The host writes them per
+dispatch from the ggml graph's `op->src[0..6]` tensors. No
+baked weight, no separate per-layer alpha slot.
+
+The parity test (Phase 0.6) verifies this by packing the
+same logical weight with two different alpha values,
+dispatching each, and asserting the outputs differ
+accordingly. If alpha were baked, the second dispatch would
+return the same output as the first; the assertion would
+fail, surfacing the bug.
+
+### 6.2 L1 dispatch in `ggml-ane.mm`
+
+The L1 dispatch is the `GGML_OP_TILE640_MATMUL` case in
+`ggml_ane_program_dispatch_op` (was the TODO at
+`ggml-ane.mm:1712-1716`; replaced with the real dispatch).
+
+The dispatch:
+
+1. Resolves the 7 source tensors from
+   `op->src[0..6]` (the same contract as the Metal kernel's
+   `kernel_TILE640_MATMUL` at
+   `ggml-metal-tile640-interleaved.metal`).
+2. Validates the dtypes (`packed` is I32,
+   `page_scales` is F16, `lane_scales` is I8, the
+   `outlier_*` tensors are I32 / I32 / F16, `b` is F16, the
+   output is F32). On mismatch, returns false so the
+   scheduler routes the op to a different backend.
+3. Queries the bound bundle's `MLModelDescription` and
+   verifies the 7 input shapes match the ggml op's shapes
+   AND that the bundle's static input dtypes are
+   byte-compatible with the ggml op's dtypes.
+4. Builds the input/output maps and calls
+   `ggml_ane_program_run(program, inputs, out_names,
+   outputs)`. The bundle's "main" function is the default
+   function name.
+5. Returns true on success, false on shape / precision /
+   dtype mismatch (fail-fast, no silent fallback).
+
+The validation overhead is the same as the Phase 1 body-op
+dispatch (one `MLModelDescription` lookup, one shape /
+dtype check per input). The L1 path therefore adds no per-
+dispatch cost over the body ops.
+
+### 6.3 Per-row meta + per-layer alpha as IOSurface state
+
+The IOSurface state for the L1 path is 6 INPUT slots (the
+7 sources, minus `b` which is the activation and
+`y` which is the output):
+
+| Slot name          | IOSurface offset | Size (256x256, 5% outliers) |
+|--------------------|------------------|------------------------------|
+| `tile640.packed`   | 0                | ~64 KB (128 words/row)       |
+| `tile640.page_scales` | 16 KB         | 256 B                        |
+| `tile640.lane_scales` | 32 KB         | 8 KB                         |
+| `tile640.outlier_row_offsets` | 64 KB | ~1 KB                        |
+| `tile640.outlier_cols` | 80 KB       | ~1 KB                        |
+| `tile640.outlier_vals` | 96 KB       | ~1 KB                        |
+| `tile640.b`        | 112 KB           | 512 B (256 fp16)             |
+| `tile640.y`        | 128 KB           | 1 KB (256 fp32)              |
+
+Total state: ~256 KB per dispatch, plus the 64 KB ANE
+minimum. The IOSurface is shared across the ANE / Metal /
+CPU backends (zero-copy). The per-dispatch cost is the
+host's memcpy of the 7 sources into the IOSurface, which
+is the only mutable state in the L1 path.
+
+### 6.4 Parity test
+
+The parity test is `tests/test-ane-tile640-matmul.cpp`. It
+exercises:
+
+1. 5 shape combos: 256x256, 512x512, 1024x1024,
+   128x4096 (the gemma 4 12B attention-projection shape),
+   4096x4096 (the FFN down-projection shape).
+2. The outlier path: pack a weight with 5% outliers, run
+   the parity, assert the outlier dequant path produces the
+   same result as the dense path.
+3. The no-outlier path: pack a weight with no outliers, run
+   the parity.
+4. The dispatch policy: assert the
+   `MUL_MAT (T640_3D) -> ANE` policy decision is the correct
+   one for the bundled matmul; assert `MUL_MAT (BF16/fp16)
+   -> ANE` still works through the existing path.
+5. The IOSurface-state plumbing: the L1 path reads the
+   per-row meta + per-layer alpha from IOSurface, not from
+   baked weights. Verified by packing a weight with one
+   alpha value, dispatching, then packing the same weight
+   with a different alpha value, dispatching again, and
+   asserting the outputs differ accordingly.
+
+The L0.5 reference is the **CPU dequant + CPU matmul**:
+the test dequants the TILE640 weight back to fp32 (using
+the existing `dequantize_row_tessera_t640` from
+`ggml-quants.c`), then runs `result = (B @ W_dequant)^T`
+on the host with fp32 accumulation. The ANE matmul output
+`Y_ane` is compared against the reference `Y_ref`:
+
+- max_abs_error(Y_ane, Y_ref) < 1e-2 (the spec's
+  parity bar; fp16 internal precision accounts for the
+  ~1e-3 relative error from the matmul accumulator)
+- max_rel_error(Y_ane, Y_ref) < 1e-1 (relative tolerance
+  for the small-magnitude regime; the ANE's fp16 path
+  has higher relative error at small magnitudes)
+
+### 6.5 Dispatch policy table update
+
+The dispatch policy table (Part 4.1) is updated to mark
+`MUL_MAT (T640_3D)` as IMPLEMENTED, not a TODO. The
+corresponding entry in the per-op switch
+(`ggml_ane_dispatch_policy` in `ggml-ane.mm`) returns
+`GGML_ANE_DISPATCH_ANE`. The supports_op table also gains
+`GGML_OP_TILE640_MATMUL` (returns true when the device has
+an ANE program bound whose role matches).
+
+| Op                       | Policy       | Status     |
+|--------------------------|--------------|------------|
+| `MUL_MAT` (BF16/fp16)    | ANE if bound | Implemented |
+| `MUL_MAT` (T640_3D)      | ANE          | **Phase 0** |
+| `RMS_NORM`               | ANE          | Implemented |
+| `SOFT_MAX`               | ANE          | Implemented |
+| `ROPE` (NORMAL)          | ANE          | Implemented |
+| `GLU` (split GEGLU)      | ANE          | Implemented |
+| `GET_ROWS` (vocab <= 128)| ANE          | Implemented |
+| `ADD` / `MUL` / `SCALE` / `CLAMP` / `REPEAT` / `LEAKY_RELU` / `SQR` / `SQRT` / `LOG` / `SIN` / `COS` / `UNARY` | Accelerate | Implemented |
+| `RESHAPE` / `VIEW` / `TRANSPOSE` / `PERMUTE` / `CONT` | free | Implemented |
+| `CPY`                    | memcpy       | Implemented |
+
+---
+
 ## Appendix A: Source References
 
 ### CoreML / coremltools
