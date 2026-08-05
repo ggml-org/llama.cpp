@@ -576,12 +576,16 @@ def _is_linear_layer(name: str, shape: tuple[int, ...]) -> bool:
 
     The rule mirrors the HIGGS estimator's family classification
     surface: 2-D tensors whose name matches one of the
-    transformer block families (attn_q / attn_k / attn_v /
-    attn_output / ffn_gate / ffn_up / ffn_down / token_embd
-    / output). Norms and biases are excluded. Embeddings
-    (``token_embd``) and the output projection (``output``) are
-    included because they are 2-D matrix weights the GPTQ path
-    can quantize.
+    per-block linear families (attn_q / attn_k / attn_v /
+    attn_output / ffn_gate / ffn_up / ffn_down). Norms and
+    biases are excluded. Embeddings (``token_embd``) and the
+    output projection (``output``) are excluded: the spec is
+    per-LINEAR-layer *inside the transformer block*; the
+    embedding / output projection are not part of the
+    per-layer sensitivity ranking the EXL2 allocator
+    consumes (the design doc Phase 0.5: "ignore
+    embeddings, norms, biases for the EXL2 path; the spec
+    is per-LINEAR-layer").
     """
     if len(shape) != 2:
         return False
@@ -591,12 +595,13 @@ def _is_linear_layer(name: str, shape: tuple[int, ...]) -> bool:
         if base.endswith(suf):
             base = base[: -len(suf)]
             break
-    # The known linear-layer suffixes; same convention as
-    # ``estimate_higgs_alpha.classify_family``.
+    # The per-block linear-layer suffixes. The
+    # token_embd and output projections are
+    # excluded; they live outside the per-block
+    # grouping the EXL2 allocator operates on.
     linear_suffixes = (
         "attn_q", "attn_k", "attn_v", "attn_output",
         "ffn_gate", "ffn_up", "ffn_down",
-        "token_embd", "output",
     )
     for suf in linear_suffixes:
         if base == suf or base.endswith("." + suf):
@@ -1208,17 +1213,18 @@ def write_to_duckdb(
             """
         )
         # The per-tensor sensitivity path's additive
-        # ``exl2_error`` column. The migration is
-        # idempotent (``ADD COLUMN IF NOT EXISTS``);
-        # DuckDB supports this. When the column is
-        # added, the per-tensor L5 path can fold the
-        # EXL2 per-layer error into the per-tensor
-        # score (a layer-wide constant today; a
-        # per-tensor refinement is the next iteration).
-        con.execute(
-            "ALTER TABLE l5_plan_summary "
-            "ADD COLUMN IF NOT EXISTS exl2_error DOUBLE"
-        )
+        # ``exl2_error`` column on ``l5_plan_summary``
+        # is the L5 orchestrator's migration
+        # (``TesseraDB._ensure_l5_plan_columns``).
+        # The calibrator does not write to
+        # ``l5_plan_summary``; the column migration
+        # fires on the orchestrator's first open.
+        # We skip the ALTER here so a pre-Phase-0.5
+        # DB without ``l5_plan_summary`` (the EXL2
+        # calibrator's first run on a fresh DB) does
+        # not see a Catalog Error. The L5 orchestrator
+        # picks up the column migration on its
+        # first open.
         # Transactional batch insert. The
         # ``INSERT ... ON CONFLICT DO UPDATE`` lets a
         # re-run against the same (model, layer,

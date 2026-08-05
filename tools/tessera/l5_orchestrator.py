@@ -608,6 +608,22 @@ class SensitivityScorer:
         model_role: str = "trunk",
     ) -> None:
         self.weights = tuple(float(w) for w in weights)
+        # Phase 0.5: the 4-tuple weights
+        # (w_im, w_grad, w_layer, w_exl2) are
+        # canonical. A 3-tuple (pre-Phase-0.5
+        # callers) is rejected at the constructor
+        # with a clear error message; the score()
+        # body uses ``self.weights[3]`` which would
+        # crash with a confusing IndexError on a
+        # 3-tuple. The 4-tuple check is explicit
+        # so the failure is at the call site, not
+        # deep inside the score math.
+        if len(self.weights) != 4:
+            raise ValueError(
+                f"sensitivity weights must be a 4-tuple "
+                f"(w_im, w_grad, w_layer, w_exl2); "
+                f"got {len(self.weights)}-tuple"
+            )
         if not math.isclose(sum(self.weights), 1.0, abs_tol=1e-6):
             raise ValueError(
                 f"sensitivity weights must sum to 1.0, got {sum(self.weights):.6f}"
