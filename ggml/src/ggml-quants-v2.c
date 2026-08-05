@@ -239,20 +239,27 @@ void quantize_row_tessera_t640_v2(const float * GGML_RESTRICT x,
         const int base     = p * TILE640_PAGE_SIZE;
         const int page_len = (base + TILE640_PAGE_SIZE <= k) ? TILE640_PAGE_SIZE : (int)(k - base);
 
-        // Per-page: page_max (vDSP_maxmgv), sum_abs (vDSP_sve).
-        float page_max_f = 0.0f;
-        float sum_abs_f  = 0.0f;
+        // Per-page: page_max (vDSP_maxmgv), mean_abs
+        // (vDSP_meamgv = mean of |x| = sum_abs / page_len).
+        // We use vDSP_meamgv (mean of magnitudes) instead of
+        // vDSP_sve (sum of values) because the C ref computes
+        // sum_abs / page_len = mean(|x|); vDSP_sve would
+        // produce sum(x) which is near zero for symmetric
+        // signals and gives a wrong threshold.
+        float page_max_f  = 0.0f;
+        float mean_abs_f  = 0.0f;
 #if defined(__APPLE__)
         vDSP_maxmgv(x + base, 1, &page_max_f, (vDSP_Length) page_len);
-        vDSP_sve(x + base, 1, &sum_abs_f, (vDSP_Length) page_len);
+        vDSP_meamgv(x + base, 1, &mean_abs_f, (vDSP_Length) page_len);
 #else
         for (int j = 0; j < page_len; j++) {
             const float a = fabsf(x[base + j]);
-            sum_abs_f += a;
+            mean_abs_f += a;
             if (a > page_max_f) page_max_f = a;
         }
+        mean_abs_f /= (float) page_len;
 #endif
-        const float threshold = sum_abs_f / (float) page_len;
+        const float threshold = mean_abs_f;
         page_scales[p] = GGML_FP32_TO_FP16(page_max_f);
 
         for (int l = 0; l < TILE640_LANES_PER_PAGE; l++) {
@@ -483,16 +490,18 @@ void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
 
     // lane_scale: int8 -> fp32, divide by 127.
 #if defined(__APPLE__)
-    // vDSP_vflt8: int8 -> float (sign-extending). Then /127.
-    // vDSP_vflt8 takes const char * (sign-extending), so we cast
-    // from int8_t * via a uintptr_t roundtrip to silence the
-    // pointer-sign warning.
+    // vDSP_vflt8: int8 -> float (sign-extending). Then /127
+    // (vDSP_vsdiv divides by its scalar; the divisor is 127,
+    // not 1/127).
+    // vDSP_vflt8 takes const char * (sign-extending), so we
+    // cast from int8_t * via a uintptr_t roundtrip to silence
+    // the pointer-sign warning.
     vDSP_vflt8((const char *) ls, 1, lane_scale_out, 1, (vDSP_Length) n_lanes);
-    float inv127 = 1.0f / 127.0f;
-    vDSP_vsdiv(lane_scale_out, 1, &inv127, lane_scale_out, 1, (vDSP_Length) n_lanes);
+    float div127 = 127.0f;
+    vDSP_vsdiv(lane_scale_out, 1, &div127, lane_scale_out, 1, (vDSP_Length) n_lanes);
 #else
     for (int64_t i = 0; i < n_lanes; i++) {
-        lane_scale_out[i] = ((float) ls[i]) * (1.0f / 127.0f);
+        lane_scale_out[i] = ((float) ls[i]) / 127.0f;
     }
 #endif
 }
