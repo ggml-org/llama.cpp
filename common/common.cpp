@@ -1322,6 +1322,9 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         return;
     }
 
+    // persist resolved context size back to params
+    params.n_ctx = llama_n_ctx(lctx);
+
     pimpl->context.reset(lctx);
 }
 
