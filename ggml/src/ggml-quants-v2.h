@@ -95,6 +95,17 @@ GGML_API void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_pack
                                      float * GGML_RESTRICT page_max_out,
                                      float * GGML_RESTRICT lane_scale_out);
 
+// Function E: apply_act_scale_v2
+//   y[i] *= fp16_to_fp32(act_scale[i]) (per-input-channel
+//   scale, n floats). vDSP_vmul elementwise multiply. The C
+//   version is a per-element scalar loop; v2 is the bulk vDSP
+//   call. For n <= 4096 the fp16->fp32 scratch is on the
+//   stack; for n > 4096 we fall back to a per-element scalar
+//   loop (the scratch would be too large for the stack).
+GGML_API void apply_act_scale_v2(float * GGML_RESTRICT y,
+                                 const void * GGML_RESTRICT act_scale_packed,
+                                 int64_t n);
+
 // Feature flag accessor: tests and the dispatch read this to
 // decide whether to use v2 or the C reference. Default ON for
 // Apple Silicon builds; can be disabled with the

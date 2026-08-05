@@ -496,3 +496,56 @@ void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
     }
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// Function E: apply_act_scale_v2
+// ---------------------------------------------------------------------------
+//
+// y[i] *= fp16_to_fp32(act_scale[i]) (per-input-channel scale,
+// n floats). vDSP_vmul elementwise multiply. The C version is
+// a per-element scalar loop; v2 is the bulk vDSP call. For
+// n <= 4096 the fp16->fp32 scratch is on the stack; for
+// n > 4096 we fall back to a per-element scalar loop (the
+// scratch would be too large for the stack).
+//
+// vDSP does not have an fp16->fp32 bulk conversion, so we
+// convert with NEON vcvt_f32_f16 (4 fp16 -> 4 fp32 per chunk)
+// on Apple, scalar on other platforms. The vDSP_vmul then
+// does the bulk multiply into y.
+
+void apply_act_scale_v2(float * GGML_RESTRICT y,
+                        const void * GGML_RESTRICT act_scale_packed,
+                        int64_t n) {
+    const uint16_t * as = (const uint16_t *) act_scale_packed;
+#if defined(__APPLE__)
+    if (n <= 4096) {
+        float scratch[4096] __attribute__((aligned(16)));
+        // Convert fp16 act_scale -> fp32 in 4-element NEON
+        // chunks; tail is scalar.
+        int64_t i = 0;
+#if GGML_TESSERA_T640_V2_NEON
+        for (; i + 4 <= n; i += 4) {
+            uint64_t bits;
+            memcpy(&bits, &as[i], sizeof(bits));
+            float16x4_t vh = vreinterpret_f16_u64(vdup_n_u64(bits));
+            float32x4_t vf = vcvt_f32_f16(vh);
+            vst1q_f32(&scratch[i], vf);
+        }
+#endif
+        for (; i < n; i++) {
+            scratch[i] = GGML_FP16_TO_FP32(as[i]);
+        }
+        // Bulk elementwise multiply: y[i] *= scratch[i].
+        vDSP_vmul(scratch, 1, y, 1, y, 1, (vDSP_Length) n);
+    } else {
+        // For very long n, fall back to per-element scalar.
+        for (int64_t i = 0; i < n; i++) {
+            y[i] *= GGML_FP16_TO_FP32(as[i]);
+        }
+    }
+#else
+    for (int64_t i = 0; i < n; i++) {
+        y[i] *= GGML_FP16_TO_FP32(as[i]);
+    }
+#endif
+}
