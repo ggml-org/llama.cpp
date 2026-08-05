@@ -61,12 +61,30 @@ if(CMAKE_CROSSCOMPILING)
     # phony target to tie it into the dependency graph
     add_custom_target(llama-ui-embed DEPENDS "${LLAMA_UI_EMBED_EXE}")
 else()
+    # exclude llama-ui-embed from sanitizer flags,
+    # it's a build-time-only tool, no need to instrument it
+    # this is to fix TSan "memory layout is incompatible" error on CI
+    get_directory_property(_llama_ui_dir_co COMPILE_OPTIONS)
+    get_directory_property(_llama_ui_dir_ll LINK_LIBRARIES)
+    set(_llama_ui_embed_co ${_llama_ui_dir_co})
+    set(_llama_ui_embed_ll ${_llama_ui_dir_ll})
+    list(FILTER _llama_ui_embed_co EXCLUDE REGEX ".*-fsanitize=.*")
+    list(FILTER _llama_ui_embed_ll EXCLUDE REGEX ".*-fsanitize=.*")
+    set_directory_properties(PROPERTIES
+        COMPILE_OPTIONS "${_llama_ui_embed_co}"
+        LINK_LIBRARIES  "${_llama_ui_embed_ll}")
+
     add_executable(llama-ui-embed embed.cpp)
     target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
     set_target_properties(llama-ui-embed PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     )
     set(LLAMA_UI_EMBED_EXE "$<TARGET_FILE:llama-ui-embed>")
+
+    # restore so the llama-ui library below keeps sanitizer instrumentation
+    set_directory_properties(PROPERTIES
+        COMPILE_OPTIONS "${_llama_ui_dir_co}"
+        LINK_LIBRARIES  "${_llama_ui_dir_ll}")
 endif()
 
 # Run the provisioning script every build so source changes in tools/ui/ are

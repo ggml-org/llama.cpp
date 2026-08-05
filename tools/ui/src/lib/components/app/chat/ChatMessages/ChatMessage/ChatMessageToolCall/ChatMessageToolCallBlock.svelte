@@ -12,6 +12,7 @@
 	import ChatMessageToolCallBlockExecShellCommand from './ChatMessageToolCallBlockExecShellCommand.svelte';
 	import ChatMessageToolCallBlockFileGlobSearch from './ChatMessageToolCallBlockFileGlobSearch.svelte';
 	import ChatMessageToolCallBlockGetDatetime from './ChatMessageToolCallBlockGetDatetime.svelte';
+	import ChatMessageToolCallBlockGetInfo from './ChatMessageToolCallBlockGetInfo.svelte';
 	import ChatMessageToolCallBlockGrepSearch from './ChatMessageToolCallBlockGrepSearch.svelte';
 	import ChatMessageToolCallBlockReadFile from './ChatMessageToolCallBlockReadFile.svelte';
 	import ChatMessageToolCallBlockRunJavascript from './ChatMessageToolCallBlockRunJavascript.svelte';
@@ -40,6 +41,8 @@
 	<ChatMessageToolCallBlockSearchResults {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.GET_DATETIME}
 	<ChatMessageToolCallBlockGetDatetime {section} {isStreaming} />
+{:else if section.toolName === BuiltInTool.GET_INFO}
+	<ChatMessageToolCallBlockGetInfo {section} {isStreaming} />
 {:else if section.toolName === BuiltInTool.READ_FILE}
 	<ChatMessageToolCallBlockReadFile {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.EDIT_FILE}

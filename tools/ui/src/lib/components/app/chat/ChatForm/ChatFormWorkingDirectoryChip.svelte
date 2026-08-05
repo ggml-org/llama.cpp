@@ -1,0 +1,69 @@
+<script lang="ts">
+	import { Folder, X } from '@lucide/svelte';
+	import { abbreviateWorkingDir } from '$lib/utils';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { ActionIcon } from '$lib/components/app/actions';
+
+	interface Props {
+		directory?: string | null;
+		homeBase?: string | null;
+		disabled?: boolean;
+		showTooltip?: boolean;
+		onClear?: (event?: MouseEvent) => void;
+	}
+
+	let {
+		directory = null,
+		homeBase = null,
+		disabled = false,
+		showTooltip = false,
+		onClear
+	}: Props = $props();
+
+	const displayLabel = $derived(
+		directory ? abbreviateWorkingDir(directory, homeBase) : 'Select working directory'
+	);
+	// Full path surface: hover the abbreviated label to recall the exact directory.
+	const displayLabelTitle = $derived(directory ?? '');
+</script>
+
+<span
+	class="text-muted-foreground inline-flex items-center gap-1 text-xs group"
+	class:text-foreground={directory}
+>
+	<div class="flex min-w-0 items-center gap-1 cursor-pointer">
+		<Folder class="w-3.5 h-3.5" />
+
+		{#if showTooltip && displayLabelTitle}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<span {...props} class="max-w-64 truncate">{displayLabel}</span>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content>
+					<p>{displayLabelTitle}</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{:else}
+			<span class="max-w-64 truncate">{displayLabel}</span>
+		{/if}
+	</div>
+
+	{#if directory}
+		<div
+			class="w-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 ease-out group-hover:w-auto group-hover:opacity-100"
+		>
+			<ActionIcon
+				icon={X}
+				tooltip="Reset working directory"
+				ariaLabel="Reset working directory"
+				{disabled}
+				onclick={onClear}
+				iconSize="h-3 w-3"
+				stopPropagationOnClick
+				class="!h-4 !w-4 shrink-0 text-muted-foreground hover:text-foreground"
+			/>
+		</div>
+	{/if}
+</span>
