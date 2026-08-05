@@ -1,0 +1,54 @@
+# Tessera productivity import / export dependencies.
+#
+# Pin to a small, well-known set of stable Python libraries. Every
+# library here is on the architect's approved list (see
+# `docs/tessera-productivity-import-export-design.md` §9) and
+# installs on both macOS and Linux. None of these need an API key.
+#
+# Versions are chosen to track the latest stable line as of
+# Phase 4 (2026-08); bump in lockstep with the existing
+# `requirements/requirements-*.txt` files so the whole tree
+# upgrades together.
+#
+# Tested-against Python: 3.11, 3.12, 3.13, 3.14.
+
+# Office formats
+python-docx>=1.1.0,<2.0     # .docx
+openpyxl>=3.1.5,<4.0        # .xlsx
+python-pptx>=1.0.0,<2.0     # .pptx
+
+# Web
+beautifulsoup4>=4.12,<5.0   # .html / .mhtml
+lxml>=5.0,<6.0              # BS4 parser (also used for XML inside OOXML)
+
+# Markdown
+markdown-it-py>=3.0,<4.0    # .md parser + token round-trip
+
+# Email
+# (stdlib: mailbox, email, html.parser, base64, quopri - no third-party deps)
+
+# HTTP client (Swift <-> Python)
+httpx>=0.28,<0.30
+
+# Optional: PDF text extraction via poppler `pdftotext` (shell-out, no
+# Python dep). weasyprint is the renderer for HTML->PDF; the
+# importer/exporter shells out to `pdftotext` (poppler-utils) for
+# text extraction. Both are pure CLI invocations on the developer's
+# machine; the importer documents the install steps in
+# `docs/tessera-productivity-import-export-design.md` §3.4.
+#   brew install pandoc poppler    # macOS
+#   apt-get install pandoc poppler-utils  # Linux
+
+# Pandoc is invoked via `pypandoc` (the standard binding) and also
+# as a direct subprocess for formats pypandoc doesn't cover.
+pypandoc>=1.13,<2.0
+
+# weasyprint for PDF rendering (we render to HTML first, then to PDF
+# via weasyprint, then read the rendered HTML for the AST).
+weasyprint>=63.0,<64.0
+
+# reportlab is a pure-Python PDF writer we use as the deterministic
+# exporter for the .pdf round-trip test. Production uses PDFKit
+# (macOS native) via the Swift shim, so reportlab is test-only;
+# it's included here so the test fixtures work on a fresh venv.
+reportlab>=4.0,<5.0

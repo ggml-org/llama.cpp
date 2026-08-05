@@ -1,0 +1,12 @@
+From: alice@example.com
+To: bob@example.com
+Subject: Hello Tessera
+Date: Mon, 1 Jan 2024 12:00:00 +0000
+Message-ID: <abc123@example.com>
+
+Hi Bob,
+
+This is the body of the email. It has two paragraphs.
+
+Best,
+Alice

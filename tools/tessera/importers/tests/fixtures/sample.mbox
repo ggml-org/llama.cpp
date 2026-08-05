@@ -1,0 +1,17 @@
+From alice@example.com Mon Jan 01 12:00:00 2024
+From: alice@example.com
+To: bob@example.com
+Subject: First message
+Date: Mon, 1 Jan 2024 12:00:00 +0000
+Message-ID: <first@example.com>
+
+First body.
+
+From bob@example.com Mon Jan 01 12:05:00 2024
+From: bob@example.com
+To: alice@example.com
+Subject: Second message
+Date: Mon, 1 Jan 2024 12:05:00 +0000
+Message-ID: <second@example.com>
+
+Second body.
