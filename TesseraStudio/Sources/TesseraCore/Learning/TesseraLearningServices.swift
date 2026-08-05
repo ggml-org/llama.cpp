@@ -24,6 +24,7 @@ public enum TesseraLearningServices {
         let baseModel = TesseraSettings.learningBaseModelPath
         let trainingConfig = TesseraTrainingOrchestrator.Config(
             minTracesForTraining: TesseraSettings.learningMinTracesForTraining,
+            trainBinary: TesseraTrainBinaryResolver.resolve(override: TesseraSettings.learningTrainBinary),
             baseModelPath: baseModel.isEmpty ? nil : baseModel,
             dryRun: TesseraSettings.learningTrainingDryRun
         )

@@ -46,6 +46,7 @@ public enum TesseraSettingsKey {
     public static let learningBaseModelPath = "tessera.settings.learningBaseModelPath"
     public static let learningMinTracesForTraining = "tessera.settings.learningMinTracesForTraining"
     public static let learningTrainingDryRun = "tessera.settings.learningTrainingDryRun"
+    public static let learningTrainBinary = "tessera.settings.learningTrainBinary"
     // Web search (agent research tool)
     public static let searchProvider = "tessera.settings.searchProvider"
     public static let searxngBaseURL = "tessera.settings.searxngBaseURL"
@@ -89,6 +90,7 @@ public enum TesseraSettingsDefault {
     public static let learningBaseModelPath = ""           // empty -> training disabled
     public static let learningMinTracesForTraining = 1000
     public static let learningTrainingDryRun = true
+    public static let learningTrainBinary = ""        // empty -> TesseraTrainBinaryResolver auto-resolves
     // Web search. Keyless DuckDuckGo is the default; SearXNG (self-hosted) and
     // Tavily (vendor key) are explicit opt-ins that stay off until configured.
     public static let searchProvider = "duckduckgo"
@@ -168,6 +170,7 @@ public enum TesseraSettings {
             TesseraSettingsKey.learningBaseModelPath: TesseraSettingsDefault.learningBaseModelPath,
             TesseraSettingsKey.learningMinTracesForTraining: TesseraSettingsDefault.learningMinTracesForTraining,
             TesseraSettingsKey.learningTrainingDryRun: TesseraSettingsDefault.learningTrainingDryRun,
+            TesseraSettingsKey.learningTrainBinary: TesseraSettingsDefault.learningTrainBinary,
             TesseraSettingsKey.searchProvider: TesseraSettingsDefault.searchProvider,
             TesseraSettingsKey.searxngBaseURL: TesseraSettingsDefault.searxngBaseURL,
             TesseraSettingsKey.tavilyAPIKey: TesseraSettingsDefault.tavilyAPIKey,
@@ -365,6 +368,12 @@ public enum TesseraSettings {
     public static var learningTrainingDryRun: Bool {
         // register(defaults:) seeds this, so the bool read is meaningful.
         UserDefaults.standard.bool(forKey: TesseraSettingsKey.learningTrainingDryRun)
+    }
+
+    /// User-chosen tessera-train-lk path. Empty means auto-resolve over
+    /// the known locations (see ``TesseraTrainBinaryResolver``).
+    public static var learningTrainBinary: String {
+        UserDefaults.standard.string(forKey: TesseraSettingsKey.learningTrainBinary) ?? TesseraSettingsDefault.learningTrainBinary
     }
 
     // MARK: Web search

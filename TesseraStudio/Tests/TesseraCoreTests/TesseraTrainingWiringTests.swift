@@ -134,6 +134,50 @@ final class TesseraTrainingWiringTests: XCTestCase {
         XCTAssertTrue(record.note.contains("tessera-train-lk"))
     }
 
+    // MARK: - Driver binary resolution
+
+    func testResolverOverrideWinsEvenWhenMissing() {
+        let resolved = TesseraTrainBinaryResolver.resolve(
+            override: "/custom/spot/tessera-train-lk",
+            isExecutable: { _ in false }
+        )
+        XCTAssertEqual(resolved, "/custom/spot/tessera-train-lk")
+    }
+
+    func testResolverWhitespaceOverrideFallsBackToAuto() {
+        let resolved = TesseraTrainBinaryResolver.resolve(
+            override: "   ",
+            isExecutable: { _ in false }
+        )
+        XCTAssertEqual(resolved, TesseraTrainBinaryResolver.expectedLocation)
+    }
+
+    func testResolverPrefersEarlierKnownLocation() {
+        let resolved = TesseraTrainBinaryResolver.resolve(
+            override: "",
+            isExecutable: { _ in true }
+        )
+        XCTAssertEqual(resolved, TesseraTrainBinaryResolver.knownLocations[0])
+    }
+
+    func testResolverSkipsNonExecutableKnownLocations() {
+        let first = TesseraTrainBinaryResolver.knownLocations[0]
+        let resolved = TesseraTrainBinaryResolver.resolve(
+            override: "",
+            isExecutable: { $0 != first }
+        )
+        XCTAssertEqual(resolved, TesseraTrainBinaryResolver.knownLocations[1])
+    }
+
+    func testResolverFallsBackToExpectedLocation() {
+        let resolved = TesseraTrainBinaryResolver.resolve(
+            override: "",
+            isExecutable: { _ in false }
+        )
+        XCTAssertEqual(resolved, TesseraTrainBinaryResolver.expectedLocation)
+        XCTAssertTrue(TesseraTrainBinaryResolver.knownLocations.contains(TesseraTrainBinaryResolver.expectedLocation))
+    }
+
     // MARK: - Helpers
 
     private func makeTempRoot() throws -> URL {
