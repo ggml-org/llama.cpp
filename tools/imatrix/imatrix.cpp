@@ -34,6 +34,20 @@
 #include <regex>
 #include <numeric>
 #include <set>
+#include <csignal>
+#include <sys/stat.h>
+
+#include "imatrix-safeguards.h"
+
+#if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
+#  include <windows.h>
+#  include <io.h>
+#  define getpid _getpid
+#else
+#  include <unistd.h>
+#endif
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -1709,6 +1723,12 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
     std::vector<std::thread> workers(std::thread::hardware_concurrency() - 1);
 
+    // Wall-time anchor for the dynamic save-frequency ladder. The first
+    // chunk's per-iteration t_start would include model load + first
+    // decode; we anchor t=0 at the start of the chunk loop so the ladder
+    // reflects runtime stability, not startup.
+    const auto t_loop_start = std::chrono::steady_clock::now();
+
     for (int i = 0; i < n_chunk; i += n_seq) {
         const int start =     i * n_ctx;
         const int end   = start + n_ctx;
@@ -1717,6 +1737,9 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
         const int32_t chunks_processed =
             params.i_chunk + i + n_seq_batch;
         g_collector.set_observer_chunk(chunks_processed);
+        const double elapsed_sec =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t_loop_start).count();
         if (g_collector.take_observer_topology_changed()) {
             llama_bump_imatrix_observer_epoch(ctx);
             LOG_INF("%s: observer topology transition at chunk %d; "
@@ -1842,8 +1865,20 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
             }
             g_collector.save_imatrix();
         }
-        if (params.n_save_freq > 0 &&
-            chunks_processed % params.n_save_freq == 0) {
+        // Phase 16.9: dynamic save-frequency ladder. When the user did
+        // not pass --save-frequency (n_save_freq == 0) AND
+        // dynamic_save_freq is on (the default), consult the ladder
+        // instead. The ladder starts paranoid (every 8 chunks) and
+        // relaxes as runtime stability is proven over wall time. A
+        // SIGKILL or jetsam during the run therefore loses at most one
+        // ladder-step's worth of work; the prior checkpoint is intact
+        // thanks to the atomic .tmp + rename in save_imatrix.
+        int32_t effective_save_freq = params.n_save_freq;
+        if (effective_save_freq == 0 && params.dynamic_save_freq) {
+            effective_save_freq = tessera_imatrix_safeguards::dynamic_save_freq_ladder(elapsed_sec);
+        }
+        if (effective_save_freq > 0 &&
+            chunks_processed % effective_save_freq == 0) {
             if (!g_collector.flush_graph_observers()) {
                 return false;
             }
@@ -2179,6 +2214,39 @@ static bool show_statistics(const common_params & params) {
     return true;
 }
 
+// Crash-safety / long-run safeguards (Phase 16.9, 2026-08-04)
+//
+// These four guards replace the previous Python smoke_imatrix.py wrapper.
+// They live in the binary so the safeguards are universal (not opt-in via a
+// wrapper script), so a 30-60 min run on a memory-constrained M1 does not
+// crash silently, and so an operator does not have to remember which
+// binary to invoke.
+//
+// 1. Memory precheck: refuse to start if the model is bigger than the
+//    configured fraction of physmem. Mac M1 + 23 GB BF16 model + 9.8 GB
+//    already compressed is exactly the failure mode this catches.
+// 2. PID file: write <output>.pid at startup; an operator can SIGTERM the
+//    wrapper PID and the binary exits at the next chunk boundary.
+// 3. Wall-time cap: SIGALRM at --max-minutes; the binary exits cleanly.
+// 4. Dynamic save-frequency ladder: start paranoid (every 8 chunks), relax
+//    as runtime stability is proven over wall time (16 -> 32 -> 64 -> 128
+//    chunks between intermediate saves). Final save is still atomic
+//    (the .tmp + rename in save_imatrix above) regardless of ladder.
+//
+// The implementation of physmem_bytes / file_size_or_zero /
+// dynamic_save_freq_ladder lives in imatrix-safeguards.h (header-only)
+// so a test binary can unit-test them without dragging in the full
+// llama_init / ggml dependency chain.
+// ---------------------------------------------------------------------------
+
+// SIGALRM handler for the --max-minutes wall-time cap. The atomic save
+// in save_imatrix means the prior checkpoint is intact; we just exit.
+// (_exit avoids running static destructors; the atomic .tmp + rename in
+// save_imatrix already published or the file is unchanged.)
+[[noreturn]] static void on_sigalrm_max_minutes(int) {
+    _exit(0);
+}
+
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -2264,6 +2332,74 @@ int main(int argc, char ** argv) {
 
         return 0;
     }
+
+    // ---- Crash-safety / long-run safeguards (Phase 16.9) -------------
+
+    // 1. Memory precheck: refuse to start if model is too big for physmem.
+    //    The previous Python smoke_imatrix.py did this; the safeguard now
+    //    lives in the binary so it cannot be skipped by accident. On
+    //    unknown platforms (Windows, BSD) physmem_bytes() returns 0 and
+    //    the precheck is a no-op (we cannot make a safe decision without
+    //    a probe).
+    if (!params.no_memory_check && params.memory_budget_fraction > 0.0f) {
+        const int64_t model_size = tessera_imatrix_safeguards::file_size_or_zero(params.model.path);
+        const int64_t physmem    = tessera_imatrix_safeguards::physmem_bytes();
+        if (model_size > 0 && physmem > 0) {
+            const double ratio = (double) model_size / (double) physmem;
+            if (ratio > params.memory_budget_fraction) {
+                fprintf(stderr,
+                    "imatrix: refusing to start: model is %lld bytes on "
+                    "%lld bytes physmem (ratio=%.2f > "
+                    "memory_budget_fraction=%.2f).\n"
+                    "imatrix: pass --force or --no-memory-check to override "
+                    "(NOT recommended; jetsam SIGKILL is likely on macOS / "
+                    "iOS when this is exceeded).\n",
+                    (long long) model_size, (long long) physmem,
+                    ratio, params.memory_budget_fraction);
+                return 1;
+            }
+            LOG_INF("%s: model=%lld bytes, physmem=%lld bytes, "
+                    "ratio=%.2f (budget=%.2f)\n",
+                    __func__, (long long) model_size, (long long) physmem,
+                    ratio, params.memory_budget_fraction);
+        }
+    }
+
+    // 2. PID file: write <output>.pid at startup. An operator can
+    //    `kill -TERM <pid>` and the binary will exit at the next chunk
+    //    boundary (the atomic save in save_imatrix keeps the prior
+    //    checkpoint intact).
+    if (!params.no_pid_file && !params.out_file.empty()) {
+        const std::string pid_path = params.out_file + ".pid";
+        std::ofstream f(pid_path, std::ios::trunc);
+        if (f.good()) {
+#ifdef _WIN32
+            f << (long long) GetCurrentProcessId() << "\n";
+#else
+            f << (long long) getpid() << "\n";
+#endif
+            LOG_INF("%s: pidfile=%s\n", __func__, pid_path.c_str());
+        } else {
+            LOG_WRN("%s: could not write pidfile %s\n",
+                    __func__, pid_path.c_str());
+        }
+    }
+
+    // 3. Wall-time cap (SIGALRM). The handler _exit(0)s; the atomic save
+    //    in save_imatrix means the prior checkpoint is intact either way.
+    if (params.max_minutes > 0) {
+        struct sigaction sa = {};
+        sa.sa_handler = on_sigalrm_max_minutes;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGALRM, &sa, nullptr);
+        struct itimerval it = {};
+        it.it_value.tv_sec = (time_t) params.max_minutes * 60;
+        setitimer(ITIMER_REAL, &it, nullptr);
+        LOG_INF("%s: wall-time cap set to %d minutes\n",
+                __func__, params.max_minutes);
+    }
+
+    // ---- end safeguards ------------------------------------------------
 
     llama_backend_init();
     llama_numa_init(params.numa);
