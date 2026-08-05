@@ -98,6 +98,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
+    fc_s            = create_tensor(tn(LLM_TENSOR_FC,              "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
     output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
 
@@ -206,7 +207,7 @@ template <>
 llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = build_inp_embd_enc();
 
-    cur = build_lora_mm(model.fc, cur);
+    cur = build_lora_mm(model.fc, cur, model.fc_s);
     cb(cur, "fc_out", -1);
 
     cur = build_norm(cur, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
@@ -461,9 +462,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                layer.ffn_up,   NULL, NULL,
-                layer.ffn_gate, NULL, NULL,
-                layer.ffn_down, NULL, NULL,
+                layer.ffn_up,   NULL, layer.ffn_up_s,
+                layer.ffn_gate, NULL, layer.ffn_gate_s,
+                layer.ffn_down, NULL, layer.ffn_down_s,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);

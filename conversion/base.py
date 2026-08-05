@@ -823,7 +823,7 @@ class ModelBase:
             elif any(str(v.get("quant_algo")).endswith("NVFP4") for v in quant_layers.values() if isinstance(v, dict)):
                 quant_algo = "NVFP4"
 
-        self._is_nvfp4 = quant_algo == "NVFP4"
+        self._is_nvfp4 = quant_algo in ("NVFP4", "W4A16_NVFP4")
         self._is_mxfp4 = quant_method == "mxfp4"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
