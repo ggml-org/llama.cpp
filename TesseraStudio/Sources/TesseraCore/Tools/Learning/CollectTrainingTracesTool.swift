@@ -48,6 +48,10 @@ public struct CollectTrainingTracesTool: TesseraTool {
 
     public init() {}
 
+    /// Where harvested traces are appended. Defaults to the app-wide trace
+    /// store; tests inject an isolated directory.
+    var traceStoreDirectory: URL?
+
     public func execute(arguments: [String: JSONValue]) async throws -> ToolResult {
         guard let modelPath = arguments["model_path"]?.stringValue, !modelPath.isEmpty else {
             return .fail("model_path is required")
@@ -95,7 +99,7 @@ public struct CollectTrainingTracesTool: TesseraTool {
 
         // Honest append: count the records the driver actually emitted. An
         // empty telemetry file is a real no-op, not a success.
-        let store = TesseraTraceStore()
+        let store = traceStoreDirectory.map { TesseraTraceStore(directory: $0) } ?? TesseraTraceStore()
         var added = 0
         if FileManager.default.fileExists(atPath: telemetryPath) {
             let url = URL(fileURLWithPath: telemetryPath)

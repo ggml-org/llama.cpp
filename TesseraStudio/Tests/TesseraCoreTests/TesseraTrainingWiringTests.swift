@@ -235,6 +235,107 @@ final class TesseraTrainingWiringTests: XCTestCase {
         XCTAssertTrue((record.stdout ?? "").contains("epoch 1"))
     }
 
+    // MARK: - Trace producer (collect_training_traces)
+
+    func testImatrixResolverDerivesFromTrainBinaryDirectory() {
+        let resolved = TesseraTrainBinaryResolver.resolveImatrix(
+            trainOverride: "/tmp/somewhere/tessera-train-lk",
+            isExecutable: { $0 == "/tmp/somewhere/llama-imatrix" }
+        )
+        XCTAssertEqual(resolved, "/tmp/somewhere/llama-imatrix")
+    }
+
+    func testImatrixResolverFallsBackToKnownLocations() {
+        let known = TesseraTrainBinaryResolver.imatrixKnownLocations[1]
+        let resolved = TesseraTrainBinaryResolver.resolveImatrix(
+            trainOverride: "/tmp/somewhere/tessera-train-lk",
+            isExecutable: { $0 == known }
+        )
+        XCTAssertEqual(resolved, known)
+    }
+
+    func testImatrixResolverReturnsDerivedPathWhenNothingFound() {
+        // Nothing executable anywhere: the resolver still returns a path so
+        // the failure message names exactly what is missing.
+        let resolved = TesseraTrainBinaryResolver.resolveImatrix(
+            trainOverride: "",
+            isExecutable: { _ in false }
+        )
+        XCTAssertEqual(resolved, "/usr/local/bin/llama-imatrix")
+    }
+
+    func testMissingImatrixNoteIsActionable() {
+        let note = CollectTrainingTracesTool.missingImatrixNote(path: "/usr/local/bin/llama-imatrix")
+        XCTAssertTrue(note.contains("/usr/local/bin/llama-imatrix"))
+        XCTAssertTrue(note.contains("cmake --build build --target llama-imatrix"))
+    }
+
+    func testTraceHarvestAppendsEmittedRecords() async throws {
+        let root = try makeTempRoot()
+        let binDir = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        // The train binary only anchors the directory; the fake imatrix does
+        // the work: write two telemetry records to --telemetry-out.
+        try "placeholder\n".write(
+            to: binDir.appendingPathComponent("tessera-train-lk"),
+            atomically: true, encoding: .utf8
+        )
+        let fakeImatrix = binDir.appendingPathComponent("llama-imatrix").path
+        try """
+        #!/bin/sh
+        out=""
+        while [ $# -gt 0 ]; do
+          if [ "$1" = "--telemetry-out" ]; then out="$2"; fi
+          shift
+        done
+        printf '%s\\n' '{"kind":"spec","step":1}' '{"kind":"spec","step":2}' > "$out"
+        """.write(toFile: fakeImatrix, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeImatrix)
+
+        let corpus = root.appendingPathComponent("corpus.txt")
+        try "some calibration text\n".write(to: corpus, atomically: true, encoding: .utf8)
+        let tracesDir = root.appendingPathComponent("traces", isDirectory: true)
+
+        var tool = CollectTrainingTracesTool()
+        tool.traceStoreDirectory = tracesDir
+
+        let result = await withSettings([
+            TesseraSettingsKey.learningTrainBinary: binDir.appendingPathComponent("tessera-train-lk").path,
+        ]) {
+            await (try? tool.execute(arguments: [
+                "model_path": .string(root.appendingPathComponent("trunk.gguf").path),
+                "draft_model_path": .string(root.appendingPathComponent("drafter.gguf").path),
+                "corpus_path": .string(corpus.path),
+            ])) ?? .fail("execute threw")
+        }
+
+        XCTAssertTrue(result.success, "harvest should succeed, got: \(result.error ?? "")")
+        XCTAssertTrue(result.output.contains("Collected 2 trace record(s)"))
+        XCTAssertEqual(TesseraTraceStore(directory: tracesDir).totalRecords(), 2)
+    }
+
+    func testTraceHarvestRequiresArguments() async throws {
+        // Hermetic argument gates: no process is launched for a missing
+        // required path. (The missing-binary branch itself depends on the
+        // real llama-imatrix being absent, so it is covered by the pure
+        // resolver + note tests above instead.)
+        let tool = CollectTrainingTracesTool()
+        let result = await try tool.execute(arguments: [:])
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.error, "model_path is required")
+
+        let noDraft = await try tool.execute(arguments: [
+            "model_path": .string("/m.gguf"),
+        ])
+        XCTAssertEqual(noDraft.error, "draft_model_path is required")
+
+        let noCorpus = await try tool.execute(arguments: [
+            "model_path": .string("/m.gguf"),
+            "draft_model_path": .string("/d.gguf"),
+        ])
+        XCTAssertEqual(noCorpus.error, "corpus_path is required")
+    }
+
     // MARK: - Driver binary resolution
 
     func testResolverOverrideWinsEvenWhenMissing() {
@@ -314,10 +415,10 @@ final class TesseraTrainingWiringTests: XCTestCase {
     // MARK: - Helpers
 
     /// Run body with temporary UserDefaults overrides, restoring prior values after.
-    private func withSettings(
+    private func withSettings<T>(
         _ overrides: [String: Any],
-        _ body: () async -> TesseraTrainingOrchestrator.TrainingRecord?
-    ) async -> TesseraTrainingOrchestrator.TrainingRecord? {
+        _ body: () async -> T
+    ) async -> T {
         let saved: [(String, Any?)] = overrides.keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
         for (key, value) in overrides { UserDefaults.standard.set(value, forKey: key) }
         let result = await body()
