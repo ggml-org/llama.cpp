@@ -546,14 +546,26 @@ def model_hash(gguf_path: Path) -> str:
     expensive for a multi-GB model; the prefix+suffix hash is
     the standard approach and detects both the header and the
     weight bytes.
+
+    Files smaller than the 64KB window are hashed as a single
+    block (no seek needed). The returned hash is the first 16
+    hex chars of SHA-256 (64 bits of entropy) - plenty for a
+    cache-invalidation key.
     """
     h = hashlib.sha256()
+    file_size = gguf_path.stat().st_size
+    window = 64 * 1024
     with gguf_path.open("rb") as f:
-        header = f.read(64 * 1024)
-        h.update(header)
-        f.seek(-64 * 1024, 2)
-        suffix = f.read(64 * 1024)
-        h.update(suffix)
+        if file_size <= window:
+            # Tiny file (test fixture, or a stub): hash
+            # the whole thing as one block.
+            h.update(f.read())
+        else:
+            header = f.read(window)
+            h.update(header)
+            f.seek(-window, 2)
+            suffix = f.read(window)
+            h.update(suffix)
     return h.hexdigest()[:16]
 
 
