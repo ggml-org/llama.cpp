@@ -111,8 +111,15 @@ struct tiered_buffer_context {
     uint64_t cache_admissions = 0;
     uint64_t cache_evictions = 0;
     size_t host_tensors = 0;
+    const ggml_tensor * ids_cache_tensor = nullptr;
+    uint64_t ids_cache_run = 0;
+    std::vector<int32_t> ids_cache_values;
     std::mutex compute_mutex;
 };
+
+// Bumped once per graph, so a cached ids read is only reused inside the graph
+// that produced it.
+std::atomic<uint64_t> tiered_graph_run{1};
 
 // Host-tier tensors across all live tiered buffers. While this is zero every
 // weight is VRAM resident, so graph compute needs no staging at all and can
@@ -707,8 +714,16 @@ static void * stage_tiered_experts(tiered_buffer_context * ctx, const ggml_tenso
         throw std::runtime_error("MUL_MAT_ID expert ids have an invalid row stride");
     }
 
-    std::vector<int32_t> ranked_ids(ids_per_row * n_rows);
-    ggml_backend_tensor_get_2d(ids, ranked_ids.data(), 0, row_size, n_rows, ids->nb[1], row_size);
+    // The gate, up and down projections of one layer share a router output, so
+    // reading it back once per graph saves two blocking device-to-host copies.
+    const uint64_t run = tiered_graph_run.load(std::memory_order_relaxed);
+    if (ctx->ids_cache_tensor != ids || ctx->ids_cache_run != run) {
+        ctx->ids_cache_values.resize(ids_per_row * n_rows);
+        ggml_backend_tensor_get_2d(ids, ctx->ids_cache_values.data(), 0, row_size, n_rows, ids->nb[1], row_size);
+        ctx->ids_cache_tensor = ids;
+        ctx->ids_cache_run = run;
+    }
+    const std::vector<int32_t> & ranked_ids = ctx->ids_cache_values;
 
     size_t tensor_offset = 0;
     (void) tiered_view_base(tensor, &tensor_offset);
@@ -1220,6 +1235,8 @@ static ggml_status tiered_backend_graph_compute(ggml_backend_t backend, ggml_cgr
     if (tiered_host_tensors.load(std::memory_order_relaxed) == 0) {
         return ggml_backend_graph_compute(ctx->inner, graph);
     }
+
+    tiered_graph_run.fetch_add(1, std::memory_order_relaxed);
 
     std::unique_lock<std::mutex> compute_lock;
     for (int i = 0; i < graph->n_nodes && !compute_lock.owns_lock(); ++i) {
