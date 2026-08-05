@@ -30,15 +30,15 @@
 
 #define DEFAULT_VTCM_SIZE               (8 * 1024 * 1024)
 
-#define DSP_OPT_MAX_BATCH_DSTS          (256 * 4)  /* 256 ops * HTP_OP_MAX_OUTPUTS */
-
 #define HEX_OP_PROF_BUCKETS             64
 
 #define HEX_OP_PROF_DUMP_INTERVAL       25
 
 #define WEIGHT_INVAL_MAX_PTRS           4096
 
-#define DSP_OPT_MAX_TENSORS             2048
+#define DSP_OPT_MAX_TENSORS             4096
+
+#define DSP_OPT_MAX_BATCH_DSTS          (DSP_OPT_MAX_TENSORS * 4 * 4)  /* max n_ops * HTP_OP_MAX_OUTPUTS */
 
 // Queue capacity/stack sizes for JZ-owned work/hmx queues. Mirror the defaults
 // in htp/main.c (HMX_QUEUE_CAPACITY=16, HMX_QUEUE_STACK_SIZE=16384,
@@ -259,6 +259,10 @@ static void ggml_log_internal(int level, const char *file, const char *func, int
     va_start(args, format);
     int len_prefix = snprintf(s_ggmlhexagon_log_internal_buf, GGMLHEXAGON_LOGBUF_LEN, "[%s, %d]: ",
                               func, line);
+    if (len_prefix < 0 || (size_t)len_prefix >= GGMLHEXAGON_LOGBUF_LEN) {
+        va_end(args);
+        return;
+    }
     int len = vsnprintf(s_ggmlhexagon_log_internal_buf + len_prefix,
                         GGMLHEXAGON_LOGBUF_LEN - len_prefix, format, args);
     if (len < (GGMLHEXAGON_LOGBUF_LEN - len_prefix)) {
@@ -269,7 +273,7 @@ static void ggml_log_internal(int level, const char *file, const char *func, int
 #endif // GGMLHEXAGON_DEBUG
 
 static void ggml_log_always(int level, const char *file, const char *func, int line, const char *format, ...) {
-    if (!g_dsp_ctx->dump_diag_info) {
+    if (!g_dsp_ctx || !g_dsp_ctx->dump_diag_info) {
         return;
     }
     static char s_ggmlhexagon_log_internal_buf[GGMLHEXAGON_LOGBUF_LEN];
@@ -277,6 +281,10 @@ static void ggml_log_always(int level, const char *file, const char *func, int l
     va_start(args, format);
     int len_prefix = snprintf(s_ggmlhexagon_log_internal_buf, GGMLHEXAGON_LOGBUF_LEN, "[%s, %d]: ",
                               func, line);
+    if (len_prefix < 0 || (size_t)len_prefix >= GGMLHEXAGON_LOGBUF_LEN) {
+        va_end(args);
+        return;
+    }
     int len = vsnprintf(s_ggmlhexagon_log_internal_buf + len_prefix,
                         GGMLHEXAGON_LOGBUF_LEN - len_prefix, format, args);
     if (len < (GGMLHEXAGON_LOGBUF_LEN - len_prefix)) {
@@ -345,8 +353,8 @@ static const char * htp_op_short_name(unsigned int op) {
 }
 
 // One-shot init for the per-op profiler: stamp min to UINT64_MAX so the
-// first real call always sets it. Called lazily from dump_op_prof so we
-// don't need a separate init hook in ggml_dsp_open. Idempotent.
+// first real call always sets it. Called from ggml_dsp_open (and guarded
+// by dump_op_prof as a safety net). Idempotent.
 static void init_op_prof_min(void) {
     static int done = 0;
     if (done) return;
@@ -410,7 +418,7 @@ static void ggml_dsp_cache_flush_range(void * addr, size_t size) {
     for (; p < end; p += line_size) {
         Q6_dccleaninva_A(p);
     }
-    __asm__ __volatile__("syncht\n");
+    __asm__ __volatile__("syncht\n" ::: "memory");
 }
 
 // Flush range WITHOUT the trailing syncht. Used by bulk_flush_all to issue a
@@ -435,6 +443,7 @@ static inline void ggml_dsp_cache_flush_range_nosync(void * addr, size_t size) {
     for (; p < end; p += line_size) {
         Q6_dccleaninva_A(p);
     }
+    __asm__ __volatile__("" ::: "memory");  // compiler barrier between cache ops
 }
 
 static void ggml_dsp_cache_inval_range(void * addr, size_t size) {
@@ -456,7 +465,7 @@ static void ggml_dsp_cache_inval_range(void * addr, size_t size) {
     for (; p < end; p += line_size) {
         Q6_dcinva_A(p);
     }
-    __asm__ __volatile__("syncht\n");
+    __asm__ __volatile__("syncht\n" ::: "memory");
 }
 
 static inline bool weight_inval_check_and_mark(const void * ptr) {
@@ -544,8 +553,8 @@ static inline void weight_inval_unmark(const void * ptr) {
  *
  * bit 0 (first-touch weight tracking) is a separate mechanism; see
  * weight_inval_check_and_mark() and INVAL_SRC_IF_NEEDED(). It is session-
- * scoped (array never reset) because repack weights are stable ION regions
- * written once at model load.
+ * scoped and reset on model reload (via execute_batch 0xFFFC bit 4) so
+ * new weights at reused ION addresses are properly invalidated.
  */
 /* True iff [q_base, q_base+q_len) is fully contained in [r_base, r_base+r_len). */
 static inline bool dsp_range_contains(const void * r_base, size_t r_len,
@@ -653,7 +662,7 @@ static inline void bulk_flush_all(void) {
     ggml_dsp_cache_flush_range_nosync(cur_base, (size_t)(cur_end - (uintptr_t)cur_base));
     /* Single syncht covers all merged-region flushes above. AP reads
      * following this point see consistent DRAM. */
-    __asm__ __volatile__("syncht\n");
+    __asm__ __volatile__("syncht\n" ::: "memory");
 }
 
 
@@ -693,14 +702,14 @@ static int vtcm_release_callback(unsigned int rctx, void * state) {
 // =================================================================================================
 // IDL helper functions
 // =================================================================================================
-static int power_on_hvx_hmx(void) {
+static int power_on_hvx_hmx(struct dsp_context * ctx) {
     HAP_power_request_t req;
 
     /* Set client class */
     memset(&req, 0, sizeof(req));
     req.type = HAP_power_set_apptype;
     req.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
-    if (HAP_power_set((void *)&g_dsp_ctx->power_ctx, &req) != 0) {
+    if (HAP_power_set((void *)&ctx->power_ctx, &req) != 0) {
         GGMLHEXAGON_LOG_ERROR("HAP_power_set apptype failed");
         return -1;
     }
@@ -729,7 +738,7 @@ static int power_on_hvx_hmx(void) {
     HAP_set_dcvs_v3_protected_bus_corners(&req, 1);
 #endif
 
-    if (HAP_power_set((void *)&g_dsp_ctx->power_ctx, &req) != 0) {
+    if (HAP_power_set((void *)&ctx->power_ctx, &req) != 0) {
         GGMLHEXAGON_LOG_ERROR("HAP_power_set DCVS failed");
         return -2;
     }
@@ -738,7 +747,7 @@ static int power_on_hvx_hmx(void) {
     memset(&req, 0, sizeof(req));
     req.type = HAP_power_set_HVX;
     req.hvx.power_up = 1;
-    if (HAP_power_set((void *)&g_dsp_ctx->power_ctx, &req) != 0) {
+    if (HAP_power_set((void *)&ctx->power_ctx, &req) != 0) {
         GGMLHEXAGON_LOG_ERROR("HAP_power_set HVX failed");
         return -3;
     }
@@ -755,7 +764,7 @@ static int power_on_hvx_hmx(void) {
     req.hmx_v2.max_corner = HAP_DCVS_EXP_VCORNER_MAX;
     req.hmx_v2.perf_mode = HAP_CLK_PERF_HIGH;
     GGMLHEXAGON_LOG_INFO("Setting HMX clock with HMX_v2 for v75+ architecture");
-    if (HAP_power_set((void *)&g_dsp_ctx->power_ctx, &req) != 0) {
+    if (HAP_power_set((void *)&ctx->power_ctx, &req) != 0) {
         GGMLHEXAGON_LOG_ERROR("HAP_power_set HMX_v2 failed, continuing without HMX");
         return -4;
     }
@@ -764,7 +773,7 @@ static int power_on_hvx_hmx(void) {
     memset(&req, 0, sizeof(req));
     req.type = HAP_power_set_HMX;
     req.hmx.power_up = 1;
-    if (HAP_power_set((void *)&g_dsp_ctx->power_ctx, &req) != 0) {
+    if (HAP_power_set((void *)&ctx->power_ctx, &req) != 0) {
         GGMLHEXAGON_LOG_ERROR("HAP_power_set HMX failed, continuing without HMX");
         return -4;
     }
@@ -1407,6 +1416,13 @@ static int build_fa_kernel_params(struct htp_ops_context * octx) {
     const struct htp_tensor * mask = octx->src[3];
     const struct htp_tensor * dst = octx->dst;
     if (!q || !k || !v || !dst) return -1;
+    /* Guard against division by zero in G = q->ne[2]/n_kv_heads and
+     * broadcast_rk2/rk3/rv2/rv3 (all use k/v ne[2],ne[3] as divisors) */
+    if (k->ne[2] == 0 || k->ne[3] == 0 || v->ne[2] == 0 || v->ne[3] == 0) {
+        GGMLHEXAGON_LOG_ERROR("build_fa: zero divisor k[%u,%u] v[%u,%u]",
+                              k->ne[2], k->ne[3], v->ne[2], v->ne[3]);
+        return -1;
+    }
     FARF(ALWAYS, "build_fa: DK=%u DV=%u neq1=%u nek1=%u G=%u ktype=%d vtype=%d hmx=%d",
          q->ne[0], v->ne[0], q->ne[1], k->ne[1], q->ne[2]/k->ne[2],
          k->type, v->type, g_dsp_ctx->hmx_available);
@@ -1531,8 +1547,7 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
     ctx->thread_counts      = 4;
     ctx->htp_ctx = (struct htp_context *)calloc(1, sizeof(struct htp_context));
     GGML_ASSERT(NULL != ctx->htp_ctx);
-    g_dsp_ctx = ctx;
-    g_dsp_ctx->thread_prio = qurt_thread_get_priority(qurt_thread_get_id());
+    ctx->thread_prio = qurt_thread_get_priority(qurt_thread_get_id());
     *handle = (remote_handle64)ctx;
 
     // Reset first-touch invalidate bitmap so a fresh session starts with
@@ -1540,14 +1555,17 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
     // re-mirror weights at model load and their ION offsets are stable
     // for the lifetime of this session.
     weight_inval_reset_all();
+#if HEX_OP_PROF
+    init_op_prof_min();
+#endif
     // Default to 0: no DSP-side cache optimizations beyond the baseline
     // first-touch weight bitmap. AP will push the configured bitmask via
     // execute_batch(0xFFFC) right after ggml_dsp_open returns. Until then,
     // every code path that consults dsp_cache_mode sees 0 and behaves like
     // baseline 29c1cf196.
-    g_dsp_ctx->dsp_cache_mode = 0;
-    g_dsp_ctx->dsp_cache_trace_bit0 = 0;  // default off; AP pushes via 0xFFFC bit 16
-    g_dsp_ctx->dsp_cache_trace_bit1 = 0;  // default off; AP pushes via 0xFFFC bit 17
+    ctx->dsp_cache_mode = 0;
+    ctx->dsp_cache_trace_bit0 = 0;  // default off; AP pushes via 0xFFFC bit 16
+    ctx->dsp_cache_trace_bit1 = 0;  // default off; AP pushes via 0xFFFC bit 17
 
     printf("uri %s\n", uri);
 
@@ -1563,16 +1581,16 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
     qurt_sysenv_max_hthreads_t mhwt;
     qurt_sysenv_get_max_hw_threads(&mhwt);
     printf("qurt_hardware_thread_counts = %d\n", mhwt.max_hthreads);
-    g_dsp_ctx->max_hw_threads = mhwt.max_hthreads;
-    g_dsp_ctx->thread_counts = mhwt.max_hthreads;
+    ctx->max_hw_threads = mhwt.max_hthreads;
+    ctx->thread_counts = mhwt.max_hthreads;
 
     /* Step 1: Power up HVX and HMX */
-    int power_result = power_on_hvx_hmx();
+    int power_result = power_on_hvx_hmx(ctx);
     if (power_result != 0) {
         printf("power_on_hvx_hmx failed (%d), continuing without HMX\n", power_result);
-        g_dsp_ctx->hmx_available = 0;
+        ctx->hmx_available = 0;
     } else {
-        g_dsp_ctx->hmx_available = 1;
+        ctx->hmx_available = 1;
     }
 
     /* Step 2: Query VTCM size and allocate resources */
@@ -1616,8 +1634,8 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
     HAP_compute_res_attr_set_release_callback(&attr, vtcm_release_callback, NULL);  // Enable release callback for cache mode
     HAP_compute_res_attr_set_hmx_param(&attr, 1);
     // Allocate VTCM for scratch pads
-    g_dsp_ctx->compute_res_ctx_id = HAP_compute_res_acquire(&attr, 1000000);
-    if (g_dsp_ctx->compute_res_ctx_id == 0) {
+    ctx->compute_res_ctx_id = HAP_compute_res_acquire(&attr, 1000000);
+    if (ctx->compute_res_ctx_id == 0) {
         GGMLHEXAGON_LOG_ERROR("HAP_compute_res_acquire failed, no VTCM available\n");
     } else {
         /* Using VTCM acquired via HAP_compute_res */
@@ -1625,12 +1643,12 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
         unsigned int vtcm_ptr_size = 0;
         if (HAP_compute_res_attr_get_vtcm_ptr_v2(&attr, &vtcm_ptr, &vtcm_ptr_size) != 0) {
             GGMLHEXAGON_LOG_INFO("HAP_compute_res_attr_get_vtcm_ptr_v2 failed\n");
-            HAP_compute_res_release(g_dsp_ctx->compute_res_ctx_id);
-            g_dsp_ctx->compute_res_ctx_id = 0;
+            HAP_compute_res_release(ctx->compute_res_ctx_id);
+            ctx->compute_res_ctx_id = 0;
         } else {
-            g_dsp_ctx->vtcm_base = vtcm_ptr;
-            g_dsp_ctx->vtcm_size = vtcm_ptr_size;
-            GGMLHEXAGON_LOG_INFO("allocated VTCM pool via compute_res: %zu bytes at %p\n", g_dsp_ctx->vtcm_size, g_dsp_ctx->vtcm_base);
+            ctx->vtcm_base = vtcm_ptr;
+            ctx->vtcm_size = vtcm_ptr_size;
+            GGMLHEXAGON_LOG_INFO("allocated VTCM pool via compute_res: %zu bytes at %p\n", ctx->vtcm_size, ctx->vtcm_base);
 
             /* VTCM: acquire once for the whole session (matches
              * htp/main.c htp_packet_callback pattern: acquire once at
@@ -1638,6 +1656,9 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
              * Avoids per-batch HAP_compute_res_acquire/release_cached churn
              * (~8700 calls/session -> 2 calls/session) and the SDK's
              * adsprpc FARF log noise. */
+            /* dsp_vtcm_acquire() uses g_dsp_ctx internally: publish ctx
+             * now that all fields it reads are initialized. */
+            g_dsp_ctx = ctx;
             dsp_vtcm_acquire();
         }
     }
@@ -1646,13 +1667,13 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
      * New Qualcomm API (b2dd28a3b) requires a pre-allocated backing buffer;
      * we memalign it here and track it in dsp_context.hmx_queue_buf for
      * cleanup in ggml_dsp_close. Capacity/stack_size match main.c defaults. */
-    if (g_dsp_ctx->hmx_available && g_dsp_ctx->compute_res_ctx_id != 0) {
-        if (g_dsp_ctx->hmx_queue != NULL) {
+    if (ctx->hmx_available && ctx->compute_res_ctx_id != 0) {
+        if (ctx->hmx_queue != NULL) {
             GGMLHEXAGON_LOG_INFO("hmx_queue already exists, deleting old one\n");
-            hmx_queue_free(g_dsp_ctx->hmx_queue);
-            free(g_dsp_ctx->hmx_queue_buf);
-            g_dsp_ctx->hmx_queue     = NULL;
-            g_dsp_ctx->hmx_queue_buf = NULL;
+            hmx_queue_free(ctx->hmx_queue);
+            free(ctx->hmx_queue_buf);
+            ctx->hmx_queue     = NULL;
+            ctx->hmx_queue_buf = NULL;
         }
         size_t hmx_size  = hmx_queue_sizeof(JZ_HMX_QUEUE_CAPACITY, JZ_HMX_QUEUE_STACK_SIZE);
         size_t hmx_align = hmx_queue_alignof();
@@ -1661,17 +1682,17 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
             // Trace slot mirrors htp/main.c (&ctx->trace[HTP_MAX_NTHREADS]): must be a
             // valid (zeroed) htp_thread_trace, htp_trace_event_start/stop dereference
             // it unconditionally on every HMX descriptor completion.
-            g_dsp_ctx->hmx_queue = hmx_queue_init(hmx_buf, JZ_HMX_QUEUE_CAPACITY,
+            ctx->hmx_queue = hmx_queue_init(hmx_buf, JZ_HMX_QUEUE_CAPACITY,
                                                   JZ_HMX_QUEUE_STACK_SIZE,
-                                                  g_dsp_ctx->compute_res_ctx_id,
-                                                  &g_dsp_ctx->htp_ctx->trace[HTP_MAX_NTHREADS]);
-            if (g_dsp_ctx->hmx_queue) {
-                g_dsp_ctx->hmx_queue_buf = hmx_buf;
+                                                  ctx->compute_res_ctx_id,
+                                                  &ctx->htp_ctx->trace[HTP_MAX_NTHREADS]);
+            if (ctx->hmx_queue) {
+                ctx->hmx_queue_buf = hmx_buf;
                 GGMLHEXAGON_LOG_INFO("async HMX queue created (capacity %u, rctx %u)\n",
-                                     hmx_queue_capacity(g_dsp_ctx->hmx_queue), g_dsp_ctx->compute_res_ctx_id);
+                                     hmx_queue_capacity(ctx->hmx_queue), ctx->compute_res_ctx_id);
             } else {
                 free(hmx_buf);
-                g_dsp_ctx->hmx_queue_buf = NULL;
+                ctx->hmx_queue_buf = NULL;
                 GGMLHEXAGON_LOG_INFO("hmx_queue_init failed, HMX path will run synchronously\n");
             }
         } else {
@@ -1679,7 +1700,7 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
         }
     } else {
         GGMLHEXAGON_LOG_INFO("HMX not available (hmx=%d, rctx=%u), skipping hmx_queue creation\n",
-                             g_dsp_ctx->hmx_available, g_dsp_ctx->compute_res_ctx_id);
+                             ctx->hmx_available, ctx->compute_res_ctx_id);
     }
 
     /* Step 5: probe DSP memory for information only (no allocation) */
@@ -1713,6 +1734,10 @@ int ggml_dsp_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
+    /* Publish ctx to g_dsp_ctx for VTCM-failure path. In the success path,
+     * g_dsp_ctx was already set before dsp_vtcm_acquire(); this assignment
+     * is a no-op there. */
+    g_dsp_ctx = ctx;
     return 0;
 }
 
@@ -1789,13 +1814,17 @@ int ggml_dsp_close(remote_handle64 handle) {
 }
 
 AEEResult ggml_dsp_setclocks(remote_handle64 handle, int32 diag_info, int32 requested_thread_counts, int32 * actual_thread_counts) {
+    if (!g_dsp_ctx) {
+        return AEE_EBADPARM;
+    }
     /* Reserve 2 hw thread slots: one for the hmx_queue thread, one for
      * FastRPC listener/system activity. An op needs requested_thread_counts+1
      * co-resident threads; oversubscribing deadlocks because QuRT does
      * not preempt equal-priority workers spinning in hex_pause, so the
      * unscheduled worker never decrements the task barrier (observed on
      * v75/8Gen3: max_hthreads=6, requested_thread_counts=6 hangs; 5 is flaky). */
-    int max_usable = g_dsp_ctx->max_hw_threads - 2;
+    int max_usable = (g_dsp_ctx->max_hw_threads > 2) ? (g_dsp_ctx->max_hw_threads - 2) : 0;
+    if (max_usable > HTP_MAX_NTHREADS) max_usable = HTP_MAX_NTHREADS;
     if (requested_thread_counts > max_usable) {
         printf("setclocks: requested_thread_counts %ld exceeds safe limit %d (max_hthreads %d - 2), clamped\n",
                requested_thread_counts, max_usable, g_dsp_ctx->max_hw_threads);
@@ -1823,6 +1852,34 @@ AEEResult ggml_dsp_setclocks(remote_handle64 handle, int32 diag_info, int32 requ
     // work_queue and dma queues; we memalign them here and track the pointers
     // in dsp_context for cleanup in ggml_dsp_close.
     if (g_dsp_ctx->thread_counts >= 1) {
+        // Free previously allocated htp_ctx resources before memset,
+        // in case ggml_dsp_setclocks is called more than once.
+        if (g_dsp_ctx->htp_ctx->work_queue) {
+            work_queue_free(g_dsp_ctx->htp_ctx->work_queue);
+            g_dsp_ctx->htp_ctx->work_queue = NULL;
+        }
+        if (g_dsp_ctx->work_queue_buf) {
+            free(g_dsp_ctx->work_queue_buf);
+            g_dsp_ctx->work_queue_buf = NULL;
+        }
+        for (int i = 0; i < HTP_MAX_NTHREADS; i++) {
+            if (g_dsp_ctx->htp_ctx->dma[i]) {
+                dma_queue_alias_free(g_dsp_ctx->htp_ctx->dma[i]);
+                g_dsp_ctx->htp_ctx->dma[i] = NULL;
+            }
+            if (g_dsp_ctx->dma_alias_bufs[i]) {
+                free(g_dsp_ctx->dma_alias_bufs[i]);
+                g_dsp_ctx->dma_alias_bufs[i] = NULL;
+            }
+            if (g_dsp_ctx->htp_ctx->dma_cached[i]) {
+                dma_queue_free(g_dsp_ctx->htp_ctx->dma_cached[i]);
+                g_dsp_ctx->htp_ctx->dma_cached[i] = NULL;
+            }
+            if (g_dsp_ctx->dma_queue_bufs[i]) {
+                free(g_dsp_ctx->dma_queue_bufs[i]);
+                g_dsp_ctx->dma_queue_bufs[i] = NULL;
+            }
+        }
         memset(g_dsp_ctx->htp_ctx, 0, sizeof(*g_dsp_ctx->htp_ctx));
         g_dsp_ctx->htp_ctx->vtcm_base      = (uint8_t *)g_dsp_ctx->vtcm_base;
         g_dsp_ctx->htp_ctx->vtcm_size      = g_dsp_ctx->vtcm_size;
@@ -1933,6 +1990,9 @@ AEEResult ggml_dsp_setclocks(remote_handle64 handle, int32 diag_info, int32 requ
 
 AEEResult ggml_dsp_register_ion(remote_handle64 h, uint32_t ion_fd, uint32_t size_lo, uint32_t size_hi) {
     (void)h;
+    if (!g_dsp_ctx) {
+        return AEE_EBADPARM;
+    }
     int32_t fd = (int32_t)ion_fd;
     uint64_t size = ((uint64_t)size_hi << 32) | (uint64_t)size_lo;
 
@@ -1991,6 +2051,9 @@ static void dsp_queues_suspend(void) {
  * ION-based op-batch execution: FastRPC only passes 2 scalars (offset, size) - all data is in the mempool.
  */
 AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint32_t batch_size) {
+    if (!g_dsp_ctx) {
+        return AEE_EBADPARM;
+    }
     if (g_dsp_ctx->ion_dsp_base == NULL) {
         GGMLHEXAGON_LOG_ERROR("ION base not registered");
         return AEE_EBADPARM;
@@ -2000,6 +2063,7 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
 
     /* dsp_cache_mode config mode: batch_size == 0xFFFC. batch_offset encodes
      *   bits  0..3 : dsp_cache_mode (first-touch weight / prior-dst skip / bulk dst flush / selective bulk flush)
+     *   bit   4    : reset weight_inval first-touch array (model reload)
      *   bit  16    : dsp_cache_trace_bit0 (1 = emit [DSP-CACHE-TRACE-BIT0] per bit 0 decision)
      *   bit  17    : dsp_cache_trace_bit1 (1 = emit [DSP-CACHE-TRACE-BIT1] per bit 1 decision)
      * Pushed by AP at ggmlhexagon_init_cdsp() time. Bit definitions:
@@ -2008,26 +2072,30 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
      *   bit 1 (0x2): skip dcinva for prior dst     - INVAL_SRC_IF_NEEDED skips
      *               dcinva for activations (flags!=2) when [base,base+len) is
      *               fully contained in a dst range that DSP wrote earlier in
-     *               this batch. Only effective when bit 2 is also on (the
-     *               per-op dst tracker populates the prior_dst list).
+     *               this batch. Only effective when bit 2 is also on.
      *   bit 2 (0x4): bulk dst flush at batch end  - per-op flush is suppressed;
-     *               dst ranges are collected/sort/merged/flushed once after
-     *               the per-op loop.
+     *               dst ranges collected/sort/merged/flushed once after loop.
      *   bit 3 (0x8): selective bulk flush         - skip batch-end flush for
-     *               dsts that a later op in this batch still consumes (pure
+     *               dsts still consumed by a later op in this batch (pure
      *               intermediates). Only effective when bit 2 is also on.
-     *               Mirrored dsts (flags&0x1) and dsts with no later consumer
-     *               (final outputs, KV write views) are always flushed. */
+     *               Mirrored dsts (flags&0x1) and final outputs always flush.
+     *   bit 4 (0x10): reset weight_inval array    - clear first-touch tracking
+     *               so new model weights at reused ION addresses get properly
+     *               invalidated after model unload/reload. */
     if (batch_size == 0xFFFC) {
         g_dsp_ctx->dsp_cache_mode = batch_offset & 0xFu;
         g_dsp_ctx->dsp_cache_trace_bit0 = (batch_offset >> 16) & 0x1u;
         g_dsp_ctx->dsp_cache_trace_bit1 = (batch_offset >> 17) & 0x1u;
-        GGMLHEXAGON_LOG_INFO("[DSP-CACHE-MODE] dsp_cache_mode=0x%x (bit0=first-touch-weight=%d bit1=skip-prior-dst=%d bit2=bulk-dst-flush=%d bit3=selective-bulk-flush=%d) dsp_cache_trace_bit0=%d dsp_cache_trace_bit1=%d",
+        if (batch_offset & 0x10u) {
+            weight_inval_reset_all();
+        }
+        GGMLHEXAGON_LOG_INFO("[DSP-CACHE-MODE] dsp_cache_mode=0x%x (bit0=first-touch=%d bit1=prior-dst=%d bit2=bulk-flush=%d bit3=selective=%d bit4=reset-inval=%d) trace0=%d trace1=%d",
                              g_dsp_ctx->dsp_cache_mode,
                              (g_dsp_ctx->dsp_cache_mode & 0x1) ? 1 : 0,
                              (g_dsp_ctx->dsp_cache_mode & 0x2) ? 1 : 0,
                              (g_dsp_ctx->dsp_cache_mode & 0x4) ? 1 : 0,
                              (g_dsp_ctx->dsp_cache_mode & 0x8) ? 1 : 0,
+                             (batch_offset & 0x10u) ? 1 : 0,
                              g_dsp_ctx->dsp_cache_trace_bit0,
                              g_dsp_ctx->dsp_cache_trace_bit1);
         return AEE_SUCCESS;
@@ -2064,9 +2132,48 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
         GGMLHEXAGON_LOG_ERROR("empty ion-batch: n_ops=%u n_tensors=%u", hdr->n_ops, hdr->n_tensors);
         return AEE_EBADPARM;
     }
+    if (hdr->n_tensors > DSP_OPT_MAX_TENSORS) {
+        GGMLHEXAGON_LOG_ERROR("n_tensors %u exceeds DSP_OPT_MAX_TENSORS %u",
+                              hdr->n_tensors, DSP_OPT_MAX_TENSORS);
+        return AEE_EBADPARM;
+    }
+    if (hdr->n_ops > DSP_OPT_MAX_TENSORS * 4) {
+        GGMLHEXAGON_LOG_ERROR("n_ops %u exceeds limit (%u)", hdr->n_ops, DSP_OPT_MAX_TENSORS * 4);
+        return AEE_EBADPARM;
+    }
+    /* Validate offsets before dereferencing to guard against corrupted batch descriptors */
+    if (hdr->ops_offset == 0 || hdr->tensors_offset == 0 ||
+        hdr->ops_offset >= batch_size || hdr->tensors_offset >= batch_size ||
+        hdr->ops_offset + hdr->n_ops * (uint32_t)sizeof(hex_op_desc) > batch_size ||
+        hdr->tensors_offset + hdr->n_tensors * (uint32_t)sizeof(hex_tensor_desc) > batch_size) {
+        GGMLHEXAGON_LOG_ERROR("invalid batch layout: ops_off=%u tens_off=%u total=%u n_ops=%u n_tensors=%u",
+                              hdr->ops_offset, hdr->tensors_offset, hdr->total_size,
+                              hdr->n_ops, hdr->n_tensors);
+        return AEE_EBADPARM;
+    }
 
     const hex_op_desc * ops = (const hex_op_desc *)((const char *)hdr + hdr->ops_offset);
     const hex_tensor_desc * tens = (const hex_tensor_desc *)((const char *)hdr + hdr->tensors_offset);
+
+    /* Validate per-op src_idx/dst_idx against n_tensors to prevent
+     * OOB access into g_pre_dt/g_pre_ht/g_batch_tensor_needs_inval. */
+    for (uint32_t i = 0; i < hdr->n_ops; i++) {
+        const hex_op_desc * op = &ops[i];
+        for (int s = 0; s < HTP_OP_MAX_INPUTS; s++) {
+            if (op->src_idx[s] >= 0 && (uint32_t)op->src_idx[s] >= hdr->n_tensors) {
+                GGMLHEXAGON_LOG_ERROR("op %u: src_idx[%d]=%d exceeds n_tensors=%u",
+                                      i, s, op->src_idx[s], hdr->n_tensors);
+                return AEE_EBADPARM;
+            }
+        }
+        for (int d = 0; d < HTP_OP_MAX_OUTPUTS; d++) {
+            if (op->dst_idx[d] >= 0 && (uint32_t)op->dst_idx[d] >= hdr->n_tensors) {
+                GGMLHEXAGON_LOG_ERROR("op %u: dst_idx[%d]=%d exceeds n_tensors=%u",
+                                      i, d, op->dst_idx[d], hdr->n_tensors);
+                return AEE_EBADPARM;
+            }
+        }
+    }
 
     /* VTCM is acquired once in ggml_dsp_open and held for the whole
      * session (matches htp/main.c htp_packet_callback pattern). Per-batch
@@ -2091,11 +2198,6 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
     /* Pre-convert all tensors once: saves one hex_tensor_to_dsptensor()
      * call per tensor per op. The per-op loop below references g_pre_dt
      * by pointer (srcs) or copies + overrides op_params (dsts). */
-    if (hdr->n_tensors > DSP_OPT_MAX_TENSORS) {
-        GGMLHEXAGON_LOG_ERROR("n_tensors %u exceeds DSP_OPT_MAX_TENSORS %u",
-                              hdr->n_tensors, DSP_OPT_MAX_TENSORS);
-        return AEE_EFAILED;
-    }
 
 #if HEX_OP_PROF
     const int64_t prof_pre_t0 = ggml_time_us();
@@ -2121,7 +2223,7 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
         for (uint32_t oi = 0; oi < hdr->n_ops; oi++) {
             for (int s = 0; s < HTP_OP_MAX_INPUTS; s++) {
                 const int32_t si = ops[oi].src_idx[s];
-                if (si >= 0 && si < (int32_t)hdr->n_tensors) {
+                if (si >= 0 && (uint32_t)si < hdr->n_tensors) {
                     g_tensor_last_use_op[si] = oi;
                 }
             }
@@ -2166,8 +2268,9 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
          * to avoid per-op stack frame pressure. */
         for (int k = 0; k < HTP_OP_MAX_OUTPUTS; k++) {
             g_dst_dt_ptrs[k] = NULL;
-            if (op->dst_idx[k] < 0) continue;
-            g_dst_dt_buf[k] = g_pre_dt[op->dst_idx[k]];
+            const int32_t di = op->dst_idx[k];
+            if (di < 0) continue;
+            g_dst_dt_buf[k] = g_pre_dt[di];
             memcpy(g_dst_dt_buf[k].op_params, op->params, sizeof(g_dst_dt_buf[k].op_params));
             g_dst_dt_ptrs[k] = &g_dst_dt_buf[k];
         }
@@ -2314,7 +2417,6 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
                 const int32_t di = op->dst_idx[k];
                 const bool skip_flush =
                     (g_dsp_ctx->dsp_cache_mode & 0x8) &&
-                    di >= 0 && di < (int32_t)hdr->n_tensors &&
                     g_tensor_last_use_op[di] > i &&
                     !(g_dst_dt_buf[k].flags & 0x1);
                 if (!skip_flush) {
@@ -2372,7 +2474,7 @@ AEEResult ggml_dsp_execute_batch(remote_handle64 h, uint32_t batch_offset, uint3
     __asm__ __volatile__("" ::: "memory");
     if (hdr->n_ops > 0 && ops[hdr->n_ops - 1].dst_idx[0] < hdr->n_tensors) {
         uint32_t last_off = tens[ops[hdr->n_ops - 1].dst_idx[0]].data_offset;
-        if (batch_size > last_off + 4)
+        if (last_off < g_dsp_ctx->ion_dsp_size && g_dsp_ctx->ion_dsp_size - last_off > 4)
             (void) *(volatile const int *)(base + last_off);
     }
     __asm__ __volatile__("" ::: "memory");
