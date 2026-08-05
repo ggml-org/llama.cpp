@@ -54,9 +54,6 @@ void test_qwen36_35b_model_selector() {
         true, false, 2048, 512, 256, 8, false, true, 4, split,
     };
     check(qwen35moe_use_auto_rdna2_q4_k_j16(config), "exact Qwen3.6 35B layer signature rejected");
-    config.layer_split = false;
-    config.tensor_parallel = true;
-    check(qwen35moe_use_auto_rdna2_q4_k_j16(config), "exact Qwen3.6 35B tensor signature rejected");
 
     auto negative = [&](qwen35moe_mmq_model_config value, const char * message) {
         check(!qwen35moe_use_auto_rdna2_q4_k_j16(value), message);
@@ -67,8 +64,10 @@ void test_qwen36_35b_model_selector() {
     changed = config; changed.n_ff_exp = 1024; negative(changed, "wrong 35B expert width accepted");
     changed = config; changed.n_expert = 128; negative(changed, "wrong 35B expert count accepted");
     changed = config; changed.n_expert_used = 4; negative(changed, "wrong 35B top-k accepted");
-    changed = config; changed.tensor_parallel = false; negative(changed, "35B missing split mode accepted");
-    changed = config; changed.layer_split = true; negative(changed, "35B dual split mode accepted");
+    changed = config; changed.layer_split = false; negative(changed, "35B missing layer split accepted");
+    changed = config; changed.tensor_parallel = true; negative(changed, "35B dual split mode accepted");
+    changed = config; changed.layer_split = false; changed.tensor_parallel = true;
+    negative(changed, "35B tensor split accepted");
     changed = config; changed.n_devices = 2; negative(changed, "35B non-four-way split accepted");
     changed = config; changed.tensor_split = nullptr; negative(changed, "35B implicit split accepted");
 
@@ -152,7 +151,8 @@ void test_backend_selector() {
     };
     check(ggml_cuda_mmq_auto_J(input) == 16, "Qwen3.6 35B layer signature rejected");
     input.nrows_x = 128;
-    check(ggml_cuda_mmq_auto_J(input) == 16, "Qwen3.6 35B tensor signature rejected");
+    negative(input, "Qwen3.6 tensor signature accepted");
+    input.nrows_x = 512;
     changed = input; changed.nrows_x = 256; negative(changed, "Qwen3.6 wrong local N accepted");
     changed = input; changed.q4_k = false; negative(changed, "Qwen3.6 Q5_K accepted");
     changed = input; changed.ncols_x = 512; negative(changed, "Qwen3.6 down shape accepted");

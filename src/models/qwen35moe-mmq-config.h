@@ -23,7 +23,7 @@ inline bool qwen35moe_use_auto_rdna2_q4_k_j16(const qwen35moe_mmq_model_config &
         config.n_expert_used == 8 && config.tensor_parallel && !config.layer_split;
     const bool qwen36_35b = config.is_35b_a3b && !config.is_122b_a10b &&
         config.n_embd == 2048 && config.n_ff_exp == 512 && config.n_expert == 256 &&
-        config.n_expert_used == 8 && (config.tensor_parallel != config.layer_split);
+        config.n_expert_used == 8 && !config.tensor_parallel && config.layer_split;
     if ((!qwen35_122b && !qwen36_35b) || config.n_devices != 4 || config.tensor_split == nullptr) {
         return false;
     }
