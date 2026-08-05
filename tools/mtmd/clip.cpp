@@ -1470,7 +1470,7 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.image_longest_edge = hparams.image_size;
                         get_u32(KEY_PREPROC_IMAGE_SIZE, hparams.image_longest_edge, false);
-                        hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                        hparams.set_limit_image_tokens_longest_edge(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_DOTS_OCR:
                     {
