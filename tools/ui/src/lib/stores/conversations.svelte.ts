@@ -500,6 +500,34 @@ class ConversationsStore {
 		}
 	}
 
+	// When encryption is unlocked, exporting asks the user whether to keep the
+	// data encrypted; otherwise it always exports unencrypted. The dialog is
+	// rendered by the caller, keyed off this reactive flag.
+	showExportEncryptionDialog = $state(false);
+	private pendingExportAction: ((unencrypted: boolean) => void) | null = null;
+
+	/** Run an export, asking for the encryption choice only when unlocked */
+	requestExport(action: (unencrypted: boolean) => void): void {
+		if (encryptionStore.isUnlocked) {
+			this.pendingExportAction = action;
+			this.showExportEncryptionDialog = true;
+		} else {
+			action(true);
+		}
+	}
+
+	/** Commit the export with the user's encryption choice */
+	resolveExport(unencrypted: boolean): void {
+		this.pendingExportAction?.(unencrypted);
+		this.pendingExportAction = null;
+	}
+
+	/** Abort a pending export and close the dialog */
+	cancelExport(): void {
+		this.pendingExportAction = null;
+		this.showExportEncryptionDialog = false;
+	}
+
 	/**
 	 * Bundles the given conversations into a single zip archive and triggers a
 	 * browser download (one JSONL file per conversation).
