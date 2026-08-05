@@ -41,6 +41,7 @@
 
 #include "ggml-common.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h"
 
 #include <stdint.h>
 
