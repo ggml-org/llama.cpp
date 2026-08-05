@@ -35,7 +35,16 @@ public struct QuantizeTool: TesseraTool {
         required: ["model_path", "output_path", "policy_path"]
     )
 
-    public init() {}
+    private let shell: TesseraProcessShell
+
+    public init() {
+        self.shell = ProcessRunner()
+    }
+
+    /// Test seam.
+    init(shell: TesseraProcessShell) {
+        self.shell = shell
+    }
 
     public func execute(arguments: [String: JSONValue]) async throws -> ToolResult {
         guard let modelPath = arguments["model_path"]?.stringValue, !modelPath.isEmpty else {
@@ -48,11 +57,12 @@ public struct QuantizeTool: TesseraTool {
             return .fail("policy_path is required")
         }
 
+        let expandedModel = NSString(string: modelPath).expandingTildeInPath
+        let expandedOutput = NSString(string: outputPath).expandingTildeInPath
+
         // Prefer the linked xcframework (in-process, no subprocess) when
-        // available; otherwise shell out to tessera-quantize.
+        // available; otherwise shell out to tessera-cli.
         if TesseraFFIBridge.isAvailable {
-            let expandedModel = NSString(string: modelPath).expandingTildeInPath
-            let expandedOutput = NSString(string: outputPath).expandingTildeInPath
             var config: [String: Any] = [
                 "policy_path": NSString(string: policyPath).expandingTildeInPath,
             ]
@@ -78,24 +88,42 @@ public struct QuantizeTool: TesseraTool {
             }
         }
 
-        var args = [
-            NSString(string: modelPath).expandingTildeInPath,
-            NSString(string: outputPath).expandingTildeInPath,
-            "--tessera-policy", NSString(string: policyPath).expandingTildeInPath,
+        // CLI fallback: tessera-cli quantize <model> <output> --config <json>
+        guard let cli = TesseraCLIBinaryResolver.resolve(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) else {
+            return .fail(TesseraCLIBinaryResolver.diagnosticMessage())
+        }
+
+        var config: [String: Any] = [
+            "policy_path": NSString(string: policyPath).expandingTildeInPath,
+        ]
+        if let imatrixPath = arguments["imatrix_path"]?.stringValue, !imatrixPath.isEmpty {
+            config["imatrix_path"] = NSString(string: imatrixPath).expandingTildeInPath
+        }
+        if let nThreads = arguments["n_threads"]?.numberValue.map({ Int($0) }), nThreads > 0 {
+            config["nthreads"] = nThreads
+        }
+
+        let configPath: String
+        do {
+            configPath = try EngineToolSupport.writeConfigFile(config: config)
+        } catch {
+            return .fail("Failed to write quantize config: \(error.localizedDescription)")
+        }
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        let args = [
+            "quantize", expandedModel, expandedOutput,
+            "--config", configPath,
         ]
 
-        if let imatrixPath = arguments["imatrix_path"]?.stringValue, !imatrixPath.isEmpty {
-            args += ["--imatrix", NSString(string: imatrixPath).expandingTildeInPath]
-        }
-
-        if let nThreads = arguments["n_threads"]?.numberValue.map({ Int($0) }), nThreads > 0 {
-            args += ["--threads", String(nThreads)]
-        }
-
-        let runner = ProcessRunner()
-        let result = try await runner.run(
-            executable: "tessera-quantize",
-            arguments: args
+        let result = try await shell.run(
+            executable: cli,
+            arguments: args,
+            environment: nil,
+            workingDirectory: nil
         )
 
         if result.exitCode == 0 {
@@ -106,6 +134,21 @@ public struct QuantizeTool: TesseraTool {
             ])
         } else {
             return .fail("Quantization failed (exit \(result.exitCode)):\n\(result.stderr)")
+        }
+    }
+}
+
+extension TesseraCLIBinaryResolver {
+    /// Short human-readable string for the Settings "not found" state and
+    /// for the tool error when the binary cannot be resolved.
+    static func diagnosticMessage() -> String {
+        switch resolvedPathOrDiagnostic(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) {
+        case .found: return "tessera-cli resolved but missing at call time"
+        case .notFound(let searched):
+            return "tessera-cli binary not found; checked: \(searched.joined(separator: "\n  - "))"
         }
     }
 }

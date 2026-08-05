@@ -48,8 +48,10 @@ public struct LoadModelTool: TesseraTool {
         let runtime = arguments["runtime"]?.stringValue ?? TesseraRuntime.onDevice.rawValue
         let nCtx = arguments["n_ctx"]?.numberValue.map { Int($0) } ?? 4096
 
-        // In production, this calls TesseraEngineBridge.loadModel().
-        // For now, validate and report.
+        // load_model stays a Swift state op (no subprocess): the on-device
+        // inference path runs through CLlama / LlamaLLMProvider, and the CLI
+        // surface would just be a wrapper around the same C call. Surface
+        // the resolved metadata so the caller can see what the load saw.
         var report = [
             "Loaded model: \(expanded)",
             "Runtime: \(runtime)",

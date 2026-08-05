@@ -40,7 +40,16 @@ public struct EvolveTool: TesseraTool {
         required: ["model_path", "imatrix_path", "output_path"]
     )
 
-    public init() {}
+    private let shell: TesseraProcessShell
+
+    public init() {
+        self.shell = ProcessRunner()
+    }
+
+    /// Test seam.
+    init(shell: TesseraProcessShell) {
+        self.shell = shell
+    }
 
     public func execute(arguments: [String: JSONValue]) async throws -> ToolResult {
         guard let modelPath = arguments["model_path"]?.stringValue, !modelPath.isEmpty else {
@@ -57,6 +66,8 @@ public struct EvolveTool: TesseraTool {
         let generations = arguments["generations"]?.numberValue.map { Int($0) } ?? 50
         let population = arguments["population"]?.numberValue.map { Int($0) } ?? 32
 
+        let expandedModel = NSString(string: modelPath).expandingTildeInPath
+
         // The FFI cannot run the GA (it needs a loaded model context), so the
         // real impl and the stub both return fallbackToCLI; the gate is kept
         // so a future in-process evolve path slots in here without touching
@@ -69,9 +80,7 @@ public struct EvolveTool: TesseraTool {
                 "imatrix_path": NSString(string: imatrixPath).expandingTildeInPath,
                 "policy_out_path": NSString(string: outputPath).expandingTildeInPath,
             ]
-            switch TesseraFFIBridge.evolve(
-                model: NSString(string: modelPath).expandingTildeInPath, config: config
-            ) {
+            switch TesseraFFIBridge.evolve(model: expandedModel, config: config) {
             case let .success(output):
                 return .ok(output, data: [
                     "output_path": .string(outputPath),
@@ -86,17 +95,38 @@ public struct EvolveTool: TesseraTool {
             }
         }
 
-        let runner = ProcessRunner()
-        let result = try await runner.run(
-            executable: "tessera-evolve",
-            arguments: [
-                "--model", NSString(string: modelPath).expandingTildeInPath,
-                "--imatrix", NSString(string: imatrixPath).expandingTildeInPath,
-                "--output", NSString(string: outputPath).expandingTildeInPath,
-                "--target-bits", String(targetBits),
-                "--generations", String(generations),
-                "--population", String(population),
-            ]
+        // CLI fallback: tessera-cli evolve <model> --config <json>
+        guard let cli = TesseraCLIBinaryResolver.resolve(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) else {
+            return .fail(TesseraCLIBinaryResolver.diagnosticMessage())
+        }
+
+        let config: [String: Any] = [
+            "imatrix_path": NSString(string: imatrixPath).expandingTildeInPath,
+            "policy_out_path": NSString(string: outputPath).expandingTildeInPath,
+            "target_bits": targetBits,
+            "generations": generations,
+            "population": population,
+        ]
+        let configPath: String
+        do {
+            configPath = try EngineToolSupport.writeConfigFile(config: config)
+        } catch {
+            return .fail("Failed to write evolve config: \(error.localizedDescription)")
+        }
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        let args = [
+            "evolve", expandedModel,
+            "--config", configPath,
+        ]
+        let result = try await shell.run(
+            executable: cli,
+            arguments: args,
+            environment: nil,
+            workingDirectory: nil
         )
 
         if result.exitCode == 0 {

@@ -94,14 +94,26 @@ public final class CLIEngineBridge: TesseraEngineBridge, @unchecked Sendable {
                 continuation.finish(throwing: EngineBridgeError.noModelLoaded)
             }
         }
+        // Resolve tessera-cli at call time so a settings change is honored
+        // without re-creating the bridge.
+        guard let cli = TesseraCLIBinaryResolver.resolve(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: EngineBridgeError.cliNotFound(
+                    TesseraCLIBinaryResolver.diagnosticMessage()
+                ))
+            }
+        }
 
         return AsyncThrowingStream { continuation in
             Task {
                 do {
                     let stream = self.runner.runStreaming(
-                        executable: "tessera-cli",
+                        executable: cli,
                         arguments: [
-                            "--model", model,
+                            "generate", model,
                             "--prompt", prompt,
                             "--n-predict", String(maxTokens),
                             "--stream",
@@ -148,11 +160,13 @@ public final class CLIEngineBridge: TesseraEngineBridge, @unchecked Sendable {
 public enum EngineBridgeError: Error, LocalizedError {
     case modelNotFound(String)
     case noModelLoaded
+    case cliNotFound(String)
 
     public var errorDescription: String? {
         switch self {
         case .modelNotFound(let path): "Model not found: \(path)"
         case .noModelLoaded: "No model is loaded. Call loadModel first."
+        case .cliNotFound(let detail): detail
         }
     }
 }

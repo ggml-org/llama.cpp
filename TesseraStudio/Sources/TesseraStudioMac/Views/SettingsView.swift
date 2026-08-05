@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.telemetryEnabled) private var telemetryEnabled = TesseraSettingsDefault.telemetryEnabled
     @AppStorage(TesseraSettingsKey.logLevel) private var logLevel = TesseraSettingsDefault.logLevel
     @AppStorage(TesseraSettingsKey.cliPath) private var cliPath = TesseraSettingsDefault.cliPath
+    @AppStorage(TesseraSettingsKey.tesseraCLIPath) private var tesseraCLIPath = TesseraSettingsDefault.tesseraCLIPath
     // LLM provider
     @AppStorage(TesseraSettingsKey.llmProviderType) private var llmProviderType = TesseraSettingsDefault.llmProviderType
     @AppStorage(TesseraSettingsKey.remoteAPIBaseURL) private var remoteAPIBaseURL = TesseraSettingsDefault.remoteAPIBaseURL
@@ -472,9 +473,40 @@ struct SettingsView: View {
                 }
             }
             PathField("Custom CLI path", text: $cliPath, picks: .directory)
+            Section("Engine binary (tessera-cli)") {
+                PathField("tessera-cli path", text: $tesseraCLIPath, picks: .file(types: [.unixExecutable]))
+                tesseraCLIStateRow
+                Text("Leave empty to auto-resolve; the known install locations and $PATH are checked in order.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    /// Live resolution status of the tessera-cli binary. Pairs a symbol
+    /// with the text so the state is not encoded by color alone. Re-runs
+    /// on every `tesseraCLIPath` edit, so the user sees the result of a
+    /// paste the moment the field is updated.
+    @ViewBuilder
+    private var tesseraCLIStateRow: some View {
+        switch TesseraCLIBinaryResolver.resolvedPathOrDiagnostic(
+            override: tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) {
+        case .found(let path):
+            Label("Found at \(path)", systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .notFound(let searched):
+            let summary = searched.isEmpty
+                ? "not found"
+                : "Not found; checked: " + searched.prefix(3).joined(separator: ", ")
+            Label(summary, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
