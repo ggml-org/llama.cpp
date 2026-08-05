@@ -1332,10 +1332,10 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
         }
         case GGML_OP_RMS_NORM: {
             // Per-row RMSNorm: y = x * rsqrt(mean(x^2) + eps). The
-            // W2 body-op spike exports one functionName "rmsnorm" of
-            // shape [1, K] fp16. K is the bundle's baked input dim
-            // and is read from MLModelDescription. The op's src[0]
-            // is the row to norm; the dst is the result. eps is
+            // W2 body-op spike exports one functionName "main" of
+            // shape [K, 1] fp16 (a column vector; matches ggml's
+            // per-row reduction over ne[0]). The op's src[0] is
+            // the row to norm; the dst is the result. eps is
             // packed in op_params[0] as a single float; we read it
             // for the manifest-side sanity check but the bundle
             // bakes eps at export time (Phase 1 ships a single
@@ -1347,7 +1347,7 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             if (op->ne[1] != 1) {
                 // Per-row reduction over ne[0]: only the decode
-                // shape [1, K] is in this spike. Prefill (ne[1] > 1)
+                // shape [K, 1] is in this spike. Prefill (ne[1] > 1)
                 // is multi-row and would require a different bundle
                 // function (one row per parallel dispatch); the
                 // scheduler routes those to the CPU backend until
@@ -1376,9 +1376,11 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             NSArray<NSNumber *> * x_shape = x_desc.multiArrayConstraint.shape;
             NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
-            if (x_shape.count != 1 || y_shape.count != 1 ||
+            if (x_shape.count != 2 || y_shape.count != 2 ||
                 x_shape[0].longLongValue != op->ne[0] ||
-                y_shape[0].longLongValue != op->ne[0]) {
+                x_shape[1].longLongValue != op->ne[1] ||
+                y_shape[0].longLongValue != op->ne[0] ||
+                y_shape[1].longLongValue != op->ne[1]) {
                 // Bundle's baked shape does not match the ggml op's
                 // shape; refuse the dispatch so the scheduler can
                 // route the op to a different backend.

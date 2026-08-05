@@ -554,6 +554,18 @@ if (APPLE)
         target_link_libraries(test-ane-matmul-w1-dispatch PRIVATE
                               ggml ggml-base)
     endif()
+    # Phase 1 body-op dispatch tests. Each op (RMS_NORM, SOFT_MAX,
+    # ROPE, GLU, GET_ROWS) loads its own single-function .mlmodelc
+    # fixture, runs the dispatch path through the ANE backend, and
+    # verifies the output against a CPU reference. The fixtures
+    # are committed under tools/ane-mtp/fixtures/<op>-*/. The
+    # test is skipped when a fixture is missing; the build script
+    # for each fixture is tools/ane-mtp/build-<op>-fixture.py.
+    llama_build(test-ane-rmsnorm.cpp)
+    if (TARGET test-ane-rmsnorm)
+        target_link_libraries(test-ane-rmsnorm PRIVATE
+                              ggml ggml-base)
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")

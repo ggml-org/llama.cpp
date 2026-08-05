@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "bundle_name": "rmsnorm-1x4096",
+  "state_size_bytes": 65536,
+  "model_type": "ml_program",
+  "slots": [
+    {
+      "name": "x",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 0,
+      "size_bytes": 16384
+    },
+    {
+      "name": "y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 16384,
+      "size_bytes": 16384
+    }
+  ],
+  "functions": [
+    {
+      "name": "main",
+      "role": "rms_norm",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "x"
+      ],
+      "output_slots": [
+        "y"
+      ],
+      "core_ml_function_name": "main",
+      "use_ane": true
+    }
+  ],
+  "dependencies": []
+}

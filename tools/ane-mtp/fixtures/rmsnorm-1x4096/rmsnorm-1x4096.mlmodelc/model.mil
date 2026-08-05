@@ -1,0 +1,19 @@
+program(1.3)
+[buildInfo = dict<string, string>({{"coremlc-component-MIL", "3520.4.1"}, {"coremlc-version", "3520.5.1"}, {"coremltools-component-milinternal", ""}, {"coremltools-version", "9.0"}})]
+{
+    func main<ios18>(tensor<fp32, [4096, 1]> x) {
+            string x_to_fp16_dtype_0 = const()[name = string("x_to_fp16_dtype_0"), val = string("fp16")];
+            tensor<fp16, [4096, 1]> x_to_fp16 = cast(dtype = x_to_fp16_dtype_0, x = x)[name = string("cast_1")];
+            tensor<fp16, [4096, 1]> x2_cast_fp16 = mul(x = x_to_fp16, y = x_to_fp16)[name = string("x2_cast_fp16")];
+            tensor<int32, [1]> mean_axes_0 = const()[name = string("mean_axes_0"), val = tensor<int32, [1]>([-2])];
+            bool mean_keep_dims_0 = const()[name = string("mean_keep_dims_0"), val = bool(true)];
+            tensor<fp16, [1, 1]> mean_cast_fp16 = reduce_mean(axes = mean_axes_0, keep_dims = mean_keep_dims_0, x = x2_cast_fp16)[name = string("mean_cast_fp16")];
+            fp16 add_y_0_to_fp16 = const()[name = string("add_y_0_to_fp16"), val = fp16(0x1.1p-20)];
+            tensor<fp16, [1, 1]> add_cast_fp16 = add(x = mean_cast_fp16, y = add_y_0_to_fp16)[name = string("add_cast_fp16")];
+            fp32 rsqrt_epsilon_0 = const()[name = string("rsqrt_epsilon_0"), val = fp32(0x1.197998p-40)];
+            tensor<fp16, [1, 1]> rsqrt_cast_fp16 = rsqrt(epsilon = rsqrt_epsilon_0, x = add_cast_fp16)[name = string("rsqrt_cast_fp16")];
+            tensor<fp16, [4096, 1]> y_cast_fp16 = mul(x = x_to_fp16, y = rsqrt_cast_fp16)[name = string("y_cast_fp16")];
+            string y_cast_fp16_to_fp32_dtype_0 = const()[name = string("y_cast_fp16_to_fp32_dtype_0"), val = string("fp32")];
+            tensor<fp32, [4096, 1]> y = cast(dtype = y_cast_fp16_to_fp32_dtype_0, x = y_cast_fp16)[name = string("cast_0")];
+        } -> (y);
+}
