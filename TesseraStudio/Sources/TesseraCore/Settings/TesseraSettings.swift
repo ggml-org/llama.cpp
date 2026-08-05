@@ -19,6 +19,11 @@ public enum TesseraSettingsKey {
     /// default) means auto-resolve via ``TesseraCLIBinaryResolver``; the
     /// known install locations and `$PATH` are walked in order.
     public static let tesseraCLIPath = "tessera.settings.tesseraCLIPath"
+    /// Absolute path to the Python interpreter used by
+    /// ``PythonEngineBridge`` to invoke tools under `tools/tessera/`. Empty
+    /// means auto-resolve via `TESSERA_PYTHON` env var, then `which python3`,
+    /// then the well-known Homebrew/system install locations.
+    public static let tesseraPythonPath = "tessera.settings.tesseraPythonPath"
     // LLM provider
     public static let llmProviderType = "tessera.settings.llmProviderType"
     public static let remoteAPIBaseURL = "tessera.settings.remoteAPIBaseURL"
@@ -73,6 +78,11 @@ public enum TesseraSettingsDefault {
     /// subprocess layout; `tesseraCLIPath` is the modern full-binary
     /// override and is what the retargeted engine tools read.
     public static let tesseraCLIPath = ""
+    /// Empty means auto-resolve via ``PythonEngineBridge.discoverPython()``,
+    /// which honors the `TESSERA_PYTHON` env var and walks the standard
+    /// install locations. Used by every tool wrapped by the Python engine
+    /// bridge.
+    public static let tesseraPythonPath = ""
     // LLM provider. Default stays .placeholder for backward compatibility.
     public static let llmProviderType = "placeholder"
     public static let remoteAPIBaseURL = "http://localhost:8080/v1"
@@ -160,6 +170,7 @@ public enum TesseraSettings {
             TesseraSettingsKey.logLevel: TesseraSettingsDefault.logLevel,
             TesseraSettingsKey.cliPath: TesseraSettingsDefault.cliPath,
             TesseraSettingsKey.tesseraCLIPath: TesseraSettingsDefault.tesseraCLIPath,
+            TesseraSettingsKey.tesseraPythonPath: TesseraSettingsDefault.tesseraPythonPath,
             TesseraSettingsKey.llmProviderType: TesseraSettingsDefault.llmProviderType,
             TesseraSettingsKey.remoteAPIBaseURL: TesseraSettingsDefault.remoteAPIBaseURL,
             TesseraSettingsKey.remoteAPIKey: TesseraSettingsDefault.remoteAPIKey,
@@ -243,6 +254,14 @@ public enum TesseraSettings {
     /// change is honored without restarting the app.
     public static var tesseraCLIPath: String {
         UserDefaults.standard.string(forKey: TesseraSettingsKey.tesseraCLIPath) ?? TesseraSettingsDefault.tesseraCLIPath
+    }
+
+    /// User-chosen absolute path to the Python interpreter used by the
+    /// Python engine bridge tools. Empty means auto-resolve
+    /// (``PythonEngineBridge.discoverPython()``). Read on every Python
+    /// tool invocation, so a settings change is honored without restarting.
+    public static var tesseraPythonPath: String {
+        UserDefaults.standard.string(forKey: TesseraSettingsKey.tesseraPythonPath) ?? TesseraSettingsDefault.tesseraPythonPath
     }
 
     // MARK: Audience mode

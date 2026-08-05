@@ -1,0 +1,24 @@
+{
+  "name": "unified_calibrate",
+  "description": "Unified per-component Tessera calibration. Runs per_tensor_calibrate.py on each --component and combines the per-component policies into a single llama.speculative.calibration-policy.v1 JSON keyed by model_role. The driver that walks (trunk, dflash, dspark, mtp_nextn, shared_embd) and stitches the per-role policy together.",
+  "default_approval_level": "prompt",
+  "script": "unified_calibrate",
+  "subcommand": null,
+  "positional": [],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "component":                { "type": "array",   "items": { "type": "string" }, "description": "A component to calibrate as ROLE=PATH (e.g. trunk=path/to/layers, dflash=path/to/bundle). May be specified multiple times; order is preserved in the unified policy." },
+      "fitness":                  { "type": "string",  "description": "Forwarded to per_tensor_calibrate.py when --fitness-default is not 'auto'. Ignored when --fitness-default is 'auto'.", "enum": ["lrq", "awq", "flrq", "dartquant", "compare"] },
+      "fitness_default":          { "type": "string",  "description": "How to pick the per-component --fitness. 'auto' consults ROLE_DEFAULT_FITNESS: trunk->awq, dflash/dspark/mtp_nextn->lrq, shared_embd->flrq.", "enum": ["auto", "lrq", "awq", "flrq", "dartquant", "compare"], "default": "auto" },
+      "per_tensor_calibrate":     { "type": "string",  "description": "Path to per_tensor_calibrate.py. Defaults to the sibling script in the same directory as this one." },
+      "output":                   { "type": "string",  "description": "Unified calibration policy JSON output path." },
+      "keep_intermediate":        { "type": "boolean", "description": "Keep the per-component intermediate policy files in a subdirectory next to --output (useful for debugging which component's calibration contributed which tensor)." },
+      "extra_arg":                { "type": "array",   "items": { "type": "string" }, "description": "Extra CLI arg forwarded to per_tensor_calibrate.py on every component. May be specified multiple times." },
+      "db":                       { "type": "string",  "description": "Optional path to the unified tessera.duckdb. When provided, the embedding-budget producer reads tensor_stats and emits a role_budgets sidecar." },
+      "budget_fraction":          { "type": "number",  "description": "Base fraction for the role size envelope: E(r) = source_footprint_bits(r) * fraction. Non-positive opts out of the size envelope.", "default": "1.0" },
+      "no_embedding_budget":      { "type": "boolean", "description": "Opt out of the M2 embedding-budget integration. The sidecar is emitted without role_budgets, preserving the pre-M2 contract." }
+    },
+    "required": ["output"]
+  }
+}

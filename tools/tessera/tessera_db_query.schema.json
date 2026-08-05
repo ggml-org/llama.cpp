@@ -1,0 +1,21 @@
+{
+  "name": "tessera_db_query",
+  "description": "Read-only CLI shim for the unified tessera.duckdb store. Wraps tessera_db.py with a stable CLI: list_models returns the distinct model_hashes with per-model tensor count, family coverage, and the recommended_action distribution; list_tensor_stats returns per-tensor rows; table_names lists the tables in the DB; query runs a read-only SQL query and dumps the result rows as JSON. The Library view uses this to populate the model grid without doing directory globbing.",
+  "default_approval_level": "auto",
+  "script": "tessera_db_query",
+  "subcommand": null,
+  "positional": ["query"],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query":         { "type": "string",  "description": "Which query to run. 'list_models' returns per-model rows; 'list_tensor_stats' returns per-tensor rows; 'table_names' lists the tables in the DB; 'query' runs a custom SQL query (requires --sql).",
+                          "enum": ["list_models", "list_tensor_stats", "table_names", "query"],
+                          "default": "list_models" },
+      "db":            { "type": "string",  "description": "Path to the unified tessera.duckdb file.", "default": "tessera.duckdb" },
+      "limit":         { "type": "integer", "description": "Row limit (per-query default; list_models=200, list_tensor_stats=2000).", "default": "200" },
+      "model_hash":    { "type": "string",  "description": "Filter (list_tensor_stats only): only return rows for this model_hash." },
+      "sql":           { "type": "string",  "description": "Read-only SQL to run when query=query." }
+    },
+    "required": []
+  }
+}

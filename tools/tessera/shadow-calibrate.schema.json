@@ -1,0 +1,23 @@
+{
+  "name": "shadow_calibrate",
+  "description": "Refine a Tessera policy with provisional reconstruction error. Reads the existing base policy and the .npz bundles, recomputes the per-tensor reconstruction error under the policy, and emits a refined policy. Used by the shadow-mode calibration loop to test a candidate policy without disrupting the production on-disk state.",
+  "default_approval_level": "prompt",
+  "script": "shadow-calibrate",
+  "subcommand": null,
+  "positional": [],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "layers":          { "type": "array",   "items": { "type": "string" }, "description": "AWQ bundle directory. Repeat for vision, audio, or drafter bundles." },
+      "base_policy":     { "type": "string",  "description": "Path to the existing base calibration policy JSON." },
+      "output":          { "type": "string",  "description": "Path to the refined policy JSON." },
+      "evolver":         { "type": "string",  "description": "Optional path to the awq-evolve.py (or compatible) evolver binary." },
+      "max_rows":        { "type": "integer", "description": "Cap on rows per bundle.", "default": "65536" },
+      "max_tokens":      { "type": "integer", "description": "Cap on calibration tokens per bundle.", "default": "256" },
+      "top_fraction":    { "type": "number",  "description": "Fraction of top-error tensors to focus the refinement on.", "default": "0.1" },
+      "max_overrides":   { "type": "integer", "description": "Cap on the number of override entries written.", "default": "256" },
+      "residual_boost":  { "type": "number",  "description": "Multiplier on the per-tensor residual when ranking the refinement targets.", "default": "1.0" }
+    },
+    "required": ["base_policy", "output"]
+  }
+}

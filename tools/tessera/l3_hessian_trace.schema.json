@@ -1,0 +1,23 @@
+{
+  "name": "l3_hessian_trace",
+  "description": "Compute per-tile Hessian traces for Tessera L3 sensitivity. Reads a per-tensor calibration bundle (.npz) and writes a hessian-trace policy JSON consumable by tile640_quantize_v3.py --calibration-policy and the L5 orchestrator. Method 'hutchinson' (HAWQ-V2 style, 50 Rademacher probes) requires train_activations; 'exact-diagonal' uses the imatrix's per-channel in_sum2 and is the right choice when only the calibration observer is available.",
+  "default_approval_level": "prompt",
+  "script": "l3_hessian_trace",
+  "subcommand": null,
+  "positional": [],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "layers":                  { "type": "string",  "description": "Directory of .npz calibration bundles or a single .npz file." },
+      "output":                  { "type": "string",  "description": "Output hessian-trace policy JSON path." },
+      "method":                  { "type": "string",  "description": "Trace estimator.", "enum": ["exact-diagonal", "hutchinson"], "default": "hutchinson" },
+      "tile_size":               { "type": "integer", "description": "Tile width for per-tile aggregation (default 640; must match TILE640_PAGE_SIZE).", "default": "640" },
+      "n_hutchinson_vectors":    { "type": "integer", "description": "Number of Rademacher probes for Hutchinson (default 50).", "default": "50" },
+      "max_tokens":              { "type": "integer", "description": "Maximum calibration tokens per bundle (default 256; 0 disables).", "default": "256" },
+      "seed":                    { "type": "integer", "description": "Seed for Hutchinson probes.", "default": "0" },
+      "validate":                { "type": "boolean", "description": "Run validate_policy on the output before exit (also triggered by default)." },
+      "verbose":                 { "type": "boolean", "description": "Verbose per-tensor logging." }
+    },
+    "required": ["layers", "output"]
+  }
+}

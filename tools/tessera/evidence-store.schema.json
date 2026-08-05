@@ -1,0 +1,17 @@
+{
+  "name": "evidence_store_summarize",
+  "description": "Summarize a Tessera Parquet calibration evidence store: count per-run row totals, per-table row breakdowns, and the most-recent ingestion timestamps. Wraps `evidence-store.py summarize`. The summarize subcommand is the read-only companion to the per-source ingest-* subcommands; it gives the L5 orchestrator a one-call health check on the evidence store.",
+  "default_approval_level": "auto",
+  "script": "evidence-store",
+  "subcommand": "summarize",
+  "positional": [],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "store":    { "type": "string",  "description": "Path to the evidence store directory (parent of the parquet parts)." },
+      "run_id":   { "type": "string",  "description": "If set, restrict the summary to this run id only." },
+      "output":   { "type": "string",  "description": "If set, write the JSON summary to this path (defaults to stdout)." }
+    },
+    "required": ["store"]
+  }
+}
