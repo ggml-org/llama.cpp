@@ -21,6 +21,7 @@ extern "C" void dequantize_row_tessera_t640(const void * GGML_RESTRICT x,
 
 #include <Accelerate/Accelerate.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -1288,6 +1289,40 @@ enum ggml_ane_dispatch_target {
     GGML_ANE_DISPATCH_NONE       = 2, // not ANE-eligible (unsupported)
 };
 
+// TILE640_MATMUL inner-dim tiling policy constants. The dispatch
+// splits the inner dim into tiles of `kTile640InnerDimTileSize` when
+// in_dim >= `kTile640InnerDimThreshold`. The architect's call: 4096
+// threshold + 1024 tile size. The 4096x4096 case becomes 4 tiles of
+// (out_dim, 1024) summed in fp32; the 8192 case becomes 8 tiles;
+// shapes below 4096 stay as a single dispatch. Tune the two knobs
+// here to retune the policy without touching the dispatch code.
+static const int64_t kTile640InnerDimThreshold = 4096;
+static const int64_t kTile640InnerDimTileSize  = 1024;
+
+// Test instrumentation: count of ANE sub-matmul dispatches in the
+// TILE640_MATMUL path. Increments once per tile in the tiled path
+// and once per op in the non-tiled path. Read by the parity test
+// (tests/test-ane-tile640-matmul.cpp) to assert the tile-vs-no-
+// tile dispatch policy (4 dispatches for the 4096x4096 case under
+// the 4096-threshold / 1024-tile-size constants).
+static std::atomic<uint64_t> g_tile640_ane_dispatch_count{0};
+
+uint64_t ggml_backend_ane_tile640_dispatch_count(void) {
+    return g_tile640_ane_dispatch_count.load(std::memory_order_relaxed);
+}
+
+void ggml_backend_ane_tile640_dispatch_count_reset(void) {
+    g_tile640_ane_dispatch_count.store(0, std::memory_order_relaxed);
+}
+
+int64_t ggml_backend_ane_tile640_threshold(void) {
+    return kTile640InnerDimThreshold;
+}
+
+int64_t ggml_backend_ane_tile640_tile_size(void) {
+    return kTile640InnerDimTileSize;
+}
+
 static enum ggml_ane_dispatch_target ggml_ane_dispatch_policy(const ggml_tensor * op) {
     switch (op->op) {
         case GGML_OP_MUL_MAT:
@@ -1877,14 +1912,18 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             if (!desc) {
                 return false;
             }
-            // The bundle is shape-locked at export time; the
+            // The bundle is shape-locked at export time. The
             // dispatch matches on the bound function's input
-            // shape. A shape mismatch returns false so the
-            // scheduler can route to a backend that has a
-            // matching bundle (the production graph would carry
-            // one .mlmodelc per (out_dim, in_dim, n_tokens) triple;
-            // the Phase 0 spike ships only 256x256x1, so larger
-            // shapes fall through to ggml-cpu/Metal).
+            // shape. The bundle is either the full (out_dim,
+            // in_dim, n_tokens) fixture (no-tile path, in_dim <
+            // kTile640InnerDimThreshold) or the (out_dim,
+            // kTile640InnerDimTileSize, n_tokens) sub-fixture
+            // (tile path, in_dim >= kTile640InnerDimThreshold).
+            // A shape mismatch returns false so the scheduler
+            // can route to a backend that has a matching bundle
+            // (the production graph would carry one .mlmodelc
+            // per shape triple; the Phase 0 spike ships the 5
+            // shape combos plus the 2 sub-fixtures).
             MLFeatureDescription * w_desc = desc.inputDescriptionsByName[@"w"];
             MLFeatureDescription * x_desc = desc.inputDescriptionsByName[@"x"];
             MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
@@ -1904,13 +1943,29 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                 y_desc.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat32) {
                 return false;
             }
+            // Phase 0 (tiling): if in_dim >= kTile640InnerDimThreshold,
+            // the dispatch splits the inner dim into tiles of
+            // kTile640InnerDimTileSize. The bound bundle is expected
+            // to be the (out_dim, kTile640InnerDimTileSize, n_tokens)
+            // sub-fixture; the dispatch iterates over N_tiles =
+            // ceil(in_dim / kTile640InnerDimTileSize) sub-matmuls,
+            // each one a (out_dim, kTile640InnerDimTileSize) slice of
+            // the full weight. The per-tile fp16 outputs are cast to
+            // fp32 and summed; the final Y is the fp32 sum. The
+            // 4096x4096 case becomes 4 tiles of (4096, 1024); the
+            // 8192 case becomes 8 tiles; shapes below 4096 stay as
+            // a single dispatch. See docs/ane-backend-deep-study.md
+            // Part 6.6 for the work-around rationale.
+            const bool tile_path = (in_dim >= kTile640InnerDimThreshold);
+            const int32_t sub_in_dim = tile_path
+                ? (int32_t) kTile640InnerDimTileSize : in_dim;
             NSArray<NSNumber *> * w_shape = w_desc.multiArrayConstraint.shape;
             NSArray<NSNumber *> * x_shape = x_desc.multiArrayConstraint.shape;
             NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
             if (w_shape.count != 2 || x_shape.count != 2 || y_shape.count != 2 ||
                 w_shape[0].longLongValue != out_dim ||
-                w_shape[1].longLongValue != in_dim ||
-                x_shape[0].longLongValue != in_dim ||
+                w_shape[1].longLongValue != sub_in_dim ||
+                x_shape[0].longLongValue != sub_in_dim ||
                 x_shape[1].longLongValue != n_tokens ||
                 y_shape[0].longLongValue != out_dim ||
                 y_shape[1].longLongValue != n_tokens) {
@@ -1986,20 +2041,147 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
                         ggml_fp32_to_fp16(row_f32[(size_t) c]);
                 }
             }
-            std::unordered_map<std::string, ggml_ane_typed_input> inputs;
-            inputs.emplace("w", ggml_ane_typed_input{
-                (const void *) weight_fp16.data(), GGML_ANE_INPUT_FP16});
-            inputs.emplace("x", ggml_ane_typed_input{
-                (const void *) op->src[6]->data, GGML_ANE_INPUT_FP16});
-            std::vector<std::string> out_names_vec = { "y" };
-            std::unordered_map<std::string, float *> outputs;
-            outputs.emplace("y", (float *) op->data);
-            const bool ok = ggml_ane_program_run(program, inputs,
-                                                  out_names_vec, outputs);
-            if (ok) {
-                out_names = std::move(out_names_vec);
+
+            if (!tile_path) {
+                // No-tile path: in_dim < kTile640InnerDimThreshold.
+                // The bound bundle is the (out_dim, in_dim, n_tokens)
+                // full fixture; a single ANE dispatch computes the
+                // matmul. The fp16 output is written to op->data as
+                // fp32 (the bundle's y dtype is fp32, the dispatch
+                // declares op->type == GGML_TYPE_F32, so the
+                // precision is preserved end-to-end).
+                std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+                inputs.emplace("w", ggml_ane_typed_input{
+                    (const void *) weight_fp16.data(), GGML_ANE_INPUT_FP16});
+                inputs.emplace("x", ggml_ane_typed_input{
+                    (const void *) op->src[6]->data, GGML_ANE_INPUT_FP16});
+                std::vector<std::string> out_names_vec = { "y" };
+                std::unordered_map<std::string, float *> outputs;
+                outputs.emplace("y", (float *) op->data);
+                g_tile640_ane_dispatch_count.fetch_add(1, std::memory_order_relaxed);
+                const bool ok = ggml_ane_program_run(program, inputs,
+                                                      out_names_vec, outputs);
+                if (ok) {
+                    out_names = std::move(out_names_vec);
+                }
+                return ok;
             }
-            return ok;
+
+            // Tile path: in_dim >= kTile640InnerDimThreshold.
+            // The bound bundle is the (out_dim, sub_in_dim,
+            // n_tokens) sub-fixture. The dispatch iterates over
+            // N_tiles = ceil(in_dim / sub_in_dim) sub-matmuls.
+            // For each tile, the dispatch:
+            //   1. Slices weight_fp16[:, t*sub_in_dim : min((t+1)*sub_in_dim, in_dim))
+            //      into a tile_weight [out_dim, sub_in_dim] (zero-padded
+            //      for the last partial tile).
+            //   2. Slices B[t*sub_in_dim : min((t+1)*sub_in_dim, in_dim), :] into
+            //      a tile_B [sub_in_dim, n_tokens] (zero-padded for the
+            //      last partial tile).
+            //   3. Calls the bound bundle with tile_weight + tile_B
+            //      as inputs, writes the fp16 output to a per-tile
+            //      scratch buffer, then casts to fp32 and adds to
+            //      the fp32 accumulator.
+            // The accumulator is the final Y, written to op->data
+            // (op->type == GGML_TYPE_F32). The N_tiles sub-matmul
+            // outputs each contribute ~sqrt(sub_in_dim) fp16
+            // accumulation error; the fp32 sum bounds the total
+            // error to ~sqrt(N_tiles * sub_in_dim) which is well
+            // within the spec's 1e-1 rel err bar.
+            //
+            // The fp32 sum accumulator is the ANE fp16 output cast
+            // to fp32 before accumulation. The sum is in fp32 to
+            // avoid fp16 overflow across N_tiles sub-matmul
+            // accumulations (4 tiles of 1024-element fp16 sums can
+            // reach ~2*sqrt(1024)*max_per_elt ~ 64x max_per_elt,
+            // within fp16 range but the ANE's fp16 accumulate is
+            // the precision bottleneck; the fp32 sum restores the
+            // spec's precision budget).
+            const int32_t N_tiles = (in_dim + (int32_t) kTile640InnerDimTileSize - 1)
+                                    / (int32_t) kTile640InnerDimTileSize;
+            std::vector<float> y_accum((size_t) out_dim * n_tokens, 0.0f);
+            std::vector<ggml_fp16_t> tile_weight(
+                (size_t) out_dim * sub_in_dim, ggml_fp16_t{0});
+            std::vector<ggml_fp16_t> tile_B(
+                (size_t) sub_in_dim * n_tokens, ggml_fp16_t{0});
+            // Bundle output is fp32 (the bundle's y dtype); the
+            // dispatch routes it through a fp16 scratch first to
+            // match the bundle's contract, then casts to fp32 for
+            // the sum.
+            std::vector<ggml_fp16_t> y_tile_fp16(
+                (size_t) out_dim * n_tokens, ggml_fp16_t{0});
+            // fp32 destination for the bundle's fp16 output.
+            std::vector<float> y_tile_fp32((size_t) out_dim * n_tokens, 0.0f);
+            const ggml_fp16_t * B_full = (const ggml_fp16_t *) op->src[6]->data;
+            for (int32_t t = 0; t < N_tiles; ++t) {
+                const int32_t col_start = t * (int32_t) kTile640InnerDimTileSize;
+                const int32_t col_end = std::min(
+                    col_start + (int32_t) kTile640InnerDimTileSize, in_dim);
+                const int32_t col_count = col_end - col_start;
+                // Build tile_weight [out_dim, sub_in_dim] by strided
+                // copy from weight_fp16 [out_dim, in_dim]. The
+                // last tile is zero-padded when col_count < sub_in_dim.
+                for (int32_t r = 0; r < out_dim; ++r) {
+                    ggml_fp16_t * dst = &tile_weight[(size_t) r * sub_in_dim];
+                    const ggml_fp16_t * src =
+                        &weight_fp16[(size_t) r * in_dim + col_start];
+                    for (int32_t c = 0; c < col_count; ++c) {
+                        dst[c] = src[c];
+                    }
+                    for (int32_t c = col_count; c < sub_in_dim; ++c) {
+                        dst[c] = ggml_fp16_t{0};
+                    }
+                }
+                // Build tile_B [sub_in_dim, n_tokens] by strided
+                // copy from B_full [in_dim, n_tokens]. The last
+                // tile is zero-padded when col_count < sub_in_dim.
+                for (int32_t c = 0; c < col_count; ++c) {
+                    for (int32_t k = 0; k < n_tokens; ++k) {
+                        tile_B[(size_t) c * n_tokens + k] =
+                            B_full[(size_t) (col_start + c) * n_tokens + k];
+                    }
+                }
+                for (int32_t c = col_count; c < sub_in_dim; ++c) {
+                    for (int32_t k = 0; k < n_tokens; ++k) {
+                        tile_B[(size_t) c * n_tokens + k] = ggml_fp16_t{0};
+                    }
+                }
+                // The bundle's y dtype is fp32; write directly
+                // into y_tile_fp32, not through a fp16 scratch.
+                // (The fp16 scratch was a vestigial intermediate
+                // from an earlier draft; the fp32 destination is
+                // the bundle's actual contract.)
+                std::unordered_map<std::string, ggml_ane_typed_input> inputs;
+                inputs.emplace("w", ggml_ane_typed_input{
+                    (const void *) tile_weight.data(), GGML_ANE_INPUT_FP16});
+                inputs.emplace("x", ggml_ane_typed_input{
+                    (const void *) tile_B.data(), GGML_ANE_INPUT_FP16});
+                std::vector<std::string> out_names_vec = { "y" };
+                std::unordered_map<std::string, float *> outputs;
+                outputs.emplace("y", y_tile_fp32.data());
+                g_tile640_ane_dispatch_count.fetch_add(1, std::memory_order_relaxed);
+                const bool ok = ggml_ane_program_run(program, inputs,
+                                                      out_names_vec, outputs);
+                if (!ok) {
+                    return false;
+                }
+                // Accumulate y_tile_fp32 into y_accum (fp32
+                // throughout; the per-tile fp16 multiply+accumulate
+                // happens inside the bundle, the cross-tile sum is
+                // fp32).
+                for (int64_t i = 0; i < (int64_t) out_dim * n_tokens; ++i) {
+                    y_accum[(size_t) i] += y_tile_fp32[(size_t) i];
+                }
+                (void) y_tile_fp16;  // (unused; fp32 destination is the bundle's contract)
+            }
+            // Write the fp32 accumulator to op->data. The op's
+            // declared type is GGML_TYPE_F32 (validated at the
+            // top of this case), so the fp32 sum is the
+            // dispatch's output contract.
+            std::memcpy(op->data, y_accum.data(),
+                        (size_t) out_dim * n_tokens * sizeof(float));
+            out_names = std::vector<std::string>{ "y" };
+            return true;
         }
         default:
             return false;

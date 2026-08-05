@@ -54,6 +54,22 @@ GGML_BACKEND_API bool ggml_backend_ane_set_program(
         ggml_backend_t backend,
         struct ggml_backend_ane_program * program);
 
+// Test instrumentation for the TILE640_MATMUL inner-dim tiling path.
+// The counter increments once per ANE sub-matmul dispatched (i.e. once
+// per tile in the tiled path, once per op in the non-tiled path). The
+// reset zeroes the counter. Used by tests/test-ane-tile640-matmul.cpp
+// to assert the tile-vs-no-tile dispatch policy (4 dispatches for the
+// 4096x4096 case under the 4096-threshold / 1024-tile-size constants).
+GGML_BACKEND_API uint64_t ggml_backend_ane_tile640_dispatch_count(void);
+GGML_BACKEND_API void ggml_backend_ane_tile640_dispatch_count_reset(void);
+
+// Tiling policy constants (also exposed for tests / future tuning).
+// The dispatch splits the inner-dim into tiles of kTile640InnerDimTileSize
+// when in_dim >= kTile640InnerDimThreshold. Both knobs are at the top
+// of the TILE640_MATMUL dispatch case in ggml-ane.mm.
+GGML_BACKEND_API int64_t ggml_backend_ane_tile640_threshold(void);
+GGML_BACKEND_API int64_t ggml_backend_ane_tile640_tile_size(void);
+
 // Lock-free data plane: a cross-backend IOSurface-backed buffer.
 //
 // Allocates an IOSurface that the CPU, Metal, and ANE backends can all
