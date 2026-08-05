@@ -134,6 +134,107 @@ final class TesseraTrainingWiringTests: XCTestCase {
         XCTAssertTrue(record.note.contains("tessera-train-lk"))
     }
 
+    // MARK: - Driver output parsing (pure)
+
+    func testParseDatasetLine() {
+        let event = TesseraTrainingOrchestrator.parseDriverLine(
+            "dataset: 512 examples, dense-label memory ~123.4 MiB"
+        )
+        guard case let .datasetBuilt(examples, memoryMiB)? = event else {
+            return XCTFail("expected .datasetBuilt, got \(String(describing: event))")
+        }
+        XCTAssertEqual(examples, 512)
+        XCTAssertEqual(memoryMiB, 123.4, accuracy: 0.001)
+    }
+
+    func testParseEpochLine() {
+        let event = TesseraTrainingOrchestrator.parseDriverLine(
+            "epoch 3: train LK loss 0.012345, top-1 agreement 0.9876"
+        )
+        guard case let .epoch(index, loss, agreement)? = event else {
+            return XCTFail("expected .epoch, got \(String(describing: event))")
+        }
+        XCTAssertEqual(index, 3)
+        XCTAssertEqual(loss, 0.012345, accuracy: 0.000001)
+        XCTAssertEqual(agreement, 0.9876, accuracy: 0.00001)
+    }
+
+    func testParseIgnoresUnrelatedDriverLines() {
+        XCTAssertNil(TesseraTrainingOrchestrator.parseDriverLine("llama_model_loader: loaded 123 tensors"))
+        XCTAssertNil(TesseraTrainingOrchestrator.parseDriverLine(""))
+        XCTAssertNil(TesseraTrainingOrchestrator.parseDriverLine("epoch without numbers"))
+        XCTAssertNil(TesseraTrainingOrchestrator.parseDriverLine("dataset: no counts here"))
+    }
+
+    // MARK: - Tolerant record decoding
+
+    func testUnknownLegacyOutcomeDecodesAsFailed() throws {
+        let json = #"{"timestamp":0,"outcome":"datasetPrepared","traceCount":3,"note":"old pipeline"}"#
+        let record = try JSONDecoder().decode(
+            TesseraTrainingOrchestrator.TrainingRecord.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(record.outcome, .trainingFailed)
+        XCTAssertEqual(record.traceCount, 3)
+    }
+
+    func testKnownOutcomeRoundTrips() throws {
+        let json = #"{"timestamp":0,"outcome":"dryRun","traceCount":7,"note":"dry"}"#
+        let record = try JSONDecoder().decode(
+            TesseraTrainingOrchestrator.TrainingRecord.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(record.outcome, .dryRun)
+    }
+
+    // MARK: - Streaming
+
+    func testStreamingYieldsSingleFinishedEventWhenGated() async throws {
+        let root = try makeTempRoot()
+        let orchestrator = try makeOrchestrator(
+            root: root, binary: "/does/not/matter", baseModel: nil, minTraces: 5
+        )
+        var events: [TesseraTrainingOrchestrator.TrainingEvent] = []
+        for await event in orchestrator.runStreaming() {
+            events.append(event)
+        }
+        XCTAssertEqual(events.count, 1)
+        guard case let .finished(record)? = events.last else {
+            return XCTFail("stream must end with .finished")
+        }
+        XCTAssertEqual(record.outcome, .skippedInsufficientTraces)
+    }
+
+    func testStreamingYieldsLiveProgressThenFinished() async throws {
+        let root = try makeTempRoot()
+        let binary = try writeFakeDriver(
+            "echo 'dataset: 512 examples, dense-label memory ~123.4 MiB'\n"
+            + "echo 'epoch 0: train LK loss 0.500000, top-1 agreement 0.7500'\n"
+            + "echo 'epoch 1: train LK loss 0.250000, top-1 agreement 0.8750'\n",
+            in: root
+        )
+        let baseModel = root.appendingPathComponent("drafter.gguf").path
+        let orchestrator = try makeOrchestrator(root: root, binary: binary, baseModel: baseModel)
+
+        var events: [TesseraTrainingOrchestrator.TrainingEvent] = []
+        for await event in orchestrator.runStreaming(overrideDryRun: false) {
+            events.append(event)
+        }
+
+        guard case .starting? = events.first else {
+            return XCTFail("stream must start with .starting, got \(events.first.map(String.init(describing:)) ?? "nil")")
+        }
+        XCTAssertTrue(events.contains { if case .datasetBuilt(512, _) = $0 { true } else { false } },
+                      "expected the datasetBuilt event, got \(events)")
+        XCTAssertTrue(events.contains { if case .epoch(1, _, _) = $0 { true } else { false } },
+                      "expected the epoch 1 event, got \(events)")
+        guard case let .finished(record)? = events.last else {
+            return XCTFail("stream must end with .finished")
+        }
+        XCTAssertEqual(record.outcome, .trainingCompleted)
+        XCTAssertTrue((record.stdout ?? "").contains("epoch 1"))
+    }
+
     // MARK: - Driver binary resolution
 
     func testResolverOverrideWinsEvenWhenMissing() {

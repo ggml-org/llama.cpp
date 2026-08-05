@@ -42,21 +42,35 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
         }
     }
 
-    /// Outcome of one training cycle. The v1 terminal set returned by run()
-    /// is {skippedInsufficientTraces, skippedNoModel, dryRun, trainingFailed,
-    /// trainingCompleted}; datasetPrepared and exportCompleted are legacy
-    /// outcomes persisted by the old three-step pipeline, and the guard cases
-    /// are reserved for the wired capability-eval gate (plug-in point).
+    /// Outcome of one training cycle. The terminal set returned today is
+    /// {skippedInsufficientTraces, skippedNoModel, dryRun, trainingFailed,
+    /// trainingCompleted}; the guard cases are reserved for the wired
+    /// capability-eval gate (plug-in point).
     public enum TrainingOutcome: String, Codable, Sendable {
         case skippedInsufficientTraces
         case skippedNoModel
-        case datasetPrepared
         case trainingCompleted
         case trainingFailed
-        case exportCompleted
         case guardPassed
         case guardFailed
         case dryRun
+
+        /// Tolerant decode: records persisted by the old three-step pipeline
+        /// carried outcomes that no longer exist. Map anything unknown to a
+        /// failed run rather than throwing or silently dropping the record.
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = TrainingOutcome(rawValue: raw) ?? .trainingFailed
+        }
+    }
+
+    /// A live signal from one training cycle. The UI consumes this to show
+    /// progress as it happens instead of blocking until the driver exits.
+    public enum TrainingEvent: Sendable {
+        case starting(traceCount: Int, dryRun: Bool)
+        case datasetBuilt(examples: Int, memoryMiB: Double)
+        case epoch(index: Int, loss: Double, agreement: Double)
+        case finished(TrainingRecord)
     }
 
     public struct TrainingRecord: Codable, Sendable {
@@ -113,49 +127,102 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
         return store.load(TrainingRecord?.self, from: Self.recordFile, default: nil)
     }
 
-    /// Run one training cycle. `overrideDryRun` wins when non-nil; otherwise
-    /// the configured dryRun applies. `maxExamples` overrides the configured
-    /// dataset cap when non-nil. Every branch persists and returns an honest
-    /// record - nothing is fabricated.
+    /// A driver invocation that passed the pre-flight gates and is ready to run.
+    private struct Prepared {
+        let stagedTraces: String
+        let outPath: String
+        let arguments: [String]
+        let dryRun: Bool
+        let traceCount: Int
+        let base: String
+        let maxExamples: Int
+    }
+
+    private enum GateResult {
+        case finished(TrainingRecord)
+        case prepared(Prepared)
+    }
+
+    /// Run one training cycle to completion and return the terminal record.
+    /// `overrideDryRun` wins when non-nil; otherwise the configured dryRun
+    /// applies. `maxExamples` overrides the dataset cap when non-nil. Every
+    /// branch persists and returns an honest record - nothing is fabricated.
+    /// For live progress, consume runStreaming() instead.
     public func run(overrideDryRun: Bool? = nil, maxExamples: Int? = nil) async -> TrainingRecord {
+        switch prepare(overrideDryRun: overrideDryRun, maxExamples: maxExamples) {
+        case .finished(let record):
+            return record
+        case .prepared(let prep):
+            return await runPrepared(prep)
+        }
+    }
+
+    /// Run one training cycle, streaming live progress events. The stream
+    /// always ends with a single .finished(record). Cancel the consuming task
+    /// to terminate the driver mid-run.
+    public func runStreaming(overrideDryRun: Bool? = nil, maxExamples: Int? = nil) -> AsyncStream<TrainingEvent> {
+        AsyncStream { continuation in
+            let task = Task { [weak self] in
+                guard let self else { continuation.finish(); return }
+                switch self.prepare(overrideDryRun: overrideDryRun, maxExamples: maxExamples) {
+                case .finished(let record):
+                    continuation.yield(.finished(record))
+                    continuation.finish()
+                case .prepared(let prep):
+                    continuation.yield(.starting(traceCount: prep.traceCount, dryRun: prep.dryRun))
+                    await self.streamDriver(prep, continuation: continuation)
+                    continuation.finish()
+                }
+            }
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
+        }
+    }
+
+    /// Run the pre-flight gates and stage the traces. Returns either an
+    /// already-persisted terminal record (a skip or early failure) or a
+    /// prepared invocation for the driver. Shared by run() and runStreaming()
+    /// so the two paths cannot drift.
+    private func prepare(overrideDryRun: Bool?, maxExamples: Int?) -> GateResult {
         let dryRun = overrideDryRun ?? config.dryRun
         let traceCount = traceStore.totalRecords()
 
         // Gate 1: enough traces to form a dataset.
         guard traceCount >= config.minTracesForTraining else {
-            return finish(TrainingRecord(
+            return .finished(finish(TrainingRecord(
                 outcome: .skippedInsufficientTraces,
                 traceCount: traceCount,
-                note: "have \(traceCount) trace record(s), need \(config.minTracesForTraining); run more imatrix calibration first"
-            ))
+                note: "have \(traceCount) trace record(s), need \(config.minTracesForTraining); collect more traces first"
+            )))
         }
 
         // Gate 2: a drafter model to train.
         guard let base = config.baseModelPath, !base.isEmpty else {
-            return finish(TrainingRecord(
+            return .finished(finish(TrainingRecord(
                 outcome: .skippedNoModel,
                 traceCount: traceCount,
                 note: "learning.baseModelPath is not set; training disabled"
-            ))
+            )))
         }
 
         // Gate 3: the native driver binary, checked up front so a missing
         // build is an actionable message, not a bare process-launch error.
         guard FileManager.default.isExecutableFile(atPath: config.trainBinary) else {
-            return finish(TrainingRecord(
+            return .finished(finish(TrainingRecord(
                 outcome: .trainingFailed,
                 traceCount: traceCount,
                 note: Self.missingBinaryNote(path: config.trainBinary)
-            ))
+            )))
         }
 
         let cap = maxExamples ?? config.maxExamples
         guard cap > 0 else {
-            return finish(TrainingRecord(
+            return .finished(finish(TrainingRecord(
                 outcome: .trainingFailed,
                 traceCount: traceCount,
                 note: "max-examples must be > 0 (got \(cap))"
-            ))
+            )))
         }
 
         // Stage all trace files into one JSONL the driver reads.
@@ -163,53 +230,161 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
         do {
             staged = try stageCombinedTraces()
         } catch {
-            return finish(TrainingRecord(
+            return .finished(finish(TrainingRecord(
                 outcome: .trainingFailed,
                 traceCount: traceCount,
                 note: "could not stage traces for tessera-train-lk: \(error.localizedDescription)"
-            ))
+            )))
         }
-        defer { try? FileManager.default.removeItem(atPath: staged) }
 
         let out = resolvedDrafterPath(base: base)
         let arguments = Self.trainArguments(
             traces: staged, model: base, out: out, maxExamples: cap, dryRun: dryRun
         )
+        return .prepared(Prepared(
+            stagedTraces: staged, outPath: out, arguments: arguments,
+            dryRun: dryRun, traceCount: traceCount, base: base, maxExamples: cap
+        ))
+    }
 
-        let result = await runStep(binary: config.trainBinary, arguments: arguments)
+    private func runPrepared(_ prep: Prepared) async -> TrainingRecord {
+        defer { try? FileManager.default.removeItem(atPath: prep.stagedTraces) }
+
+        let result = await runStep(binary: config.trainBinary, arguments: prep.arguments)
         switch result {
         case .failure(let error):
             return finish(TrainingRecord(
                 outcome: .trainingFailed,
-                traceCount: traceCount,
+                traceCount: prep.traceCount,
                 note: "tessera-train-lk could not start (\(error.localizedDescription)); expected at \(config.trainBinary)"
             ))
         case .success(let res) where res.exitCode != 0:
             return finish(TrainingRecord(
                 outcome: .trainingFailed,
-                traceCount: traceCount,
+                traceCount: prep.traceCount,
                 stdout: Self.capped(res.stdout),
                 stderr: Self.capped(res.stderr),
                 note: "tessera-train-lk exited \(res.exitCode)"
             ))
-        case .success(let res) where dryRun:
+        case .success(let res) where prep.dryRun:
             return finish(TrainingRecord(
                 outcome: .dryRun,
-                traceCount: traceCount,
+                traceCount: prep.traceCount,
                 stdout: Self.capped(res.stdout),
                 stderr: Self.capped(res.stderr),
-                note: "dry run: tessera-train-lk built the dataset from \(traceCount) trace(s) against \(base); nothing trained or saved"
+                note: "dry run: tessera-train-lk built the dataset from \(prep.traceCount) trace(s) against \(prep.base); nothing trained or saved"
             ))
         case .success(let res):
             return finish(TrainingRecord(
                 outcome: .trainingCompleted,
-                traceCount: traceCount,
-                drafterPath: out,
+                traceCount: prep.traceCount,
+                drafterPath: prep.outPath,
                 stdout: Self.capped(res.stdout),
                 stderr: Self.capped(res.stderr),
-                note: "drafter trained with tessera-train-lk (max-examples \(cap)) and saved to \(out)"
+                note: "drafter trained with tessera-train-lk (max-examples \(prep.maxExamples)) and saved to \(prep.outPath)"
             ))
         }
+    }
+
+    /// Drive the streaming process, parse live progress, accumulate the
+    /// output for the terminal record, and yield .finished at the end.
+    private func streamDriver(_ prep: Prepared, continuation: AsyncStream<TrainingEvent>.Continuation) async {
+        var stdoutAll = ""
+        var stderrAll = ""
+        var lineBuffer = ""
+        var exitCode: Int32 = -1
+
+        let stream = ProcessRunner().runStreamingCombined(
+            executable: config.trainBinary, arguments: prep.arguments
+        )
+        do {
+            for try await chunk in stream {
+                if Task.isCancelled { break }
+                switch chunk {
+                case .output(.stdout, let text):
+                    stdoutAll += text
+                    lineBuffer += text
+                    while let newline = lineBuffer.firstIndex(of: "\n") {
+                        let line = String(lineBuffer[lineBuffer.startIndex..<newline])
+                        lineBuffer.removeSubrange(lineBuffer.startIndex...newline)
+                        if let event = Self.parseDriverLine(line) {
+                            continuation.yield(event)
+                        }
+                    }
+                case .output(.stderr, let text):
+                    stderrAll += text
+                case .exited(let code):
+                    exitCode = code
+                }
+            }
+        } catch {
+            // The driver could not start; the terminal record below reports it.
+        }
+        try? FileManager.default.removeItem(atPath: prep.stagedTraces)
+
+        let record: TrainingRecord
+        if Task.isCancelled {
+            record = TrainingRecord(
+                outcome: .trainingFailed, traceCount: prep.traceCount,
+                stdout: Self.capped(stdoutAll), stderr: Self.capped(stderrAll),
+                note: "training cancelled before the driver finished"
+            )
+        } else if exitCode != 0 {
+            record = TrainingRecord(
+                outcome: .trainingFailed, traceCount: prep.traceCount,
+                stdout: Self.capped(stdoutAll), stderr: Self.capped(stderrAll),
+                note: exitCode == -1
+                    ? "tessera-train-lk could not start; expected at \(config.trainBinary)"
+                    : "tessera-train-lk exited \(exitCode)"
+            )
+        } else if prep.dryRun {
+            record = TrainingRecord(
+                outcome: .dryRun, traceCount: prep.traceCount,
+                stdout: Self.capped(stdoutAll), stderr: Self.capped(stderrAll),
+                note: "dry run: tessera-train-lk built the dataset from \(prep.traceCount) trace(s) against \(prep.base); nothing trained or saved"
+            )
+        } else {
+            record = TrainingRecord(
+                outcome: .trainingCompleted, traceCount: prep.traceCount,
+                drafterPath: prep.outPath,
+                stdout: Self.capped(stdoutAll), stderr: Self.capped(stderrAll),
+                note: "drafter trained with tessera-train-lk (max-examples \(prep.maxExamples)) and saved to \(prep.outPath)"
+            )
+        }
+        continuation.yield(.finished(finish(record)))
+    }
+
+    /// Parse one driver stdout line into a progress event, if it is one.
+    static func parseDriverLine(_ raw: String) -> TrainingEvent? {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        return parseDatasetLine(line) ?? parseEpochLine(line)
+    }
+
+    // "dataset: 512 examples, dense-label memory ~123.4 MiB"
+    private static func parseDatasetLine(_ line: String) -> TrainingEvent? {
+        guard let range = line.range(of: "dataset:") else { return nil }
+        let scanner = Scanner(string: String(line[range.upperBound...]))
+        guard let examples = scanner.scanInt(), examples > 0 else { return nil }
+        var memoryMiB = 0.0
+        if scanner.scanUpToString("~") != nil {
+            _ = scanner.scanString("~")
+            memoryMiB = scanner.scanDouble() ?? 0.0
+        }
+        return .datasetBuilt(examples: examples, memoryMiB: memoryMiB)
+    }
+
+    // "epoch 3: train LK loss 0.012345, top-1 agreement 0.9876"
+    private static func parseEpochLine(_ line: String) -> TrainingEvent? {
+        guard let range = line.range(of: "epoch ") else { return nil }
+        let scanner = Scanner(string: String(line[range.upperBound...]))
+        guard let index = scanner.scanInt() else { return nil }
+        guard scanner.scanUpToString("loss") != nil else { return nil }
+        _ = scanner.scanString("loss")
+        guard let loss = scanner.scanDouble() else { return nil }
+        _ = scanner.scanUpToString("agreement")
+        _ = scanner.scanString("agreement")
+        let agreement = scanner.scanDouble() ?? 0.0
+        return .epoch(index: index, loss: loss, agreement: agreement)
     }
 
     // MARK: - Driver contract
