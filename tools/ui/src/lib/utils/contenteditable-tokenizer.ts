@@ -31,6 +31,7 @@
 import {
 	MENTION_BADGE_CLASSNAME,
 	MENTION_BADGE_ICON_CLASSNAME,
+	MENTION_BADGE_SVG_ATTRIBUTES,
 	decodeFileLinkPath,
 	fileMentionLinkRe,
 	getMentionBadgeIconPaths
@@ -210,21 +211,16 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 
 		// Icon - matches the lucide component picked by MentionBadge.svelte
 		// so the DOM-built badge is visually identical.
-		const SVG_NS = 'http://www.w3.org/2000/svg';
-		const svg = document.createElementNS(SVG_NS, 'svg');
-		svg.setAttribute('viewBox', '0 0 24 24');
-		svg.setAttribute('fill', 'none');
-		svg.setAttribute('stroke', 'currentColor');
-		svg.setAttribute('stroke-width', '2');
-		svg.setAttribute('stroke-linecap', 'round');
-		svg.setAttribute('stroke-linejoin', 'round');
-		svg.setAttribute('aria-hidden', 'true');
+		const svg = document.createElementNS(MENTION_BADGE_SVG_ATTRIBUTES['xmlns'], 'svg');
+		for (const [attr, value] of Object.entries(MENTION_BADGE_SVG_ATTRIBUTES)) {
+			svg.setAttribute(attr, value);
+		}
 		for (const cls of MENTION_BADGE_ICON_CLASSNAME.split(/\s+/).filter(Boolean)) {
 			svg.classList.add(cls);
 		}
 
 		for (const d of getMentionBadgeIconPaths(token.path)) {
-			const path = document.createElementNS(SVG_NS, 'path');
+			const path = document.createElementNS(MENTION_BADGE_SVG_ATTRIBUTES['xmlns'], 'path');
 			path.setAttribute('d', d);
 			svg.appendChild(path);
 		}

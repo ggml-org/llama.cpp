@@ -63,6 +63,23 @@ export const MENTION_BADGE_CLASSNAME =
 export const MENTION_BADGE_ICON_CLASSNAME = 'h-3 w-3 shrink-0';
 
 /**
+ * SVG attributes shared by the DOM-built and hast-built badge icons so
+ * both match `MentionBadge.svelte`'s lucide component. The tokenizer
+ * applies them via `setAttribute`, the rehype plugin spreads them onto
+ * the hast `<svg>` `properties`; string values are valid for both.
+ */
+export const MENTION_BADGE_SVG_ATTRIBUTES: Readonly<Record<string, string>> = {
+	xmlns: 'http://www.w3.org/2000/svg',
+	viewBox: '0 0 24 24',
+	fill: 'none',
+	stroke: 'currentColor',
+	'stroke-width': '2',
+	'stroke-linecap': 'round',
+	'stroke-linejoin': 'round',
+	'aria-hidden': 'true'
+};
+
+/**
  * SVG path strings for the badge's inline icon. Each entry becomes
  * one `<path>` child of the wrapper `<svg>` so the DOM-built and
  * hast-built badges are visually identical to `MentionBadge.svelte`'s

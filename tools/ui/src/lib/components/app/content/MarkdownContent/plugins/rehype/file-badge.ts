@@ -16,6 +16,7 @@
 import {
 	MENTION_BADGE_CLASSNAME,
 	MENTION_BADGE_ICON_CLASSNAME,
+	MENTION_BADGE_SVG_ATTRIBUTES,
 	decodeFileLinkPath,
 	getMentionBadgeIconPaths
 } from '$lib/utils';
@@ -58,14 +59,7 @@ function iconElement(href: string): Element {
 		type: 'element',
 		tagName: 'svg',
 		properties: {
-			xmlns: 'http://www.w3.org/2000/svg',
-			viewBox: '0 0 24 24',
-			fill: 'none',
-			stroke: 'currentColor',
-			'stroke-width': 2,
-			'stroke-linecap': 'round',
-			'stroke-linejoin': 'round',
-			'aria-hidden': 'true',
+			...MENTION_BADGE_SVG_ATTRIBUTES,
 			className: MENTION_BADGE_ICON_CLASSNAME.split(' ').filter(Boolean)
 		},
 		children: getMentionBadgeIconPaths(href).map((d) => ({
