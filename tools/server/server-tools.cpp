@@ -30,20 +30,14 @@ namespace fs = std::filesystem;
 // internal helpers
 //
 
-#if defined(_WIN32)
-// A chunk can end in the middle of a multi-byte sequence, so the incomplete
-// tail is dropped before validating what precedes it.
-static bool is_utf8_text(const std::string & text) {
-    return is_valid_utf8(text.substr(0, validate_utf8(text)));
-}
-
-// A child process writes its output in the OEM code page, which is not UTF-8
-// on a western Windows install, so accented text reaches the JSON layer as
-// invalid bytes and is replaced there. Text that already decodes as UTF-8 is
-// returned untouched, so a child that emits UTF-8 is never decoded twice.
-// run() spawns without a console, so the console code page does not apply.
+// a child process writes in the OEM code page, so accented output would reach
+// the JSON layer as invalid bytes. run() spawns without a console, so the
+// console code page never applies
 static std::string console_output_to_utf8(const std::string & text) {
-    if (text.empty() || is_utf8_text(text)) {
+#if defined(_WIN32)
+    // a chunk can end mid sequence, so the incomplete tail is dropped first
+    if (text.empty() || is_valid_utf8(text.substr(0, validate_utf8(text)))) {
+        // never decode twice a child that already emits UTF-8
         return text;
     }
 
@@ -64,12 +58,10 @@ static std::string console_output_to_utf8(const std::string & text) {
     std::string utf8(utf8_len, '\0');
     WideCharToMultiByte(CP_UTF8, 0, wide.data(), wide_len, utf8.data(), utf8_len, nullptr, nullptr);
     return utf8;
-}
 #else
-static std::string console_output_to_utf8(const std::string & text) {
     return text;
-}
 #endif
+}
 
 json server_tool::to_json() const {
     return {
