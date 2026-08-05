@@ -103,6 +103,7 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+    set(GGML_CUDA_CUTLASS_MOE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/moe-mmq-cutlass.cu")
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
@@ -122,6 +123,32 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-q4_0-q4_0.cu
             template-instances/fattn-vec-instance-q8_0-q8_0.cu
             template-instances/fattn-vec-instance-bf16-bf16.cu)
+    endif()
+
+    if (GGML_CUDA_CUTLASS_MOE)
+        if (CUDAToolkit_VERSION VERSION_LESS "12.9")
+            message(FATAL_ERROR "GGML_CUDA_CUTLASS_MOE requires CUDA 12.9 or newer")
+        endif()
+        if (NOT EXISTS "${GGML_CUDA_CUTLASS_PATH}/include/cutlass/cutlass.h")
+            message(FATAL_ERROR
+                "GGML_CUDA_CUTLASS_MOE requires GGML_CUDA_CUTLASS_PATH to point to a CUTLASS source tree")
+        endif()
+        find_package(Git QUIET)
+        if (NOT GIT_FOUND)
+            message(FATAL_ERROR "GGML_CUDA_CUTLASS_MOE requires Git to verify the CUTLASS revision")
+        endif()
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${GGML_CUDA_CUTLASS_PATH}" rev-parse HEAD
+            OUTPUT_VARIABLE GGML_CUDA_CUTLASS_REVISION_FOUND
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE GGML_CUDA_CUTLASS_REVISION_RESULT)
+        if (NOT GGML_CUDA_CUTLASS_REVISION_RESULT EQUAL 0 OR
+            NOT "${GGML_CUDA_CUTLASS_REVISION_FOUND}" STREQUAL "${GGML_CUDA_CUTLASS_REVISION}")
+            message(FATAL_ERROR
+                "GGML_CUDA_CUTLASS_PATH must be checked out at ${GGML_CUDA_CUTLASS_REVISION}; found ${GGML_CUDA_CUTLASS_REVISION_FOUND}")
+        endif()
+
+        list(REMOVE_ITEM GGML_SOURCES_CUDA "${GGML_CUDA_CUTLASS_MOE_SOURCE}")
     endif()
 
     ggml_add_backend_library(ggml-cuda
@@ -197,6 +224,31 @@ if (CUDAToolkit_FOUND)
 
     if (NOT GGML_CUDA_NO_VMM OR CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
         target_link_libraries(ggml-cuda PRIVATE CUDA::cuda_driver)
+    endif()
+
+    if (GGML_CUDA_CUTLASS_MOE)
+        add_library(ggml-cuda-cutlass-moe OBJECT "${GGML_CUDA_CUTLASS_MOE_SOURCE}")
+        set_target_properties(ggml-cuda-cutlass-moe PROPERTIES
+            CUDA_ARCHITECTURES OFF
+            POSITION_INDEPENDENT_CODE ON)
+        target_link_libraries(ggml-cuda-cutlass-moe PRIVATE ggml-base)
+        target_include_directories(ggml-cuda-cutlass-moe PRIVATE
+            ..
+            "${GGML_CUDA_CUTLASS_PATH}/include"
+            "${GGML_CUDA_CUTLASS_PATH}/tools/util/include")
+        target_compile_definitions(ggml-cuda-cutlass-moe PRIVATE GGML_CUDA_CUTLASS_MOE)
+        target_compile_options(ggml-cuda-cutlass-moe PRIVATE
+            "$<$<COMPILE_LANGUAGE:CUDA>:--generate-code=arch=compute_120f,code=sm_120f>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
+        if (BUILD_SHARED_LIBS)
+            target_compile_definitions(ggml-cuda-cutlass-moe PRIVATE GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
+        endif()
+        target_sources(ggml-cuda PRIVATE $<TARGET_OBJECTS:ggml-cuda-cutlass-moe>)
+
+        target_compile_definitions(ggml-cuda PRIVATE GGML_CUDA_CUTLASS_MOE)
+        target_include_directories(ggml-cuda PRIVATE
+            "${GGML_CUDA_CUTLASS_PATH}/include"
+            "${GGML_CUDA_CUTLASS_PATH}/tools/util/include")
     endif()
 
     if (GGML_CUDA_NCCL)
@@ -280,7 +332,13 @@ if (CUDAToolkit_FOUND)
         list(APPEND CUDA_FLAGS -Xcompiler ${CUDA_CXX_FLAGS_JOINED})
     endif()
 
-    target_compile_options(ggml-cuda PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")
+    set(GGML_CUDA_COMPILE_TARGETS ggml-cuda)
+    if (TARGET ggml-cuda-cutlass-moe)
+        list(APPEND GGML_CUDA_COMPILE_TARGETS ggml-cuda-cutlass-moe)
+    endif()
+    foreach(GGML_CUDA_COMPILE_TARGET IN LISTS GGML_CUDA_COMPILE_TARGETS)
+        target_compile_options(${GGML_CUDA_COMPILE_TARGET} PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")
+    endforeach()
 else()
     message(FATAL_ERROR "CUDA Toolkit not found")
 endif()

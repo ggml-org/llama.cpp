@@ -167,3 +167,167 @@ void ggml_cuda_launch_mm_ids_helper(
             break;
     }
 }
+
+static constexpr int MM_IDS_PREFIX_THREADS = 256;
+static constexpr int MM_IDS_PREFIX_WARPS   = MM_IDS_PREFIX_THREADS / WARP_SIZE;
+
+template <int n_expert_used>
+static __global__ void mm_ids_prefix_count(const int32_t * __restrict__ ids,
+                                           int32_t * __restrict__ block_counts,
+                                           int n_rows,
+                                           int n_experts,
+                                           int si1) {
+    extern __shared__ int32_t counts[];
+
+    for (int expert = threadIdx.x; expert < n_experts; expert += blockDim.x) {
+        counts[expert] = 0;
+    }
+    __syncthreads();
+
+    const int route = blockIdx.x * blockDim.x + threadIdx.x;
+    if (route < n_rows) {
+        const int token  = route / n_expert_used;
+        const int slot   = route - token * n_expert_used;
+        const int expert = ids[token * si1 + slot];
+        if ((unsigned) expert < (unsigned) n_experts) {
+            atomicAdd(&counts[expert], 1);
+        }
+    }
+    __syncthreads();
+
+    for (int expert = threadIdx.x; expert < n_experts; expert += blockDim.x) {
+        block_counts[(int64_t) blockIdx.x * n_experts + expert] = counts[expert];
+    }
+}
+
+static __global__ void mm_ids_prefix_scan(const int32_t * __restrict__ block_counts,
+                                          int32_t * __restrict__ block_offsets,
+                                          int32_t * __restrict__ expert_bounds,
+                                          int n_blocks,
+                                          int n_experts) {
+    __shared__ int32_t totals[MM_IDS_PREFIX_THREADS];
+
+    const int expert = threadIdx.x;
+    int       total  = 0;
+    if (expert < n_experts) {
+        for (int block = 0; block < n_blocks; ++block) {
+            const int index       = block * n_experts + expert;
+            block_offsets[index] = total;
+            total += block_counts[index];
+        }
+    }
+    totals[expert] = total;
+    __syncthreads();
+
+    for (int offset = 1; offset < MM_IDS_PREFIX_THREADS; offset *= 2) {
+        const int32_t lower = expert >= offset ? totals[expert - offset] : 0;
+        __syncthreads();
+        totals[expert] += lower;
+        __syncthreads();
+    }
+
+    if (expert < n_experts) {
+        expert_bounds[expert] = expert == 0 ? 0 : totals[expert - 1];
+    }
+    if (expert == n_experts - 1) {
+        expert_bounds[n_experts] = totals[expert];
+    }
+}
+
+template <int n_expert_used>
+static __global__ void mm_ids_prefix_scatter(const int32_t * __restrict__ ids,
+                                             const int32_t * __restrict__ block_offsets,
+                                             const int32_t * __restrict__ expert_bounds,
+                                             int32_t * __restrict__ ids_src1,
+                                             int32_t * __restrict__ ids_dst,
+                                             int32_t * __restrict__ row_expert,
+                                             int n_rows,
+                                             int n_experts,
+                                             int si1) {
+    extern __shared__ int32_t warp_counts[];
+
+    for (int index = threadIdx.x; index < MM_IDS_PREFIX_WARPS * n_experts; index += blockDim.x) {
+        warp_counts[index] = 0;
+    }
+    __syncthreads();
+
+    const int route = blockIdx.x * blockDim.x + threadIdx.x;
+    int       expert = -1;
+    if (route < n_rows) {
+        const int token = route / n_expert_used;
+        const int slot  = route - token * n_expert_used;
+        expert          = ids[token * si1 + slot];
+        if ((unsigned) expert < (unsigned) n_experts) {
+            atomicAdd(&warp_counts[(threadIdx.x / WARP_SIZE) * n_experts + expert], 1);
+        }
+    }
+    __syncthreads();
+
+    const bool     valid  = route < n_rows && (unsigned) expert < (unsigned) n_experts;
+    const unsigned active = __ballot_sync(0xFFFFFFFF, valid);
+    if (!valid) {
+        return;
+    }
+
+    const int warp = threadIdx.x / WARP_SIZE;
+    const int lane = threadIdx.x % WARP_SIZE;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+    const unsigned peers = __match_any_sync(active, expert);
+#else
+    unsigned peers = 0;
+    for (int source = 0; source < WARP_SIZE; ++source) {
+        if ((active & (1u << source)) != 0 && __shfl_sync(active, expert, source) == expert) {
+            peers |= 1u << source;
+        }
+    }
+#endif
+    const unsigned lower_mask = lane == 0 ? 0 : (1u << lane) - 1;
+    int            local_rank = __popc(peers & lower_mask);
+    for (int previous_warp = 0; previous_warp < warp; ++previous_warp) {
+        local_rank += warp_counts[previous_warp * n_experts + expert];
+    }
+
+    const int row = expert_bounds[expert] + block_offsets[(int64_t) blockIdx.x * n_experts + expert] + local_rank;
+    ids_src1[route] = row;
+    ids_dst[row]    = route;
+    row_expert[row] = expert;
+}
+
+int ggml_cuda_mm_ids_prefix_block_count(int n_tokens, int n_expert_used) {
+    GGML_ASSERT(n_tokens >= 0 && n_expert_used >= 0);
+    const int64_t n_rows = (int64_t) n_tokens * n_expert_used;
+    GGML_ASSERT(n_rows <= INT_MAX);
+    return ((int) n_rows + MM_IDS_PREFIX_THREADS - 1) / MM_IDS_PREFIX_THREADS;
+}
+
+bool ggml_cuda_launch_mm_ids_prefix(const int32_t * __restrict__ ids,
+                                    int32_t * __restrict__ ids_src1,
+                                    int32_t * __restrict__ ids_dst,
+                                    int32_t * __restrict__ expert_bounds,
+                                    int32_t * __restrict__ row_expert,
+                                    int32_t * __restrict__ block_counts,
+                                    int32_t * __restrict__ block_offsets,
+                                    int n_experts,
+                                    int n_tokens,
+                                    int n_expert_used,
+                                    int si1,
+                                    cudaStream_t stream) {
+    if (n_experts <= 0 || n_experts > MM_IDS_PREFIX_THREADS || n_tokens <= 0 || n_expert_used != 4 ||
+        si1 < n_expert_used) {
+        return false;
+    }
+
+    const int n_rows   = (int) ((int64_t) n_tokens * n_expert_used);
+    const int n_blocks = ggml_cuda_mm_ids_prefix_block_count(n_tokens, n_expert_used);
+    mm_ids_prefix_count<4><<<n_blocks, MM_IDS_PREFIX_THREADS, n_experts * sizeof(int32_t), stream>>>(
+        ids, block_counts, n_rows, n_experts, si1);
+    CUDA_CHECK(cudaGetLastError());
+    mm_ids_prefix_scan<<<1, MM_IDS_PREFIX_THREADS, 0, stream>>>(
+        block_counts, block_offsets, expert_bounds, n_blocks, n_experts);
+    CUDA_CHECK(cudaGetLastError());
+    mm_ids_prefix_scatter<4><<<n_blocks, MM_IDS_PREFIX_THREADS,
+                               MM_IDS_PREFIX_WARPS * n_experts * sizeof(int32_t), stream>>>(
+        ids, block_offsets, expert_bounds, ids_src1, ids_dst, row_expert, n_rows, n_experts, si1);
+    CUDA_CHECK(cudaGetLastError());
+    return true;
+}

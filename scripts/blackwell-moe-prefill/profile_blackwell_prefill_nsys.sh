@@ -54,10 +54,14 @@ direct='LLAMA_CUDA_FATTN_DIRECT_CAUSAL=1'
 tma_inplace='GGML_CUDA_MOE_MMQ_WEIGHT_LAYOUT=tma-inplace GGML_CUDA_MOE_MMQ_TMA_REQUIRE=1 GGML_CUDA_MOE_MMQ_TMA_WARP_SPECIALIZED=1 GGML_CUDA_MOE_MMQ_W13_EPILOGUE=tma-epilogue GGML_CUDA_MOE_MMQ_W2_EPILOGUE=tma-weighted'
 tuned="$direct $tma_inplace GGML_CUDA_MOE_MMQ_W13_TILE_ROWS=64 GGML_CUDA_MOE_MMQ_W2_OUTPUT_TILE_MAJOR=1 GGML_CUDA_ADD_RMS_NORM_FUSION=1"
 ceiling="$tuned LLAMA_CUDA_FATTN_Q_ROPE=1 GGML_CUDA_FATTN_SM120_CAUSAL_SCHEDULE=1"
+cutlass_gemm='GGML_CUDA_MOE_MMQ_BACKEND=cutlass GGML_CUDA_MOE_MMQ_CUTLASS_FUSION=none'
+cutlass_full="$direct GGML_CUDA_MOE_MMQ_BACKEND=cutlass GGML_CUDA_MOE_MMQ_CUTLASS_FUSION=full GGML_CUDA_ADD_RMS_NORM_FUSION=1 LLAMA_CUDA_FATTN_Q_ROPE=1 GGML_CUDA_FATTN_SM120_CAUSAL_SCHEDULE=1"
 cases=(
     'baseline|bitwise|GGML_CUDA_MOE_MMQ_DISABLE=1'
     "strict-tuned|bitwise|$tuned"
     "full-ceiling-tuned|metrics-only|$ceiling"
+    "cutlass-gemm|metrics-only|$cutlass_gemm"
+    "cutlass-full|metrics-only|$cutlass_full"
 )
 
 run_selected() {
@@ -119,10 +123,20 @@ for entry in "${cases[@]}"; do
             require_log "$case_dir" 'w2-epilogue=tma-weighted' "$label did not select the W2 epilogue"
             require_log "$case_dir" 'CUDA add RMS norm fusion: enabled' "$label did not select add RMS norm fusion"
             ;;
+        cutlass-gemm|cutlass-full)
+            require_log "$case_dir" 'backend=cutlass' "$label did not select CUTLASS MoE"
+            ;;
     esac
     if [[ "$label" == full-ceiling-tuned ]]; then
         require_log "$case_dir" 'FlashAttention: q-rope=1' "$label did not select Q RoPE fusion"
         require_log "$case_dir" 'FlashAttention: sm120-causal=1' "$label did not select the SM120 causal schedule"
+    fi
+    if [[ "$label" == cutlass-full ]]; then
+        require_log "$case_dir" 'cutlass-fusion=full' "$label did not select full CUTLASS fusion"
+        require_log "$case_dir" 'FlashAttention: direct-causal=1' "$label did not select direct causal Attention"
+        require_log "$case_dir" 'FlashAttention: q-rope=1' "$label did not select Q RoPE fusion"
+        require_log "$case_dir" 'FlashAttention: sm120-causal=1' "$label did not select the SM120 causal schedule"
+        require_log "$case_dir" 'CUDA add RMS norm fusion: enabled' "$label did not select add RMS norm fusion"
     fi
 
     relative_dir=${case_dir#"$run_dir/"}

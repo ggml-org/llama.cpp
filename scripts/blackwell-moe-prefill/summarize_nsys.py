@@ -57,15 +57,17 @@ def kernel_category(name: str) -> str:
         return "KQ mask"
     if "moe_tma_w13" in lower or "moe_tma_persistent" in lower:
         return "MoE GEMM"
+    if "cutlass" in lower and "gemm" in lower:
+        return "MoE GEMM"
     if "mul_mat_q<(ggml_type)39" in lower:
         return "MoE GEMM"
-    if "quantize_mmq" in lower or "moe_quantize" in lower:
+    if "quantize_mmq" in lower or "moe_quantize" in lower or "moe_cutlass_quantize" in lower:
         return "MoE activation quant"
     if "moe_mmq_repack" in lower:
         return "MoE weight repack (one-time)"
-    if "mm_ids_helper" in lower or "topk" in lower or "top_k" in lower:
+    if "mm_ids_helper" in lower or "mm_ids_prefix" in lower or "topk" in lower or "top_k" in lower:
         return "MoE routing"
-    if "moe_mmq_" in lower or "swiglu_oai" in lower or "add_id_kernel" in lower:
+    if "moe_mmq_" in lower or "moe_cutlass_" in lower or "swiglu_oai" in lower or "add_id_kernel" in lower:
         return "MoE epilogue"
     if "rms_norm" in lower:
         return "Norm"

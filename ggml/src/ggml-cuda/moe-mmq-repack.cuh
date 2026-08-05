@@ -8,6 +8,7 @@ enum class ggml_cuda_moe_weight_layout : int {
     split,
     tma,
     tma_inplace,
+    cutlass,
 };
 
 static constexpr int ggml_cuda_moe_repack_group_blocks = 16;

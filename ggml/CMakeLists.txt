@@ -201,6 +201,11 @@ option(GGML_MUSA                            "ggml: use MUSA"                    
 option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
 option(GGML_CUDA_FORCE_CUBLAS               "ggml: always use cuBLAS instead of mmq kernels"  OFF)
 option(GGML_CUDA_MOE_PROFILE                "ggml: add NVTX ranges for CUDA MoE profiling"    OFF)
+option(GGML_CUDA_CUTLASS_MOE                "ggml: build the experimental CUTLASS MoE path"   OFF)
+set   (GGML_CUDA_CUTLASS_PATH "" CACHE PATH
+                                            "ggml: path to a CUTLASS source tree")
+set   (GGML_CUDA_CUTLASS_REVISION "b46b16d003484063bca4ed365e44095c4c6ed633" CACHE STRING
+                                            "ggml: required CUTLASS revision for the experimental MoE path")
 set   (GGML_CUDA_NVTX_INCLUDE_DIR "" CACHE PATH
                                             "ggml: optional NVTX3 include root for CUDA MoE profiling")
 set   (GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING

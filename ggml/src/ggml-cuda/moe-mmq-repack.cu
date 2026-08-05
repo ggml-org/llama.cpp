@@ -32,6 +32,58 @@ static __global__ void moe_mmq_repack_split(const block_mxfp4 * src,
     scales[row * scale_stride + k_block] = value->e;
 }
 
+static __device__ __forceinline__ int64_t moe_mmq_cutlass_scale_offset(int row,
+                                                                       int k_block,
+                                                                       int padded_k_blocks) {
+    const int inner_k       = k_block % 4;
+    const int inner_m       = (row % 128) / 32;
+    const int outer_m       = row % 32;
+    const int k_tile        = k_block / 4;
+    const int m_tile        = row / 128;
+    const int k_tile_stride = 512;
+    const int m_tile_stride = (padded_k_blocks / 4) * k_tile_stride;
+    return (int64_t) m_tile * m_tile_stride + (int64_t) k_tile * k_tile_stride + outer_m * 16 +
+           inner_m * 4 + inner_k;
+}
+
+static __global__ void moe_mmq_repack_cutlass(const block_mxfp4 * src,
+                                               char *              values,
+                                               uint8_t *           scales,
+                                               int                 k_blocks,
+                                               int                 padded_k_blocks,
+                                               int                 rows,
+                                               int                 padded_rows,
+                                               int                 experts) {
+    const int64_t index = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t n     = (int64_t) experts * rows * padded_k_blocks;
+    if (index >= n) {
+        return;
+    }
+
+    const int     k_block = index % padded_k_blocks;
+    const int64_t row_all = index / padded_k_blocks;
+    const int     row      = row_all % rows;
+    const int     expert   = row_all / rows;
+    uint8_t *     values_dst = (uint8_t *) values + index * (QK_MXFP4 / 2);
+    if (k_block >= k_blocks) {
+        memset(values_dst, 0, QK_MXFP4 / 2);
+        return;
+    }
+    const block_mxfp4 block = src[row_all * k_blocks + k_block];
+
+#pragma unroll
+    for (int i = 0; i < QK_MXFP4 / 2; ++i) {
+        const int e0 = 2 * i;
+        const int e1 = e0 + 1;
+        const uint8_t q0 = e0 < QK_MXFP4 / 2 ? block.qs[e0] & 0x0F : block.qs[e0 - QK_MXFP4 / 2] >> 4;
+        const uint8_t q1 = e1 < QK_MXFP4 / 2 ? block.qs[e1] & 0x0F : block.qs[e1 - QK_MXFP4 / 2] >> 4;
+        values_dst[i] = q0 | (q1 << 4);
+    }
+    const int64_t scale_expert_stride = (int64_t) padded_rows * padded_k_blocks;
+    scales[(int64_t) expert * scale_expert_stride +
+           moe_mmq_cutlass_scale_offset(row, k_block, padded_k_blocks)] = block.e;
+}
+
 static __global__ void moe_mmq_repack_interleaved(const block_mxfp4 * src,
                                                   char *              dst,
                                                   int                 src_k_blocks,
@@ -320,6 +372,68 @@ static ggml_cuda_moe_weight_cache_entry * moe_mmq_repack_weight_inplace(ggml_bac
 #endif
 }
 
+static ggml_cuda_moe_weight_cache_entry * moe_mmq_repack_weight_cutlass(ggml_backend_cuda_context & ctx,
+                                                                        const ggml_tensor *         tensor,
+                                                                        cudaStream_t                stream) {
+#if CUDART_VERSION >= 12080
+    const int k_blocks        = tensor->ne[0] / QK_MXFP4;
+    const int padded_k_blocks = GGML_PAD(k_blocks, 4);
+    const int rows            = tensor->ne[1];
+    const int padded_rows     = GGML_PAD(rows, 128);
+    const int experts         = tensor->ne[2];
+    if (tensor->ne[3] != 1) {
+        return nullptr;
+    }
+
+    const size_t values_size = (size_t) experts * rows * padded_k_blocks * (QK_MXFP4 / 2);
+    const size_t scales_size = (size_t) experts * padded_rows * padded_k_blocks;
+    if (values_size > ggml_nbytes(tensor)) {
+        return nullptr;
+    }
+
+    void * values = nullptr;
+    void * scales = nullptr;
+    CUDA_CHECK(cudaMallocAsync(&values, values_size, stream));
+    CUDA_CHECK(cudaMallocAsync(&scales, scales_size, stream));
+    CUDA_CHECK(cudaMemsetAsync(scales, 0, scales_size, stream));
+
+    constexpr int threads = 256;
+    const int64_t n_blocks = (int64_t) experts * rows * padded_k_blocks;
+    const int grid = (int) ((n_blocks + threads - 1) / threads);
+    moe_mmq_repack_cutlass<<<grid, threads, 0, stream>>>((const block_mxfp4 *) tensor->data, (char *) values,
+                                                         (uint8_t *) scales, k_blocks, padded_k_blocks, rows,
+                                                         padded_rows, experts);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaMemcpyAsync(tensor->data, values, values_size, cudaMemcpyDeviceToDevice, stream));
+    CUDA_CHECK(cudaFreeAsync(values, stream));
+
+    ctx.moe_weight_cache.emplace_back();
+    ggml_cuda_moe_weight_cache_entry * entry = &ctx.moe_weight_cache.back();
+    entry->source         = tensor;
+    entry->source_data    = tensor->data;
+    entry->layout         = (int) ggml_cuda_moe_weight_layout::cutlass;
+    entry->ne[0]          = tensor->ne[0];
+    entry->ne[1]          = tensor->ne[1];
+    entry->ne[2]          = tensor->ne[2];
+    entry->data           = tensor->data;
+    entry->owns_data      = false;
+    entry->scales_data    = scales;
+    entry->owns_scales    = true;
+    CUDA_CHECK(cudaEventCreateWithFlags(&entry->ready, cudaEventDisableTiming));
+    CUDA_CHECK(cudaEventRecord(entry->ready, stream));
+    entry->ncols          = (int64_t) padded_k_blocks * QK_MXFP4;
+    entry->stride_row     = padded_k_blocks;
+    entry->stride_channel = (int64_t) rows * padded_k_blocks;
+    entry->scale_stride   = padded_rows * padded_k_blocks;
+    entry->last_used      = ++ctx.moe_weight_cache_clock;
+    entry->rows_padded    = padded_rows;
+    return entry;
+#else
+    GGML_UNUSED_VARS(ctx, tensor, stream);
+    return nullptr;
+#endif
+}
+
 bool ggml_cuda_moe_repack_weight(ggml_backend_cuda_context & ctx,
                                  const ggml_tensor *         tensor,
                                  ggml_cuda_moe_weight_layout layout,
@@ -355,6 +469,12 @@ bool ggml_cuda_moe_repack_weight(ggml_backend_cuda_context & ctx,
     ggml_cuda_moe_weight_cache_entry * entry = moe_mmq_find_weight(ctx, tensor, layout);
     if (entry == nullptr && layout == ggml_cuda_moe_weight_layout::tma_inplace) {
         entry = moe_mmq_repack_weight_inplace(ctx, tensor, stream);
+        if (entry == nullptr) {
+            return false;
+        }
+    }
+    if (entry == nullptr && layout == ggml_cuda_moe_weight_layout::cutlass) {
+        entry = moe_mmq_repack_weight_cutlass(ctx, tensor, stream);
         if (entry == nullptr) {
             return false;
         }
@@ -455,6 +575,7 @@ bool ggml_cuda_moe_repack_weight(ggml_backend_cuda_context & ctx,
     }
     view = {
         (const char *) entry->data,
+        entry->scales_data != nullptr ? (const uint8_t *) entry->scales_data :
         entry->scales_offset == 0 ? nullptr : (const uint8_t *) entry->data + entry->scales_offset,
         entry->ncols,
         entry->stride_row,
@@ -480,7 +601,8 @@ bool ggml_cuda_moe_repack_weight(ggml_backend_cuda_context & ctx,
 bool ggml_cuda_moe_weight_is_inplace_repacked(const ggml_backend_cuda_context & ctx, const ggml_tensor * tensor) {
     for (const auto & entry : ctx.moe_weight_cache) {
         if (entry.source == tensor && entry.source_data == tensor->data &&
-            entry.layout == (int) ggml_cuda_moe_weight_layout::tma_inplace) {
+            (entry.layout == (int) ggml_cuda_moe_weight_layout::tma_inplace ||
+             entry.layout == (int) ggml_cuda_moe_weight_layout::cutlass)) {
             return true;
         }
     }

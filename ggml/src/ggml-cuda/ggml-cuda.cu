@@ -725,6 +725,7 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
         ggml_cuda_set_device(device);
     }
     if (moe_weight_stream != nullptr) {
+        CUDA_CHECK(cudaStreamSynchronize(moe_weight_stream));
         CUDA_CHECK(cudaStreamDestroy(moe_weight_stream));
     }
     if (!moe_weight_cache.empty()) {
@@ -737,6 +738,9 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
             }
             if (entry.data != nullptr && entry.owns_data) {
                 CUDA_CHECK(cudaFree(entry.data));
+            }
+            if (entry.scales_data != nullptr && entry.owns_scales) {
+                CUDA_CHECK(cudaFree(entry.scales_data));
             }
         }
     }

@@ -4605,8 +4605,11 @@ struct test_moe_mmq : public test_case {
         const size_t half = n / 2;
         const double baseline_cpu = nmse(reference, actual, half);
         const double candidate_cpu = nmse(reference + half, actual + half, half);
-        const double candidate_baseline_err =
-            std::memcmp(actual, actual + half, half * sizeof(float)) == 0 ? 0.0 : 2.0;
+        const char * backend = std::getenv("GGML_CUDA_MOE_MMQ_BACKEND");
+        const bool approximate = n_token >= 256 && backend != nullptr && std::strcmp(backend, "cutlass") == 0;
+        const double candidate_baseline = nmse(actual, actual + half, half);
+        const double candidate_baseline_err = approximate ? candidate_baseline / 2e-2 :
+            (std::memcmp(actual, actual + half, half * sizeof(float)) == 0 ? 0.0 : 2.0);
 
         return std::max({
             baseline_cpu / 4e-2,
@@ -10028,6 +10031,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     if (getenv("GGML_CUDA_MOE_MMQ_TEST") != nullptr) {
+        test_cases.emplace_back(new test_moe_mmq(1, true));
         test_cases.emplace_back(new test_moe_mmq(512));
         test_cases.emplace_back(new test_moe_mmq(512, true));
         test_cases.emplace_back(new test_moe_mmq(512, true, true));

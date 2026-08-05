@@ -72,6 +72,224 @@ bash bench_llama_mmq.sh \
 
 Compare only runs from the same GPU, clocks, power mode, and software versions.
 
+## Direct CUTLASS grouped GEMM
+
+The optional CUTLASS path uses the same fused GPT-OSS graph and expert plan as
+the native experiments. It replaces W13 and W2 with the SM120 block-scaled
+FP8xFP4 grouped GEMM. The original MXFP4 tensor storage is compacted in place;
+only the swizzled scale-factor buffers remain as extra model memory.
+
+The best pp8192 result from each experiment is shown together here:
+
+| Version | Best ubatch | Prefill | Share of vLLM |
+| --- | ---: | ---: | ---: |
+| Existing llama.cpp | 2048 | 11,738.58 tok/s | 31.9% |
+| Canonical persistent | 2048 | 14,875 tok/s | 40.4% |
+| Strict native CUDA | 8192 | 17,708 tok/s | 48.1% |
+| Native CUDA full ceiling | 8192 | 23,301 tok/s | 63.3% |
+| Direct CUTLASS | 8192 | 24,762.74 tok/s | 67.3% |
+| Optimized CUTLASS support | 8192 | 25,713.80 tok/s | 69.8% |
+| vLLM FlashInfer CUTLASS | 8192 | 36,819 tok/s | 100% |
+
+The native full ceiling changes the Attention evaluation order. The direct
+CUTLASS path changes the MoE intermediate format, while its optimized support
+version is bitwise identical to the earlier direct CUTLASS result. `RESULTS.md`
+contains the correctness and profiling details.
+
+Configure against the CUTLASS revision that added the SM120 small-N grouped
+block-scaled kernels. The CUTLASS translation unit is compiled for `120f`; the
+rest of ggml-cuda keeps the architectures selected by the normal build.
+
+```bash
+git -C /path/to/cutlass checkout b46b16d003484063bca4ed365e44095c4c6ed633
+cmake -S . -B build-sm120-cutlass \
+  -DGGML_CUDA=ON \
+  -DGGML_CUDA_CUTLASS_MOE=ON \
+  -DGGML_CUDA_CUTLASS_PATH=/path/to/cutlass \
+  -DGGML_CUDA_GRAPHS=OFF \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-sm120-cutlass -j 25
+```
+
+The CUTLASS translation unit is compiled directly for `compute_120f` and
+`sm_120f`, which requires CUDA 12.9 or newer. Its object target disables CMake's
+automatic CUDA architecture flags because older CMake releases reject the `f`
+suffix. The configure step verifies the CUTLASS commit before compilation. The
+rest of the CUDA backend keeps the normal architecture list.
+
+Run the isolated GEMM, W13-fused, complete MoE, and full prefill ceiling
+variants in separate processes:
+
+```bash
+bash bench_cutlass_moe.sh \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/gpt-oss-120b-fused-w13.gguf \
+  results
+```
+
+Before loading the full model, run all six grouped-kernel configurations on the
+backend MoE graph. The script exits on the first failed configuration:
+
+```bash
+bash validate_cutlass_kernels.sh \
+  build-sm120-cutlass/bin/test-backend-ops \
+  results
+```
+
+After correctness passes, collect the 512, 2048, and 8192-token component
+timings for the 36 independent W13/W2 combinations:
+
+```bash
+bash sweep_cutlass_kernels.sh \
+  build-sm120-cutlass/bin/test-backend-ops \
+  results
+```
+
+`GGML_CUDA_MOE_MMQ_CUTLASS_FUSION=none|w13|full` selects how much of the
+surrounding pipeline is fused. `none` scatters both grouped-GEMM outputs back
+to the existing graph layout. `w13` also fuses bias, SwiGLU, and A2 MXFP8
+quantization. `full` additionally performs W2 bias, routing weight, and expert
+reduction without materializing the routed output.
+
+W13 and W2 select their grouped GEMM independently:
+
+```text
+GGML_CUDA_MOE_MMQ_CUTLASS_W13_TILE_N=0|32|64|128
+GGML_CUDA_MOE_MMQ_CUTLASS_W2_TILE_N=0|32|64|128
+GGML_CUDA_MOE_MMQ_CUTLASS_W13_SWAP_AB=0|1
+GGML_CUDA_MOE_MMQ_CUTLASS_W2_SWAP_AB=0|1
+```
+
+Zero selects 32, 64, or 128 from the average routed rows per expert. The
+default swaps A and B so TileN follows the routed-token dimension. Each stage
+has six explicit tile and swap combinations. All variants use
+`KernelScheduleAuto`, GPU-resident problem metadata, and the CUDA pool for
+CUTLASS workspace. PDL is disabled by default.
+
+The validation and benchmark scripts require the CUTLASS configuration line in
+stderr. A graph mismatch or silent fallback therefore fails the run instead of
+recording native MMQ numbers as CUTLASS results.
+
+The packed values replace the original device tensor contents. Unsupported
+graphs can fall back before the first repack, including startup warmup and
+small-token decode. After repacking, the same weights cannot be consumed by an
+MMQ fallback. Use a separate process for each variant.
+CUTLASS repacking uses the dedicated weight stream by default; W13 waits for its
+own transform while the W2 transform can continue in parallel. Set
+`GGML_CUDA_MOE_MMQ_REPACK_ASYNC=0` to serialize the first-use transform.
+
+CUTLASS writes BF16 intermediates and uses MXFP8 activations, so its logits are
+not expected to be bitwise identical to the native MXFP4 path. Record the full
+metrics before timing:
+
+```bash
+bash validate_cutlass_moe.sh \
+  build-sm120-cutlass/bin/llama-debug \
+  /models/gpt-oss-120b-fused-w13.gguf \
+  results
+```
+
+For Nsys, export the CUTLASS mode before calling `profile_llama.sh`:
+
+```bash
+GGML_CUDA_MOE_MMQ_BACKEND=cutlass \
+GGML_CUDA_MOE_MMQ_CUTLASS_FUSION=full \
+bash profile_llama.sh cutlass-full \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/gpt-oss-120b-fused-w13.gguf \
+  results
+```
+
+Use the CUTLASS matrix profiler to compare the native TMA path, the earlier
+W13-32/W2-64 choice, fixed TileN 32/64/128, and swapped versus unswapped
+operands under the same pp8192 workload:
+
+```bash
+bash profile_cutlass_moe_nsys.sh \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/gpt-oss-120b-fused-w13.gguf \
+  results
+```
+
+Each process performs one warmup pass and one measured pass. The generated
+`summary.md` normalizes the NVTX totals to one 36-layer pass and separates
+input quantization, W13, the W13 epilogue, W2, and final reduction. Raw reports
+and a machine-readable `cutlass-stages.csv` are retained. Restrict the matrix
+with `PREFILL_CUTLASS_NSYS_CASES`; use `all` to select every defined case.
+
+### CUTLASS scope and optimized CUDA support
+
+The `full` setting replaces the complete MoE graph sequence, but CUTLASS itself
+only runs the W13 and W2 grouped GEMMs. Expert scheduling, input expansion and
+quantization, the W13 activation, and W2 finalization are ggml-cuda kernels.
+The current path is:
+
+```text
+shared expert plan
+  -> MXFP8 input quantization and route expansion
+  -> CUTLASS W13
+  -> bias, SwiGLU, and A2 quantization
+  -> CUTLASS W2
+  -> bias, routing weight, and expert reduction
+```
+
+The optimized support kernels are selected by default for the CUTLASS backend.
+Each stage can fall back to the earlier CUTLASS support path independently:
+
+```text
+GGML_CUDA_MOE_MMQ_CUTLASS_PREFIX_DISABLE=1
+GGML_CUDA_MOE_MMQ_CUTLASS_CTA_QUANT_DISABLE=1
+GGML_CUDA_MOE_MMQ_CUTLASS_CTA_ACTIVATION_DISABLE=1
+```
+
+The W13 activation CTA can cover 1, 4, or 8 routed rows. Four is the default;
+the other shapes remain available for the SM120 sweep:
+
+```text
+GGML_CUDA_MOE_MMQ_CUTLASS_ACTIVATION_ROWS=1|4|8
+```
+
+The final pp8192 result below uses one routed row per CTA.
+
+The prefix scheduler uses block histograms, a device prefix sum, and a stable
+scatter. The input kernel gives one 256-thread CTA to each token and quantizes
+the broadcast hidden state once before writing its routed rows. The W13
+activation kernel gives one 256-thread CTA to a small routed-row tile and
+processes two 32-value scale groups per warp.
+
+Run the old support path, each cumulative stage, and the complete path through
+the same backend correctness cases:
+
+```bash
+bash validate_cutlass_support.sh \
+  build-sm120-cutlass/bin/test-backend-ops \
+  results
+```
+
+The validation script sets `GGML_CUDA_MOE_MMQ_CUTLASS_VALIDATE_SUPPORT=1`.
+This compares the new route maps, MXFP8 values, and scale buffers byte for byte
+with the earlier CUTLASS support kernels before each GEMM. It synchronizes the
+CUDA stream and must not be enabled during timing runs.
+
+The final pp8192 support-kernel profile is:
+
+| Component | Earlier range | Optimized range | Optimized kernels | vLLM named kernels |
+| --- | ---: | ---: | ---: | ---: |
+| Histogram, prefix sum, and permutation | 8.649 ms | 6.578 ms | 0.345 ms | about 0.924 ms |
+| Route expansion and input MXFP8 quantization | 15.588 ms | 9.526 ms | 3.945 ms | about 4.012 ms |
+| W13 bias, SwiGLU, and A2 quantization | 58.301 ms | 12.973 ms | 12.129 ms | 13.384 ms |
+
+The range column includes launches and gaps. The kernel column contains only
+GPU kernel time. The optimized path is bitwise identical to the earlier
+CUTLASS support path. In an unprofiled same-build A/B run it improved pp8192
+from 21,608 to 25,714 tok/s. The complete MoE range fell from 218.819 to
+165.725 ms.
+
+The support compute kernels are no longer the main gap. The remaining work is
+launch integration, stable W13/W2 tile selection, W2 finalization, and the
+Attention and RoPE path. See `RESULTS.md` for the full Nsys split and the vLLM
+comparison.
+
 ## Fused graph and persistent grouped MMQ
 
 `bench_native_moe.sh` runs three modes against the fused-W13 GGUF:

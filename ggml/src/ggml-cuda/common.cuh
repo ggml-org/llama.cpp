@@ -1418,6 +1418,8 @@ struct ggml_cuda_moe_weight_cache_entry {
     int64_t ne[3] = {};
     void * data = nullptr;
     bool owns_data = false;
+    void * scales_data = nullptr;
+    bool owns_scales = false;
     size_t allocation_size = 0;
     size_t scales_offset = 0;
     int64_t ncols = 0;

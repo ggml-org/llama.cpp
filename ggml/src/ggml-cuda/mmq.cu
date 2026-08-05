@@ -95,7 +95,7 @@ void ggml_cuda_mul_mat_q(
 
     if (ggml_cuda_moe_weight_is_inplace_repacked(ctx, src0) &&
         (moe_state == nullptr || moe_state->weight.layout != ggml_cuda_moe_weight_layout::tma_inplace)) {
-        GGML_ABORT("in-place TMA MoE weights require the fused TMA path");
+        GGML_ABORT("in-place MoE weights require their fused backend path");
     }
 
     GGML_TENSOR_BINARY_OP_LOCALS;
