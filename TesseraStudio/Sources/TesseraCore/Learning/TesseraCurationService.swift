@@ -88,20 +88,9 @@ public final class TesseraCurationService: TesseraCurating, @unchecked Sendable 
     }
 
     public func scrub(_ text: String) -> String {
-        var out = text
-        // PEM private-key blocks (spans lines).
-        out = Self.replace(out,
-            pattern: "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----",
-            with: "[REDACTED PRIVATE KEY]")
-        // Bearer tokens.
-        out = Self.replace(out, pattern: "(?i)Bearer\\s+[A-Za-z0-9._\\-]+", with: "Bearer [REDACTED]")
-        // OpenAI-style secret keys.
-        out = Self.replace(out, pattern: "\\bsk-[A-Za-z0-9_\\-]{8,}", with: "sk-[REDACTED]")
-        // KEY=VALUE lines whose name looks sensitive.
-        out = Self.replace(out,
-            pattern: "(?im)^(\\s*(?:export\\s+)?[A-Za-z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD)[A-Za-z0-9_]*\\s*[:=]\\s*).*$",
-            with: "$1[REDACTED]")
-        return out
+        // The shared versioned rule set: the curation stage's sensitivity
+        // probe runs the very same patterns read-only (TesseraScrubRules).
+        TesseraScrubRules.scrub(text)
     }
 
     // MARK: - Curation analytics (pure, testable)
@@ -225,11 +214,5 @@ public final class TesseraCurationService: TesseraCurating, @unchecked Sendable 
         try store.delete(Self.receiptsFile)
         try store.delete(Self.dedupFile)
         return count
-    }
-
-    private static func replace(_ input: String, pattern: String, with template: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return input }
-        let range = NSRange(input.startIndex..<input.endIndex, in: input)
-        return regex.stringByReplacingMatches(in: input, options: [], range: range, withTemplate: template)
     }
 }
