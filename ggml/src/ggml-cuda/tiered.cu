@@ -4,6 +4,7 @@
 #include "ggml-impl.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -109,8 +110,14 @@ struct tiered_buffer_context {
     uint64_t cache_d2d_bytes = 0;
     uint64_t cache_admissions = 0;
     uint64_t cache_evictions = 0;
+    size_t host_tensors = 0;
     std::mutex compute_mutex;
 };
+
+// Host-tier tensors across all live tiered buffers. While this is zero every
+// weight is VRAM resident, so graph compute needs no staging at all and can
+// skip its per-node scan.
+std::atomic<size_t> tiered_host_tensors{0};
 
 struct tiered_buffer_type_context {
     int device = 0;
@@ -167,6 +174,11 @@ static const ggml_tensor * tiered_view_base(const ggml_tensor * tensor, size_t *
     return tensor;
 }
 
+static ggml_status tiered_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor);
+
+// Identifies tiered buffers by init_tensor's function pointer rather than a
+// ggml_backend_buft_name() string compare, since this runs for every src of
+// every graph node, every token.
 static tiered_buffer_context * buffer_context(const ggml_tensor * tensor) {
     if (!tensor) {
         return nullptr;
@@ -175,27 +187,25 @@ static tiered_buffer_context * buffer_context(const ggml_tensor * tensor) {
     tensor = tiered_view_base(tensor, &view_offset);
     GGML_UNUSED(view_offset);
     ggml_backend_buffer_t buffer = tensor ? tensor->buffer : nullptr;
-    if (!buffer || !buffer->context) {
-        return nullptr;
-    }
-    const char * name = ggml_backend_buft_name(buffer->buft);
-    constexpr char prefix[] = "CUDA_TIERED";
-    if (!name || std::strncmp(name, prefix, sizeof(prefix) - 1) != 0) {
+    if (!buffer || !buffer->context || buffer->iface.init_tensor != tiered_buffer_init_tensor) {
         return nullptr;
     }
     return static_cast<tiered_buffer_context *>(buffer->context);
 }
 
+// tensor->extra caches the resolved tensor_state, set in
+// tiered_buffer_init_tensor, so the graph-compute hot path is a field read
+// instead of an unordered_map lookup.
 static tensor_state * state_for(const ggml_tensor * tensor) {
-    tiered_buffer_context * ctx = buffer_context(tensor);
-    if (!ctx) {
+    if (!tensor) {
         return nullptr;
     }
     size_t view_offset = 0;
     const ggml_tensor * base = tiered_view_base(tensor, &view_offset);
-    GGML_UNUSED(view_offset);
-    const auto found = ctx->tensors.find(base);
-    return found != ctx->tensors.end() ? found->second.get() : nullptr;
+    if (!buffer_context(tensor)) {
+        return nullptr;
+    }
+    return base ? static_cast<tensor_state *>(base->extra) : nullptr;
 }
 
 static void set_device(int device) {
@@ -501,6 +511,11 @@ static void initialize_expert_cache(tiered_buffer_context * ctx) {
     }
 }
 
+// Staging must cover the CUDA row-padding guard, not just the tensor bytes.
+static size_t staging_bytes(const tensor_state * state) {
+    return std::max(state->sparse_size, align_up_size(state->alloc_size, 256));
+}
+
 // Dense DRAM weights are re-staged on every graph, so the scratch is kept and
 // grown instead of being allocated per node.
 static void * ensure_dram_staging(tiered_buffer_context * ctx, size_t size) {
@@ -712,7 +727,7 @@ static void * stage_tiered_experts(tiered_buffer_context * ctx, const ggml_tenso
     host_ids.erase(std::unique(host_ids.begin(), host_ids.end()), host_ids.end());
 
     set_device(ctx->device);
-    size_t staging_size = state->sparse_size > 0 ? state->sparse_size : align_up_size(state->size, 256);
+    size_t staging_size = staging_bytes(state);
     if (!ctx->expert_cache_initialized && ctx->plan->options.ssd_cache_bytes > 0) {
         for (const auto & entry : ctx->tensors) {
             const ggml_tensor * candidate_tensor = entry.first;
@@ -720,9 +735,7 @@ static void * stage_tiered_experts(tiered_buffer_context * ctx, const ggml_tenso
             if (candidate_state->tier == GGML_CUDA_TIERED_MEMORY_VRAM || !is_ssd_eligible(candidate_tensor)) {
                 continue;
             }
-            const size_t candidate_size = candidate_state->sparse_size > 0 ?
-                    candidate_state->sparse_size : align_up_size(candidate_state->size, 256);
-            staging_size = std::max(staging_size, candidate_size);
+            staging_size = std::max(staging_size, staging_bytes(candidate_state));
         }
     }
     if (ctx->expert_staging_size < staging_size) {
@@ -741,6 +754,8 @@ static void * stage_tiered_experts(tiered_buffer_context * ctx, const ggml_tenso
             allocation_status = cudaMalloc(&ctx->expert_staging, staging_size);
         }
         TIERED_CUDA_CHECK(allocation_status);
+        // slab copies never write the guard tail, so define it once here
+        TIERED_CUDA_CHECK(cudaMemsetAsync(ctx->expert_staging, 0, staging_size, ensure_copy_stream(ctx)));
         ctx->expert_staging_size = staging_size;
     }
 
@@ -809,6 +824,9 @@ static void tiered_buffer_free(ggml_backend_buffer_t buffer) {
         }
     }
 
+    tiered_host_tensors.fetch_sub(ctx->host_tensors, std::memory_order_relaxed);
+    ctx->host_tensors = 0;
+
     if (ctx->plan->options.ssd_cache_bytes > 0) {
         const uint64_t cacheable_bytes = ctx->cache_hit_bytes + ctx->cache_miss_bytes;
         const double request_hit_rate = ctx->cache_requests > 0 ?
@@ -865,8 +883,12 @@ static void * tiered_buffer_base(ggml_backend_buffer_t buffer) {
 
 static ggml_status tiered_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     auto * ctx = static_cast<tiered_buffer_context *>(buffer->context);
-    if (!tensor->view_src && ctx->tensors.find(tensor) == ctx->tensors.end()) {
-        ctx->tensors.emplace(tensor, std::make_unique<tensor_state>());
+    if (!tensor->view_src) {
+        auto & state_ptr = ctx->tensors[tensor];
+        if (!state_ptr) {
+            state_ptr = std::make_unique<tensor_state>();
+        }
+        tensor->extra = state_ptr.get();
     }
     return GGML_STATUS_SUCCESS;
 }
@@ -931,7 +953,15 @@ static void tiered_buffer_set_tensor(
         state->tier = found->second;
     }
 
-    if (state->tier != GGML_CUDA_TIERED_MEMORY_VRAM && state->alloc_size != state->size) {
+    // CUDA pads quantized rows to a guard boundary. A directly mapped DRAM
+    // tensor has no room for the guard, but a streamed one lands in staging
+    // scratch that we size ourselves, so stream it instead of rejecting it.
+    if (state->tier == GGML_CUDA_TIERED_MEMORY_DRAM && state->alloc_size != state->size &&
+            is_ssd_eligible(tensor)) {
+        state->tier = GGML_CUDA_TIERED_MEMORY_SSD;
+    }
+
+    if (state->tier == GGML_CUDA_TIERED_MEMORY_DRAM && state->alloc_size != state->size) {
         if (ctx->plan->options.strict) {
             throw std::runtime_error(std::string("host tier does not support CUDA padding for tensor: ") + tensor->name);
         }
@@ -995,6 +1025,11 @@ static void tiered_buffer_set_tensor(
                         tensor->name, error.what());
             }
             break;
+    }
+
+    if (state->tier != GGML_CUDA_TIERED_MEMORY_VRAM) {
+        ++ctx->host_tensors;
+        tiered_host_tensors.fetch_add(1, std::memory_order_relaxed);
     }
 
     GGML_LOG_INFO("tiered-memory: %-4s %8.2f MiB %s\n",
@@ -1167,12 +1202,25 @@ static ggml_status compute_view(tiered_backend_context * ctx, ggml_cgraph * grap
         return GGML_STATUS_SUCCESS;
     }
     ggml_cgraph view = ggml_graph_view(graph, begin, end);
-    view.uid = ggml_graph_next_uid();
+    // Propagate the caller's graph uid instead of minting a fresh one: the
+    // inner CUDA backend keys its captured-graph cache off the view's first
+    // node pointer (stable per segment across tokens), and only replays
+    // without recapturing when the uid also matches the last capture. A
+    // fresh uid every call defeated that cache and forced a recapture every
+    // token even when nothing about this segment changed.
+    view.uid = graph->uid;
     return ggml_backend_graph_compute(ctx->inner, &view);
 }
 
 static ggml_status tiered_backend_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto * ctx = static_cast<tiered_backend_context *>(backend->context);
+
+    // Nothing to stage while every weight is VRAM resident, so run the whole
+    // graph in one piece and skip the per-node source scan below.
+    if (tiered_host_tensors.load(std::memory_order_relaxed) == 0) {
+        return ggml_backend_graph_compute(ctx->inner, graph);
+    }
+
     std::unique_lock<std::mutex> compute_lock;
     for (int i = 0; i < graph->n_nodes && !compute_lock.owns_lock(); ++i) {
         for (int src_index = 0; src_index < GGML_MAX_SRC; ++src_index) {
