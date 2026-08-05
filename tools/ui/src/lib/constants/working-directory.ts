@@ -41,3 +41,9 @@ export const PATH_NAV_MAX_DEPTH = 1;
 // Native folder-picker resolution searches a shallow, bounded window.
 export const NATIVE_MAX_DEPTH = 4;
 export const NATIVE_LIMIT = 20;
+
+/** How many directory levels below home the server allows a glob search. */
+export const FILE_GLOB_SEARCH_MAX_SERVER_DEPTH = 32;
+
+/** Depth the pickers fall back to when the user setting is invalid. */
+export const FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH = 10;
