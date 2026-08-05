@@ -119,6 +119,12 @@ struct tiered_buffer_context {
     // uploaded once.
     void * packed_ids = nullptr;
     size_t packed_ids_count = 0;
+    // Slot indices uploaded when the kernel reads the cache in place. Unlike
+    // packed_ids these change every step, so the buffer is reused, not cached.
+    void * slot_ids = nullptr;
+    size_t slot_ids_count = 0;
+    std::vector<int32_t> slot_ids_host;
+    uint64_t cache_direct_nodes = 0;
     std::mutex compute_mutex;
 };
 
@@ -437,15 +443,14 @@ static void initialize_expert_cache(tiered_buffer_context * ctx) {
                 continue;
             }
 
-            const size_t guard = std::min<size_t>(tensor->nb[2], 512);
-            if (tensor->nb[2] > std::numeric_limits<size_t>::max() - guard) {
+            // MUL_MAT_ID derives the expert stride as nb[2]/type_size, so a slot
+            // the kernel reads directly has to stay a whole number of blocks.
+            // nb[2] already is one; pad the guard the same way.
+            const size_t type_size = ggml_type_size(tensor->type);
+            if (type_size == 0 || tensor->nb[2] % type_size != 0) {
                 continue;
             }
-            const size_t raw_slot_size = tensor->nb[2] + guard;
-            if (raw_slot_size > std::numeric_limits<size_t>::max() - 255) {
-                continue;
-            }
-            candidates.push_back({ tensor, state, align_up_size(raw_slot_size, 256), 0 });
+            candidates.push_back({ tensor, state, tensor->nb[2], 0 });
         }
 
         std::sort(candidates.begin(), candidates.end(), [](const cache_candidate & lhs, const cache_candidate & rhs) {
@@ -483,7 +488,7 @@ static void initialize_expert_cache(tiered_buffer_context * ctx) {
                 return;
             }
 
-            allocation_status = cudaMalloc(&ctx->expert_cache, used);
+            allocation_status = cudaMalloc(&ctx->expert_cache, used + 512);
             if (allocation_status != cudaSuccess) {
                 (void) cudaGetLastError();
                 ctx->expert_cache = nullptr;
@@ -608,6 +613,32 @@ static const int32_t * ensure_packed_ids(tiered_buffer_context * ctx, size_t cou
     return static_cast<const int32_t *>(ctx->packed_ids);
 }
 
+static size_t cache_slot_count(const tensor_state * state) {
+    return state->cache ? state->cache->slots.size() : 0;
+}
+
+// Every selected expert is already resident, so hand the cache itself to
+// MUL_MAT_ID and point the ids at the slots holding them. This skips the
+// device-to-device copy that staging would otherwise cost per expert.
+static const int32_t * upload_slot_ids(tiered_buffer_context * ctx, const std::vector<int32_t> & slots) {
+    const size_t bytes = slots.size() * sizeof(int32_t);
+    if (ctx->slot_ids_count < slots.size()) {
+        if (ctx->slot_ids) {
+            TIERED_CUDA_CHECK(cudaStreamSynchronize(ensure_copy_stream(ctx)));
+            TIERED_CUDA_CHECK(cudaFree(ctx->slot_ids));
+            ctx->slot_ids = nullptr;
+            ctx->slot_ids_count = 0;
+        }
+        TIERED_CUDA_CHECK(cudaMalloc(&ctx->slot_ids, bytes));
+        ctx->slot_ids_count = slots.size();
+    }
+    TIERED_CUDA_CHECK(cudaMemcpyAsync(ctx->slot_ids, slots.data(), bytes,
+            cudaMemcpyHostToDevice, ensure_copy_stream(ctx)));
+    // The kernel reads these immediately, so they must have landed.
+    TIERED_CUDA_CHECK(cudaStreamSynchronize(ensure_copy_stream(ctx)));
+    return static_cast<const int32_t *>(ctx->slot_ids);
+}
+
 static bool stage_cached_experts(
         tiered_buffer_context * ctx,
         const ggml_tensor * tensor,
@@ -616,11 +647,15 @@ static bool stage_cached_experts(
         const std::vector<int32_t> & ranked_ids,
         const std::vector<int32_t> & sorted_ids,
         size_t ids_per_row,
-        size_t n_rows) {
+        size_t n_rows,
+        const int32_t * & out_direct_ids,
+        size_t & out_direct_stride) {
     expert_cache_state * cache = state->cache.get();
     if (!cache || n_rows != 1 || tensor_offset != 0 || tensor->view_src || tensor->ne[3] != 1 ||
             cache->heat.size() != static_cast<size_t>(tensor->ne[2]) ||
-            cache->slot_of_expert.size() != static_cast<size_t>(tensor->ne[2])) {
+            cache->slot_of_expert.size() != static_cast<size_t>(tensor->ne[2]) ||
+            cache->slots.size() < ranked_ids.size() ||
+            cache->slot_size != tensor->nb[2]) {
         return false;
     }
 
@@ -639,117 +674,91 @@ static bool stage_cached_experts(
         ++ctx->cache_epoch;
     }
 
-    struct cache_miss {
-        int32_t expert = -1;
-        size_t slab_begin = 0;
-        size_t copy_size = 0;
-    };
-    std::vector<cache_miss> misses;
-    std::vector<uint8_t> protected_slots(cache->slots.size(), 0);
+    // Every selected expert is given a slot - hits keep theirs, misses evict
+    // one and are read straight into it - so MUL_MAT_ID always reads the cache
+    // in place. src[0] and ne[2] stay fixed across steps, which is what lets the
+    // captured CUDA graph be replayed; only the ids contents vary, exactly as
+    // they do for the router output this replaces.
+    ctx->slot_ids_host.assign(ranked_ids.size(), -1);
+    std::vector<uint8_t> held(cache->slots.size(), 0);
     const cudaStream_t stream = ensure_copy_stream(ctx);
-    GGML_UNUSED(sorted_ids);
 
-    // Rank order is the packed order, so slab j lands at j*nb[2] and the ids
-    // handed to MUL_MAT_ID become the identity.
     for (size_t rank = 0; rank < ranked_ids.size(); ++rank) {
+        ++ctx->cache_requests;
+        const int32_t slot = cache->slot_of_expert[static_cast<size_t>(ranked_ids[rank])];
+        if (slot < 0) {
+            continue;
+        }
+        cache->slots[static_cast<size_t>(slot)].last_hit_epoch = ctx->cache_epoch;
+        held[static_cast<size_t>(slot)] = 1;
+        ctx->slot_ids_host[rank] = slot;
+        ++ctx->cache_hits;
+        ctx->cache_hit_bytes += tensor->nb[2];
+    }
+
+    for (size_t rank = 0; rank < ranked_ids.size(); ++rank) {
+        if (ctx->slot_ids_host[rank] >= 0) {
+            continue;
+        }
         const int32_t expert = ranked_ids[rank];
-        const size_t slab_begin = tensor_offset + static_cast<size_t>(expert) * tensor->nb[2];
+
+        size_t victim = cache->slots.size();
+        for (size_t index = 0; index < cache->slots.size(); ++index) {
+            if (held[index]) {
+                continue;
+            }
+            const expert_cache_slot & slot_ref = cache->slots[index];
+            if (slot_ref.expert < 0) {
+                victim = index;
+                break;
+            }
+            if (victim == cache->slots.size()) {
+                victim = index;
+                continue;
+            }
+            const expert_cache_slot & best = cache->slots[victim];
+            const uint16_t a = cache->heat[static_cast<size_t>(slot_ref.expert)];
+            const uint16_t b = cache->heat[static_cast<size_t>(best.expert)];
+            if (a < b || (a == b && slot_ref.last_hit_epoch < best.last_hit_epoch)) {
+                victim = index;
+            }
+        }
+        if (victim == cache->slots.size()) {
+            throw std::runtime_error("expert cache has no free slot for a selected expert");
+        }
+
+        expert_cache_slot & slot_ref = cache->slots[victim];
+        const size_t slab_begin = static_cast<size_t>(expert) * tensor->nb[2];
         if (slab_begin >= state->size) {
             throw std::runtime_error("MUL_MAT_ID expert slab exceeds its base tensor");
         }
         const size_t copy_size = std::min<size_t>(tensor->nb[2], state->size - slab_begin);
-        const size_t packed_offset = rank * tensor->nb[2];
-        ++ctx->cache_requests;
+        copy_host_to_device(ctx,
+                static_cast<char *>(ctx->expert_cache) + slot_ref.device_offset,
+                static_cast<const char *>(state->host_ptr) + slab_begin,
+                copy_size);
 
-        const int32_t hit_slot = cache->slot_of_expert[static_cast<size_t>(expert)];
-
-        if (hit_slot >= 0) {
-            expert_cache_slot & slot = cache->slots[static_cast<size_t>(hit_slot)];
-            TIERED_CUDA_CHECK(cudaMemcpyAsync(
-                    static_cast<char *>(ctx->expert_staging) + packed_offset,
-                    static_cast<const char *>(ctx->expert_cache) + slot.device_offset,
-                    copy_size,
-                    cudaMemcpyDeviceToDevice,
-                    stream));
-            slot.last_hit_epoch = ctx->cache_epoch;
-            protected_slots[static_cast<size_t>(hit_slot)] = 1;
-            ++ctx->cache_hits;
-            ctx->cache_hit_bytes += copy_size;
-            ctx->cache_d2d_bytes += copy_size;
-        } else {
-            copy_host_to_device(ctx,
-                    static_cast<char *>(ctx->expert_staging) + packed_offset,
-                    static_cast<const char *>(state->host_ptr) + slab_begin,
-                    copy_size);
-            misses.push_back({ expert, packed_offset, copy_size });
-            ctx->cache_miss_bytes += copy_size;
-            ctx->cache_h2d_bytes += copy_size;
-        }
-    }
-
-    std::sort(misses.begin(), misses.end(), [&](const cache_miss & lhs, const cache_miss & rhs) {
-        const uint16_t lhs_heat = cache->heat[static_cast<size_t>(lhs.expert)];
-        const uint16_t rhs_heat = cache->heat[static_cast<size_t>(rhs.expert)];
-        return lhs_heat != rhs_heat ? lhs_heat > rhs_heat : lhs.expert < rhs.expert;
-    });
-
-    // Staging is complete here, so the caller can enqueue compute. The admission
-    // copies below only read staging, so they stay async and overlap with it.
-    TIERED_CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    for (const cache_miss & miss : misses) {
-        size_t victim = cache->slots.size();
-        for (size_t slot_index = 0; slot_index < cache->slots.size(); ++slot_index) {
-            const expert_cache_slot & slot = cache->slots[slot_index];
-            if (protected_slots[slot_index]) {
-                continue;
-            }
-            if (slot.expert < 0) {
-                victim = slot_index;
-                break;
-            }
-            if (victim == cache->slots.size()) {
-                victim = slot_index;
-                continue;
-            }
-            const expert_cache_slot & current = cache->slots[victim];
-            const uint16_t slot_heat = cache->heat[static_cast<size_t>(slot.expert)];
-            const uint16_t current_heat = cache->heat[static_cast<size_t>(current.expert)];
-            if (slot_heat < current_heat ||
-                    (slot_heat == current_heat && slot.last_hit_epoch < current.last_hit_epoch)) {
-                victim = slot_index;
-            }
-        }
-
-        if (victim == cache->slots.size()) {
-            continue;
-        }
-        expert_cache_slot & slot = cache->slots[victim];
-        if (slot.expert >= 0 &&
-                cache->heat[static_cast<size_t>(miss.expert)] <= cache->heat[static_cast<size_t>(slot.expert)]) {
-            continue;
-        }
-
-        TIERED_CUDA_CHECK(cudaMemcpyAsync(
-                static_cast<char *>(ctx->expert_cache) + slot.device_offset,
-                static_cast<const char *>(ctx->expert_staging) + miss.slab_begin,
-                miss.copy_size,
-                cudaMemcpyDeviceToDevice,
-                stream));
-        if (slot.expert >= 0) {
-            cache->slot_of_expert[static_cast<size_t>(slot.expert)] = -1;
+        if (slot_ref.expert >= 0) {
+            cache->slot_of_expert[static_cast<size_t>(slot_ref.expert)] = -1;
             ++ctx->cache_evictions;
         }
-        slot.expert = miss.expert;
-        cache->slot_of_expert[static_cast<size_t>(miss.expert)] = static_cast<int32_t>(victim);
-        slot.last_hit_epoch = ctx->cache_epoch;
-        protected_slots[victim] = 1;
+        slot_ref.expert = expert;
+        slot_ref.last_hit_epoch = ctx->cache_epoch;
+        cache->slot_of_expert[static_cast<size_t>(expert)] = static_cast<int32_t>(victim);
+        held[victim] = 1;
+        ctx->slot_ids_host[rank] = static_cast<int32_t>(victim);
         ++ctx->cache_admissions;
-        ctx->cache_d2d_bytes += miss.copy_size;
+        ctx->cache_miss_bytes += copy_size;
+        ctx->cache_h2d_bytes += copy_size;
     }
 
+    TIERED_CUDA_CHECK(cudaStreamSynchronize(stream));
+    out_direct_ids = upload_slot_ids(ctx, ctx->slot_ids_host);
+    out_direct_stride = cache->slot_size;
+    ++ctx->cache_direct_nodes;
     return true;
 }
+
 
 static void * stage_tiered_experts(
         tiered_buffer_context * ctx,
@@ -757,9 +766,11 @@ static void * stage_tiered_experts(
         tensor_state * state,
         const ggml_tensor * ids,
         int64_t & out_packed_experts,
-        const int32_t * & out_packed_ids) {
+        const int32_t * & out_packed_ids,
+        size_t & out_packed_stride) {
     out_packed_experts = 0;
     out_packed_ids = nullptr;
+    out_packed_stride = 0;
     if (!ids || ids->type != GGML_TYPE_I32) {
         throw std::runtime_error("MUL_MAT_ID expert ids must be I32");
     }
@@ -851,7 +862,10 @@ static void * stage_tiered_experts(
 
     initialize_expert_cache(ctx);
 
-    if (!stage_cached_experts(ctx, tensor, state, tensor_offset, ranked_ids, host_ids, ids_per_row, n_rows)) {
+    const int32_t * direct_ids = nullptr;
+    size_t direct_stride = 0;
+    if (!stage_cached_experts(ctx, tensor, state, tensor_offset, ranked_ids, host_ids,
+                              ids_per_row, n_rows, direct_ids, direct_stride)) {
         if (packed) {
             for (size_t rank = 0; rank < ranked_ids.size(); ++rank) {
                 const size_t slab_begin = static_cast<size_t>(ranked_ids[rank]) * tensor->nb[2];
@@ -901,6 +915,14 @@ static void * stage_tiered_experts(
         TIERED_CUDA_CHECK(cudaStreamSynchronize(ensure_copy_stream(ctx)));
     }
 
+    if (direct_ids) {
+        // Slots of one tensor are contiguous inside the shared cache buffer,
+        // so rebase to this tensor's first slot and index within it.
+        out_packed_experts = static_cast<int64_t>(cache_slot_count(state));
+        out_packed_ids = direct_ids;
+        GGML_UNUSED(direct_stride);
+        return static_cast<char *>(ctx->expert_cache) + state->cache->slots[0].device_offset;
+    }
     if (packed) {
         out_packed_experts = static_cast<int64_t>(ids_per_row);
         out_packed_ids = ensure_packed_ids(ctx, ids_per_row);
@@ -1449,8 +1471,10 @@ static ggml_status tiered_backend_graph_compute(ggml_backend_t backend, ggml_cgr
             try {
                 int64_t packed_experts = 0;
                 const int32_t * packed_ids = nullptr;
+                size_t packed_stride = 0;
                 void * staged_data = stage_tiered_experts(
-                        weight_ctx, weight, streamed_state, original_ids, packed_experts, packed_ids);
+                        weight_ctx, weight, streamed_state, original_ids,
+                        packed_experts, packed_ids, packed_stride);
                 staged_weight = *weight;
                 staged_weight.data = staged_data;
                 staged_weight.view_src = nullptr;
@@ -1461,6 +1485,9 @@ static ggml_status tiered_backend_graph_compute(ggml_backend_t backend, ggml_cgr
                 // them become the identity.
                 if (packed_experts > 0) {
                     staged_weight.ne[2] = packed_experts;
+                    if (packed_stride) {
+                        staged_weight.nb[2] = packed_stride;
+                    }
                     staged_ids = *original_ids;
                     staged_ids.data = const_cast<int32_t *>(packed_ids);
                     staged_ids.view_src = nullptr;
