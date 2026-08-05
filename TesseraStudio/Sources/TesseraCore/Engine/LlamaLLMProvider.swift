@@ -47,6 +47,7 @@ public actor LlamaLLMProvider: LLMProvider {
     // provenance "runtime"). Flushed to the trace store per completed
     // generation.
     private(set) var sessionTraceBuffer: [String] = []
+    private let traceStore: TesseraTraceStore
 
     public init(
         modelPath: String,
@@ -58,7 +59,8 @@ public actor LlamaLLMProvider: LLMProvider {
         runtimeDraftModelSetting: String? = nil,
         runtimeCapture: Bool? = nil,
         runtimeCaptureTopk: Int? = nil,
-        runtimeDraftMax: Int? = nil
+        runtimeDraftMax: Int? = nil,
+        traceStore: TesseraTraceStore? = nil
     ) {
         let expanded = NSString(string: modelPath).expandingTildeInPath
         self.modelPath = expanded
@@ -76,6 +78,9 @@ public actor LlamaLLMProvider: LLMProvider {
         self.runtimeCapture = runtimeCapture ?? TesseraSettings.learningRuntimeCapture
         self.runtimeCaptureTopk = runtimeCaptureTopk ?? TesseraSettings.learningRuntimeCaptureTopk
         self.runtimeDraftMax = runtimeDraftMax ?? TesseraSettings.learningRuntimeDraftMax
+        // Same default directory as the training orchestrator's store, so
+        // runtime records join the combined training gate count.
+        self.traceStore = traceStore ?? TesseraTraceStore()
     }
 
     deinit {
@@ -157,6 +162,7 @@ public actor LlamaLLMProvider: LLMProvider {
             if !specBox.traceLines.isEmpty {
                 sessionTraceBuffer.append(contentsOf: specBox.traceLines)
             }
+            flushSessionTraces()
 
             let parsed = Self.parse(specBox.text)
             return LLMResponse(
@@ -186,6 +192,20 @@ public actor LlamaLLMProvider: LLMProvider {
             toolCalls: parsed.toolCalls,
             tokenCount: Int(generated)
         )
+    }
+
+    /// Drain the session buffer into the trace store (section 8). One flush
+    /// per completed generation keeps each runtime file to a single sid. On
+    /// a store failure the buffer is kept so the next generation retries -
+    /// capture plumbing must never break generation itself.
+    private func flushSessionTraces() {
+        guard !sessionTraceBuffer.isEmpty else { return }
+        do {
+            try traceStore.appendRuntime(records: sessionTraceBuffer)
+            sessionTraceBuffer.removeAll()
+        } catch {
+            print("[tessera.runtime] trace flush failed, keeping \(sessionTraceBuffer.count) record(s) buffered: \(error.localizedDescription)")
+        }
     }
 
     /// Free the model/context immediately instead of waiting for deinit.

@@ -14,6 +14,7 @@ struct LearningTrainingSection: View {
 
     @State private var record: TesseraTrainingOrchestrator.TrainingRecord?
     @State private var traceCount = 0
+    @State private var capture = TesseraRuntimeCaptureSummary()
     @State private var minTraces = TesseraSettingsDefault.learningMinTracesForTraining
     @State private var baseModel = ""
     @State private var binaryPath = ""
@@ -28,6 +29,7 @@ struct LearningTrainingSection: View {
     var body: some View {
         Section("Drafter Training") {
             traceGaugeRow
+            runtimeCaptureRow
             if !setupComplete {
                 setupRow
             } else if running {
@@ -68,6 +70,45 @@ struct LearningTrainingSection: View {
             .accessibilityValue("\(traceCount) of \(minTraces) traces")
         }
         .padding(.vertical, 2)
+    }
+
+    /// Runtime capture status (runtime-traces spec section 10): this
+    /// session's record count, the lifetime runtime record total, and the
+    /// live acceptance rate across captured steps. Read-only; the curation
+    /// state row lands with the replay stage.
+    private var runtimeCaptureRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("runtime capture") {
+                Text(runtimeCaptureSummary).monospacedDigit()
+            }
+            if let rate = capture.acceptanceRate {
+                Gauge(value: rate, in: 0...1) {
+                    EmptyView()
+                } currentValueLabel: {
+                    EmptyView()
+                }
+                .tint(.accentColor)
+                .accessibilityLabel("Runtime acceptance rate")
+                .accessibilityValue(rate.formatted(.percent))
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var runtimeCaptureSummary: String {
+        let sessions = capture.sessions.count
+        guard capture.totalRecords > 0 else {
+            return sessions == 0 ? "no runtime records yet" : "\(sessions) session(s), 0 records"
+        }
+        var parts: [String] = []
+        if let latest = capture.latestSession {
+            parts.append("latest session \(latest.records) rec")
+        }
+        parts.append("\(capture.totalRecords) total")
+        if let rate = capture.acceptanceRate {
+            parts.append("\(rate.formatted(.percent.precision(.fractionLength(0)))) accepted")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var setupComplete: Bool {
@@ -239,6 +280,7 @@ struct LearningTrainingSection: View {
         let orchestrator = TesseraLearningCenter.shared.training
         record = orchestrator?.lastTraining()
         traceCount = orchestrator?.traceStore.totalRecords() ?? 0
+        capture = (orchestrator?.traceStore ?? TesseraTraceStore()).runtimeSummary()
         minTraces = TesseraSettings.learningMinTracesForTraining
         baseModel = TesseraSettings.learningBaseModelPath
         dryRunConfigured = TesseraSettings.learningTrainingDryRun

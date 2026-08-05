@@ -1,5 +1,46 @@
 import Foundation
 
+/// One captured runtime session: every runtime record sharing a sid
+/// (runtime-traces spec section 8). One provider generation call stamps
+/// one sid, so a session is one turn's spec-decoding steps.
+public struct TesseraRuntimeSessionSummary: Sendable, Equatable {
+    public let sid: String
+    public var records: Int
+    public var accepted: Int
+    public var drafted: Int
+
+    public var acceptanceRate: Double? {
+        drafted > 0 ? Double(accepted) / Double(drafted) : nil
+    }
+
+    init(sid: String, records: Int, accepted: Int, drafted: Int) {
+        self.sid = sid
+        self.records = records
+        self.accepted = accepted
+        self.drafted = drafted
+    }
+}
+
+/// Store-wide runtime capture stats for the dashboard capture row.
+public struct TesseraRuntimeCaptureSummary: Sendable, Equatable {
+    public var totalRecords = 0
+    public var totalBytes = 0
+    /// Distinct sessions, oldest capture first.
+    public var sessions: [TesseraRuntimeSessionSummary] = []
+
+    public init() {}
+
+    public var latestSession: TesseraRuntimeSessionSummary? { sessions.last }
+
+    /// accepted/drafted across every captured step.
+    public var acceptanceRate: Double? {
+        let drafted = sessions.reduce(0) { $0 + $1.drafted }
+        guard drafted > 0 else { return nil }
+        let accepted = sessions.reduce(0) { $0 + $1.accepted }
+        return Double(accepted) / Double(drafted)
+    }
+}
+
 /// File-backed accumulator for llama.tessera.spec.v1 telemetry JSONL.
 /// Traces accumulate across imatrix calibration runs; the orchestrator
 /// reads them when enough data has gathered to form a training dataset.
@@ -12,6 +53,17 @@ public final class TesseraTraceStore: @unchecked Sendable {
     private let directory: URL
     private let lock = NSLock()
     private var cachedRecordCount: Int?
+    private var runtimeIndexCache: [RuntimeFileEntry]?
+
+    /// Filename prefixes per provenance (runtime-traces spec section 8).
+    /// All keep the traces- prefix, so totalRecords() counts every
+    /// provenance and the training gate sees the combined total.
+    public static let runtimeFilePrefix = "traces-runtime-"
+    public static let replayFilePrefix = "traces-replay-"
+
+    /// Default rolling cap on the runtime share (spec section 8). The
+    /// runtime trimmer never touches calibration or replay files.
+    public static let runtimeBudgetBytesDefault = 200 * 1024 * 1024
 
     public init(directory: URL = TesseraTraceStore.defaultDirectory()) {
         self.directory = directory
@@ -39,6 +91,42 @@ public final class TesseraTraceStore: @unchecked Sendable {
         let dest = directory.appendingPathComponent(name)
         try fm.copyItem(at: jsonlPath, to: dest)
         cachedRecordCount = nil
+        runtimeIndexCache = nil
+        return dest
+    }
+
+    /// Append runtime-captured telemetry records (runtime-traces spec
+    /// section 8). Records already carry "provenance":"runtime" and one
+    /// "sid" per provider generation call; they are written verbatim as
+    /// traces-runtime-<date>.jsonl. Returns the stored file URL, or nil
+    /// when there was nothing to write. After writing, retention and the
+    /// runtime rolling cap are enforced; quarantined sessions (section 12)
+    /// are exempt via exemptSids, wired by the curation stage.
+    @discardableResult
+    public func appendRuntime(records: [String], exemptSids: Set<String> = []) throws -> URL? {
+        lock.lock(); defer { lock.unlock() }
+        guard !records.isEmpty else { return nil }
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let stem = Self.datedStem(Date(), prefix: Self.runtimeFilePrefix)
+        var name = "\(stem).jsonl"
+        var n = 1
+        while fm.fileExists(atPath: directory.appendingPathComponent(name).path) {
+            name = "\(stem)-\(n).jsonl"
+            n += 1
+        }
+        let dest = directory.appendingPathComponent(name)
+        try (records.joined(separator: "\n") + "\n")
+            .write(to: dest, atomically: true, encoding: .utf8)
+        cachedRecordCount = nil
+        runtimeIndexCache = nil
+
+        // Retention first (all provenances), then the runtime rolling cap.
+        try trimExpiredUnlocked(
+            retentionDays: TesseraSettings.learningDataRetentionDays,
+            exemptSids: exemptSids, now: Date())
+        try trimRuntimeUnlocked(
+            budgetBytes: Self.runtimeBudgetBytesDefault, exemptSids: exemptSids)
         return dest
     }
 
@@ -64,6 +152,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
         let files = traceFilesUnlocked()
         for file in files { try FileManager.default.removeItem(at: file) }
         cachedRecordCount = nil
+        runtimeIndexCache = nil
         return files.count
     }
 
@@ -77,7 +166,162 @@ public final class TesseraTraceStore: @unchecked Sendable {
         let records = files.reduce(0) { $0 + Self.countRecords(in: $1) }
         for file in files { try FileManager.default.removeItem(at: file) }
         cachedRecordCount = nil
+        runtimeIndexCache = nil
         return records
+    }
+
+    // MARK: - Runtime capture (runtime-traces spec section 8)
+
+    /// Runtime trace files, oldest-first.
+    public func runtimeFiles() -> [URL] {
+        lock.lock(); defer { lock.unlock() }
+        return runtimeIndexUnlocked().map { $0.url }
+    }
+
+    /// Session-grouped runtime stats for the dashboard capture row.
+    /// Sessions are ordered oldest capture first; a sid split across
+    /// several files (a retried flush) merges into one session.
+    public func runtimeSummary() -> TesseraRuntimeCaptureSummary {
+        lock.lock(); defer { lock.unlock() }
+        var summary = TesseraRuntimeCaptureSummary()
+        var order: [String] = []
+        var merged: [String: TesseraRuntimeSessionSummary] = [:]
+        for entry in runtimeIndexUnlocked() {
+            summary.totalBytes += entry.bytes
+            summary.totalRecords += entry.records
+            for (sid, t) in entry.sessionTotals {
+                if var existing = merged[sid] {
+                    existing.records += t.records
+                    existing.accepted += t.accepted
+                    existing.drafted += t.drafted
+                    merged[sid] = existing
+                } else {
+                    order.append(sid)
+                    merged[sid] = TesseraRuntimeSessionSummary(
+                        sid: sid, records: t.records,
+                        accepted: t.accepted, drafted: t.drafted)
+                }
+            }
+        }
+        summary.sessions = order.compactMap { merged[$0] }
+        return summary
+    }
+
+    /// Rolling cap: trim runtime files oldest-first until the runtime share
+    /// fits the budget. Calibration and replay files are never touched.
+    /// Files holding a sid in exemptSids (quarantined sessions) are exempt;
+    /// the share may stay over budget rather than remove them. Returns the
+    /// number of files removed.
+    @discardableResult
+    public func trimRuntimeToBudget(budgetBytes: Int, exemptSids: Set<String> = []) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return try trimRuntimeUnlocked(budgetBytes: budgetBytes, exemptSids: exemptSids)
+    }
+
+    /// Date-based retention: remove files of ANY provenance older than
+    /// retentionDays, except files holding a sid in exemptSids (quarantined
+    /// sessions are exempt from automatic retention entirely; only
+    /// user-initiated purge removes them). Returns the number of files
+    /// removed.
+    @discardableResult
+    public func trimExpired(retentionDays: Int, exemptSids: Set<String> = [], now: Date = Date()) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return try trimExpiredUnlocked(retentionDays: retentionDays, exemptSids: exemptSids, now: now)
+    }
+
+    // MARK: - Trimming (caller holds the lock)
+
+    private func trimRuntimeUnlocked(budgetBytes: Int, exemptSids: Set<String>) throws -> Int {
+        let entries = runtimeIndexUnlocked()
+        var total = entries.reduce(0) { $0 + $1.bytes }
+        guard total > budgetBytes else { return 0 }
+        var removed = 0
+        for entry in entries where total > budgetBytes {
+            guard entry.sids.isDisjoint(with: exemptSids) else { continue }
+            try FileManager.default.removeItem(at: entry.url)
+            total -= entry.bytes
+            removed += 1
+        }
+        if removed > 0 {
+            cachedRecordCount = nil
+            runtimeIndexCache = nil
+        }
+        return removed
+    }
+
+    private func trimExpiredUnlocked(retentionDays: Int, exemptSids: Set<String>, now: Date) throws -> Int {
+        guard retentionDays > 0 else { return 0 }
+        let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86_400)
+        let sidsByFile = Dictionary(
+            uniqueKeysWithValues: runtimeIndexUnlocked().map { ($0.url, $0.sids) })
+        var removed = 0
+        for file in traceFilesUnlocked() {
+            guard let created = try? file.resourceValues(forKeys: [.creationDateKey]),
+                  let createdDate = created.creationDate, createdDate < cutoff else { continue }
+            let sids = sidsByFile[file] ?? []
+            guard sids.isDisjoint(with: exemptSids) else { continue }
+            try FileManager.default.removeItem(at: file)
+            removed += 1
+        }
+        if removed > 0 {
+            cachedRecordCount = nil
+            runtimeIndexCache = nil
+        }
+        return removed
+    }
+
+    // MARK: - Runtime index (caller holds the lock)
+
+    /// One parsed runtime file: byte size, line count, and per-sid totals.
+    private struct RuntimeFileEntry {
+        let url: URL
+        let bytes: Int
+        let records: Int
+        let sids: Set<String>
+        let sessionTotals: [String: (records: Int, accepted: Int, drafted: Int)]
+    }
+
+    private func runtimeIndexUnlocked() -> [RuntimeFileEntry] {
+        if let cached = runtimeIndexCache { return cached }
+        var entries: [RuntimeFileEntry] = []
+        for file in traceFilesUnlocked()
+        where file.lastPathComponent.hasPrefix(Self.runtimeFilePrefix) {
+            guard let data = try? Data(contentsOf: file),
+                  let text = String(data: data, encoding: .utf8) else { continue }
+            var records = 0
+            var sids = Set<String>()
+            var totals: [String: (records: Int, accepted: Int, drafted: Int)] = [:]
+            text.enumerateLines { line, _ in
+                guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                records += 1
+                guard let parsed = Self.parseRuntimeLine(line), let sid = parsed.sid else { return }
+                sids.insert(sid)
+                var t = totals[sid] ?? (0, 0, 0)
+                t.records += 1
+                t.accepted += parsed.accepted
+                t.drafted += parsed.drafted
+                totals[sid] = t
+            }
+            entries.append(RuntimeFileEntry(
+                url: file, bytes: data.count, records: records,
+                sids: sids, sessionTotals: totals))
+        }
+        runtimeIndexCache = entries
+        return entries
+    }
+
+    /// Extract (sid, accepted, drafted) from one telemetry record. A record
+    /// without a sid still counts toward the file's line total but joins no
+    /// session (the engine always stamps one; this stays honest if not).
+    private static func parseRuntimeLine(_ line: String) -> (sid: String?, accepted: Int, drafted: Int)? {
+        guard let data = line.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        let sid = (obj["sid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let accepted = (obj["accepted"] as? NSNumber)?.intValue ?? 0
+        let drafted = (obj["drafted"] as? NSNumber)?.intValue ?? 0
+        return (sid, accepted, drafted)
     }
 
     // MARK: - Helpers (caller holds the lock)
@@ -106,10 +350,10 @@ public final class TesseraTraceStore: @unchecked Sendable {
         return count
     }
 
-    private static func datedStem(_ date: Date) -> String {
+    private static func datedStem(_ date: Date, prefix: String = "traces-") -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        return "traces-\(formatter.string(from: date))"
+        return "\(prefix)\(formatter.string(from: date))"
     }
 }
