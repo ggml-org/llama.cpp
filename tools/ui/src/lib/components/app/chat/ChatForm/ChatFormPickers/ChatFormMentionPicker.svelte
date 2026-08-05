@@ -2,17 +2,15 @@
 	import { File, Folder } from '@lucide/svelte';
 	import {
 		abbreviateHome,
-		buildCaseInsensitiveGlob,
+		buildGlobSearchArgs,
 		joinPath,
 		lastPathSegment,
 		rankEntries,
-		splitPathQuery,
-		type GlobEntry
+		runGlobSearch
 	} from '$lib/utils';
 	import { debounce } from '$lib/utils/debounce';
-	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { BuiltInTool } from '$lib/enums';
+	import { GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { recentMentionsStore } from '$lib/stores/recent-mentions.svelte';
@@ -21,11 +19,7 @@
 	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
 	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
 	import type { FileMentionEntry } from '$lib/types';
-	import {
-		FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
-		GLOB_WILDCARD,
-		PATH_NAV_MAX_DEPTH
-	} from '$lib/constants';
+	import { FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH, HOME_TILDE } from '$lib/constants';
 
 	/**
 	 * Floating file/folder mention picker.
@@ -85,10 +79,10 @@
 	// Search depth from settings, coerced to a valid positive integer.
 	// The setting can hold an empty string or other non-numeric value
 	// (e.g. an empty input field), which the server would interpret as
-	// max_depth 0 = unlimited and walk the whole tree. Fall back to 6
-	// (matching the working-directory picker) for any invalid value.
+	// max_depth 0 = unlimited and walk the whole tree. Fall back to
+	// FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH for any invalid value.
 	const searchDepth = $derived.by(() => {
-		const n = Number(config().mentionSearchMaxDepth ?? 6);
+		const n = Number(config().mentionSearchMaxDepth);
 		return Number.isInteger(n) && n > 0 ? n : FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH;
 	});
 
@@ -114,7 +108,13 @@
 		searchError = null;
 	}
 
+	// The mention search shows a focused list; a smaller window than the
+	// working-directory picker is enough because entries are ranked client-side.
+	const MENTION_SEARCH_LIMIT = 50;
+
 	async function doSearch(query: string) {
+		const args = buildGlobSearchArgs(query, scopePath ?? home ?? HOME_TILDE, searchDepth);
+
 		cancelSearch();
 		const controller = new AbortController();
 		searchController = controller;
@@ -122,40 +122,20 @@
 
 		isSearching = true;
 		try {
-			// A query starting with `~` or `/` navigates the tree: search the
-			// parent for the last segment instead of glob-matching the whole
-			// string (which would never match because the base path is already
-			// home-relative and contains no literal `~`).
-			const pathQuery = splitPathQuery(query);
-			const searchPath = pathQuery ? pathQuery.parent : (scopePath ?? home ?? '~');
-			const include = pathQuery
-				? pathQuery.last
-					? buildCaseInsensitiveGlob(pathQuery.last)
-					: GLOB_WILDCARD
-				: buildCaseInsensitiveGlob(query);
-			const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : searchDepth;
-
-			const res = await ToolsService.executeToolRaw(
-				BuiltInTool.FILE_GLOB_SEARCH,
-				{
-					path: searchPath,
-					type: 'all',
-					include,
-					max_depth: maxDepth,
-					limit: 50
-				},
+			const res = await runGlobSearch(
+				args,
+				GlobSearchType.ALL,
+				MENTION_SEARCH_LIMIT,
 				controller.signal
 			);
 			if (mySeq !== searchSeq) return;
-			if (typeof res.error === 'string') {
+			if (res.error) {
 				searchResults = [];
 				searchError = res.error;
 				return;
 			}
-			const base = typeof res.base === 'string' ? res.base : '';
-			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-			searchResults = rankEntries(entries, pathQuery?.last ?? query).map((e) => {
-				const path = joinPath(base, e.path);
+			searchResults = rankEntries(res.entries, args.rankQuery).map((e) => {
+				const path = joinPath(res.base, e.path);
 				return {
 					path,
 					name: lastPathSegment(e.path),
@@ -184,7 +164,7 @@
 	// localStorage). Surfaced when the user opens the picker with no
 	// characters typed after `@`, so they can re-use a file or folder
 	// without re-typing the search.
-	const recentMentions = $derived(recentMentionsStore.value);
+	const recentMentions = $derived(recentMentionsStore.items);
 
 	// What the list actually renders. Recents when the user has not
 	// typed anything after `@`, live search results otherwise.
@@ -255,13 +235,13 @@
 
 		const results = displayedItems;
 
-		if (event.key === 'Escape') {
+		if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 			onClose();
 			return true;
 		}
 
-		if (event.key === 'ArrowDown') {
+		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			if (results.length > 0) {
 				hoveredIndex = (hoveredIndex + 1) % results.length;
@@ -270,7 +250,7 @@
 			return true;
 		}
 
-		if (event.key === 'ArrowUp') {
+		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 			if (results.length > 0) {
 				hoveredIndex = hoveredIndex === 0 ? results.length - 1 : hoveredIndex - 1;
@@ -279,7 +259,7 @@
 			return true;
 		}
 
-		if (event.key === 'Enter') {
+		if (event.key === KeyboardKey.ENTER) {
 			if (results[hoveredIndex]) {
 				event.preventDefault();
 				handleSelect(results[hoveredIndex]);

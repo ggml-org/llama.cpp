@@ -1,18 +1,19 @@
 <script lang="ts">
 	import { FolderOpen } from '@lucide/svelte';
 	import { untrack } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
 	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import {
 		abbreviateHome,
 		buildCaseInsensitiveGlob,
+		buildGlobSearchArgs,
 		joinPath,
 		lastPathSegment,
 		rankEntries,
-		splitPathQuery,
-		type GlobEntry
+		runGlobSearch,
+		type GlobEntry,
+		type GlobSearchResult
 	} from '$lib/utils';
 	import { debounce } from '$lib/utils/debounce';
 	import * as Popover from '$lib/components/ui/popover';
@@ -105,12 +106,6 @@
 	let searchController: AbortController | null = null;
 	let searchSeq = 0;
 
-	// Cache of the last file_glob_search result per (parent, include, max_depth),
-	// so repeated queries in the same directory don't re-walk the tree. Entries
-	// expire after a short TTL.
-	const SEARCH_CACHE_TTL_MS = 2000;
-	const searchCache = new SvelteMap<string, { results: GlobEntry[]; base: string; at: number }>();
-
 	const runSearch = debounce((query: string) => {
 		void doSearch(query);
 	}, SEARCH_DEBOUNCE_MS);
@@ -178,29 +173,20 @@
 	// directory is "entered".
 	let searchScope = $state(HOME_TILDE);
 
-	// Runs a directory listing through the cache, so a repeated query in the
-	// same directory does not re-walk the tree on the server.
+	// Runs a directory listing through the shared cache, so a repeated query
+	// in the same directory does not re-walk the tree on the server.
 	async function searchDirs(
 		path: string,
 		include: string,
 		maxDepth: number,
 		signal: AbortSignal
-	): Promise<{ base: string; entries: GlobEntry[]; error?: string }> {
-		const key = `${path}\u0000${include}\u0000${maxDepth}`;
-		const cached = searchCache.get(key);
-		if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
-			return { base: cached.base, entries: cached.results };
-		}
-		const res = await ToolsService.executeToolRaw(
-			BuiltInTool.FILE_GLOB_SEARCH,
-			{ path, type: GlobSearchType.DIR, include, max_depth: maxDepth, limit: SEARCH_LIMIT },
+	): Promise<GlobSearchResult> {
+		return runGlobSearch(
+			{ path, include, maxDepth, rankQuery: '' },
+			GlobSearchType.DIR,
+			SEARCH_LIMIT,
 			signal
 		);
-		if (typeof res.error === 'string') return { base: '', entries: [], error: res.error };
-		const base = typeof res.base === 'string' ? res.base : '';
-		const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-		searchCache.set(key, { results: entries, base, at: Date.now() });
-		return { base, entries };
 	}
 
 	async function doSearch(query: string) {
@@ -219,20 +205,13 @@
 		searchController = controller;
 		const mySeq = ++searchSeq;
 
-		const pathQuery = splitPathQuery(trimmed);
+		const args = buildGlobSearchArgs(trimmed, homeBase ?? HOME_TILDE, SEARCH_MAX_DEPTH);
 
 		isSearching = true;
 		try {
 			// A generous limit is requested because ranking happens
 			// client-side; only the top 20 are shown.
-			const searchPath = pathQuery ? pathQuery.parent : (homeBase ?? HOME_TILDE);
-			const include = pathQuery
-				? pathQuery.last
-					? buildCaseInsensitiveGlob(pathQuery.last)
-					: GLOB_WILDCARD
-				: buildCaseInsensitiveGlob(trimmed);
-			const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : SEARCH_MAX_DEPTH;
-			const res = await searchDirs(searchPath, include, maxDepth, controller.signal);
+			const res = await searchDirs(args.path, args.include, args.maxDepth, controller.signal);
 			if (mySeq !== searchSeq) return;
 			if (res.error) {
 				queryResults = [];
@@ -241,13 +220,13 @@
 				return;
 			}
 			const { base, entries } = res;
-			const ranked = rankEntries(entries, pathQuery?.last ?? trimmed);
+			const ranked = rankEntries(entries, args.rankQuery);
 			let results = ranked.map((e) => joinPath(base, e.path));
-			searchScope = pathQuery ? pathQuery.parent : (homeBase ?? HOME_TILDE);
+			searchScope = args.path;
 
 			// An exactly-typed directory is "entered": list its children too,
 			// so path navigation doesn't require a trailing slash.
-			const last = pathQuery?.last;
+			const last = args.last;
 			const exact = last
 				? ranked.find((e) => lastPathSegment(e.path).toLowerCase() === last.toLowerCase())
 				: undefined;

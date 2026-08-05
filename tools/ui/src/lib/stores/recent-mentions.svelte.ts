@@ -38,10 +38,6 @@ function isValidEntry(value: unknown): value is FileMentionEntry {
 class RecentMentionsStore {
 	items = $state<FileMentionEntry[]>(this.loadFromStorage());
 
-	get value(): FileMentionEntry[] {
-		return this.items;
-	}
-
 	/**
 	 * Push an entry to the front, dedupe by path, cap to MAX.
 	 * Capitalizes the picker on the user's recent context.

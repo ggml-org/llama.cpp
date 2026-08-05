@@ -21,6 +21,7 @@ import {
 	GLOB_WILDCARD,
 	HOME_TILDE,
 	LEADING_SLASHES_REGEX,
+	PATH_NAV_MAX_DEPTH,
 	UNC_ROOT_REGEX,
 	WINDOWS_SEPARATOR
 } from '$lib/constants';
@@ -97,6 +98,46 @@ export function buildCaseInsensitiveGlob(query: string): string {
 		else out += c;
 	}
 	return out + GLOB_WILDCARD;
+}
+
+/** Params derived from a picker query, fed to `file_glob_search`. */
+export interface GlobSearchArgs {
+	/** Directory to search - the parent for a path-navigation query. */
+	path: string;
+	/** Case-insensitive glob matching the query's last segment. */
+	include: string;
+	/** Recursion depth: PATH_NAV_MAX_DEPTH for path queries, else the search depth. */
+	maxDepth: number;
+	/** Query used to rank/match the returned entries. */
+	rankQuery: string;
+	/**
+	 * Last path segment of a path-navigation query (`~/dir/sub`), or
+	 * undefined for a plain home-relative glob. Lets callers act on the
+	 * exact targeted segment (e.g. the WD picker "entering" a directory).
+	 */
+	last?: string;
+}
+
+/**
+ * Map any picker query to `file_glob_search` args. Turning a query into glob
+ * params is identical for every picker: a root/`~` query navigates the tree
+ * (search the parent for the last segment), anything else glob-matches
+ * home-relative entries.
+ */
+export function buildGlobSearchArgs(
+	query: string,
+	scopePath: string,
+	searchDepth: number
+): GlobSearchArgs {
+	const pathQuery = splitPathQuery(query);
+	const path = pathQuery ? pathQuery.parent : scopePath;
+	const include = pathQuery
+		? pathQuery.last
+			? buildCaseInsensitiveGlob(pathQuery.last)
+			: GLOB_WILDCARD
+		: buildCaseInsensitiveGlob(query);
+	const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : searchDepth;
+	return { path, include, maxDepth, rankQuery: pathQuery?.last ?? query, last: pathQuery?.last };
 }
 
 /** Exact basename first, then prefix, then substring; lower is better. */
