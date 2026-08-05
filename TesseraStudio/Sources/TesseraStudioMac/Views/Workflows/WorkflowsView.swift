@@ -40,6 +40,9 @@ struct WorkflowsView: View {
     @State private var inspectorVisible = true
 
     @Environment(\.undoManager) private var undoManager
+    /// HIG 2.7 / 3.6: under Reduce Motion the banner appears and
+    /// disappears instantly instead of fading.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationSplitView(columnVisibility: $paletteVisibility) {
@@ -64,6 +67,10 @@ struct WorkflowsView: View {
                     connectionErrorBanner(err)
                 }
             }
+            // Scope the animation to the banner state so the
+            // canvas itself never animates; nil under Reduce
+            // Motion makes the banner appear / disappear instantly.
+            .animation(reduceMotion ? nil : .default, value: connectionError)
             // The parameter panel is a HIG inspector: supplementary
             // detail about the canvas selection, toggleable from
             // View > Show/Hide Inspector.
@@ -497,7 +504,13 @@ struct WorkflowsView: View {
             .padding(.horizontal, 16)
             Spacer()
         }
-        .transition(.opacity)
+        .transition(bannerTransition)
+    }
+
+    /// Fade under normal motion, instant (identity) under Reduce
+    /// Motion.
+    private var bannerTransition: AnyTransition {
+        reduceMotion ? .identity : .opacity
     }
 
     private func newDocument() {
