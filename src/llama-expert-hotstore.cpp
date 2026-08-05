@@ -293,7 +293,9 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
     last_sync_tokens = heatmap.tokens_total;
     if (swapped > 0) {
         update_luts();
-        LLAMA_LOG("=== Expert hot store: re-sync swapped %d expert slots ===\n", swapped);
+        if (getenv("LLAMA_EXPERT_DEBUG")) {
+            LLAMA_LOG("=== Expert hot store: re-sync swapped %d expert slots ===\n", swapped);
+        }
     }
 }
 
