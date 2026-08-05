@@ -41,9 +41,9 @@ jobs:
         include:
         - sanitizer: ADDRESS
           machine: [self-hosted, X64, Linux]
+        # thread doesn't run properly on some self hosted machines, so run it on Github instead
         - sanitizer: THREAD
-          # only certain machines can run the thread sanitizer without crashing, see #26593
-          machine: ${{ 'ggml-6-x86-vulkan-t4' || 'ggml-8-x86-nvidia-a10' }}
+          machine: ubuntu-24.04
         - sanitizer: UNDEFINED
           machine: [self-hosted, X64, Linux]
 
@@ -53,6 +53,15 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        if: ${{ matrix.sanitizer == 'THREAD' }}
+        with:
+          key: ctest-thread-ubuntu-24.04
+          variant: ccache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       # with UNDEFINED sanitizer, we have to build in Debug to avoid GCC 13 false-positive warnings
       - name: Build (undefined)
