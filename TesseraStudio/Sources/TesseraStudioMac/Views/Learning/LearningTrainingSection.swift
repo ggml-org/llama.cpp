@@ -162,6 +162,15 @@ struct LearningTrainingSection: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
+        if let stderr = record.stderr, !stderr.isEmpty {
+            DisclosureGroup("Driver output") {
+                Text(stderr)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .help("The tail of the training driver's stderr for this cycle")
+        }
     }
 
     // MARK: - Outcome display (symbol carries the meaning, color reinforces)

@@ -34,6 +34,7 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.learningBaseModelPath) private var learningBaseModelPath = TesseraSettingsDefault.learningBaseModelPath
     @AppStorage(TesseraSettingsKey.learningTrainBinary) private var learningTrainBinary = TesseraSettingsDefault.learningTrainBinary
     @AppStorage(TesseraSettingsKey.learningTrainingDryRun) private var learningTrainingDryRun = TesseraSettingsDefault.learningTrainingDryRun
+    @AppStorage(TesseraSettingsKey.learningAutoTrain) private var learningAutoTrain = TesseraSettingsDefault.learningAutoTrain
 
     // Autonomy (autonomy-calibration-design.md 13): snapshots of the learned-
     // permission store, refreshed on appear and after every mutation.
@@ -138,9 +139,12 @@ struct SettingsView: View {
                           picks: .file(types: [.init(filenameExtension: "gguf")].compactMap { $0 }))
                 PathField("Training driver (tessera-train-lk)", text: $learningTrainBinary,
                           picks: .file(types: [.unixExecutable]))
+                Toggle("Train automatically when idle", isOn: $learningAutoTrain)
+                    .help("Runs a training cycle on the idle schedule when enough traces have accumulated")
                 Toggle("Dry run (build the dataset only)", isOn: $learningTrainingDryRun)
+                    .help("Idle cycles validate the dataset without training or saving a drafter; the dashboard's Train Drafter button always trains")
                 trainBinaryStateRow
-                Text("These paths are read when the app launches.")
+                Text("Auto-train applies immediately. The paths above are read when the app launches.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
