@@ -1084,10 +1084,12 @@ const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
 }
 
 //
-// MoE utils
+// FFN offload utils
 //
 
 const char * const LLM_FFN_EXPS_REGEX = "\\.ffn_(up|down|gate|gate_up)_(ch|)exps";
+
+const char * const LLM_FFN_DENSE_REGEX = "\\.ffn_(up|down|gate)\\.";
 
 inline std::string llm_ffn_exps_block_regex(int idx) {
     return string_format("blk\\.%d%s", idx, LLM_FFN_EXPS_REGEX);
@@ -1097,11 +1099,11 @@ inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
     return { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() };
 }
 
-inline void llm_add_n_cpu_moe_overrides(int n, std::vector<llama_model_tensor_buft_override> & overrides) {
+inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vector<llama_model_tensor_buft_override> & overrides) {
     // keep strings alive and avoid leaking memory by storing them in a static list
     static std::list<std::string> buft_override_strings;
     for (int i = 0; i < n; ++i) {
-        buft_override_strings.push_back(llm_ffn_exps_block_regex(i));
+        buft_override_strings.push_back(string_format("blk\\.%d%s", i, ffn_regex));
         overrides.push_back({buft_override_strings.back().c_str(), ggml_backend_cpu_buffer_type()});
     }
 }
