@@ -351,8 +351,8 @@ static void test_estimator_no_uniform_fallback_above_threshold(
     p.alpha_floor_fraction = 1e-3f;
     ts_higgs_proxy_result r;
     int rc = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r);
-    check("estimator: t_squared_source offline_ternary_mse",
-          rc == 0 && r.t_squared_source == "offline_ternary_mse");
+    check("estimator: t_squared_source l1_kernel_dequant",
+          rc == 0 && r.t_squared_source == "l1_kernel_dequant");
     bool any_non_uniform = false;
     for (const auto & lr : r.layers) {
         if (lr.alpha_l != 1.0f) { any_non_uniform = true; break; }
@@ -392,8 +392,8 @@ static void test_uniform_fallback_above_threshold(const std::string & fixture_pa
     int rc = ts_higgs_proxy_estimate(fixture_path.c_str(), &p, nullptr, nullptr, &r);
     check("no-uniform: returns 0", rc == 0);
     if (rc != 0) return;
-    check("no-uniform: t_squared_source offline_ternary_mse",
-          r.t_squared_source == "offline_ternary_mse");
+    check("no-uniform: t_squared_source l1_kernel_dequant",
+          r.t_squared_source == "l1_kernel_dequant");
     bool any_non_uniform = false;
     for (const auto & lr : r.layers) {
         if (lr.alpha_l != 1.0f) { any_non_uniform = true; break; }

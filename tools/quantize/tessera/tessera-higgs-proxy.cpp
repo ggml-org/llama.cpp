@@ -649,6 +649,15 @@ int ts_higgs_proxy_estimate(const char * gguf_path,
     if (p.min_params_for_estimate < 0) p.min_params_for_estimate = 1000000000LL;
     if (!(p.alpha_floor_fraction > 0.0f)) p.alpha_floor_fraction = 1e-3f;
     if (p.alpha_floor_fraction >= 1.0f) p.alpha_floor_fraction = 1e-3f;
+
+    // The default t_l^2 measurement is the L1-on-ANE kernel dequant
+    // path. TS_HIGGS_PROXY_LEGACY_OFFLINE=1 restores the legacy
+    // offline ternary MSE default. A caller-supplied measurement_fn
+    // keeps the legacy behavior bit-identical.
+    const bool caller_fn = (measurement_fn != nullptr);
+    const char * legacy_env = std::getenv("TS_HIGGS_PROXY_LEGACY_OFFLINE");
+    const bool legacy_offline = legacy_env && legacy_env[0] == '1';
+    const bool use_l1_default = !caller_fn && !legacy_offline;
     if (!measurement_fn) measurement_fn = ts_higgs_proxy_measure_offline;
 
     // Reset the result.
@@ -656,7 +665,8 @@ int ts_higgs_proxy_estimate(const char * gguf_path,
     result->n_valid = 0;
     result->n_fallback_uniform = 0;
     result->mean_alpha = 0.0f;
-    result->t_squared_source = "offline_ternary_mse";
+    result->t_squared_source = use_l1_default ? "l1_kernel_dequant"
+                                              : "offline_ternary_mse";
 
     gguf_image img;
     std::string err;
@@ -676,6 +686,7 @@ int ts_higgs_proxy_estimate(const char * gguf_path,
     // in the sidecar for diagnostics.
     int64_t total_params = 0;
     int64_t measured_count = 0;
+    std::vector<uint8_t> packed;  // L1 path TILE640 scratch, reused per tensor
     for (int64_t i = 0; i < n_t; i++) {
         const char * tname = gguf_get_tensor_name(img.ctx, i);
         ggml_tensor * t = ggml_get_tensor(img.gctx, tname);
@@ -712,8 +723,21 @@ int ts_higgs_proxy_estimate(const char * gguf_path,
         }
 
         const std::string family = ts_higgs_proxy_classify_family(tname);
-        const float t_sq = measurement_fn(f32.data(), ne, measured_count,
-                                          measurement_ctx);
+        float t_sq;
+        if (use_l1_default) {
+            // The flat tensor is row-major [out_dim, in_dim]; the L1
+            // measurement packs each row to TILE640 and dequantizes via
+            // the same dispatch the GGML_OP_TILE640_MATMUL path uses.
+            const int64_t in_dim  = t->ne[0];
+            const int64_t out_dim = ne / in_dim;
+            ts_higgs_proxy_pack_tile640(f32.data(), out_dim, in_dim, packed);
+            t_sq = ts_higgs_proxy_measure_l1(f32.data(), packed.data(),
+                                             out_dim, in_dim,
+                                             measured_count, nullptr);
+        } else {
+            t_sq = measurement_fn(f32.data(), ne, measured_count,
+                                  measurement_ctx);
+        }
 
         // Per-tensor record (alpha filled in after the
         // post-normalization step below).
@@ -728,7 +752,8 @@ int ts_higgs_proxy_estimate(const char * gguf_path,
         lr.n_elem = ne;
         lr.frobenius_norm_sq = (float)fro2;
         lr.t_squared = t_sq;
-        lr.t_squared_source = "offline_ternary_mse";
+        lr.t_squared_source = use_l1_default ? "l1_kernel_dequant"
+                                             : "offline_ternary_mse";
         lr.dtype_source = ts_dtype_name(t->type);
         lr.alpha_l = 0.0f;  // filled in after normalization
         lr.alpha_floor_applied = false;
@@ -910,8 +935,11 @@ std::string ts_higgs_proxy_to_json(const ts_higgs_proxy_result * result,
     // Top-level measurement string: the Python build_sidecar
     // pulls this from the audit["measurement"] field, which the
     // Python estimator stamps as "offline_ternary_mse" (the
-    // default) or "uniform_fallback" (global fallback). The
-    // proxy's result.t_squared_source is already in that enum.
+    // legacy default) or "uniform_fallback" (global fallback).
+    // The C++ proxy stamps "l1_kernel_dequant" (the default),
+    // "offline_ternary_mse" (legacy opt-in / custom fn), or
+    // "uniform_fallback". result.t_squared_source is already in
+    // that enum.
     const std::string measurement = result->t_squared_source;
     const bool fallback_global = (measurement == "uniform_fallback");
 

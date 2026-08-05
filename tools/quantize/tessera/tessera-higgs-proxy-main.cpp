@@ -44,8 +44,12 @@ static void print_usage(const char * prog) {
     std::printf("  --alpha-floor <F>             absolute floor (default: 1e-6)\n");
     std::printf("  --verbose                     per-tensor summary to stderr\n");
     std::printf("\n");
-    std::printf("The t_l^2 measurement is the offline ternary MSE proxy (the\n");
-    std::printf("L1-agnostic default; see docs/tessera-higgs-estimator.md).\n");
+    std::printf("The default t_l^2 measurement is the L1-on-ANE kernel dequant\n");
+    std::printf("path (t_squared_source=l1_kernel_dequant): the per-element L1\n");
+    std::printf("distance between the fp32 weight and the ANE-dequantized fp16\n");
+    std::printf("weight via the TILE640 matmul dispatch. Set the environment\n");
+    std::printf("variable TS_HIGGS_PROXY_LEGACY_OFFLINE=1 to restore the legacy\n");
+    std::printf("offline ternary MSE proxy. See docs/tessera-higgs-estimator.md.\n");
 }
 
 int main(int argc, char ** argv) {
