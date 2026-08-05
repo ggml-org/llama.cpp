@@ -21,14 +21,6 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     if (!g_ggml_sycl_fa_onednn) {
         return false;
     }
-    // Battlemage (Xe2) only, for now. On other Intel archs oneDNN's fused SDPA returns wrong results
-    // for some shapes (e.g. head_dim=64 on Arc / xe_hpg) -- an oneDNN bug tracked upstream at
-    // https://github.com/uxlfoundation/oneDNN/issues/5510. Remove this hardware limitation once that
-    // is fixed; until then non-BMG archs fall back to the existing FA kernel.
-    const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
-    if (arch != gpu_arch::intel_gpu_bmg_g21 && arch != gpu_arch::intel_gpu_bmg_g31) {
-        return false;
-    }
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
@@ -59,6 +51,19 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
                 return false;
             }
         }
+    }
+    const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
+    const bool is_bmg = (arch == gpu_arch::intel_gpu_bmg_g21 ||
+                          arch == gpu_arch::intel_gpu_bmg_g31);   // verify bmg_g31 actually exists in this enum
+    const bool is_dg2 = (arch == gpu_arch::intel_gpu_dg2_g10 ||
+                          arch == gpu_arch::intel_gpu_dg2_g11 ||
+                          arch == gpu_arch::intel_gpu_dg2_g12);   // verify naming: dg2_* vs acm_* below
+
+    if (!is_bmg && !is_dg2) {
+        return false;   // unverified/untested arch: stay conservative
+    }
+    if (is_dg2 && K->ne[0] == 64) {
+        return false;   // known-bad shape on this family
     }
     // Optional KV-length ceiling (GGML_SYCL_FA_ONEDNN_MAX_KV, 0 = unlimited). Escape hatch:
     // very long sequences make the fused SDPA slow enough to risk the xe driver watchdog on
