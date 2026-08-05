@@ -19,15 +19,27 @@ A SwiftUI iOS app, on an iPhone 13 Pro Max, that:
   commitment from M0a/M0b, commit c64e9a85a).
 - Quantized at T640_3D (2-bit weights + per-row meta) with HIGGS
   per-layer alphas, total ~3.5-4 GB on disk.
-- Runs the full transformer forward pass with **all heavy ops on
-  Apple Neural Engine** and the control-flow / sampling ops on CPU.
+- Runs the full transformer forward pass through **one singular
+  stateless multifunction `.mlmodelc`** on the Apple Neural Engine,
+  with the GGUF ternary weights streamed into IOSurface at runtime.
+  **Accelerate** (vDSP / BLAS) handles the CPU-side ops and the
+  fallbacks the ANE refuses.
 - Streams tokens at 5-10 tok/s with battery draw ~25-30% per hour.
 - Survives 30+ minutes of continuous use before thermal throttling
   forces a graceful CPU-only fallback.
 
-The "hell of a demo" the architect described: ANE-first, low-power,
+**The "hell of a demo" the architect described: ANE-first, low-power,
 battery-respectful, on the hardest target (iPhone), with the singular
-unified GGUF the architect committed to.
+unified GGUF the architect committed to.**
+
+The architecture is **stateless from the ANE's perspective**: the
+`.mlmodelc` is a kernel library (one file, all the functionName
+entries for matmul / RMSNorm / SoftMax / RoPE / GLU / GetRows). The
+GGUF holds the model weights in the T640_3D packed format; the host
+streams each layer's weight tensor into IOSurface as the forward
+pass advances, and the ANE program consumes it. The per-`.mlmodelc`
+weight cap that bites the weight-baked pattern does not apply here
+because nothing is baked.
 
 ## Why iPhone 13 Pro Max specifically
 
@@ -65,23 +77,38 @@ app heap. **iPhone mode is short-context chat**, not long-document
 summarization. The 13 Pro Max demo target is 1-2k context with the
 full unified GGUF, or 4-8k context with the drafter heads offloaded.
 
+**The ANE bundle itself is not part of this budget.** The `.mlmodelc`
+is stateless — function definitions only, no baked weights — so it
+sits in the few-MB range and lives in the app bundle. The 3.5-4 GB
+weight budget is the GGUF file in the sandbox; the .mlmodelc adds
+negligible overhead.
+
 ## ANE constraints on A15
 
 | Constraint | Value | Source / implication |
 |---|---|---|
-| Per-`.mlmodelc` weight cap | ~80-100 MB | reverse-engineering: maderix/ANE, A14-A17 |
-| Multifunction support | yes (A15+) | one bundle, multiple functionName entries |
+| Per-`.mlmodelc` weight cap | ~80-100 MB | applies to **baked** weights, NOT to runtime IOSurface-fed weights |
+| Multifunction support | yes (A15+) | one bundle, many functionName entries (matmul, RMSNorm, SoftMax, RoPE, GLU, GetRows, etc.) |
 | State must be in IOSurface | yes | architect's W0-W7 already implements this |
-| Compute units preference | `MLComputeUnitsCPUAndNeuralEngine` | runtime falls back to CPU per-op |
+| Compute units preference | `MLComputeUnitsCPUAndNeuralEngine` | runtime falls back per-op |
 | Cross-function input sharing | no | per-function slot allocation; no share |
+| Per-function weight binding | YES — each functionName has baked input shapes | the function is shape-specific; the weight format inside is fixed |
 
-For a 3.5-4 GB trunk at the A15 cap, the bundle splits into
-~36-40 multifunction `.mlmodelc` files, each holding the dispatch
-table for its weight range. The architect's W0-W7 architecture
-(IOSurface-pinned state, MTLSharedEvent handoff, E-core SPSC pump)
-is **designed for exactly this**. The pattern is proven on the
-gemma4 prefill bundle (`test-ane-pinned-slot-dispatch`); applying it
-to the full 12B is engineering, not research.
+**The weight cap is not a binding constraint for the iPhone demo**
+because the `.mlmodelc` is **stateless from the ANE's perspective**.
+The bundle contains function definitions (matmul-of-shape-X, RMSNorm-
+of-shape-Y, etc.) but no model weights. The weights come from the
+GGUF at runtime, streamed into IOSurface. The `.mlmodelc` is therefore
+~few MB (function tables + a small amount of internal state) regardless
+of model size. The 3.5-4 GB weight budget lives entirely in the GGUF
+file in the app sandbox, not in the ANE bundle.
+
+The architect's W0-W7 architecture (IOSurface-pinned state, MTLSharedEvent
+handoff, E-core SPSC pump) is exactly this pattern: the bundle is
+stateless, the host writes activations + the current layer's weights
+into pinned IOSurface slots, the pump dispatches. The pattern is
+proven on the gemma4 prefill bundle (`test-ane-pinned-slot-dispatch`);
+applying it to the full 12B is engineering, not research.
 
 ## The HIGGS per-layer alpha story
 
@@ -165,12 +192,16 @@ architecture pivots here and we know early.
   (max abs error < 1e-2 FP16 equivalent).
 - The `TILE640_MATMUL` op routing at `ggml-ane.mm:1240` is no longer
   a TODO.
+- The weight is supplied at runtime via IOSurface (no baked weight);
+  Phase 2 wires the GGUF→IOSurface stream.
 
 **Files**:
 - `ggml/src/ggml-ane/ggml-ane.mm` (TILE640_MATMUL dispatch case, ~200
   lines)
-- `tools/ane-mtp/` (new bundle export for the T640_3D matmul
-  function)
+- `tools/ane-mtp/` (the `.mlmodelc` for the T640_3D matmul function
+  is one entry in the same multifunction bundle as Phase 1's body
+  ops — the L0.5 reference is exported as a separate Python script
+  for parity testing)
 - `tests/test-ane-tile640-matmul.cpp` (new parity test)
 - `common/tessera-debug/` if the L1 kernel needs any host-side
   helpers
@@ -185,7 +216,8 @@ architecture pivots here and we know early.
 - Per-row meta + per-layer alpha together is ~1 effective bit per
   weight of state. Can this state live in IOSurface and be
   re-supplied per dispatch, or does it have to be baked into the
-  bundle at compile time?
+  bundle at compile time? (Same question applies for Phase 2's
+  streaming layer.)
 
 ### Phase 1: transformer body ops on ANE
 
@@ -195,6 +227,30 @@ elementwise. A 12B forward pass on the current backend is
 This phase lights up the rest of the transformer body so the L1
 path is fully on ANE.
 
+**The host-side split: ANE vs Accelerate**. Not every op goes to
+ANE. The dispatch policy is:
+
+| Op class | Primary backend | Fallback | Why |
+|---|---|---|---|
+| `MUL_MAT` (T640_3D) | ANE (L1 path, Phase 0) | n/a | the matmul is the whole point |
+| `MUL_MAT` (BF16/fp16) | ANE (the W0 spike) | Accelerate BLAS | bake-shape constraint, fallback if shape mismatches |
+| `NORM` (RMSNorm) | ANE (new, Phase 1) | Accelerate vDSP (if shape doesn't fit) | per-row reduction |
+| `SOFT_MAX` | ANE (new, Phase 1) | Accelerate vDSP | row softmax |
+| `ROPE` (gemma 4 variant) | ANE (new, Phase 1) | Accelerate vDSP | elementwise + gather |
+| `GLU` (gated FFN) | ANE (new, Phase 1) | Accelerate vDSP | split + elementwise mul |
+| `GET_ROWS` (embedding) | ANE (new, Phase 1) | memcpy (vocab is small enough) | simple gather |
+| `ADD` / `MUL` / `SCALE` | Accelerate vDSP (always) | n/a | ANE dispatch overhead > vDSP cost for elementwise |
+| `RESHAPE` / `VIEW` / `PERMUTE` | layout-only, free | n/a | no compute |
+| `CPY` | memcpy | n/a | no compute |
+| Sampling (argmax, top-k, etc.) | CPU | n/a | control flow, not compute |
+
+The dispatcher in `ggml_ane_program_dispatch_op` checks ANE
+eligibility (shape, dtype, dispatch cost vs. fall-through cost);
+if ANE is the better fit, it runs the functionName; otherwise it
+returns `false` and the ggml scheduler routes the op to the CPU
+backend (which uses Accelerate via `ggml-cpu`). The hard rule:
+**ANE is used when ANE is faster, not when ANE is available**.
+
 **Definition of done**:
 - `GGML_OP_NORM` (RMSNorm) dispatched to ANE, with eps from
   `op_params[0]`.
@@ -203,16 +259,19 @@ path is fully on ANE.
   (rope scaling, mrope sections, freq factors).
 - `GGML_OP_GLU` dispatched to ANE (split-then-mul for gated FFN).
 - `GGML_OP_GET_ROWS` dispatched to ANE (embedding lookup).
-- Each op has a CPU-vs-ANE parity test at representative shapes
-  (e.g. RMSNorm at [1, 4096], SoftMax at [1, 1024], RoPE at
-  [1, 4096], GLU at [1, 11008]).
-- All five ops land in one multifunction `.mlmodelc` (the architect's
-  W0 + W1 spike pattern, with all the new functionName entries in
-  one bundle).
+- The fallback policy above is implemented in
+  `ggml_ane_program_dispatch_op`: per op, ANE first if eligible,
+  else `return false` for the scheduler to route to CPU.
+- Each ANE-eligible op has a CPU-vs-ANE parity test at
+  representative shapes (e.g. RMSNorm at [1, 4096], SoftMax at
+  [1, 1024], RoPE at [1, 4096], GLU at [1, 11008]).
+- All five ops land in the one multifunction `.mlmodelc` (the
+  architect's W0 + W1 spike pattern, with all the new functionName
+  entries in the same bundle).
 
 **Files**:
-- `ggml/src/ggml-ane/ggml-ane.mm` (5 new dispatch cases, ~50-200 lines
-  each)
+- `ggml/src/ggml-ane/ggml-ane.mm` (5 new dispatch cases, ~50-200
+  lines each, plus the dispatch-policy table)
 - `tools/ane-mtp/make-transformer-body-bundle.py` (new, single
   multifunction bundle export)
 - `tests/test-ane-transformer-body.cpp` (new parity suite)
@@ -226,41 +285,55 @@ multifunction bundle export).
   coremltools op?
 - GLU: gemma 4 uses `geglu` (GELU * gate) or `swiglu` (silu * gate)?
   The MIL op name differs.
+- Per-op ANE eligibility: how do we decide the cutoff "ANE faster
+  than vDSP"? A 64-element add on ANE has ~1 ms dispatch
+  overhead, vs. vDSP's <1 us. Below ~256 elements, ANE is never
+  the right answer. We need a benchmark table.
 
-### Phase 2: A15 bundle split
+### Phase 2: GGUF-to-IOSurface weight streaming
 
-**Why**: ANE has a per-`.mlmodelc` weight cap (~80-100 MB on A15).
-A 3.5-4 GB trunk at this cap splits into ~36-40 multifunction bundles.
-The architect's W0-W7 architecture is designed for this; this phase
-applies it to the full 12B.
+**Why**: the `.mlmodelc` is stateless but each functionName still
+has a fixed input shape. The current layer's weight tensor has to
+land in the right IOSurface slot before the functionName is
+dispatched. This phase is the wire from "GGUF on disk" to "ANE sees
+the weight as input."
 
 **Definition of done**:
-- A `tools/ane-mtp/split-bundle.py` that takes a Tessera-quantized
-  unified GGUF, walks the weight tensor list, partitions into
-  per-ANE-budget chunks, and emits a set of multifunction `.mlmodelc`
-  files with the IOSurface state contract from W0.
-- Each `.mlmodelc` carries the `dispatch_pinned_function` for the
-  weight range + the relevant subset of body ops (from Phase 1) that
-  are inlined into the same bundle.
-- The `ane_state_layout.v1.json` manifest is the per-bundle
-  contract; the iOS loader uses it to map pinned IOSurface slots.
-- The `test-ane-state-layout` test passes on a 36-bundle split
-  (or a test fixture simulating it).
+- A `common/ane-mtp/gguf_weight_stream.{h,mm}` that, given a
+  `ggml_context *` over the unified GGUF and a layer index `L`,
+  locates the `blk.L.*` weight tensors (and any per-layer alpha /
+  page / lane / outlier / act_scale meta tensors) and copies
+  them into the corresponding IOSurface-pinned slots.
+- The E-core pump's dispatch path consumes the streamed weight
+  and the activation as inputs to the bundle's `dispatch_pinned_function`
+  for that layer.
+- A "weight cache" that keeps the current layer's weights warm
+  in IOSurface across consecutive dispatches (decode is M=1 per
+  layer, so the same weights are reused N times before the layer
+  index advances). Reduces ANE-side state thrash.
+- The `test-ane-state-layout` test passes on a streamed 12B load
+  (or a test fixture simulating it): the manifest drives the slot
+  allocation, the streaming write lands the weight, the dispatch
+  runs, the output lands in the destination slot, the next layer
+  is streamed in.
 
 **Files**:
-- `tools/ane-mtp/split-bundle.py` (new)
-- `common/ane-mtp.mm` (extend the load path to handle a list of
-  bundles, not just one)
-- `tests/test-ane-bundle-split.cpp` (new)
+- `common/ane-mtp/gguf_weight_stream.h` + `.mm` (new)
+- `common/ane-mtp/ane-pump.mm` (extend the pump to use the
+  streamer)
+- `tests/test-ane-gguf-stream.cpp` (new)
 
 **Estimated scope**: 1-2 weeks.
 
 **Open questions**:
-- Are the body ops (RMSNorm, etc.) duplicated across bundles, or
-  factored into a shared "common" bundle? Duplication is simpler;
-  factoring saves ~200-500 KB of mlmodelc footprint.
-- Bundle ordering: does the load path need explicit prefetch
-  hints, or does iOS's `URL` cache handle the streaming?
+- Per-layer alpha + per-row meta: do these stream as part of the
+  weight tensor's meta-region, or as separate IOSurface slots?
+  Architecturally cleaner as a single meta-slot, byte-packed.
+- Prefetch: the pump can stream the next layer's weight while
+  the ANE is computing the current layer's output. The IOSurface
+  write is memcpy-fast; the question is whether iOS's `URL`
+  cache can keep the GGUF pages warm or if we need an explicit
+  `posix_fadvise(POSIX_FADV_WILLNEED)` on the GGUF fd.
 
 ### Phase 3: HIGGS per-layer alpha estimation
 
@@ -425,10 +498,12 @@ release cycle.
 
 ## What this is NOT
 
+- **Not a weight-baked bundle**. The `.mlmodelc` is stateless;
+  weights come from the GGUF via IOSurface. The per-`.mlmodelc`
+  weight cap does not apply because nothing is baked.
 - **Not a T640_3D matmul on a server**. The L1 work is ANE-specific
   (the IOSurface state contract, the multifunction bundle, the
-  per-model weight cap). Server-side matmul is a different
-  problem.
+  E-core pump). Server-side matmul is a different problem.
 - **Not a long-context solution**. 1-2k context is the iPhone
   budget. 8k+ context needs the iPad or Mac.
 - **Not a multi-model chat surface**. The singular unified GGUF
@@ -445,9 +520,9 @@ release cycle.
 |---|---|---|---|
 | 0 | L1 kernel-dequant on ANE | 2-3 weeks | - |
 | 1 | Transformer body ops | 2-3 weeks | Phase 0 (uses L1 path) |
-| 2 | A15 bundle split | 1-2 weeks | Phase 1 (body ops land in bundle) |
+| 2 | GGUF-to-IOSurface weight streaming | 1-2 weeks | Phase 0+1 (multifunction bundle) |
 | 3 | HIGGS per-layer alpha | 1-2 weeks | Phase 0 (measurement source) |
-| 4 | iOS app | 3-4 weeks | Phases 0-2 (uses the bundles) |
+| 4 | iOS app | 3-4 weeks | Phases 0-2 (uses the running bundle) |
 | 5 | Battery / thermal characterization | 1 week | Phase 4 (needs the running app) |
 
 **Total: 10-12 weeks for Path A on iPhone, 12-14 weeks for Path B
