@@ -6,10 +6,11 @@ import TesseraCore
 /// adding a new ``WorkflowNodeType`` to the registry shows up
 /// here without a UI change.
 ///
-/// Phase 2.1 ships a read-only List (drag-from-palette-onto-canvas
-/// is Phase 2.2). The view also exposes a search field so the
-/// palette scales to the 18+ shipped TesseraTools once we wrap
-/// more of them as workflow nodes.
+/// Rows are drag sources for drag-onto-canvas: the payload is
+/// the node type id as a plain String, matched by the canvas's
+/// `dropDestination(for: String.self)`. The view also exposes a
+/// search field so the palette scales to the 18+ shipped
+/// TesseraTools once we wrap more of them as workflow nodes.
 struct WorkflowPaletteView: View {
     let registry: WorkflowNodeRegistry
     @State private var query: String = ""
@@ -59,5 +60,10 @@ struct WorkflowPaletteView: View {
                 .lineLimit(2)
         }
         .padding(.vertical, 2)
+        // The whole row drags, not just the label text; the
+        // payload is the type id string the canvas drop target
+        // inserts a node for.
+        .contentShape(Rectangle())
+        .draggable(entry.typeId)
     }
 }
