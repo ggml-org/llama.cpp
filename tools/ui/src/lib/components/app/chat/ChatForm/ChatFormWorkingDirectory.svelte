@@ -150,6 +150,13 @@
 	// hoveredIndex/queryResults are untracked so hover and result replacement
 	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger
 	$effect(() => {
+		// Skip the initial run on mount: scrolling here fires before the popover
+		// is positioned, which scrolls the whole page to the top.
+		if (lastScrollTrigger === null) {
+			lastScrollTrigger = scrollTrigger;
+			return;
+		}
+
 		if (scrollTrigger === lastScrollTrigger) return;
 		lastScrollTrigger = scrollTrigger;
 		untrack(() => {
@@ -429,6 +436,7 @@
 		align="start"
 		sideOffset={12}
 		{customAnchor}
+		preventScroll={false}
 		onkeydown={handleKeydown}
 		onOpenAutoFocus={(event) => event.preventDefault()}
 		onCloseAutoFocus={(event) => event.preventDefault()}

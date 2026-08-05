@@ -56,7 +56,17 @@
 	// selectedIndex/items.length are untracked so hover and result replacement
 	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger
 	$effect(() => {
-		if (scrollTrigger === undefined || scrollTrigger === lastScrollTrigger) return;
+		if (scrollTrigger === undefined) return;
+
+		// Skip the initial run on mount: the list opens with the first row
+		// already in view, and scrolling here fires before the popover is
+		// positioned, which scrolls the whole page to the top.
+		if (lastScrollTrigger === null) {
+			lastScrollTrigger = scrollTrigger;
+			return;
+		}
+
+		if (scrollTrigger === lastScrollTrigger) return;
 		lastScrollTrigger = scrollTrigger;
 		untrack(() => {
 			if (!listContainer) return;

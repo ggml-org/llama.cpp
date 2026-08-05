@@ -298,6 +298,7 @@
 		side="top"
 		sideOffset={12}
 		{customAnchor}
+		preventScroll={false}
 		onkeydown={handleKeydown}
 		onOpenAutoFocus={(event) => event.preventDefault()}
 		onCloseAutoFocus={(event) => event.preventDefault()}

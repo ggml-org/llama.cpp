@@ -28,7 +28,7 @@
 	onMount(() => {
 		if (textareaElement) {
 			autoResizeTextarea(textareaElement);
-			textareaElement.focus();
+			textareaElement.focus({ preventScroll: true });
 		}
 	});
 
