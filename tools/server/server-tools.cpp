@@ -119,42 +119,6 @@ static int entry_depth(const std::string & rel) {
     return 1 + (int) std::count(rel.begin(), rel.end(), '/');
 }
 
-#if defined(_WIN32)
-// std::filesystem reports a junction as a plain directory, so a junction
-// pointing back at an ancestor would be walked forever. Read the reparse tag
-// and treat a symlink and a mount point as links, leaving any other reparse
-// point (a cloud placeholder, a dedup stub) walkable.
-static bool is_dir_link(const fs::path & p) {
-    WIN32_FIND_DATAW data;
-    const HANDLE h = FindFirstFileW(p.c_str(), &data);
-    if (h == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    FindClose(h);
-
-    if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
-        return false;
-    }
-    return data.dwReserved0 == IO_REPARSE_TAG_SYMLINK || data.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT;
-}
-
-// NTFS is case insensitive, so a directory named Build is the same junk as build
-static std::string junk_lookup_name(const std::string & fname) {
-    std::string lowered = fname;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                   [](unsigned char c) { return (char) std::tolower(c); });
-    return lowered;
-}
-#else
-static bool is_dir_link(const fs::path &) {
-    return false;
-}
-
-static std::string junk_lookup_name(const std::string & fname) {
-    return fname;
-}
-#endif
-
 class tools_io {
 public:
     struct exec_result {
@@ -215,15 +179,13 @@ public:
             }
         }
 
-        // drop the "." and ".." segments a caller may have typed, so they don't
-        // reach `git -C` or come back to the client inside `base`
+        // drop "." and ".." so they never reach git or the client
         full = full.lexically_normal();
-        // normalizing a trailing ".." leaves a separator behind
+        // a trailing ".." normalizes to a path that ends with a separator
         if (!full.has_filename() && full != full.root_path()) {
             full = full.parent_path();
         }
-        // generic form: '/' separators on every platform, which Windows
-        // accepts and the web UI assumes
+        // '/' separators on every platform: Windows accepts them, the web UI needs them
         return full.generic_string();
     }
 
@@ -378,6 +340,42 @@ public:
 private:
     std::string cwd;
 
+    // a link can point back to an ancestor and loop forever, so it is never walked
+    static bool is_link(const fs::directory_entry & entry) {
+        std::error_code ec;
+        if (entry.is_symlink(ec) || ec) {
+            return true;
+        }
+#if defined(_WIN32)
+        // a junction looks like a plain directory to std::filesystem, so read the reparse tag
+        WIN32_FIND_DATAW data;
+        const HANDLE h = FindFirstFileW(entry.path().c_str(), &data);
+        if (h == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        FindClose(h);
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+            return false;
+        }
+        // other reparse points (cloud placeholder, dedup stub) are real directories
+        return data.dwReserved0 == IO_REPARSE_TAG_SYMLINK || data.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT;
+#else
+        return false;
+#endif
+    }
+
+    // NTFS is case insensitive, so Build and build are the same directory
+    static std::string get_effective_name(const std::string & fname) {
+#if defined(_WIN32)
+        std::string lowered = fname;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return (char) std::tolower(c); });
+        return lowered;
+#else
+        return fname;
+#endif
+    }
+
     static const std::unordered_set<std::string> & junk_dir_names() {
         static const std::unordered_set<std::string> names = {
             ".git", ".svn", ".hg", "node_modules", "__pycache__",
@@ -403,14 +401,9 @@ private:
             stack.pop_back();
 
             std::error_code ec;
-            // the throwing increment would escape the tool on a directory that
-            // goes away mid walk, so step the iterator explicitly
+            // step the iterator by hand: the throwing increment escapes on a directory that goes away
             fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
-            // a directory that cannot be opened or read is a subtree the caller
-            // never sees: a path over the platform limit (260 on Windows unless
-            // long paths are enabled), a volume going away, a name the
-            // filesystem rejects. skip_permission_denied never lands here, so
-            // this is an incomplete answer rather than a deliberate omission
+            // permission errors are skipped above, so this is a subtree the caller never sees
             if (ec) {
                 truncated = true;
                 continue;
@@ -435,14 +428,9 @@ private:
                     if (kind == list_kind::dirs || kind == list_kind::all) {
                         result.push_back({rel, true});
                     }
-                    // junk directories stay selectable but are never walked: they
-                    // hold nothing worth searching and can be enormous
-                    if (junk_dir_names().count(junk_lookup_name(fname)) > 0) continue;
-                    // do not descend into a link: it can point back to an
-                    // ancestor and loop forever. an unreadable state is treated
-                    // as a link, since descending on a guess is the risky side
-                    const bool is_link = entry.is_symlink(tec) || tec || is_dir_link(entry.path());
-                    if (!is_link && (max_depth == 0 || depth + 1 < max_depth)) {
+                    // junk directories stay selectable but are never walked: they can be enormous
+                    if (junk_dir_names().count(get_effective_name(fname)) > 0) continue;
+                    if (!is_link(entry) && (max_depth == 0 || depth + 1 < max_depth)) {
                         stack.emplace_back(entry.path(), rel_dir / fname, depth + 1);
                     }
                 } else if (entry.is_regular_file(tec)) {
