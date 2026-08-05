@@ -320,6 +320,7 @@ struct WorkflowsView: View {
                         .accessibilityHint("Stop the workflow run")
                 default:
                     Button("Close") { editor.runPhase = .idle }
+                        .keyboardShortcut(.cancelAction)
                 }
             }
             .padding(12)
@@ -497,6 +498,7 @@ struct WorkflowsView: View {
                 Spacer()
                 Button("Dismiss") { connectionError = nil }
                     .buttonStyle(.borderless)
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(10)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
