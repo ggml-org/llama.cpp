@@ -630,6 +630,14 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-quantize-perf.cpp)
     llama_build_and_test(test-rope.cpp)
     llama_build_and_test(test-col2im-1d.cpp)
+    # TILE640 v2 (Accelerate + NEON) parity test for the 5 quant
+    # helpers in ggml/src/ggml-quants-v2.c. Verifies bit-identical
+    # output vs the C references in ggml/src/ggml-quants.c.
+    llama_build_and_test(test-tessera-quants-v2.cpp)
+    if (TARGET test-tessera-quants-v2)
+        target_include_directories(test-tessera-quants-v2 PRIVATE
+            ${PROJECT_SOURCE_DIR}/ggml/src)
+    endif()
 endif()
 
 # libmtmd
