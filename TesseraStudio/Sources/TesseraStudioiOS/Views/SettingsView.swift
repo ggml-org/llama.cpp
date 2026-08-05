@@ -83,8 +83,74 @@ struct SettingsView: View {
                 TextField("tessera-cli path", text: $tesseraCLIPath)
                 TextField("Python interpreter path", text: $tesseraPythonPath)
             }
+
+            Section {
+                Text("Plea the Fifth")
+                    .font(.headline)
+                Text("Architecture reviewed against the design spec. External security audit pending - to be completed before public release.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // iOS does not have a global hot-key. The covert
+                // trigger is the only way to invoke the wipe from a
+                // text field on iOS.
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Covert trigger phrase (advanced)")
+                        .font(.subheadline)
+                    TextField("At least 8 characters", text: $covertTriggerDraft)
+                    Text("Choose something you can type naturally. Don't choose a famous quote.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let err = covertTriggerError {
+                        Text(err).font(.caption).foregroundStyle(.red)
+                    }
+                    HStack {
+                        Button("Save") { saveCovertTrigger() }
+                            .disabled(covertTriggerDraft.trimmingCharacters(in: .whitespacesAndNewlines).count < PleadTheFifthSettings.minCovertPhraseLength)
+                        Button("Test") { testCovertTrigger() }
+                            .disabled(!PleadTheFifthSettings.covertTriggerConfigured)
+                    }
+                    if let note = covertTriggerTestNote {
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Toggle("Coercion mode", isOn: $coercionMode)
+                Text("On iOS, coercion mode hides the in-app 'Plea the Fifth' shortcut. The covert trigger still works.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Plea the Fifth")
+            }
         }
         .navigationTitle("Settings")
+        .onAppear { covertTriggerDraft = PleadTheFifthSettings.covertTriggerPhrase }
+    }
+
+    @AppStorage(PleadTheFifthSettingsKey.coercionMode)
+    private var coercionMode: Bool = false
+
+    @State private var covertTriggerDraft: String = ""
+    @State private var covertTriggerError: String?
+    @State private var covertTriggerTestNote: String?
+
+    private func saveCovertTrigger() {
+        do {
+            try PleadTheFifthSettings.setCovertTriggerPhrase(covertTriggerDraft)
+            covertTriggerError = nil
+            covertTriggerTestNote = "Saved."
+        } catch {
+            covertTriggerError = "\(error.localizedDescription)"
+        }
+    }
+
+    private func testCovertTrigger() {
+        let phrase = PleadTheFifthSettings.covertTriggerPhrase
+        let sample = "I said '\(phrase)' yesterday"
+        let monitor = CovertTriggerMonitor()
+        let wouldFire = monitor.shouldTrigger(in: sample)
+        covertTriggerTestNote = wouldFire
+            ? "The trigger would have fired on the sample sentence."
+            : "The trigger did not fire. The phrase is set but the sample did not match."
     }
 }
 #endif

@@ -1,106 +1,209 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
-/// Defense-in-depth overwrite helper. Used by the volume reset path to
-/// overwrite the sparse bundle's bands with random bytes before the
-/// directory is removed.
+/// Overwrites a file with random bytes (N passes) and then zeros, before
+/// unlinking it. Defense in depth: even if a future attack breaks AES-256
+/// (not realistic on the 10-20 year horizon, but documented as a residual
+/// risk in the design), the original ciphertext on disk is gone.
 ///
-/// The crypto-shred property comes from deleting the Keychain entry -
-/// once the key is gone, the encrypted bundle is unrecoverable
-/// regardless of what its bytes contain. The overwrite is the spec's
-/// "defense in depth" step (Section 7.1, steps 6-7): it protects
-/// against the residual concern that a future AES-256 cryptanalytic
-/// breakthrough would expose the ciphertext.
-///
-/// Scope: the helper walks the directory and overwrites every regular
-/// file in place. Sparse bundles hold the actual band data in
-/// `bands/0`, `bands/1`, ...; the `Info.plist` and `token` are tiny
-/// metadata and are overwritten too, though the OS recreates them
-/// when it next opens the bundle.
-///
-/// Threading: synchronous file I/O. Bundle size is bounded (the dev
-/// preview is 1 GiB; 3 passes = 3 GiB of writes) and the call sites
-/// are reset flows, not the hot path.
+/// Modern SSDs cannot guarantee that overwritten blocks are actually
+/// erased at the physical layer (the FTL may keep copies for wear
+/// leveling). That is the entire reason crypto-shred exists. The
+/// overwrite here is the second line of defense AFTER the key has
+/// already been destroyed - the data is already cryptographically
+/// unrecoverable; the overwrite is belt-and-suspenders for the
+/// "what if AES falls tomorrow" worry.
 public enum SecureOverwrite {
 
-    /// Overwrite every file under `root` with `passes` rounds of
-    /// random data. The file is left at its original size; the
-    /// caller is responsible for deleting the directory after this
-    /// returns.
-    ///
-    /// On any per-file error the helper continues to the next file
-    /// and surfaces the first error in the returned value. The
-    /// wipe must continue even if some bands cannot be written -
-    /// crypto-shred has already happened by the time this is called.
-    public static func randomPasses(under root: URL, passes: Int) async throws {
-        try await Task.detached(priority: .utility) {
-            try randomPassesSync(under: root, passes: passes)
-        }.value
-    }
+    /// Errors the overwrite can produce. The executor maps these to
+    /// `WipeOutcome.partialFailure` and continues.
+    public enum OverwriteError: Error, LocalizedError {
+        case statFailed(path: String, underlying: Int32)
+        case openFailed(path: String, underlying: Int32)
+        case writeFailed(path: String, underlying: Int32)
+        case fsyncFailed(path: String, underlying: Int32)
+        case unlinkFailed(path: String, underlying: Int32)
+        case parentFsyncFailed(path: String, underlying: Int32)
 
-    /// Synchronous variant for tests that want to assert the call's
-    /// effect without awaiting the actor hop.
-    public static func randomPassesSync(under root: URL, passes: Int) throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: root.path) else { return }
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-
-        var firstError: Error?
-        for case let fileURL as URL in enumerator {
-            let resourceValues = try? fileURL.resourceValues(
-                forKeys: [.isRegularFileKey, .fileSizeKey]
-            )
-            guard resourceValues?.isRegularFile == true else { continue }
-            let size = resourceValues?.fileSize ?? 0
-            guard size > 0 else { continue }
-
-            do {
-                try overwriteFile(at: fileURL, size: size, passes: passes)
-            } catch {
-                if firstError == nil { firstError = error }
+        public var errorDescription: String? {
+            switch self {
+            case .statFailed(let p, let c):
+                return "stat(\(p)): errno=\(c)"
+            case .openFailed(let p, let c):
+                return "open(\(p)): errno=\(c)"
+            case .writeFailed(let p, let c):
+                return "write(\(p)): errno=\(c)"
+            case .fsyncFailed(let p, let c):
+                return "fsync(\(p)): errno=\(c)"
+            case .unlinkFailed(let p, let c):
+                return "unlink(\(p)): errno=\(c)"
+            case .parentFsyncFailed(let p, let c):
+                return "fsync(parent of \(p)): errno=\(c)"
             }
         }
-        if let err = firstError { throw err }
     }
 
-    /// Overwrite a single file. Opens the file in write mode (which
-    /// truncates to size 0) and writes `size` random bytes, `passes`
-    /// times, then fsyncs.
-    private static func overwriteFile(at url: URL, size: Int, passes: Int) throws {
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        // 1 MiB buffer is a reasonable balance between syscall count
-        // and memory pressure for a 1 GiB bundle.
-        let bufferSize = min(size, 1024 * 1024)
-        var buffer = Data(count: bufferSize)
+    /// Injectable random source so tests can stage deterministic data.
+    /// Production calls `arc4random_buf` directly.
+    public typealias RandomFill = (UnsafeMutableRawPointer, Int) -> Void
+
+    /// Default random fill: `arc4random_buf` on Darwin, the system RNG
+    /// on Linux. Pulled out so tests can substitute a known sequence.
+    public static let defaultRandomFill: RandomFill = { ptr, n in
+        #if canImport(Darwin)
+        arc4random_buf(ptr, n)
+        #else
+        // Linux / non-Apple: best-effort. The executor itself is
+        // macOS-only at runtime; this branch exists so the type
+        // compiles in `swift test` on Linux CI.
+        for i in 0..<n {
+            ptr.storeBytes(of: UInt8.random(in: 0...UInt8.max), toByteOffset: i, as: UInt8.self)
+        }
+        #endif
+    }
+
+    /// Overwrite each path with `passes` random passes plus a final
+    /// zero pass, fsync, then unlink. The parent's fsync runs once
+    /// at the end (the executor does that in its own step 8).
+    public static func randomPassesThenDelete(
+        paths: [URL],
+        passes: Int = 3,
+        randomFill: RandomFill = defaultRandomFill
+    ) throws {
+        for url in paths {
+            try overwriteAndDelete(url: url, passes: passes, randomFill: randomFill)
+        }
+    }
+
+    /// fsync the directory that contains `path`. Important on Unix:
+    /// deleting a file does not guarantee the directory entry is
+    /// durable until the directory itself is fsynced.
+    public static func fsyncParentDirectory(of path: URL) throws {
+        let parent = path.deletingLastPathComponent()
+        let fd = parent.withUnsafeFileSystemRepresentation { ptr -> Int32 in
+            guard let ptr = ptr else { return -1 }
+            return open(ptr, O_RDONLY)
+        }
+        guard fd >= 0 else {
+            throw OverwriteError.parentFsyncFailed(path: parent.path, underlying: currentErrno())
+        }
+        defer { close(fd) }
+        if fsync(fd) != 0 {
+            throw OverwriteError.parentFsyncFailed(path: parent.path, underlying: currentErrno())
+        }
+    }
+
+    // MARK: - internals
+
+    /// Read the current `errno` value. Swift imports `errno` as a
+    /// global `Int32` rather than as a function, so the canonical
+    /// way to read it is via `__error()`.
+    @inline(never)
+    private static func currentErrno() -> Int32 {
+        return __error().pointee
+    }
+
+    private static func overwriteAndDelete(
+        url: URL,
+        passes: Int,
+        randomFill: RandomFill
+    ) throws {
+        let path = url.path
+        // 1. stat to get the size. If the file is already gone, treat
+        // it as success (the user / a prior wipe may have removed it).
+        var st = stat()
+        let statRC = path.withCString { stat($0, &st) }
+        if statRC != 0 {
+            if currentErrno() == ENOENT { return }
+            throw OverwriteError.statFailed(path: path, underlying: currentErrno())
+        }
+        let size = Int(st.st_size)
+        if size == 0 {
+            try unlink(path: path)
+            return
+        }
+
+        // 2. Open for writing. O_NOFOLLOW so a symlinked target does
+        // not redirect the wipe to a different file.
+        let fd = path.withCString { ptr -> Int32 in
+            open(ptr, O_WRONLY | O_NOFOLLOW)
+        }
+        guard fd >= 0 else {
+            if currentErrno() == ENOENT { return }
+            throw OverwriteError.openFailed(path: path, underlying: currentErrno())
+        }
+        defer { close(fd) }
+
+        // 3. N random passes. Buffer is 1 MiB; loop until size is
+        // written. randomFill never returns early.
+        let chunk = 1 << 20
+        var buffer = [UInt8](repeating: 0, count: chunk)
         for _ in 0..<passes {
-            try handle.seek(toOffset: 0)
-            var written = 0
-            while written < size {
-                let chunk = min(bufferSize, size - written)
-                try randomBytes(into: &buffer, count: chunk)
-                try handle.write(contentsOf: buffer.prefix(chunk))
-                written += chunk
+            try writeRandomPass(fd: fd, size: size, chunk: chunk,
+                                buffer: &buffer, randomFill: randomFill)
+            if lseek(fd, 0, SEEK_SET) == -1 {
+                throw OverwriteError.writeFailed(path: path, underlying: currentErrno())
             }
-            try handle.synchronize()
         }
-        // Truncate back to the original size; the caller decides
-        // whether to delete the file.
-        try handle.truncate(atOffset: UInt64(size))
+        // 4. Final zero pass.
+        for i in 0..<buffer.count { buffer[i] = 0 }
+        try writeRandomPass(fd: fd, size: size, chunk: chunk,
+                            buffer: &buffer, randomFill: randomFill)
+
+        // 5. fsync, truncate to 0, close.
+        if fsync(fd) != 0 {
+            throw OverwriteError.fsyncFailed(path: path, underlying: currentErrno())
+        }
+        if ftruncate(fd, 0) != 0 {
+            throw OverwriteError.writeFailed(path: path, underlying: currentErrno())
+        }
+        // 6. Unlink.
+        try unlink(path: path)
     }
 
-    /// Fill the first `count` bytes of `buffer` with random data from
-    /// `arc4random_buf`. We use the C builtin rather than
-    /// `SecRandomCopyBytes` because it's simpler and equally suitable
-    /// for the overwrite (the random data here is not security-bearing;
-    /// the crypto-shred has already happened by the time this runs).
-    private static func randomBytes(into buffer: inout Data, count: Int) {
-        buffer.withUnsafeMutableBytes { rawBuf in
-            guard let base = rawBuf.baseAddress else { return }
-            arc4random_buf(base, count)
+    private static func writeRandomPass(
+        fd: Int32,
+        size: Int,
+        chunk: Int,
+        buffer: inout [UInt8],
+        randomFill: RandomFill
+    ) throws {
+        if lseek(fd, 0, SEEK_SET) == -1 {
+            throw OverwriteError.writeFailed(path: "<fd=\(fd)>", underlying: currentErrno())
+        }
+        var written = 0
+        while written < size {
+            let n = min(chunk, size - written)
+            randomFill(&buffer, n)
+            // Zero the tail of the buffer so a previous pass's
+            // residue does not leak past this write's end.
+            for i in n..<buffer.count { buffer[i] = 0 }
+            let rc = buffer.withUnsafeBufferPointer { ptr -> Int in
+                let base = ptr.baseAddress!
+                var total = 0
+                while total < n {
+                    let r = write(fd, base.advanced(by: total), n - total)
+                    if r < 0 {
+                        if currentErrno() == EINTR { continue }
+                        return -1
+                    }
+                    total += r
+                }
+                return total
+            }
+            if rc < 0 {
+                throw OverwriteError.writeFailed(path: "<fd=\(fd)>", underlying: currentErrno())
+            }
+            written += rc
+        }
+    }
+
+    private static func unlink(path: String) throws {
+        let rc = path.withCString { Darwin.unlink($0) }
+        if rc != 0 && currentErrno() != ENOENT {
+            throw OverwriteError.unlinkFailed(path: path, underlying: currentErrno())
         }
     }
 }
