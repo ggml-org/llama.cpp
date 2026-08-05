@@ -1562,6 +1562,130 @@ that the architect needs to weigh.
    bar fixes it; the architect decides whether to loosen the
    bar or keep it strict and route 512x512 outlier to CPU.
 
+### 6.9 Dynamic dispatch cost model for the v2 quants
+
+The dispatch in `ggml-ane.mm`'s `GGML_OP_TILE640_MATMUL`
+case (around line 2059-2210) decides per call whether to
+route to the v2 (Accelerate + NEON) path or the C reference
+for the two batched v2 functions
+(`decode_per_row_meta_v2`, `apply_outlier_addback_v2`). The
+v2 dequant, quant, and act_scale stay on the static rules
+(v2 above `GGML_TESSERA_T640_V2_MIN_K`, C ref below); the
+cost model shows they always win at in_dim >= 1024.
+
+**Cost model** (threshold derived from
+`tests/bench-tessera-quants-v2.cpp` on M1 Pro):
+
+| Function                     | Cost model rule                  | Crossover                          |
+|------------------------------|----------------------------------|------------------------------------|
+| `apply_outlier_addback_v2`   | v2 iff `n_total` in (0, 1024]    | `n_total = 1024` (v2's NEON path scratch cap) |
+| `decode_per_row_meta_v2`     | always C ref                     | n/a (v2 never wins)                |
+
+The helpers live in `ggml/src/ggml-quants-v2-dispatch.h`:
+
+```c
+static inline bool ts_v2_dispatch_should_use_v2_outlier(int64_t n_total) {
+    return n_total > 0 && n_total <= TS_V2_OUTLIER_NEON_PATH_MAX_N_TOTAL;
+}
+static inline bool ts_v2_dispatch_should_use_v2_meta(int64_t n_rows, int64_t n_pages) {
+    (void) n_rows; (void) n_pages;
+    return false;  // v2 is 0.41-0.65x of C; never wins
+}
+```
+
+**Why a threshold, not a math model.** The spec's
+preferred approach was a few lines of math comparing
+`v2_setup_tax + v2_per_row * n_rows` vs `c_per_row * n_rows`.
+The bench data shows the operations are memory-bandwidth
+bound at large n on M1 Pro: the v2 outlier at n_rows=1024
+ranges 486-6416us across runs (10x variance) and the C
+ref ranges 483-2105us. A per-row cost model derived from
+a linear fit through (n=1, n=1024) is dominated by the
+noise. The threshold approach pins the v2's win region to
+its internal NEON path boundary (the 4 KB stack scratch
+cap at n_total=1024), which is a hard, deterministic
+criterion that doesn't depend on noisy per-row cost
+measurements.
+
+**Outlier addback detail.** The v2's NEON bulk fp16->fp32
+path is active for `n_total <= 1024`; above that the v2
+falls back to a scalar convert + scatter that is identical
+to the C ref (the v2's own internal threshold). Calling
+the v2 above `n_total = 1024` wastes a function call + the
+`n_total > 1024` check inside v2, so the dispatch calls
+the C ref (`ts_apply_outlier_addback_ref`) directly. At
+`n_total <= 1024` the v2's NEON path is faster (1.5-1.98x
+on M1 Pro per the bench).
+
+**Meta decode detail.** The v2's vDSP bulk calls
+(`vDSP_vflt8` + `vDSP_vsdiv` for lane scales, NEON
+`vcvt_f32_f16` for page scales) are slower per element
+than the C ref's scalar loop at every shape we measured
+(0.41-0.65x of C). The C ref (`ts_decode_per_row_meta_ref`)
+is a single scalar loop over the whole tile's meta. The
+v2 helper always returns false; the call site is kept for
+uniformity with the outlier decision.
+
+**Per-shape dispatch picks** (from the bench's
+`bench_dispatch_picks()`):
+
+| Shape (n_rows, n_pages or n_total)         | meta pick  | outlier pick |
+|--------------------------------------------|------------|--------------|
+| meta n_rows=1, n_pages=16 (528 elems)      | C ref      | n/a          |
+| meta n_rows=16, n_pages=16 (8448 elems)    | C ref      | n/a          |
+| meta n_rows=64, n_pages=16 (33792 elems)   | C ref      | n/a          |
+| meta n_rows=256, n_pages=16 (135168 elems) | C ref      | n/a          |
+| meta n_rows=1024, n_pages=16 (540672 elems)| C ref      | n/a          |
+| outlier n_rows=1, k=1024, n_total=51       | n/a        | v2 (NEON path) |
+| outlier n_rows=1, k=4096, n_total=204      | n/a        | v2 (NEON path) |
+| outlier n_rows=1, k=8192, n_total=409      | n/a        | v2 (NEON path) |
+| outlier n_rows=16, k=4096, n_total=3264    | n/a        | C ref (v2 falls back) |
+| outlier n_rows=64, k=4096, n_total=13056   | n/a        | C ref (v2 falls back) |
+| outlier n_rows=256, k=4096, n_total=52224  | n/a        | C ref (v2 falls back) |
+| outlier n_rows=1024, k=4096, n_total=208896| n/a        | C ref (v2 falls back) |
+
+**Implementation.** The dispatch's v2 path is a unit
+because the v2 dequant takes pre-decoded meta as a
+separate input; the pre-decode can come from either the
+v2 batched meta decode or the C ref batched meta decode.
+The C ref outlier scatters into the v2 dequant's output
+buffer. The per-row fp16 cast is unchanged. The hybrid
+(C meta + v2 dequant + C or v2 outlier) is faster than
+both the all-v2 path and the all-C ref path:
+
+- The v2 dequant is always faster than the C ref
+  dequant (1.30-1.63x at in_dim >= 1024) because the v2
+  dequant skips the per-row meta decode work (the meta
+  is pre-decoded).
+- The C ref meta is faster than the v2 batched meta
+  decode (0.41-0.65x for the C ref, i.e. C is faster) at
+  every shape.
+- The v2 outlier is faster than the C ref outlier
+  (1.5-1.98x) at n_total <= 1024 (NEON path active).
+- The C ref outlier is faster than the v2 outlier at
+  n_total > 1024 (the v2 falls back to scalar and a
+  function call is wasted).
+
+**Validation.** `tests/test-ane-tile640-dispatch.cpp`
+exercises the dispatch helpers + C ref fallbacks:
+- dispatch picks: sweeps n_rows=1, 5, 6, 16, 64, 256,
+  1024 (plus n_pages=1/16/64 for meta) and asserts the
+  cost model returns the right bool at each shape
+  (including the n_total=1024 boundary, n_total=1020
+  just-under, n_total=1224 just-over, n_total=0 no-work).
+- C ref parity: asserts `ts_decode_per_row_meta_ref`
+  matches the scalar ref and `ts_apply_outlier_addback_ref`
+  matches the v2's scalar fallback (bit-identical).
+
+`tests/bench-tessera-quants-v2.cpp` adds two new
+sections: `bench_cost_model()` measures the cost model
+constants (per-row slope, setup-tax intercept) via a
+linear fit through the (n=1, n=1024) endpoints, and
+`bench_dispatch_picks()` prints what the cost model
+would choose per shape. Both are noisy at large n
+(memory-bandwidth bound) which is why the threshold
+approach is preferred.
+
 ### 6.7 Open questions for Phase 0.5
 
 **Open question #2 (per-shape fixtures): RESOLVED.** The
