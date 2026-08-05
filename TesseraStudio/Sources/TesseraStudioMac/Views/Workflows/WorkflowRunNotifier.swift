@@ -69,6 +69,8 @@ enum WorkflowRunNotifier {
         notification.title = content.title
         notification.body = content.body
         notification.sound = .default
+        // Routing (HIG 14.12): suppress only when frontmost + run surface visible, ping otherwise, cancels never ping - a post that reaches here always interrupts (explicit, not defaulted).
+        notification.interruptionLevel = .active
         let request = UNNotificationRequest(
             identifier: "tessera.workflow.run.\(UUID().uuidString)",
             content: notification,
