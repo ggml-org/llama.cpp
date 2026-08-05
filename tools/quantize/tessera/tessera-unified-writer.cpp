@@ -1183,9 +1183,23 @@ int ts_unified_writer::write_all(std::string * err) {
         ev_json += "]";
         gguf_set_val_str(p_->dst, "tessera.unified.budget_events", ev_json.c_str());
     }
-    // Flush to disk.
-    if (!gguf_write_to_file(p_->dst, p_->dst_path.c_str(), /*only_meta=*/false)) {
-        if (err) *err = "gguf_write_to_file failed: " + p_->dst_path;
+    // Crash-safe publish: write to .tmp, then atomic rename. The unified
+    // GGUF can be ~3.7 GB and take minutes; a SIGKILL or jetsam mid-write
+    // without this guard would leave a truncated file at dst_path, and
+    // the next quantize pass would either load garbage or fail with a
+    // confusing "invalid GGUF" instead of a clean "previous run
+    // interrupted" recovery. POSIX rename is atomic on the same
+    // filesystem; mirrors the imatrix save pattern in
+    // tools/imatrix/imatrix.cpp:save_imatrix.
+    const std::string dst_tmp = p_->dst_path + ".tmp";
+    if (!gguf_write_to_file(p_->dst, dst_tmp.c_str(), /*only_meta=*/false)) {
+        std::remove(dst_tmp.c_str());
+        if (err) *err = "gguf_write_to_file failed: " + dst_tmp;
+        return 1;
+    }
+    if (std::rename(dst_tmp.c_str(), p_->dst_path.c_str()) != 0) {
+        std::remove(dst_tmp.c_str());
+        if (err) *err = "unified GGUF atomic rename failed: " + p_->dst_path;
         return 1;
     }
     return 0;
