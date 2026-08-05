@@ -22,44 +22,136 @@ struct WorkflowCanvasView: View {
     /// connection is live so input ports can show compatibility
     /// feedback before the drop; nil renders ports normally.
     var pendingSourceType: WorkflowPortType? = nil
+    /// Zoom factor and pan offset for the canvas content. The
+    /// parent owns them because the palette drop handler (which
+    /// lives in the parent) has to undo the transform when it
+    /// converts its drop location into canvas coordinates.
+    @Binding var zoom: CGFloat
+    @Binding var pan: CGSize
     let onConnectionCompleted: (CGPoint, CGSize) -> Void
     /// Fired by `WorkflowNodeView` after a drag-to-move gesture
     /// completes, with `(nodeId, startPosition, endPosition)`.
     /// The parent uses this to register an undo entry.
     let onPositionDragEnded: (String, CGPoint, CGPoint) -> Void
 
+    /// Named coordinate space declared on the (untransformed)
+    /// canvas content. Port drags report their locations in
+    /// this space, so wire drawing and drop hit-testing stay in
+    /// canvas coordinates regardless of zoom + pan.
+    static let coordinateSpaceName = "tesseraCanvas"
+
     /// The canvas bounds captured from the GeometryReader, so
     /// the drop callback reports the real size instead of a
     /// constant. Zero until the first layout pass; a wire can
     /// only complete after that.
     @State private var canvasSize: CGSize = .zero
+    /// Anchor values for the in-flight pan / magnify gestures,
+    /// so each change is applied relative to the value the
+    /// gesture started at (the bindings are live state).
+    @State private var panDragStart: CGSize?
+    @State private var magnifyStartZoom: CGFloat?
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 gridBackground
-                edgeLayer
-                pendingConnectionLayer
-                nodeLayer
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .clipped()
-            .contentShape(Rectangle())
-            .onTapGesture {
-                // Tap on empty canvas clears an in-flight wire
-                // (lets the user abort a drag without dropping
-                // on a port) and clears selection.
-                if pendingConnection != nil {
-                    pendingConnection = nil
+                ZStack(alignment: .topLeading) {
+                    edgeLayer
+                    pendingConnectionLayer
+                    nodeLayer
                 }
-                selectedNodeId = nil
+                .frame(width: geo.size.width, height: geo.size.height)
+                .coordinateSpace(name: Self.coordinateSpaceName)
+                .scaleEffect(zoom, anchor: .topLeading)
+                .offset(pan)
             }
             .onAppear { canvasSize = geo.size }
             .onChange(of: geo.size) { _, newSize in
                 canvasSize = newSize
             }
         }
+        // Tap on empty canvas clears an in-flight wire (lets
+        // the user abort a drag without dropping on a port)
+        // and clears selection. Attached outside the transform
+        // so the whole viewport stays tappable at any zoom.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if pendingConnection != nil {
+                pendingConnection = nil
+            }
+            selectedNodeId = nil
+        }
+        // Drag on empty canvas pans the view. Node and port
+        // drags are deeper in the hierarchy, so they win where
+        // they exist; a drag that starts on empty space pans.
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    if panDragStart == nil { panDragStart = pan }
+                    if let start = panDragStart {
+                        pan = CGSize(
+                            width: start.width + value.translation.width,
+                            height: start.height + value.translation.height
+                        )
+                    }
+                }
+                .onEnded { _ in panDragStart = nil }
+        )
+        // Trackpad pinch zooms. The anchor stays top-leading;
+        // cursor-anchored zoom is a follow-on.
+        .simultaneousGesture(
+            MagnifyGesture()
+                .onChanged { value in
+                    if magnifyStartZoom == nil { magnifyStartZoom = zoom }
+                    if let start = magnifyStartZoom {
+                        zoom = WorkflowGeometry.clampedZoom(
+                            start * value.magnification)
+                    }
+                }
+                .onEnded { _ in magnifyStartZoom = nil }
+        )
+        .clipped()
+        .overlay(alignment: .bottomTrailing) {
+            zoomControls.padding(10)
+        }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    /// Zoom in / out / reset cluster, pinned to the canvas
+    /// corner. The keyboard shortcuts give the same actions a
+    /// keyboard path (Cmd+= / Cmd+- / Cmd+0).
+    private var zoomControls: some View {
+        HStack(spacing: 4) {
+            Button {
+                zoom = WorkflowGeometry.clampedZoom(zoom / 1.25)
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            .help("Zoom out")
+            Text("\(Int(round(zoom * 100)))%")
+                .monospacedDigit()
+                .frame(minWidth: 44)
+            Button {
+                zoom = WorkflowGeometry.clampedZoom(zoom * 1.25)
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .keyboardShortcut("=", modifiers: .command)
+            .help("Zoom in")
+            Button {
+                zoom = 1
+                pan = .zero
+            } label: {
+                Image(systemName: "arrow.up.left.and.down.right.magnifyingglass")
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .help("Reset zoom and pan")
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var gridBackground: some View {

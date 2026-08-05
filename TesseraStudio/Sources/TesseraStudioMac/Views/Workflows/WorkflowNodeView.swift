@@ -208,7 +208,15 @@ struct WorkflowPortView: View {
                 }
                 .contentShape(Circle())
                 .gesture(
-                    DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    // Canvas space, not global: the wire preview
+                    // and the drop hit-test both work in canvas
+                    // coordinates, and the named space is declared
+                    // inside the zoom/pan transform so these values
+                    // stay correct at any zoom.
+                    DragGesture(
+                        minimumDistance: 0,
+                        coordinateSpace: .named(WorkflowCanvasView.coordinateSpaceName)
+                    )
                         .onChanged { value in
                             onDragStarted(value.startLocation)
                             onDragChanged(value.location)

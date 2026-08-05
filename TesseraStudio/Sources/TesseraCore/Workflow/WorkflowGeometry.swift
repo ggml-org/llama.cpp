@@ -49,4 +49,36 @@ public enum WorkflowGeometry {
             y: nodeCenter.y + yOffset - nodeHeight(portCount: portCount) / 2
         )
     }
+
+    /// Smallest / largest zoom factor the canvas allows.
+    public static let minZoom: CGFloat = 0.25
+    public static let maxZoom: CGFloat = 4.0
+
+    /// Clamp a zoom factor to the supported range.
+    public static func clampedZoom(_ zoom: CGFloat) -> CGFloat {
+        min(max(zoom, minZoom), maxZoom)
+    }
+
+    /// Convert a point reported in the canvas viewport (palette
+    /// drops, overlay controls) into canvas content coordinates
+    /// under the current zoom + pan. The canvas renders as
+    /// `screen = canvas * zoom + pan` with a top-leading anchor.
+    public static func canvasPoint(
+        fromViewport point: CGPoint, zoom: CGFloat, pan: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: (point.x - pan.width) / zoom,
+            y: (point.y - pan.height) / zoom
+        )
+    }
+
+    /// Inverse of ``canvasPoint(fromViewport:zoom:pan:)``.
+    public static func viewportPoint(
+        fromCanvas point: CGPoint, zoom: CGFloat, pan: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: point.x * zoom + pan.width,
+            y: point.y * zoom + pan.height
+        )
+    }
 }

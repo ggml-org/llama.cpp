@@ -38,6 +38,11 @@ struct WorkflowsView: View {
     /// supplementary detail about the current selection). On by
     /// default so the editor reads the same as before.
     @State private var inspectorVisible = true
+    /// Canvas zoom + pan. Owned here (not by the canvas) because
+    /// the palette drop handler has to undo the transform when it
+    /// converts its drop location into canvas coordinates.
+    @State private var canvasZoom: CGFloat = 1
+    @State private var canvasPan: CGSize = .zero
 
     @Environment(\.undoManager) private var undoManager
     /// HIG 2.7 / 3.6: under Reduce Motion the banner appears and
@@ -57,6 +62,8 @@ struct WorkflowsView: View {
                     pendingConnection: $pendingConnection,
                     selectedNodeId: $editor.selectedNodeId,
                     pendingSourceType: pendingConnection?.source.portType,
+                    zoom: $canvasZoom,
+                    pan: $canvasPan,
                     onConnectionCompleted: { dropPoint, canvasSize in
                         completeConnection(at: dropPoint, in: canvasSize)
                     },
@@ -77,7 +84,11 @@ struct WorkflowsView: View {
             // registry doesn't know.
             .dropDestination(for: String.self) { items, location in
                 guard let typeId = items.first else { return false }
-                return addNode(typeId: typeId, at: location)
+                // The drop location is in this (untransformed) stack's
+                // space; undo zoom + pan before inserting the node.
+                let canvasLocation = WorkflowGeometry.canvasPoint(
+                    fromViewport: location, zoom: canvasZoom, pan: canvasPan)
+                return addNode(typeId: typeId, at: canvasLocation)
             }
             // The parameter panel is a HIG inspector: supplementary
             // detail about the canvas selection, toggleable from
