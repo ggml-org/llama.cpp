@@ -417,6 +417,27 @@ struct llama_sampler * llama_sampler_clone(const struct llama_sampler * smpl) {
     GGML_ABORT("the sampler does not support cloning");
 }
 
+void llama_sampler_copy(struct llama_sampler * dst, const struct llama_sampler * src) {
+    if (!dst || !src) {
+        return;
+    }
+
+    GGML_ASSERT(dst->iface == src->iface && "llama_sampler_copy: cannot copy between different sampler types");
+
+    // build a temporary sampler carrying src's current state
+    llama_sampler * tmp = llama_sampler_clone(src);
+
+    // free dst's old state (frees dst->ctx, including children for a chain)
+    if (dst->iface->free) {
+        dst->iface->free(dst);
+    }
+
+    // transplant tmp's state into dst, then destroy the (now empty) temp shell
+    dst->ctx = tmp->ctx;
+    tmp->ctx = nullptr;
+    delete tmp;
+}
+
 void llama_sampler_free(struct llama_sampler * smpl) {
     if (smpl == nullptr) {
         return;
