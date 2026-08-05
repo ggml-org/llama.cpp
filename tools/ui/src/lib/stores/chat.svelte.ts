@@ -35,9 +35,12 @@ import {
 	findDescendantMessages,
 	findLeafNode,
 	findMessageById,
+	formatCwdMessage,
 	isAbortError,
-	generateConversationTitle
+	generateConversationTitle,
+	CWD_CLEARED_TEXT
 } from '$lib/utils';
+import { toolsStore } from '$lib/stores/tools.svelte';
 import { classifyContinueIntent } from '$lib/utils/agentic';
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
@@ -870,7 +873,8 @@ class ChatStore {
 		content: string,
 		type: MessageType = MessageType.TEXT,
 		parent: string = '-1',
-		extras?: DatabaseMessageExtra[]
+		extras?: DatabaseMessageExtra[],
+		isSynthetic?: boolean
 	): Promise<DatabaseMessage> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) throw new Error('No active conversation');
@@ -893,7 +897,8 @@ class ChatStore {
 				timestamp: Date.now(),
 				toolCalls: '',
 				children: [],
-				extra: extras
+				extra: extras,
+				isSynthetic
 			},
 			parentId
 		);
@@ -901,6 +906,33 @@ class ChatStore {
 		await conversationsStore.updateCurrentNode(message.id);
 		conversationsStore.updateConversationTimestamp();
 		return message;
+	}
+
+	/**
+	 * Record a working-directory change into chat history as a synthetic
+	 * user message, so the model sees it on its next turn (the client
+	 * sends the cwd itself via the x-tool-cwd header on tool calls).
+	 * A plain user message is used because some chat templates reject
+	 * tool messages without a preceding tool call.
+	 */
+	async recordCwdChange(cwd: string | null): Promise<void> {
+		const content = cwd
+			? formatCwdMessage(cwd, await toolsStore.resolveServerHome())
+			: CWD_CLEARED_TEXT;
+
+		// Reuse the trailing cwd row when it is already the last message, so
+		// repeated picks update it in place instead of stacking another row.
+		const last = conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
+		if (last && last.role === MessageRole.USER && last.isSynthetic === true) {
+			await DatabaseService.updateMessage(last.id, { content, isSynthetic: true });
+			conversationsStore.updateMessageAtIndex(conversationsStore.activeMessages.length - 1, {
+				content,
+				isSynthetic: true
+			});
+			return;
+		}
+
+		await this.addMessage(MessageRole.USER, content, MessageType.TEXT, '-1', undefined, true);
 	}
 
 	async addSystemPrompt(): Promise<void> {
@@ -1055,6 +1087,7 @@ class ChatStore {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
 				const currentConfig = config();
 				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+				let sysOrRootId = rootId;
 				if (systemPrompt) {
 					const systemMessage = await DatabaseService.createSystemMessage(
 						currentConv.id,
@@ -1062,8 +1095,25 @@ class ChatStore {
 						rootId
 					);
 					conversationsStore.addMessageToActive(systemMessage);
-					parentIdForUserMessage = systemMessage.id;
-				} else parentIdForUserMessage = rootId;
+					sysOrRootId = systemMessage.id;
+				}
+				// Reflect a working directory picked on the new-chat screen into
+				// chat history before the first user message, so the model sees
+				// it on its first turn. createConversation() has already threaded
+				// the pending pick onto the conversation.
+				if (currentConv.cwd) {
+					const cwdMessage = await this.addMessage(
+						MessageRole.USER,
+						formatCwdMessage(currentConv.cwd, await toolsStore.resolveServerHome()),
+						MessageType.TEXT,
+						sysOrRootId,
+						undefined,
+						true
+					);
+					parentIdForUserMessage = cwdMessage.id;
+				} else {
+					parentIdForUserMessage = sysOrRootId;
+				}
 			}
 			const userMessage = await this.addMessage(
 				MessageRole.USER,
@@ -1282,7 +1332,8 @@ class ChatStore {
 			createToolResultMessage: async (
 				toolCallId: string,
 				content: string,
-				extras?: DatabaseMessageExtra[]
+				extras?: DatabaseMessageExtra[],
+				toolCwd?: string
 			) => {
 				const msg = await DatabaseService.createMessageBranch(
 					{
@@ -1291,6 +1342,7 @@ class ChatStore {
 						role: MessageRole.TOOL,
 						content,
 						toolCallId,
+						toolCwd,
 						timestamp: Date.now(),
 						toolCalls: '',
 						children: [],

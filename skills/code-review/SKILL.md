@@ -119,6 +119,7 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - In most cases, `build_vit` should be enough to build the transformer graph for vision models. Do not add a loop to build the transformer graph manually, unless you have a very good reason to do so. If you do, please explain why in the PR description.
 - If you need a dedicated preprocessor, there is a high chance that it can be a derived class from one of the existing preprocessors. Check carefully before adding a new preprocessor class.
 - If the model need a new public API in `mtmd.h`, open a discussion first.
+- For audio generation models, see `tools/mtmd/README-dev.md`
 
 ## General (always)
 
