@@ -627,15 +627,14 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
-                        if (arch == LLM_ARCH_DEEPSEEK4) {
-                            GGML_ASSERT(llama_memory_seq_rm(
-                                    llama_get_memory(model_and_ctx_cpu.second.get()), 0, -1, -1));
-                        }
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         if (arch == LLM_ARCH_DEEPSEEK4) {
+                            // DSV4 is the only arch whose seq_rm clears per-sequence cache contents via
+                            // ggml_backend_tensor_memset (the compressed buffers must never expose stale rows);
+                            // for the Meta config this is the only test coverage of the meta backend's memset_tensor
                             GGML_ASSERT(llama_memory_seq_rm(
                                     llama_get_memory(model_and_ctx_dev.second.get()), 0, -1, -1));
                         }
@@ -651,9 +650,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                     FILE * file = tmpfile(); // Can be null on Windows without administrator privileges.
                     // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
                     //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
-                    // FIXME: DSV4 metadata is not implemented by llama_model_saver.
-                    const bool can_roundtrip = llama_model_saver_supports_arch(arch) && arch != LLM_ARCH_DEEPSEEK4;
-                    if (file != nullptr && can_roundtrip && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                    if (file != nullptr && llama_model_saver_supports_arch(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
                         GGML_ASSERT(model_and_ctx_dev.first && model_and_ctx_dev.second);
                         llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
                         ms.add_kv_from_model();

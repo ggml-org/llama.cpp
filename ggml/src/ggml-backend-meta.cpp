@@ -848,7 +848,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         switch (tensor->op) {
             case GGML_OP_NONE: {
                 if (tensor->view_src != nullptr) {
-                    // full-tensor view created with ggml_view_tensor, transparent for the split state
+                    // GGML_OP_NONE tensors are usually graph inputs written via set_tensor (mirrored),
+                    // but ggml_view_tensor also produces them: ggml_backend_sched creates such full-tensor
+                    // views as dependencies for split inputs when a graph is split across backends
+                    // (e.g. on partial offload). These views must be transparent for the split state.
+                    GGML_ASSERT(tensor->view_offs == 0 && ggml_are_same_shape(tensor, tensor->view_src));
                     split_state = ggml_backend_meta_get_split_state(stc, tensor->view_src, assume_sync);
                 } else {
                     split_state = {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
