@@ -1332,10 +1332,31 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         }
     }
 
-    gguf_write_to_file(ctx_gguf, fname.c_str(), false);
+    // Crash-safe publish: write to .tmp, then atomic rename. A SIGKILL or
+    // jetsam mid-write leaves the previous good copy at `fname` intact
+    // (POSIX rename is atomic on the same filesystem; mirrors the
+    // transfer-ledger pattern at the bottom of this file).
+    const std::string fname_tmp = fname + ".tmp";
+    const bool write_ok = gguf_write_to_file(ctx_gguf, fname_tmp.c_str(), false);
+    bool publish_ok = false;
+    if (write_ok) {
+        if (std::rename(fname_tmp.c_str(), fname.c_str()) != 0) {
+            LOG_ERR("%s: failed to publish imatrix %s (rename from %s)\n",
+                    __func__, fname.c_str(), fname_tmp.c_str());
+            std::remove(fname_tmp.c_str());
+        } else {
+            publish_ok = true;
+        }
+    } else {
+        LOG_ERR("%s: failed to write imatrix to %s\n", __func__, fname_tmp.c_str());
+        std::remove(fname_tmp.c_str());
+    }
 
-    LOGV(1, "\n");
-    LOG_DBGV(1, "%s: stored collected data after %d chunks in %s\n", __func__, m_last_chunk, fname.c_str());
+    if (publish_ok) {
+        LOGV(1, "\n");
+        LOG_DBGV(1, "%s: stored collected data after %d chunks in %s\n",
+                 __func__, m_last_chunk, fname.c_str());
+    }
 
     gguf_free(ctx_gguf);
     ggml_free(ctx);
