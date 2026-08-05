@@ -107,8 +107,8 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
             /*.n_ff_exp      =*/ n_ff_exp,
             /*.n_expert      =*/ n_expert,
             /*.n_expert_used =*/ n_expert_used,
-            /*.row_split     =*/ split_mode() == LLAMA_SPLIT_MODE_ROW,
-            /*.n_devices     =*/ n_devices(),
+            /*.tensor_parallel =*/ split_mode() == LLAMA_SPLIT_MODE_TENSOR && devices.size() == 1 && devices[0].is_meta,
+            /*.n_devices       =*/ get_split_state_ud.n_devices,
             /*.tensor_split  =*/ tensor_split(),
         };
         if (qwen35moe_use_auto_rdna2_q4_k_j16(mmq_config)) {

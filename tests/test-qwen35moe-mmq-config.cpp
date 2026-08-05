@@ -35,7 +35,7 @@ void test_model_selector() {
     changed = config; changed.n_ff_exp = 2048; negative(changed, "wrong expert width accepted");
     changed = config; changed.n_expert = 128; negative(changed, "wrong expert count accepted");
     changed = config; changed.n_expert_used = 4; negative(changed, "wrong top-k accepted");
-    changed = config; changed.row_split = false; negative(changed, "non-row split accepted");
+    changed = config; changed.tensor_parallel = false; negative(changed, "non-tensor-parallel split accepted");
     changed = config; changed.n_devices = 2; negative(changed, "non-four-way split accepted");
     changed = config; changed.tensor_split = nullptr; negative(changed, "implicit split accepted");
 

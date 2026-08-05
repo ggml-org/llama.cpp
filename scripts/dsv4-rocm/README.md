@@ -413,8 +413,8 @@ automatic selection; use `default` for a correctness-control arm. Normal model
 execution does not need either variable.
 
 Qwen3.5-122B-A10B automatically marks separate Q4_K routed gate/up tensors only
-when its exact 3072/1024/256/top-8 metadata and an explicit equal four-way row
-split match the validated model. The HIP backend selects J16 only for RDNA2 PP
+when its exact 3072/1024/256/top-8 metadata and an explicit equal four-way
+tensor-parallel split match the validated model. The HIP backend selects J16 only for RDNA2 PP
 ubatches with the exact per-rank K=3072, N=256, 256-expert, top-8, batch-256
 signature. It emits a one-time `source=automatic` attestation. Q5_K down,
 fused/shared/MTP tensors, decode and remainder batches, other splits, other
