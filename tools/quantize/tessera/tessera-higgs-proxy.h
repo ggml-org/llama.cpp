@@ -175,6 +175,15 @@ float ts_higgs_proxy_measure_l1(const float * W_orig_flat,
                                 int64_t out_dim, int64_t in_dim,
                                 int64_t layer_idx, void * ctx);
 
+// Produce the packed_W buffer ts_higgs_proxy_measure_l1 consumes:
+// TILE640-pack each of the out_dim rows of in_dim elements with the
+// C reference ternary quantizer (the deterministic creation path)
+// and concatenate the per-row flat rows [packed words | fp16
+// page_scales | int8 lane_scales]. packed is cleared first.
+void ts_higgs_proxy_pack_tile640(const float * W_flat,
+                                 int64_t out_dim, int64_t in_dim,
+                                 std::vector<uint8_t> & packed);
+
 // ---------------------------------------------------------------------------
 // Estimator
 //

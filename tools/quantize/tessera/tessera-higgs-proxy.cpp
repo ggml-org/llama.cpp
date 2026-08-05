@@ -11,6 +11,14 @@
 #include "ggml.h"
 #include "gguf.h"
 
+// TILE640 quant/dequant helpers (the same dispatch the
+// GGML_OP_TILE640_MATMUL inference path drives): the C reference
+// quantizer for deterministic packing, the v2 (Accelerate + NEON)
+// dequant + the v2 dispatch cost model for the L1 measurement.
+#include "ggml-quants.h"
+#include "ggml-quants-v2.h"
+#include "ggml-quants-v2-dispatch.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -358,6 +366,133 @@ float ts_higgs_proxy_measure_offline(const float * W_flat, int64_t n_elem,
         return 0.0f;
     }
     return t2;
+}
+
+// ---------------------------------------------------------------------------
+// L1-on-ANE t_l^2 measurement (the Phase 0 source)
+//
+// The packed_W contract is the concatenated per-row flat TILE640
+// row layout [packed words | fp16 page_scales | int8 lane_scales]
+// produced by ts_higgs_proxy_pack_tile640. The per-row dequant
+// mirrors the GGML_OP_TILE640_MATMUL dispatch in ggml-ane.mm:
+// v2 dequant with pre-decoded meta at in_dim >= MIN_K (and v2
+// enabled), the C reference below the cutoff; the meta decode
+// follows the v2 dispatch cost model (always the C reference
+// today). The dequantized row is round-tripped through fp16 (the
+// bundle's pinned slot dtype - the F16 pre-dequant) before the
+// abs-diff, so the measurement captures the ternary quantization
+// error AND the ANE fp16 precision loss.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Per-row flat TILE640 byte size for pages pages (matches the
+// ggml-ane.mm row_bytes formula: words * 4 + page_scales * 2 +
+// lane_scales).
+size_t ts_higgs_proxy_t640_row_bytes(int64_t pages) {
+    return (size_t)pages * (TILE640_WORDS_PER_PAGE * sizeof(uint32_t)
+                            + sizeof(uint16_t)
+                            + TILE640_LANES_PER_PAGE * sizeof(int8_t));
+}
+
+}  // namespace
+
+void ts_higgs_proxy_pack_tile640(const float * W_flat,
+                                 int64_t out_dim, int64_t in_dim,
+                                 std::vector<uint8_t> & packed) {
+    packed.clear();
+    if (!W_flat || out_dim <= 0 || in_dim <= 0) {
+        return;
+    }
+    const int64_t pages = (in_dim + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE;
+    const size_t row_bytes = ts_higgs_proxy_t640_row_bytes(pages);
+    packed.resize((size_t)out_dim * row_bytes);
+    for (int64_t r = 0; r < out_dim; r++) {
+        quantize_row_tessera_t640_ref(W_flat + (size_t)r * in_dim,
+                                      packed.data() + (size_t)r * row_bytes,
+                                      in_dim);
+    }
+}
+
+float ts_higgs_proxy_measure_l1(const float * W_orig_flat,
+                                const void * packed_W,
+                                int64_t out_dim, int64_t in_dim,
+                                int64_t layer_idx, void * ctx) {
+    (void)layer_idx; (void)ctx;
+    if (!W_orig_flat || !packed_W || out_dim <= 0 || in_dim <= 0) {
+        return 0.0f;
+    }
+
+    const int64_t pages = (in_dim + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE;
+    const size_t row_bytes = ts_higgs_proxy_t640_row_bytes(pages);
+
+    // The GGML_OP_TILE640_MATMUL dispatch rule (ggml-ane.mm): v2
+    // dequant iff v2 enabled and in_dim >= MIN_K; the meta decode
+    // goes through the v2 cost model (returns false today, so the
+    // C reference decode runs; the branch tracks future cost-model
+    // changes without drift).
+    const bool use_v2 = ggml_tessera_t640_v2_enabled() &&
+                        in_dim >= GGML_TESSERA_T640_V2_MIN_K;
+    const bool use_v2_meta = ts_v2_dispatch_should_use_v2_meta(out_dim, pages);
+
+    // Per-row scratch (aligned, like the dispatch's row buffer).
+    std::vector<uint8_t> row_buf(row_bytes);
+    std::vector<float> row_y((size_t)in_dim);
+    std::vector<float> page_max((size_t)pages);
+    std::vector<float> lane_scale((size_t)pages * TILE640_LANES_PER_PAGE);
+
+    const uint8_t * base = (const uint8_t *)packed_W;
+    double l1_sum = 0.0;
+    float max_abs = 0.0f;
+
+    for (int64_t r = 0; r < out_dim; r++) {
+        std::memcpy(row_buf.data(), base + (size_t)r * row_bytes, row_bytes);
+        if (use_v2) {
+            const uint32_t * words = (const uint32_t *)row_buf.data();
+            const uint16_t * ps = (const uint16_t *)
+                (row_buf.data() + (size_t)pages * TILE640_WORDS_PER_PAGE * sizeof(uint32_t));
+            const int8_t * ls = (const int8_t *)(ps + pages);
+            if (use_v2_meta) {
+                decode_per_row_meta_v2(ps, ls, 1, pages,
+                                       page_max.data(), lane_scale.data());
+            } else {
+                ts_decode_per_row_meta_ref(ps, ls, 1, pages,
+                                           page_max.data(), lane_scale.data());
+            }
+            dequantize_row_tessera_t640_v2(words, page_max.data(),
+                                           lane_scale.data(), in_dim,
+                                           row_y.data());
+        } else {
+            dequantize_row_tessera_t640(row_buf.data(), row_y.data(), in_dim);
+        }
+
+        const float * orig = W_orig_flat + (size_t)r * in_dim;
+        for (int64_t c = 0; c < in_dim; c++) {
+            const float w = orig[c];
+            if (std::isnan(w) || std::isinf(w)) {
+                // Same convention as measure_offline: no rejection of the
+                // tensor, the math is well-defined on the surviving finite
+                // values.
+                continue;
+            }
+            const float a = std::fabs(w);
+            if (a > max_abs) max_abs = a;
+            // F16 pre-dequant round-trip: the ANE bundle consumes the
+            // dequantized weight as fp16 (ggml_fp32_to_fp16 compiles to
+            // NEON vcvt_f32_f16 on Apple Silicon).
+            const float w_deq = ggml_fp16_to_fp32(ggml_fp32_to_fp16(row_y[(size_t)c]));
+            l1_sum += (double)std::fabs(w - w_deq);
+        }
+    }
+
+    if (!(max_abs > 0.0f)) {
+        return 0.0f;
+    }
+    const double t2 = (l1_sum / (double)(out_dim * in_dim)) / (double)max_abs;
+    if (std::isnan(t2) || std::isinf(t2)) {
+        return 0.0f;
+    }
+    return (float)t2;
 }
 
 // ---------------------------------------------------------------------------

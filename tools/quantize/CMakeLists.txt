@@ -141,6 +141,13 @@ target_include_directories(${TARGET} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/tessera)
 
+# ggml internal headers (ggml-quants.h, ggml-quants-v2.h,
+# ggml-quants-v2-dispatch.h): tessera-higgs-proxy.cpp drives the same
+# TILE640 quant/dequant dispatch the GGML_OP_TILE640_MATMUL inference
+# path uses. PRIVATE: the headers never leak into downstream consumers.
+target_include_directories(${TARGET} PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/src)
+
 # Pull the duckdb include path through the amalgamation target when present,
 # so tessera-quantize-db.cpp can find duckdb.hpp. The OBJECT library's
 # sources are linked in by the $<TARGET_OBJECTS> below.
