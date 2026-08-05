@@ -37,7 +37,16 @@ public struct CalibrateTool: TesseraTool {
         required: ["model_path", "corpus_path", "output_path"]
     )
 
-    public init() {}
+    private let shell: TesseraProcessShell
+
+    public init() {
+        self.shell = ProcessRunner()
+    }
+
+    /// Test seam.
+    init(shell: TesseraProcessShell) {
+        self.shell = shell
+    }
 
     public func execute(arguments: [String: JSONValue]) async throws -> ToolResult {
         guard let modelPath = arguments["model_path"]?.stringValue, !modelPath.isEmpty else {
@@ -52,14 +61,18 @@ public struct CalibrateTool: TesseraTool {
 
         let nTokens = arguments["n_tokens"]?.numberValue.map { Int($0) } ?? 5000
         let modality = arguments["modality"]?.stringValue ?? "text"
+        let expandedCorpus = NSString(string: corpusPath).expandingTildeInPath
+        let expandedOutput = NSString(string: outputPath).expandingTildeInPath
 
-        // Prefer the linked xcframework when available; fall back to the
-        // tessera-imatrix CLI subprocess otherwise.
         if TesseraFFIBridge.isAvailable {
             switch TesseraFFIBridge.calibrate(
                 model: NSString(string: modelPath).expandingTildeInPath,
-                corpus: NSString(string: corpusPath).expandingTildeInPath,
-                config: ["n_tokens": nTokens, "modality": modality]
+                corpus: expandedCorpus,
+                config: [
+                    "n_tokens": nTokens,
+                    "modality": modality,
+                    "output_path": expandedOutput,
+                ]
             ) {
             case let .success(output):
                 return .ok(output, data: [
@@ -75,16 +88,37 @@ public struct CalibrateTool: TesseraTool {
             }
         }
 
-        let runner = ProcessRunner()
-        let result = try await runner.run(
-            executable: "tessera-imatrix",
-            arguments: [
-                "--model", NSString(string: modelPath).expandingTildeInPath,
-                "--corpus", NSString(string: corpusPath).expandingTildeInPath,
-                "--output", NSString(string: outputPath).expandingTildeInPath,
-                "--n-tokens", String(nTokens),
-                "--modality", modality,
-            ]
+        // CLI fallback: tessera-cli calibrate <corpus> --config <json>
+        guard let cli = TesseraCLIBinaryResolver.resolve(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) else {
+            return .fail(TesseraCLIBinaryResolver.diagnosticMessage())
+        }
+
+        let config: [String: Any] = [
+            "model_path": NSString(string: modelPath).expandingTildeInPath,
+            "output_path": expandedOutput,
+            "n_tokens": nTokens,
+            "modality": modality,
+        ]
+        let configPath: String
+        do {
+            configPath = try EngineToolSupport.writeConfigFile(config: config)
+        } catch {
+            return .fail("Failed to write calibrate config: \(error.localizedDescription)")
+        }
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        let args = [
+            "calibrate", expandedCorpus,
+            "--config", configPath,
+        ]
+        let result = try await shell.run(
+            executable: cli,
+            arguments: args,
+            environment: nil,
+            workingDirectory: nil
         )
 
         if result.exitCode == 0 {

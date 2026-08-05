@@ -33,7 +33,16 @@ public struct ConvertTool: TesseraTool {
         required: ["model_path", "output_path"]
     )
 
-    public init() {}
+    private let shell: TesseraProcessShell
+
+    public init() {
+        self.shell = ProcessRunner()
+    }
+
+    /// Test seam.
+    init(shell: TesseraProcessShell) {
+        self.shell = shell
+    }
 
     public func execute(arguments: [String: JSONValue]) async throws -> ToolResult {
         guard let modelPath = arguments["model_path"]?.stringValue, !modelPath.isEmpty else {
@@ -45,15 +54,12 @@ public struct ConvertTool: TesseraTool {
 
         let computeUnits = arguments["compute_units"]?.stringValue ?? "cpuAndNeuralEngine"
         let precision = arguments["precision"]?.stringValue ?? "float16"
+        let expandedModel = NSString(string: modelPath).expandingTildeInPath
+        let expandedOutput = NSString(string: outputPath).expandingTildeInPath
 
-        // The FFI cannot dequantize weight tensors without a loaded model
-        // context, so it returns fallbackToCLI; the gate is kept so a future
-        // in-process convert path slots in here.
         if TesseraFFIBridge.isAvailable {
             switch TesseraFFIBridge.convert(
-                model: NSString(string: modelPath).expandingTildeInPath,
-                output: NSString(string: outputPath).expandingTildeInPath,
-                format: "coreml"
+                model: expandedModel, output: expandedOutput, format: "coreml"
             ) {
             case let .success(output):
                 return .ok(output, data: [
@@ -69,15 +75,38 @@ public struct ConvertTool: TesseraTool {
             }
         }
 
-        let runner = ProcessRunner()
-        let result = try await runner.run(
-            executable: "tessera-convert",
-            arguments: [
-                "--model", NSString(string: modelPath).expandingTildeInPath,
-                "--output", NSString(string: outputPath).expandingTildeInPath,
-                "--compute-units", computeUnits,
-                "--precision", precision,
-            ]
+        // CLI fallback: tessera-cli convert <model> <output> --format coreml
+        // compute_units + precision are embedded in the JSON config because
+        // the spec only names --format on the command line.
+        guard let cli = TesseraCLIBinaryResolver.resolve(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) else {
+            return .fail(TesseraCLIBinaryResolver.diagnosticMessage())
+        }
+
+        let config: [String: Any] = [
+            "compute_units": computeUnits,
+            "precision": precision,
+        ]
+        let configPath: String
+        do {
+            configPath = try EngineToolSupport.writeConfigFile(config: config)
+        } catch {
+            return .fail("Failed to write convert config: \(error.localizedDescription)")
+        }
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        let args = [
+            "convert", expandedModel, expandedOutput,
+            "--format", "coreml",
+            "--config", configPath,
+        ]
+        let result = try await shell.run(
+            executable: cli,
+            arguments: args,
+            environment: nil,
+            workingDirectory: nil
         )
 
         if result.exitCode == 0 {

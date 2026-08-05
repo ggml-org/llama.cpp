@@ -35,6 +35,13 @@ targets:
     dependencies:
       - package: TesseraStudio
         product: TesseraCore
+      # Worker 1 builds tessera.xcframework into artifacts/ via
+      # TesseraStudio/scripts/build-xcframework.sh. When the xcframework is
+      # present, the FFI symbols take over; until then the SwiftPM CTesseraFFI
+      # stub is what links into TesseraCore and TesseraFFIBridge.isAvailable
+      # is false, so the engine tools fall back to the tessera-cli subprocess
+      # (see TesseraCLIBinaryResolver).
+      - framework: artifacts/tessera.xcframework
     settings:
       base:
         PRODUCT_NAME: TesseraStudioMac

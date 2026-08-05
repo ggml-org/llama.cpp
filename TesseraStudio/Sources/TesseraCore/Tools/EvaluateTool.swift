@@ -47,7 +47,16 @@ public struct EvaluateTool: TesseraTool {
         required: ["model_path"]
     )
 
-    public init() {}
+    private let shell: TesseraProcessShell
+
+    public init() {
+        self.shell = ProcessRunner()
+    }
+
+    /// Test seam.
+    init(shell: TesseraProcessShell) {
+        self.shell = shell
+    }
 
     public func execute(arguments: [String: JSONValue]) async throws -> ToolResult {
         // Multi-axis capability eval is a separate path; when off, the
@@ -65,10 +74,8 @@ public struct EvaluateTool: TesseraTool {
         let nTokens = arguments["n_tokens"]?.numberValue.map { Int($0) } ?? 512
         let runtime = arguments["runtime"]?.stringValue ?? TesseraRuntime.onDevice.rawValue
         let measurePower = arguments["measure_power"].map { $0 != .bool(false) && $0 != .string("false") } ?? true
+        let expandedModel = NSString(string: modelPath).expandingTildeInPath
 
-        // The FFI cannot run a model forward pass (needed for perplexity), so
-        // it returns fallbackToCLI; the gate is kept so a future in-process
-        // evaluate path slots in here without touching the tool signature.
         if TesseraFFIBridge.isAvailable {
             var config: [String: Any] = [
                 "n_tokens": nTokens,
@@ -78,9 +85,7 @@ public struct EvaluateTool: TesseraTool {
             if !evalCorpus.isEmpty {
                 config["eval_corpus"] = NSString(string: evalCorpus).expandingTildeInPath
             }
-            switch TesseraFFIBridge.evaluate(
-                model: NSString(string: modelPath).expandingTildeInPath, config: config
-            ) {
+            switch TesseraFFIBridge.evaluate(model: expandedModel, config: config) {
             case let .success(output):
                 return .ok(output, data: [
                     "model_path": .string(modelPath),
@@ -95,31 +100,67 @@ public struct EvaluateTool: TesseraTool {
             }
         }
 
-        var args = [
-            "--model", NSString(string: modelPath).expandingTildeInPath,
-            "--n-tokens", String(nTokens),
-            "--runtime", runtime,
-        ]
-        if !evalCorpus.isEmpty {
-            args += ["--corpus", NSString(string: evalCorpus).expandingTildeInPath]
-        }
-        if measurePower {
-            args += ["--measure-power"]
+        // CLI fallback: tessera-cli evaluate <model> --config <json>
+        guard let cli = TesseraCLIBinaryResolver.resolve(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) else {
+            return .fail(TesseraCLIBinaryResolver.diagnosticMessage())
         }
 
-        let runner = ProcessRunner()
-        let result = try await runner.run(
-            executable: "tessera-evaluate",
-            arguments: args
+        var config: [String: Any] = [
+            "n_tokens": nTokens,
+            "runtime": runtime,
+            "measure_power": measurePower,
+        ]
+        if !evalCorpus.isEmpty {
+            config["eval_corpus"] = NSString(string: evalCorpus).expandingTildeInPath
+        }
+        let configPath: String
+        do {
+            configPath = try EngineToolSupport.writeConfigFile(config: config)
+        } catch {
+            return .fail("Failed to write evaluate config: \(error.localizedDescription)")
+        }
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        let args = [
+            "evaluate", expandedModel,
+            "--config", configPath,
+        ]
+        let result = try await shell.run(
+            executable: cli,
+            arguments: args,
+            environment: nil,
+            workingDirectory: nil
         )
 
         if result.exitCode == 0 {
-            return .ok("Evaluation complete.\n\(result.stdout)", data: [
+            // tessera-cli evaluate prints JSON: surface it as the agent's data
+            // payload when it parses, and otherwise fall back to the raw text.
+            let payload: [String: JSONValue] = [
                 "model_path": .string(modelPath),
                 "runtime": .string(runtime),
                 "n_tokens": .number(Double(nTokens)),
                 "backend": .string("cli"),
-            ])
+            ]
+            let outputText: String
+            if let parsed = EngineToolSupport.parseJSONObject(stdout: result.stdout) {
+                var merged = payload
+                for (k, v) in parsed {
+                    if let s = v as? String { merged[k] = .string(s) }
+                    else if let n = v as? NSNumber {
+                        if CFGetTypeID(n) == CFBooleanGetTypeID() {
+                            merged[k] = .bool(n.boolValue)
+                        } else {
+                            merged[k] = .number(n.doubleValue)
+                        }
+                    }
+                }
+                return .ok("Evaluation complete.", data: merged)
+            }
+            outputText = "Evaluation complete.\n\(result.stdout)"
+            return .ok(outputText, data: payload)
         } else {
             return .fail("Evaluation failed (exit \(result.exitCode)):\n\(result.stderr)")
         }

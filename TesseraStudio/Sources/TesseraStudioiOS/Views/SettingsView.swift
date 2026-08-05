@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.telemetryEnabled) private var telemetryEnabled = TesseraSettingsDefault.telemetryEnabled
     @AppStorage(TesseraSettingsKey.logLevel) private var logLevel = TesseraSettingsDefault.logLevel
     @AppStorage(TesseraSettingsKey.cliPath) private var cliPath = TesseraSettingsDefault.cliPath
+    @AppStorage(TesseraSettingsKey.tesseraCLIPath) private var tesseraCLIPath = TesseraSettingsDefault.tesseraCLIPath
     // LLM provider
     @AppStorage(TesseraSettingsKey.llmProviderType) private var llmProviderType = TesseraSettingsDefault.llmProviderType
     @AppStorage(TesseraSettingsKey.remoteAPIBaseURL) private var remoteAPIBaseURL = TesseraSettingsDefault.remoteAPIBaseURL
@@ -78,6 +79,7 @@ struct SettingsView: View {
                     }
                 }
                 TextField("Custom CLI path", text: $cliPath)
+                TextField("tessera-cli path", text: $tesseraCLIPath)
             }
         }
         .navigationTitle("Settings")

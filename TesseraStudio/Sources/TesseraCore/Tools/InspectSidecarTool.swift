@@ -17,7 +17,16 @@ public struct InspectSidecarTool: TesseraTool {
         required: ["path"]
     )
 
-    public init() {}
+    private let shell: TesseraProcessShell
+
+    public init() {
+        self.shell = ProcessRunner()
+    }
+
+    /// Test seam.
+    init(shell: TesseraProcessShell) {
+        self.shell = shell
+    }
 
     public func execute(arguments: [String: JSONValue]) async throws -> ToolResult {
         guard let path = arguments["path"]?.stringValue, !path.isEmpty else {
@@ -30,11 +39,58 @@ public struct InspectSidecarTool: TesseraTool {
             return .fail("Sidecar file not found: \(expanded)")
         }
 
-        let data = try Data(contentsOf: URL(fileURLWithPath: expanded))
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .fail("Invalid JSON in sidecar file")
+        // Prefer the linked FFI inspector when the xcframework is linked; the
+        // stub returns .fallbackToCLI so this gate is safe in SwiftPM builds.
+        if TesseraFFIBridge.isAvailable {
+            switch TesseraFFIBridge.inspectSidecar(path: expanded) {
+            case let .success(output):
+                return formatSidecarOutput(jsonString: output, expanded: expanded, backend: "ffi")
+            case .fallbackToCLI:
+                break
+            case let .error(code, message):
+                return .fail("Inspect failed via FFI (code \(code)): \(message)")
+            }
         }
 
+        // CLI fallback: tessera-cli inspect-sidecar <path>
+        guard let cli = TesseraCLIBinaryResolver.resolve(
+            override: TesseraSettings.tesseraCLIPath,
+            settingsKey: TesseraSettingsKey.tesseraCLIPath
+        ) else {
+            return .fail(TesseraCLIBinaryResolver.diagnosticMessage())
+        }
+
+        let result = try await shell.run(
+            executable: cli,
+            arguments: ["inspect-sidecar", expanded],
+            environment: nil,
+            workingDirectory: nil
+        )
+        if result.exitCode != 0 {
+            return .fail("Inspect failed (exit \(result.exitCode)):\n\(result.stderr)")
+        }
+        return formatSidecarOutput(jsonString: result.stdout, expanded: expanded, backend: "cli")
+    }
+
+    /// Render the sidecar's JSON as a short multi-line report. Both the FFI
+    /// happy path and the CLI fallback produce JSON; this is the single
+    /// presentation layer for either source.
+    private func formatSidecarOutput(jsonString: String, expanded: String, backend: String) -> ToolResult {
+        let json: [String: Any]?
+        if let parsed = EngineToolSupport.parseJSONObject(stdout: jsonString) {
+            json = parsed
+        } else if let data = try? Data(contentsOf: URL(fileURLWithPath: expanded)),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // Defensive fallback: the CLI returned something that did not
+            // parse, so re-read the file directly. Keeps the tool honest
+            // when the on-disk file is still the source of truth.
+            json = obj
+        } else {
+            return .fail("Invalid JSON in sidecar file: \(expanded)")
+        }
+        guard let json else {
+            return .fail("Invalid JSON in sidecar file: \(expanded)")
+        }
         let schemaVersion = json["schema_version"] as? Int ?? 0
         let profile = json["tessera_profile"] as? String ?? "unknown"
         let effectiveBits = json["effective_bits"] as? Double ?? 0
@@ -65,7 +121,7 @@ public struct InspectSidecarTool: TesseraTool {
             "schema_version": .number(Double(schemaVersion)),
             "tessera_profile": .string(profile),
             "effective_bits": .number(effectiveBits),
-            "backend": .string("cli"),
+            "backend": .string(backend),
         ])
     }
 }

@@ -15,6 +15,10 @@ public enum TesseraSettingsKey {
     public static let telemetryEnabled = "tessera.settings.telemetryEnabled"
     public static let logLevel = "tessera.settings.logLevel"
     public static let cliPath = "tessera.settings.cliPath"
+    /// User-chosen absolute path to the `tessera-cli` binary. Empty (the
+    /// default) means auto-resolve via ``TesseraCLIBinaryResolver``; the
+    /// known install locations and `$PATH` are walked in order.
+    public static let tesseraCLIPath = "tessera.settings.tesseraCLIPath"
     // LLM provider
     public static let llmProviderType = "tessera.settings.llmProviderType"
     public static let remoteAPIBaseURL = "tessera.settings.remoteAPIBaseURL"
@@ -64,6 +68,11 @@ public enum TesseraSettingsDefault {
     public static let telemetryEnabled = false
     public static let logLevel = "info"
     public static let cliPath = "/usr/local/bin"
+    /// Empty means auto-resolve via ``TesseraCLIBinaryResolver``. The
+    /// legacy `cliPath` directory setting still exists for the older
+    /// subprocess layout; `tesseraCLIPath` is the modern full-binary
+    /// override and is what the retargeted engine tools read.
+    public static let tesseraCLIPath = ""
     // LLM provider. Default stays .placeholder for backward compatibility.
     public static let llmProviderType = "placeholder"
     public static let remoteAPIBaseURL = "http://localhost:8080/v1"
@@ -150,6 +159,7 @@ public enum TesseraSettings {
             TesseraSettingsKey.telemetryEnabled: TesseraSettingsDefault.telemetryEnabled,
             TesseraSettingsKey.logLevel: TesseraSettingsDefault.logLevel,
             TesseraSettingsKey.cliPath: TesseraSettingsDefault.cliPath,
+            TesseraSettingsKey.tesseraCLIPath: TesseraSettingsDefault.tesseraCLIPath,
             TesseraSettingsKey.llmProviderType: TesseraSettingsDefault.llmProviderType,
             TesseraSettingsKey.remoteAPIBaseURL: TesseraSettingsDefault.remoteAPIBaseURL,
             TesseraSettingsKey.remoteAPIKey: TesseraSettingsDefault.remoteAPIKey,
@@ -225,6 +235,14 @@ public enum TesseraSettings {
 
     public static var cliPath: String {
         UserDefaults.standard.string(forKey: TesseraSettingsKey.cliPath) ?? TesseraSettingsDefault.cliPath
+    }
+
+    /// User-chosen absolute path to the `tessera-cli` binary. Empty
+    /// means auto-resolve (the resolver walks known install locations and
+    /// `$PATH`). The engine tools read this on every call so a settings
+    /// change is honored without restarting the app.
+    public static var tesseraCLIPath: String {
+        UserDefaults.standard.string(forKey: TesseraSettingsKey.tesseraCLIPath) ?? TesseraSettingsDefault.tesseraCLIPath
     }
 
     // MARK: Audience mode
