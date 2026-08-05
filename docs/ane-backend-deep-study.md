@@ -1195,10 +1195,17 @@ the result within the 1e-2 fp16 abs error budget.
 
 #### 6.1.3 IOSurface state for per-row meta + per-layer alpha
 
-**Resolution: per-row meta and per-layer alpha are encoded
-INSIDE the 7 TILE640 sources (`page_scales` and
-`lane_scales`); the bundle takes them as runtime inputs, not
-as baked weights.**
+**Resolution: the per-row meta (page_scales, lane_scales,
+outlier data) and the activations are encoded INSIDE the 7
+TILE640 sources; the bundle takes them as runtime inputs,
+not as baked weights. The per-layer alpha is the AWQ
+exponent applied at quantization time; it is folded into
+the ternary encoding (the weight itself), not into the
+per-row meta. With the default `ts_quantize_2d` parameters
+the per-row meta is alpha-independent, so a "same weight,
+different alpha" plumbing test is degenerate — the
+plumbing is exercised by re-quantizing with a different
+seed and asserting the ANE outputs differ.**
 
 The 7 TILE640 sources per the L0.5 reference
 (`ggml-metal-ops.cpp:1765-1828`):
@@ -1213,24 +1220,31 @@ The 7 TILE640 sources per the L0.5 reference
 | `outlier_vals`    | F16   | `[n_outliers]`                          | sparse addback values          |
 | `b`               | F16   | `[in_dim, n_tokens, ...]`              | activations                    |
 
-The per-layer alpha is the AWQ exponent applied at
-quantization time. It is folded into `page_scales` and
-`lane_scales` during `ts_quantize_2d` (the existing
-quantizer takes `alpha` as a parameter and produces the
-scaled page/lane scales accordingly). The bundle therefore
-sees alpha through `page_scales` / `lane_scales`; no
-separate alpha input is needed.
-
 The 7 sources are IOSurface-resident by construction (they
 are the bundle's INPUT slots). The host writes them per
 dispatch from the ggml graph's `op->src[0..6]` tensors. No
 baked weight, no separate per-layer alpha slot.
 
-The parity test (Phase 0.6) verifies this by packing the
-same logical weight with two different alpha values,
-dispatching each, and asserting the outputs differ
-accordingly. If alpha were baked, the second dispatch would
-return the same output as the first; the assertion would
+The per-layer alpha is encoded into the ternary itself
+(during `ts_quantize_2d`'s AWQ-aware ternarization) and is
+therefore part of `packed`. The bundle sees alpha through
+`packed` (the ternary bits) after the dispatch's host-side
+dequant reconstructs the fp16 weight. This is a deeper
+architectural point than the Phase 0 spec's claim that
+"alpha is folded into page_scales/lane_scales": in the
+C++ quantizer the alpha drives the AWQ per-channel scale
+search, which rescales the weight BEFORE ternarization, so
+the effect of alpha is in the ternary bits, not the
+per-row scales. The bundle's dequant path consumes the
+ternary bits and the per-row scales; both are runtime
+inputs.
+
+The parity test (Phase 0.6) verifies the per-row meta
+plumbing by re-quantizing with a different seed (which
+produces different page_scales / lane_scales) and
+asserting the ANE outputs differ accordingly. If the
+dispatch cached the per-row meta from a prior call, the
+second output would equal the first; the assertion would
 fail, surfacing the bug.
 
 ### 6.2 L1 dispatch in `ggml-ane.mm`
