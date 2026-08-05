@@ -7,26 +7,67 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		03FCDB138C2861BDF31C6D0D /* TrainingNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF9F199C740DC441D8D701F4 /* TrainingNotifier.swift */; };
+		0E4099EC4C4ABCC1B639FACA /* tessera.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 12E04ED6FBF1FCC3CA154CC7 /* tessera.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		14E5A74A80E7C2805E812FA3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 543C41C3EF0C82A41F740F1E /* ContentView.swift */; };
+		25EBBB580ADAEC2995B59446 /* WorkflowRunNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3010B9479BCC8BF30CCE9D /* WorkflowRunNotifier.swift */; };
 		44820084A42BFF61FD9198E8 /* TesseraCore in Frameworks */ = {isa = PBXBuildFile; productRef = 3EE7F1E4BFBB3E93B73ACCC3 /* TesseraCore */; };
+		47A4606AAD4445F62D82AB82 /* WorkflowsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FE31A6FADD1FFB1193E0FD1 /* WorkflowsView.swift */; };
 		47AD6881245204EF1A0C514C /* TesseraStudioMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD216E1B50E0E33E37DDB5C /* TesseraStudioMacApp.swift */; };
+		4EFBBCBA193E296F054E5385 /* WorkflowParameterPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40729A9531A2DFABE1EA961D /* WorkflowParameterPanelView.swift */; };
 		504CC16738EF99406D6B8529 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C144C7F04921903632D744E /* ContentView.swift */; };
+		561C364154E0918D86AD8D30 /* LearningDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD3045F308A4FC885C96939 /* LearningDashboardView.swift */; };
+		650C73FFFB02DBF42C52F402 /* WorkflowPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D222D5A75213DE4EA6FBB98 /* WorkflowPaletteView.swift */; };
+		716BCB07A97A34782A506338 /* WorkflowEditorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACDE06D68EFB3E03589167D6 /* WorkflowEditorStore.swift */; };
+		7F44BF2A0ABEA00E653CD50D /* WorkflowMenuActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD514C99769025121FCA45B2 /* WorkflowMenuActions.swift */; };
+		9062010338171FA15B703C64 /* tessera.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 12E04ED6FBF1FCC3CA154CC7 /* tessera.xcframework */; };
 		94155ADF33A1FA2244B0096B /* TesseraCore in Frameworks */ = {isa = PBXBuildFile; productRef = 558253DF4AD709A6F954A1B9 /* TesseraCore */; };
 		ACA69BEBB04769F1DD146753 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515D71CE71265C64C3BC538B /* SettingsView.swift */; };
+		B01CB1767E74CF9EBCF90BA1 /* WorkflowNodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75205220F8E12273F58FC23E /* WorkflowNodeView.swift */; };
+		C711E5902DC14E6DFA5B6BB3 /* LearningTrainingSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1FE0CD17FC666E463147E4 /* LearningTrainingSection.swift */; };
+		CA2FCD5D78AF4EDF4AAC29A0 /* WorkflowCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE2F125CEF082F7FA8395246 /* WorkflowCanvasView.swift */; };
 		D3B43A51CB7885704B6C80CE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9839F117CD5A6CC1C9C5F7DE /* SettingsView.swift */; };
 		D4B9C1644A7E90A4302166CF /* TesseraStudioiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 437779B0DF7334909ED10304 /* TesseraStudioiOSApp.swift */; };
+		DE12AD035A9DEF1AA463F79F /* WorkflowDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F27831D331D02ACFE0F58B1 /* WorkflowDocument.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		B9477D6A371B076BE580DBFE /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				0E4099EC4C4ABCC1B639FACA /* tessera.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		12E04ED6FBF1FCC3CA154CC7 /* tessera.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = tessera.xcframework; path = artifacts/tessera.xcframework; sourceTree = "<group>"; };
 		2C144C7F04921903632D744E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		3FE31A6FADD1FFB1193E0FD1 /* WorkflowsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowsView.swift; sourceTree = "<group>"; };
+		40729A9531A2DFABE1EA961D /* WorkflowParameterPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowParameterPanelView.swift; sourceTree = "<group>"; };
 		437779B0DF7334909ED10304 /* TesseraStudioiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TesseraStudioiOSApp.swift; sourceTree = "<group>"; };
 		515D71CE71265C64C3BC538B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		543C41C3EF0C82A41F740F1E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		55B00FB4A80A894E7D327A58 /* TesseraStudioiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TesseraStudioiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6F27831D331D02ACFE0F58B1 /* WorkflowDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowDocument.swift; sourceTree = "<group>"; };
+		75205220F8E12273F58FC23E /* WorkflowNodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowNodeView.swift; sourceTree = "<group>"; };
+		7D222D5A75213DE4EA6FBB98 /* WorkflowPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowPaletteView.swift; sourceTree = "<group>"; };
 		9075FB059F1B04D32002C2F2 /* TesseraStudioMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TesseraStudioMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		92B9CE3C72E91BD745B3A6BF /* TesseraStudio */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TesseraStudio; path = .; sourceTree = SOURCE_ROOT; };
 		9839F117CD5A6CC1C9C5F7DE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		9D3010B9479BCC8BF30CCE9D /* WorkflowRunNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowRunNotifier.swift; sourceTree = "<group>"; };
+		ACDE06D68EFB3E03589167D6 /* WorkflowEditorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowEditorStore.swift; sourceTree = "<group>"; };
+		BF9F199C740DC441D8D701F4 /* TrainingNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingNotifier.swift; sourceTree = "<group>"; };
+		CD1FE0CD17FC666E463147E4 /* LearningTrainingSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningTrainingSection.swift; sourceTree = "<group>"; };
+		CD514C99769025121FCA45B2 /* WorkflowMenuActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowMenuActions.swift; sourceTree = "<group>"; };
 		DFD216E1B50E0E33E37DDB5C /* TesseraStudioMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TesseraStudioMacApp.swift; sourceTree = "<group>"; };
+		EE2F125CEF082F7FA8395246 /* WorkflowCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowCanvasView.swift; sourceTree = "<group>"; };
+		FCD3045F308A4FC885C96939 /* LearningDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningDashboardView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -43,6 +84,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				94155ADF33A1FA2244B0096B /* TesseraCore in Frameworks */,
+				9062010338171FA15B703C64 /* tessera.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -66,6 +108,15 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		3F01C24A97920B06D1E20438 /* Learning */ = {
+			isa = PBXGroup;
+			children = (
+				CD1FE0CD17FC666E463147E4 /* LearningTrainingSection.swift */,
+				BF9F199C740DC441D8D701F4 /* TrainingNotifier.swift */,
+			);
+			path = Learning;
+			sourceTree = "<group>";
+		};
 		4B0BFA4088E866070226D74B /* Packages */ = {
 			isa = PBXGroup;
 			children = (
@@ -83,6 +134,22 @@
 			path = TesseraStudioiOS;
 			sourceTree = "<group>";
 		};
+		660EF4753934B99780D9956A /* Workflows */ = {
+			isa = PBXGroup;
+			children = (
+				EE2F125CEF082F7FA8395246 /* WorkflowCanvasView.swift */,
+				6F27831D331D02ACFE0F58B1 /* WorkflowDocument.swift */,
+				ACDE06D68EFB3E03589167D6 /* WorkflowEditorStore.swift */,
+				CD514C99769025121FCA45B2 /* WorkflowMenuActions.swift */,
+				75205220F8E12273F58FC23E /* WorkflowNodeView.swift */,
+				7D222D5A75213DE4EA6FBB98 /* WorkflowPaletteView.swift */,
+				40729A9531A2DFABE1EA961D /* WorkflowParameterPanelView.swift */,
+				9D3010B9479BCC8BF30CCE9D /* WorkflowRunNotifier.swift */,
+				3FE31A6FADD1FFB1193E0FD1 /* WorkflowsView.swift */,
+			);
+			path = Workflows;
+			sourceTree = "<group>";
+		};
 		ADF4D9448C4AB7B955BF1EC0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -90,6 +157,14 @@
 				9075FB059F1B04D32002C2F2 /* TesseraStudioMac.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B8364AA1085CB31A892616E1 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				12E04ED6FBF1FCC3CA154CC7 /* tessera.xcframework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		BDB3D247610FB8EE2D45003A /* Sources */ = {
@@ -115,6 +190,7 @@
 			children = (
 				4B0BFA4088E866070226D74B /* Packages */,
 				BDB3D247610FB8EE2D45003A /* Sources */,
+				B8364AA1085CB31A892616E1 /* Frameworks */,
 				ADF4D9448C4AB7B955BF1EC0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -122,7 +198,10 @@
 		F5AF8869B5464F3C31082196 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				FCD3045F308A4FC885C96939 /* LearningDashboardView.swift */,
 				515D71CE71265C64C3BC538B /* SettingsView.swift */,
+				3F01C24A97920B06D1E20438 /* Learning */,
+				660EF4753934B99780D9956A /* Workflows */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -164,6 +243,7 @@
 			buildPhases = (
 				D522CCF6F89116F5D1065F1E /* Sources */,
 				F2936DE8F64A5825A8188229 /* Frameworks */,
+				B9477D6A371B076BE580DBFE /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -230,8 +310,20 @@
 			buildActionMask = 2147483647;
 			files = (
 				504CC16738EF99406D6B8529 /* ContentView.swift in Sources */,
+				561C364154E0918D86AD8D30 /* LearningDashboardView.swift in Sources */,
+				C711E5902DC14E6DFA5B6BB3 /* LearningTrainingSection.swift in Sources */,
 				ACA69BEBB04769F1DD146753 /* SettingsView.swift in Sources */,
 				47AD6881245204EF1A0C514C /* TesseraStudioMacApp.swift in Sources */,
+				03FCDB138C2861BDF31C6D0D /* TrainingNotifier.swift in Sources */,
+				CA2FCD5D78AF4EDF4AAC29A0 /* WorkflowCanvasView.swift in Sources */,
+				DE12AD035A9DEF1AA463F79F /* WorkflowDocument.swift in Sources */,
+				716BCB07A97A34782A506338 /* WorkflowEditorStore.swift in Sources */,
+				7F44BF2A0ABEA00E653CD50D /* WorkflowMenuActions.swift in Sources */,
+				B01CB1767E74CF9EBCF90BA1 /* WorkflowNodeView.swift in Sources */,
+				650C73FFFB02DBF42C52F402 /* WorkflowPaletteView.swift in Sources */,
+				4EFBBCBA193E296F054E5385 /* WorkflowParameterPanelView.swift in Sources */,
+				25EBBB580ADAEC2995B59446 /* WorkflowRunNotifier.swift in Sources */,
+				47A4606AAD4445F62D82AB82 /* WorkflowsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -248,6 +340,10 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"artifacts\"",
+				);
 				INFOPLIST_FILE = Support/Mac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -371,6 +467,10 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"artifacts\"",
+				);
 				INFOPLIST_FILE = Support/Mac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
