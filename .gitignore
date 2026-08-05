@@ -159,3 +159,9 @@ AGENTS.local.md
 # locally; it is not checked in.
 /TesseraStudio/artifacts/
 /build-ffi/
+
+# Tessera calibration corpus payloads. The build-calibration-corpus.py
+# --real path downloads Wikitext-103 / COCO val2014 / LibriSpeech into
+# data/calibration/ (text, vision/ images, audio/ FLACs). The builder
+# is checked in; the downloaded contents are not.
+/data/calibration/

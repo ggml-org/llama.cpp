@@ -310,6 +310,25 @@ generator emits the plain calibration text, a sample index, a deterministic
 manifest, and a `llama.tessera.training-corpus.v1` receipt under CC BY-NC-SA
 4.0 with attribution to tribunus.dev.
 
+`--real` switches the same builder to the architect-chosen real corpora:
+Wikitext-103 (CC BY-SA 3.0) for text, COCO val2014 captions (CC BY 4.0 on
+the annotations; per-image Flickr licenses are mixed) for vision, and
+LibriSpeech dev.clean (CC BY 4.0) for audio. `--corpora` selects which
+modalities to fetch (comma-separated; default `text`); `--budget` selects
+the sample count per modality (`light` 1K/256/256, `medium` 5K/1K/1K,
+`heavy` 20K/4K/4K for text/vision/audio); `--dry-run` lists what would be
+fetched without any network or disk write. Text is stratified by paragraph
+length (short / medium / long) so the calibration pipeline gets a balanced
+mix; vision is uniform random over the COCO val2014 captions shard;
+audio is uniform random over the LibriSpeech dev.clean shard (the shard is
+already speaker-stratified). The output schema is the v1 schema extended
+with a `modality` field on each record and `image_path` / `audio_path` on
+the multimodal records; `multimodal_calibrate.py` (M1) consumes those
+fields and the `vision_samples` / `audio_samples` arrays in the manifest.
+The `training-corpus-receipt.json` gains a `corpora` block recording the
+upstream repository, downloaded byte count, the SHA256 of the first 1 MB
+of the downloaded payload, and the per-corpus license / attribution.
+
 `moe-calibrate.py` connects that corpus to llama-imatrix. It begins with a
 deterministic stratified set of 128 samples, accumulates graph-resident
 observer output across rounds, and adds 128 samples per round up to 1024.
