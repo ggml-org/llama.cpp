@@ -98,6 +98,11 @@
 		navigateToNextConversation: () => navigateToConversation(1)
 	});
 
+	// Bump the encryption idle timer on any user interaction
+	function handleActivity() {
+		encryptionStore.onUserActivity();
+	}
+
 	function checkApiKey() {
 		const apiKey = config().apiKey;
 
@@ -146,25 +151,6 @@
 		});
 		encryptionStore.onUnlock(() => {
 			if (!conversationsStore.isInitialized) void conversationsStore.init();
-		});
-
-		// Wire up global user-activity listeners for the encryption idle timer
-		const activityHandler = () => encryptionStore.onUserActivity();
-		window.addEventListener('mousemove', activityHandler, { passive: true });
-		window.addEventListener('keydown', activityHandler, { passive: true });
-		window.addEventListener('click', activityHandler, { passive: true });
-		window.addEventListener('scroll', activityHandler, { passive: true });
-		window.addEventListener('touchstart', activityHandler, { passive: true });
-
-		// Teardown on layout destroy
-		$effect(() => {
-			return () => {
-				window.removeEventListener('mousemove', activityHandler);
-				window.removeEventListener('keydown', activityHandler);
-				window.removeEventListener('click', activityHandler);
-				window.removeEventListener('scroll', activityHandler);
-				window.removeEventListener('touchstart', activityHandler);
-			};
 		});
 	});
 
@@ -290,7 +276,18 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:window
+	onkeydown={(e) => {
+		encryptionStore.onUserActivity();
+		handleKeydown(e);
+	}}
+	onmousemove={handleActivity}
+	onclick={handleActivity}
+	onscroll={handleActivity}
+	ontouchstart={handleActivity}
+	bind:innerHeight
+	bind:innerWidth
+/>
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
