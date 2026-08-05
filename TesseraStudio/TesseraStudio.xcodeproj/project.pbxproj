@@ -11,6 +11,7 @@
 		0E4099EC4C4ABCC1B639FACA /* tessera.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 12E04ED6FBF1FCC3CA154CC7 /* tessera.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		14E5A74A80E7C2805E812FA3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 543C41C3EF0C82A41F740F1E /* ContentView.swift */; };
 		25EBBB580ADAEC2995B59446 /* WorkflowRunNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3010B9479BCC8BF30CCE9D /* WorkflowRunNotifier.swift */; };
+		26164F765A562AE012432E1D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 3917A41E9C7063CEEF6F3C6A /* PrivacyInfo.xcprivacy */; };
 		44820084A42BFF61FD9198E8 /* TesseraCore in Frameworks */ = {isa = PBXBuildFile; productRef = 3EE7F1E4BFBB3E93B73ACCC3 /* TesseraCore */; };
 		47A4606AAD4445F62D82AB82 /* WorkflowsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FE31A6FADD1FFB1193E0FD1 /* WorkflowsView.swift */; };
 		47AD6881245204EF1A0C514C /* TesseraStudioMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD216E1B50E0E33E37DDB5C /* TesseraStudioMacApp.swift */; };
@@ -48,6 +49,7 @@
 /* Begin PBXFileReference section */
 		12E04ED6FBF1FCC3CA154CC7 /* tessera.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = tessera.xcframework; path = artifacts/tessera.xcframework; sourceTree = "<group>"; };
 		2C144C7F04921903632D744E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		3917A41E9C7063CEEF6F3C6A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		3FE31A6FADD1FFB1193E0FD1 /* WorkflowsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowsView.swift; sourceTree = "<group>"; };
 		40729A9531A2DFABE1EA961D /* WorkflowParameterPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowParameterPanelView.swift; sourceTree = "<group>"; };
 		437779B0DF7334909ED10304 /* TesseraStudioiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TesseraStudioiOSApp.swift; sourceTree = "<group>"; };
@@ -91,6 +93,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		00D67B0ECC0F20D66FA17D67 /* Mac */ = {
+			isa = PBXGroup;
+			children = (
+				3917A41E9C7063CEEF6F3C6A /* PrivacyInfo.xcprivacy */,
+			);
+			path = Mac;
+			sourceTree = "<group>";
+		};
 		1CB356EEFE5F04B3E736C1B5 /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -150,6 +160,14 @@
 			path = Workflows;
 			sourceTree = "<group>";
 		};
+		69E7A0D6C73684589F4E170E /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				00D67B0ECC0F20D66FA17D67 /* Mac */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
 		ADF4D9448C4AB7B955BF1EC0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -190,6 +208,7 @@
 			children = (
 				4B0BFA4088E866070226D74B /* Packages */,
 				BDB3D247610FB8EE2D45003A /* Sources */,
+				69E7A0D6C73684589F4E170E /* Support */,
 				B8364AA1085CB31A892616E1 /* Frameworks */,
 				ADF4D9448C4AB7B955BF1EC0 /* Products */,
 			);
@@ -242,6 +261,7 @@
 			buildConfigurationList = 1BA3A17FA0B3CA6F9F416A0A /* Build configuration list for PBXNativeTarget "TesseraStudioMac" */;
 			buildPhases = (
 				D522CCF6F89116F5D1065F1E /* Sources */,
+				31FCCD89AB7EC5603A57FEA2 /* Resources */,
 				F2936DE8F64A5825A8188229 /* Frameworks */,
 				B9477D6A371B076BE580DBFE /* Embed Frameworks */,
 			);
@@ -293,6 +313,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		31FCCD89AB7EC5603A57FEA2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				26164F765A562AE012432E1D /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		5B65E49E08C43B3AE9743D40 /* Sources */ = {
