@@ -79,6 +79,12 @@ let package = Package(
         // Redis / Valkey client (SwiftNIO-based, maintained by swift-server).
         // Used by TesseraCache for the ephemeral scratchpad / decay windows.
         .package(url: "https://github.com/swift-server/RediStack.git", from: "1.6.2"),
+        // Splash (JohnSundell): Swift-native syntax highlighter. Used by
+        // the Phase 2 editor for highlighting `.codeBlock` blocks. Splash
+        // is grammar-driven and ships a Swift grammar; other languages use
+        // a small regex highlighter. See docs/tessera-productivity-editor-design.md
+        // §10 for the rationale and the language list.
+        .package(url: "https://github.com/JohnSundell/Splash.git", from: "0.16.0"),
     ],
     targets: [
         .target(
@@ -106,6 +112,10 @@ let package = Package(
                 // hexagonal boundary rationale.
                 .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "RediStack", package: "RediStack"),
+                // Splash: Swift-native syntax highlighter for code blocks.
+                // The CodeBlockHighlighter consumes it on macOS; the
+                // regex fallback path is used on Linux/CI.
+                .product(name: "Splash", package: "Splash"),
             ],
             path: "Sources/TesseraCore",
             // Ships the Skills format doc so the target has a resource bundle
