@@ -57,6 +57,17 @@ TENSOR_STATS_COLS: tuple[str, ...] = (
     "out_dim", "in_dim", "n_elements", "dtype",
     "kurtosis", "eff_rank", "rms", "mean_abs", "tail_ratio",
     "source", "recommended_action", "updated_at",
+    # Targeted re-calibration: the orchestrator's monitor
+    # verdict triggers a focused re-capture on a
+    # domain-specific sample subset. The backfill machinery
+    # (tools/tessera/backfill.py) increments this counter
+    # each time the per-tensor activation stats are
+    # re-captured; the orchestrator reads the counter to
+    # decide whether the next iteration should re-trigger
+    # the backfill (it gates on ``backfill_count <
+    # max_backfill_rounds``). NULL means "no backfill yet"
+    # (the column is additive; pre-backfill rows are NULL).
+    "backfill_count",
 )
 L3_OUTLIER_COLS: tuple[str, ...] = (
     "model_hash", "model_role", "name", "layer", "sidecar_label",
@@ -210,6 +221,13 @@ class TesseraDB:
         # we don't repeat the round-trip for every insert.
         if not read_only:
             self._ensure_unified_indexes()
+            # Targeted re-calibration: the backfill_count
+            # column on tensor_stats is additive; the
+            # migration is idempotent (ADD COLUMN IF NOT
+            # EXISTS) and runs on every open so a Python
+            # opener picking up a C++-created DB sees the
+            # column without an explicit migration step.
+            self._ensure_tensor_stats_columns()
 
     @classmethod
     def open(
@@ -265,13 +283,30 @@ class TesseraDB:
             # Build one upsert per row. Per-row is fine because
             # the upsert is not on the hot path; the C++ side's
             # GA-prep walk also does per-row writes.
+            #
+            # Targeted re-calibration: ``backfill_count`` is
+            # incremented on every backfill write. The
+            # ``source`` column is the discriminator: a write
+            # with ``source='backfill_real'`` increments the
+            # counter; a write with any other source leaves
+            # the counter unchanged (the COALESCE-preserve
+            # contract the other columns follow). The INSERT
+            # path uses ``INSERT ... SELECT`` (rather than
+            # ``VALUES``) so the backfill_count can be derived
+            # from the source at insert time: the first
+            # backfill write on a fresh row sets the counter
+            # to 1 (not NULL). Subsequent backfill writes
+            # (the UPDATE path) increment.
             sql = (
                 "INSERT INTO tensor_stats ("
                 "  model_hash, model_role, name, family, layer_depth, "
                 "  out_dim, in_dim, n_elements, dtype, "
                 "  kurtosis, eff_rank, rms, mean_abs, tail_ratio, "
-                "  source, recommended_action, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "  source, recommended_action, updated_at, backfill_count"
+                ") SELECT "
+                "  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "  ?, ?, ?, "
+                "  CASE WHEN ? = 'backfill_real' THEN 1 ELSE NULL END "
                 "ON CONFLICT (model_hash, model_role, name) DO UPDATE SET "
                 "  family             = COALESCE(excluded.family,             tensor_stats.family), "
                 "  layer_depth        = COALESCE(excluded.layer_depth,        tensor_stats.layer_depth), "
@@ -286,7 +321,12 @@ class TesseraDB:
                 "  tail_ratio         = COALESCE(excluded.tail_ratio,         tensor_stats.tail_ratio), "
                 "  source             = excluded.source, "
                 "  recommended_action = COALESCE(excluded.recommended_action, tensor_stats.recommended_action), "
-                "  updated_at         = excluded.updated_at"
+                "  updated_at         = excluded.updated_at, "
+                "  backfill_count     = CASE "
+                "    WHEN excluded.source = 'backfill_real' THEN "
+                "      COALESCE(tensor_stats.backfill_count, 0) + 1 "
+                "    ELSE tensor_stats.backfill_count "
+                "  END"
             )
             # COALESCE on the UPDATE means: if the new write's
             # column is NULL, keep the existing value (the other
@@ -296,6 +336,15 @@ class TesseraDB:
             # upsert (and vice versa); the same convention applies
             # to recommended_action (the calibration side's
             # l5_action verdict; the C++ side never writes it).
+            #
+            # backfill_count: targeted re-calibration
+            # increments the counter on every backfill
+            # write. The caller can pass an explicit value
+            # (the typical case is ``None`` = "increment by
+            # 1"); passing a value lets callers seed or
+            # repair the counter explicitly. The CASE
+            # chain is: caller explicit -> source-driven
+            # increment on update -> existing (NULL-safe).
             try:
                 self._conn.execute(sql, [
                     model_hash,
@@ -315,6 +364,15 @@ class TesseraDB:
                     r.get("source", "py_cal"),
                     r.get("recommended_action"),
                     r.get("updated_at", now),
+                    # The CASE in the SELECT (insert path)
+                    # reads from this parameter; the CASE in
+                    # the ON CONFLICT (update path) reads
+                    # from ``excluded.source``. The
+                    # source-default (``py_cal``) keeps the
+                    # default-source rows on the legacy NULL
+                    # path; ``backfill_real`` rows get the
+                    # source-driven increment.
+                    r.get("source", "py_cal"),
                 ])
             except Exception as e:
                 sys.stderr.write(
@@ -503,6 +561,43 @@ class TesseraDB:
                 f"ADD COLUMN model_role failed: {e}\n"
             )
         self._l5_plan_columns_ensured = True
+
+    def _ensure_tensor_stats_columns(self) -> None:
+        """Idempotent migration of the targeted re-calibration
+        (``backfill_count``) column on ``tensor_stats``.
+
+        Targeted re-calibration (the focused re-capture
+        triggered by the L5 monitor verdict) writes a
+        ``backfill_count`` per row; the orchestrator gates
+        the next-iteration re-capture on this counter. The
+        column is additive: a pre-backfill DB has no
+        ``backfill_count`` column; the migration adds it
+        with a NULL default so the existing rows are
+        unchanged. The migration runs on every
+        ``TesseraDB`` open (``__init__``) and is cached on
+        the instance, so the round-trip is paid once per
+        process lifetime, not once per insert.
+
+        ``ADD COLUMN IF NOT EXISTS`` is a no-op when the
+        column already exists, so the call is safe on every
+        open and on every DB shape (Python-only, C++-then-
+        Python, fresh, post-migration).
+        """
+        if self._read_only:
+            return
+        if getattr(self, "_tensor_stats_columns_ensured", False):
+            return
+        try:
+            self._conn.execute(
+                "ALTER TABLE tensor_stats "
+                "ADD COLUMN IF NOT EXISTS backfill_count INTEGER DEFAULT NULL"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"tessera-db: ALTER TABLE tensor_stats "
+                f"ADD COLUMN backfill_count failed: {e}\n"
+            )
+        self._tensor_stats_columns_ensured = True
 
     def insert_l4_plan_outcome(
         self,

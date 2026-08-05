@@ -91,6 +91,7 @@ SCHEMA_SQL = """
         source             TEXT,
         recommended_action TEXT,
         updated_at         TIMESTAMP,
+        backfill_count     INTEGER DEFAULT NULL,
         PRIMARY KEY (model_hash, model_role, name)
     );
     CREATE TABLE IF NOT EXISTS l5_weights (

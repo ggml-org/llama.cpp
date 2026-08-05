@@ -251,6 +251,19 @@ class RequantAction:
     # the right group. Defaults to ``"trunk"`` for
     # backward compat with pre-Phase-16 callers.
     model_role: str = "trunk"
+    # Targeted re-calibration: the L5 monitor-verdict
+    # hook reads the per-tensor recommended_action
+    # (from the tensor_stats row) and uses it to
+    # decide which tensors the backfill re-captures.
+    # The field is None when the per-tensor verdict
+    # is not available (no tensor_stats row, or the
+    # orchestrator was constructed without a DB
+    # reference). The planner populates the field
+    # from the df's ``recommended_action`` column
+    # (when present); the field defaults to None for
+    # pre-backfill callers.
+    recommended_action: str | None = None
+    backfill_count: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -268,6 +281,11 @@ class RequantAction:
             # dict so the l5_plan_summary writer can tag
             # the row with the role.
             "model_role": self.model_role,
+            # Targeted re-calibration: the per-tensor
+            # recommended_action verdict (None when the
+            # DB lookup did not find a row).
+            "recommended_action": self.recommended_action,
+            "backfill_count": self.backfill_count,
         }
 
 
@@ -872,6 +890,28 @@ class RequantPlanner:
                     # role so the l5_plan_summary
                     # writer can tag the row.
                     model_role=self.model_role,
+                    # Targeted re-calibration:
+                    # the planner propagates the
+                    # per-tensor recommended_action
+                    # and backfill_count from the df
+                    # (the l5_outcome / l5_action
+                    # verdict on the tensor_stats
+                    # row) to the action so the
+                    # backfill hook can filter on
+                    # it. None when the df does
+                    # not have the columns (the
+                    # pre-backfill orchestrator
+                    # path).
+                    recommended_action=(
+                        str(tensor["recommended_action"])
+                        if tensor.get("recommended_action") is not None
+                        else None
+                    ),
+                    backfill_count=(
+                        int(tensor["backfill_count"])
+                        if tensor.get("backfill_count") is not None
+                        else None
+                    ),
                 )
             )
 
@@ -938,6 +978,22 @@ class RequantPlanner:
                     storage_delta_bits=bits_after - bits_before,
                     # Phase 16: role carried through.
                     model_role=self.model_role,
+                    # Targeted re-calibration:
+                    # recommended_action /
+                    # backfill_count are
+                    # propagated from the df
+                    # (same contract as the
+                    # top-fraction branch).
+                    recommended_action=(
+                        str(tensor["recommended_action"])
+                        if tensor.get("recommended_action") is not None
+                        else None
+                    ),
+                    backfill_count=(
+                        int(tensor["backfill_count"])
+                        if tensor.get("backfill_count") is not None
+                        else None
+                    ),
                 )
             )
 
@@ -996,6 +1052,9 @@ class OrchestratorLoop:
         converge_tolerance_delta: float = 1e-6,
         converge_tolerance_storage: float = 0.01,
         converge_window: int = 2,
+        backfill: "TargetedBackfill | None" = None,
+        max_backfill_rounds: int = 2,
+        backfill_sample_cap: int = 256,
     ) -> None:
         self.scorer = scorer
         self.planner = planner
@@ -1029,6 +1088,21 @@ class OrchestratorLoop:
         self.converge_tolerance_delta = float(converge_tolerance_delta)
         self.converge_tolerance_storage = float(converge_tolerance_storage)
         self.converge_window = max(1, int(converge_window))
+        # Targeted re-calibration: the backfill hook
+        # fires after the auto-converge checks (so
+        # auto-converge reasons still win when they fire
+        # first) and before the apply step. The hook
+        # drives a focused re-capture on the
+        # monitor-verdict tensors; the new activation
+        # stats re-feed the next iteration's
+        # ``l5_outcome`` evaluation. The hook is opt-in
+        # (None = bypassed, byte-equivalent pre-task
+        # behavior on iteration ordering). The
+        # ``--no-targeted-recal`` CLI flag maps to
+        # ``backfill=None``.
+        self.backfill = backfill
+        self.max_backfill_rounds = max(1, int(max_backfill_rounds))
+        self.backfill_sample_cap = max(1, int(backfill_sample_cap))
         self.history: list[RequantPlan] = []
 
     # -- public API --------------------------------------------------------
@@ -1056,6 +1130,26 @@ class OrchestratorLoop:
         df = self._load_dataframe(l4_report)
         if df.is_empty():
             raise ValueError("L4 report has no tensors; nothing to do")
+
+        # Targeted re-calibration: the backfill hook
+        # needs the runtime context (``_db`` /
+        # ``_db_path`` / ``_model_hash`` / ``_components``
+        # / ``_corpus_root`` / ``_backfill_timeout_sec``)
+        # to dispatch the per-tensor subprocesses. The
+        # context is set by ``enable_backfill``; when
+        # the orchestrator's CLI constructs the loop
+        # with ``backfill=TargetedBackfill(...)`` it
+        # also calls ``enable_backfill`` immediately
+        # after. The defaults below are the
+        # pre-backfill behavior (``_db = None`` ->
+        # the hook is bypassed).
+        if not hasattr(self, "_db"):
+            self._db = None
+            self._db_path = None
+            self._model_hash = ""
+            self._components = {}
+            self._corpus_root = None
+            self._backfill_timeout_sec = 600
 
         # Track the per-tensor qtype we have settled on.  We start from
         # the L4 report's current_qtype; the loop updates this map as
@@ -1131,6 +1225,112 @@ class OrchestratorLoop:
                             f"{self.converge_tolerance_storage:.3e})"
                         )
                         break
+
+            # Targeted re-calibration: when the backfill
+            # hook is enabled (i.e. ``self.backfill`` is
+            # not None), drive a focused re-capture on
+            # the monitor-verdict tensors. The hook is
+            # positioned AFTER the auto-converge checks
+            # so the auto-converge reasons still win
+            # when they fire first (the
+            # conflict-resolution the prior worker
+            # documented). The hook is async
+            # (ThreadPoolExecutor with max_workers=2);
+            # the orchestrator waits on the future at
+            # the next "apply" step so the next
+            # iteration's plan reads the re-captured
+            # stats. The new ``backfill-no-progress``
+            # termination_reason fires when every
+            # monitor tensor has hit the rounds cap
+            # (no further backfill is productive).
+            if self.backfill is not None and getattr(
+                self, "_db", None
+            ) is not None:
+                monitor_actions = [
+                    a for a in plan.actions
+                    if a.recommended_action == "monitor"
+                ]
+                if monitor_actions:
+                    monitor_entries = [
+                        {
+                            "name": a.name,
+                            "model_role": a.model_role,
+                            "family": _tensor_family(a.name),
+                            "layer_depth": int(
+                                self._layer_for(a.name)
+                            ),
+                        }
+                        for a in monitor_actions
+                    ]
+                    # The backfill engine filters by
+                    # ``backfill_count < max_rounds``;
+                    # passing all monitor tensors is fine
+                    # (the engine handles the cap).
+                    future = self.backfill.run_backfill_async(
+                        db_path=self._db_path,  # type: ignore[arg-type]
+                        model_hash=str(
+                            getattr(self, "_model_hash", "")
+                        ),
+                        components=self._components,
+                        corpus_root=self._corpus_root,
+                        monitor_tensors=monitor_entries,
+                    )
+                    try:
+                        result = future.result(
+                            timeout=self._backfill_timeout_sec,
+                        )
+                    except Exception as e:
+                        self._log(
+                            f"  backfill error: "
+                            f"{e.__class__.__name__}: {str(e)[:200]}"
+                        )
+                        result = None
+                    if result is not None:
+                        no_progress = (
+                            result.tensors_processed == 0
+                            and result.error_count == 0
+                        )
+                        if no_progress and len(monitor_entries) > 0:
+                            # Every monitor tensor hit
+                            # the backfill rounds cap
+                            # (the engine filtered them
+                            # all out). Set the
+                            # backfill-no-progress
+                            # termination_reason and
+                            # break the loop. We do
+                            # NOT touch the current
+                            # plan's other
+                            # termination_reason;
+                            # the spec is explicit
+                            # that
+                            # backfill-no-progress
+                            # is a new value, not a
+                            # replacement.
+                            plan.termination_reason = (
+                                "backfill-no-progress"
+                            )
+                            self._log(
+                                f"  converged: "
+                                f"backfill-no-progress "
+                                f"(monitor_tensors="
+                                f"{len(monitor_entries)}, "
+                                f"tensors_processed="
+                                f"{result.tensors_processed})"
+                            )
+                            break
+                        self._log(
+                            f"  backfill: "
+                            f"tensors_processed="
+                            f"{result.tensors_processed}, "
+                            f"samples_consumed="
+                            f"{result.samples_consumed}, "
+                            f"wall_time="
+                            f"{result.wall_time_sec:.2f}s"
+                        )
+                # When monitor_entries is empty,
+                # fall through to the apply step
+                # (no backfill to run; the next
+                # iteration's plan will re-evaluate).
 
             # Apply the plan.  The applier is responsible for writing the
             # updated policy (or calling per_tensor_calibrate.py).
@@ -1252,6 +1452,67 @@ class OrchestratorLoop:
     def _log(self, message: str) -> None:
         if self.verbose:
             print(f"[l5] {message}", file=sys.stderr)
+
+    def _layer_for(self, tensor_name: str) -> int:
+        """Extract the block index from ``tensor_name``
+        (same convention as the rest of the orchestrator:
+        ``blk.<i>.`` -> i; else 0). The backfill hook uses
+        this to populate the per-tensor ``layer_depth``
+        field the focused re-capture records.
+        """
+        import re as _re
+        m = _re.match(r"^blk\.(\d+)\.", str(tensor_name))
+        if m is not None:
+            return int(m.group(1))
+        return 0
+
+    # -- targeted re-calibration -----------------------------------------
+
+    def enable_backfill(
+        self,
+        *,
+        db: "TesseraDB | None" = None,
+        db_path: Path | None = None,
+        model_hash: str = "",
+        components: "Mapping[str, Path | None] | None" = None,
+        corpus_root: Path | None = None,
+        timeout_sec: int = 600,
+    ) -> None:
+        """Wire the backfill engine's runtime context
+        onto the orchestrator.
+
+        The orchestrator's iteration loop reads
+        ``self._db`` / ``self._db_path`` /
+        ``self._model_hash`` / ``self._components`` /
+        ``self._corpus_root`` /
+        ``self._backfill_timeout_sec`` on every iteration.
+        Setting them on the instance via this method
+        keeps the backfill hook decoupled from the
+        constructor (the backfill engine's lifetime is
+        a subset of the orchestrator's; the engine is
+        constructed at startup, the runtime context is
+        set when the orchestrator's CLI is built).
+
+        ``db`` is the ``TesseraDB`` instance the
+        orchestrator has open (read-only is fine -- the
+        backfill engine reads ``backfill_count`` from
+        it; the per-tensor subprocess writes through
+        ``--backfill-db``). ``db_path`` is the path
+        argument the subprocess uses; when ``db`` is
+        None, ``db_path`` is the only seam. ``None``
+        on both -> the backfill hook is bypassed (the
+        pre-task byte-equivalent behavior).
+        """
+        self._db = db
+        self._db_path = (
+            Path(db_path) if db_path is not None else None
+        )
+        self._model_hash = str(model_hash)
+        self._components = dict(components or {})
+        self._corpus_root = (
+            Path(corpus_root) if corpus_root is not None else None
+        )
+        self._backfill_timeout_sec = max(1, int(timeout_sec))
 
     # -- output ------------------------------------------------------------
 
@@ -1778,6 +2039,106 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--verbose", action="store_true")
+    # Targeted re-calibration (L5 monitor-verdict hook).
+    # The ``--targeted-recal`` / ``--no-targeted-recal``
+    # flag toggles the backfill engine. The default is
+    # ON when ``--retune-from-db`` is set (the
+    # orchestrator's normal path -- the retune lookup
+    # already queries the DB; the backfill hook reuses
+    # the same DB); OFF when ``--retune-from-db`` is
+    # not set (the backfill needs a DB reference;
+    # without one, the hook is bypassed). The
+    # ``--max-backfill-rounds`` and
+    # ``--backfill-sample-cap`` flags control the
+    # backfill engine's per-tensor budget. The
+    # ``--backfill-timeout-sec`` flag is the per-iter
+    # wait on the async future (default 600s).
+    parser.add_argument(
+        "--targeted-recal",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Enable the L5 monitor-verdict backfill hook. "
+            "When ON (the recommended default), the "
+            "orchestrator drives a focused re-capture on "
+            "the monitor-verdict tensors each iteration; "
+            "the new activation stats re-feed the next "
+            "iteration's l5_outcome evaluation. When OFF "
+            "(--no-targeted-recal), the hook is bypassed "
+            "and the iteration ordering is "
+            "byte-equivalent to the pre-backfill behavior. "
+            "The default is ON when --retune-from-db is "
+            "set (the orchestrator has a DB reference); "
+            "OFF otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--max-backfill-rounds",
+        type=int,
+        default=2,
+        help=(
+            "Maximum number of backfill rounds per "
+            "monitor-verdict tensor (default 2). The "
+            "orchestrator's iteration loop re-triggers "
+            "the backfill while backfill_count < this "
+            "value; the loop terminates with "
+            "backfill-no-progress when every monitor "
+            "tensor has hit the cap."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-sample-cap",
+        type=int,
+        default=256,
+        help=(
+            "Per-tensor sample cap for the backfill "
+            "re-capture (default 256). The cap is per "
+            "tensor; a 12B-class model with ~100 "
+            "monitor-verdict tensors sees "
+            "100 * 256 * max_rounds activations per "
+            "pass."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-timeout-sec",
+        type=int,
+        default=600,
+        help=(
+            "Per-iteration wait on the backfill async "
+            "future (default 600s). A stuck subprocess "
+            "raises TimeoutExpired; the orchestrator "
+            "logs the error and continues."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-components",
+        default=None,
+        help=(
+            "Comma-separated ROLE=PATH map of the per-role "
+            "components the backfill engine uses. ROLE is "
+            "one of trunk / dflash / dspark / mtp_nextn / "
+            "shared_embd / vision_tower / audio_tower / "
+            "mm_projector. Text-side roles take a layers "
+            "directory; mmproj roles take a GGUF path. "
+            "Default: empty (the orchestrator's CLI is "
+            "free of per-component paths; the backfill "
+            "engine's monitor lookup needs them to be "
+            "set explicitly when the engine is on)."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-corpus",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the calibration corpus root. When "
+            "set, the backfill samples from the "
+            "corpus's domain-specific subsets (the "
+            "build-calibration-corpus contract). When "
+            "None, the per-tensor driver falls back to "
+            "its synthetic-sample default."
+        ),
+    )
     return parser
 
 
@@ -2014,6 +2375,50 @@ def main(argv: list[str] | None = None) -> int:
             return apply_plan_to_policy(plan, args.existing_policy)
         apply_fn = _apply
 
+    # Targeted re-calibration: the backfill engine is
+    # constructed only when --targeted-recal is on. The
+    # default is on when --retune-from-db is set (the
+    # orchestrator has a DB reference); off otherwise.
+    # The ``--no-targeted-recal`` flag forces the engine
+    # to None (the byte-equivalent pre-task behavior on
+    # iteration ordering).
+    targeted_recal_on = (
+        args.targeted_recal
+        if args.targeted_recal is not None
+        else (args.retune_from_db is not None)
+    )
+    backfill_engine = None
+    backfill_components: dict[str, Path | None] = {}
+    if targeted_recal_on:
+        try:
+            from backfill import TargetedBackfill  # type: ignore
+        except ImportError:  # pragma: no cover - script-mode
+            sys.path.insert(
+                0, str(Path(__file__).resolve().parent),
+            )
+            from backfill import TargetedBackfill  # type: ignore
+        backfill_engine = TargetedBackfill(
+            max_backfill_rounds=args.max_backfill_rounds,
+            sample_cap=args.backfill_sample_cap,
+            verbose=args.verbose,
+        )
+        # Parse the --backfill-components map. The
+        # format is ``ROLE=PATH[,ROLE=PATH...]``. ROLE
+        # is one of the 8 unified-schema values; the
+        # text-side roles take a layers directory; the
+        # mmproj roles take a GGUF path.
+        if args.backfill_components:
+            for entry in args.backfill_components.split(","):
+                if "=" not in entry:
+                    raise ValueError(
+                        f"--backfill-components: expected "
+                        f"ROLE=PATH, got {entry!r}"
+                    )
+                role, path_str = entry.split("=", 1)
+                backfill_components[role.strip()] = Path(
+                    path_str.strip()
+                )
+
     orchestrator = OrchestratorLoop(
         scorer=scorer,
         planner=planner,
@@ -2039,7 +2444,50 @@ def main(argv: list[str] | None = None) -> int:
         converge_tolerance_delta=args.converge_tolerance,
         converge_tolerance_storage=args.converge_storage_tolerance,
         converge_window=args.converge_window,
+        # Targeted re-calibration: the backfill
+        # engine is None when --no-targeted-recal
+        # is set; the orchestrator's hook is
+        # bypassed in that case (byte-equivalent
+        # pre-task behavior on iteration ordering).
+        backfill=backfill_engine,
+        max_backfill_rounds=args.max_backfill_rounds,
+        backfill_sample_cap=args.backfill_sample_cap,
     )
+    # Wire the backfill engine's runtime context.
+    # The context is the same DB the retune uses
+    # (so we do not pay a second DuckDB open on
+    # the same file); the ``--backfill-db`` path
+    # is the same path the retune lookup opened
+    # (or ``--backfill-db`` itself when
+    # ``--retune-from-db`` is not set).
+    if backfill_engine is not None:
+        if args.retune_from_db is not None:
+            try:
+                from tessera_db import TesseraDB  # type: ignore
+                db_ctx = TesseraDB.open(args.retune_from_db)
+            except Exception as e:  # pragma: no cover - safety
+                sys.stderr.write(
+                    f"[l5] targeted-recal: TesseraDB.open "
+                    f"failed: {e.__class__.__name__}: "
+                    f"{str(e)[:120]}; backfill hook bypassed\n"
+                )
+                db_ctx = None
+            orchestrator.enable_backfill(
+                db=db_ctx,
+                db_path=args.retune_from_db,
+                model_hash=str(args.model_hash or ""),
+                components=backfill_components,
+                corpus_root=args.backfill_corpus,
+                timeout_sec=args.backfill_timeout_sec,
+            )
+        else:
+            # No DB reference; the hook is bypassed.
+            sys.stderr.write(
+                "[l5] targeted-recal: --retune-from-db is not set; "
+                "the backfill hook needs a DB reference. "
+                "Pass --retune-from-db PATH or "
+                "--no-targeted-recal to bypass.\n"
+            )
     plans = orchestrator.run(l4_report, imatrix)
 
     # History file defaults next to the policy file.

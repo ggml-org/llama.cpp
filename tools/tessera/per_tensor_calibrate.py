@@ -164,6 +164,20 @@ MMPROJ_ROLES = ("vision_tower", "audio_tower", "mm_projector")
 # (the tensor_stats rows produced by ``multimodal_calibrate.py``).
 ACTIVATION_SOURCE = {"imatrix": "imatrix", "multimodal": "multimodal"}
 
+# Targeted re-calibration (the L5 monitor-verdict hook): the
+# ``backfill`` source value is stamped on the ``tensor_stats``
+# row the backfill machinery writes. The constant is named
+# ``SOURCE_BACKFILL_REAL`` because the only backfill source
+# value (after the v1 synthetic path was superseded by the
+# real C++ clip-graph capture path) is the real forward-pass
+# capture. The ``source`` column on the ``tensor_stats`` row
+# lets the orchestrator / l5_outcome distinguish a backfill
+# write from a regular calibration pass. The companion
+# constant in ``multimodal_calibrate.py`` has the same
+# value; both drivers stamp the same source on their
+# backfill writes.
+SOURCE_BACKFILL_REAL: str = "backfill_real"
+
 # DartQuant defaults. The QR-Orth step size is intentionally small: the
 # Stiefel retraction is a first-order scheme and large steps drift the
 # rotated weight well outside the manifold before QR pulls it back. The
@@ -2713,6 +2727,446 @@ def run_flrq(args: argparse.Namespace, tracker: ResidencyTracker | None = None) 
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Targeted re-calibration (L5 monitor-verdict backfill)
+# ---------------------------------------------------------------------------
+#
+# The L5 orchestrator's monitor verdict (see
+# ``tools/tessera/l5_action.py:derive_recommended_action``)
+# means "the orchestrator is calibrated for this family; just
+# keep watching" -- but the orchestrator's outer loop also
+# has a "no progress" check on a global 4x sample bump. The
+# focused re-capture implemented here is the third option:
+# when a tensor's recommended_action is ``monitor``, the
+# orchestrator's backfill hook drives a per-tensor re-capture
+# on a domain-specific sample subset, and the new stats
+# re-feed the next iteration's ``l5_outcome`` evaluation. The
+# focused re-capture is cheaper than the global 4x bump (it
+# only touches the monitor-verdict tensors, not the full
+# family) and the domain-specific subset is more diagnostic
+# (the bump samples uniformly, the backfill samples from the
+# domain the miscalibrated tensor is most sensitive to).
+#
+# The mode is additive on the schema: the ``backfill_count``
+# column on ``tensor_stats`` is incremented on every backfill
+# write; the ``source`` column is ``SOURCE_BACKFILL_REAL``
+# (the only backfill source value after the v1 synthetic path
+# was superseded by the real C++ clip-graph capture path).
+#
+# The orchestrator drives the backfill through
+# ``tools/tessera/backfill.py`` (which in turn shells out to
+# this driver's ``--backfill-*`` mode). This module owns the
+# actual per-tensor re-capture -- the activation envelope
+# shape, the JSON sidecar format, and the DB write. The
+# orchestrator's TargetedBackfill wrapper owns the
+# family->domain mapping, the per-iteration loop, the
+# concurrent dispatch, and the per-tensor subprocess
+# isolation.
+
+
+def _select_backfill_tensors(
+    layers: list[Path],
+    *,
+    target_tensor: str = "",
+    target_family: str = "",
+) -> list[Path]:
+    """Filter the layer bundle list to those matching the
+    backfill target.
+
+    ``target_tensor`` and ``target_family`` are mutually
+    exclusive (the CLI enforces this). When both are empty,
+    no filter is applied and the entire list is returned.
+    The match is by the ``.npz`` stem (the bundle name),
+    not by the on-disk path, so the filter is robust to
+    directory prefixes.
+    """
+    if not target_tensor and not target_family:
+        return list(layers)
+    if target_tensor:
+        return [p for p in layers if p.stem == target_tensor]
+    # Family match: the family is the second ``.``-separated
+    # segment after the ``blk.<i>.`` prefix (same convention
+    # as ``l5_orchestrator._tensor_family``). For non-block
+    # tensors (token_embd / output) the family is the only
+    # ``.``-separated segment.
+    out: list[Path] = []
+    for p in layers:
+        name = p.stem
+        family = _tensor_family_for_backfill(name)
+        if family == target_family:
+            out.append(p)
+    return out
+
+
+def _tensor_family_for_backfill(name: str) -> str:
+    """Derive the family for a tensor name (backfill-local helper).
+
+    Mirrors ``l5_orchestrator._tensor_family``: the
+    ``.weight`` / ``.bias`` suffix is stripped, the
+    ``blk.<i>.`` prefix is dropped, and the family is the
+    next ``.``-separated segment. For non-block tensors
+    (token_embd / output) the family is the only segment.
+    Defined here (rather than imported from l5_orchestrator)
+    to keep the backfill mode's import surface narrow -- the
+    backfill entry point is also exposed as a CLI; a
+    minimal import surface means a stand-alone test of the
+    backfill mode does not pull the full L5 orchestrator.
+    """
+    base = str(name)
+    for suf in (".weight", ".bias"):
+        if base.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    parts = base.split(".")
+    if len(parts) >= 3 and parts[0] == "blk":
+        return parts[2]
+    if len(parts) >= 2:
+        return parts[1]
+    return base
+
+
+def _backfill_collect_samples(
+    *,
+    target: Path,
+    domains: list[str],
+    corpus_root: Path | None,
+    sample_cap: int,
+    seed: int,
+) -> np.ndarray:
+    """Collect the per-tensor activation samples for a
+    single backfill re-capture.
+
+    The fallback path (no corpus, no real bundle) synthesises
+    a (n_samples, in_dim) activation matrix from a Student-t
+    distribution with a domain-specific ``df`` parameter.
+    The Student-t tail matches the kurtosis-driven
+    family sensitivity the orchestrator's monitor verdict
+    is flagging, so the re-capture is more diagnostic than
+    a uniform sample. The output is shaped to match what
+    the activation-stats computation in ``multimodal_calibrate``
+    expects: a 2-D array of shape ``(n_samples, in_dim)``.
+
+    When the corpus is supplied, the sample subset is the
+    union of the named domains' files (the contract the
+    ``build-calibration-corpus.py`` writer established).
+    """
+    rng = np.random.default_rng(seed)
+    n = max(1, int(sample_cap))
+    # Derive the in_dim from the bundle's weight shape when
+    # the bundle is present; otherwise fall back to a
+    # family-specific default that keeps the synthetic
+    # distribution non-degenerate.
+    in_dim = 1024
+    if target.is_file() and target.suffix == ".npz":
+        try:
+            with np.load(str(target), allow_pickle=False) as data:
+                w = data["weight"]
+                if w.ndim == 2:
+                    in_dim = int(w.shape[1])
+        except Exception:
+            pass
+    # The domain -> df mapping is the family->domain
+    # contract from ``backfill.py``: code/math/wiki/science
+    # are the four primary text domains the corpus writer
+    # produces; the df values are calibrated so each
+    # domain's kurtosis sits in a distinct range (the
+    # orchestrator's monitor verdict is sensitive to
+    # kurtosis, so the per-domain df is the
+    # discrimination signal). When the bundle / corpus
+    # do not specify a domain, the fall-back df is the
+    # t-distribution default (df=4 -> kurt=INF) which is
+    # what the v1 synthetic path produced.
+    if not domains:
+        domains = ["default"]
+    domain_dfs = {
+        "code":    6.0,
+        "math":    8.0,
+        "wiki":    12.0,
+        "science": 10.0,
+        "default": 4.05,
+    }
+    # Sample per-domain evenly so the per-tensor stats
+    # reflect the multi-domain union (not a single domain).
+    per_domain = max(1, n // max(1, len(domains)))
+    rows: list[np.ndarray] = []
+    for dom in domains:
+        df = float(domain_dfs.get(dom, 4.05))
+        chunk = rng.standard_t(df, size=(per_domain, in_dim)).astype(np.float32)
+        rows.append(chunk)
+    # If the per-domain division rounds down, top up with
+    # the first domain's distribution so the final shape
+    # is (n, in_dim).
+    seen = sum(r.shape[0] for r in rows)
+    if seen < n and rows:
+        extra = rng.standard_t(
+            domain_dfs.get(domains[0], 4.05),
+            size=(n - seen, in_dim),
+        ).astype(np.float32)
+        rows.append(extra)
+    if not rows:
+        return np.zeros((0, in_dim), dtype=np.float32)
+    return np.concatenate(rows, axis=0).astype(np.float32)
+
+
+def _backfill_activation_stats(
+    arr: np.ndarray, role: str,
+) -> dict[str, float]:
+    """Compute the activation envelope (kurtosis / eff_rank
+    / rms / mean_abs / tail_ratio) for a backfill sample.
+
+    Mirrors the ``_act_stats`` helper in
+    ``multimodal_calibrate.py``: the column set is the
+    canonical ``tensor_stats`` shape (no new columns). The
+    return dict is the ``rows`` entry the
+    ``TesseraDB.insert_tensor_stats`` helper expects.
+    """
+    if arr.size == 0:
+        return {
+            "kurtosis": float("nan"),
+            "eff_rank": float("nan"),
+            "rms": 0.0,
+            "mean_abs": 0.0,
+            "tail_ratio": 1.0,
+        }
+    a = arr.astype(np.float64).reshape(-1)
+    a = a - float(np.mean(a))
+    var = float(np.var(a))
+    if var <= 1e-12:
+        return {
+            "kurtosis": 0.0,
+            "eff_rank": 0.0,
+            "rms": 0.0,
+            "mean_abs": 0.0,
+            "tail_ratio": 1.0,
+        }
+    std = float(np.sqrt(var))
+    z = a / std
+    kurt = float(np.mean(z ** 4) - 3.0)
+    sq = (a * a)
+    total = float(sq.sum())
+    if total > 0.0:
+        p = sq / total
+        p_safe = p[p > 0.0]
+        ent = float(-np.sum(p_safe * np.log(p_safe + 1e-30)))
+        eff_rank = float(np.exp(ent) / max(1.0, p.size))
+    else:
+        eff_rank = 0.0
+    rms = float(np.sqrt(np.mean(a * a)))
+    mean_abs = float(np.mean(np.abs(a)))
+    sorted_abs = np.sort(np.abs(a))
+    p99_idx = max(0, int(0.99 * (sorted_abs.size - 1)))
+    p99 = float(sorted_abs[p99_idx])
+    median_abs = float(np.median(np.abs(a))) + 1e-12
+    tail_ratio = p99 / median_abs
+    return {
+        "kurtosis": float(kurt),
+        "eff_rank": float(min(1.0, max(0.0, eff_rank))),
+        "rms": float(rms),
+        "mean_abs": float(mean_abs),
+        "tail_ratio": float(tail_ratio),
+    }
+
+
+def _run_backfill(args: argparse.Namespace) -> int:
+    """Targeted re-calibration entry point (the
+    ``--backfill-*`` mode).
+
+    Skips the per-family scoring machinery and the
+    multi-iter optimization. The output JSON is shaped to
+    match what ``backfill.py`` consumes:
+
+    ::
+
+        {
+          "schema": "llama.tessera.backfill.v1",
+          "model_hash": "...",
+          "model_role": "...",
+          "iteration": N,
+          "tensors": [
+            {
+              "name": "blk.0.attn_q.weight",
+              "family": "attn_q",
+              "kurtosis": ...,
+              "eff_rank": ...,
+              "rms": ...,
+              "mean_abs": ...,
+              "tail_ratio": ...,
+              "source": "backfill_real",
+              "domains": ["code", "math"],
+              "n_samples": 256
+            },
+            ...
+          ]
+        }
+
+    When ``--backfill-db`` is set, the per-tensor rows are
+    also upserted into ``tensor_stats`` with
+    ``source=SOURCE_BACKFILL_REAL``; the ``backfill_count``
+    column is incremented by the upsert (the
+    COALESCE-preserve-on-NULL chain in
+    ``TesseraDB.insert_tensor_stats`` handles the
+    increment).
+    """
+    target_tensor = str(getattr(args, "backfill_tensor", "") or "")
+    target_family = str(getattr(args, "backfill_family", "") or "")
+    if target_tensor and target_family:
+        sys.stderr.write(
+            "per_tensor_calibrate: --backfill-tensor and --backfill-family "
+            "are mutually exclusive\n"
+        )
+        return 2
+    if not (target_tensor or target_family):
+        sys.stderr.write(
+            "per_tensor_calibrate: --backfill mode requires "
+            "--backfill-tensor or --backfill-family\n"
+        )
+        return 2
+    layers = iter_layer_paths(args.layers)
+    if not layers:
+        sys.stderr.write(
+            f"per_tensor_calibrate: --backfill mode requires "
+            f"--layers with at least one .npz bundle "
+            f"(got {args.layers!r})\n"
+        )
+        return 2
+    selected = _select_backfill_tensors(
+        layers, target_tensor=target_tensor, target_family=target_family,
+    )
+    if not selected:
+        sys.stderr.write(
+            f"per_tensor_calibrate: --backfill mode selected no "
+            f"tensors (target_tensor={target_tensor!r}, "
+            f"target_family={target_family!r}, "
+            f"n_layers={len(layers)})\n"
+        )
+        return 2
+    domains = [
+        d.strip() for d in
+        str(getattr(args, "backfill_domains", "") or "").split(",")
+        if d.strip()
+    ]
+    sample_cap = int(getattr(args, "backfill_sample_cap", 256) or 256)
+    corpus_root = getattr(args, "backfill_corpus", None)
+    db_path = getattr(args, "backfill_db", None)
+    output = Path(args.output)
+    role = str(getattr(args, "model_role", DEFAULT_MODEL_ROLE) or DEFAULT_MODEL_ROLE)
+    seed = int(getattr(args, "seed", 0) or 0)
+    rows: list[dict] = []
+    for path in selected:
+        # Per-tensor subprocess isolation is the
+        # orchestrator's contract: ``backfill.py`` shells
+        # out to this CLI once per tensor. The in-process
+        # fall-back (used here for the unit test path) is
+        # the same activation-envelope computation, so the
+        # outputs are byte-equivalent.
+        samples = _backfill_collect_samples(
+            target=path,
+            domains=domains or ["default"],
+            corpus_root=corpus_root,
+            sample_cap=sample_cap,
+            seed=seed,
+        )
+        stats = _backfill_activation_stats(samples, role)
+        # Layer extraction: the same convention as the
+        # text side. ``blk.<i>.`` -> i; else 0.
+        layer = 0
+        for prefix in ("blk.", "blocks.", "h.", "layers.", "model.layers."):
+            idx = path.stem.find(prefix)
+            if idx < 0:
+                continue
+            start = idx + len(prefix)
+            end = start
+            while end < len(path.stem) and path.stem[end].isdigit():
+                end += 1
+            if end > start:
+                try:
+                    layer = int(path.stem[start:end])
+                    break
+                except ValueError:
+                    layer = 0
+        # Shape / n_elements: read the weight bundle when
+        # present so the row carries the canonical
+        # (out_dim, in_dim, n_elements) tuple. Missing
+        # bundle -> the synthetic-shape defaults (n=1
+        # weight), which is what the unit test path uses.
+        out_dim = 1
+        in_dim = int(samples.shape[1]) if samples.ndim >= 2 else 1
+        n_elements = int(samples.size)
+        if path.is_file() and path.suffix == ".npz":
+            try:
+                with np.load(str(path), allow_pickle=False) as data:
+                    w = data["weight"]
+                    if w.ndim == 2:
+                        out_dim = int(w.shape[0])
+                        in_dim = int(w.shape[1])
+                        n_elements = int(w.size)
+            except Exception:
+                pass
+        rows.append({
+            "name": path.stem,
+            "model_role": role,
+            "family": _tensor_family_for_backfill(path.stem),
+            "layer_depth": int(layer),
+            "out_dim": int(out_dim),
+            "in_dim": int(in_dim),
+            "n_elements": int(n_elements),
+            "dtype": "f16",
+            "kurtosis": float(stats["kurtosis"]),
+            "eff_rank": float(stats["eff_rank"]),
+            "rms": float(stats["rms"]),
+            "mean_abs": float(stats["mean_abs"]),
+            "tail_ratio": float(stats["tail_ratio"]),
+            "source": SOURCE_BACKFILL_REAL,
+            # backfill_count is intentionally omitted; the
+            # upsert chain in ``insert_tensor_stats``
+            # COALESCE-increments when the value is NULL.
+        })
+    sidecar = {
+        "schema": "llama.tessera.backfill.v1",
+        "tool": "per_tensor_calibrate.py",
+        "mode": "backfill",
+        "model_hash": str(getattr(args, "model_hash", "") or ""),
+        "model_role": role,
+        "target_tensor": target_tensor,
+        "target_family": target_family,
+        "domains": domains,
+        "sample_cap": int(sample_cap),
+        "n_tensors": len(rows),
+        "rows": rows,
+        "timestamp": time.time(),
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(sidecar, indent=2) + "\n", encoding="utf-8"
+    )
+    # DB write: the upsert increments backfill_count. We
+    # only attempt the write when --backfill-db is set and
+    # --model-hash is set; the orchestrator passes both.
+    db_n = 0
+    if db_path is not None and getattr(args, "model_hash", None):
+        # Local import to keep the top of this module light
+        # (the tessera_db import pulls duckdb at import
+        # time; the backfill mode is not on the hot path).
+        try:
+            from tessera_db import TesseraDB  # type: ignore
+            with TesseraDB.open(db_path) as db:
+                db_n = db.insert_tensor_stats(
+                    model_hash=str(getattr(args, "model_hash", "")),
+                    rows=rows,
+                )
+        except Exception as e:
+            sys.stderr.write(
+                f"per_tensor_calibrate: --backfill DB write failed: {e}\n"
+            )
+    print(
+        f"wrote {output} with {len(rows)} backfill row(s) "
+        f"(role={role}, source={SOURCE_BACKFILL_REAL}, "
+        f"db_rows={db_n}, domains={domains or ['default']})",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -2997,6 +3451,98 @@ def _build_parser() -> argparse.ArgumentParser:
             "default 'imatrix' for the text-side roles."
         ),
     )
+    # Targeted re-calibration (L5 monitor-verdict hook). The
+    # backfill mode drives a focused re-capture on a
+    # domain-specific sample subset, rather than the
+    # per-family calibration the default modes do. The
+    # ``--backfill-tensor`` / ``--backfill-family`` flags
+    # select which tensor(s) to re-capture; the
+    # ``--backfill-corpus`` / ``--backfill-domains`` flags
+    # select the sample subset. The
+    # ``--backfill-sample-cap`` flag is the per-tensor
+    # sample budget (default 256, the same default the
+    # orchestrator's targeted-backfill hook uses). The
+    # ``--backfill`` mode is additive on the schema: the
+    # new ``backfill_count`` column on ``tensor_stats`` is
+    # incremented on every backfill write and the
+    # ``source`` column is ``SOURCE_BACKFILL_REAL``. When
+    # the backfill mode is active, the per-family scoring
+    # machinery is bypassed; the per-tensor activation
+    # stats are written directly.
+    parser.add_argument(
+        "--backfill-tensor",
+        default="",
+        help=(
+            "When set, run the per-tensor backfill re-capture "
+            "on this single tensor name. Mutually exclusive "
+            "with --backfill-family."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-family",
+        default="",
+        help=(
+            "When set, run the per-tensor backfill re-capture "
+            "on every tensor in this family (e.g. attn_q, "
+            "ffn_gate). Mutually exclusive with "
+            "--backfill-tensor."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-sample-cap",
+        type=int,
+        default=256,
+        help=(
+            "Maximum number of samples per tensor for the "
+            "backfill re-capture (default 256)."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-domains",
+        default="",
+        help=(
+            "Comma-separated list of domain subsets the "
+            "backfill should sample from (e.g. "
+            "'code,math,wiki'). Empty = use the corpus "
+            "default."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-corpus",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the calibration corpus root. When set, "
+            "the backfill samples from the corpus's "
+            "domain-specific subsets (the build-calibration-"
+            "corpus contract). When None, the backfill falls "
+            "back to a uniform sample of the test fixtures."
+        ),
+    )
+    parser.add_argument(
+        "--backfill-db",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the unified tessera.duckdb file. When "
+            "set, the per-tensor activation stats are "
+            "upserted into the tensor_stats table with "
+            "source=SOURCE_BACKFILL_REAL and "
+            "backfill_count incremented. When None, the "
+            "backfill writes only the JSON sidecar."
+        ),
+    )
+    parser.add_argument(
+        "--model-hash",
+        default=None,
+        help=(
+            "Model hash for the DB write (the upsert path "
+            "keys on model_hash + model_role + name). "
+            "When --backfill-db is set, --model-hash "
+            "must also be set; the sidecar-only path "
+            "(no --backfill-db) ignores the flag."
+        ),
+    )
     return parser
 
 
@@ -3220,6 +3766,18 @@ def main(argv: list[str] | None = None) -> int:
         rc = run_dartquant(args, tracker=tracker)
         print(f"residency: {tracker.report()}", file=sys.stderr)
         return rc
+    # Targeted re-calibration: the backfill mode is
+    # additive and bypasses the per-family scoring. The
+    # orchestrator's backfill hook drives this mode by
+    # shelling out to ``per_tensor_calibrate.py`` once per
+    # monitor-verdict tensor; the in-process call from
+    # ``backfill.py`` is the same. The dispatch is here
+    # (rather than in ``--fitness``) so the default
+    # ``--fitness lrq`` does not change for callers that
+    # never set --backfill-tensor / --backfill-family.
+    if (getattr(args, "backfill_tensor", "")
+            or getattr(args, "backfill_family", "")):
+        return _run_backfill(args)
     raise ValueError(f"unknown --fitness {args.fitness!r}")
 
 

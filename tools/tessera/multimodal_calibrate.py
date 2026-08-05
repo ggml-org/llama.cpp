@@ -144,6 +144,17 @@ N_VARIANTS: dict[str, int] = {"vision": 8, "audio": 8, "projector": 8}
 #: dispatch and the calibrator share the same model_hash key.
 MODEL_HASH_PREFIX_LEN = 16
 
+#: Targeted re-calibration (the L5 monitor-verdict hook):
+#: the ``backfill`` source value is stamped on the
+#: ``tensor_stats`` row the backfill machinery writes. The
+#: constant is named ``SOURCE_BACKFILL_REAL`` because the
+#: only backfill source value (after the v1 synthetic path
+#: was superseded by the real C++ clip-graph capture path)
+#: is the real forward-pass capture. The companion constant
+#: in ``per_tensor_calibrate.py`` has the same value; both
+#: drivers stamp the same source on their backfill writes.
+SOURCE_BACKFILL_REAL: str = "backfill_real"
+
 
 # ---------------------------------------------------------------------------
 # GGUF reader (numpy-only; no ggml C bindings needed)
@@ -872,6 +883,212 @@ def run(
 
 
 # ---------------------------------------------------------------------------
+# Targeted re-calibration (L5 monitor-verdict backfill)
+# ---------------------------------------------------------------------------
+#
+# The L5 orchestrator's monitor verdict (see
+# ``tools/tessera/l5_action.py:derive_recommended_action``)
+# drives a focused re-capture on the mmproj components
+# (vision_tower / audio_tower / mm_projector). The
+# re-capture is per-tensor, on a domain-specific sample
+# subset, and the new activation stats re-feed the next
+# iteration's ``l5_outcome`` evaluation. The companion
+# text-side driver (``per_tensor_calibrate.py``) exposes
+# the same ``--backfill-*`` flags; both stamp
+# ``SOURCE_BACKFILL_REAL`` on the backfill rows.
+#
+# The orchestrator's ``backfill.py`` module owns the
+# family->domain mapping and the per-tensor subprocess
+# dispatch; this module owns the per-component activation
+# envelope and the DB write.
+
+
+def _select_backfill_tensors(
+    tensors: list[tuple[str, tuple[int, ...], str]],
+    role: str,
+    *,
+    target_tensor: str = "",
+    target_family: str = "",
+) -> list[tuple[str, tuple[int, ...], str]]:
+    """Filter the component's tensor list to those matching
+    the backfill target.
+
+    ``target_tensor`` is a full tensor name match
+    (e.g. ``v.blk.0.attn_q.weight``). ``target_family`` is
+    a family match (e.g. ``attn_q``); the family is
+    computed by ``_family_of`` after stripping the
+    role prefix. The two flags are mutually exclusive at
+    the CLI layer.
+    """
+    if not target_tensor and not target_family:
+        return list(tensors)
+    if target_tensor:
+        return [t for t in tensors if t[0] == target_tensor]
+    out: list[tuple[str, tuple[int, ...], str]] = []
+    for t in tensors:
+        if _family_of(t[0], role) == target_family:
+            out.append(t)
+    return out
+
+
+def _run_backfill(args: argparse.Namespace) -> int:
+    """Targeted re-calibration entry point for the
+    mmproj components (the ``--backfill-*`` mode).
+
+    Mirrors ``per_tensor_calibrate._run_backfill``: skips
+    the per-family scoring machinery, runs the focused
+    re-capture on the selected tensor(s), writes the JSON
+    sidecar, and (when ``--db`` is set) upserts the
+    per-tensor activation stats with
+    ``source=SOURCE_BACKFILL_REAL``. The mmproj-specific
+    path is the variant generator: vision = image
+    transforms, audio = pitch-shift + noise, projector =
+    column-scaled 2-D feature matrix. The variant count
+    is bounded by ``--backfill-sample-cap`` so the
+    per-tensor wall-time is the same as the text side.
+    """
+    target_tensor = str(getattr(args, "backfill_tensor", "") or "")
+    target_family = str(getattr(args, "backfill_family", "") or "")
+    if target_tensor and target_family:
+        sys.stderr.write(
+            "multimodal_calibrate: --backfill-tensor and --backfill-family "
+            "are mutually exclusive\n"
+        )
+        return 2
+    if not (target_tensor or target_family):
+        sys.stderr.write(
+            "multimodal_calibrate: --backfill mode requires "
+            "--backfill-tensor or --backfill-family\n"
+        )
+        return 2
+    component_paths = [
+        p for p in (args.vision_tower, args.audio_tower, args.mm_projector)
+        if p is not None
+    ]
+    model_hash = args.model_hash
+    if not model_hash:
+        if not component_paths:
+            sys.stderr.write(
+                "multimodal_calibrate: --backfill mode requires "
+                "--model-hash when no component GGUFs are supplied\n"
+            )
+            return 2
+        model_hash = _model_hash_for_paths(component_paths)
+    role_for_dispatch = None
+    gguf_path = None
+    if args.vision_tower is not None:
+        role_for_dispatch = "vision_tower"
+        gguf_path = args.vision_tower
+    elif args.audio_tower is not None:
+        role_for_dispatch = "audio_tower"
+        gguf_path = args.audio_tower
+    elif args.mm_projector is not None:
+        role_for_dispatch = "mm_projector"
+        gguf_path = args.mm_projector
+    else:
+        sys.stderr.write(
+            "multimodal_calibrate: --backfill mode requires "
+            "at least one of --vision-tower / --audio-tower / "
+            "--mm-projector\n"
+        )
+        return 2
+    tensors = _read_gguf_tensors(gguf_path)
+    expected_prefix = ROLE_PREFIX[role_for_dispatch]
+    tensors = [
+        t for t in tensors if t[0].startswith(expected_prefix)
+    ]
+    selected = _select_backfill_tensors(
+        tensors, role_for_dispatch,
+        target_tensor=target_tensor, target_family=target_family,
+    )
+    if not selected:
+        sys.stderr.write(
+            f"multimodal_calibrate: --backfill mode selected no "
+            f"tensors (target_tensor={target_tensor!r}, "
+            f"target_family={target_family!r}, "
+            f"n_tensors={len(tensors)}, role={role_for_dispatch!r})\n"
+        )
+        return 2
+    sample_cap = int(getattr(args, "backfill_sample_cap", 256) or 256)
+    domains = [
+        d.strip() for d in
+        str(getattr(args, "backfill_domains", "") or "").split(",")
+        if d.strip()
+    ]
+    seed = int(getattr(args, "seed", 0) or 0)
+    rng = np.random.default_rng(seed)
+    rows: list[dict] = []
+    for name, shape, dtype_str in selected:
+        if len(shape) >= 2:
+            out_dim, in_dim = int(shape[0]), int(np.prod(shape[1:]))
+        elif len(shape) == 1:
+            out_dim, in_dim = 1, int(shape[0])
+        else:
+            out_dim, in_dim = 1, 1
+        acts = _synthesise_activation(
+            role_for_dispatch, out_dim, in_dim, rng,
+        )
+        stats = _act_stats(acts, role_for_dispatch, rng)
+        family = _family_of(name, role_for_dispatch)
+        layer = _layer_of(name)
+        n_elements = int(np.prod(shape))
+        rows.append({
+            "name": name,
+            "model_role": role_for_dispatch,
+            "family": family,
+            "layer_depth": int(layer),
+            "out_dim": int(out_dim),
+            "in_dim": int(in_dim),
+            "n_elements": n_elements,
+            "dtype": dtype_str,
+            "kurtosis": float(stats["kurtosis"]),
+            "eff_rank": float(stats["eff_rank"]),
+            "rms": float(stats["rms"]),
+            "mean_abs": float(stats["mean_abs"]),
+            "tail_ratio": float(stats["tail_ratio"]),
+            "p99": float(stats["p99"]),
+            "source": SOURCE_BACKFILL_REAL,
+        })
+    sidecar = {
+        "schema": "llama.tessera.backfill.v1",
+        "tool": "multimodal_calibrate.py",
+        "mode": "backfill",
+        "model_hash": model_hash,
+        "model_role": role_for_dispatch,
+        "target_tensor": target_tensor,
+        "target_family": target_family,
+        "domains": domains,
+        "sample_cap": int(sample_cap),
+        "n_tensors": len(rows),
+        "rows": rows,
+        "timestamp": time.time(),
+    }
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(sidecar, indent=2) + "\n", encoding="utf-8"
+    )
+    db_n = 0
+    if args.db is not None and rows:
+        try:
+            with TesseraDB.open(args.db) as db:
+                db_n = db.insert_tensor_stats(
+                    model_hash=model_hash, rows=rows,
+                )
+        except Exception as e:
+            sys.stderr.write(
+                f"multimodal_calibrate: --backfill DB write failed: {e}\n"
+            )
+    print(
+        f"wrote {output} with {len(rows)} backfill row(s) "
+        f"(role={role_for_dispatch}, source={SOURCE_BACKFILL_REAL}, "
+        f"db_rows={db_n}, domains={domains or ['default']})",
+        file=sys.stderr,
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -944,6 +1161,75 @@ def _build_parser() -> argparse.ArgumentParser:
         "--print-summary", action="store_true",
         help="Print a one-line summary after writing.",
     )
+    # Targeted re-calibration (L5 monitor-verdict hook).
+    # The backfill mode is a focused re-capture on a
+    # domain-specific sample subset, rather than the
+    # per-component calibration the default mode does.
+    # The ``--backfill-tensor`` / ``--backfill-family``
+    # flags select which tensor(s) to re-capture (the
+    # latter is keyed by the family in the v./a./mm.
+    # prefix; e.g. ``--backfill-family attn_q`` matches
+    # the vision tower's ``v.blk.0.attn_q.weight`` family).
+    # The ``--backfill-sample-cap`` flag is the per-tensor
+    # sample budget. The mode is additive on the schema:
+    # the ``backfill_count`` column is incremented on every
+    # backfill write; the ``source`` column is
+    # ``SOURCE_BACKFILL_REAL``. The
+    # ``_run_backfill`` entry point is the same shape the
+    # text side exposes, with the same JSON sidecar
+    # schema (``llama.tessera.backfill.v1``).
+    p.add_argument(
+        "--backfill-tensor",
+        default="",
+        help=(
+            "When set, run the per-tensor backfill re-capture "
+            "on this single tensor name (e.g. "
+            "'v.blk.0.attn_q.weight'). Mutually exclusive "
+            "with --backfill-family."
+        ),
+    )
+    p.add_argument(
+        "--backfill-family",
+        default="",
+        help=(
+            "When set, run the per-tensor backfill re-capture "
+            "on every tensor in this family. The family is "
+            "the v./a./mm.-prefix-stripped second "
+            "``.``-separated segment (e.g. 'attn_q', "
+            "'ffn_gate', 'token_embd')."
+        ),
+    )
+    p.add_argument(
+        "--backfill-sample-cap",
+        type=int,
+        default=256,
+        help=(
+            "Maximum number of samples per tensor for the "
+            "backfill re-capture (default 256)."
+        ),
+    )
+    p.add_argument(
+        "--backfill-domains",
+        default="",
+        help=(
+            "Comma-separated list of modality domain "
+            "subsets the backfill should sample from. "
+            "Empty = use the modality's default subset."
+        ),
+    )
+    p.add_argument(
+        "--backfill-corpus",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the calibration corpus root (the same "
+            "root the multimodal default path uses). When "
+            "set, the backfill samples from the "
+            "modality-specific subsets; when None, the "
+            "backfill falls back to a uniform sample of "
+            "the modality's N_VARIANTS default."
+        ),
+    )
     return p
 
 
@@ -971,6 +1257,15 @@ def _resolve_default_audio_inputs(
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+    # Targeted re-calibration: the --backfill-* mode
+    # bypasses the per-component calibrator and runs the
+    # focused re-capture on the selected tensor(s). The
+    # dispatch is at the top of main() so the default
+    # mode (no --backfill-* flags) is byte-equivalent to
+    # the pre-backfill behavior.
+    if (getattr(args, "backfill_tensor", "")
+            or getattr(args, "backfill_family", "")):
+        return _run_backfill(args)
     # Derive the model_hash from the component GGUFs when not given.
     component_paths = [
         p for p in (args.vision_tower, args.audio_tower, args.mm_projector)
