@@ -17,6 +17,8 @@ add_library(mtmd
             clip-impl.h
             clip-model.h
             clip-graph.h
+            clip-capture.cpp
+            clip-capture.h
             models/models.h
             models/cogvlm.cpp
             models/conformer.cpp
@@ -139,4 +141,13 @@ if (LLAMA_BUILD_TOOLS)
     set_target_properties(llama-mtmd-debug PROPERTIES OUTPUT_NAME llama-mtmd-debug)
     target_link_libraries(llama-mtmd-debug PRIVATE llama-common mtmd Threads::Threads)
     target_compile_features(llama-mtmd-debug PRIVATE cxx_std_17)
+
+    # tessera: clip-graph activation capture CLI. Mirrors the
+    # llama-imatrix pattern (standalone binary the orchestrator
+    # invokes). Does not link against llama-common or
+    # llama-quantize-impl to keep the surface minimal.
+    add_executable(llama-clip-capture clip-capture-cli.cpp)
+    set_target_properties(llama-clip-capture PROPERTIES OUTPUT_NAME llama-clip-capture)
+    target_link_libraries(llama-clip-capture PRIVATE mtmd Threads::Threads)
+    target_compile_features(llama-clip-capture PRIVATE cxx_std_17)
 endif()

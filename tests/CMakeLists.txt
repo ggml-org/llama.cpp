@@ -576,6 +576,20 @@ llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 unset(LLAMA_TEST_NAME)
 
+# tessera: v2 clip-graph activation capture tests. The
+# fixture is a real mmproj-tinygemma3 GGUF; if the file is
+# missing the integration tests are skipped. The pure-function
+# tests (bogus-path, empty-input, peak-RSS gate) run
+# regardless.
+set(LLAMA_TEST_NAME test-clip-capture)
+llama_build_and_test(${PROJECT_SOURCE_DIR}/tools/mtmd/tests/test-clip-capture.cpp
+                    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+target_include_directories(${LLAMA_TEST_NAME} PRIVATE
+    ${PROJECT_SOURCE_DIR}/tools/mtmd
+    ${PROJECT_SOURCE_DIR}/vendor)
+unset(LLAMA_TEST_NAME)
+
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
 if (TARGET cpp-httplib)

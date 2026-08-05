@@ -102,3 +102,32 @@ struct clip_cap {
     bool has_audio;
 };
 struct clip_cap clip_get_cap(const char * fname);
+
+//
+// tessera v2 activation capture (M1 was a numpy synthetic pass;
+// this is the real forward-pass tap). Mirrors the imatrix tap
+// pattern (src/llama-context.cpp:1168-1188 for the text side).
+// The function below runs a forward pass on the supplied batch
+// and invokes the callback for every non-weight, non-input
+// tensor in the graph. The tensor's data is valid for the
+// duration of the callback; the caller must copy if it wants to
+// keep the data. Returns the number of activations seen, or -1
+// on failure (the model's forward pass itself failed).
+//
+// The weight-tensor set is built by re-parsing the source GGUF
+// at ``gguf_path`` (the same path the caller passed to
+// ``clip_init``). Re-parsing is cheap relative to the forward
+// pass; the alternative — exposing the model struct's weight
+// pointer set — would leak the model struct into the public
+// header.
+//
+typedef int (*clip_capture_activation_cb)(
+        const char * tensor_name,
+        const struct ggml_tensor * tensor,
+        void * user_data);
+
+int clip_capture_activations(
+        struct clip_ctx * ctx, int n_threads,
+        const struct clip_image_f32_batch * imgs,
+        const char * gguf_path,
+        clip_capture_activation_cb cb, void * user_data);

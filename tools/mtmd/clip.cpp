@@ -17,6 +17,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -4788,6 +4789,84 @@ std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * 
         result[dev] += size;
     }
     return result;
+}
+
+//
+// tessera v2 activation capture (M1 was a numpy synthetic pass).
+// Runs a forward pass and invokes the callback for each
+// non-weight, non-input tensor in the graph. See clip.h for the
+// public API contract.
+//
+int clip_capture_activations(
+        struct clip_ctx * ctx, int n_threads,
+        const struct clip_image_f32_batch * imgs_c_ptr,
+        const char * gguf_path,
+        clip_capture_activation_cb cb, void * user_data) {
+    if (ctx == nullptr || imgs_c_ptr == nullptr || cb == nullptr) {
+        return -1;
+    }
+    const clip_image_f32_batch & imgs = *imgs_c_ptr;
+    if (imgs.entries.empty()) {
+        return 0;
+    }
+    // Build the weight-name set from the source GGUF. The set is
+    // local to this function; parsing is cheap relative to the
+    // forward pass.
+    std::set<std::string> weight_names;
+    if (gguf_path != nullptr) {
+        struct gguf_init_params wparams = {
+            /*.no_alloc = */ true,
+            /*.ctx      = */ nullptr,
+        };
+        gguf_context_ptr wctx(gguf_init_from_file(gguf_path, wparams));
+        if (wctx) {
+            const int n_t = gguf_get_n_tensors(wctx.get());
+            for (int i = 0; i < n_t; ++i) {
+                const char * nm = gguf_get_tensor_name(wctx.get(), i);
+                if (nm) {
+                    weight_names.insert(nm);
+                }
+            }
+        }
+    }
+    // Same forward-pass path as clip_image_batch_encode, but the
+    // graph is walked after compute and activations are tapped.
+    if (!ctx->is_allocated) {
+        clip_model_loader::warmup(*ctx, *imgs_c_ptr);
+    }
+    ggml_backend_sched_reset(ctx->sched.get());
+    ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs)->build();
+    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+    if (status != GGML_STATUS_SUCCESS) {
+        return -1;
+    }
+    // Walk the graph's nodes; for each non-weight, non-input
+    // tensor, invoke the callback.
+    int n_activations = 0;
+    const int n_nodes = ggml_graph_n_nodes(gf);
+    for (int i = 0; i < n_nodes; ++i) {
+        ggml_tensor * node = ggml_graph_node(gf, i);
+        if (node == nullptr) {
+            continue;
+        }
+        const char * nm = ggml_get_name(node);
+        if (nm == nullptr || nm[0] == '\0') {
+            continue;
+        }
+        if (weight_names.count(nm) > 0) {
+            continue;
+        }
+        if (node->flags & GGML_TENSOR_FLAG_INPUT) {
+            continue;
+        }
+        int rc = cb(nm, node, user_data);
+        if (rc != 0) {
+            return rc < 0 ? rc : -1;
+        }
+        n_activations += 1;
+    }
+    return n_activations;
 }
 
 //
