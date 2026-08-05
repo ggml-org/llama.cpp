@@ -152,8 +152,9 @@ public enum TesseraFFIBridge {
     // MARK: - Helpers
 
     /// Map a C int return to an Outcome: 0 -> success, positive -> CLI
-    /// fallback, negative -> error.
-    private static func intOutcome(_ code: Int32, success: String) -> Outcome {
+    /// fallback, negative -> error. Internal so TesseraEngineContext can
+    /// reuse the same mapping for the model-context path.
+    static func intOutcome(_ code: Int32, success: String) -> Outcome {
         if code == 0 { return .success(output: success) }
         if code > 0 { return .fallbackToCLI }
         switch code {
@@ -164,13 +165,66 @@ public enum TesseraFFIBridge {
 
     /// Serialize the Swift config dictionary to a JSON string for the C calls.
     /// Empty/invalid configs become empty strings (the C side treats null and
-    /// "" the same: use defaults).
-    private static func serializeConfig(_ config: [String: Any]) -> String {
+    /// "" the same: use defaults). Internal so TesseraEngineContext can
+    /// reuse the serialiser.
+    static func serializeConfig(_ config: [String: Any]) -> String {
         guard !config.isEmpty,
               let data = try? JSONSerialization.data(withJSONObject: config),
               let str = String(data: data, encoding: .utf8) else {
             return ""
         }
         return str
+    }
+
+    // MARK: - Model-context path (header added 2026-08)
+    //
+    // The handle-based variants run in-process against a loaded model
+    // context. They delegate to TesseraEngineContext (the actor that owns
+    // the underlying C++ objects) so the native side never sees
+    // concurrent calls. The *_model() operations return .fallbackToCLI
+    // while the engine wiring is incomplete; the real implementation will
+    // turn the same calls into .success(output:) responses.
+
+    /// Load a model via the native FFI. Throws TesseraEngineError on
+    /// failure (engine not available, GGUF parse error, ...).
+    public static func loadModel(path: String) async throws -> TesseraModelHandle {
+        try await TesseraEngineContext.shared.loadModel(path: path)
+    }
+
+    /// Release a handle. Safe to call with a handle that was already
+    /// freed; the actor no-ops in that case.
+    public static func freeModel(handle: TesseraModelHandle) async {
+        await TesseraEngineContext.shared.free(handle: handle)
+    }
+
+    /// AWQ evolve against the loaded model. The call runs inside the
+    /// engine context actor so it serialises with concurrent free() and
+    /// load() calls on the same model.
+    public static func evolveModel(
+        handle: TesseraModelHandle,
+        config: [String: Any] = [:]
+    ) async -> Outcome {
+        await TesseraEngineContext.shared.evolve(handle: handle, config: config)
+    }
+
+    /// Perplexity / KL forward probe against the loaded model. Returns
+    /// the structured JSON on success; the .fallbackToCLI case carries
+    /// the engine's TODO note so the UI can show it.
+    public static func evaluateModel(
+        handle: TesseraModelHandle,
+        config: [String: Any] = [:]
+    ) async -> Outcome {
+        await TesseraEngineContext.shared.evaluate(handle: handle, config: config)
+    }
+
+    /// Convert the loaded model to the named format.
+    public static func convertModel(
+        handle: TesseraModelHandle,
+        output outputPath: String,
+        format: String
+    ) async -> Outcome {
+        await TesseraEngineContext.shared.convert(
+            handle: handle, outputPath: outputPath, format: format
+        )
     }
 }

@@ -15,6 +15,7 @@
 
 #include "include/tessera_ffi.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 // A small static JSON string for the char*-returning stubs: signals that the
@@ -89,6 +90,46 @@ char *tessera_list_models(const char *dir) {
     // can fall back to FileManager enumeration.
     (void)dir;
     return ts_stub_unavailable_json();
+}
+
+// --- model-context variants (header added 2026-08; see include/tessera_ffi.h) ---
+//
+// Stub semantics: loadModel returns NULL (so TesseraEngineContext throws
+// TesseraError.engineUnavailable), freeModel is a no-op on NULL, and the
+// *_model operations return the unavailable marker so the bridge falls back
+// to the CLI subprocess. This keeps SwiftPM builds green without the
+// xcframework and exercises the same error paths the real impl will hit
+// when its engine wiring is incomplete.
+
+tessera_model_handle_t tessera_load_model(const char *model_path,
+                                          const int32_t *n_gpu_layers) {
+    (void)model_path;
+    (void)n_gpu_layers;
+    return NULL;
+}
+
+void tessera_free_model(tessera_model_handle_t handle) {
+    (void)handle;
+}
+
+int tessera_evolve_model(tessera_model_handle_t handle, const char *config_json) {
+    (void)handle;
+    (void)config_json;
+    return 1;
+}
+
+char *tessera_evaluate_model(tessera_model_handle_t handle, const char *config_json) {
+    (void)handle;
+    (void)config_json;
+    return ts_stub_unavailable_json();
+}
+
+int tessera_convert_model(tessera_model_handle_t handle,
+                          const char *output_path,
+                          const char *format) {
+    (void)handle;
+    if (!output_path || !format) return -1;
+    return 1;
 }
 
 void tessera_free_string(char *s) {
