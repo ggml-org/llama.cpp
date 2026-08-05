@@ -186,9 +186,11 @@ public enum AudienceMode: String, CaseIterable, Sendable {
 
 /// Read-only access to current settings for non-view code.
 public enum TesseraSettings {
-    /// Register factory defaults. Call once at app launch.
-    public static func registerDefaults() {
-        UserDefaults.standard.register(defaults: [
+    /// Every registered default, keyed by settings key. Exposed so the
+    /// registered surface is auditable (e.g. a test can assert no opt-out
+    /// key exists where collection is mandatory).
+    public static var registeredDefaults: [String: Any] {
+        [
             TesseraSettingsKey.defaultRuntime: TesseraRuntime.onDevice.rawValue,
             TesseraSettingsKey.modelDirectory: TesseraSettingsDefault.modelDirectory,
             TesseraSettingsKey.threadCount: TesseraSettingsDefault.threadCount,
@@ -239,7 +241,12 @@ public enum TesseraSettings {
             TesseraSettingsKey.searxngBaseURL: TesseraSettingsDefault.searxngBaseURL,
             TesseraSettingsKey.tavilyAPIKey: TesseraSettingsDefault.tavilyAPIKey,
             TesseraSettingsKey.coercionMode: TesseraSettingsDefault.coercionMode,
-        ])
+        ]
+    }
+
+    /// Register factory defaults. Call once at app launch.
+    public static func registerDefaults() {
+        UserDefaults.standard.register(defaults: registeredDefaults)
     }
 
     public static var defaultRuntime: TesseraRuntime {

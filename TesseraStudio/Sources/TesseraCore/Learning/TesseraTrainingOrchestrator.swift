@@ -435,12 +435,15 @@ public final class TesseraTrainingOrchestrator: @unchecked Sendable {
         var out = Data()
         // Training consumes calibration + promoted replay records only
         // (runtime-traces spec section 12.5): raw runtime captures enter the
-        // pipeline exclusively through the curation stage's replay. The
-        // runtime file prefix is the first egress-filter line; the record
-        // guard is the second, so a runtime-provenance record is dropped
-        // even if it ever lands in a calibration- or replay-named file.
+        // pipeline exclusively through the curation stage's replay, and s2s
+        // records are Tier B local-only (voice-bearing codes), never dataset
+        // fuel (s2s design section 4.2). The runtime and s2s file prefixes
+        // are the first egress-filter line; the record guard is the second,
+        // so a local-only record is dropped even if it ever lands in a
+        // calibration- or replay-named file.
         for file in traceStore.traceFiles()
-        where !file.lastPathComponent.hasPrefix(TesseraTraceStore.runtimeFilePrefix) {
+        where !file.lastPathComponent.hasPrefix(TesseraTraceStore.runtimeFilePrefix)
+            && !file.lastPathComponent.hasPrefix(TesseraTraceStore.s2sFilePrefix) {
             guard let data = try? Data(contentsOf: file) else { continue }
             let text = String(decoding: data, as: UTF8.self)
             for line in text.split(separator: "\n", omittingEmptySubsequences: true)
