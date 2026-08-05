@@ -12,8 +12,13 @@
 //
 // The proxy is L1-agnostic by design: the t_l^2 measurement is
 // parameterized into ts_higgs_proxy_measurement_fn. The default
-// implementation is the offline ternary MSE; the L1 path is a
-// function-pointer change, not a code rewrite.
+// is the L1-on-ANE path (ts_higgs_proxy_measure_l1): ternary
+// TILE640 quantization error + the F16 pre-dequant precision
+// loss, modeled with the same dequant dispatch the
+// GGML_OP_TILE640_MATMUL inference path uses. The offline
+// ternary MSE stays available as a documented opt-in
+// (TS_HIGGS_PROXY_LEGACY_OFFLINE=1, or pass
+// ts_higgs_proxy_measure_offline as the measurement_fn).
 //
 // See docs/tessera-higgs-estimator.md for the math and the
 // ane.alpha-coefficients.v1 schema. See docs/tessera-ane-ios-demo-design.md
@@ -134,6 +139,43 @@ float ts_higgs_proxy_measure_offline(const float * W_flat, int64_t n_elem,
                                      int64_t layer_idx, void * ctx);
 
 // ---------------------------------------------------------------------------
+// L1-on-ANE t_l^2 measurement (the L1-agnostic path, Phase 0 source)
+//
+// Per-layer L1 distance between the original fp32 weight and the
+// ANE-dequantized fp16 weight, modeled with the same dequant
+// dispatch the GGML_OP_TILE640_MATMUL inference path uses:
+//   - packed_W is the layer's TILE640 packing, concatenated
+//     per-row flat rows [packed words | fp16 page_scales |
+//     int8 lane_scales] (the quantize_row_tessera_t640_ref row
+//     layout), out_dim rows of in_dim elements each;
+//   - each row is dequantized with dequantize_row_tessera_t640_v2
+//     (pre-decoded meta) when the dispatch cost model picks v2
+//     (in_dim >= GGML_TESSERA_T640_V2_MIN_K and v2 enabled), the
+//     C reference dequantize_row_tessera_t640 below the cutoff;
+//   - the dequantized row is round-tripped through fp16 (the
+//     bundle's pinned slot dtype - the F16 pre-dequant) before
+//     the abs-diff, so the measurement captures both the ternary
+//     quantization error AND the ANE fp16 precision loss.
+//
+// t_l^2 = (L1 / (out_dim * in_dim)) / max(|W_orig|): the mean
+// absolute reconstruction error normalized by the largest
+// original weight magnitude. Non-negative; 0.0 for a zero-norm /
+// empty input (no NaN, no Inf).
+// ---------------------------------------------------------------------------
+
+typedef float (*ts_higgs_proxy_l1_measurement_fn)(const float * W_orig_flat,
+                                                  const void * packed_W,
+                                                  int64_t out_dim, int64_t in_dim,
+                                                  int64_t layer_idx, void * ctx);
+
+// The L1-on-ANE measurement. See the typedef comment for the
+// packed_W layout contract and the normalization.
+float ts_higgs_proxy_measure_l1(const float * W_orig_flat,
+                                const void * packed_W,
+                                int64_t out_dim, int64_t in_dim,
+                                int64_t layer_idx, void * ctx);
+
+// ---------------------------------------------------------------------------
 // Estimator
 //
 // Read the GGUF, dequant every tensor to F32, classify family,
@@ -142,7 +184,12 @@ float ts_higgs_proxy_measure_offline(const float * W_flat, int64_t n_elem,
 // normalized so the positive mean is 1.0). Clamp to alpha_floor.
 // Apply uniform fallback if total_params < min_params_for_estimate.
 //
-// measurement_fn may be NULL; the default offline ternary MSE is used.
+// measurement_fn may be NULL; the default is then the L1-on-ANE
+// path (ts_higgs_proxy_measure_l1, t_squared_source
+// "l1_kernel_dequant"). Setting the env var
+// TS_HIGGS_PROXY_LEGACY_OFFLINE=1 restores the legacy offline
+// ternary MSE default. An explicit measurement_fn keeps the
+// legacy signature and its bit-identical output.
 // measurement_ctx is passed through to the measurement function.
 //
 // gguf_path must be a readable GGUF file. Returns 0 on success, non-zero
