@@ -262,7 +262,15 @@ final class EngineToolRetargetTests: XCTestCase {
     func testToolReturnsBinaryNotFoundWhenResolverFails() async throws {
         // Override the settings with a path that does not exist; the
         // resolver returns nil and the tool should surface a clear error
-        // that names the checked locations.
+        // that names the checked locations. Clear `knownLocations` so
+        // a developer-machine install of tessera-cli at e.g.
+        // ~/Developer/GitHub/tessera/build/bin/tessera-cli doesn't
+        // short-circuit the test (the same hook the W3 worker exposed
+        // for the resolver's own unit tests).
+        let originalLocations = TesseraCLIBinaryResolver.knownLocations
+        TesseraCLIBinaryResolver.knownLocations = []
+        defer { TesseraCLIBinaryResolver.knownLocations = originalLocations }
+
         UserDefaults.standard.set("/nope/tessera-cli", forKey: TesseraSettingsKey.tesseraCLIPath)
         let tool = QuantizeTool(shell: mockShell)
         let result = try await tool.execute(arguments: [
