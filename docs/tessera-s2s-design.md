@@ -1,7 +1,10 @@
 # Tessera S2S: Route A (text bridge) + instrumentation for Route B
 
-Status: design. Talker quantization locked by architect 2026-08-05 (section
-3.4); sections 8.1/8.2/8.3 still open.
+Status: design. Architect decisions landed 2026-08-05: Talker quant via
+Tessera pipelines with chained end-to-end calibration (3.4), CustomVoice
+presets with voice cloning on indefinite hold (3.1, 7), trace code storage
+default-on with no opt-out (4). Route B consent lane under deep research:
+Talker-as-anonymizer for voice-bearing pairs (section 8).
 Date: 2026-08-05
 
 ## 0. Driving decisions
@@ -16,7 +19,11 @@ Date: 2026-08-05
    Route A's accumulated instrumentation data, not on a calendar date.
 4. The Talker is quantized through the Tessera calibration and quantization
    pipelines, not plain offline quant. It doubles as the multimodal test
-   target for ternary-dequant-on-arrival (section 3.4).
+   target for ternary-dequant-on-arrival (section 3.4). Calibration is the
+   ENTIRE Gemma 4 -> Qwen3-TTS chain run and instrumented together, so the
+   Talker is quantized against the trunk's real output distribution.
+5. Voice cloning is on indefinite hold. CustomVoice presets only. Trace code
+   storage is default-on with no opt-out (mandatory collection doctrine).
 
 ## 1. Why instrumenting Route A makes Route B nearly free
 
@@ -91,9 +98,10 @@ Consequences:
   frame -> 80 ms of 24 kHz PCM, streaming. ggml has ggml_conv_1d and
   ggml_conv_transpose_1d; the snake activation is synthesized as
   x + sin^2(alpha*x)/alpha (no native snake op).
-- Qwen-TTS-Tokenizer-12Hz encoder: NOT needed for Route A TTS. Needed later
-  for voice-clone reference audio (Base model ref_audio path) and for offline
-  Route B data prep on contributed corpora. Deferred to wave 5.
+- Qwen-TTS-Tokenizer-12Hz encoder: NOT needed for Route A TTS. Its only
+  consumers would be voice-clone reference audio (indefinite hold) and
+  offline Route B data prep on contributed corpora. No wave assigned; this
+  graph ships only if cloning comes back or Route B needs corpus encoding.
 
 ### 3.2 Runtime flow
 
@@ -132,21 +140,28 @@ purposes:
   head) is the first non-text model through the pipeline, and becomes the
   multimodal parity fixture for dequant-on-arrival once that path lands.
 
-Campaign dependency, honest state at 2026-08-05: true fused
-dequant-on-arrival currently FAILS parity (ane-fused-dequant Phase 0.5
-finding: the MIL dequant chain is broken as a whole, individual constructs
-exonerated). The champion that passes the 4-seed gate is host-side dequant to
-F16 + plain ANE matmul, bit-identical to the dequant-on-host path.
-Consequences for this wave:
+Dequant-on-arrival state (architect update 2026-08-05, supersedes the
+ane-fused-dequant best.md Phase 0.5 snapshot): the fused on-arrival path now
+dispatches dequant onto Accelerate+NEON and matmul onto CoreML in low-power /
+iOS mode, and is coming along nicely. Consequences for this wave:
 
 - The W2 correctness gate runs code/logit parity against the F16 reference
-  through the host-dequant path (the one that passes today).
-- Ternary-dequant-on-arrival on the Talker is a tracking item gated on the
-  ane-fused-dequant campaign; it is deliberately NOT in the S2S critical
-  path. When the campaign lands on-arrival parity for text fixtures, the
-  Talker fixture is re-run as the multimodal proof.
-- Calibration data: TTS prompts + style/voice instructions (input side only;
-  imatrix observes activations, output codes are irrelevant to it).
+  through the current dispatch path.
+- Ternary-dequant-on-arrival on the Talker rides the campaign's progress;
+  the Talker fixture is the multimodal proof as soon as text-fixture parity
+  holds. It stays out of the S2S ship gate.
+
+Chained calibration (architect decision 2026-08-05): the Talker is NOT
+calibrated standalone. Calibration runs the entire Gemma 4 -> retokenize ->
+Talker chain instrumented together, so:
+
+- Talker activations are collected on the trunk's REAL outputs
+  (on-distribution by construction, not a curated prompt set).
+- Instrumentation (section 4) is live during calibration, so calibration
+  runs double as the first s2s.v1 trace corpus.
+- The input segment (mic -> audio tower, when voice input is active) is part
+  of the chained pass. That segment is the voice-bearing one; see section 8
+  for the consent/anonymization treatment.
 
 ## 4. Instrumentation contract
 
@@ -157,7 +172,9 @@ Consequences for this wave:
 - Text: the exact tokens Gemma produced (post-retokenize Qwen ids too, so the
   pair is training-ready without re-derivation).
 - Codes: full codebook-0 stream + acoustic layers 1-15, zlib-compressed
-  base64 (code streams are highly compressible).
+  base64 (code streams are highly compressible). Code capture is DEFAULT-ON
+  with no opt-out, per the mandatory-collection doctrine; codes are Tier B
+  local-only (section 4.2), so default-on storage creates no egress exposure.
 - Timing: retokenize us, Talker TTFT, per-frame decode rate, Code2Wav
   throughput, first-packet latency.
 - Voice config: preset id or reference-audio content hash (never the raw
@@ -170,10 +187,15 @@ Consequences for this wave:
 - Aggregates (rates, latencies, code-entropy stats, frame counts): Tier A,
   egress-eligible under the existing anonymization route.
 - Text: Tier B, through the anonymization stage before anything else.
-- Codes: Tier B, LOCAL-ONLY. Code sequences reconstruct voice through
-  Code2Wav, so they are voice-bearing (biometric-adjacent). They must never
-  reach dataset staging.
-- Waveform: not captured by default; explicit opt-in capture flag only.
+- Codes: Tier B, LOCAL-ONLY, default-on capture with no opt-out. Code
+  sequences reconstruct voice through Code2Wav, so they are voice-bearing
+  (biometric-adjacent). They must never reach dataset staging. Note that
+  with CustomVoice presets (no cloning), OUTPUT codes carry preset synthetic
+  voices, not user voices; the voice-bearing segment of the chain is the
+  INPUT side (mic -> audio tower), which the consent lane in section 8
+  covers.
+- Waveform: distinct from code storage; still not captured by default
+  (separate decision, not yet made).
 
 ### 4.3 Store plumbing
 
@@ -223,28 +245,36 @@ separate, explicit opt-in consent lane distinct from the T&Cs collection.
 ## 7. Sequencing
 
 - W1: this doc; lock decisions in section 8.
-- W2: Talker conversion + calibration + tessera-pipeline quantization
-  (ternary ANE encoding, section 3.4) + golden parity tests (HF vs GGUF
-  logits and sampled codes on fixed prompts, host-dequant path).
+- W2: Talker conversion + CHAINED end-to-end calibration (Gemma 4 -> Talker,
+  instrumented, section 3.4) + tessera-pipeline quantization (ternary ANE
+  encoding) + golden parity tests (HF vs GGUF logits and sampled codes on
+  fixed prompts, current dispatch path).
 - W3: Code2Wav graph + streaming PCM + tessera-s2s-cli end to end.
 - W4: instrumentation + trace store + Studio audio node + session wiring.
-- W5 (optional, deferred): Tokenizer-12Hz encoder graph for voice clone.
+
+Voice cloning: on indefinite hold (architect 2026-08-05). No wave assigned;
+resurrecting it requires the Tokenizer-12Hz encoder graph (section 3.1) and
+revisits the consent lane from scratch.
 
 ## 8. Open questions for the architect
 
-Resolved 2026-08-05: Talker quantization goes through the Tessera
-calibration/quantization pipelines as the ternary-dequant-on-arrival
-multimodal test target (section 3.4). Plain offline quant (e.g. Q8_0) is off
-the table.
+Resolved 2026-08-05:
 
-Still open:
+- Talker quantization: Tessera pipelines, ternary-dequant-on-arrival
+  multimodal target, chained end-to-end calibration (section 3.4).
+- Voice mode: CustomVoice presets; voice cloning on indefinite hold.
+- Code storage: default-on, no opt-out (mandatory collection doctrine);
+  codes stay Tier B local-only.
 
-1. Code storage in traces: zlib base64 by default; raw as opt-in?
-2. First-ship voice mode: CustomVoice presets (no encoder graph needed) vs
-   Base voice clone. CustomVoice recommended for W2-W4, clone deferred to W5.
-3. Route B consent lane: opt-in contribution of voice-bearing pairs, separate
-   from the anonymous dataset route. Confirm the lane exists before W4 ships
-   capture defaults.
+Under research (architect direction 2026-08-05):
+
+- Route B consent lane via Talker-as-anonymizer: use the Talker itself to
+  anonymize voice-bearing pairs - transcribe user speech, re-synthesize with
+  a preset synthetic voice, keep (text, synthetic codes), discard the
+  original voice. Question: does re-synthesis through the text bottleneck
+  meet the irreversibility standard (Recital 26 / WP216) for voice data, so
+  anonymized pairs can flow without a separate opt-in lane? Deep research
+  pending; result lands here before W4 ships capture defaults.
 
 ## Appendix A: staged assets (source-manifest)
 
