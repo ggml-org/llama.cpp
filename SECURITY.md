@@ -21,11 +21,18 @@ Please disclose it as a private [security advisory](https://github.com/ggml-org/
 
 A team of volunteers on a reasonable-effort basis maintains this project. As such, please give us at least 90 days to work on a fix before public exposure.
 
+### AI-powered code scan
+
+llama.cpp has an AI security scanner that scans the code periodically. The full prompts and tool set can be found in [ggml-org/security-scan-prompt](https://github.com/ggml-org/security-scan-prompt).
+
+We greatly appreciate reports that reflect genuine research effort, and we are happy to spend our time reviewing them. Findings that an autonomous AI agent can surface on its own add little on top of the scans we already run.
+
 ### Requirements
 
 Before submitting your report, ensure you meet the following requirements:
 
 - You have read this policy and fully understand it.
+- You have searched for existing discussions of the issue. If it has already been reported, your report will likely be rejected as a duplicate.
 - AI is only permitted in an assistive capacity as stated in [AGENTS.md](AGENTS.md). We do not accept reports that are written exclusively by AI.
 - Your report must include a working Proof-of-Concept in the form of a script and/or attached files.
 
@@ -45,6 +52,8 @@ Only vulnerabilities that fall within these parts of the project are considered 
     - Bugs that can lead to Denial-of-Service attack
 
 Note that none of the topics under [Using llama.cpp securely](#using-llamacpp-securely) are considered vulnerabilities in LLaMA C++.
+
+Denial-of-Service (DoS) bugs are generally not treated as vulnerabilities. We don't reject them outright, but we look at them case-by-case and only accept those that are genuinely worth fixing.
 
 For vulnerabilities that fall within the `vendor` directory, please report them directly to the third-party project.
 
