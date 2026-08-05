@@ -53,11 +53,10 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
         }
     }
     const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
-    const bool is_bmg = (arch == gpu_arch::intel_gpu_bmg_g21 ||
-                          arch == gpu_arch::intel_gpu_bmg_g31);   // verify bmg_g31 actually exists in this enum
+    const bool is_bmg = (arch == gpu_arch::intel_gpu_bmg_g21);
     const bool is_dg2 = (arch == gpu_arch::intel_gpu_dg2_g10 ||
                           arch == gpu_arch::intel_gpu_dg2_g11 ||
-                          arch == gpu_arch::intel_gpu_dg2_g12);   // verify naming: dg2_* vs acm_* below
+                          arch == gpu_arch::intel_gpu_dg2_g12);   // verified that dg2_x works alongside acm_gx
 
     if (!is_bmg && !is_dg2) {
         return false;   // unverified/untested arch: stay conservative
