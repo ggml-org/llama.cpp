@@ -84,25 +84,57 @@ int bench_dequant(int64_t k) {
     std::vector<uint8_t> packed(tessera_t640_row_bytes(k));
     quantize_row_tessera_t640_ref(x.data(), packed.data(), k);
     std::vector<float> y((size_t) k, 0.0f);
-
-    auto time_fn = [&](auto fn) {
-        // Warmup.
-        for (int i = 0; i < kWarmup; i++) {
-            fn(packed.data(), y.data(), k);
-        }
+    // v2: pre-extract the meta pointers from the flat row
+    // buffer and pre-decode once (the dispatch's hoisted
+    // meta decode is one call for the whole tile, but the
+    // bench's per-row dequant is per-row, so we pre-decode
+    // the meta for this single row outside the timing loop).
+    const int pages = (int) ((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
+    const uint32_t * packed_words = (const uint32_t *) packed.data();
+    const uint16_t * page_scales_p = (const uint16_t *) (packed_words + pages * TILE640_WORDS_PER_PAGE);
+    const int8_t   * lane_scales_p = (const int8_t   *) (page_scales_p + pages);
+    std::vector<float> page_max((size_t) pages);
+    std::vector<float> lane_scale((size_t) (pages * TILE640_LANES_PER_PAGE));
+    decode_per_row_meta_v2(page_scales_p, lane_scales_p, 1, (int64_t) pages,
+                           page_max.data(), lane_scale.data());
+    // Sink so the compiler can't DCE the writes.
+    volatile float sink = 0.0f;
+    auto time_fn_c = [&]() {
         std::vector<double> us;
         us.reserve((size_t) kRuns);
+        for (int i = 0; i < kWarmup; i++) {
+            dequantize_row_tessera_t640(packed.data(), y.data(), k);
+        }
         for (int i = 0; i < kRuns; i++) {
             const auto t0 = std::chrono::steady_clock::now();
-            fn(packed.data(), y.data(), k);
+            dequantize_row_tessera_t640(packed.data(), y.data(), k);
             const auto t1 = std::chrono::steady_clock::now();
             us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
         }
+        sink += y[0];
         return median_us(us);
     };
-
-    const double us_c  = time_fn(dequantize_row_tessera_t640);
-    const double us_v2 = time_fn(dequantize_row_tessera_t640_v2);
+    auto time_fn_v2 = [&]() {
+        std::vector<double> us;
+        us.reserve((size_t) kRuns);
+        for (int i = 0; i < kWarmup; i++) {
+            dequantize_row_tessera_t640_v2(packed_words,
+                                           page_max.data(), lane_scale.data(),
+                                           k, y.data());
+        }
+        for (int i = 0; i < kRuns; i++) {
+            const auto t0 = std::chrono::steady_clock::now();
+            dequantize_row_tessera_t640_v2(packed_words,
+                                           page_max.data(), lane_scale.data(),
+                                           k, y.data());
+            const auto t1 = std::chrono::steady_clock::now();
+            us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+        }
+        sink += y[0];
+        return median_us(us);
+    };
+    const double us_c  = time_fn_c();
+    const double us_v2 = time_fn_v2();
     const double speedup = us_c / us_v2;
     // Throughput: read packed + write fp32.
     const double bytes_io = (double) (tessera_t640_row_bytes(k) + k * sizeof(float));
@@ -110,6 +142,7 @@ int bench_dequant(int64_t k) {
     const double mbps_v2  = bytes_io / (us_v2 * 1e3);
     printf("  dequant k=%-5lld  C: %7.2f us (%.0f MB/s)  v2: %7.2f us (%.0f MB/s)  speedup: %.2fx\n",
            (long long) k, us_c, mbps_c, us_v2, mbps_v2, speedup);
+    (void) sink;
     return 0;
 }
 

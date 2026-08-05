@@ -81,7 +81,21 @@ int test_dequant(int64_t k, uint32_t seed) {
     std::vector<float> y_ref((size_t) k);
     std::vector<float> y_v2((size_t) k);
     dequantize_row_tessera_t640(packed.data(), y_ref.data(), k);
-    dequantize_row_tessera_t640_v2(packed.data(), y_v2.data(), k);
+    // v2: pre-decode the per-row meta, then dequant with
+    // the pre-decoded arrays (the v2 API takes them as
+    // separate inputs; the dispatch calls decode_per_row_meta_v2
+    // once for the whole tile).
+    const int pages = (int) ((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
+    const uint8_t * packed_bytes = packed.data();
+    const uint32_t * packed_words = (const uint32_t *) packed_bytes;
+    const uint16_t * page_scales = (const uint16_t *) (packed_words + pages * TILE640_WORDS_PER_PAGE);
+    const int8_t   * lane_scales = (const int8_t   *) (page_scales + pages);
+    std::vector<float> page_max((size_t) pages);
+    std::vector<float> lane_scale((size_t) (pages * TILE640_LANES_PER_PAGE));
+    decode_per_row_meta_v2(page_scales, lane_scales, 1, (int64_t) pages,
+                           page_max.data(), lane_scale.data());
+    dequantize_row_tessera_t640_v2(packed_words, page_max.data(), lane_scale.data(),
+                                   k, y_v2.data());
     int mismatches = 0;
     float max_diff = 0.0f;
     for (int64_t i = 0; i < k; i++) {

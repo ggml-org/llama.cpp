@@ -38,16 +38,28 @@ extern "C" {
 #define GGML_TESSERA_T640_V2_MIN_K 1024
 
 // Function A: dequantize_row_tessera_t640_v2
-//   Per-page: fp16->fp32 page_max, broadcast to 640 cols.
-//   Per-lane: int8->fp32 lane_scale, /127, * page_max = scale.
+//   Per-page: pre-decoded page_max (fp32) is read directly
+//             from page_max_in[p] (the caller pre-decodes via
+//             decode_per_row_meta_v2 for the whole TILE, then
+//             passes per-row views).
+//   Per-lane: pre-decoded lane_scale (fp32, /127) is read
+//             directly from lane_scale_in[p * LANES_PER_PAGE + l].
+//             scale = page_max_in[p] * lane_scale_in[...];
 //   Per-col: precompute trit_sign {-1, 0, 1} from the radix-243
 //            packed word, then bulk vDSP_vmul by per-lane scale.
 //   Outlier addback: NOT applied here; that is a separate helper
 //                    (apply_outlier_addback_v2). The C reference's
 //                    outlier omission is the documented trait.
-GGML_API void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
-                                             float * GGML_RESTRICT y,
-                                             int64_t k);
+//   Packed input: just the [pages * LANES_PER_PAGE] uint32_t
+//                 words (no page_scales / lane_scales trailer
+//                 inline). The caller extracted the page_scales
+//                 and lane_scales into separate buffers for the
+//                 pre-decode call.
+GGML_API void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT packed,
+                                             const float * GGML_RESTRICT page_max_in,
+                                             const float * GGML_RESTRICT lane_scale_in,
+                                             int64_t k,
+                                             float * GGML_RESTRICT y);
 
 // Function B: quantize_row_tessera_t640_v2
 //   Per-page: vDSP_maxmgv for page_max, vDSP_sve for sum_abs

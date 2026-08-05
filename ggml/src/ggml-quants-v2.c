@@ -71,18 +71,23 @@ int ggml_tessera_t640_v2_enabled(void) {
 // vDSP call setup cost dominates and the C reference is faster.
 // The dispatcher checks k and falls back.
 
-void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
-                                    float * GGML_RESTRICT y,
-                                    int64_t k) {
-    if (k < GGML_TESSERA_T640_V2_MIN_K || !ggml_tessera_t640_v2_enabled()) {
-        dequantize_row_tessera_t640(x, y, k);
-        return;
-    }
+void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT packed,
+                                    const float * GGML_RESTRICT page_max_in,
+                                    const float * GGML_RESTRICT lane_scale_in,
+                                    int64_t k,
+                                    float * GGML_RESTRICT y) {
+    // Note: no in-function fallback to the C ref. The dispatch
+    // is responsible for routing to v2 vs the C ref based on
+    // ggml_tessera_t640_v2_enabled() and k >= GGML_TESSERA_T640_V2_MIN_K.
+    // The C ref reads page_scales / lane_scales inline from a
+    // flat [packed | page_scales | lane_scales] buffer; the v2
+    // takes the packed words and the pre-decoded meta as
+    // separate inputs (the dispatch's batched decode_per_row_meta_v2
+    // produced them). Reconstructing the flat C ref buffer
+    // inside v2 would be redundant.
 
     const int pages = (int)((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
-    const uint32_t * packed      = (const uint32_t *) x;
-    const uint16_t * page_scales = (const uint16_t *) (packed + pages * TILE640_WORDS_PER_PAGE);
-    const int8_t   * lane_scales = (const int8_t   *) (page_scales + pages);
+    const uint32_t * packed_words = (const uint32_t *) packed;
 
     // Per-page scratch: sign vector and per-lane scale broadcast,
     // both 640 elements (one full page) to keep the vDSP call
@@ -95,12 +100,19 @@ void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
         const int base     = p * TILE640_PAGE_SIZE;
         const int page_len = (base + TILE640_PAGE_SIZE <= k) ? TILE640_PAGE_SIZE : (int)(k - base);
 
-        const float page_max = GGML_FP16_TO_FP32(page_scales[p]);
+        // Pre-decoded meta: the caller ran decode_per_row_meta_v2
+        // for the whole tile and indexed page_max_in[p] for this
+        // row's p-th page.
+        const float page_max = page_max_in[p];
 
         for (int l = 0; l < TILE640_LANES_PER_PAGE; l++) {
             const int   col0  = l * TILE640_LANE_SIZE;
+            // Pre-decoded lane_scale (fp32, /127): the caller's
+            // batched meta decode pre-divided by 127 so this
+            // multiply is the only op (the C ref had two ops:
+            // int8->fp32 + /127).
             const float scale = page_max *
-                (lane_scales[p * TILE640_LANES_PER_PAGE + l] * (1.0f / 127.0f));
+                lane_scale_in[p * TILE640_LANES_PER_PAGE + l];
 
             // Decode the 4 radix-243 groups (= 20 trits per lane).
             // idx has a serial dependency; cannot SIMD. The serial
@@ -108,7 +120,7 @@ void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
             // lane. Pre-decode all 20 trits into a small int8
             // buffer; the {+1, 0, -1} sign mapping and the scale
             // broadcast are then NEON 4-element chunks.
-            uint32_t rem = packed[p * TILE640_WORDS_PER_PAGE + l];
+            uint32_t rem = packed_words[p * TILE640_WORDS_PER_PAGE + l];
             int8_t trits[20];
             int t = 0;
             for (int g = 0; g < 4; g++) {
