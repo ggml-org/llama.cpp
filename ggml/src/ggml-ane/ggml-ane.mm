@@ -1458,6 +1458,110 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             return ok;
         }
+        case GGML_OP_ROPE: {
+            // Rotary position embedding. gemma 4's variant
+            // (NORMAL mode, no freq_factors for the spike; the
+            // mrope / freq_factors case is a follow-on bundle
+            // per the dispatch policy). The bundle takes the
+            // activation x of shape [n_dims, 1] and a scalar
+            // position (fp32 [1, 1]); it returns y of the same
+            // shape. The rotation params (n_dims, freq_base,
+            // etc.) are baked into the bundle at export time.
+            if (op->src[0] == nullptr || op->src[1] == nullptr) {
+                return false;
+            }
+            if (op->ne[1] != 1) {
+                // Single-token decode (M=1). The spike bakes
+                // a single position; multi-token prefill is a
+                // different shape and lands in the layer-slab
+                // function.
+                return false;
+            }
+            if (op->src[0]->type != GGML_TYPE_F32 ||
+                op->type != GGML_TYPE_F32) {
+                return false;
+            }
+            // ggml_rope packs its op_params as int32 words at
+            // 4-byte stride (see ggml_rope_impl in
+            // ggml/src/ggml.c:4229):
+            //   [0]    n_past (deprecated, always 0)
+            //   [1]    n_dims
+            //   [2]    mode (GGML_ROPE_TYPE_*)
+            //   [3]    n_ctx (deprecated, always 0)
+            //   [4]    n_ctx_orig
+            //   [5..9] freq_base / freq_scale / ext_factor /
+            //          attn_factor / beta_fast / beta_slow
+            //          (as float, read as int32 word)
+            //   [11..14] mrope sections (mrope only)
+            // The dispatch verifies that the ggml op's n_dims
+            // and mode match what the bundle bakes (NORMAL with
+            // n_dims = K); other modes / sizes fall through to
+            // the CPU path. The bundle's other rotation params
+            // (freq_base, etc.) are baked and not re-checked
+            // here.
+            const int32_t n_dims =
+                ggml_get_op_params_i32(op, 1);
+            const int32_t mode =
+                ggml_get_op_params_i32(op, 2);
+            if (n_dims != (int32_t) op->ne[0]) {
+                // The bundle bakes a specific n_dims; if the
+                // ggml op's n_dims doesn't match, refuse the
+                // dispatch so the scheduler routes it elsewhere.
+                return false;
+            }
+            if (mode != GGML_ROPE_TYPE_NORMAL) {
+                // NORMAL only in this spike; NEOX / MROPE /
+                // VISION / IMROPE fall through.
+                return false;
+            }
+            MLModelDescription * desc = program->model.modelDescription;
+            if (!desc) {
+                return false;
+            }
+            MLFeatureDescription * x_desc = desc.inputDescriptionsByName[@"x"];
+            MLFeatureDescription * p_desc = desc.inputDescriptionsByName[@"pos"];
+            MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
+            if (!x_desc || x_desc.type != MLFeatureTypeMultiArray ||
+                !p_desc || p_desc.type != MLFeatureTypeMultiArray ||
+                !y_desc || y_desc.type != MLFeatureTypeMultiArray) {
+                return false;
+            }
+            NSArray<NSNumber *> * x_shape = x_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * p_shape = p_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
+            if (x_shape.count != 2 || y_shape.count != 2 ||
+                x_shape[0].longLongValue != op->ne[0] ||
+                x_shape[1].longLongValue != op->ne[1] ||
+                y_shape[0].longLongValue != op->ne[0] ||
+                y_shape[1].longLongValue != op->ne[1]) {
+                return false;
+            }
+            // The position is i32 in the ggml op; the bundle
+            // takes fp32 (the bundle is internally fp16, so
+            // casting to fp32 then re-casting inside the bundle
+            // is a no-op semantically and saves us a per-row
+            // int->fp conversion in the dispatch hot path).
+            int32_t pos_i = 0;
+            if (op->src[1]->type == GGML_TYPE_I32) {
+                pos_i = ((const int32_t *) op->src[1]->data)[0];
+            } else if (op->src[1]->type == GGML_TYPE_F32) {
+                pos_i = (int32_t) ((const float *) op->src[1]->data)[0];
+            } else {
+                return false;
+            }
+            float pos_f = static_cast<float>(pos_i);
+            std::unordered_map<std::string, const float *> inputs;
+            inputs.emplace("x", (const float *) op->src[0]->data);
+            inputs.emplace("pos", &pos_f);
+            std::vector<std::string> out_names_vec = { "y" };
+            std::unordered_map<std::string, float *> outputs;
+            outputs.emplace("y", (float *) op->data);
+            const bool ok = ggml_ane_program_run(program, inputs, out_names_vec, outputs);
+            if (ok) {
+                out_names = std::move(out_names_vec);
+            }
+            return ok;
+        }
         case GGML_OP_TILE640_MATMUL:
             // TODO(ane-bundle): dispatch matmul to the bound bundle's matmul
             // function once the conversion tool names one. Today the matmul

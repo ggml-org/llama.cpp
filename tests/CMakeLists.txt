@@ -571,6 +571,11 @@ if (APPLE)
         target_link_libraries(test-ane-softmax PRIVATE
                               ggml ggml-base)
     endif()
+    llama_build(test-ane-rope.cpp)
+    if (TARGET test-ane-rope)
+        target_link_libraries(test-ane-rope PRIVATE
+                              ggml ggml-base)
+    endif()
 endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")

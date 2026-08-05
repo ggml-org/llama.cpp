@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "bundle_name": "rope-1x4096",
+  "state_size_bytes": 65536,
+  "model_type": "ml_program",
+  "slots": [
+    {
+      "name": "x",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 0,
+      "size_bytes": 16384
+    },
+    {
+      "name": "pos",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        1,
+        1
+      ],
+      "offset": 16384,
+      "size_bytes": 16
+    },
+    {
+      "name": "y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        4096,
+        1
+      ],
+      "offset": 32768,
+      "size_bytes": 16384
+    }
+  ],
+  "functions": [
+    {
+      "name": "main",
+      "role": "rope",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "x",
+        "pos"
+      ],
+      "output_slots": [
+        "y"
+      ],
+      "core_ml_function_name": "main",
+      "use_ane": true
+    }
+  ],
+  "dependencies": []
+}
