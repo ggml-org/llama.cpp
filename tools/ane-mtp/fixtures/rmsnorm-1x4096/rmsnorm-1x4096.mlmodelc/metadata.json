@@ -42,8 +42,8 @@
     },
     "userDefinedMetadata" : {
       "com.github.apple.coremltools.version" : "9.0",
-      "com.github.apple.coremltools.conversion_date" : "2026-08-05",
-      "com.github.apple.coremltools.source" : "milinternal"
+      "com.github.apple.coremltools.source" : "milinternal",
+      "com.github.apple.coremltools.conversion_date" : "2026-08-05"
     },
     "inputSchema" : [
       {
