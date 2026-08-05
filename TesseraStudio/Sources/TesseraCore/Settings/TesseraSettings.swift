@@ -47,6 +47,8 @@ public enum TesseraSettingsKey {
     public static let learningMinTracesForTraining = "tessera.settings.learningMinTracesForTraining"
     public static let learningTrainingDryRun = "tessera.settings.learningTrainingDryRun"
     public static let learningTrainBinary = "tessera.settings.learningTrainBinary"
+    public static let learningAutoTrain = "tessera.settings.learningAutoTrain"
+    public static let learningTrainingIntervalHours = "tessera.settings.learningTrainingIntervalHours"
     // Web search (agent research tool)
     public static let searchProvider = "tessera.settings.searchProvider"
     public static let searxngBaseURL = "tessera.settings.searxngBaseURL"
@@ -91,6 +93,11 @@ public enum TesseraSettingsDefault {
     public static let learningMinTracesForTraining = 1000
     public static let learningTrainingDryRun = true
     public static let learningTrainBinary = ""        // empty -> TesseraTrainBinaryResolver auto-resolves
+    // Idle drafter training. On by default (the architect-chosen trigger);
+    // the orchestrator's gates (traces, model path, driver binary) and the
+    // dry-run default keep it harmless until the flywheel is supplied.
+    public static let learningAutoTrain = true
+    public static let learningTrainingIntervalHours = 24
     // Web search. Keyless DuckDuckGo is the default; SearXNG (self-hosted) and
     // Tavily (vendor key) are explicit opt-ins that stay off until configured.
     public static let searchProvider = "duckduckgo"
@@ -171,6 +178,8 @@ public enum TesseraSettings {
             TesseraSettingsKey.learningMinTracesForTraining: TesseraSettingsDefault.learningMinTracesForTraining,
             TesseraSettingsKey.learningTrainingDryRun: TesseraSettingsDefault.learningTrainingDryRun,
             TesseraSettingsKey.learningTrainBinary: TesseraSettingsDefault.learningTrainBinary,
+            TesseraSettingsKey.learningAutoTrain: TesseraSettingsDefault.learningAutoTrain,
+            TesseraSettingsKey.learningTrainingIntervalHours: TesseraSettingsDefault.learningTrainingIntervalHours,
             TesseraSettingsKey.searchProvider: TesseraSettingsDefault.searchProvider,
             TesseraSettingsKey.searxngBaseURL: TesseraSettingsDefault.searxngBaseURL,
             TesseraSettingsKey.tavilyAPIKey: TesseraSettingsDefault.tavilyAPIKey,
@@ -374,6 +383,18 @@ public enum TesseraSettings {
     /// the known locations (see ``TesseraTrainBinaryResolver``).
     public static var learningTrainBinary: String {
         UserDefaults.standard.string(forKey: TesseraSettingsKey.learningTrainBinary) ?? TesseraSettingsDefault.learningTrainBinary
+    }
+
+    /// Whether the idle scheduler runs drafter-training sweeps. The
+    /// orchestrator's own gates still apply on every sweep.
+    public static var learningAutoTrain: Bool {
+        // register(defaults:) seeds this, so the bool read is meaningful.
+        UserDefaults.standard.bool(forKey: TesseraSettingsKey.learningAutoTrain)
+    }
+
+    public static var learningTrainingIntervalHours: Int {
+        let v = UserDefaults.standard.integer(forKey: TesseraSettingsKey.learningTrainingIntervalHours)
+        return v > 0 ? v : TesseraSettingsDefault.learningTrainingIntervalHours
     }
 
     // MARK: Web search

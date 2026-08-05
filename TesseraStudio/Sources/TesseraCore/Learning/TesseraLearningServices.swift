@@ -9,6 +9,11 @@ public enum TesseraLearningServices {
     /// deallocated; installDefaults owns the only reference.
     private static var assessmentScheduler: TesseraAssessmentScheduler?
 
+    /// Held for the process lifetime so the recurring idle-training loop is
+    /// not deallocated; installDefaults owns the only reference. Exposed so
+    /// the UI layer can attach a completion hook (notification, refresh).
+    public private(set) static var trainingScheduler: TesseraTrainingScheduler?
+
     public static func installDefaults(into center: TesseraLearningCenter = .shared) {
         center.install(escalation: TesseraEscalationService())
         center.install(curation: TesseraCurationService())
@@ -28,7 +33,12 @@ public enum TesseraLearningServices {
             baseModelPath: baseModel.isEmpty ? nil : baseModel,
             dryRun: TesseraSettings.learningTrainingDryRun
         )
-        center.install(training: TesseraTrainingOrchestrator(config: trainingConfig))
+        let training = TesseraTrainingOrchestrator(config: trainingConfig)
+        center.install(training: training)
+
+        let idleTrainer = TesseraTrainingScheduler(orchestrator: training)
+        idleTrainer.start()
+        trainingScheduler = idleTrainer
 
         let scheduler = TesseraAssessmentScheduler(assessor: center.assessor)
         scheduler.start()

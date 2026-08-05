@@ -279,7 +279,60 @@ final class TesseraTrainingWiringTests: XCTestCase {
         XCTAssertTrue(TesseraTrainBinaryResolver.knownLocations.contains(TesseraTrainBinaryResolver.expectedLocation))
     }
 
+    // MARK: - Idle scheduler
+
+    func testIdleSweepSkipsWhenAutoTrainDisabled() async throws {
+        let root = try makeTempRoot()
+        let orchestrator = try makeOrchestrator(root: root, binary: "/does/not/matter", baseModel: nil)
+        let scheduler = TesseraTrainingScheduler(orchestrator: orchestrator)
+        let record = await withSettings([TesseraSettingsKey.learningAutoTrain: false]) {
+            await scheduler.sweep()
+        }
+        XCTAssertNil(record, "auto-train off must stop the sweep before touching the orchestrator")
+    }
+
+    func testIdleSweepRunsTheOrchestratorGates() async throws {
+        let root = try makeTempRoot()
+        // One seeded trace with a min-traces gate of 5 -> the sweep reaches the
+        // orchestrator and comes back with the honest gate record.
+        let orchestrator = try makeOrchestrator(root: root, binary: "/does/not/matter", baseModel: nil, minTraces: 5)
+        let scheduler = TesseraTrainingScheduler(orchestrator: orchestrator)
+        let finished = LockedFlag()
+        scheduler.onFinished = { _ in finished.set() }
+
+        let record = await withSettings([
+            TesseraSettingsKey.learningAutoTrain: true,
+            TesseraSettingsKey.learningOnPowerOnly: false,
+        ]) {
+            await scheduler.sweep()
+        }
+
+        XCTAssertEqual(record?.outcome, .skippedInsufficientTraces)
+        XCTAssertTrue(finished.isSet, "onFinished must fire for every sweep that reaches the orchestrator")
+    }
+
     // MARK: - Helpers
+
+    /// Run body with temporary UserDefaults overrides, restoring prior values after.
+    private func withSettings(
+        _ overrides: [String: Any],
+        _ body: () async -> TesseraTrainingOrchestrator.TrainingRecord?
+    ) async -> TesseraTrainingOrchestrator.TrainingRecord? {
+        let saved: [(String, Any?)] = overrides.keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        for (key, value) in overrides { UserDefaults.standard.set(value, forKey: key) }
+        let result = await body()
+        for (key, value) in saved {
+            if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        return result
+    }
+
+    private final class LockedFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var flag = false
+        func set() { lock.lock(); flag = true; lock.unlock() }
+        var isSet: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+    }
 
     private func makeTempRoot() throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
