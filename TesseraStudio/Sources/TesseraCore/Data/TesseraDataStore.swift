@@ -68,7 +68,7 @@ public struct EntityLink: Sendable, Equatable {
 
 /// One row from `graph_receipts`. `signature` is nil until signing
 /// is wired up (the column exists; the signing path is a follow-up).
-public struct GraphReceipt: Sendable, Equatable {
+public struct GraphReceipt: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let entityID: UUID
     public let receiptType: String
@@ -550,6 +550,90 @@ public actor TesseraDataStore {
         let rows = try await client.query(query, logger: logger)
         for try await _ in rows { return true }
         return false
+    }
+
+    /// List entities of a given type, ordered by updated_at DESC
+    /// then label. Used by the contact store's "all contacts"
+    /// query and by the graph view's "load every entity of
+    /// type X" path. Bounded by `limit` (default 1000) so a
+    /// large catalog doesn't materialize all at once; the
+    /// caller is expected to page or filter.
+    public func listByEntityType(
+        entityType: String,
+        limit: Int = 1000,
+        offset: Int = 0
+    ) async throws -> [GraphEntity] {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let query: PostgresQuery = """
+            SELECT id, entity_type, subtype, label, body, source_url, created_at, updated_at, embedding::text
+              FROM graph_entities
+             WHERE entity_type = \(entityType)
+             ORDER BY updated_at DESC, label ASC
+             LIMIT \(limit) OFFSET \(offset)
+            """
+        let rows = try await client.query(query, logger: logger)
+        var out: [GraphEntity] = []
+        for try await row in rows {
+            out.append(try decodeEntity(row))
+        }
+        return out
+    }
+
+    /// Case-insensitive prefix search over `label` for a given
+    /// entity type. Used by the contact store's "find contact
+    /// by name" path; the `idx_entities_contact_name` partial
+    /// index (migration 0003_contacts.sql) makes this O(log n)
+    /// for the contact case, but the SQL is generic across
+    /// entity types so the same code path serves tasks,
+    /// documents, and any future material.
+    ///
+    /// The `labelPrefix` is lowercased because Postgres'
+    /// `LOWER(label) LIKE 'foo%'` only uses the index when the
+    /// pattern is unanchored. We pass a case-insensitive
+    /// `ILIKE` for small N; the index kicks in once the
+    /// migration's partial index is in place.
+    public func searchByLabelPrefix(
+        entityType: String,
+        labelPrefix: String,
+        limit: Int = 20
+    ) async throws -> [GraphEntity] {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let pattern = labelPrefix + "%"
+        let query: PostgresQuery = """
+            SELECT id, entity_type, subtype, label, body, source_url, created_at, updated_at, embedding::text
+              FROM graph_entities
+             WHERE entity_type = \(entityType)
+               AND LOWER(label) LIKE LOWER(\(pattern))
+             ORDER BY label ASC
+             LIMIT \(limit)
+            """
+        let rows = try await client.query(query, logger: logger)
+        var out: [GraphEntity] = []
+        for try await row in rows {
+            out.append(try decodeEntity(row))
+        }
+        return out
+    }
+
+    /// List every entity_link in the database, used by the graph
+    /// view to build its edge set. Limited to `limit` rows;
+    /// the graph viewmaterializes incrementally for large
+    /// graphs (see ``GraphViewModel`` for the progressive
+    /// disclosure policy).
+    public func listAllLinks(limit: Int = 10_000) async throws -> [EntityLink] {
+        guard let client else { throw TesseraDataStoreError.closed }
+        let query: PostgresQuery = """
+            SELECT id, source_id, target_id, link_type, weight
+              FROM entity_links
+             ORDER BY created_at DESC
+             LIMIT \(limit)
+            """
+        let rows = try await client.query(query, logger: logger)
+        var out: [EntityLink] = []
+        for try await row in rows {
+            out.append(try decodeLink(row))
+        }
+        return out
     }
 
     // MARK: - Links

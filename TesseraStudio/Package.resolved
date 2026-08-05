@@ -1,6 +1,15 @@
 {
   "pins" : [
     {
+      "identity" : "grape",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SwiftGraphs/Grape.git",
+      "state" : {
+        "revision" : "48eb7d8ab4ce549c6cdde106b5f7fa317421364c",
+        "version" : "1.1.0"
+      }
+    },
+    {
       "identity" : "postgres-nio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/postgres-nio.git",

@@ -85,6 +85,10 @@ let package = Package(
         // a small regex highlighter. See docs/tessera-productivity-editor-design.md
         // §10 for the rationale and the language list.
         .package(url: "https://github.com/JohnSundell/Splash.git", from: "0.16.0"),
+        // Force-directed graph visualization (SwiftUI-native, 2D simd, KDTree).
+        // Used by the Graph view (Phase 6 productivity surface). Pinned at
+        // 1.1.0+ per docs/tessera-productivity-contacts-graph-design.md §14.
+        .package(url: "https://github.com/SwiftGraphs/Grape.git", from: "1.1.0"),
     ],
     targets: [
         .target(
@@ -116,6 +120,10 @@ let package = Package(
                 // The CodeBlockHighlighter consumes it on macOS; the
                 // regex fallback path is used on Linux/CI.
                 .product(name: "Splash", package: "Splash"),
+                // Graph view (Phase 6 productivity surface). Only the
+                // Productivity/Graph viewmodel and view import these.
+                .product(name: "Grape", package: "Grape"),
+                .product(name: "ForceSimulation", package: "Grape"),
             ],
             path: "Sources/TesseraCore",
             // Ships the Skills format doc so the target has a resource bundle

@@ -174,6 +174,42 @@ public actor TesseraDataLayer {
         try await dataStore.deleteEntity(id: id)
     }
 
+    /// List entities of a given type, ordered by updated_at DESC
+    /// then label. See ``TesseraDataStore/listByEntityType(...)``
+    /// for the index + limit semantics.
+    public func listByEntityType(
+        entityType: String,
+        limit: Int = 1000,
+        offset: Int = 0
+    ) async throws -> [GraphEntity] {
+        try await dataStore.listByEntityType(
+            entityType: entityType,
+            limit: limit,
+            offset: offset
+        )
+    }
+
+    /// Case-insensitive prefix search over `label` for a given
+    /// entity type. See ``TesseraDataStore/searchByLabelPrefix(...)``
+    /// for the SQL details.
+    public func searchByLabelPrefix(
+        entityType: String,
+        labelPrefix: String,
+        limit: Int = 20
+    ) async throws -> [GraphEntity] {
+        try await dataStore.searchByLabelPrefix(
+            entityType: entityType,
+            labelPrefix: labelPrefix,
+            limit: limit
+        )
+    }
+
+    /// Every entity_link in the database (bounded by `limit`).
+    /// Used by the graph view to build its edge set.
+    public func listAllLinks(limit: Int = 10_000) async throws -> [EntityLink] {
+        try await dataStore.listAllLinks(limit: limit)
+    }
+
     /// Insert (or no-op) a typed edge between two entities.
     @discardableResult
     public func linkEntities(
