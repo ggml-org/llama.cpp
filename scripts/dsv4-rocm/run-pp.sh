@@ -51,6 +51,8 @@ Important environment overrides:
   DSV4_ALLOW_BUSY_GPUS=1  override safety refusal (never use for controlled A/B)
   DSV4_HASH_MODE=full     hash every GGUF shard; default records path/size/mtime only
   DSV4_LIBRARY_PATH       selected binary's DSO directory (default: llama-bench directory)
+  GGML_HIP_RDNA2_MMQ_J_Q4_K
+                          optional Q4_K-only routed-MMQ J override; mutually exclusive with GGML_HIP_RDNA2_MMQ_J
 
 A measurement-truncated run preserves valid complete JSONL records but exits 3.
 Production baselines should never set DSV4_ALLOW_BUSY_GPUS=1.
@@ -219,7 +221,7 @@ export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
     printf 'DSV4_ALLOW_BUSY_GPUS=%q\n' "$ALLOW_BUSY"
     printf 'DSV4_LIBRARY_PATH=%q\n' "$LIBRARY_PATH"
     printf 'LD_LIBRARY_PATH=%q\n' "$LD_LIBRARY_PATH"
-    for name in GGML_HIP_RDNA2_MMQ_J GGML_HIP_RDNA2_HC_MIXES GGML_HIP_RDNA2_LID_SUBWAVE; do
+    for name in GGML_HIP_RDNA2_MMQ_J GGML_HIP_RDNA2_MMQ_J_Q4_K GGML_HIP_RDNA2_HC_MIXES GGML_HIP_RDNA2_LID_SUBWAVE; do
         if declare -p "$name" >/dev/null 2>&1; then
             printf '%s=%q\n' "$name" "${!name}"
         else

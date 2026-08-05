@@ -1594,24 +1594,36 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
          ntx_fd);
 }
 
-static int ggml_cuda_rdna2_mmq_J_override() {
+static int ggml_cuda_rdna2_mmq_J_parse_override(const char * env_name) {
 #if defined(GGML_USE_HIP)
-    static const int value = []() {
-        const char * env = std::getenv("GGML_HIP_RDNA2_MMQ_J");
-        if (!env || !env[0]) {
-            return 0;
-        }
+    const char * env = std::getenv(env_name);
+    if (!env || !env[0]) {
+        return 0;
+    }
 
-        char * end = nullptr;
-        const long parsed = std::strtol(env, &end, 10);
-        if (end == env || *end != '\0' || parsed < 8 || parsed > 128 || parsed % 8 != 0) {
-            fprintf(stderr, "GGML_HIP_RDNA2_MMQ_J must be a multiple of 8 in [8, 128] (got '%s')\n", env);
-            GGML_ABORT("invalid RDNA2 MMQ J override");
-        }
-        return int(parsed);
-    }();
-    return value;
+    char * end = nullptr;
+    const long parsed = std::strtol(env, &end, 10);
+    if (end == env || *end != '\0' || parsed < 8 || parsed > 128 || parsed % 8 != 0) {
+        fprintf(stderr, "%s must be a multiple of 8 in [8, 128] (got '%s')\n", env_name, env);
+        GGML_ABORT("invalid RDNA2 MMQ J override");
+    }
+    return int(parsed);
 #else
+    GGML_UNUSED(env_name);
+    return 0;
+#endif
+}
+
+static int ggml_cuda_rdna2_mmq_J_override(ggml_type type) {
+#if defined(GGML_USE_HIP)
+    static const int global_value = ggml_cuda_rdna2_mmq_J_parse_override("GGML_HIP_RDNA2_MMQ_J");
+    static const int q4_k_value   = ggml_cuda_rdna2_mmq_J_parse_override("GGML_HIP_RDNA2_MMQ_J_Q4_K");
+    if (global_value && q4_k_value) {
+        GGML_ABORT("GGML_HIP_RDNA2_MMQ_J and GGML_HIP_RDNA2_MMQ_J_Q4_K are mutually exclusive");
+    }
+    return type == GGML_TYPE_Q4_K && q4_k_value ? q4_k_value : global_value;
+#else
+    GGML_UNUSED(type);
     return 0;
 #endif
 }
@@ -1643,11 +1655,11 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
         }
     }
 
-    const int J_override = ggml_cuda_rdna2_mmq_J_override();
+    const int J_override = ggml_cuda_rdna2_mmq_J_override(type);
     if (J_override && GGML_CUDA_CC_IS_RDNA2(cc) && args.ids_dst) {
         const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J_override, fallback, cc);
         if (config.type == GGML_TYPE_COUNT || mmq_get_nbytes_shared(config, cc) > smpbo) {
-            fprintf(stderr, "GGML_HIP_RDNA2_MMQ_J=%d is unsupported for type=%d fallback=%d\n",
+            fprintf(stderr, "RDNA2 MMQ J override=%d is unsupported for type=%d fallback=%d\n",
                     J_override, int(type), int(fallback));
             GGML_ABORT("unsupported RDNA2 MMQ J override");
         }

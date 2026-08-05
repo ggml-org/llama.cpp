@@ -404,6 +404,14 @@ expert routing changes the optimum. Keep the variable and its value in the
 manifest, use complete paired runs, and do not carry this setting to unrelated
 models without screening their routing shape.
 
+`GGML_HIP_RDNA2_MMQ_J_Q4_K` is a narrower experimental override for routed
+Q4_K MMQ only. It has the same numeric value contract and is mutually exclusive
+with the global `GGML_HIP_RDNA2_MMQ_J`. It exists for mixed-quant MoE models
+where Q4_K J16 is bitwise-stable but another expert type is not; all non-Q4_K
+types retain default J selection. Do not enable both variables. Qwen3.5-122B
+screening must prove isolated uniform/hot Q4_K equality, full-model logit
+equality, and retained whole-model performance before deployment.
+
 `test-mmid-rdna2` defaults to a fast prototype-weight fixture for performance
 screens. Its `--fixture unique` mode independently quantizes every
 expert/output row for correctness. The target-shape check uses N=512,
