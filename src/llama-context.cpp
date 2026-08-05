@@ -50,8 +50,8 @@ static bool llama_model_supports_rs_rollback(const llama_model & model) {
     }
 
     // Nemotron-H SSM rollback snapshots are currently produced only by the CUDA backend.
-    for (int il = 0; il < model.hparams.n_layer_all; ++il) {
-        if (model.hparams.is_recr(il) && !llama_backend_dev_is_cuda(model.dev_layer(il))) {
+    for (uint32_t il = 0; il < model.hparams.n_layer_all; ++il) {
+        if (model.hparams.is_recr(il) && !llama_backend_dev_is_cuda(model.dev_layer((int) il))) {
             return false;
         }
     }
