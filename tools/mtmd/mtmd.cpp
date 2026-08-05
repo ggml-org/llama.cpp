@@ -884,10 +884,11 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_GRANITE4_VISION:
                 {
-                    img_beg = "<image>";
-                    img_end = "";
+                    // the "<image>" marker is fully replaced by the image embeddings,
+                    // the trailing newline comes from the chat template
+                    img_beg = "";
+                    img_end = "\n";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_granite>(ctx_v);
-                    ov_img_first = true;
                 } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));
@@ -1736,7 +1737,22 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
             return 1;
         }
-        return mtmd_encode_impl(ctx, chunk->tokens_image.get(), out_embd);
+        {
+            int32_t rc = mtmd_encode_impl(ctx, chunk->tokens_image.get(), out_embd);
+            const char * dbg_path = getenv("MTMD_DUMP_EMBD");
+            if (rc == 0 && dbg_path) {
+                FILE * f = fopen(dbg_path, "ab");
+                if (f) {
+                    const int32_t n_embd = ctx->n_embd_out();
+                    int32_t hdr[2] = { (int32_t)(out_embd.size() / n_embd), n_embd };
+                    fwrite(hdr, sizeof(int32_t), 2, f);
+                    fwrite(out_embd.data(), sizeof(float), out_embd.size(), f);
+                    fclose(f);
+                    fprintf(stderr, "MTMD_DUMP_EMBD: wrote %d tokens x %d embd\n", hdr[0], hdr[1]);
+                }
+            }
+            return rc;
+        }
     } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
         if (!ctx->ctx_a) {
             LOG_ERR("%s: model does not support audio input\n", __func__);

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstdarg>
 #include <cinttypes>
 #include <string>
@@ -599,11 +600,46 @@ struct mtmd_serialization; // forward declaration
 //     Memory layout: RGBRGB...RGBRGB... (nt times)
 // For audio, only one channel is used, buf.size() == nx*ny
 //     nx will be n_frames and ny will be n_mel
+// llava-next "anyres" tiling, used by Granite4 Vision
+// the image holds [overview, tile(0,0), tile(0,1), ...] stacked on the Y axis, so that the whole
+// grid is encoded and assembled in a single graph
+struct clip_image_anyres {
+    int grid_x = 0; // tiles per row, 0 means the image is not tiled
+    int grid_y = 0; // tiles per column
+    int orig_nx = 0; // size of the source image, used to drop the padding tokens
+    int orig_ny = 0;
+
+    bool is_tiled() const {
+        return grid_x > 0 && grid_y > 0;
+    }
+};
+
+// token area kept after removing the padding added by the anyres resize
+// ref: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/llava_next/modeling_llava_next.py#L109
+static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_h,
+                                     int & off_x, int & off_y, int & out_w, int & out_h) {
+    off_x = 0;
+    off_y = 0;
+    out_w = cur_w;
+    out_h = cur_h;
+    if ((float) orig_w / orig_h > (float) cur_w / cur_h) {
+        const int new_h = (int) std::round((double) orig_h * cur_w / orig_w);
+        off_y = (cur_h - new_h) / 2;
+        out_h = cur_h - 2 * off_y;
+    } else {
+        const int new_w = (int) std::round((double) orig_w * cur_h / orig_h);
+        off_x = (cur_w - new_w) / 2;
+        out_w = cur_w - 2 * off_x;
+    }
+}
+
 struct clip_image_f32 {
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
     // whether a learned newline (or EOI) token should be appended after the image (eg Granite4 Vision)
     bool add_newline = false;
+    // set only if the image is a stack of anyres tiles
+    clip_image_anyres anyres;
 
     clip_image_size get_size() const {
         return { nx_, ny_ };
