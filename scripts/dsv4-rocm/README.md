@@ -414,12 +414,13 @@ execution does not need either variable.
 
 Qwen3.5-122B-A10B automatically marks separate Q4_K routed gate/up tensors only
 when its exact 3072/1024/256/top-8 metadata and an explicit equal four-way
-tensor-parallel split match the validated model. The HIP backend selects J16
-only for RDNA2 PP ubatches with the exact per-rank K=3072, N=256, 256-expert,
-top-8, batch-256
-signature. It emits a one-time `source=automatic` attestation. Q5_K down,
-fused/shared/MTP tensors, decode and remainder batches, other splits, other
-models, and other backends retain the original heuristic.
+tensor-parallel split match the validated model. Qwen3.6-35B-A3B does the same
+for exact 2048/512/256/top-8 metadata and an explicit equal four-way layer
+split. The HIP backend selects J16 only for RDNA2 PP ubatches with the matching
+K/N pair (3072/256 or 2048/512), 256 experts, top-8, and batch 256. It emits a
+one-time `source=automatic` attestation. Q5_K down, fused/shared/MTP tensors,
+decode and remainder batches, other splits, other models, and other backends
+retain the original heuristic.
 
 At commit `a4f2d56f0`, automatic dispatch passed the exact 2K/4-token gate
 across all 248,320 F32 logits with one candidate attestation and none in the
@@ -428,6 +429,17 @@ by 12.33%, 14.37%, and 13.41%; control drift was -1.21%, +0.38%, and -1.65%.
 The 2K value is from the stable focused rerun that replaced an initial arm with
 -2.28% control drift. This acceptance remains limited to the guarded model,
 topology, and PP signature; it does not make J16 a general Q4_K default.
+
+For Qwen3.6-35B-A3B, forced global J16 is a numerical NO-GO: the layer-mode
+2K/four-token gate changed essentially every one of 248,320 logits (RMSE
+0.0730–0.1054), although argmax happened to match. Q4_K-only J16 passed exact
+byte equality in both layer and tensor gates, proving the Q5_K down path must
+retain its heuristic. The automatic no-env layer path then reproduced
+`PASS_EXACT` at commit `b2c53dd6e`. In three-repetition layer screens Q4-only
+J16 improved PP512 from 2104.60 to 2487.82 t/s (+18.21%) while TG128 remained
+78.31 t/s. Automatic 35B selection is deliberately limited to four-way layer
+mode; Q4-only tensor J16 remains an explicit diagnostic despite its separate
+exact gate.
 
 `test-mmid-rdna2` defaults to a fast prototype-weight fixture for performance
 screens. Its `--fixture unique` mode independently quantizes every
