@@ -18,14 +18,44 @@
 extern "C" void dequantize_row_tessera_t640(const void * GGML_RESTRICT x,
                                              float * GGML_RESTRICT y,
                                              int64_t k);
-// v2 variant (Accelerate + NEON). Same signature, same
-// contract; the dispatch calls the v2 variant when
-// ggml_tessera_t640_v2_enabled() is true and the vDSP path
-// is appropriate (k >= GGML_TESSERA_T640_V2_MIN_K). The C
-// reference is the documented fallback.
-extern "C" void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT x,
-                                                float * GGML_RESTRICT y,
-                                                int64_t k);
+// v2 variant (Accelerate + NEON). The v2 API takes the
+// packed words, the pre-decoded page_max + lane_scale
+// (fp32, /127) arrays, k, and the output. The caller is
+// responsible for the pre-decode; the dispatch's
+// GGML_OP_TILE640_MATMUL path calls decode_per_row_meta_v2
+// once for the whole tile and hands each per-row dequant
+// the pre-decoded arrays. The C reference in ggml-quants.c
+// is the documented fallback when v2 is disabled or k is
+// below the cutoff; the dispatch routes to the C ref
+// directly without going through the v2.
+extern "C" void dequantize_row_tessera_t640_v2(const void * GGML_RESTRICT packed,
+                                               const float * GGML_RESTRICT page_max,
+                                               const float * GGML_RESTRICT lane_scale,
+                                               int64_t k,
+                                               float * GGML_RESTRICT y);
+// Batched meta decode (one call for the whole TILE of rows).
+// Reads (n_rows * n_pages) page_scales + (n_rows * n_lanes)
+// lane_scales; writes (n_rows * n_pages) page_max + (n_rows
+// * n_lanes) lane_scale (fp32, /127). Used by the dispatch
+// to hoist the per-row meta decode out of the per-row
+// dequant loop.
+extern "C" void decode_per_row_meta_v2(const void * GGML_RESTRICT page_scales_packed,
+                                       const void * GGML_RESTRICT lane_scales_packed,
+                                       int64_t n_rows,
+                                       int64_t n_pages,
+                                       float * GGML_RESTRICT page_max_out,
+                                       float * GGML_RESTRICT lane_scale_out);
+// Batched outlier addback (one call for the whole BUFFER of
+// rows). Reads n_rows * row_len rows + per-row CSR offsets +
+// cols + vals; writes outlier addback into the rows buffer.
+// Used by the dispatch to hoist the per-row outlier addback
+// out of the per-row dequant loop.
+extern "C" void apply_outlier_addback_v2(float * GGML_RESTRICT rows,
+                                         int64_t row_len,
+                                         int64_t n_rows,
+                                         const int32_t * GGML_RESTRICT outlier_row_offsets,
+                                         const int32_t * GGML_RESTRICT outlier_cols,
+                                         const void * GGML_RESTRICT outlier_vals);
 extern "C" int  ggml_tessera_t640_v2_enabled(void);
 
 // GGML_TESSERA_T640_V2_MIN_K is the v2 dispatch cutoff
@@ -1274,12 +1304,34 @@ static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> 
 //                         true and in_dim >=
 //                         GGML_TESSERA_T640_V2_MIN_K (1024);
 //                         the C reference in ggml-quants.c is
-//                         the documented fallback. v2 speedup
-//                         on A15-class hardware is 1.3-1.58x
-//                         for the dequant (the radix-243
-//                         trit decode is the bottleneck);
-//                         the v2 quant and v2 act_scale are
-//                         faster (3-4x and 1.9x respectively).
+//                         the documented fallback. The v2
+//                         path batches the per-row meta
+//                         decode + per-row outlier addback
+//                         into single tile-wide calls (one
+//                         decode_per_row_meta_v2 for the
+//                         whole tile's meta, one
+//                         apply_outlier_addback_v2 for the
+//                         whole buffer of outliers) to
+//                         amortise the vDSP / NEON setup
+//                         cost. v2 speedup on A15-class
+//                         hardware is 1.3-1.6x for the
+//                         dequant (the radix-243 trit decode
+//                         is the bottleneck); the v2 quant
+//                         and v2 act_scale are faster (3-4x
+//                         and 1.9x respectively). The v2
+//                         batched meta decode and outlier
+//                         addback are competitive with the
+//                         C scalar refs at the dispatch's
+//                         typical shape (256x4096 with 5%
+//                         sparsity) and win at single-row
+//                         shapes (1.5-2x for outlier, 1.01x
+//                         for meta at the 1024-row sweep
+//                         point). For the meta decode, the
+//                         v2 stays as the regression-suite
+//                         target; the C ref is the dispatch
+//                         default for the meta (the vDSP
+//                         setup cost is ~26us of fixed
+//                         overhead the C ref doesn't pay).
 //                         See tests/bench-tessera-quants-v2.cpp
 //                         for the per-shape numbers.
 //   MUL_MAT (BF16/fp16)-> ANE if the bound bundle's function matches
@@ -2007,9 +2059,30 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             // by row. The outlier addback is applied in fp32
             // (matching the L0.5 reference's behaviour per
             // test_b5_tile640_metal_dequant.cpp:343-349).
-            // The packed rows are assembled in the flat
-            // per-row layout the dequant function expects:
-            //   [packed | page_scales | lane_scales] per row.
+            //
+            // For the v2 (Accelerate + NEON) path, the dispatch
+            // hoists the per-row meta decode + outlier addback
+            // out of the per-row dequant loop:
+            //   1. decode_per_row_meta_v2: one call for the
+            //      whole TILE of meta (out_dim * pages_per_row
+            //      page_scales + out_dim * pages_per_row * 32
+            //      lane_scales). Amortises the vDSP setup cost
+            //      across the whole tile.
+            //   2. per-row dequant with the pre-decoded meta
+            //      (the v2 dequant takes the pre-decoded
+            //      page_max + lane_scale arrays as separate
+            //      inputs; the per-row dequant skips the inline
+            //      meta decode).
+            //   3. apply_outlier_addback_v2: one call for the
+            //      whole BUFFER of outliers (out_dim rows, n_total
+            //      outliers). Amortises the NEON bulk-convert
+            //      setup across the whole buffer.
+            //
+            // For the C ref path (v2 disabled or k < MIN_K),
+            // the dispatch falls back to the per-row scalar
+            // loop with the flat [packed | page_scales |
+            // lane_scales] row buffer (the C ref's documented
+            // contract).
             std::vector<ggml_fp16_t> weight_fp16((size_t) out_dim * in_dim);
             const int64_t pages_per_row = (in_dim + 639) / 640;
             const int64_t words_per_page = 32;
@@ -2019,65 +2092,114 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             const int32_t * outlier_row_offsets = (const int32_t *) op->src[3]->data;
             const int32_t * outlier_cols = (const int32_t *) op->src[4]->data;
             const ggml_fp16_t * outlier_vals = (const ggml_fp16_t *) op->src[5]->data;
-            std::vector<uint8_t> row_bytes(
-                (size_t)(pages_per_row * (words_per_page * 4 + 2 + words_per_page)));
-            std::vector<float> row_f32((size_t) in_dim);
-            for (int32_t r = 0; r < out_dim; ++r) {
-                row_bytes.clear();
-                // Packed words (32-bit each).
-                for (int64_t p = 0; p < pages_per_row; ++p) {
-                    for (int64_t l = 0; l < words_per_page; ++l) {
-                        const uint32_t v = (uint32_t) packed[
-                            (r * pages_per_row + p) * words_per_page + l];
+            const bool use_v2 = ggml_tessera_t640_v2_enabled() &&
+                                in_dim >= GGML_TESSERA_T640_V2_MIN_K;
+            if (use_v2) {
+                // v2 path: bulk meta decode + per-row dequant with
+                // pre-decoded meta + bulk outlier addback.
+                // weight_f32 is the contiguous (out_dim * in_dim)
+                // fp32 buffer; per-row dequant writes into
+                // weight_f32[r * in_dim : (r+1) * in_dim]; the
+                // batched outlier addback scatters into the same
+                // buffer; the per-row fp16 cast reads from it.
+                std::vector<float> weight_f32((size_t) out_dim * in_dim);
+                std::vector<float> page_max_f32((size_t) out_dim * pages_per_row);
+                std::vector<float> lane_scale_f32(
+                    (size_t) out_dim * pages_per_row * TILE640_LANES_PER_PAGE);
+                // 1. Bulk meta decode: one vDSP call for the
+                // whole tile's lane_scales + one NEON sweep
+                // for the whole tile's page_scales.
+                decode_per_row_meta_v2(page_scales, lane_scales,
+                                       (int64_t) out_dim, pages_per_row,
+                                       page_max_f32.data(),
+                                       lane_scale_f32.data());
+                // 2. Per-row dequant with pre-decoded meta.
+                // The v2 dequant takes the packed words directly
+                // (the flat [packed | page_scales | lane_scales]
+                // buffer is no longer needed for the dequant;
+                // we extract the per-row packed words view).
+                for (int32_t r = 0; r < out_dim; ++r) {
+                    const uint32_t * row_packed = (const uint32_t *) &packed[
+                        r * pages_per_row * words_per_page];
+                    const float * row_page_max = &page_max_f32[r * pages_per_row];
+                    const float * row_lane_scale = &lane_scale_f32[
+                        r * pages_per_row * TILE640_LANES_PER_PAGE];
+                    float * row_y = &weight_f32[r * in_dim];
+                    dequantize_row_tessera_t640_v2(row_packed,
+                                                   row_page_max,
+                                                   row_lane_scale,
+                                                   in_dim, row_y);
+                }
+                // 3. Bulk outlier addback: one NEON bulk convert
+                // for all n_total outliers + one scalar scatter
+                // pass.
+                apply_outlier_addback_v2(weight_f32.data(), in_dim,
+                                         (int64_t) out_dim,
+                                         outlier_row_offsets,
+                                         outlier_cols,
+                                         outlier_vals);
+                // 4. Per-row fp16 cast (the bundle's pinned slot
+                // dtype is fp16; the dequant is fp32).
+                for (int32_t r = 0; r < out_dim; ++r) {
+                    for (int32_t c = 0; c < in_dim; ++c) {
+                        weight_fp16[(size_t) r * in_dim + c] =
+                            ggml_fp32_to_fp16(weight_f32[(size_t) r * in_dim + c]);
+                    }
+                }
+            } else {
+                // C ref path: per-row scalar loop with the flat
+                // [packed | page_scales | lane_scales] row buffer
+                // (the C ref's documented contract). Below the v2
+                // cutoff (k < 1024) the vDSP setup cost is larger
+                // than the per-row work, so the scalar C ref wins.
+                std::vector<uint8_t> row_bytes(
+                    (size_t)(pages_per_row * (words_per_page * 4 + 2 + words_per_page)));
+                std::vector<float> row_f32((size_t) in_dim);
+                for (int32_t r = 0; r < out_dim; ++r) {
+                    row_bytes.clear();
+                    // Packed words (32-bit each).
+                    for (int64_t p = 0; p < pages_per_row; ++p) {
+                        for (int64_t l = 0; l < words_per_page; ++l) {
+                            const uint32_t v = (uint32_t) packed[
+                                (r * pages_per_row + p) * words_per_page + l];
+                            row_bytes.insert(row_bytes.end(),
+                                             (const uint8_t *) &v,
+                                             (const uint8_t *) &v + 4);
+                        }
+                    }
+                    // Page scales (16-bit each, fp16).
+                    for (int64_t p = 0; p < pages_per_row; ++p) {
+                        const uint16_t s = (uint16_t) page_scales[
+                            r * pages_per_row + p];
                         row_bytes.insert(row_bytes.end(),
-                                         (const uint8_t *) &v,
-                                         (const uint8_t *) &v + 4);
+                                         (const uint8_t *) &s,
+                                         (const uint8_t *) &s + 2);
                     }
-                }
-                // Page scales (16-bit each, fp16).
-                for (int64_t p = 0; p < pages_per_row; ++p) {
-                    const uint16_t s = (uint16_t) page_scales[
-                        r * pages_per_row + p];
-                    row_bytes.insert(row_bytes.end(),
-                                     (const uint8_t *) &s,
-                                     (const uint8_t *) &s + 2);
-                }
-                // Lane scales (8-bit each, int8).
-                for (int64_t p = 0; p < pages_per_row; ++p) {
-                    for (int64_t l = 0; l < words_per_page; ++l) {
-                        const int8_t s = lane_scales[
-                            (r * pages_per_row + p) * words_per_page + l];
-                        row_bytes.push_back((uint8_t) s);
+                    // Lane scales (8-bit each, int8).
+                    for (int64_t p = 0; p < pages_per_row; ++p) {
+                        for (int64_t l = 0; l < words_per_page; ++l) {
+                            const int8_t s = lane_scales[
+                                (r * pages_per_row + p) * words_per_page + l];
+                            row_bytes.push_back((uint8_t) s);
+                        }
                     }
-                }
-                // Dequant the row in fp32 (the L0.5 reference's
-                // precision; the ANE's fp16 path is downstream
-                // of this). The v2 variant (Accelerate + NEON)
-                // is the host-side acceleration; the C reference
-                // is the documented fallback when v2 is disabled
-                // or k is below the v2 cutoff.
-                if (ggml_tessera_t640_v2_enabled() &&
-                    in_dim >= GGML_TESSERA_T640_V2_MIN_K) {
-                    dequantize_row_tessera_t640_v2(row_bytes.data(),
-                                                   row_f32.data(), in_dim);
-                } else {
                     dequantize_row_tessera_t640(row_bytes.data(),
                                                 row_f32.data(), in_dim);
-                }
-                // Sparse outlier addback (fp32; matches the GPU
-                // kernel's outlier path).
-                const int32_t lo = outlier_row_offsets[r];
-                const int32_t hi = outlier_row_offsets[r + 1];
-                for (int32_t k = lo; k < hi; ++k) {
-                    const int32_t col = outlier_cols[k];
-                    if (col >= 0 && col < in_dim) {
-                        row_f32[col] = ggml_fp16_to_fp32(outlier_vals[k]);
+                    // Sparse outlier addback (fp32; matches the
+                    // GPU kernel's outlier path).
+                    const int32_t lo = outlier_row_offsets[r];
+                    const int32_t hi = outlier_row_offsets[r + 1];
+                    for (int32_t k = lo; k < hi; ++k) {
+                        const int32_t col = outlier_cols[k];
+                        if (col >= 0 && col < in_dim) {
+                            row_f32[col] = ggml_fp16_to_fp32(outlier_vals[k]);
+                        }
                     }
-                }
-                // Cast to fp16 for the bundle's pinned slot.
-                for (int32_t c = 0; c < in_dim; ++c) {
-                    weight_fp16[(size_t) r * in_dim + c] =
-                        ggml_fp32_to_fp16(row_f32[(size_t) c]);
+                    // Cast to fp16 for the bundle's pinned slot.
+                    for (int32_t c = 0; c < in_dim; ++c) {
+                        weight_fp16[(size_t) r * in_dim + c] =
+                            ggml_fp32_to_fp16(row_f32[(size_t) c]);
+                    }
                 }
             }
 
