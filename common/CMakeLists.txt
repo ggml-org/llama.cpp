@@ -104,6 +104,8 @@ add_library(${TARGET}
     tessera-analytical-io.h
     tessera-config.cpp
     tessera-config.h
+    tessera-runtime.cpp
+    tessera-runtime.h
     trie.cpp
     trie.h
     unicode.cpp
