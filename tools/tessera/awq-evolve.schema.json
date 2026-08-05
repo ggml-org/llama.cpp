@@ -1,0 +1,40 @@
+{
+  "name": "awq_evolve",
+  "description": "Evolve AWQ and Tessera sparse-residual policies via the GA driver. Reads .npz layer bundles, runs the genetic search (with islands + transfer ledger), and writes a llama.speculative.calibration-policy.v1 JSON consumable by llama-quantize --tessera-policy.",
+  "default_approval_level": "prompt",
+  "script": "awq-evolve",
+  "subcommand": null,
+  "positional": [],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "layers":                       { "type": "string",  "description": "Directory containing layer .npz bundles.", "cli_flag": "--layers" },
+      "output":                       { "type": "string",  "description": "Calibration policy JSON output path." },
+      "checkpoint":                   { "type": "string",  "description": "Path to a checkpoint file to resume the GA from." },
+      "base_policy":                  { "type": "string",  "description": "Acceptance policy to preserve and refine." },
+      "generations":                  { "type": "integer", "description": "Number of GA generations.", "default": "50" },
+      "population":                   { "type": "integer", "description": "Population size per generation.", "default": "32" },
+      "islands":                      { "type": "integer", "description": "Number of islands for the island model.", "default": "4" },
+      "seed":                         { "type": "integer", "description": "RNG seed.", "default": "0" },
+      "base_outlier_frac":            { "type": "number",  "description": "Initial outlier fraction estimate." },
+      "max_rows":                     { "type": "integer", "description": "Cap on rows per bundle.", "default": "65536" },
+      "max_tokens":                   { "type": "integer", "description": "Cap on calibration tokens per bundle.", "default": "256" },
+      "override_quantile":            { "type": "number",  "description": "Override-quantile cutoff." },
+      "max_overrides_per_family":     { "type": "integer", "description": "Per-family override cap." },
+      "transfer_ledger":              { "type": "string",  "description": "Progressive observer ledger used to prioritize late-surviving tensors." },
+      "sensitive_generations":        { "type": "integer", "description": "Base generations for each sensitive tensor (0 uses family generations / 4)." },
+      "sensitive_population":         { "type": "integer", "description": "Base population for each sensitive tensor (0 uses family population / 2)." },
+      "saved_compute_reinvestment":   { "type": "number",  "description": "Multiplier applied to the observer budget saved by progressive freezing." },
+      "progressive_eval":             { "type": "boolean", "description": "Successively promote candidates from stratified evidence to full scoring." },
+      "screen_fraction":              { "type": "number",  "description": "Fraction of candidates promoted past the screen." },
+      "refine_fraction":              { "type": "number",  "description": "Fraction of candidates promoted past the refine stage." },
+      "promotion_margin":             { "type": "number",  "description": "Margin required to promote a candidate." },
+      "progressive_diversity_slots":  { "type": "integer", "description": "Diversity slots in the progressive promotion queue." },
+      "candidate_batch_size":         { "type": "integer", "description": "Maximum candidate matrices per MLX activation-projection wave." },
+      "model_role":                   { "type": "string",  "description": "Component role for this AWQ evolution pass (trunk, dflash, dspark, mtp_nextn, shared_embd). Stamped on every per-family and per-override entry in the output policy.",
+                                          "enum": ["trunk", "dflash", "dspark", "mtp_nextn", "shared_embd"],
+                                          "default": "trunk" }
+    },
+    "required": ["layers", "output"]
+  }
+}

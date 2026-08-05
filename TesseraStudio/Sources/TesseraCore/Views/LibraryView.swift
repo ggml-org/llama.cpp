@@ -5,6 +5,7 @@ public struct LibraryView: View {
     @State private var models: [ModelInfo] = []
     @State private var searchText = ""
     @State private var runtimeFilter: TesseraRuntime?
+    @State private var dbFallbackNotice: String?
 
     public init() {}
 
@@ -24,12 +25,20 @@ public struct LibraryView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 400))], spacing: 16) {
-                ForEach(filteredModels) { model in
-                    ModelCardView(model: model)
+            VStack(alignment: .leading, spacing: 8) {
+                if let notice = dbFallbackNotice {
+                    Text("Tessera DB unavailable: \(notice). Showing directory scan instead.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal)
                 }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 400))], spacing: 16) {
+                    ForEach(filteredModels) { model in
+                        ModelCardView(model: model)
+                    }
+                }
+                .padding()
             }
-            .padding()
         }
         .navigationTitle("Library")
         .searchable(text: $searchText, prompt: "Search models")
@@ -61,6 +70,76 @@ public struct LibraryView: View {
     }
 
     private func scanModels() {
+        // Prefer the Tessera DB query path. On success the rows are
+        // rendered from the DB's per-model summary; on any failure
+        // (python missing, script missing, non-zero exit) we fall back
+        // to the directory glob and surface a caption.
+        Task {
+            await loadFromDB()
+        }
+    }
+
+    @MainActor
+    private func loadFromDB() async {
+        let tool = TesseraDBQueryTool()
+        let result: ToolResult
+        do {
+            result = try await tool.execute(arguments: [
+                "query": .string("list_models"),
+                "limit": .number(500)
+            ])
+        } catch {
+            self.dbFallbackNotice = "\(error)"
+            self.models = scanDirectory().sorted { $0.name < $1.name }
+            return
+        }
+        if result.success, let parsed = result.data?["parsed"], case let .object(obj) = parsed,
+           case let .array(rows)? = obj["rows"] {
+            let mapped: [ModelInfo] = rows.compactMap { row -> ModelInfo? in
+                guard case let .object(o) = row,
+                      case let .string(hash)? = o["model_hash"] else { return nil }
+                let count = (o["tensor_count"]?.numberValue).map { Int($0) } ?? 0
+                return ModelInfo(
+                    name: shortHash(hash),
+                    family: "Tessera",
+                    parameterCount: "\(count) tensors",
+                    quantization: "calibrated",
+                    effectiveBits: 0,
+                    fileSizeBytes: 0,
+                    runtime: .mlx,
+                    isTesseraQuantized: true,
+                    hasMLModelC: false,
+                    ggufPath: nil,
+                    mlmodelcPath: nil
+                )
+            }
+            if !mapped.isEmpty {
+                self.models = mapped.sorted { $0.name < $1.name }
+                self.dbFallbackNotice = nil
+                return
+            }
+            // DB exists but is empty: drop into the directory fallback
+            // silently (no notice) so the user still sees their .gguf files.
+            self.dbFallbackNotice = nil
+            self.models = scanDirectory()
+            return
+        }
+        // Tool failed: keep the existing data (so the user can still see
+        // what was loaded before) and append the directory scan.
+        let directoryRows = scanDirectory()
+        let combined = (models + directoryRows)
+        let deduped = Dictionary(grouping: combined, by: \.name).compactMapValues { $0.first }.values
+        self.models = Array(deduped).sorted { $0.name < $1.name }
+        if let err = result.error {
+            self.dbFallbackNotice = err
+        } else {
+            self.dbFallbackNotice = "tool returned no rows"
+        }
+    }
+
+    /// Legacy directory glob. Kept as the offline fallback when the
+    /// Python bridge is unavailable.
+    private func scanDirectory() -> [ModelInfo] {
         let fm = FileManager.default
         let primary = NSString(string: TesseraSettings.modelDirectory).expandingTildeInPath
         let dirs = [primary, NSString(string: "~/Models").expandingTildeInPath]
@@ -91,7 +170,15 @@ public struct LibraryView: View {
                 ))
             }
         }
-        models = found.sorted { $0.name < $1.name }
+        return found
+    }
+
+    private func shortHash(_ hash: String) -> String {
+        // model_hash is a SHA256 prefix (12 chars by convention); show
+        // the last 8 for the Library card so multiple models in the
+        // same family are distinguishable.
+        let suffix = hash.suffix(8)
+        return String(suffix)
     }
 
     private func guessFamily(from filename: String) -> String {

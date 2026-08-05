@@ -33,7 +33,8 @@ public final class TesseraToolRegistry: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// The default registry: the 8 v1 tools plus the 9 learning tools.
+    /// The default registry: the 8 v1 tools plus the 9 learning tools
+    /// plus the 9 Python-tool wrappers under tools/tessera/.
     public static let `default` = TesseraToolRegistry(tools: [
         ListModelsTool(),
         LoadModelTool(),
@@ -59,5 +60,17 @@ public final class TesseraToolRegistry: Sendable {
         RunTrainingTool(),
         InspectLearningTool(),
         PurgeTrainingDataTool(),
+        // Python tooling surface (docs/tessera-studio-design.md 2.3): the
+        // calibration / DB / evidence Python scripts are first-class tools.
+        // The Library view consumes tessera_db_query for its model grid.
+        AWQEvolveTool(),
+        BackfillTool(),
+        EvidenceStoreSummarizeTool(),
+        L3HessianTraceTool(),
+        MultimodalCalibrateTool(),
+        PerTensorCalibrateTool(),
+        ShadowCalibrateTool(),
+        TesseraDBQueryTool(),
+        UnifiedCalibrateTool(),
     ])
 }

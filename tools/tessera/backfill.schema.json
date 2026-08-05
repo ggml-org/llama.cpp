@@ -1,0 +1,22 @@
+{
+  "name": "backfill",
+  "description": "Targeted re-calibration: focused re-capture for L5 monitor-verdict tensors. Reads the monitor-verdict rows from the DB, dispatches one per-tensor subprocess per row, and writes the per-tensor activation stats back to the DB with source='backfill_real' and backfill_count incremented.",
+  "default_approval_level": "prompt",
+  "script": "backfill",
+  "subcommand": null,
+  "positional": [],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "db":                       { "type": "string",  "description": "Path to the unified tessera.duckdb file." },
+      "model_hash":               { "type": "string",  "description": "Model hash for the monitor-verdict lookup." },
+      "corpus_root":              { "type": "string",  "description": "Path to the calibration corpus root." },
+      "max_backfill_rounds":      { "type": "integer", "description": "Maximum number of backfill rounds per monitor-verdict tensor (default 2).", "default": "2" },
+      "backfill_sample_cap":      { "type": "integer", "description": "Per-tensor sample cap for the backfill re-capture (default 256).", "default": "256" },
+      "component":                { "type": "array",   "items": { "type": "string" }, "description": "Per-role component path as ROLE=PATH (trunk, dflash, dspark, mtp_nextn, shared_embd, vision_tower, audio_tower, mm_projector). Repeatable. Text-side roles take a layers directory; mmproj roles take a GGUF path." },
+      "output":                   { "type": "string",  "description": "Path to the sidecar JSON (llama.tessera.backfill.v1). Defaults to stdout when omitted." },
+      "verbose":                  { "type": "boolean", "description": "Log per-tensor progress to stderr." }
+    },
+    "required": ["db", "model_hash"]
+  }
+}

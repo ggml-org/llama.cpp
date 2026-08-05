@@ -1,0 +1,32 @@
+{
+  "name": "multimodal_calibrate",
+  "description": "Multimodal activation capture for vision_tower, audio_tower, and mm_projector components. The capture path runs a real forward pass through the clip graph via the llama-clip-capture C++ binary, then writes per-tensor rows through TesseraDB.insert_tensor_stats with source='real'. Additive on the schema; no new columns.",
+  "default_approval_level": "prompt",
+  "script": "multimodal_calibrate",
+  "subcommand": null,
+  "positional": [],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "db":                    { "type": "string",  "description": "Path to the unified tessera.duckdb file. Optional; the sidecar JSON is still written when --output is supplied." },
+      "model_hash":            { "type": "string",  "description": "Model hash (must match the dispatch's model_hash for the same unified model). Defaults to the SHA256 prefix of the supplied component GGUFs." },
+      "vision_tower":          { "type": "string",  "description": "Path to the vision tower GGUF (v.* prefixed activations)." },
+      "vision_inputs":         { "type": "array",   "items": { "type": "string" }, "description": "One or more image files (jpeg/png). Defaults to tools/mtmd/test-1.jpeg when omitted." },
+      "audio_tower":           { "type": "string",  "description": "Path to the audio tower GGUF (a.* prefixed activations)." },
+      "audio_inputs":          { "type": "array",   "items": { "type": "string" }, "description": "One or more audio files (wav/mp3/flac/aac/alac). Defaults to tools/mtmd/test-2.mp3 when omitted." },
+      "mm_projector":          { "type": "string",  "description": "Path to the mm_projector GGUF (mm.* prefixed activations)." },
+      "projector_inputs":      { "type": "array",   "items": { "type": "string" }, "description": "Optional seeds for the projector forward pass." },
+      "output":                { "type": "string",  "description": "Path to the sidecar calibration JSON (the audit trail). The DB rows are the canonical side." },
+      "budget_fraction":       { "type": "number",  "description": "If set, the per-family requant_budget_bits on l5_weights is stamped with (1 - budget_fraction) * family_default_bits for the mmproj families. 0 disables.", "default": "0" },
+      "clip_capture_binary":   { "type": "string",  "description": "Path to the llama-clip-capture C++ binary. Defaults to the value in tools/tessera/clip-capture-binary." },
+      "batch_size":            { "type": "integer", "description": "Forward-pass batch size.", "default": "1" },
+      "print_summary":         { "type": "boolean", "description": "Print a one-line per-tensor summary to stdout at the end." },
+      "backfill_tensor":       { "type": "string",  "description": "If set, only re-capture the named tensor (backfill path)." },
+      "backfill_family":       { "type": "string",  "description": "If set, only re-capture the named family (backfill path)." },
+      "backfill_sample_cap":   { "type": "integer", "description": "Per-tensor sample cap for the backfill re-capture.", "default": "256" },
+      "backfill_domains":      { "type": "array",   "items": { "type": "string" }, "description": "Domain filter for the backfill corpus." },
+      "backfill_corpus":       { "type": "string",  "description": "Path to a backfill-specific corpus directory." }
+    },
+    "required": []
+  }
+}
