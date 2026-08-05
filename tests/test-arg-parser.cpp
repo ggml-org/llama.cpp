@@ -37,11 +37,11 @@ static void test(void) {
     {
         common_params base;
         base.n_parallel = 4;
-        base.n_sampling_outputs_per_seq_max = 8;
+        base.n_outputs_max_per_seq = 8;
 
         const auto draft = common_base_params_to_speculative(base);
         assert(draft.n_outputs_max == 4);
-        assert(draft.n_sampling_outputs_per_seq_max == 1);
+        assert(draft.n_outputs_max_per_seq == 1);
     }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");

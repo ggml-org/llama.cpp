@@ -348,15 +348,15 @@ extern "C" {
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
     //       https://github.com/ggml-org/llama.cpp/pull/7544
     struct llama_context_params {
-        uint32_t n_ctx;             // text context, 0 = from model
-        uint32_t n_batch;           // logical maximum batch size that can be submitted to llama_decode
-        uint32_t n_ubatch;          // physical maximum batch size
-        uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
-        uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
-        uint32_t n_outputs_max;     // max outputs in a ubatch (0 = n_batch)
-        uint32_t n_sampling_outputs_per_seq_max; // max outputs per sequence with backend sampling (0 = n_outputs_max)
-        int32_t  n_threads;         // number of threads to use for generation
-        int32_t  n_threads_batch;   // number of threads to use for batch processing
+        uint32_t n_ctx;                 // text context, 0 = from model
+        uint32_t n_batch;               // logical maximum batch size that can be submitted to llama_decode
+        uint32_t n_ubatch;              // physical maximum batch size
+        uint32_t n_seq_max;             // max number of sequences (i.e. distinct states for recurrent models)
+        uint32_t n_rs_seq;              // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
+        uint32_t n_outputs_max;         // max outputs in a ubatch (0 = n_batch)
+        uint32_t n_outputs_max_per_seq; // max outputs per sequence (0 = n_outputs_max)
+        int32_t  n_threads;             // number of threads to use for generation
+        int32_t  n_threads_batch;       // number of threads to use for batch processing
 
         enum llama_context_type      ctx_type;          // set the context type (e.g. MTP)
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
@@ -1274,12 +1274,12 @@ extern "C" {
         // [EXPERIMENTAL]
         // backend sampling interface:
 
-        // return true if the backend supports all ops needed by the sampler and can handle up to n_outputs_per_seq_max outputs per sequence
+        // return true if the backend supports all ops needed by the sampler and can handle up to n_outputs_max_per_seq outputs per sequence
         // note: call once per sampler
         bool (*backend_init)(
                 struct llama_sampler       * smpl,
                 ggml_backend_buffer_type_t   buft,
-                uint32_t                     n_outputs_per_seq_max);
+                uint32_t                     n_outputs_max_per_seq);
 
         // call after .backend_apply()
         void (*backend_accept)(
@@ -1300,6 +1300,10 @@ extern "C" {
 
         // called before rebuilding a sampling graph to clear any internal sampler state
         void (*backend_reset)(struct llama_sampler * smpl);
+
+        // copy mutable state from src into dst while keeping dst's references to the current sampling graph
+        // src and dst must have the same type and configuration
+        void (*copy_state)(const struct llama_sampler * src, struct llama_sampler * dst);
     };
 
     struct llama_sampler {
@@ -1320,6 +1324,9 @@ extern "C" {
     LLAMA_API void                   llama_sampler_apply (      struct llama_sampler * smpl, llama_token_data_array * cur_p);
     LLAMA_API void                   llama_sampler_reset (      struct llama_sampler * smpl);
     LLAMA_API struct llama_sampler * llama_sampler_clone (const struct llama_sampler * smpl);
+    // copy mutable sampler state without changing dst or its sampling graph bindings
+    // src and dst must have the same type and configuration
+    LLAMA_API void                   llama_sampler_copy  (const struct llama_sampler * src, struct llama_sampler * dst);
     // important: do not free if the sampler has been added to a llama_sampler_chain (via llama_sampler_chain_add)
     LLAMA_API void                   llama_sampler_free  (      struct llama_sampler * smpl);
 

@@ -31,7 +31,7 @@ int main(int argc, char ** argv){
 
     const auto output_limits = common_speculative_get_output_limits(params.n_batch, params.n_parallel, n_draft);
     params.n_outputs_max = output_limits.total;
-    params.n_sampling_outputs_per_seq_max = output_limits.per_seq;
+    params.n_outputs_max_per_seq = output_limits.per_seq;
 
     // init llama.cpp
     llama_backend_init();

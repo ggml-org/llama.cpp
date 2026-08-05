@@ -87,7 +87,7 @@ struct test_context {
             int32_t n_seq_max = -1,
             uint32_t n_outputs_max = 0,
             uint32_t n_ubatch = 0,
-            uint32_t n_sampling_outputs_per_seq_max = 1) {
+            uint32_t n_outputs_max_per_seq = 1) {
         auto * model = params.model.get();
 
         GGML_ASSERT(model);
@@ -100,7 +100,7 @@ struct test_context {
             cparams.n_ubatch = n_ubatch;
         }
         cparams.n_outputs_max = n_outputs_max;
-        cparams.n_sampling_outputs_per_seq_max = n_sampling_outputs_per_seq_max;
+        cparams.n_outputs_max_per_seq = n_outputs_max_per_seq;
         cparams.samplers = configs.data();
         cparams.n_samplers = configs.size();
         cparams.kv_unified = true;
@@ -276,7 +276,7 @@ struct test_context {
 
 struct test_single_output_backend_sampler {
     bool backend_initialized = false;
-    uint32_t backend_outputs_per_seq_max = 0;
+    uint32_t backend_outputs_max_per_seq = 0;
     int backend_apply_count = 0;
     int apply_count = 0;
 };
@@ -296,10 +296,10 @@ static void test_single_output_backend_sampler_free(llama_sampler * smpl) {
 }
 
 static bool test_single_output_backend_sampler_backend_init(
-        llama_sampler * smpl, ggml_backend_buffer_type_t /*buft*/, uint32_t n_outputs_per_seq_max) {
+        llama_sampler * smpl, ggml_backend_buffer_type_t /*buft*/, uint32_t n_outputs_max_per_seq) {
     auto * ctx = (test_single_output_backend_sampler *) smpl->ctx;
-    ctx->backend_outputs_per_seq_max = n_outputs_per_seq_max;
-    if (n_outputs_per_seq_max > 1) {
+    ctx->backend_outputs_max_per_seq = n_outputs_max_per_seq;
+    if (n_outputs_max_per_seq > 1) {
         return false;
     }
     ctx->backend_initialized = true;
@@ -324,6 +324,7 @@ static llama_sampler_i test_single_output_backend_sampler_i = {
     /* .backend_apply     = */ test_single_output_backend_sampler_backend_apply,
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
+    /* .copy_state        = */ nullptr,
 };
 
 static llama_sampler * test_single_output_backend_sampler_init(
@@ -1771,8 +1772,7 @@ static void test_backend_multi_output_dist_transaction(const test_params & param
     verify_random(0, randoms[2]);
     llama_batch_free(batch);
 
-    GGML_ASSERT(llama_set_sampler(test_ctx.ctx.get(), seq_id, saved.get()));
-    chain = std::move(saved);
+    llama_sampler_copy(saved.get(), chain.get());
 
     batch = decode();
     verify_random(0, randoms[2]);
@@ -1955,7 +1955,7 @@ static void test_backend_multi_output_cpu_suffix(const test_params & params) {
         GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
 
         GGML_ASSERT(sampler_ctx->backend_initialized);
-        GGML_ASSERT(sampler_ctx->backend_outputs_per_seq_max == 1);
+        GGML_ASSERT(sampler_ctx->backend_outputs_max_per_seq == 1);
         GGML_ASSERT(sampler_ctx->backend_apply_count > 0);
         GGML_ASSERT(sampler_ctx->apply_count == 0);
         GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx.get(), 0) != LLAMA_TOKEN_NULL);
@@ -1976,7 +1976,7 @@ static void test_backend_multi_output_cpu_suffix(const test_params & params) {
         GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
 
         GGML_ASSERT(!sampler_ctx->backend_initialized);
-        GGML_ASSERT(sampler_ctx->backend_outputs_per_seq_max == 2);
+        GGML_ASSERT(sampler_ctx->backend_outputs_max_per_seq == 2);
         GGML_ASSERT(sampler_ctx->backend_apply_count == 0);
         for (int i = 0; i < batch.n_tokens; ++i) {
             GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx.get(), i) == LLAMA_TOKEN_NULL);
