@@ -22,7 +22,118 @@
 #include <cstdlib>
 #include <cstring>
 #include <climits>
+#include <type_traits>
 #include <vector>
+
+// remember to bump this if the serialization format changes
+#define MTMD_SERIALIZATION_VERSION 1
+
+struct mtmd_serialization {
+    // note: using 64-bit here for future-proofing
+    uint64_t version = MTMD_SERIALIZATION_VERSION;
+    std::vector<char> data;
+    size_t read_pos = 0; // cursor used when reading
+
+    // for writing
+    mtmd_serialization(uint64_t version) : version(version) {
+        write(version);
+    }
+
+    // for reading
+    mtmd_serialization(uint64_t version, const char * buf, size_t len) {
+        // copy buf to data
+        data.assign(buf, buf + len);
+        uint64_t ver_in = read<uint64_t>();
+        if (ver_in != version) {
+            throw std::runtime_error("mtmd_serialization: version mismatch");
+        }
+        this->version = ver_in;
+    }
+
+    template <typename T>
+    void write(T value) {
+        static_assert(std::is_trivially_copyable<T>::value && !std::is_same<T, bool>::value,
+            "T must be trivially copyable and not bool");
+        const char * p = reinterpret_cast<const char *>(&value);
+        data.insert(data.end(), p, p + sizeof(T));
+    }
+
+    template <typename T>
+    T read() {
+        static_assert(std::is_trivially_copyable<T>::value && !std::is_same<T, bool>::value,
+            "T must be trivially copyable and not bool");
+        if (read_pos + sizeof(T) > data.size()) {
+            throw std::runtime_error("mtmd_serialization: read OOB");
+        }
+        T value;
+        std::memcpy(&value, data.data() + read_pos, sizeof(T));
+        read_pos += sizeof(T);
+        return value;
+    }
+
+};
+
+template <>
+void mtmd_serialization::write<bool>(bool value) {
+    write<uint8_t>(value ? 1 : 0);
+}
+template <>
+bool mtmd_serialization::read<bool>() {
+    return read<uint8_t>() != 0;
+}
+
+template <>
+void mtmd_serialization::write<std::string>(std::string value) {
+    write<uint64_t>(value.size());
+    data.insert(data.end(), value.begin(), value.end());
+}
+template <>
+std::string mtmd_serialization::read<std::string>() {
+    uint64_t len = read<uint64_t>();
+    if (read_pos + len > data.size()) {
+        throw std::runtime_error("mtmd_serialization: read_string OOB");
+    }
+    std::string str(data.data() + read_pos, len);
+    read_pos += len;
+    return str;
+}
+
+// only mtmd.cpp needs these, so they're implemented here rather than in clip-impl.h
+void clip_image_f32::serialize(mtmd_serialization & ser) const {
+    // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+    // note: buf is intentionally NOT serialized; the loaded clip_image_f32 will always be a placeholder
+    ser.write(add_viewsep);
+    ser.write(add_newline);
+    ser.write((int32_t)nx_);
+    ser.write((int32_t)ny_);
+}
+void clip_image_f32::deserialize(mtmd_serialization & ser) {
+    add_viewsep = ser.read<bool>();
+    add_newline = ser.read<bool>();
+    nx_ = ser.read<int32_t>();
+    ny_ = ser.read<int32_t>();
+    buf.clear(); // always a placeholder after loading
+}
+
+void clip_image_f32_batch::serialize(mtmd_serialization & ser) const {
+    // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+    ser.write(is_audio);
+    ser.write<uint64_t>(entries.size());
+    for (const auto & entry : entries) {
+        entry.serialize(ser);
+    }
+}
+void clip_image_f32_batch::deserialize(mtmd_serialization & ser) {
+    is_audio = ser.read<bool>();
+    uint64_t n = ser.read<uint64_t>();
+    entries.clear();
+    entries.reserve(n);
+    for (uint64_t i = 0; i < n; i++) {
+        clip_image_f32 entry;
+        entry.deserialize(ser);
+        entries.push_back(std::move(entry));
+    }
+}
 
 // for still image data, layout is RGBRGBRGB...
 // length of data must be nx * ny * 3 bytes
@@ -136,6 +247,26 @@ struct mtmd_image_tokens {
             id
         };
     }
+
+    void serialize(mtmd_serialization & ser) const {
+        // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+        ser.write(nx);
+        ser.write(ny);
+        ser.write((uint32_t)pos);
+        ser.write(image_idx);
+        ser.write(n_temporal_merge);
+        ser.write(id);
+        batch_f32.serialize(ser);
+    }
+    void deserialize(mtmd_serialization & ser) {
+        nx = ser.read<uint32_t>();
+        ny = ser.read<uint32_t>();
+        pos = (mtmd_pos_type)ser.read<uint32_t>();
+        image_idx = ser.read<uint32_t>();
+        n_temporal_merge = ser.read<uint32_t>();
+        id = ser.read<std::string>();
+        batch_f32.deserialize(ser);
+    }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
 
@@ -160,6 +291,18 @@ struct mtmd_audio_tokens {
             batch_f32.clone(),
             id
         };
+    }
+
+    void serialize(mtmd_serialization & ser) const {
+        // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+        ser.write(n_tokens);
+        ser.write(id);
+        batch_f32.serialize(ser);
+    }
+    void deserialize(mtmd_serialization & ser) {
+        n_tokens = ser.read<uint32_t>();
+        id = ser.read<std::string>();
+        batch_f32.deserialize(ser);
     }
 };
 using mtmd_audio_tokens_ptr = std::unique_ptr<mtmd_audio_tokens>;
@@ -191,6 +334,49 @@ struct mtmd_input_chunk {
             return tokens_audio && tokens_audio->is_placeholder();
         }
         return false;
+    }
+
+    void serialize(mtmd_serialization & ser) const {
+        // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+        ser.write((uint32_t)type);
+
+        ser.write<uint64_t>(tokens_text.size());
+        for (llama_token tok : tokens_text) {
+            ser.write((int32_t)tok);
+        }
+
+        ser.write(tokens_image != nullptr);
+        if (tokens_image) {
+            tokens_image->serialize(ser);
+        }
+
+        ser.write(tokens_audio != nullptr);
+        if (tokens_audio) {
+            tokens_audio->serialize(ser);
+        }
+    }
+    void deserialize(mtmd_serialization & ser) {
+        type = (mtmd_input_chunk_type)ser.read<uint32_t>();
+
+        uint64_t n_tokens_text = ser.read<uint64_t>();
+        tokens_text.resize(n_tokens_text);
+        for (uint64_t i = 0; i < n_tokens_text; i++) {
+            tokens_text[i] = (llama_token)ser.read<int32_t>();
+        }
+
+        if (ser.read<bool>()) {
+            tokens_image = std::make_unique<mtmd_image_tokens>();
+            tokens_image->deserialize(ser);
+        } else {
+            tokens_image.reset();
+        }
+
+        if (ser.read<bool>()) {
+            tokens_audio = std::make_unique<mtmd_audio_tokens>();
+            tokens_audio->deserialize(ser);
+        } else {
+            tokens_audio.reset();
+        }
     }
 };
 
@@ -2040,6 +2226,42 @@ mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk) {
 void mtmd_input_chunk_free(mtmd_input_chunk * chunk) {
     if (chunk) {
         delete chunk;
+    }
+}
+
+int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len) {
+    try {
+        mtmd_serialization ser(MTMD_SERIALIZATION_VERSION);
+        chunk->serialize(ser);
+
+        if (expected_out_len) {
+            *expected_out_len = ser.data.size();
+        }
+        if (!out_buf) {
+            // caller is only querying the required size
+            return 0;
+        }
+        if (out_len < ser.data.size()) {
+            LOG_ERR("%s: out_buf is too small, need %zu bytes, got %zu\n", __func__, ser.data.size(), out_len);
+            return -1;
+        }
+        std::memcpy(out_buf, ser.data.data(), ser.data.size());
+        return 0;
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: %s\n", __func__, e.what());
+        return -1;
+    }
+}
+
+mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len) {
+    try {
+        mtmd_serialization ser(MTMD_SERIALIZATION_VERSION, buf, len);
+        mtmd::input_chunk_ptr chunk(new mtmd_input_chunk());
+        chunk->deserialize(ser);
+        return chunk.release();
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: %s\n", __func__, e.what());
+        return nullptr;
     }
 }
 
