@@ -1367,54 +1367,146 @@ an ANE program bound whose role matches).
 ### 6.6 Phase 0 L1 matmul parity results
 
 `tests/test-ane-tile640-matmul.cpp` exercises the dispatch
-end-to-end on the canonical 256x256 case. The fixture is
-`tools/ane-mtp/fixtures/tile640-matmul-256x256x1/` (a
-2-input fp16 matmul: w [256, 256] fp16 + x [256, 1] fp16
--> y [256, 1] fp32). The parity bars are the spec's
-1e-2 abs / 1e-1 rel; the test uses 2e-2 abs / 1e-1 rel
-with a rel-error denominator floor of 1e-2 (the ANE's
-fp16 matmul has ~1e-3 absolute error, so the rel error
-budget applies only to elements with |ref| > 1e-2 per
-the spec's "small magnitudes" caveat).
+end-to-end on the 5 shape combos the spec lists (256x256,
+512x512, 1024x1024, 128x4096, 4096x4096). Each shape has
+its own `.mlmodelc` fixture
+(`tools/ane-mtp/fixtures/tile640-matmul-{W}x{H}x1/`,
+a 2-input fp16 matmul: w [out_dim, in_dim] fp16 +
+x [in_dim, 1] fp16 -> y [out_dim, 1] fp32). The
+parity bars are the spec's 1e-2 abs / 1e-1 rel; the
+test uses 2e-2 abs / 1e-1 rel with a rel-error denominator
+floor of 1e-2 (the ANE's fp16 matmul has ~1e-3 absolute
+error, so the rel error budget applies only to elements
+with |ref| > 1e-2 per the spec's "small magnitudes"
+caveat).
+
+The dispatch's shape-match check
+(`ggml-ane.mm:1907-1918`) returns true when the bound
+bundle's baked shape matches the ggml op's shape. Each
+test case binds the matching-shape `.mlmodelc` via
+`ggml_backend_ane_set_program`; a shape mismatch would
+fail `ggml_backend_graph_compute` with "advertised op
+has no compute path" (TILE640_MATMUL has no fall-through
+path), so the SUCCESS return IS the "dispatch returned
+true" signal. The wrapper in the test (`run_parity_test`)
+surfaces this via the parity bar's printed output.
+
+The 5-shape parity table (the L0.5 reference is fp32
+dequant + fp32 matmul on the host; the ANE path is
+host fp32 dequant -> fp16 cast -> ANE fp16 matmul;
+fp16 multiplication and accumulation on the ANE):
 
 | Case                    | max abs err | max rel err | Status |
 |-------------------------|-------------|-------------|--------|
 | dense 256x256           | 1.02e-3     | 9.26e-3     | PASS   |
-| dense 256x256 (re-run)  | 9.05e-4     | 2.92e-2     | PASS   |
+| dense 512x512           | 1.48e-3     | 5.54e-2     | PASS   |
+| dense 1024x1024         | 2.10e-3     | 8.24e-2     | PASS   |
+| dense 128x4096          | 3.05e-3     | 7.25e-3     | PASS   |
+| dense 4096x4096         | 4.34e-3     | 1.98e-1     | **FAIL (rel)** |
 | 5% outliers 256x256     | 3.57e-3     | 3.38e-2     | PASS   |
-| no outliers 256x256     | 8.51e-4     | 1.67e-2     | PASS   |
-| IOSurface-state plumbing (re-run with different seed -> different page_scales) | structural | structural | PASS |
+| 5% outliers 512x512     | 4.76e-3     | 1.42e-1     | **FAIL (rel)** |
+| 5% outliers 1024x1024   | 7.02e-3     | 8.94e-2     | PASS   |
+| 5% outliers 128x4096    | 7.57e-3     | 4.38e-2     | PASS   |
+| 5% outliers 4096x4096   | 1.52e-2     | 2.66e-1     | **FAIL (rel)** |
+| IOSurface-state plumbing (5 shapes x 2 modes = 10 dispatches with different per-shape seeds) | structural | structural | PASS |
 
-All 4 parity cases pass within the 2e-2 abs / 1e-1 rel
-budget. The 5% outliers case has the largest abs error
-(3.57e-3) because the outlier addback is applied in fp32
-on the host and the fp16 cast loses some precision on the
-large-magnitude values; the resulting error is well within
-the bar.
+All 5 abs err bars pass (max abs err 1.52e-2 for the
+4096x4096 outlier case, well within 2.0e-2). The dense
+256x256 / 128x4096 / 1024x1024 / 512x512 cases all pass
+the 1e-1 rel err bar. The 5% outlier path passes rel err
+for 256x256, 1024x1024, and 128x4096. The 4096x4096 case
+(dense and outlier) and the 512x512 outlier case exceed
+the 1e-1 rel err bar.
 
-The fixture is shape-locked to 256x256x1; the other shape
-combos the spec lists (512x512, 1024x1024, 128x4096,
-4096x4096) require additional fixtures built with
+The 4096x4096 case is a documented ANE precision loss:
+the 4096-element inner dimension of the matmul pushes
+the ANE's fp16 multiplication + fp16 accumulation
+beyond the 1e-1 rel err budget. The L0.5 reference is
+fp32 throughout (fp32 weight, fp32 activation, fp32
+accumulate), so the relative comparison amplifies the
+ANE's fp16 path's known precision loss for large inner
+dimensions. The 512x512 outlier case is on the edge:
+the outlier magnitudes (5x base) push the per-element
+fp16 range to where the absolute error per multiply
+grows faster than the magnitude, degrading rel err
+from 5.5e-2 (dense) to 1.4e-1 (5% outliers).
+
+The dispatch's shape-mismatch check now covers all 5
+bound shapes. Production graphs hit the ANE path for
+the 5 gemma 4 12B weight shape combos (256x256
+decoder / 512x512 / 1024x1024 / 128x4096 attention-proj /
+4096x4096 FFN down-proj) and only fall through to
+ggml-cpu/Metal for shapes the bound bundles don't
+cover.
+
+The fixture build is per-shape: each (out_dim, in_dim)
+triple gets its own `.mlmodelc` via
 `tools/ane-mtp/build-tile640-matmul-fixture.py
---out-dim N --in-dim M --n-tokens K`. The dispatch's
-shape-mismatch check returns false so the scheduler
-routes those shapes to ggml-cpu/Metal until the matching
-.mlmodelc is built (Phase 0.5).
+--out-dim N --in-dim M --n-tokens K`. The committed
+fixture state is partial (`.mlmodelc/Manifest.json +
+model.mil + metadata.json`); the `.mlmodelc/coremldata.bin`
+is gitignored (per the repo's `*.bin` rule). Re-build
+each fixture locally before running the test to
+regenerate the full .mlmodelc on disk; the build script
+is idempotent.
 
-### 6.7 Open question for Phase 0.5
+**Open question for the architect (rel err bar for
+in_dim >= 4096)**: the 4096x4096 case fails the 1e-1
+rel err bar in the current test. Three work-arounds:
 
-The 5-trit-base-243 dequant happens on the host in Phase
-0. The MIL graph for the equivalent dequant inside the
-bundle is ~50 elementwise ops per page (5-trit unpack via
-a 243-entry LUT, multiply by page_scale * lane_scale,
-scatter the sparse outlier vals). A Phase 0.5 spike
-should attempt the fused path: a 7-input .mlmodelc that
-takes the 6 weight components + activations and computes
-the matmul internally. The expected gain is the 0.3-1.3 ms
-prologue the host dequant pays (per the research doc
-Section 2.1), at the cost of a more complex MIL graph
-and per-shape fixture rebuilds. The architect decides
-whether the throughput win justifies the complexity.
+1. **Loosen the rel err bar for in_dim >= 4096** (e.g.,
+   3e-1 for the 4096 case). The 4096x4096 matmul is
+   the gemma 4 12B FFN down-projection shape; the
+   ANE's fp16 path is faster but less accurate, and
+   the spec's 1e-1 rel err bar was sized for the 256x256
+   spike. A per-shape or per-in_dim rel err bar in the
+   test reflects the ANE's actual precision envelope.
+
+2. **Tile the matmul** in the dispatch: split a
+   4096x4096 matmul into smaller chunks (e.g., 4x
+   4096x1024 sub-matmuls) where each sub-matmul meets
+   the 1e-1 rel err bar. The output is the sum. The
+   cost is N dispatches instead of 1, but each is
+   smaller and within the bar.
+
+3. **Route 4096x4096 to ggml-cpu/Metal** in the
+   dispatch: accept the ~30-50x slowdown for the FFN
+   down-projection in exchange for fp32 precision. The
+   other 4 shapes stay on ANE.
+
+The architect decides. The 512x512 outlier case is
+on the edge (1.42e-1 vs 1e-1) and would be fixed by
+work-around 1 with a slightly looser bar (1.5e-1).
+
+### 6.7 Open questions for Phase 0.5
+
+**Open question #2 (per-shape fixtures): RESOLVED.** The
+5-shape fixture coverage landed in this worktree
+(evolve/ane-tile640-fixtures-full): the 4 follow-on
+fixtures (512x512, 1024x1024, 128x4096, 4096x4096) are
+siblings of the canonical 256x256 fixture, built with
+the same script (`tools/ane-mtp/build-tile640-matmul-fixture.py
+--out-dim N --in-dim M --n-tokens K`). The dispatch's
+shape-mismatch check now covers all 5 bound shapes; the
+gemma 4 12B weight shape set is fully covered (256x256
+decoder / 512x512 / 1024x1024 / 128x4096 attention-proj /
+4096x4096 FFN down-proj). The 5-shape parity table is
+in Part 6.6 above.
+
+**Open question #1 (fused dequant+matmul on ANE, original
+Phase 0.5 spike): OPEN.** The 5-trit-base-243 dequant
+happens on the host in Phase 0. The MIL graph for the
+equivalent dequant inside the bundle is ~50 elementwise
+ops per page (5-trit unpack via a 243-entry LUT, multiply
+by page_scale * lane_scale, scatter the sparse outlier
+vals). A Phase 0.5 spike should attempt the fused path:
+a 7-input .mlmodelc that takes the 6 weight components +
+activations and computes the matmul internally. The
+expected gain is the 0.3-1.3 ms prologue the host dequant
+pays (per the research doc Section 2.1), at the cost of
+a more complex MIL graph and per-shape fixture rebuilds.
+The architect decides whether the throughput win
+justifies the complexity.
 
 ---
 
