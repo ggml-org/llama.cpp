@@ -134,6 +134,7 @@ struct ContentView: View {
                 Button("History", systemImage: "sidebar.left") {
                     withAnimation { showHistory.toggle() }
                 }
+                .help("Show or hide the chat history drawer")
                 .accessibilityHint("Shows or hides the chat history drawer")
             }
         }

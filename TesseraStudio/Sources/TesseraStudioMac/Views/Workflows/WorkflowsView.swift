@@ -199,7 +199,7 @@ struct WorkflowsView: View {
             Button(action: requestNewDocument) {
                 Label("New", systemImage: "doc.badge.plus")
             }
-            .help("New workflow")
+            .help("Create an empty workflow")
             .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("New workflow")
             .accessibilityHint("Replace the current workflow with an empty one")
@@ -207,7 +207,7 @@ struct WorkflowsView: View {
             Button(action: { isImporting = true }) {
                 Label("Open", systemImage: "folder")
             }
-            .help("Open workflow from disk")
+            .help("Open a workflow file from disk")
             .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("Open workflow")
             .accessibilityHint("Choose a workflow file to open")
@@ -215,7 +215,7 @@ struct WorkflowsView: View {
             Button(action: { isExporting = true }) {
                 Label("Save", systemImage: "square.and.arrow.down")
             }
-            .help("Save workflow to disk")
+            .help("Save the current workflow to disk")
             .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("Save workflow")
             .accessibilityHint("Save the current workflow to a file")
@@ -229,7 +229,7 @@ struct WorkflowsView: View {
             Button(action: { editor.runWorkflow() }) {
                 Label("Run", systemImage: "play.fill")
             }
-            .help("Run workflow")
+            .help("Run the current workflow")
             .disabled(editor.runPhase.isRunning)
             .accessibilityLabel("Run workflow")
             .accessibilityHint("Execute the current workflow and show progress")
