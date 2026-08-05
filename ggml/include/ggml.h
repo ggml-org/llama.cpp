@@ -2789,9 +2789,7 @@ extern "C" {
             struct ggml_tensor * tensor);
 
     // add the tensor and its parents to the graph without marking them for compute
-    // use this to fix the position of nodes in the graph, e.g. to keep q, k and v together
-    // the compute flag is set later, when the tensor is reached from a computed node
-    // a tensor that stays outside the selected branch of ggml_build_forward_select() is never computed
+    // the flag is set later, when the tensor is reached from a node that computes
     GGML_API void ggml_build_forward_order(
             struct ggml_cgraph * cgraph,
             struct ggml_tensor * tensor);
