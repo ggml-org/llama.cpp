@@ -442,7 +442,7 @@
 		onCloseAutoFocus={(event) => event.preventDefault()}
 		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl"
 	>
-		<div class="p-2 min-h-28 flex flex-col justify-between">
+		<div class="p-2 min-h-22 flex flex-col justify-between">
 			<SearchInput
 				bind:ref={searchInputRef}
 				bind:value={query}
@@ -476,9 +476,9 @@
 			{/if}
 
 			{#if homeBase}
-				<div class="-mx-2 my-1 h-px bg-border/20" aria-hidden="true"></div>
+				<div class="-mx-2 my-2 h-px bg-border/20" aria-hidden="true"></div>
 
-				<span class="px-2 py-2 font-mono text-[10px]">
+				<span class="px-2 py-1.5 font-mono text-[10px]">
 					Searching in:
 
 					<span class="truncate text-muted-foreground/70" title={searchScope}
