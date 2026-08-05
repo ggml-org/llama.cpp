@@ -88,7 +88,8 @@ printf 'screen_dir=%s\n' "$screen_dir"
 printf 'correctness_artifact=%s\ngit_head=%s\noptimization_accepted=0\n' "$CORRECTNESS_DIR" "$head" > "$screen_dir/contract.txt"
 
 run_arm() {
-    local arm=$1 value=$2 label="bf16-hidden-${arm}" launch_log="$screen_dir/${arm}-launch.log" rc arm_dir
+    local arm=$1 value=$2 rc arm_dir
+    local label="bf16-hidden-${arm}" launch_log="$screen_dir/${arm}-launch.log"
     check_gpus_idle "before $arm"
     set +e
     env \

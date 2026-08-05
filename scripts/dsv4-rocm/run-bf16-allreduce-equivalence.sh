@@ -131,7 +131,8 @@ printf 'run_dir=%s\n' "$run_dir"
 DSV4_HASH_MODE=metadata "$ROOT_DIR/scripts/dsv4-rocm/manifest.sh" "$run_dir" "$BINARY" "$MODEL"
 
 run_arm() {
-    local arm=$1 value=$2 arm_dir="$run_dir/$arm" rc
+    local arm=$1 value=$2 rc
+    local arm_dir="$run_dir/$arm"
     mkdir "$arm_dir"
     check_gpus_idle "before $arm"
     {
