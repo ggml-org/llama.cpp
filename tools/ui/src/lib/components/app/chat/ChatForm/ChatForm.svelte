@@ -15,9 +15,7 @@
 		INPUT_CLASSES,
 		SETTING_CONFIG_DEFAULT,
 		INITIAL_FILE_SIZE,
-		PROMPT_CONTENT_SEPARATOR,
-		PROMPT_TRIGGER_PREFIX,
-		getChatCommands
+		PROMPT_CONTENT_SEPARATOR
 	} from '$lib/constants';
 	import {
 		ContentPartType,
@@ -31,6 +29,7 @@
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { recentMentionsStore } from '$lib/stores/recent-mentions.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
@@ -40,9 +39,7 @@
 		activeConversation,
 		pendingCwd
 	} from '$lib/stores/conversations.svelte';
-	import { recentMentionsStore } from '$lib/stores/recent-mentions.svelte';
 	import type {
-		ChatFormCommand,
 		FileMentionEntry,
 		GetPromptResult,
 		MCPPromptInfo,
@@ -56,12 +53,9 @@
 		isIMEComposing,
 		lastPathSegment,
 		parseClipboardContent,
-		takeCommandDismissSnapshot,
-		takeMentionDismissSnapshot,
-		uuid,
-		type CommandDismissSnapshot,
-		type MentionDismissSnapshot
+		uuid
 	} from '$lib/utils';
+	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -148,37 +142,6 @@
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
 
-	// Picker State
-	let isCommandPickerOpen = $state(false);
-	let commandQuery = $state('');
-	let isPromptPickerOpen = $state(false);
-	let promptSearchQuery = $state('');
-	let isMentionPickerOpen = $state(false);
-	let mentionQuery = $state('');
-	let isWorkingDirectoryPickerOpen = $state(false);
-	let workingDirectoryQuery = $state('');
-
-	/**
-	 * Snapshot of the most recent `@`-mention token the user dismissed
-	 * (via Escape, outside-click, or simply by deleting it). When the
-	 * picker is closed AND the same token is still intact in the buffer,
-	 * we do NOT auto-reopen - the user has explicitly told us this
-	 * `@<query>` should be treated as literal text. The snapshot
-	 * becomes stale the moment any character inside the token changes,
-	 * at which point the picker is allowed to reopen on the next input.
-	 */
-	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
-
-	/**
-	 * Snapshot of the most recent `/`-command token the user dismissed
-	 * (via Escape or outside-click). When the command picker is closed AND
-	 * the same token is still intact in the buffer, we neither reopen the
-	 * picker nor instant-dispatch - the user has explicitly told us this
-	 * `/name` should be treated as literal text. The snapshot becomes stale
-	 * the moment any character inside the token changes.
-	 */
-	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
-
 	// Invisible anchor for the mention picker: sits at the top edge of the
 	// chat form so the popover floats above the box (matches the working-
 	// directory picker's `customAnchor` pattern). One anchor per popover we
@@ -187,21 +150,28 @@
 
 	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
 
-	// Scopes the @-mention search to the cwd the user picked (when set),
-	// falling back to the server home so the picker still finds matches
-	// before the user has chosen a directory.
-	let mentionScopePath = $derived(cwd ?? toolsStore.serverHome ?? null);
-
-	// Slash commands surfaced by the `/` command picker, filtered to those
-	// whose backing capability is currently available.
-	let availableCommands = $derived(
-		getChatCommands({
-			showModelSelector,
-			hasPrompts: () =>
-				mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
-			hasBuiltinTools: () => toolsStore.builtinTools.length > 0
-		})
-	);
+	// Picker orchestration: open/query state for the command, prompt,
+	// mention and working-directory pickers is owned by the hook; the chat
+	// form only supplies the component-owned dependencies (input value,
+	// caret, model selector) the pickers need.
+	const pickers = useChatFormPickers({
+		getValue: () => value,
+		setValue: (v) => {
+			value = v;
+			onValueChange?.(v);
+		},
+		getCaretOffset: () => inputRef?.getCaretOffset(),
+		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
+		focusInput: refocusInput,
+		getShowModelSelector: () => showModelSelector,
+		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
+		hasBuiltinTools: () => toolsStore.builtinTools.length > 0,
+		hasRecents: () => recentMentionsStore.items.length > 0,
+		getCwd: () => cwd,
+		getServerHome: () => toolsStore.serverHome ?? null,
+		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
+		getPickersRef: () => pickersRef
+	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
 		// Committing a directory consumes the `/cwd` token (the command is
@@ -217,34 +187,6 @@
 			await chatStore.recordCwdChange(newDir?.trim() || null);
 		}
 	}
-
-	// Chip click opens the picker seeded with the current directory (no
-	// `/cwd` token in the input, so no two-way sync happens).
-	function handleWorkingDirectoryOpen() {
-		workingDirectoryQuery = cwd ?? '';
-		isWorkingDirectoryPickerOpen = true;
-	}
-
-	function handleWorkingDirectoryClose() {
-		isWorkingDirectoryPickerOpen = false;
-		workingDirectoryQuery = '';
-		refocusInput();
-	}
-
-	// Two-way binding between the text after `/cwd ` and the picker's search
-	// input: typing in the search input rewrites the `/cwd <query>` token in
-	// the chat input. The reverse direction (typing in the chat input) is
-	// handled by `handleInput` -> `dispatchCommand` -> `workingDirectoryQuery`.
-	$effect(() => {
-		if (!isWorkingDirectoryPickerOpen) return;
-		const token = findCommandToken(value);
-		if (!token || token.name !== 'cwd') return;
-		const newValue = `/cwd ${workingDirectoryQuery}`;
-		if (newValue === value) return;
-		value = newValue;
-		onValueChange?.(newValue);
-		queueMicrotask(() => inputRef?.setCaretOffset(newValue.length));
-	});
 
 	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
@@ -367,131 +309,11 @@
 		}
 	}
 
-	function handleInput() {
-		const cursor = inputRef?.getCaretOffset() ?? value.length;
-
-		if (value.startsWith(PROMPT_TRIGGER_PREFIX)) {
-			// A `/` at the start is a command, not a mention - close the
-			// mention and prompt pickers and route to the command picker.
-			isMentionPickerOpen = false;
-			mentionQuery = '';
-			isPromptPickerOpen = false;
-			promptSearchQuery = '';
-
-			const token = findCommandToken(value);
-			if (!token) {
-				isCommandPickerOpen = false;
-				commandQuery = '';
-				return;
-			}
-
-			// Picker's been dismissed for THIS exact token - honor the
-			// "literal until delete + retype" rule: don't reopen or
-			// instant-dispatch until the token changes.
-			const isDismissedSticky =
-				commandDismissedSnapshot !== null &&
-				commandDismissedSnapshot.name === token.name &&
-				commandDismissedSnapshot.args === token.args;
-
-			if (isDismissedSticky) {
-				isCommandPickerOpen = false;
-				commandQuery = '';
-				return;
-			}
-
-			// The command name is complete once a space follows it. An exact
-			// match dispatches instantly (Slack-style); a non-match falls
-			// through to the picker's empty state so the user can still
-			// submit the literal text. Disabled commands never dispatch.
-			const nameComplete = token.args.length > 0 || value.endsWith(' ');
-			if (nameComplete) {
-				const command = availableCommands.find((c) => c.name === token.name);
-				if (command && !command.disabled) {
-					isCommandPickerOpen = false;
-					commandQuery = '';
-					dispatchCommand(command, token.args);
-					return;
-				}
-			}
-
-			// Still typing the name (or it doesn't match) - show the picker
-			// only when there is something to pick.
-			if (availableCommands.length > 0) {
-				isCommandPickerOpen = true;
-				commandQuery = token.name;
-			} else {
-				isCommandPickerOpen = false;
-				commandQuery = '';
-			}
-			return;
-		}
-
-		// Not a command - close the command picker and reset the snapshot.
-		isCommandPickerOpen = false;
-		commandQuery = '';
-		if (commandDismissedSnapshot !== null) {
-			commandDismissedSnapshot = null;
-		}
-		// A non-command edit while the `/cwd` picker is open means the user
-		// abandoned the command - close the picker.
-		if (isWorkingDirectoryPickerOpen) {
-			isWorkingDirectoryPickerOpen = false;
-		}
-
-		const token = findMentionToken(value, cursor);
-
-		if (token) {
-			// Picker's been dismissed for THIS exact token - honor the
-			// "literal until delete + retype" rule: don't reopen until the
-			// token changes (typed-then-Esc'd a slot, then kept typing
-			// inside the same `@<q>`).
-			const isDismissedSticky =
-				mentionDismissedSnapshot !== null &&
-				mentionDismissedSnapshot.start === token.start &&
-				mentionDismissedSnapshot.query === token.query;
-
-			if (!isDismissedSticky) {
-				// Show the picker only if it can actually render something
-				// useful: either the user has typed at least one
-				// character after `@` (live search), or we've previously
-				// picked at least one file/folder (recents surface). A
-				// bare `@` with no recents is a no-op - re-typing into
-				// the token would otherwise flash an empty "start
-				// typing..." hint before the user types anything.
-				const haveRecents = recentMentionsStore.value.length > 0;
-				const haveQuery = token.query.length > 0;
-
-				if (haveRecents || haveQuery) {
-					mentionDismissedSnapshot = null;
-					isMentionPickerOpen = true;
-					mentionQuery = token.query;
-					isPromptPickerOpen = false;
-					promptSearchQuery = '';
-					return;
-				}
-			}
-		}
-
-		isPromptPickerOpen = false;
-		promptSearchQuery = '';
-		isMentionPickerOpen = false;
-		mentionQuery = '';
-
-		// Token gone or no longer intact - the snapshot is stale. Reset so
-		// the next fresh `@` opens immediately even at the same offset.
-		if (mentionDismissedSnapshot !== null && !token) {
-			mentionDismissedSnapshot = null;
-		}
-	}
-
 	function handleKeydown(event: KeyboardEvent) {
-		if (pickersRef?.handleKeydown(event)) {
-			return;
-		}
-
-		if (event.key === KeyboardKey.ESCAPE && isPromptPickerOpen) {
-			isPromptPickerOpen = false;
-			promptSearchQuery = '';
+		// Let the pickers consume navigation/escape keys first (Esc closes a
+		// picker, arrow keys move its selection). When consumed, skip the
+		// enter-to-submit logic below.
+		if (pickers.handleKeydown(event)) {
 			return;
 		}
 
@@ -595,8 +417,7 @@
 		promptInfo: MCPPromptInfo,
 		args?: Record<string, string>
 	) {
-		isPromptPickerOpen = false;
-		promptSearchQuery = '';
+		pickers.closePromptPicker();
 
 		const promptName = promptInfo.title || promptInfo.name;
 		const placeholder: ChatUploadedFile = {
@@ -662,90 +483,6 @@
 	// synchronous focus() back into the still-mounted popover.
 	function refocusInput() {
 		queueMicrotask(() => inputRef?.focus());
-	}
-
-	function handlePromptPickerClose() {
-		isPromptPickerOpen = false;
-		promptSearchQuery = '';
-		refocusInput();
-	}
-
-	/**
-	 * Dispatch a selected slash command. The command token is consumed
-	 * (the input is cleared) and the corresponding picker / selector is
-	 * opened. `args` (everything after the command name) seeds the target
-	 * picker's search where applicable - e.g. `/prompt rev` opens the MCP
-	 * prompt picker pre-filtered by `rev`.
-	 */
-	function dispatchCommand(command: ChatFormCommand, args: string) {
-		switch (command.action) {
-			case 'prompt':
-				isWorkingDirectoryPickerOpen = false;
-				value = '';
-				onValueChange?.('');
-				isPromptPickerOpen = true;
-				promptSearchQuery = args.trim();
-				break;
-			case 'cwd':
-				// Keep `/cwd <args>` in the input so the search field and the
-				// token stay two-way bound while the picker is open.
-				workingDirectoryQuery = args.trim();
-				isWorkingDirectoryPickerOpen = true;
-				break;
-			case 'model':
-				isWorkingDirectoryPickerOpen = false;
-				value = '';
-				onValueChange?.('');
-				chatFormActionsRef?.openModelSelector();
-				break;
-		}
-	}
-
-	function handleCommandSelect(command: ChatFormCommand) {
-		// Complete the command name in the input (with a trailing space) and
-		// let the normal input flow dispatch it. This way `/cw` + Enter yields
-		// `/cwd ` in the chat form, and the instant-dispatch-on-space path
-		// opens the target picker exactly as if the user had typed it.
-		value = `/${command.name} `;
-		onValueChange?.(value);
-		handleInput();
-	}
-
-	/**
-	 * Command picker dismissed (Esc, outside-click, or selection-complete).
-	 * Capture a `(name, args)` snapshot of the live token so subsequent
-	 * input events that produce the SAME token won't reopen the picker or
-	 * instant-dispatch - the user has explicitly told us that `/name`
-	 * should be literal until they delete or retype a fresh `/`.
-	 */
-	function handleCommandPickerClose() {
-		if (isCommandPickerOpen) {
-			commandDismissedSnapshot = takeCommandDismissSnapshot(value);
-		}
-		isCommandPickerOpen = false;
-		commandQuery = '';
-		// When a command was selected, the target picker/selector takes over
-		// and manages its own focus - don't yank focus back to the chat input.
-		if (!isPromptPickerOpen && !isMentionPickerOpen && !isWorkingDirectoryPickerOpen) {
-			refocusInput();
-		}
-	}
-
-	/**
-	 * Mention picker dismissed (Esc, outside-click, or selection-complete).
-	 * Capture a `(start, query)` snapshot of the live token so subsequent
-	 * input events that produce the SAME token won't reopen the picker -
-	 * the user has explicitly told us that `@<query>` should be literal
-	 * until they delete or retype a fresh `@`.
-	 */
-	function handleMentionPickerClose() {
-		if (isMentionPickerOpen) {
-			const cursor = inputRef?.getCaretOffset() ?? value.length;
-			mentionDismissedSnapshot = takeMentionDismissSnapshot(value, cursor);
-		}
-		isMentionPickerOpen = false;
-		mentionQuery = '';
-		refocusInput();
 	}
 
 	/**
@@ -837,19 +574,19 @@
 >
 	<ChatFormPickers
 		bind:this={pickersRef}
-		{isCommandPickerOpen}
-		{commandQuery}
-		commands={availableCommands}
-		onCommandPickerClose={handleCommandPickerClose}
-		onCommandSelect={handleCommandSelect}
-		{isPromptPickerOpen}
-		{promptSearchQuery}
-		{isMentionPickerOpen}
-		{mentionQuery}
+		isCommandPickerOpen={pickers.isCommandPickerOpen}
+		commandQuery={pickers.commandQuery}
+		commands={pickers.availableCommands}
+		onCommandPickerClose={pickers.handleCommandPickerClose}
+		onCommandSelect={pickers.handleCommandSelect}
+		isPromptPickerOpen={pickers.isPromptPickerOpen}
+		promptSearchQuery={pickers.promptSearchQuery}
+		isMentionPickerOpen={pickers.isMentionPickerOpen}
+		mentionQuery={pickers.mentionQuery}
 		{mentionAnchor}
-		scopePath={mentionScopePath}
-		onPromptPickerClose={handlePromptPickerClose}
-		onMentionPickerClose={handleMentionPickerClose}
+		scopePath={pickers.mentionScopePath}
+		onPromptPickerClose={pickers.handlePromptPickerClose}
+		onMentionPickerClose={pickers.handleMentionPickerClose}
 		onMentionOpened={() => inputRef?.focus()}
 		onMentionSelect={handleMentionSelect}
 		onPromptLoadStart={handlePromptLoadStart}
@@ -881,7 +618,6 @@
 
 		<div
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
-			onpaste={handlePaste}
 		>
 			{#if useContenteditable}
 				<ChatFormContenteditable
@@ -890,7 +626,7 @@
 					bind:value
 					onKeydown={handleKeydown}
 					onInput={() => {
-						handleInput();
+						pickers.handleInput();
 						onValueChange?.(value);
 					}}
 					onPaste={handlePaste}
@@ -904,7 +640,7 @@
 					bind:value
 					onKeydown={handleKeydown}
 					onInput={() => {
-						handleInput();
+						pickers.handleInput();
 						onValueChange?.(value);
 					}}
 					onPaste={handlePaste}
@@ -938,7 +674,7 @@
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
-				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
+				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>
 		</div>
@@ -949,12 +685,12 @@
 	{#if toolsStore.builtinTools.length > 0}
 		<ChatFormWorkingDirectory
 			directory={cwd}
-			isOpen={isWorkingDirectoryPickerOpen}
-			bind:query={workingDirectoryQuery}
+			isOpen={pickers.isWorkingDirectoryPickerOpen}
+			bind:query={pickers.workingDirectoryQuery}
 			customAnchor={mentionAnchor}
 			onChange={handleWorkingDirectoryChange}
-			onClose={handleWorkingDirectoryClose}
-			onOpen={handleWorkingDirectoryOpen}
+			onClose={pickers.handleWorkingDirectoryClose}
+			onOpen={pickers.handleWorkingDirectoryOpen}
 			{disabled}
 		/>
 	{/if}

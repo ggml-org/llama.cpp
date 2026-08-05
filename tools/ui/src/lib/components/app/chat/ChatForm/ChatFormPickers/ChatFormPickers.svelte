@@ -55,17 +55,6 @@
 		onPromptLoadError
 	}: Props = $props();
 
-	/**
-	 * When this container receives an `onMentionSelect` from the parent we
-	 * forward it to the picker so the picker can keep calling `onSelect` and
-	 * `onClose` together (mirrors the `handleResourceClick -> onResourceSelect +
-	 * onClose` pattern in the old resource picker). When the parent doesn't
-	 * supply one we fall back to a no-op so the picker can still close cleanly.
-	 */
-	const handleMentionSelect = (entry: FileMentionEntry) => {
-		onMentionSelect?.(entry);
-	};
-
 	let commandPickerRef: ChatFormCommandPicker | undefined = $state(undefined);
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
 	let mentionPickerRef: ChatFormMentionPicker | undefined = $state(undefined);
@@ -118,5 +107,5 @@
 	scopePath={scopePath ?? null}
 	onClose={onMentionPickerClose ?? (() => {})}
 	onOpened={onMentionOpened}
-	onSelect={handleMentionSelect}
+	onSelect={onMentionSelect ?? (() => {})}
 />
