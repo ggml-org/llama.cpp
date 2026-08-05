@@ -512,6 +512,10 @@ iPhone demo is the killer validation: per-layer alpha is what makes
 - `docs/research-higgs-alpha-2026-07-30.md` (already exists; this
   phase implements the estimator it documents)
 
+> See `docs/tessera-higgs-estimator.md` for the math, the
+> L1-agnostic design, the sidecar JSON shape, and the
+> measurement-function contract.
+
 **Estimated scope**: 1-2 weeks (the math is research; the
 implementation is engineering).
 
