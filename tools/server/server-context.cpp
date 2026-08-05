@@ -2422,6 +2422,8 @@ private:
                     int n_idle_slots       = 0;
                     int n_processing_slots = 0;
 
+                    uint64_t kv_cache_tokens = 0;
+
                     for (server_slot & slot : slots) {
                         json slot_data = slot.to_json(slots_debug == 0);
 
@@ -2430,6 +2432,8 @@ private:
                         } else {
                             n_idle_slots++;
                         }
+
+                        kv_cache_tokens += (uint64_t) slot.prompt.n_tokens();
 
                         slots_data.push_back(slot_data);
                     }
@@ -2442,6 +2446,31 @@ private:
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
+                    res->model_name          = model_name;
+
+                    res->kv_cache_tokens = kv_cache_tokens;
+                    res->kv_cache_cells  = (uint64_t) n_ctx;
+
+                    {
+                        size_t k_bytes = 0;
+                        size_t v_bytes = 0;
+                        llama_memory_kv_size_bytes(llama_get_memory(ctx_tgt), &k_bytes, &v_bytes);
+                        res->kv_cache_k_bytes = (uint64_t) k_bytes;
+                        res->kv_cache_v_bytes = (uint64_t) v_bytes;
+                    }
+                    res->kv_cache_type_k = ggml_type_name(params_base.cache_type_k);
+                    res->kv_cache_type_v = ggml_type_name(params_base.cache_type_v);
+
+                    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                            continue;
+                        }
+                        size_t free_b = 0, total_b = 0;
+                        ggml_backend_dev_memory(dev, &free_b, &total_b);
+                        res->vram_devices.emplace_back(ggml_backend_dev_name(dev),
+                                                       (uint64_t) free_b, (uint64_t) total_b);
+                    }
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -2853,6 +2882,8 @@ private:
                 n_discard = std::clamp(n_discard, 0, std::max(0, n_left - 1));
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
+
+                metrics.n_ctx_shift++;
 
                 slot.mem.seq_rm (slot.id, n_keep            , n_keep + n_discard);
                 slot.mem.seq_add(slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
@@ -4041,6 +4072,12 @@ private:
         for (size_t i = 0; i < src.size(); i++) {
             dst[i] += src[i];
         }
+
+        // distributions: one observation per completed generation request
+        metrics.hist_prompt_tokens      .observe((double) slot.stats.n_prompt_processed);
+        metrics.hist_context_tokens     .observe((double) slot.prompt.n_tokens());
+        metrics.hist_ttft_seconds       .observe(slot.stats.t_prompt_ms() / 1.e3);
+        metrics.hist_gen_latency_seconds.observe(slot.stats.t_gen_ms()    / 1.e3);
     }
 };
 

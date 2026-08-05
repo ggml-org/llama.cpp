@@ -20,18 +20,33 @@ def fetch_metrics(server: ServerProcess) -> str:
     return res.body
 
 
+HISTOGRAM_SUFFIXES = ("_bucket", "_sum", "_count")
+
+
 def parse_metrics(text: str) -> dict:
-    """parse the prometheus text format into {name: (type, value)}"""
+    """parse the prometheus text format into {name: (type, value)}
+
+    every series carries at least a model label, so the name is taken from the
+    part before '{'. for labelled series the last line wins. histogram
+    sub-series (_bucket / _sum / _count) are typed by their base name and are
+    not returned - assert on the raw text for those.
+    """
     out = {}
     types = {}
     for line in text.splitlines():
         if line.startswith("# TYPE "):
             _, _, name, kind = line.split(" ", 3)
             types[name] = kind
-        elif line.startswith("llamacpp:") and "{" not in line:
-            name, value = line.split(" ", 1)
-            assert name in types, f"{name} has no # TYPE line"
+            continue
+        if not line.startswith("llamacpp:"):
+            continue
+        series, value = line.rsplit(" ", 1)
+        name = series.split("{", 1)[0]
+        if name in types:
             out[name] = (types[name], float(value))
+            continue
+        base = next((name[: -len(s)] for s in HISTOGRAM_SUFFIXES if name.endswith(s)), None)
+        assert base in types, f"{name} has no # TYPE line"
     return out
 
 
@@ -225,3 +240,83 @@ def test_metrics_embedding_prompt_is_counted():
     assert metrics["llamacpp:prompt_tokens_total"][1] > 0
     assert metrics["llamacpp:n_decode_total"][1] > 0
     assert metrics["llamacpp:tokens_predicted_total"][1] == 0
+
+
+def test_metrics_every_series_is_labelled_with_the_model():
+    global server
+    server.start()
+    server.make_request("POST", "/completion", data={"prompt": "I believe", "n_predict": 8})
+
+    text = fetch_metrics(server)
+    series = [line for line in text.splitlines() if line.startswith("llamacpp:")]
+    assert series
+
+    for line in series:
+        assert 'model="' in line, line
+
+
+def test_metrics_kv_cache_bytes_and_type():
+    global server
+    server.start()
+
+    text = fetch_metrics(server)
+    metrics = parse_metrics(text)
+
+    # the byte footprint of an attention model is never zero
+    assert metrics["llamacpp:kv_cache_k_bytes"][1] > 0
+    assert metrics["llamacpp:kv_cache_v_bytes"][1] > 0
+
+    assert metrics["llamacpp:kv_cache_cells"][1] > 0
+    assert metrics["llamacpp:kv_cache_tokens"][0] == "gauge"
+
+    # the live quantization type is carried as a label, the value is always 1
+    assert 'llamacpp:kv_cache_type{model="' in text
+    assert 'cache="k"' in text
+    assert 'cache="v"' in text
+
+
+def test_metrics_histograms():
+    global server
+    server.start()
+    server.make_request("POST", "/completion", data={"prompt": "hello world", "n_predict": 8})
+
+    text = fetch_metrics(server)
+
+    for name in [
+        "prompt_tokens_size",
+        "context_used_tokens",
+        "time_to_first_token_seconds",
+        "generation_latency_seconds",
+    ]:
+        assert f"# TYPE llamacpp:{name} histogram" in text, name
+        assert f"llamacpp:{name}_bucket{{" in text, name
+        assert f"llamacpp:{name}_sum{{" in text, name
+        assert f"llamacpp:{name}_count{{" in text, name
+
+        # the +Inf bucket holds every observation, so it must equal _count
+        inf = [l for l in text.splitlines() if l.startswith(f"llamacpp:{name}_bucket") and 'le="+Inf"' in l]
+        count = [l for l in text.splitlines() if l.startswith(f"llamacpp:{name}_count")]
+        assert len(inf) == 1 and len(count) == 1, name
+        assert float(inf[0].split()[-1]) == float(count[0].split()[-1]), name
+
+    # the request above was observed by every histogram
+    assert float([l for l in text.splitlines() if l.startswith("llamacpp:prompt_tokens_size_count")][0].split()[-1]) > 0
+
+
+def test_metrics_vram_gauges():
+    global server
+    server.start()
+
+    text = fetch_metrics(server)
+
+    # the VRAM series only exist when a GPU backend is present
+    if "llamacpp:vram_total_bytes" not in text:
+        pytest.skip("no GPU device")
+
+    for name in ["llamacpp:vram_free_bytes", "llamacpp:vram_total_bytes"]:
+        assert f"# TYPE {name} gauge" in text
+        lines = [l for l in text.splitlines() if l.startswith(name)]
+        assert lines
+        for line in lines:
+            assert 'device="' in line
+            assert float(line.split()[-1]) > 0
