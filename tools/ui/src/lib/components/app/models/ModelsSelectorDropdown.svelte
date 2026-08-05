@@ -53,6 +53,21 @@
 		highlightedId = null;
 	});
 
+	// Focus the dropdown's search box without scrolling the page. bits-ui
+	// auto-focuses the opened content by default, which can yank the page
+	// scroll; we prevent that on the Content and refocus the search here.
+	$effect(() => {
+		if (!isOpen) return;
+
+		requestAnimationFrame(() => {
+			const search = document.querySelector<HTMLElement>(
+				'[data-slot="dropdown-menu-content"] input'
+			);
+
+			search?.focus({ preventScroll: true });
+		});
+	});
+
 	// Flatten grouped options into the visual render order (loaded -> favorites -> available) so
 	// keyboard navigation follows the on-screen order of the rows, not the flat option list order.
 	let visualOrder = $derived.by(() => {
@@ -88,45 +103,21 @@
 		highlightedId = visualOrder[index];
 	}
 
-	// Load or unload the given model based on its current status.
-	// Returns the pending operation, or null when it's a no-op (already loading).
-	function toggleModelLoad(modelId: string): Promise<void> | null {
-		const model = routerModels().find((m) => m.id === modelId);
-		const status = model?.status?.value as ServerModelStatus | undefined;
-
-		if (status === ServerModelStatus.LOADING) return null;
-
-		const isLoaded = status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
-
-		if (isLoaded) {
-			return modelsStore.unloadModel(modelId);
-		}
-
-		return modelsStore.loadModel(modelId);
-	}
-
-	// Load/unload a model, then once the operation settles close the dropdown
-	// and return focus to the chat input. On failure the dropdown stays open
-	// (the error is already surfaced via toast).
-	async function loadAndDismiss(modelId: string) {
-		const op = toggleModelLoad(modelId);
-		if (!op) return;
-
-		try {
-			await op;
-		} catch {
+	// Enter selects and loads the model via handleSelect (which also closes
+	// the dropdown and returns focus to the chat form). Alt+Enter only
+	// unloads and keeps the dropdown open.
+	async function handleModelKeyAction(modelId: string, unload: boolean) {
+		if (!unload) {
+			void ms.handleSelect(modelId);
 			return;
 		}
 
-		ms.handleOpenChange(false);
+		const model = routerModels().find((m) => m.id === modelId);
+		const status = model?.status?.value as ServerModelStatus | undefined;
 
-		requestAnimationFrame(() => {
-			const input = document.querySelector<HTMLElement>(
-				'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]'
-			);
+		if (status === ServerModelStatus.LOADING) return;
 
-			input?.focus({ preventScroll: true });
-		});
+		await modelsStore.unloadModel(modelId);
 	}
 
 	export function open() {
@@ -146,7 +137,7 @@
 			event.preventDefault();
 
 			if (highlightedId) {
-				void loadAndDismiss(highlightedId);
+				void handleModelKeyAction(highlightedId, event.altKey);
 			} else if (visualOrder.length > 0) {
 				highlightedId = visualOrder[0];
 			}
@@ -247,6 +238,7 @@
 				<DropdownMenu.Content
 					align="end"
 					class="w-full max-w-[100vw] pt-0 sm:w-max sm:max-w-[calc(100vw-2rem)]"
+					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
 					<DropdownMenuSearchable
 						searchValue={ms.searchTerm}
@@ -295,7 +287,7 @@
 									onKeyDown={(event) => {
 										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
 											event.preventDefault();
-											void loadAndDismiss(option.id);
+											void handleModelKeyAction(option.id, event.altKey);
 										}
 									}}
 								/>
