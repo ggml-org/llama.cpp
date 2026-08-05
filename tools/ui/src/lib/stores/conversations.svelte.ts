@@ -35,6 +35,7 @@ import {
 	FileExtensionText,
 	MimeTypeText,
 	MimeTypeApplication,
+	MigrationPhase,
 	ReasoningEffort,
 	SessionRecordType
 } from '$lib/enums';
@@ -147,7 +148,7 @@ class ConversationsStore {
 				await MigrationService.runAllMigrations();
 				// Hard gate: never load (or fall back to writing) data while locked
 				await encryptionStore.ensureUnlocked();
-				await MigrationService.runAllMigrations('post-unlock');
+				await MigrationService.runAllMigrations(MigrationPhase.POST_UNLOCK);
 				await mcpStore.loadSecrets();
 				await this.loadConversations();
 				this.isInitialized = true;

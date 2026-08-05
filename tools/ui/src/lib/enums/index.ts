@@ -29,6 +29,8 @@ export {
 
 export { SessionRecordType } from './conversation-import.enums';
 
+export { MigrationPhase } from './migration.enums';
+
 export { ReasoningEffort } from './reasoning-effort.enums';
 
 export {

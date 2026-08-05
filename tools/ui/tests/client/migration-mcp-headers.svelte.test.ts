@@ -8,6 +8,7 @@ import {
 	MCP_SECRETS_LOCALSTORAGE_KEY,
 	SETTINGS_KEYS
 } from '$lib/constants';
+import { MigrationPhase } from '$lib/enums';
 
 const HEADERS = '{"Authorization":"Bearer token-123"}';
 
@@ -62,7 +63,7 @@ describe('mcp-headers-to-secrets-v1 migration', () => {
 			{ id: 'srv-2', url: 'https://example.com/other', enabled: false }
 		]);
 
-		await MigrationService.runAllMigrations('post-unlock');
+		await MigrationService.runAllMigrations(MigrationPhase.POST_UNLOCK);
 
 		const servers = readServers();
 		expect(servers[0].headers).toBeUndefined();
@@ -74,7 +75,7 @@ describe('mcp-headers-to-secrets-v1 migration', () => {
 	it('freezes the resolved id for servers without one', async () => {
 		writeServers([{ url: 'https://example.com/mcp', enabled: true, headers: HEADERS }]);
 
-		await MigrationService.runAllMigrations('post-unlock');
+		await MigrationService.runAllMigrations(MigrationPhase.POST_UNLOCK);
 
 		const servers = readServers();
 		const id = servers[0].id as string;
@@ -89,7 +90,7 @@ describe('mcp-headers-to-secrets-v1 migration', () => {
 			{ id: 'srv-1', url: 'https://example.com/mcp', enabled: true, headers: '{"X-Stale":"1"}' }
 		]);
 
-		await MigrationService.runAllMigrations('post-unlock');
+		await MigrationService.runAllMigrations(MigrationPhase.POST_UNLOCK);
 
 		expect(McpSecretsService.getHeaders('srv-1')).toBe(HEADERS);
 		expect(readServers()[0].headers).toBeUndefined();
@@ -101,7 +102,7 @@ describe('mcp-headers-to-secrets-v1 migration', () => {
 			{ id: 'srv-1', url: 'https://example.com/mcp', enabled: true, headers: HEADERS }
 		]);
 
-		await MigrationService.runAllMigrations('post-unlock');
+		await MigrationService.runAllMigrations(MigrationPhase.POST_UNLOCK);
 
 		const raw = localStorage.getItem(MCP_SECRETS_LOCALSTORAGE_KEY);
 		expect(EncryptionService.isEncryptedValue(raw!)).toBe(true);

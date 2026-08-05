@@ -37,24 +37,16 @@ import {
 import { McpSecretsService } from '$lib/services/mcp-secrets.service';
 import { LEGACY_AGENTIC_REGEX, LEGACY_REASONING_TAGS } from '$lib/constants/agentic';
 import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
-import { MessageRole } from '$lib/enums';
+import { MessageRole, MigrationPhase } from '$lib/enums';
 
 // Types
-
-/**
- * boot migrations run before the encryption unlock gate and must not read
- * encrypted fields (they would see ciphertext passthrough); post-unlock
- * migrations run after the gate and may assume the session is unlocked (or
- * encryption is disabled).
- */
-type MigrationPhase = 'boot' | 'post-unlock';
 
 interface Migration {
 	/** Unique identifier for this migration */
 	id: string;
 	/** Human-readable description */
 	description: string;
-	/** When the migration runs; defaults to 'boot' */
+	/** When the migration runs; defaults to boot */
 	phase?: MigrationPhase;
 	/** Run the migration forward (non-destructive - copies, doesn't delete) */
 	run(): Promise<void>;
@@ -302,7 +294,7 @@ const legacyMessageMigration: Migration = {
 	id: LEGACY_MESSAGE_MIGRATION_ID,
 	description: 'Migrate legacy marker-based messages to structured format',
 	// reads and rewrites message content, so it must see plaintext
-	phase: 'post-unlock',
+	phase: MigrationPhase.POST_UNLOCK,
 
 	async run(): Promise<void> {
 		const db = await getDatabaseService();
@@ -696,7 +688,7 @@ const MCP_HEADERS_TO_SECRETS_MIGRATION_ID = 'mcp-headers-to-secrets-v1';
 const mcpHeadersToSecretsMigration: Migration = {
 	id: MCP_HEADERS_TO_SECRETS_MIGRATION_ID,
 	description: 'Move inline MCP server headers from config into the secrets store',
-	phase: 'post-unlock',
+	phase: MigrationPhase.POST_UNLOCK,
 
 	async run(): Promise<void> {
 		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
@@ -795,13 +787,13 @@ export const MigrationService = {
 	 * Run all pending migrations (non-destructive - preserves legacy data)
 	 * Should be called once at app initialization
 	 */
-	async runAllMigrations(phase: MigrationPhase = 'boot'): Promise<void> {
+	async runAllMigrations(phase: MigrationPhase = MigrationPhase.BOOT): Promise<void> {
 		const state = getMigrationState();
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
 			console.log(`[Migration] Starting ${phase} migration run, state:`, state);
 
 		for (const migration of migrations) {
-			if ((migration.phase ?? 'boot') !== phase) continue;
+			if ((migration.phase ?? MigrationPhase.BOOT) !== phase) continue;
 
 			if (isMigrationCompleted(migration.id)) {
 				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
