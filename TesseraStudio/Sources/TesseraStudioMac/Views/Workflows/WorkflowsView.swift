@@ -21,6 +21,15 @@ struct WorkflowsView: View {
     /// stay distinct presentation states (Save may later write
     /// back to a remembered URL without touching Save As).
     @State private var isSavingAs = false
+    /// Save launched from the unsaved-changes alert (New / Open
+    /// guard). Distinct from Save / Save As so the follow-up
+    /// replacement only runs on THIS save's success.
+    @State private var isSavingBeforeReplace = false
+    /// The New / Open that triggered the unsaved-changes alert,
+    /// held until Save succeeds, Discard is chosen, or Cancel
+    /// drops it.
+    @State private var pendingDocumentAction: PendingDocumentAction?
+    @State private var showUnsavedChangesAlert = false
     @State private var isImporting = false
     /// Palette column visibility for the NavigationSplitView
     /// (View > Show/Hide Node Palette toggles it).
@@ -99,6 +108,24 @@ struct WorkflowsView: View {
                 connectionError = "Save failed: \(err.localizedDescription)"
             }
         }
+        // The New / Open guard's save: on success the pending
+        // replacement runs; on failure it is dropped and the
+        // document stays put.
+        .fileExporter(
+            isPresented: $isSavingBeforeReplace,
+            document: editor.document,
+            contentType: .tesseraWorkflow,
+            defaultFilename: editor.documentName
+        ) { result in
+            switch result {
+            case .success(let url):
+                editor.markSaved(at: url)
+                performPendingDocumentAction()
+            case .failure(let err):
+                pendingDocumentAction = nil
+                connectionError = "Save failed: \(err.localizedDescription)"
+            }
+        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.tesseraWorkflow],
@@ -107,7 +134,7 @@ struct WorkflowsView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    openDocument(from: url)
+                    requestOpenDocument(from: url)
                 }
             case .failure(let err):
                 connectionError = "Open failed: \(err.localizedDescription)"
@@ -116,11 +143,26 @@ struct WorkflowsView: View {
         .sheet(isPresented: runSheetPresented) {
             runProgressSheet
         }
+        // HIG 14.7: New / Open replace the whole document. When
+        // the current one has unsaved edits, confirm first -
+        // Save finishes before the replacement, Discard replaces
+        // directly, Cancel keeps everything as is.
+        .alert(
+            "Save changes to \"\(editor.documentName)\"?",
+            isPresented: $showUnsavedChangesAlert
+        ) {
+            Button("Save…") { isSavingBeforeReplace = true }
+                .keyboardShortcut(.defaultAction)
+            Button("Discard", role: .destructive) { performPendingDocumentAction() }
+            Button("Cancel", role: .cancel) { pendingDocumentAction = nil }
+        } message: {
+            Text("Your changes will be lost if you don't save them.")
+        }
         // Publish File > New / Open / Save actions to the
         // focused scene so the App-level menu commands
         // (Cmd-N, Cmd-O, Cmd-S, Shift-Cmd-S) can reach us.
         .focusedSceneValue(\.workflowMenuActions, WorkflowMenuActions(
-            new: newDocument,
+            new: requestNewDocument,
             open: { isImporting = true },
             save: { isExporting = true },
             saveAs: { isSavingAs = true },
@@ -147,7 +189,7 @@ struct WorkflowsView: View {
     @ToolbarContentBuilder
     private var workflowToolbarItems: some ToolbarContent {
         ToolbarItemGroup(placement: .secondaryAction) {
-            Button(action: newDocument) {
+            Button(action: requestNewDocument) {
                 Label("New", systemImage: "doc.badge.plus")
             }
             .help("New workflow")
@@ -476,6 +518,43 @@ struct WorkflowsView: View {
         }
     }
 
+    /// New with the unsaved-edits guard: clean documents hydrate
+    /// directly, edited ones confirm first.
+    private func requestNewDocument() {
+        if editor.isEdited {
+            pendingDocumentAction = .new
+            showUnsavedChangesAlert = true
+        } else {
+            newDocument()
+        }
+    }
+
+    /// Open of an already-picked file with the unsaved-edits
+    /// guard. The importer always presents; the guard decides
+    /// what happens with the chosen URL.
+    private func requestOpenDocument(from url: URL) {
+        if editor.isEdited {
+            pendingDocumentAction = .open(url)
+            showUnsavedChangesAlert = true
+        } else {
+            openDocument(from: url)
+        }
+    }
+
+    /// Run the pending New / Open after the alert resolves via
+    /// Discard or a successful save. No-op when nothing is
+    /// pending (Cancel already dropped it).
+    private func performPendingDocumentAction() {
+        guard let action = pendingDocumentAction else { return }
+        pendingDocumentAction = nil
+        switch action {
+        case .new:
+            newDocument()
+        case .open(let url):
+            openDocument(from: url)
+        }
+    }
+
     private func completeConnection(
         at dropPoint: CGPoint, in canvasSize: CGSize
     ) {
@@ -540,6 +619,14 @@ struct WorkflowsView: View {
         }
         return best?.0
     }
+}
+
+/// A New / Open request held while the unsaved-changes alert is
+/// up. `open` carries the picked URL so the replacement can run
+/// after a successful save without re-presenting the importer.
+enum PendingDocumentAction {
+    case new
+    case open(URL)
 }
 
 struct PendingConnection {
