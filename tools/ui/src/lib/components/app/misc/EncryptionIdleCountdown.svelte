@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Timer } from '@lucide/svelte';
+	import { TimerReset } from '@lucide/svelte';
 
 	import { encryptionStore } from '$lib/stores/encryption.svelte';
 
@@ -20,6 +20,11 @@
 			remainingMs <= WARNING_WINDOW_MS
 	);
 
+	// How close we are to locking (0 fresh warning .. 1 about to lock); drives the pulse
+	let urgency = $derived(
+		remainingMs === null ? 0 : Math.min(1, 1 - remainingMs / WARNING_WINDOW_MS)
+	);
+
 	$effect(() => {
 		if (!hasDeadline) return;
 
@@ -32,7 +37,7 @@
 	});
 
 	function formatRemaining(ms: number): string {
-		const totalSeconds = Math.ceil(ms / 1000);
+		const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
 		const minutes = Math.floor(totalSeconds / 60);
 		const seconds = totalSeconds % 60;
 		return `${minutes}:${String(seconds).padStart(2, '0')}`;
@@ -41,10 +46,33 @@
 
 {#if visible && remainingMs !== null}
 	<div
-		class="fixed top-4 right-4 z-50 flex items-center gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-700 shadow-sm backdrop-blur-sm dark:text-amber-400"
+		class="pointer-events-auto fixed top-4 right-4 z-50 relative flex items-center gap-2 rounded-lg border border-amber-500/40 bg-background/90 px-3 pt-2 pb-3 shadow-lg backdrop-blur-md"
 		role="status"
+		aria-live="polite"
 	>
-		<Timer class="h-3.5 w-3.5" />
-		<span class="tabular-nums">Locking in {formatRemaining(remainingMs)}</span>
+		<span
+			class="grid h-6 w-6 place-items-center rounded-full border border-amber-500/40 text-amber-600 dark:text-amber-400 {urgency >=
+			0.7
+				? 'animate-pulse'
+				: ''}"
+		>
+			<TimerReset class="h-3.5 w-3.5" />
+		</span>
+
+		<span class="flex flex-col leading-tight">
+			<span class="text-xs font-medium text-foreground">Auto-lock in</span>
+			<span class="text-sm font-semibold tabular-nums text-amber-600 dark:text-amber-400">
+				{formatRemaining(remainingMs)}
+			</span>
+		</span>
+
+		<span
+			class="absolute right-3 bottom-1.5 left-3 h-0.5 overflow-hidden rounded-full bg-amber-500/15"
+		>
+			<span
+				class="block h-full rounded-full bg-amber-500/60 transition-[width] duration-1000 ease-linear"
+				style:width={`{(1 - urgency) * 100}%`}
+			></span>
+		</span>
 	</div>
 {/if}
