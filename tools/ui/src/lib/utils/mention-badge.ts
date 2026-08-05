@@ -13,10 +13,48 @@
 // `)` only when not followed by whitespace or `[` so the closing `)` of an
 // adjacent badge still terminates the match, while macOS paths like
 // `Screenshot (1).png` and folders named `Foo (Stuff)/bar` parse correctly.
-const FILE_MENTION_LINK = /\[([^\]\n]+?)\]\(file:\/\/(?:[^)\n]|\)(?![\s[]))+\)/;
+const FILE_MENTION_LINK_SOURCE = String.raw`\[([^\]\n]+?)\]\(file:\/\/((?:[^)\n]|\)(?![\s[]))+)\)`;
+
+export function fileMentionLinkRe(flags = ''): RegExp {
+	return new RegExp(FILE_MENTION_LINK_SOURCE, flags);
+}
 
 export function containsFileMentionLink(value: string): boolean {
-	return FILE_MENTION_LINK.test(value);
+	return fileMentionLinkRe().test(value);
+}
+
+/**
+ * Encode a filesystem path for safe embedding in a `[name](file://path)`
+ * markdown link destination.
+ *
+ * A destination containing a space (or `()`, `<`, `>` etc.) is not valid
+ * CommonMark; remark parses the whole line as plain text, so the mention
+ * shows as raw source in a rendered message bubble instead of a badge.
+ * Encoding each `/`-separated segment escapes those characters while
+ * keeping the leading/trailing slashes (the trailing `/` marks a
+ * directory for the picker).
+ */
+export function encodeFileLinkPath(path: string): string {
+	return path
+		.split('/')
+		.map((segment) => encodeURIComponent(segment))
+		.join('/');
+}
+
+/**
+ * Inverse of `encodeFileLinkPath`. Decodes a `/`-separated encoded path
+ * back to a human-readable filesystem path, tolerating malformed escape
+ * sequences by falling back to the input unchanged.
+ */
+export function decodeFileLinkPath(path: string): string {
+	try {
+		return path
+			.split('/')
+			.map((segment) => decodeURIComponent(segment))
+			.join('/');
+	} catch {
+		return path;
+	}
 }
 
 export const MENTION_BADGE_CLASSNAME =

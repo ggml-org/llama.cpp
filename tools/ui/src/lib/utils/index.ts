@@ -174,12 +174,17 @@ export {
 export {
 	splitPathQuery,
 	buildCaseInsensitiveGlob,
+	buildGlobSearchArgs,
 	rankEntries,
 	joinPath,
 	highlightMatch,
 	type GlobEntry,
+	type GlobSearchArgs,
 	type PathQuery
 } from './working-directory';
+
+// Shared `file_glob_search` runner with a short-lived result cache
+export { runGlobSearch, type GlobSearchResult } from './glob-search';
 
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {
@@ -214,6 +219,8 @@ export {
 // a Svelte mount)
 export {
 	containsFileMentionLink,
+	encodeFileLinkPath,
+	decodeFileLinkPath,
 	MENTION_BADGE_CLASSNAME,
 	MENTION_BADGE_ICON_CLASSNAME,
 	MENTION_BADGE_FILE_ICON_PATHS,

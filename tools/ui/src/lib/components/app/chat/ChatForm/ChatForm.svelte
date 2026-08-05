@@ -48,6 +48,7 @@
 	} from '$lib/types';
 	import {
 		containsFileMentionLink,
+		encodeFileLinkPath,
 		findCommandToken,
 		findMentionToken,
 		isIMEComposing,
@@ -512,7 +513,7 @@
 		const cleanedPath = entry.path.replace(/\/+$/, '');
 		const pathWithSeparator = entry.type === 'directory' ? `${cleanedPath}/` : cleanedPath;
 		const basename = lastPathSegment(cleanedPath) || entry.name;
-		const insertion = `[${basename}](file://${pathWithSeparator}) `;
+		const insertion = `[${basename}](file://${encodeFileLinkPath(pathWithSeparator)}) `;
 		const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);
 
 		// Pin the post-insertion caret offset BEFORE the swap effect

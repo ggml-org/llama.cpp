@@ -16,6 +16,7 @@
 import {
 	MENTION_BADGE_CLASSNAME,
 	MENTION_BADGE_ICON_CLASSNAME,
+	decodeFileLinkPath,
 	getMentionBadgeIconPaths
 } from '$lib/utils';
 import type { Plugin } from 'unified';
@@ -23,13 +24,22 @@ import type { Root, Element } from 'hast';
 import { visit } from 'unist-util-visit';
 
 /**
- * Derive a friendly label from a `file://` URL. We strip the
- * `file://` prefix and any trailing separator so `[tools/]`
+ * Derive a friendly label from a `file://` URL, decoding the path so an
+ * encoded segment (spaces, parentheses) shows its human-readable name.
+ * Strips the `file://` prefix and any trailing separator so `[tools/]`
  * rather than `[tools//]`.
  */
-function labelFromFileUrl(href: string): string {
+function decodeHrefPath(href: string): string {
 	const stripped = href.startsWith('file://') ? href.slice('file://'.length) : href;
-	const trimmed = stripped.replace(/\/+$/, '');
+	return decodeFileLinkPath(stripped);
+}
+
+/**
+ * Derive the last `/`-separated segment of a decoded path as the badge label.
+ */
+function labelFromFileUrl(href: string): string {
+	const decoded = decodeHrefPath(href);
+	const trimmed = decoded.replace(/\/+$/, '');
 	const slash = trimmed.lastIndexOf('/');
 	return slash === -1 ? trimmed : trimmed.slice(slash + 1);
 }
@@ -79,14 +89,15 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 
 			const label = labelFromFileUrl(href);
 			const titleAttr = typeof props.title === 'string' ? props.title : href;
+			const decodedPath = decodeHrefPath(href);
 
 			node.tagName = 'span';
 			node.properties = {
 				className: MENTION_BADGE_CLASSNAME.split(' ').filter(Boolean),
 				role: 'link',
 				tabIndex: 0,
-				'data-href': href,
-				title: titleAttr
+				'data-href': `file://${decodedPath}`,
+				title: titleAttr.startsWith('file://') ? decodedPath : titleAttr
 			};
 			node.children = [
 				iconElement(href),

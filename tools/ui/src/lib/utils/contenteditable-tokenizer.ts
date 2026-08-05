@@ -31,6 +31,8 @@
 import {
 	MENTION_BADGE_CLASSNAME,
 	MENTION_BADGE_ICON_CLASSNAME,
+	decodeFileLinkPath,
+	fileMentionLinkRe,
 	getMentionBadgeIconPaths
 } from './mention-badge';
 
@@ -53,7 +55,7 @@ export type ContentToken =
  *   typed or pasted after stays in a separate text token so the
  *   round trip is byte-exact.
  */
-const MENTION_BADGE_RE = /\[([^\]\n]+?)\]\(file:\/\/((?:[^)\n]|\)(?![\s[]))+)\)/g;
+const MENTION_BADGE_RE = fileMentionLinkRe('g');
 
 /**
  * Compute the byte-length contribution of one badge in source form.
@@ -202,7 +204,7 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 		badge.dataset.mentionBadge = 'true';
 		badge.dataset.mentionName = token.name;
 		badge.dataset.mentionPath = token.path;
-		badge.title = token.path;
+		badge.title = decodeFileLinkPath(token.path);
 		badge.className = MENTION_BADGE_CLASSNAME;
 		badge.contentEditable = 'false';
 
