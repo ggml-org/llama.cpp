@@ -1562,6 +1562,74 @@ static bool ggml_ane_program_dispatch_op(ggml_backend_ane_program * program,
             }
             return ok;
         }
+        case GGML_OP_GLU: {
+            // Gated linear unit, split form (a, b) -> y =
+            // activation(a) * b. The gemma 4 FFN is geglu
+            // (GELU activation); a follow-on bundle exposes the
+            // swiglu variant. The activation is baked into the
+            // bundle; the manifest's role is what the dispatch
+            // keys on, not the op's op_params glu_op.
+            if (op->src[0] == nullptr) {
+                return false;
+            }
+            // Phase 1 ships the split form (src[1] != nullptr).
+            // The non-split form (a is [2*n, ...] and the bundle
+            // would have to do the split internally) is a
+            // follow-on; the dispatch falls through to CPU for
+            // that case.
+            if (op->src[1] == nullptr) {
+                return false;
+            }
+            if (op->ne[1] != 1) {
+                return false;
+            }
+            if (op->src[0]->type != GGML_TYPE_F32 ||
+                op->src[1]->type != GGML_TYPE_F32 ||
+                op->type != GGML_TYPE_F32) {
+                return false;
+            }
+            if (!ggml_are_same_shape(op->src[0], op->src[1])) {
+                return false;
+            }
+            // Verify the bundle bakes GEGLU (the gemma 4
+            // variant). swiglu is a follow-on bundle.
+            const int32_t glu_op = ggml_get_glu_op(op);
+            if (glu_op != GGML_GLU_OP_GEGLU) {
+                return false;
+            }
+            MLModelDescription * desc = program->model.modelDescription;
+            if (!desc) {
+                return false;
+            }
+            MLFeatureDescription * g_desc = desc.inputDescriptionsByName[@"gate"];
+            MLFeatureDescription * u_desc = desc.inputDescriptionsByName[@"up"];
+            MLFeatureDescription * y_desc = desc.outputDescriptionsByName[@"y"];
+            if (!g_desc || g_desc.type != MLFeatureTypeMultiArray ||
+                !u_desc || u_desc.type != MLFeatureTypeMultiArray ||
+                !y_desc || y_desc.type != MLFeatureTypeMultiArray) {
+                return false;
+            }
+            NSArray<NSNumber *> * g_shape = g_desc.multiArrayConstraint.shape;
+            NSArray<NSNumber *> * y_shape = y_desc.multiArrayConstraint.shape;
+            if (g_shape.count != 2 || y_shape.count != 2 ||
+                g_shape[0].longLongValue != op->ne[0] ||
+                g_shape[1].longLongValue != op->ne[1] ||
+                y_shape[0].longLongValue != op->ne[0] ||
+                y_shape[1].longLongValue != op->ne[1]) {
+                return false;
+            }
+            std::unordered_map<std::string, const float *> inputs;
+            inputs.emplace("gate", (const float *) op->src[0]->data);
+            inputs.emplace("up",   (const float *) op->src[1]->data);
+            std::vector<std::string> out_names_vec = { "y" };
+            std::unordered_map<std::string, float *> outputs;
+            outputs.emplace("y", (float *) op->data);
+            const bool ok = ggml_ane_program_run(program, inputs, out_names_vec, outputs);
+            if (ok) {
+                out_names = std::move(out_names_vec);
+            }
+            return ok;
+        }
         case GGML_OP_TILE640_MATMUL:
             // TODO(ane-bundle): dispatch matmul to the bound bundle's matmul
             // function once the conversion tool names one. Today the matmul

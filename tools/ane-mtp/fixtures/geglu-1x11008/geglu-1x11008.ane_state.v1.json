@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "bundle_name": "geglu-1x11008",
+  "state_size_bytes": 147456,
+  "model_type": "ml_program",
+  "slots": [
+    {
+      "name": "gate",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        11008,
+        1
+      ],
+      "offset": 0,
+      "size_bytes": 44032
+    },
+    {
+      "name": "up",
+      "kind": "input",
+      "dtype": "f32",
+      "shape": [
+        11008,
+        1
+      ],
+      "offset": 49152,
+      "size_bytes": 44032
+    },
+    {
+      "name": "y",
+      "kind": "output",
+      "dtype": "f32",
+      "shape": [
+        11008,
+        1
+      ],
+      "offset": 98304,
+      "size_bytes": 44032
+    }
+  ],
+  "functions": [
+    {
+      "name": "main",
+      "role": "glu",
+      "bucket": 0,
+      "stateful": false,
+      "input_slots": [
+        "gate",
+        "up"
+      ],
+      "output_slots": [
+        "y"
+      ],
+      "core_ml_function_name": "main",
+      "use_ane": true
+    }
+  ],
+  "dependencies": []
+}
