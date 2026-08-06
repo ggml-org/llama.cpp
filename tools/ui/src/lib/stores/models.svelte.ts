@@ -394,6 +394,7 @@ class ModelsStore {
 				model: modelId,
 				description: details?.description,
 				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+				modalities: this.buildArchitectureModalities(item.architecture),
 				details: details?.details,
 				meta: item.meta ?? null,
 				parsedId: ModelsService.parseModelId(modelId),
@@ -997,6 +998,21 @@ class ModelsStore {
 			vision: modalities.vision ?? false,
 			audio: modalities.audio ?? false,
 			video: modalities.video ?? false
+		};
+	}
+
+	/** Map the router modalities, the only source available while a model is not loaded. */
+	private buildArchitectureModalities(
+		architecture: ApiModelDataEntry['architecture']
+	): ModelModalities | undefined {
+		if (!architecture) return undefined;
+
+		const inputs = architecture.input_modalities;
+
+		return {
+			vision: inputs.includes('image'),
+			audio: inputs.includes('audio'),
+			video: inputs.includes('video')
 		};
 	}
 
