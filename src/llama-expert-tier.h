@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "ggml.h"
 
 // Expert tier hook: drop-in replacement for ggml_mul_mat_id on expert weight
@@ -23,12 +25,14 @@
 // intentional approximation: applying it would add get_rows/mul nodes per
 // layer, and the scale factors are close to 1.
 
-// register one expert weight tensor -> its GPU hot tensor and per-layer LUTs.
-// Called by llama_expert_hotstore::allocate() after creating dst_hot and
-// the LUT/mask tensors. Multiple entries per layer share the same luts[i].
+// register one expert weight tensor -> its per-device GPU hot tensors and
+// per-device LUTs. called by llama_expert_hotstore::allocate() after creating
+// dst_hot/hot_lut and the cold_mask tensors. multiple entries per layer share
+// the same luts[i].
 void llama_expert_tier_register(ggml_tensor * src,
-                                ggml_tensor * dst_hot,
-                                ggml_tensor * hot_lut,
+                                const std::vector<ggml_tensor *> & dst_hot,
+                                const std::vector<ggml_tensor *> & hot_lut,
+                                const std::vector<ggml_tensor *> & mask_lut,
                                 ggml_tensor * cold_mask);
 
 // drop the entire table (called by hotstore destructor)

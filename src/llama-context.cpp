@@ -23,8 +23,7 @@
 // llama_context
 //
 
-static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
-    switch (ctx_type) {
+static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {    switch (ctx_type) {
         case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
         case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
     }
@@ -483,18 +482,22 @@ llama_context::llama_context(
         // overrides the guard for testing.
         const bool force = params.expert_cache_force || getenv("LLAMA_EXPERT_CACHE_FORCE") != nullptr;
         bool cache_enabled = false;
+        std::vector<ggml_backend_buffer_type_t> gpu_bufts;
         for (auto & backend : backends) {
             ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
-            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+            if (type == GGML_BACKEND_DEVICE_TYPE_CPU || type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
                 continue;
             }
             const char * name = ggml_backend_dev_name(dev);
             const bool supported = name != nullptr && strncmp(name, "CUDA", 4) == 0;
             if (!force && !supported) {
-                break;
+                continue; // skip unsupported GPU backends; collect the rest
             }
-            cache_enabled = expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
-            break;
+            gpu_bufts.push_back(ggml_backend_get_default_buffer_type(backend.get()));
+        }
+        if (!gpu_bufts.empty()) {
+            cache_enabled = expert_hotstore->allocate(gpu_bufts, model.tensor_split(), (int) gpu_bufts.size());
         }
         // launch hint: cache did not engage, usually a non-CUDA (or no) accelerator
         if (!cache_enabled && !force) {

@@ -5,8 +5,9 @@
 
 namespace {
     struct tier_entry {
-        ggml_tensor * dst_hot;
-        ggml_tensor * hot_lut;
+        std::vector<ggml_tensor *> dst_hot; // per-device hot tensors
+        std::vector<ggml_tensor *> hot_lut; // per-device LUTs
+        std::vector<ggml_tensor *> mask_lut; // per-device sentinel masks
         ggml_tensor * cold_mask;
     };
 
@@ -15,11 +16,12 @@ namespace {
 }
 
 void llama_expert_tier_register(ggml_tensor * src,
-                                ggml_tensor * dst_hot,
-                                ggml_tensor * hot_lut,
+                                const std::vector<ggml_tensor *> & dst_hot,
+                                const std::vector<ggml_tensor *> & hot_lut,
+                                const std::vector<ggml_tensor *> & mask_lut,
                                 ggml_tensor * cold_mask) {
     std::lock_guard<std::mutex> lk(g_mtx);
-    g_table[src] = {dst_hot, hot_lut, cold_mask};
+    g_table[src] = {dst_hot, hot_lut, mask_lut, cold_mask};
 }
 
 void llama_expert_tier_clear() {
@@ -73,10 +75,20 @@ ggml_tensor * llama_expert_tier_build(ggml_context * ctx,
     const int n_expert_used = (int) ids->ne[0];
     const int n_tokens      = (int) cur->ne[2];
 
-    // hot: remap real expert ids to hot slot indices; cold experts map to the
-    // zeroed sentinel slot and contribute nothing on the GPU.
-    ggml_tensor * ids_hot = remap_ids(ctx, ent.hot_lut, ids, n_experts, n_expert_used, n_tokens);
-    ggml_tensor * hot = ggml_mul_mat_id(ctx, ent.dst_hot, cur, ids_hot);
+    // hot: for each device, remap real expert ids to that device's LOCAL slot
+    // indices; experts whose slot lives on another device (or are cold) map to
+    // this device's zeroed sentinel slot and contribute nothing. Sum the
+    // per-device results (the scheduler inserts any cross-device copies).
+    ggml_tensor * hot = nullptr;
+    for (size_t g = 0; g < ent.dst_hot.size(); g++) {
+        ggml_tensor * ids_hot = remap_ids(ctx, ent.hot_lut[g], ids, n_experts, n_expert_used, n_tokens);
+        ggml_tensor * h = ggml_mul_mat_id(ctx, ent.dst_hot[g], cur, ids_hot);
+        // zero the rows routed to the sentinel plane: index the mask LUT (0
+        // at the sentinel) by ids_hot, repeat over the hidden dim, multiply
+        ggml_tensor * m = ggml_get_rows(ctx, ent.mask_lut[g], ids_hot);
+        h = ggml_mul(ctx, h, ggml_repeat(ctx, m, h));
+        hot = hot ? ggml_add(ctx, hot, h) : h;
+    }
 
     // cold: dedicated CPU op that computes only the cold-selected experts,
     // skipping hot ones via the integer zero-check on cold_mask.

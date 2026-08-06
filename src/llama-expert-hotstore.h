@@ -21,12 +21,12 @@ struct llama_expert_hotstore {
     // expert weight tensors (gate/up/down, incl. chexps variants)
     std::vector<size_t> bytes_per_slot;
 
-    // one hot tensor per expert weight tensor, shape {ne0, ne1, hot_s + 1};
-    // the last plane is the zeroed sentinel slot
+    // one hot tensor per expert weight tensor per device, shape {ne0, ne1,
+    // local_slots_g + 1}; the last plane is the zeroed sentinel slot
     struct entry {
         int          layer_idx;
         ggml_tensor* src; // model tensor holding all n_experts slices
-        ggml_tensor* dst; // hot tensor holding hot_s slots
+        std::vector<ggml_tensor *> dst; // per-device hot tensors
     };
     std::vector<entry> entries;
 
@@ -38,17 +38,24 @@ struct llama_expert_hotstore {
     std::vector<std::vector<int>> slot_to_expert;
 
     // per-layer LUT and mask for in-graph routing.
-    // hot_lut[e]   = slot index [0..hot_s-1] if e is hot, or hot_s (sentinel) if cold.
-    // cold_mask[e] = 1 if e is cold, else 0 (read as int zero-check by mul_mat_id_cold).
+    // hot_lut[g][e]   = LOCAL slot index if e is hot on device g, else the
+    //                   device's local sentinel slot (zero contribution).
+    // cold_mask[e]    = 1 if e is cold, else 0 (read as int zero-check by
+    //                   mul_mat_id_cold).
     struct layer_lut {
-        ggml_tensor * hot_lut   = nullptr; // i32[n_experts]
-        ggml_tensor * cold_mask = nullptr; // i32[n_experts]
+        std::vector<ggml_tensor *> hot_lut; // per-device i32[n_experts]
+        std::vector<ggml_tensor *> mask_lut; // per-device f32[local_slots+1], 0 at sentinel
+        ggml_tensor * cold_mask = nullptr;  // i32[n_experts]
     };
     std::vector<layer_lut> luts; // size n_layers
 
-    // keeps the GPU buffer (and its no_alloc context) alive
-    ggml_context_ptr        ctx;
-    ggml_backend_buffer_ptr buf;
+    // per-device hot store: each device owns a contiguous slot range and its
+    // own no_alloc context + GPU buffer (dst tensors and hot_luts inside).
+    int n_devices = 1;
+    std::vector<int>                  slot_start; // per-device slot range start (inclusive)
+    std::vector<int>                  slot_end;   // per-device slot range end (exclusive)
+    std::vector<ggml_context_ptr>        ctx_dev;
+    std::vector<ggml_backend_buffer_ptr> buf_dev;
 
     // CPU context and buffer for host-side tensors (like cold_mask)
     ggml_context_ptr        ctx_cpu;
@@ -75,21 +82,28 @@ llama_expert_hotstore(const llama_model * model, int n_layers,
 
     ~llama_expert_hotstore();
 
-    // allocate the GPU hot store for `hot_s` slots. returns false (and
-    // leaves the store disabled) on failure or shortage of VRAM.
-    bool allocate(ggml_backend_buffer_type_t gpu_buft);
+    // allocate the GPU hot store for `hot_s` slots, split across the given
+    // device buffer types by tensor_split (fractions, one per device). returns
+    // false (and leaves the store disabled) on failure or shortage of VRAM.
+    bool allocate(const std::vector<ggml_backend_buffer_type_t> & bufts,
+                  const float * tensor_split, int n_split);
 
     // copy the top-S expert slices for every layer into the GPU hot store,
     // using the given heatmap for the ranking. one-shot (guarded by is_filled).
-    void copy_top_s(const llama_expert_heatmap & heatmap);
+    // copy the top-S expert slices for every layer into the GPU hot store,
+    // using the given heatmap for the ranking. one-shot (guarded by is_filled).
+    // returns true if a fill happened (caller should synchronize the GPU).
+    bool copy_top_s(const llama_expert_heatmap & heatmap);
 
     // re-sync the hot store to the current heatmap ranking, swapping only
     // the experts that changed (stable slots; unchanged experts not re-copied).
-    void resync_top_s(const llama_expert_heatmap & heatmap);
+    // returns true if any slot changed (caller should synchronize the GPU).
+    bool resync_top_s(const llama_expert_heatmap & heatmap);
 
     // cadence-gated wrapper: re-sync only if tokens_total crossed sync_period;
-    // multi_slot freezes the hot store (static slots, no swapping)
-    void maybe_resync(const llama_expert_heatmap & heatmap, bool multi_slot);
+    // multi_slot freezes the hot store (static slots, no swapping). returns
+    // true if a re-sync ran and swapped slots.
+    bool maybe_resync(const llama_expert_heatmap & heatmap, bool multi_slot);
 
     // returns the GPU slot index holding expert_id in layer il, or -1 if none
     int slot_of(int layer_idx, int expert_id) const;

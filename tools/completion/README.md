@@ -152,6 +152,7 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `--ecf, --expert-cache-force` | enable the expert cache on non-CUDA backends (testing/emergency only) |
 | `--expert-heat-decay N` | expert heatmap decay rate per update (default: 0.999)<br/>(env: LLAMA_ARG_EXPERT_HEAT_DECAY) |
 | `--expert-heat-log-period N` | expert heatmap log interval in updates (default: 0, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD) |
+| `--expert-sync-period N` | expert hot store re-sync cadence in tokens (default: 1)<br/>(env: LLAMA_ARG_EXPERT_SYNC_PERIOD) |
 | `--expert-hyst N` | expert hot store hysteresis ratio (default: 1.3, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_HYST) |
 | `--expert-dwell N` | expert hot store minimum dwell updates before swap (default: 0, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_DWELL) |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
