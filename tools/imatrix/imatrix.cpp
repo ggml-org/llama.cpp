@@ -300,11 +300,15 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         if (blk_start_pos == std::string::npos) { continue; }
 
         std::string tname = ts.tensor;
-        tname.replace(blk_start_pos, layer_str.length() + 4, "blk." + std::to_string(blk - 1));
+        auto it = tensor_map.end();
+        for (int prev = blk - 1; prev >= 0 && it == tensor_map.end(); --prev) {
+            tname = ts.tensor;
+            tname.replace(blk_start_pos, layer_str.length() + 4, "blk." + std::to_string(prev));
+            it = tensor_map.find(tname);
+        }
 
-        auto it = tensor_map.find(tname);
         if (it == tensor_map.end()) {
-            LOG_WRN("%s: missing previous-layer tensor '%s'\n", __func__, tname.c_str());
+            LOG_WRN("%s: no preceding-layer tensor for '%s'\n", __func__, ts.tensor.c_str());
             continue;
         }
 
