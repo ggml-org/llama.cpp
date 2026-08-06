@@ -8,6 +8,7 @@ enum Destination: String, CaseIterable, Identifiable {
     case runs = "Runs"
     case learning = "Learning"
     case workflows = "Workflows"
+    case email = "Email"
 
     var id: String { rawValue }
 
@@ -18,6 +19,7 @@ enum Destination: String, CaseIterable, Identifiable {
         case .runs: "clock.arrow.circlepath"
         case .learning: "chart.bar.doc.horizontal"
         case .workflows: "rectangle.connected.to.line.below"
+        case .email: "envelope"
         }
     }
 }
@@ -62,6 +64,14 @@ struct ContentView: View {
     // (training runs are global, so the ping decision looks across
     // all windows; see LearningSurfaceTracker).
     @State private var windowID = UUID()
+    // Email surface state (Phase 5). The data layer is
+    // shared with the rest of the productivity
+    // surface; the email store is a thin wrapper
+    // around it. The data layer is created lazily
+    // on first access (when the user opens the
+    // Email destination) so app launch is not
+    // gated on Postgres.
+    @State private var emailSurface = EmailSurfaceBootstrap()
 
     var body: some View {
         NavigationSplitView {
@@ -172,6 +182,14 @@ struct ContentView: View {
             LearningDashboardView()
         case .workflows:
             WorkflowsView(editor: workflowEditor)
+        case .email:
+            EmailView(
+                store: emailSurface.store,
+                sender: emailSurface.sender,
+                importer: emailSurface.importer,
+                identity: emailSurface.identity
+            )
+            .onAppear { emailSurface.installIfNeeded() }
         case nil:
             ContentUnavailableView(
                 "Select a destination",
