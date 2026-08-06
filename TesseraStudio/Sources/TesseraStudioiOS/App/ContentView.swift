@@ -24,6 +24,13 @@ struct ContentView: View {
     @State private var restoredMessages: [ChatMessage] = []
     @State private var playgroundSession = UUID()
     @State private var exportItem: ExportItem?
+    // Email surface state (Phase 5). Same
+    // lazy-bootstrap pattern as the macOS
+    // ``EmailSurfaceBootstrap``; the
+    // iOS-side ``EmailView_iOS`` is
+    // constructed once the user opens the
+    // Email tab.
+    @State private var emailSurface = EmailSurfaceBootstrap_iOS()
 
     var body: some View {
         TabView {
@@ -50,6 +57,17 @@ struct ContentView: View {
                 RunsView()
             }
             .tabItem { Label("Runs", systemImage: "clock.arrow.circlepath") }
+
+            NavigationStack {
+                emailSurface.installIfNeeded()
+                EmailView_iOS(
+                    store: emailSurface.store,
+                    sender: emailSurface.sender,
+                    importer: emailSurface.importer,
+                    identity: emailSurface.identity
+                )
+            }
+            .tabItem { Label("Email", systemImage: "envelope") }
 
             NavigationStack {
                 SettingsView()

@@ -54,10 +54,36 @@ public struct EmailChatAdapter: Sendable {
         case unknown
     }
 
-    private let store: EmailStore
+    /// The minimal store surface the
+    /// adapter needs. Production wires
+    /// this to ``EmailStore/list(limit:)``
+    /// ; tests can wire a fake with a
+    /// fixed list. The closure is
+    /// `@Sendable` so the adapter can be
+    /// called from any actor.
+    public typealias EmailLookup = @Sendable () async -> [EmailMessage]
 
+    private let lookup: EmailLookup
+
+    /// Production initializer. The adapter
+    /// reads from the email store's
+    /// ``EmailStore/list(limit:)`` method.
     public init(store: EmailStore) {
-        self.store = store
+        self.lookup = {
+            (try? await store.list(limit: 1000)) ?? []
+        }
+    }
+
+    /// Test-friendly initializer. The
+    /// caller provides a closure that
+    /// returns the in-memory email list
+    /// (e.g., a captured `[EmailMessage]`
+    /// in the test). Used by
+    /// ``EmailChatAdapterTests`` to
+    /// exercise the run handlers without
+    /// a real data layer.
+    public init(lookup: @escaping EmailLookup) {
+        self.lookup = lookup
     }
 
     /// Parse a free-form user message into an
@@ -247,15 +273,15 @@ public struct EmailChatAdapter: Sendable {
     private func runSummarize(threadID: String?, context: RunContext) async -> RunResult {
         let emails: [EmailMessage]
         if let tid = threadID {
-            emails = (try? await store.list(limit: 1000))?
-                .filter { ($0.threadID ?? $0.messageID) == tid } ?? []
+            emails = (await lookup())
+                .filter { ($0.threadID ?? $0.messageID) == tid }
         } else {
             // "this thread" — use the most
             // recent thread (the chat panel
             // would normally pass the threadID
             // explicitly; v1 falls back to the
             // most recent email's thread).
-            let all = (try? await store.list(limit: 50)) ?? []
+            let all = await lookup()
             guard let mostRecent = all.first else {
                 return .noAction(reason: "no thread to summarize")
             }
@@ -278,7 +304,7 @@ public struct EmailChatAdapter: Sendable {
     }
 
     private func runFind(sender: String?, topic: String?, context: RunContext) async -> RunResult {
-        let all = (try? await store.list(limit: 1000)) ?? []
+        let all = await lookup()
         let q = (sender?.lowercased() ?? "")
         let topicQ = (topic?.lowercased() ?? "")
         let matches = all.filter { e in
@@ -297,7 +323,7 @@ public struct EmailChatAdapter: Sendable {
     // MARK: - Helpers
 
     private func mostRecentEmailID() async -> UUID? {
-        let all = (try? await store.list(limit: 1)) ?? []
+        let all = await lookup()
         return all.first?.id
     }
 

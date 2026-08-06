@@ -221,4 +221,146 @@ final class EmailStoreIntegrationTests: XCTestCase {
         let types = receipts.map { $0.receiptType }
         XCTAssertTrue(types.contains(EmailReceiptType.archived.rawValue))
     }
+
+    /// The full receipt chain is the audit
+    /// trail. After several mutations
+    /// (upsert, mark read, set starred,
+    /// archive), the chain has a receipt
+    /// for each. This is the
+    /// "the receipt chain shows the email's
+    /// full history" test from the spec.
+    func testReceiptChainShowsFullHistory() async throws {
+        try requireIntegration()
+        let ctx = try await makeTestContext()
+        defer { Task { await ctx.tearDown() } }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let email = EmailMessage(
+            messageID: "msg-history@example.com",
+            from: EmailAddress(email: "alice@example.com"),
+            subject: "History",
+            receivedAt: date,
+            isRead: false,
+            isStarred: false,
+            folder: .inbox,
+            createdAt: date,
+            updatedAt: date
+        )
+        _ = try await ctx.emailStore.upsert(email)
+        _ = try await ctx.emailStore.markRead(email.id, read: true)
+        _ = try await ctx.emailStore.setStarred(email.id, starred: true)
+        _ = try await ctx.emailStore.setFolder(email.id, folder: .archive)
+
+        let receipts = try await ctx.emailStore.receipts(forEmail: email.id)
+        let types = receipts.map { $0.receiptType }
+        // Every mutation in the history
+        // produced a receipt. The chain
+        // contains them all in the order
+        // they were appended.
+        XCTAssertTrue(types.contains(EmailReceiptType.upsert.rawValue))
+        XCTAssertTrue(types.contains(EmailReceiptType.read.rawValue))
+        XCTAssertTrue(types.contains(EmailReceiptType.starred.rawValue))
+        XCTAssertTrue(types.contains(EmailReceiptType.archived.rawValue))
+    }
+
+    /// Linking an email to another graph
+    /// entity creates an ``entity_link``
+    /// row and appends a
+    /// ``link_created`` receipt. The
+    /// ``link`` method is the seam the
+    /// detail view's "related" section
+    /// uses to surface cross-surface links.
+    func testLinkEmailToEntity() async throws {
+        try requireIntegration()
+        let ctx = try await makeTestContext()
+        defer { Task { await ctx.tearDown() } }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let email = EmailMessage(
+            messageID: "msg-link@example.com",
+            from: EmailAddress(email: "alice@example.com"),
+            subject: "Link me",
+            receivedAt: date,
+            folder: .inbox,
+            createdAt: date,
+            updatedAt: date
+        )
+        _ = try await ctx.emailStore.upsert(email)
+
+        // Create a second entity to link to.
+        let otherID = UUID()
+        let link = try await ctx.emailStore.link(
+            emailID: email.id,
+            to: otherID,
+            linkType: "mentioned_in"
+        )
+        XCTAssertEqual(link.sourceID, email.id)
+        XCTAssertEqual(link.targetID, otherID)
+        XCTAssertEqual(link.linkType, "mentioned_in")
+
+        // The link receipt is in the chain.
+        let receipts = try await ctx.emailStore.receipts(forEmail: email.id)
+        let types = receipts.map { $0.receiptType }
+        XCTAssertTrue(types.contains(EmailReceiptType.linkCreated.rawValue))
+    }
+
+    /// ``recordReply`` flips the
+    /// ``isReplied`` flag on the original,
+    /// persists the draft in ``.sent``,
+    /// and appends a ``replied`` receipt
+    /// to the original. This is the
+    /// "send routes through the share
+    /// sheet" test (we don't actually
+    /// present the share sheet in the
+    /// integration test, but we do verify
+    /// the side effects the share-sheet
+    /// path would produce).
+    func testRecordReplyPersistsDraftAndReceipt() async throws {
+        try requireIntegration()
+        let ctx = try await makeTestContext()
+        defer { Task { await ctx.tearDown() } }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let original = EmailMessage(
+            messageID: "msg-orig@example.com",
+            from: EmailAddress(email: "alice@example.com"),
+            subject: "Original",
+            receivedAt: date,
+            folder: .inbox,
+            threadID: "msg-orig@example.com",
+            createdAt: date,
+            updatedAt: date
+        )
+        _ = try await ctx.emailStore.upsert(original)
+
+        // The reply draft.
+        let draft = EmailMessage(
+            id: UUID(),
+            messageID: "reply-id",
+            from: EmailAddress(email: "me@example.com"),
+            to: [EmailAddress(email: "alice@example.com")],
+            subject: "Re: Original",
+            bodyPlain: "Got it, thanks",
+            receivedAt: date,
+            folder: .drafts,
+            threadID: original.threadID,
+            createdAt: date,
+            updatedAt: date
+        )
+        let sent = try await ctx.emailStore.recordReply(
+            to: original.id,
+            draft: draft
+        )
+        XCTAssertNotNil(sent)
+        XCTAssertEqual(sent?.folder, .sent)
+
+        // The original's isReplied flipped.
+        let updated = try await ctx.emailStore.get(id: original.id)
+        XCTAssertEqual(updated?.isReplied, true)
+
+        // The reply receipt is in the chain.
+        let receipts = try await ctx.emailStore.receipts(forEmail: original.id)
+        let types = receipts.map { $0.receiptType }
+        XCTAssertTrue(types.contains(EmailReceiptType.replied.rawValue))
+    }
 }

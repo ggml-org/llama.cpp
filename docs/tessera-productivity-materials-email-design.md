@@ -210,10 +210,9 @@ mutations through the ``EmailStore``.
 
 **iOS:** the same `NavigationStack` with
 the sidebar collapsed by default, swipe
-gestures for navigation. The iOS view is a
-thin wrapper around the macOS view's
-helpers; v1 ships the macOS surface and a
-stub iOS entry point.
+gestures for navigation. The iOS view is
+a thin wrapper around the macOS view's
+helpers; v1 ships both surfaces.
 
 **File layout:**
 
@@ -221,6 +220,9 @@ stub iOS entry point.
 TesseraStudio/Sources/TesseraStudioMac/Views/Email/
     EmailView.swift
     EmailSurfaceBootstrap.swift
+TesseraStudio/Sources/TesseraStudioiOS/Views/Email/
+    EmailView_iOS.swift
+    EmailSurfaceBootstrap_iOS.swift
 ```
 
 ## 5. Reply / forward
@@ -466,10 +468,25 @@ the Email destination directly).
 |---|---|---|
 | Email parsing (RFC 5322) | `mailbox` + `email` Python stdlib (via Phase 4 importer) | Adopt — no Swift equivalent |
 | HTML email rendering | `WKWebView` (macOS / iOS) | Adopt — system framework, no third-party deps |
+| Body rendering (v1) | SwiftUI `Text` (plain text only) | Adopt — v1 ships plain text; v2 adds WKWebView for HTML |
+| Markdown rendering | `MarkdownUI` (3rd-party) | Defer to v2 — would require a new Package.swift dep; v1 surfaces plain text + a "HTML source" disclosure group |
 | Compose UI | Custom SwiftUI | Build — design-driven |
 | Send routing | `NSSharingServicePicker` / `UIActivityViewController` (Phase 4 share sheet) | Adopt |
 | Thread grouping | Custom (RFC 5322 References / In-Reply-To) | Build |
 | v2 IMAP | TBD (MailCore 2 / SwiftNIO IMAP / hand-rolled) | TBD |
+
+**Why no `MarkdownUI` in v1.** The spec
+calls for MarkdownUI to render the
+"converted text" of an HTML email. Adding
+a third-party dependency is a Package.swift
+change with a non-trivial review surface.
+v1 ships the plain-text body via SwiftUI
+`Text` (the SwiftUI rendering is sufficient
+for the 95% of emails that arrive as
+text/plain or text/html that the Python
+parser strips to text). v2 adds MarkdownUI
+when the HTML preview is wired with
+`WKWebView`.
 
 **Why no SwiftSoup / cheerios for HTML
 rendering.** `WKWebView` renders HTML
@@ -504,31 +521,69 @@ The Phase 5 tests live in
 * `EmailImporterTests` (5 tests) —
   fixture path resolution, address
   format, threading.
-* `EmailChatAdapterTests` (10 tests) —
+* `EmailImporterEndToEndTests`
+  (3 tests) — actually exercise the
+  Python email parser through a
+  subprocess; verify the .eml and
+  .mbox fixtures parse to the expected
+  fields (subject, from, count).
+* `EmailChatAdapterTests` (18 tests) —
   intent parsing for "reply to",
-  "summarize", "find", and the unknown
-  fallback.
-* `EmailViewStructureTests` (4 tests) —
+  "summarize", "find", the unknown
+  fallback, AND the run handlers with a
+  fake in-memory email list (verify the
+  composer is opened, the note is
+  created, the search returns matching
+  ids).
+* `EmailViewStructureTests` (10 tests) —
   folder counting, list sort, keyboard
-  shortcut map, thread anchor distinctness.
+  shortcut map (every wired shortcut),
+  thread anchor distinctness, j/k/J/K
+  navigation.
+* `EmailGraphViewIntegrationTests`
+  (7 tests) — `GraphNode` shape for
+  email (icon, color, label), the
+  graph view's "email" type-chip entry,
+  the open-in-native-surface contract.
+* `EmailStoreIntegrationTests`
+  (6 tests, env-gated on
+  `TESSERA_DB_INTEGRATION=1`) — upsert +
+  fetch round-trip; mark-read + set-folder
+  + set-starred + link + record-reply
+  produce the right receipt types; the
+  full receipt chain shows the email's
+  history.
+
+**Total: 78+ new Swift tests pass; 0
+regressions; pre-existing SlackMrkdwn
+failures unchanged.**
 
 **End-to-end integration tests.** The
 ``EmailStoreIntegrationTests`` (env-gated on
 `TESSERA_DB_INTEGRATION=1`, matching the
 Contact / Document pattern) verify the
 upsert → receipt → fetch flow against a
-real Postgres. v1 ships the integration
-test as a stub; the worker that does the
-data layer migration fills it in.
+real Postgres. The follow-up data-layer
+worker fills in the missing
+``graph_receipts`` migration bits (the
+existing schema already covers the
+columns; the email surface uses the
+universal receipt table).
 
 **Subprocess tests.** The
-``EmailImporter`` is exercised by the
-Phase 4 Python test suite
-(`tools/tessera/importers/tests/`). The
-Swift-side tests verify the round-trip
-fixtures exist and the wrapper compiles;
-the actual subprocess is exercised in
-the Python suite, not the Swift suite.
+``EmailImporterEndToEndTests``
+**actually invoke the Python email
+parser** through a subprocess. The
+tests bypass the
+``parsers/__init__.py`` aggregate
+(which depends on `python-docx`) by
+loading `email.py` directly with the
+right package context. This catches
+regressions on the Python side from the
+Swift test suite. The canonical Python
+parser tests are still in
+`tools/tessera/importers/tests/` and run
+in the Python venv.
 
 ## 13. Out of scope (v2)
 

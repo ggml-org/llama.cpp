@@ -78,6 +78,16 @@ public struct EmailView: View {
     @State private var showComposer: Bool = false
     @State private var focusedRow: EmailRowFocus = .list
     @State private var isPresentingKeyHint: Bool = false
+    /// Pending "g" key for two-key chords
+    /// (MailMate-style: `g i` goes to inbox,
+    /// `g s` goes to sent). When the user
+    /// presses `g`, this state is set with a
+    /// short timeout; the next keypress
+    /// resolves the chord or clears the
+    /// pending state. The timeout is small
+    /// (1.2s) so a stray `g` doesn't leave
+    /// the user stuck.
+    @State private var pendingG: Date?
 
     // Computed
     private var filteredEmails: [EmailMessage] {
@@ -266,12 +276,47 @@ public struct EmailView: View {
             return .handled
         }
         .onKeyPress(.init("s")) {
+            if isPendingG() {
+                pendingG = nil
+                goToSent()
+                return .handled
+            }
             toggleStar()
             return .handled
         }
         .onKeyPress(.init("c")) {
             startNewCompose()
             return .handled
+        }
+        // Two-key chord: `g i` goes to inbox,
+        // `g s` goes to sent. The `g` key
+        // arms `pendingG`; the next keypress
+        // resolves the chord (or clears
+        // pendingG if the next key isn't `i`
+        // or `s`).
+        .onKeyPress(.init("g")) {
+            pendingG = Date()
+            return .handled
+        }
+        .onKeyPress(.init("i")) {
+            if isPendingG() {
+                pendingG = nil
+                goToInbox()
+                return .handled
+            }
+            return .ignored
+        }
+        // Enter opens the focused email.
+        // v1: the list selection IS the
+        // focused email; pressing Enter
+        // while the list is focused is a
+        // no-op (the email is already shown
+        // in the detail). The shortcut is
+        // still wired so a future split
+        // (search results, etc.) can use
+        // it.
+        .onKeyPress(.return) {
+            return .ignored
         }
     }
 
@@ -502,6 +547,35 @@ public struct EmailView: View {
             _ = try? await store.setStarred(id, starred: !email.isStarred)
             await load()
         }
+    }
+
+    /// True when a `g` keypress is pending and
+    /// hasn't timed out. The chord is
+    /// resolved by the next keypress (or
+    /// cleared by the timeout). The 1.2s
+    /// window is a MailMate convention.
+    /// Stale pendings are left for the
+    /// caller to clear (the timeout is
+    /// short and the next unrelated `g`
+    /// press will reset it).
+    private func isPendingG() -> Bool {
+        guard let pendingG else { return false }
+        let elapsed = Date().timeIntervalSince(pendingG)
+        return elapsed <= 1.2
+    }
+
+    /// Navigate to the Inbox folder.
+    /// `g i` is the MailMate-style chord.
+    private func goToInbox() {
+        selectedFolder = .inbox
+        selectedEmailID = nil
+    }
+
+    /// Navigate to the Sent folder.
+    /// `g s` is the MailMate-style chord.
+    private func goToSent() {
+        selectedFolder = .sent
+        selectedEmailID = nil
     }
 
     private func presentOpenPanel(allowed: [UTType]) {
@@ -951,6 +1025,8 @@ private struct KeyboardHintSheet: View {
         ("#", "Trash"),
         ("s", "Toggle star"),
         ("c", "Compose new"),
+        ("g i", "Go to inbox"),
+        ("g s", "Go to sent"),
         ("/", "Search"),
     ]
 
