@@ -54,16 +54,24 @@ public final class TesseraTraceStore: @unchecked Sendable {
     private let lock = NSLock()
     private var cachedRecordCount: Int?
     private var runtimeIndexCache: [RuntimeFileEntry]?
+    private var s2sIndexCache: [S2SFileEntry]?
 
     /// Filename prefixes per provenance (runtime-traces spec section 8).
     /// All keep the traces- prefix, so totalRecords() counts every
     /// provenance and the training gate sees the combined total.
     public static let runtimeFilePrefix = "traces-runtime-"
     public static let replayFilePrefix = "traces-replay-"
+    /// S2S utterance records (s2s design section 4.3). Codes are Tier B
+    /// local-only, so the staging filter skips this prefix outright.
+    public static let s2sFilePrefix = "traces-s2s-"
 
     /// Default rolling cap on the runtime share (spec section 8). The
     /// runtime trimmer never touches calibration or replay files.
     public static let runtimeBudgetBytesDefault = 200 * 1024 * 1024
+
+    /// Default rolling cap on the s2s share. Same discipline as the runtime
+    /// cap; the s2s trimmer never touches any other provenance.
+    public static let s2sBudgetBytesDefault = 200 * 1024 * 1024
 
     public init(directory: URL = TesseraTraceStore.defaultDirectory()) {
         self.directory = directory
@@ -97,6 +105,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
         try fm.copyItem(at: jsonlPath, to: dest)
         cachedRecordCount = nil
         runtimeIndexCache = nil
+        s2sIndexCache = nil
         return dest
     }
 
@@ -125,6 +134,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
             .write(to: dest, atomically: true, encoding: .utf8)
         cachedRecordCount = nil
         runtimeIndexCache = nil
+        s2sIndexCache = nil
 
         // Retention first (all provenances), then the runtime rolling cap.
         try trimExpiredUnlocked(
@@ -160,6 +170,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
             .write(to: dest, atomically: true, encoding: .utf8)
         cachedRecordCount = nil
         runtimeIndexCache = nil
+        s2sIndexCache = nil
 
         // Retention covers every provenance; quarantined sessions stay exempt.
         try trimExpiredUnlocked(
@@ -173,6 +184,51 @@ public final class TesseraTraceStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return traceFilesUnlocked()
             .filter { $0.lastPathComponent.hasPrefix(Self.replayFilePrefix) }
+    }
+
+    /// Append captured S2S utterance records (s2s design section 4.3).
+    /// Records are TesseraS2SRecord lines: they carry "provenance":"s2s"
+    /// and one device-local sid per utterance, and are written verbatim as
+    /// traces-s2s-<date>.jsonl. Capture is default-on with no opt-out
+    /// (mandatory-collection doctrine); codes are Tier B local-only, so
+    /// this share never touches dataset staging. Returns the stored file
+    /// URL, or nil when there was nothing to write. After writing,
+    /// retention and the s2s rolling cap are enforced; quarantined sessions
+    /// are exempt via exemptSids, wired by the curation stage.
+    @discardableResult
+    public func appendS2S(records: [String], exemptSids: Set<String> = []) throws -> URL? {
+        lock.lock(); defer { lock.unlock() }
+        guard !records.isEmpty else { return nil }
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let stem = Self.datedStem(Date(), prefix: Self.s2sFilePrefix)
+        var name = "\(stem).jsonl"
+        var n = 1
+        while fm.fileExists(atPath: directory.appendingPathComponent(name).path) {
+            name = "\(stem)-\(n).jsonl"
+            n += 1
+        }
+        let dest = directory.appendingPathComponent(name)
+        try (records.joined(separator: "\n") + "\n")
+            .write(to: dest, atomically: true, encoding: .utf8)
+        cachedRecordCount = nil
+        runtimeIndexCache = nil
+        s2sIndexCache = nil
+
+        // Retention first (all provenances), then the s2s rolling cap.
+        try trimExpiredUnlocked(
+            retentionDays: TesseraSettings.learningDataRetentionDays,
+            exemptSids: exemptSids, now: Date())
+        try trimS2SUnlocked(
+            budgetBytes: Self.s2sBudgetBytesDefault, exemptSids: exemptSids)
+        return dest
+    }
+
+    /// S2S trace files, oldest-first.
+    public func s2sFiles() -> [URL] {
+        lock.lock(); defer { lock.unlock() }
+        return traceFilesUnlocked()
+            .filter { $0.lastPathComponent.hasPrefix(Self.s2sFilePrefix) }
     }
 
     /// Stored trace files, oldest-first (the dated names sort chronologically).
@@ -198,6 +254,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
         for file in files { try FileManager.default.removeItem(at: file) }
         cachedRecordCount = nil
         runtimeIndexCache = nil
+        s2sIndexCache = nil
         return files.count
     }
 
@@ -212,6 +269,7 @@ public final class TesseraTraceStore: @unchecked Sendable {
         for file in files { try FileManager.default.removeItem(at: file) }
         cachedRecordCount = nil
         runtimeIndexCache = nil
+        s2sIndexCache = nil
         return records
     }
 
@@ -275,39 +333,43 @@ public final class TesseraTraceStore: @unchecked Sendable {
     }
 
     /// User-initiated purge of one session (spec sections 9 and 12.4):
-    /// remove every runtime record carrying the sid, rewriting the affected
-    /// files in place and deleting any file left empty. Quarantined
-    /// sessions are exempt from automatic retention entirely; this is the
-    /// ONLY path that removes them. Calibration and replay files are never
-    /// touched (a promoted session loses its sid before replay, so no
-    /// replay record can carry it). Returns the number of records removed.
+    /// remove every runtime or s2s record carrying the sid, rewriting the
+    /// affected files in place and deleting any file left empty.
+    /// Quarantined sessions are exempt from automatic retention entirely;
+    /// this is the ONLY path that removes them. Calibration and replay
+    /// files are never touched (a promoted session loses its sid before
+    /// replay, so no replay record can carry it). Returns the number of
+    /// records removed.
     @discardableResult
     public func purgeSession(sid: String) throws -> Int {
         lock.lock(); defer { lock.unlock() }
         guard !sid.isEmpty else { return 0 }
         let fm = FileManager.default
         var removed = 0
-        for entry in runtimeIndexUnlocked() where entry.sids.contains(sid) {
-            guard let text = try? String(contentsOf: entry.url, encoding: .utf8) else { continue }
+        let targets = runtimeIndexUnlocked().map { ($0.url, $0.sids) }
+            + s2sIndexUnlocked().map { ($0.url, $0.sids) }
+        for (url, sids) in targets where sids.contains(sid) {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             var kept: [String] = []
             text.enumerateLines { line, _ in
                 guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                if let parsed = Self.parseRuntimeLine(line), parsed.sid == sid {
+                if Self.lineSid(line) == sid {
                     removed += 1
                     return
                 }
                 kept.append(line)
             }
             if kept.isEmpty {
-                try fm.removeItem(at: entry.url)
+                try fm.removeItem(at: url)
             } else {
                 try (kept.joined(separator: "\n") + "\n")
-                    .write(to: entry.url, atomically: true, encoding: .utf8)
+                    .write(to: url, atomically: true, encoding: .utf8)
             }
         }
         if removed > 0 {
             cachedRecordCount = nil
             runtimeIndexCache = nil
+            s2sIndexCache = nil
         }
         return removed
     }
@@ -337,8 +399,11 @@ public final class TesseraTraceStore: @unchecked Sendable {
     private func trimExpiredUnlocked(retentionDays: Int, exemptSids: Set<String>, now: Date) throws -> Int {
         guard retentionDays > 0 else { return 0 }
         let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86_400)
-        let sidsByFile = Dictionary(
+        // Sid-bearing provenances (runtime, s2s) can hold quarantined
+        // sessions; their files are exempt from automatic retention.
+        var sidsByFile: [URL: Set<String>] = Dictionary(
             uniqueKeysWithValues: runtimeIndexUnlocked().map { ($0.url, $0.sids) })
+        for entry in s2sIndexUnlocked() { sidsByFile[entry.url] = entry.sids }
         var removed = 0
         for file in traceFilesUnlocked() {
             guard let created = try? file.resourceValues(forKeys: [.creationDateKey]),
@@ -351,6 +416,37 @@ public final class TesseraTraceStore: @unchecked Sendable {
         if removed > 0 {
             cachedRecordCount = nil
             runtimeIndexCache = nil
+            s2sIndexCache = nil
+        }
+        return removed
+    }
+
+    /// Rolling cap for the s2s share: trim s2s files oldest-first until the
+    /// share fits the budget. Every other provenance is never touched.
+    /// Files holding a sid in exemptSids (quarantined sessions) are exempt;
+    /// the share may stay over budget rather than remove them. Returns the
+    /// number of files removed.
+    @discardableResult
+    public func trimS2SToBudget(budgetBytes: Int, exemptSids: Set<String> = []) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return try trimS2SUnlocked(budgetBytes: budgetBytes, exemptSids: exemptSids)
+    }
+
+    @discardableResult
+    private func trimS2SUnlocked(budgetBytes: Int, exemptSids: Set<String>) throws -> Int {
+        let entries = s2sIndexUnlocked()
+        var total = entries.reduce(0) { $0 + $1.bytes }
+        guard total > budgetBytes else { return 0 }
+        var removed = 0
+        for entry in entries where total > budgetBytes {
+            guard entry.sids.isDisjoint(with: exemptSids) else { continue }
+            try FileManager.default.removeItem(at: entry.url)
+            total -= entry.bytes
+            removed += 1
+        }
+        if removed > 0 {
+            cachedRecordCount = nil
+            s2sIndexCache = nil
         }
         return removed
     }
@@ -407,6 +503,44 @@ public final class TesseraTraceStore: @unchecked Sendable {
         let accepted = (obj["accepted"] as? NSNumber)?.intValue ?? 0
         let drafted = (obj["drafted"] as? NSNumber)?.intValue ?? 0
         return (sid, accepted, drafted)
+    }
+
+    /// The sid one JSONL record carries, or nil for unparseable lines and
+    /// empty sids. Shared by every provenance whose records carry a sid
+    /// (runtime and s2s).
+    private static func lineSid(_ line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return (obj["sid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    // MARK: - S2S index (caller holds the lock)
+
+    /// One parsed s2s file: byte size and its sids (one per utterance).
+    private struct S2SFileEntry {
+        let url: URL
+        let bytes: Int
+        let sids: Set<String>
+    }
+
+    private func s2sIndexUnlocked() -> [S2SFileEntry] {
+        if let cached = s2sIndexCache { return cached }
+        var entries: [S2SFileEntry] = []
+        for file in traceFilesUnlocked()
+        where file.lastPathComponent.hasPrefix(Self.s2sFilePrefix) {
+            guard let data = try? Data(contentsOf: file),
+                  let text = String(data: data, encoding: .utf8) else { continue }
+            var sids = Set<String>()
+            text.enumerateLines { line, _ in
+                guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                if let sid = Self.lineSid(line) { sids.insert(sid) }
+            }
+            entries.append(S2SFileEntry(url: file, bytes: data.count, sids: sids))
+        }
+        s2sIndexCache = entries
+        return entries
     }
 
     // MARK: - Helpers (caller holds the lock)
