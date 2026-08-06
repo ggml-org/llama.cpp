@@ -6,7 +6,8 @@
 		joinPath,
 		lastPathSegment,
 		rankEntries,
-		runGlobSearch
+		runGlobSearch,
+		type GlobEntry
 	} from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { GlobSearchType } from '$lib/enums';
@@ -21,7 +22,9 @@
 	import type { FileMentionEntry } from '$lib/types';
 	import {
 		FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
+		GLOB_WILDCARD,
 		HOME_TILDE,
+		PATH_NAV_MAX_DEPTH,
 		SEARCH_DEBOUNCE_MS
 	} from '$lib/constants';
 
@@ -116,14 +119,45 @@
 					searchError = res.error;
 					return;
 				}
-				searchResults = rankEntries(res.entries, args.rankQuery).map((e) => {
-					const path = joinPath(res.base, e.path);
-					return {
-						path,
-						name: lastPathSegment(e.path),
-						type: e.type === 'dir' ? 'directory' : 'file'
-					};
+				const toEntry = (e: GlobEntry): FileMentionEntry => ({
+					path: joinPath(res.base, e.path),
+					name: lastPathSegment(e.path),
+					type: e.type === 'dir' ? 'directory' : 'file'
 				});
+
+				let entries = rankEntries(res.entries, args.rankQuery).map(toEntry);
+
+				// A trailing `/` targets a directory: list its children too so the
+				// user can step into it from the picker, mirroring the WD picker.
+				if (query.endsWith('/') && args.last) {
+					const last = args.last;
+					const exact = res.entries.find(
+						(e) =>
+							e.type === 'dir' && lastPathSegment(e.path).toLowerCase() === last.toLowerCase()
+					);
+					if (exact) {
+						const exactDir = joinPath(res.base, exact.path);
+						const childRes = await runGlobSearch(
+							{ path: exactDir, include: GLOB_WILDCARD, maxDepth: PATH_NAV_MAX_DEPTH, rankQuery: '' },
+							GlobSearchType.ALL,
+							MENTION_SEARCH_LIMIT,
+							signal
+						);
+						if (!isCurrent()) return;
+						if (!childRes.error) {
+							const children = childRes.entries
+								.map((e): FileMentionEntry => ({
+									path: joinPath(childRes.base, e.path),
+									name: lastPathSegment(e.path),
+									type: e.type === 'dir' ? 'directory' : 'file'
+								}))
+								.sort((a, b) => a.path.localeCompare(b.path));
+							entries = [...entries, ...children];
+						}
+					}
+				}
+
+				searchResults = entries;
 				searchError = null;
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;
