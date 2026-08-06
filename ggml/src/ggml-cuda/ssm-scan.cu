@@ -782,10 +782,6 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t n_s = src1->ne[3];  // number of sequences in the batch
     const int32_t K_param = ggml_get_op_params_i32(dst, 0);
     const int64_t K = K_param > 0 ? K_param : 1;
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-    // Multi-snapshot SSM rollback is implemented only for NVIDIA CUDA.
-    GGML_ASSERT(K == 1);
-#endif
 
     const int64_t s_off = ggml_nelements(src1) * sizeof(float);
 
