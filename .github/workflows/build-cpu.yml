@@ -122,6 +122,7 @@ jobs:
           ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   windows:
+    name: windows / ${{ matrix.build }}
     runs-on: windows-2025
 
     env:
