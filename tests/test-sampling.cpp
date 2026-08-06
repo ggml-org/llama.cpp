@@ -48,9 +48,14 @@ struct sampler_tester {
 
     void check() {
         GGML_ASSERT(cur_p.size == probs_expected.size());
+        double probs_sum = 0.0;
+        double probs_expected_sum = 0.0;
         for (size_t i = 0; i < cur_p.size; i++) {
             GGML_ASSERT(fabs(cur_p.data[i].p - probs_expected[i]) < 1e-5);
+            probs_sum += cur_p.data[i].p;
+            probs_expected_sum += probs_expected[i];
         }
+        GGML_ASSERT(fabs(probs_sum - probs_expected_sum) < 1e-5);
     }
 
     llama_token_data_array cur_p;
@@ -181,7 +186,7 @@ static void test_dry(
     tester.check();
 }
 
-static void test_top_n_sigma(const std::vector<float> & probs, const std::vector<float> & probs_expected, int n) {
+static void test_top_n_sigma(const std::vector<float> & probs, const std::vector<float> & probs_expected, float n) {
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
