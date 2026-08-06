@@ -19,6 +19,7 @@ add_library(llama
             llama-cparams.cpp
             llama-expert-heatmap.cpp
             llama-expert-hotstore.cpp
+            llama-expert-pool.cpp
             llama-expert-tier.cpp
             llama-grammar.cpp
             llama-graph.cpp
