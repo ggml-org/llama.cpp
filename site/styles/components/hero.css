@@ -1,0 +1,132 @@
+/* Tessera Observatory v1 -- hero.
+ *
+ * The page-level headline and lede. The hero is the first
+ * projection; it sets the page's intent and tone. The headline
+ * is the page's argument; the blurb is the page's invitation.
+ *
+ * The hero is generous. The headline is the largest type on
+ * the page. The blurb is the lead, in muted color, max-width
+ * to keep the line length readable. The hairline below the
+ * hero separates it from the body without committing to a
+ * heavy divider.
+ *
+ * The home hero adds a faint cyan ambient halo behind the
+ * headline, anchoring it to the page. Subordinated to the
+ * headline; pointer-events: none.
+ */
+
+.hero {
+  position: relative;
+  padding: var(--space-8) var(--gutter) var(--space-7);
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+.hero::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(100%, var(--max-width));
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-rule-strong) 30%,
+    var(--color-rule-strong) 70%,
+    transparent
+  );
+}
+
+.hero-home {
+  padding-top: var(--space-9);
+  padding-bottom: var(--space-8);
+}
+.hero-home::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60%;
+  max-width: 36rem;
+  height: 100%;
+  background: radial-gradient(
+    ellipse 50% 50% at 50% 30%,
+    rgba(106, 212, 255, 0.06) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: -1;
+}
+
+.hero-eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+  margin-bottom: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+}
+
+.hero-headline {
+  font-size: clamp(2rem, 1.5rem + 2.5vw, 3rem);
+  line-height: var(--line-height-tight);
+  letter-spacing: var(--letter-spacing-tight);
+  color: var(--color-fg);
+  margin: 0 0 var(--space-4) 0;
+  max-width: 36rem;
+}
+
+.hero-blurb {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-loose);
+  color: var(--color-fg-muted);
+  max-width: 40rem;
+  margin: 0 0 var(--space-5) 0;
+}
+
+.hero-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.hero-cta-primary {
+  display: inline-block;
+  padding: var(--space-2) var(--space-5);
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  font-size: var(--font-size-sm);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: filter var(--motion-fast) var(--motion-ease);
+}
+.hero-cta-primary:hover {
+  color: var(--color-bg);
+  filter: brightness(1.1);
+  text-decoration: none;
+}
+.hero-cta-secondary {
+  display: inline-block;
+  padding: var(--space-2) 0;
+  color: var(--color-fg-muted);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--color-rule-strong);
+}
+.hero-cta-secondary:hover {
+  color: var(--color-fg);
+  text-decoration: none;
+}

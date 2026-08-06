@@ -1,0 +1,44 @@
+/* Tessera Observatory v1 -- page header.
+ *
+ * The page-level header for non-home pages. Mirrors the home
+ * hero's structure (eyebrow + headline + blurb) at a smaller
+ * scale. The home page uses the full hero; everything else
+ * uses the page header.
+ */
+
+.page-header {
+  padding: var(--space-7) var(--gutter) var(--space-6);
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+.page-header-eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+  margin-bottom: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+}
+
+.page-header-headline {
+  font-size: clamp(1.75rem, 1.25rem + 2vw, 2.5rem);
+  line-height: var(--line-height-tight);
+  letter-spacing: var(--letter-spacing-tight);
+  color: var(--color-fg);
+  margin: 0 0 var(--space-3) 0;
+  max-width: 32rem;
+}
+
+.page-header-blurb {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-loose);
+  color: var(--color-fg-muted);
+  max-width: 40rem;
+  margin: 0;
+}

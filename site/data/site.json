@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "archetype": "observatory",
+  "site_title": "Tessera",
+  "site_tagline": "LLM calibration with runtime-verifiable fitness.",
+  "canonical_origin": "https://tessera.tribunus.dev",
+  "home_hero_headline": "Calibrate and quantize models with receipts the kernel agrees with.",
+  "home_hero_blurb": "Most quantization pipelines produce bit-exact artifacts and bit-divergent runtime behavior. The calibrator optimizes a proxy. The kernel dispatches a different code path. The user sees a green benchmark and a hallucinated answer. Tessera closes the gap: the fitness is measured against the actual kernel dequant output, the policy is shipped with the artifact, and every release is auditable end-to-end.",
+  "author": {
+    "name": "Julian Torres",
+    "role": "Architect and sole developer of Tessera"
+  },
+  "build_identity": {
+    "ssg": "tessera-docs-ssg (bootstrap: hand-authored)",
+    "recorded_at": "2026-08-05T19:30:00Z"
+  }
+}

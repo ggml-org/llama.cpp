@@ -1,0 +1,188 @@
+/* Tessera Observatory v1 -- design tokens.
+ *
+ * One source of truth for color, type, space, motion, and shape.
+ * Every component reads from these tokens. Editing a token is a
+ * constitutional change: every component depends on it.
+ *
+ * Archetype: observatory (research-project instrument panel). Dark
+ * first, single-family typography with weight variation, no
+ * decorative imagery, no third-party requests of any kind.
+ *
+ * Self-hosted font slot: the @font-face declarations are
+ * scaffolded in foundation/fonts.css. Drop the .woff2 files into
+ * /styles/fonts/ when ready; the system stack in this file is the
+ * fallback layer (page is readable with the network down).
+ *
+ * Status is communicated in three forms at once: text, shape,
+ * and color. The shape variation is what makes the state
+ * visible to a color-blind visitor, a screen reader (via the
+ * text label), and a printed page (no color at all). The
+ * state-badge component is the per-status application.
+ *
+ * Accent identity is shared with prism-engine on tribunus.dev
+ * (cyan + magenta as the prism dispersion). The two projects
+ * are architecturally distinct; the visual identity is the
+ * shared brand.
+ */
+
+:root {
+  /* ------------------------------------------------------------- *
+   * 1. Color -- observatory ambient.
+   * ------------------------------------------------------------- */
+
+  /* Surfaces. Three levels of elevation, plus the base. */
+  --color-bg:           #0a0a10;
+  --color-surface-1:    #131320;
+  --color-surface-2:    #1c1c2e;
+  --color-surface-3:    #262638;
+
+  /* Text. High contrast for primary, lower for muted. */
+  --color-fg:           #ebebf2;
+  --color-fg-muted:     #a0a0b8;
+  --color-fg-subtle:    #6c6c84;
+
+  /* Rule. The hairline between sections, between rows, between
+   * panels. Visible at all times; never decorative. */
+  --color-rule:         #2a2a3e;
+  --color-rule-strong:  #3a3a52;
+
+  /* Accent. The prism dispersion color: cyan. The warm side:
+   * magenta. Shared with prism-engine. */
+  --color-accent:       #6ad4ff;
+  --color-accent-warm:  #c56ad4;
+
+  /* Status colors. Each one has a paired text/shape variant
+   * in the state-badge component. Color is reinforcement;
+   * text and shape are the primary signal. */
+  --color-state-planned:      #6c6c84;
+  --color-state-implemented:  #6ad4ff;
+  --color-state-qualifying:   #c56ad4;
+  --color-state-validated:    #5fd97a;
+  --color-state-released:     #6ad4ff;
+  --color-state-unreleased:   #6c6c84;
+
+  /* Status surface tints -- used for state badges' backgrounds
+   * when a badge sits on a chapter or a card. */
+  --color-state-planned-bg:      rgba(108, 108, 132, 0.12);
+  --color-state-implemented-bg:  rgba(106, 212, 255, 0.14);
+  --color-state-qualifying-bg:   rgba(197, 106, 212, 0.14);
+  --color-state-validated-bg:    rgba(95, 217, 122, 0.16);
+  --color-state-released-bg:     rgba(106, 212, 255, 0.14);
+  --color-state-unreleased-bg:   rgba(108, 108, 132, 0.10);
+
+  /* Focus ring. The visible focus indicator. WCAG 2.4.7. */
+  --color-focus:        #6ad4ff;
+  --color-focus-ring:   rgba(106, 212, 255, 0.35);
+
+  /* ------------------------------------------------------------- *
+   * 2. Type -- system stack (bootstrap); self-host slot is open.
+   * ------------------------------------------------------------- */
+
+  /* Bootstrap: system font stack. The page is readable with no
+   * network requests. Drop a self-hosted family in foundation/
+   * fonts.css when ready (the @font-face slot is already there).
+   */
+  --font-sans: "Inter", "IBM Plex Sans", "Helvetica Neue",
+               -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", "SF Mono",
+               Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Modular scale, 1.25 ratio, anchored at 16px. Observatory
+   * variant: tighter than editorial; the page reads as an
+   * instrument panel, not a magazine. */
+  --font-size-xs:   0.78rem;
+  --font-size-sm:   0.875rem;
+  --font-size-base: 1rem;
+  --font-size-md:   1.125rem;
+  --font-size-lg:   1.375rem;
+  --font-size-xl:   1.75rem;
+  --font-size-2xl:  2.25rem;
+  --font-size-3xl:  3rem;
+
+  --line-height-tight:  1.15;
+  --line-height-snug:   1.3;
+  --line-height-base:   1.55;
+  --line-height-loose:  1.7;
+
+  --letter-spacing-tight:  -0.025em;
+  --letter-spacing-base:   0;
+  --letter-spacing-wide:   0.04em;
+  --letter-spacing-mono:   -0.01em;
+
+  --font-weight-regular: 400;
+  --font-weight-medium:  500;
+  --font-weight-bold:    700;
+
+  /* ------------------------------------------------------------- *
+   * 3. Space -- 4px base unit, geometric scale.
+   * ------------------------------------------------------------- */
+
+  --space-1:    0.25rem;
+  --space-2:    0.5rem;
+  --space-3:    0.75rem;
+  --space-4:    1rem;
+  --space-5:    1.5rem;
+  --space-6:    2rem;
+  --space-7:    3rem;
+  --space-8:    4rem;
+  --space-9:    6rem;
+
+  /* ------------------------------------------------------------- *
+   * 4. Layout -- content width and gutter.
+   * ------------------------------------------------------------- */
+
+  --max-width:   72rem;     /* the page */
+  --max-prose:   44rem;     /* chapter prose, 65ch at 16px */
+  --gutter:      1.5rem;    /* outer page padding on mobile */
+
+  /* ------------------------------------------------------------- *
+   * 5. Motion -- duration and easing. Reduced-motion collapses to 0.
+   * ------------------------------------------------------------- */
+
+  --motion-fast:  150ms;
+  --motion-base:  250ms;
+  --motion-slow:  400ms;
+  --motion-ease:  cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ------------------------------------------------------------- *
+   * 6. Shape.
+   * ------------------------------------------------------------- */
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+/* Light theme -- opt-in via the [data-theme="light"] attribute on
+ * <html>. The same token names, inverted. Light is opt-in for the
+ * Observatory; dark is the default. The visitor toggles via the
+ * header button.
+ */
+:root[data-theme="light"] {
+  --color-bg:           #fafafa;
+  --color-surface-1:    #ffffff;
+  --color-surface-2:    #f0f0f4;
+  --color-surface-3:    #e6e6ec;
+  --color-fg:           #0a0a10;
+  --color-fg-muted:     #4a4a58;
+  --color-fg-subtle:    #8888a0;
+  --color-rule:         #d8d8e0;
+  --color-rule-strong:  #b8b8c4;
+  --color-state-planned-bg:      rgba(108, 108, 132, 0.08);
+  --color-state-implemented-bg:  rgba(106, 212, 255, 0.16);
+  --color-state-qualifying-bg:   rgba(197, 106, 212, 0.14);
+  --color-state-validated-bg:    rgba(95, 217, 122, 0.18);
+  --color-state-released-bg:     rgba(106, 212, 255, 0.16);
+  --color-state-unreleased-bg:   rgba(108, 108, 132, 0.06);
+  --color-focus-ring:   rgba(106, 212, 255, 0.45);
+}
+
+/* prefers-reduced-motion: motion collapses to zero. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tessera — Changelog</title>
+<link rel="canonical" href="https://tessera.tribunus.dev/changelog/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="generator" content="tessera-docs-ssg">
+<meta name="build-id" content="bootstrap-001">
+<meta property="og:title" content="Tessera — Changelog">
+<meta property="og:description" content="Calibrate and quantize models with receipts the kernel agrees with.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tessera.tribunus.dev/changelog/">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="/styles/site.css">
+<script>
+(function(){try{
+  var k='tessera-theme';
+  var v=null;
+  try{v=localStorage.getItem(k);}catch(e){}
+  if(v!=='dark'&&v!=='light'){
+    try{
+      if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){v='light';}
+      else{v='dark';}
+    }catch(e){v='dark';}
+  }
+  document.documentElement.setAttribute('data-theme',v);
+  try{document.documentElement.style.colorScheme=v;}catch(e){}
+}catch(e){}})();
+</script>
+<script src="/scripts/theme.js" defer></script>
+<script src="/scripts/transitions-orchestrator.js" defer></script>
+<script src="/scripts/selection-controller.js" defer></script>
+</head>
+<body data-prism-route="/changelog/" data-prism-hydrated="false">
+<a href="#top" class="skip-link">Skip to main content</a>
+<header class="site-header">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Tessera</span></a>
+<nav class="site-nav" aria-label="Primary navigation">
+<a class="site-nav-link" href="/start/">Start</a>
+<a class="site-nav-link" href="/architecture/">Architecture</a>
+<a class="site-nav-link" href="/evidence/">Evidence</a>
+<a class="site-nav-link" href="/status/">Status</a>
+<a class="site-nav-link" href="/changelog/" aria-current="page">Changelog</a>
+<a class="site-nav-link" rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">GitHub</a>
+</nav>
+<button type="button" class="theme-toggle" aria-label="Toggle dark and light theme" data-theme-toggle><span class="theme-toggle-icon" aria-hidden="true"></span><span class="theme-toggle-label">Dark</span></button>
+</header>
+<main class="page-body" id="top">
+
+<header class="page-header">
+<span class="page-header-eyebrow">Changelog</span>
+<h1 class="page-header-headline">What shipped, in order.</h1>
+<p class="page-header-blurb">Each entry is one release, named for the user-visible change, with the receipts that produced it linked from the evidence page.</p>
+</header>
+
+<section class="chapter" id="bootstrap">
+<div class="chapter-eyebrow">Bootstrap</div>
+<h2 class="chapter-title">The site goes live.</h2>
+<div class="chapter-body">
+<p>The <code>tessera.tribunus.dev</code> docs site is bootstrapped on the <code>feat/docs-bootstrap</code> branch. Hand-authored HTML, Observatory design language, GitHub Pages deploy on push to <code>main</code>. The first public changelog is a backfill of the receipts that produced the pipeline as it stands today.</p>
+</div>
+</section>
+
+<section class="chapter" id="backfill">
+<div class="chapter-eyebrow">Backfill</div>
+<h2 class="chapter-title">The pipeline as it stands today.</h2>
+<div class="chapter-body">
+<p>The receipts for the recent waves are in the <a href="/evidence/">evidence</a> page. Each entry below is the user-visible change the wave produced; the receipt carries the per-tensor t_l² and the kernel's hash.</p>
+<table>
+<thead>
+<tr><th>Wave</th><th>User-visible change</th><th>Receipt</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>Tessera Studio Phase 1 + 2</td>
+<td>The macOS / iOS app gains a workflow data model and a SwiftUI graph editor for wrapping the calibration tools as composable nodes.</td>
+<td><a href="https://github.com/Tribunus-dev/tessera">Repository</a></td>
+</tr>
+<tr>
+<td>Clip-capture v2</td>
+<td>Multimodal activation capture against the actual C++ mtmd clip graph; AudioToolbox decode for WAV / MP3 / FLAC / AAC / ALAC; dead-node detection at the graph level.</td>
+<td><a href="/evidence/">Evidence</a></td>
+</tr>
+<tr>
+<td>Runtime-aware kernel-dequant fitness</td>
+<td>The calibrator's fitness signal is now the kernel's dequant output, not an offline proxy. The L1 path is the default; the legacy offline measurement stays as an opt-in env var.</td>
+<td><a href="/evidence/">Evidence</a></td>
+</tr>
+<tr>
+<td>Regime router</td>
+<td>Per family + shape, dynamic dispatch to the v2 quant functions replaces the static thresholds.</td>
+<td><a href="/evidence/">Evidence</a></td>
+</tr>
+<tr>
+<td>Self-improving drafter training (MVP)</td>
+<td>The training driver for the LK / autoregressive drafter path is native C++; the data path traces → dense reconstruction → graph loss → API selection works end to end.</td>
+<td><a href="/evidence/">Evidence</a></td>
+</tr>
+<tr>
+<td>Singular-GGUF commitment</td>
+<td>Multimodal absorption is now mechanical end to end: writer absorbs vision / audio / mm projector as first-class components of the singular GGUF. The multimodal pipeline does not split the artifact across files.</td>
+<td><a href="/evidence/">Evidence</a></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+
+</main>
+<aside class="secondary-nav">
+<ul class="secondary-nav-list">
+<li class="secondary-nav-label">Navigate</li>
+<li><a href="/">Home</a></li>
+<li><a href="/start/">Start</a></li>
+<li><a href="/architecture/">Architecture</a></li>
+<li><a href="/evidence/">Evidence</a></li>
+<li><a href="/status/">Status</a></li>
+<li><a href="/changelog/" aria-current="page">Changelog</a></li>
+<li><a href="/colophon/">Colophon</a></li>
+</ul>
+</aside>
+<footer class="site-footer">
+<div class="site-footer-inner">
+<p>Tessera is independently developed by <strong>Julian Torres</strong>. Released under the project's license. <a href="/colophon/">Colophon</a> · <a rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">Repository</a></p>
+<p><a href="https://tessera.tribunus.dev">tessera.tribunus.dev</a></p>
+</div>
+</footer>
+</body>
+</html>

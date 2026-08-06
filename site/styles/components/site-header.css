@@ -1,0 +1,146 @@
+/* Tessera Observatory v1 -- site header + primary nav.
+ *
+ * The header is the site's invariant chrome. The primary nav is
+ * exactly six items per the editorial-curated-site skill: Start,
+ * Architecture, Evidence, Status, Changelog, GitHub. The current
+ * route is marked with aria-current="page" and rendered with a
+ * stronger color and an underline.
+ *
+ * The nav wraps to a second row at small viewports. The brand sits
+ * on its own line, then the nav links flow.
+ */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--gutter);
+  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-fg);
+  text-decoration: none;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-base);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+}
+.brand:hover { color: var(--color-fg); text-decoration: none; }
+
+.brand-mark {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1.5rem;
+  background:
+    linear-gradient(135deg,
+      var(--color-accent) 0%,
+      var(--color-accent) 50%,
+      var(--color-accent-warm) 50%,
+      var(--color-accent-warm) 100%);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-nav-link {
+  position: relative;
+  display: inline-block;
+  padding: var(--space-2) 0;
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: color var(--motion-fast) var(--motion-ease);
+}
+.site-nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--color-accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--motion-base) var(--motion-ease);
+}
+.site-nav-link:hover,
+.site-nav-link:focus-visible {
+  color: var(--color-fg);
+  text-decoration: none;
+}
+.site-nav-link:hover::after,
+.site-nav-link:focus-visible::after {
+  transform: scaleX(1);
+}
+.site-nav-link[aria-current="page"] {
+  color: var(--color-fg);
+}
+.site-nav-link[aria-current="page"]::after {
+  transform: scaleX(1);
+}
+.site-nav-link[rel="external"]::before {
+  content: "↗";
+  display: inline-block;
+  margin-right: 0.3em;
+  opacity: 0.6;
+}
+
+/* Theme toggle. */
+.theme-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--motion-ease),
+              border-color var(--motion-fast) var(--motion-ease);
+}
+.theme-toggle:hover {
+  color: var(--color-fg);
+  border-color: var(--color-rule-strong);
+}
+.theme-toggle-icon {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  background: var(--color-fg);
+  box-shadow: inset -2px -2px 0 0 var(--color-bg);
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+:root[data-theme="light"] .theme-toggle-icon {
+  background: var(--color-fg);
+  box-shadow: inset 2px 2px 0 0 var(--color-bg);
+}

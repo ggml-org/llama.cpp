@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tessera — Calibrate and quantize models with receipts the kernel agrees with.</title>
+<link rel="canonical" href="https://tessera.tribunus.dev/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="generator" content="tessera-docs-ssg">
+<meta name="build-id" content="bootstrap-001">
+<meta property="og:title" content="Tessera — LLM calibration with runtime-verifiable fitness.">
+<meta property="og:description" content="Calibrate and quantize models with receipts the kernel agrees with.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tessera.tribunus.dev/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Tessera">
+<meta name="twitter:description" content="Calibrate and quantize models with receipts the kernel agrees with.">
+<link rel="stylesheet" href="/styles/site.css">
+<script>
+(function(){try{
+  var k='tessera-theme';
+  var v=null;
+  try{v=localStorage.getItem(k);}catch(e){}
+  if(v!=='dark'&&v!=='light'){
+    try{
+      if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){v='light';}
+      else{v='dark';}
+    }catch(e){v='dark';}
+  }
+  document.documentElement.setAttribute('data-theme',v);
+  try{document.documentElement.style.colorScheme=v;}catch(e){}
+}catch(e){}})();
+</script>
+<script src="/scripts/theme.js" defer></script>
+<script src="/scripts/transitions-orchestrator.js" defer></script>
+<script src="/scripts/selection-controller.js" defer></script>
+</head>
+<body data-prism-route="/" data-prism-hydrated="false">
+<a href="#top" class="skip-link">Skip to main content</a>
+<header class="site-header">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Tessera</span></a>
+<nav class="site-nav" aria-label="Primary navigation">
+<a class="site-nav-link" href="/start/">Start</a>
+<a class="site-nav-link" href="/architecture/">Architecture</a>
+<a class="site-nav-link" href="/evidence/">Evidence</a>
+<a class="site-nav-link" href="/status/">Status</a>
+<a class="site-nav-link" href="/changelog/">Changelog</a>
+<a class="site-nav-link" rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">GitHub</a>
+</nav>
+<button type="button" class="theme-toggle" aria-label="Toggle dark and light theme" data-theme-toggle><span class="theme-toggle-icon" aria-hidden="true"></span><span class="theme-toggle-label">Dark</span></button>
+</header>
+<main class="page-body" id="top">
+
+<section class="hero hero-home">
+<span class="hero-eyebrow">Observatory v1 · bootstrap</span>
+<h1 class="hero-headline">Calibrate and quantize models with receipts the kernel agrees with.</h1>
+<p class="hero-blurb">Most quantization pipelines produce bit-exact artifacts and bit-divergent runtime behavior. The calibrator optimizes a proxy. The kernel dispatches a different code path. The user sees a green benchmark and a hallucinated answer. Tessera closes the gap: the fitness is measured against the actual kernel dequant output, the policy is shipped with the artifact, and every release is auditable end-to-end.</p>
+<div class="hero-cta">
+<a class="hero-cta-primary" href="/start/">Get started</a>
+<a class="hero-cta-secondary" href="/architecture/">How the pipeline works</a>
+</div>
+</section>
+
+<section class="chapter" id="the-problem">
+<div class="chapter-eyebrow">The problem</div>
+<h2 class="chapter-title">The proxy is the lie.</h2>
+<p class="chapter-body">A typical quantization pipeline is three layers deep. The calibrator produces an importance matrix on a corpus. The optimizer uses that matrix to pick a bit allocation per tensor. The kernel reads the bit allocation and dispatches one of N code paths. Each layer is tested in isolation. The pipeline as a whole is not.</p>
+<p class="chapter-body">The calibrator's loss is a proxy — typically a Frobenius distance to the original weight, evaluated in fp32 offline. The kernel sees a different weight, dispatched through a different code path, with a different rounding regime. The artifact is bit-exact; the runtime is not. The benchmark reports a green number; the user observes something else.</p>
+<p class="chapter-body">This is a <em>receipt gap</em>. The artifact carries no record of what the kernel actually computed. A reproduction attempt produces a different number, and there is no audit trail to explain why.</p>
+</section>
+
+<section class="chapter" id="the-insight">
+<div class="chapter-eyebrow">The insight</div>
+<h2 class="chapter-title">Measure fitness at the kernel, not the calibrator.</h2>
+<p class="chapter-body">If the run is the artifact, the fitness is the distance between the artifact and the run. The calibrator is a means; the kernel is the ground truth. Tessera's fitness is a Frobenius distance measured after the weight has been dequantized through the exact code path the runtime will use — not a proxy, not an offline estimate, the actual output. The policy is shipped with the artifact. The receipt carries the kernel's hash. A reviewer can re-run the dequant and recover the same number.</p>
+</section>
+
+<section class="chapter" id="the-plan">
+<div class="chapter-eyebrow">The plan</div>
+<h2 class="chapter-title">Three steps. End to end.</h2>
+<ol class="chapter-steps">
+<li class="chapter-step">
+<span class="chapter-step-number">01</span>
+<h3 class="chapter-step-title">Calibrate</h3>
+<p class="chapter-step-body">Run <code>per_tensor_calibrate</code> on a calibration corpus. Per-tensor statistics: kurtosis, effective rank, outlier density. The calibrator's output is a typed component, not a number.</p>
+</li>
+<li class="chapter-step">
+<span class="chapter-step-number">02</span>
+<h3 class="chapter-step-title">Quantize</h3>
+<p class="chapter-step-body">Run the GA-prep walk with the calibration policy as the fitness signal. The artifact is a GGUF; the policy is in the metadata. The kernel's dequant output is compared against the original, the receipt is appended, the artifact is written.</p>
+</li>
+<li class="chapter-step">
+<span class="chapter-step-number">03</span>
+<h3 class="chapter-step-title">Verify</h3>
+<p class="chapter-step-body">Run <code>tessera-ab-harness</code>. The harness re-dequants the artifact through the kernel and reports the same t_l². The receipt is the proof. The proof is the claim.</p>
+</li>
+</ol>
+</section>
+
+<section class="chapter chapter-bleed" id="the-evidence">
+<div class="chapter-eyebrow">The evidence</div>
+<h2 class="chapter-title">A claim is not a claim until it has a receipt.</h2>
+<p class="chapter-body">Every Tessera release ships with the receipts that produced it. The receipts include the calibration corpus, the per-tensor statistics, the GA-prep trace, and the kernel's dequant output for each tensor. The receipt chain is the link from the source model to the shipped artifact. Every link is preserved. Every link is verifiable.</p>
+<p class="chapter-body"><a href="/evidence/">See the latest evidence →</a></p>
+</section>
+
+<section class="chapter chapter-bleed" id="what-is-in-tessera">
+<div class="chapter-eyebrow">What is in the box</div>
+<h2 class="chapter-title">The tools, in order of how you would use them.</h2>
+<div class="chapter-body">
+<table>
+<thead>
+<tr><th>Tool</th><th>Purpose</th><th>Stage</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><code>per_tensor_calibrate</code></td>
+<td>Per-tensor importance statistics on a calibration corpus.</td>
+<td>Calibration</td>
+</tr>
+<tr>
+<td><code>awq-evolve</code></td>
+<td>GA-driven AWQ policy search; per-tensor alpha and clip.</td>
+<td>Calibration</td>
+</tr>
+<tr>
+<td><code>l5_orchestrator</code></td>
+<td>Iterative requant loop; family-aware bit allocation.</td>
+<td>Quantization</td>
+</tr>
+<tr>
+<td><code>unified_calibrate</code></td>
+<td>Co-calibrate trunk + drafters (DFlash, DSPark, MTP) in one pass.</td>
+<td>Multimodal</td>
+</tr>
+<tr>
+<td><code>multimodal_calibrate</code></td>
+<td>Modality-aware per-tensor stats for vision / audio / mm projector.</td>
+<td>Multimodal</td>
+</tr>
+<tr>
+<td><code>clip-capture</code></td>
+<td>Multimodal activation capture against the actual C++ mtmd clip graph.</td>
+<td>Multimodal</td>
+</tr>
+<tr>
+<td><code>embedding_budget</code></td>
+<td>Size-envelope producer for shared embedding tensors across components.</td>
+<td>Quantization</td>
+</tr>
+<tr>
+<td><code>tessera-ab-harness</code></td>
+<td>A/B comparison; re-dequants through the kernel and compares the t_l².</td>
+<td>Verification</td>
+</tr>
+<tr>
+<td><code>llama-quantize --tessera-mode</code></td>
+<td>The C++ quantizer that writes the artifact. The full pipeline runs end to end; opt back to stock K-quants with <code>--tessera-mode=off</code>.</td>
+<td>Writer</td>
+</tr>
+<tr>
+<td><code>Tessera Studio</code></td>
+<td>The macOS / iOS app. The same pipeline, surfaced as an agent app.</td>
+<td>Surface</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section class="chapter chapter-bleed" id="who-built-it">
+<div class="chapter-eyebrow">Who built it</div>
+<h2 class="chapter-title">A single architect, sustained.</h2>
+<p class="chapter-body">Tessera is independently developed by Julian Torres. The architecture is a sustained argument that the LLM deployment stack's abstractions are inadequate, and that the right response is a different one. The argument is not a vision document; it is a calibrator, a quantizer, an artifact format, a fitness signal against the kernel, a C++ pipeline, a macOS app, and a constitutional model for receipts.</p>
+</section>
+
+</main>
+<aside class="secondary-nav">
+<ul class="secondary-nav-list">
+<li class="secondary-nav-label">Navigate</li>
+<li><a href="/" aria-current="page">Home</a></li>
+<li><a href="/start/">Start</a></li>
+<li><a href="/architecture/">Architecture</a></li>
+<li><a href="/evidence/">Evidence</a></li>
+<li><a href="/status/">Status</a></li>
+<li><a href="/changelog/">Changelog</a></li>
+<li><a href="/colophon/">Colophon</a></li>
+</ul>
+</aside>
+<footer class="site-footer">
+<div class="site-footer-inner">
+<p>Tessera is independently developed by <strong>Julian Torres</strong>. Released under the project's license. <a href="/colophon/">Colophon</a> · <a rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">Repository</a></p>
+<p><a href="https://tessera.tribunus.dev">tessera.tribunus.dev</a></p>
+</div>
+</footer>
+</body>
+</html>

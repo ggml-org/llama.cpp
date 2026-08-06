@@ -1,0 +1,138 @@
+/* Tessera Observatory v1 -- chapter.
+ *
+ * A chapter is a labelled section with a title, optional
+ * subtitle, and a body. Chapters stack vertically; the page
+ * is a column of chapters. The chapter title is the
+ * Observatory's mid-scale heading (xl, sans medium).
+ *
+ * Three forms:
+ *   .chapter            -- section with a left-rule accent
+ *   .chapter-tight      -- section without a rule (used between
+ *                         the hero and the first chapter)
+ *   .chapter-bleed      -- full-bleed chapter (used for the
+ *                         tool listing and the changelog)
+ */
+
+.chapter {
+  position: relative;
+  padding: var(--space-6) 0 var(--space-5);
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+.chapter::before {
+  content: "";
+  position: absolute;
+  top: var(--space-5);
+  left: var(--gutter);
+  width: 1.5rem;
+  height: 1px;
+  background: var(--color-accent);
+}
+
+.chapter-tight {
+  border-left: none;
+  padding-left: 0;
+}
+.chapter-tight::before { display: none; }
+
+.chapter-bleed {
+  max-width: 100%;
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+.chapter-eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+  margin-bottom: var(--space-2);
+}
+.chapter-eyebrow::before { content: "§ "; opacity: 0.6; }
+
+.chapter-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+  letter-spacing: var(--letter-spacing-tight);
+  color: var(--color-fg);
+  margin: 0 0 var(--space-3) 0;
+  max-width: 32rem;
+}
+
+.chapter-subtitle {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-base);
+  color: var(--color-fg-muted);
+  margin: 0 0 var(--space-5) 0;
+  max-width: 40rem;
+}
+
+.chapter-body > * { max-width: var(--max-prose); }
+.chapter-body > * + * { margin-top: var(--space-4); }
+.chapter-body p { font-size: var(--font-size-md); line-height: var(--line-height-loose); }
+
+/* Step list -- used in "The Plan" and similar narrative beats. */
+.chapter-steps {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  margin: var(--space-5) 0;
+  padding: 0;
+  list-style: none;
+}
+@media (min-width: 768px) {
+  .chapter-steps { grid-template-columns: repeat(3, 1fr); }
+}
+.chapter-step {
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+  position: relative;
+}
+.chapter-step-number {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-subtle);
+  letter-spacing: var(--letter-spacing-mono);
+  margin-bottom: var(--space-2);
+}
+.chapter-step-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+  margin: 0 0 var(--space-2) 0;
+  color: var(--color-fg);
+}
+.chapter-step-body {
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+  margin: 0;
+  line-height: var(--line-height-base);
+}
+
+/* Callout. Observatory voice: factual, no decoration. */
+.callout {
+  margin: var(--space-5) 0;
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface-1);
+  border-left: 3px solid var(--color-accent-warm);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.callout-title {
+  display: block;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-sm);
+  color: var(--color-fg);
+  margin-bottom: var(--space-1);
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wide);
+}

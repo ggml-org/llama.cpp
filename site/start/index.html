@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tessera — Start</title>
+<link rel="canonical" href="https://tessera.tribunus.dev/start/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="generator" content="tessera-docs-ssg">
+<meta name="build-id" content="bootstrap-001">
+<meta property="og:title" content="Tessera — Start">
+<meta property="og:description" content="Calibrate and quantize models with receipts the kernel agrees with.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tessera.tribunus.dev/start/">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="/styles/site.css">
+<script>
+(function(){try{
+  var k='tessera-theme';
+  var v=null;
+  try{v=localStorage.getItem(k);}catch(e){}
+  if(v!=='dark'&&v!=='light'){
+    try{
+      if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){v='light';}
+      else{v='dark';}
+    }catch(e){v='dark';}
+  }
+  document.documentElement.setAttribute('data-theme',v);
+  try{document.documentElement.style.colorScheme=v;}catch(e){}
+}catch(e){}})();
+</script>
+<script src="/scripts/theme.js" defer></script>
+<script src="/scripts/transitions-orchestrator.js" defer></script>
+<script src="/scripts/selection-controller.js" defer></script>
+</head>
+<body data-prism-route="/start/" data-prism-hydrated="false">
+<a href="#top" class="skip-link">Skip to main content</a>
+<header class="site-header">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Tessera</span></a>
+<nav class="site-nav" aria-label="Primary navigation">
+<a class="site-nav-link" href="/start/" aria-current="page">Start</a>
+<a class="site-nav-link" href="/architecture/">Architecture</a>
+<a class="site-nav-link" href="/evidence/">Evidence</a>
+<a class="site-nav-link" href="/status/">Status</a>
+<a class="site-nav-link" href="/changelog/">Changelog</a>
+<a class="site-nav-link" rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">GitHub</a>
+</nav>
+<button type="button" class="theme-toggle" aria-label="Toggle dark and light theme" data-theme-toggle><span class="theme-toggle-icon" aria-hidden="true"></span><span class="theme-toggle-label">Dark</span></button>
+</header>
+<main class="page-body" id="top">
+
+<header class="page-header">
+<span class="page-header-eyebrow">Start</span>
+<h1 class="page-header-headline">A five-minute first pass.</h1>
+<p class="page-header-blurb">Build the pipeline, calibrate a tiny model, and read the receipt. The whole loop is a single <code>llama-quantize</code> invocation.</p>
+</header>
+
+<section class="chapter" id="prerequisites">
+<div class="chapter-eyebrow">Prerequisites</div>
+<h2 class="chapter-title">What you need before you start.</h2>
+<div class="chapter-body">
+<ul>
+<li>A C++17 or later toolchain (clang or gcc).</li>
+<li>CMake 3.20+.</li>
+<li>Python 3.10+ for the calibration pipeline.</li>
+<li>A small model to calibrate against (a 1.1B parameter Llama is enough for the smoke test).</li>
+<li>A small calibration corpus. The Tessera CC0 procedural set is shipped baked into the binary; you do not need to download a corpus for the first run.</li>
+</ul>
+</div>
+</section>
+
+<section class="chapter" id="build">
+<div class="chapter-eyebrow">Build</div>
+<h2 class="chapter-title">Build the pipeline.</h2>
+<div class="chapter-body">
+<pre><code>git clone https://github.com/Tribunus-dev/tessera
+cd tessera
+cmake -B build -DGGML_METAL=ON -DGGML_OPENBLAS=ON
+cmake --build build --target llama-quantize -j</code></pre>
+<p>The output binary is <code>build/bin/llama-quantize</code>. The Tessera C++ pipeline is in the same binary as the upstream quantizer. The default mode is Tessera; opt back to stock K-quants with <code>--tessera-mode=off</code>.</p>
+</div>
+</section>
+
+<section class="chapter" id="calibrate">
+<div class="chapter-eyebrow">Calibrate</div>
+<h2 class="chapter-title">Calibrate, then quantize.</h2>
+<div class="chapter-body">
+<p>Pass a model to <code>llama-quantize</code> with a Tessera type and let the pipeline run end to end:</p>
+<pre><code>build/bin/llama-quantize \
+  --tessera-mode=on \
+  --tessera-policy=auto \
+  --imatrix \
+  --calib-corpus=tessera-cc0 \
+  models/tinyllama-1.1b.gguf \
+  models/tinyllama-1.1b.tessera-t640.gguf \
+  TESSERA_T640</code></pre>
+<p>The pipeline runs three stages: calibration (the built-in corpus), AWQ policy search (the GA), and quantization (the writer). Each stage writes its output to the sidecar. The final artifact is the GGUF; the receipt is in the sidecar.</p>
+</div>
+</section>
+
+<section class="chapter" id="verify">
+<div class="chapter-eyebrow">Verify</div>
+<h2 class="chapter-title">Read the receipt.</h2>
+<div class="chapter-body">
+<p>Run the A/B harness to re-dequantize the artifact through the kernel and compare against the original:</p>
+<pre><code>python3 tools/tessera/tessera-ab-harness.py \
+  --baseline models/tinyllama-1.1b.gguf \
+  --candidate models/tinyllama-1.1b.tessera-t640.gguf \
+  --metric t_l2</code></pre>
+<p>The harness reports the per-tensor t_l² and the aggregate. The t_l² is the Frobenius distance between the original weight and the kernel's dequant output, normalized by the max weight magnitude. A green receipt is one where the t_l² matches what the policy predicted.</p>
+</div>
+</section>
+
+<section class="chapter" id="next">
+<div class="chapter-eyebrow">Next</div>
+<h2 class="chapter-title">Where to go from here.</h2>
+<div class="chapter-body">
+<ul>
+<li><a href="/architecture/">The architecture</a> — what the pipeline is doing under the hood.</li>
+<li><a href="/evidence/">The evidence</a> — receipts from the most recent runs.</li>
+<li><a href="/changelog/">The changelog</a> — what shipped, in order.</li>
+</ul>
+</div>
+</section>
+
+</main>
+<aside class="secondary-nav">
+<ul class="secondary-nav-list">
+<li class="secondary-nav-label">Navigate</li>
+<li><a href="/">Home</a></li>
+<li><a href="/start/" aria-current="page">Start</a></li>
+<li><a href="/architecture/">Architecture</a></li>
+<li><a href="/evidence/">Evidence</a></li>
+<li><a href="/status/">Status</a></li>
+<li><a href="/changelog/">Changelog</a></li>
+<li><a href="/colophon/">Colophon</a></li>
+</ul>
+</aside>
+<footer class="site-footer">
+<div class="site-footer-inner">
+<p>Tessera is independently developed by <strong>Julian Torres</strong>. Released under the project's license. <a href="/colophon/">Colophon</a> · <a rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">Repository</a></p>
+<p><a href="https://tessera.tribunus.dev">tessera.tribunus.dev</a></p>
+</div>
+</footer>
+</body>
+</html>

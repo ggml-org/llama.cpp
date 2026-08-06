@@ -1,0 +1,41 @@
+/* Tessera Observatory v1 -- font slot.
+ *
+ * Self-hosted family slot. The bootstrap ships with the system
+ * stack in tokens.css so the site is readable with no network
+ * requests. Drop the .woff2 files into /styles/fonts/ and
+ * uncomment the @font-face declarations when ready.
+ *
+ * Recommended family: Inter (sans) + JetBrains Mono (mono),
+ * both available as variable fonts. Source:
+ *   Inter: https://rsms.me/inter/ (SIL OFL 1.1)
+ *   JetBrains Mono: https://www.jetbrains.com/lp/mono/ (SIL OFL 1.1)
+ *
+ * Self-hosting is non-negotiable: no fonts.gstatic.com, no Google
+ * Fonts CSS, no third-party font CDN. The visitor's browser fetches
+ * the font files from the same origin as the page.
+ *
+ * font-display: swap -- text renders immediately with the system
+ * fallback; the local face replaces it once loaded. The first
+ * paint is never blocked on font readiness.
+ *
+ * To activate:
+ *   1. Drop the .woff2 files into /styles/fonts/.
+ *   2. Update the src: URL below.
+ *   3. Preload the file in <head> for LCP.
+ */
+
+/* @font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/styles/fonts/Inter-Variable.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/styles/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations");
+} */

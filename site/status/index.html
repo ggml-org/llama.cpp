@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tessera — Status</title>
+<link rel="canonical" href="https://tessera.tribunus.dev/status/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="generator" content="tessera-docs-ssg">
+<meta name="build-id" content="bootstrap-001">
+<meta property="og:title" content="Tessera — Status">
+<meta property="og:description" content="Calibrate and quantize models with receipts the kernel agrees with.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tessera.tribunus.dev/status/">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="/styles/site.css">
+<script>
+(function(){try{
+  var k='tessera-theme';
+  var v=null;
+  try{v=localStorage.getItem(k);}catch(e){}
+  if(v!=='dark'&&v!=='light'){
+    try{
+      if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){v='light';}
+      else{v='dark';}
+    }catch(e){v='dark';}
+  }
+  document.documentElement.setAttribute('data-theme',v);
+  try{document.documentElement.style.colorScheme=v;}catch(e){}
+}catch(e){}})();
+</script>
+<script src="/scripts/theme.js" defer></script>
+<script src="/scripts/transitions-orchestrator.js" defer></script>
+<script src="/scripts/selection-controller.js" defer></script>
+</head>
+<body data-prism-route="/status/" data-prism-hydrated="false">
+<a href="#top" class="skip-link">Skip to main content</a>
+<header class="site-header">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Tessera</span></a>
+<nav class="site-nav" aria-label="Primary navigation">
+<a class="site-nav-link" href="/start/">Start</a>
+<a class="site-nav-link" href="/architecture/">Architecture</a>
+<a class="site-nav-link" href="/evidence/">Evidence</a>
+<a class="site-nav-link" href="/status/" aria-current="page">Status</a>
+<a class="site-nav-link" href="/changelog/">Changelog</a>
+<a class="site-nav-link" rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">GitHub</a>
+</nav>
+<button type="button" class="theme-toggle" aria-label="Toggle dark and light theme" data-theme-toggle><span class="theme-toggle-icon" aria-hidden="true"></span><span class="theme-toggle-label">Dark</span></button>
+</header>
+<main class="page-body" id="top">
+
+<header class="page-header">
+<span class="page-header-eyebrow">Status</span>
+<h1 class="page-header-headline">Where Tessera is, in plain text.</h1>
+<p class="page-header-blurb">The state of the pipeline, the studio, and the road ahead. Honest about what is built, what is qualifying, and what is on the list.</p>
+</header>
+
+<section class="chapter" id="shipped">
+<div class="chapter-eyebrow">Shipped</div>
+<h2 class="chapter-title">What is in the box today.</h2>
+<div class="chapter-body">
+<table>
+<thead>
+<tr><th>Component</th><th>State</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>per_tensor_calibrate</code></td><td>Released</td><td>Offline Frobenius; multimodal extension in qualifying.</td></tr>
+<tr><td><code>awq-evolve</code></td><td>Released</td><td>Island GA; fitness against the kernel dequant output.</td></tr>
+<tr><td><code>llama-quantize --tessera-mode</code></td><td>Released</td><td>End-to-end pipeline; opt back to stock with <code>--tessera-mode=off</code>.</td></tr>
+<tr><td><code>l5_orchestrator</code></td><td>Released</td><td>Iterative requant with family-aware bit allocation.</td></tr>
+<tr><td><code>unified_calibrate</code></td><td>Released</td><td>Co-calibrate trunk + drafters (DFlash, DSPark, MTP) in one pass.</td></tr>
+<tr><td><code>multimodal_calibrate</code></td><td>Qualifying</td><td>v1 forward-pass is synthetic; C++ mtmd capture wired.</td></tr>
+<tr><td><code>clip-capture</code></td><td>Qualifying</td><td>True batching, dead-node detection, audio decode wired.</td></tr>
+<tr><td><code>embedding_budget</code></td><td>Released</td><td>Size-envelope producer for shared embedding tensors.</td></tr>
+<tr><td><code>tessera-ab-harness</code></td><td>Released</td><td>Per-tensor t_l² against the kernel dequant output.</td></tr>
+<tr><td><code>Tessera Studio</code></td><td>Qualifying</td><td>macOS / iOS agent app; Phase 1 + 2 complete (workflow data model + graph editor).</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section class="chapter" id="qualifying">
+<div class="chapter-eyebrow">Qualifying</div>
+<h2 class="chapter-title">What is on the runway.</h2>
+<div class="chapter-body">
+<ul>
+<li>Real C++ multimodal capture (clip-capture v2 is the production-readiness line; the synthetic v1 path is being removed as the real path lands).</li>
+<li>Tessera Studio agent loop wire-up — the Phase 1 data model and the Phase 2 graph editor are merged; the learning loop and the run-progress orchestration are next.</li>
+<li>L1 kernel-dequant measurement for the calibrator's fitness — the L1 path is now the default; legacy offline measurement stays as an opt-in env var.</li>
+<li>Regime router (per family + shape, dynamic dispatch to the v2 quant functions) — replacing the static thresholds with a learned policy.</li>
+</ul>
+</div>
+</section>
+
+<section class="chapter" id="not-yet">
+<div class="chapter-eyebrow">Not yet</div>
+<h2 class="chapter-title">What is on the list.</h2>
+<div class="chapter-body">
+<ul>
+<li>Auto-build calibration corpus from the user's own usage (privacy-preserving; CC BY 4.0 license, scrubber-first).</li>
+<li>Self-improving drafter training (Qwen-class trunk + DFlash + DSpark, regime-routed; the MVP is the multi-dimensional behavioral eval + capability archive).</li>
+<li>Hardware-backend reach beyond Apple Silicon (Tessera is macOS / iOS first; the pipeline is backend-agnostic but the runtime is Apple-targeted today).</li>
+</ul>
+</div>
+</section>
+
+</main>
+<aside class="secondary-nav">
+<ul class="secondary-nav-list">
+<li class="secondary-nav-label">Navigate</li>
+<li><a href="/">Home</a></li>
+<li><a href="/start/">Start</a></li>
+<li><a href="/architecture/">Architecture</a></li>
+<li><a href="/evidence/">Evidence</a></li>
+<li><a href="/status/" aria-current="page">Status</a></li>
+<li><a href="/changelog/">Changelog</a></li>
+<li><a href="/colophon/">Colophon</a></li>
+</ul>
+</aside>
+<footer class="site-footer">
+<div class="site-footer-inner">
+<p>Tessera is independently developed by <strong>Julian Torres</strong>. Released under the project's license. <a href="/colophon/">Colophon</a> · <a rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">Repository</a></p>
+<p><a href="https://tessera.tribunus.dev">tessera.tribunus.dev</a></p>
+</div>
+</footer>
+</body>
+</html>

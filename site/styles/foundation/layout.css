@@ -1,0 +1,78 @@
+/* Tessera Observatory v1 -- layout primitives.
+ *
+ * Page chrome and structural primitives. Reads from tokens.css.
+ * Components compose these primitives; do not redefine widths
+ * or gutters in component files.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+main {
+  flex: 1 0 auto;
+  width: 100%;
+}
+
+/* Page wrapper. The page is a column of chapters inside this
+ * container. Max-width caps the prose; chapters can opt out for
+ * full-bleed surfaces (the hero, the secondary-nav). */
+.page {
+  width: 100%;
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+@media (min-width: 768px) {
+  :root { --gutter: 2rem; }
+}
+@media (min-width: 1024px) {
+  :root { --gutter: 3rem; }
+}
+
+/* Page-level vertical rhythm. The home page is a stack of
+ * hero + chapters; the chapter page is a stack of section +
+ * footer. */
+.page-stack > * + * { margin-top: var(--space-6); }
+.page-stack > * + .hero,
+.page-stack > .hero + * { margin-top: var(--space-7); }
+
+/* Skip link. WCAG 2.4.1. */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: var(--space-3);
+  z-index: 100;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-weight: var(--font-weight-medium);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: top var(--motion-fast) var(--motion-ease);
+}
+.skip-link:focus-visible {
+  top: var(--space-3);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Visually hidden, but accessible to screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

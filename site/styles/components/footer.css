@@ -1,0 +1,57 @@
+/* Tessera Observatory v1 -- secondary nav + footer.
+ *
+ * The secondary nav is the per-page context navigation
+ * (one level deep, derived from data/navigation.json).
+ * The footer carries the author attribution, the repository
+ * link, and the canonical origin.
+ */
+
+.secondary-nav {
+  margin-top: var(--space-7);
+  padding: var(--space-5) var(--gutter);
+  border-top: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule);
+  background: var(--color-surface-1);
+}
+.secondary-nav-list {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  align-items: center;
+  list-style: none;
+  padding: 0;
+}
+.secondary-nav-label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wide);
+  margin-right: var(--space-2);
+}
+.secondary-nav a {
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-sm);
+}
+.secondary-nav a:hover { color: var(--color-fg); }
+
+.site-footer {
+  padding: var(--space-6) var(--gutter);
+  border-top: 1px solid var(--color-rule);
+  background: var(--color-bg);
+}
+.site-footer-inner {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+  color: var(--color-fg-muted);
+}
+.site-footer a { color: var(--color-fg-muted); }
+.site-footer a:hover { color: var(--color-fg); }

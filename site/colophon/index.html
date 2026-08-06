@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tessera — Colophon</title>
+<link rel="canonical" href="https://tessera.tribunus.dev/colophon/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="generator" content="tessera-docs-ssg">
+<meta name="build-id" content="bootstrap-001">
+<meta property="og:title" content="Tessera — Colophon">
+<meta property="og:description" content="Calibrate and quantize models with receipts the kernel agrees with.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tessera.tribunus.dev/colophon/">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="/styles/site.css">
+<script>
+(function(){try{
+  var k='tessera-theme';
+  var v=null;
+  try{v=localStorage.getItem(k);}catch(e){}
+  if(v!=='dark'&&v!=='light'){
+    try{
+      if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){v='light';}
+      else{v='dark';}
+    }catch(e){v='dark';}
+  }
+  document.documentElement.setAttribute('data-theme',v);
+  try{document.documentElement.style.colorScheme=v;}catch(e){}
+}catch(e){}})();
+</script>
+<script src="/scripts/theme.js" defer></script>
+<script src="/scripts/transitions-orchestrator.js" defer></script>
+<script src="/scripts/selection-controller.js" defer></script>
+</head>
+<body data-prism-route="/colophon/" data-prism-hydrated="false">
+<a href="#top" class="skip-link">Skip to main content</a>
+<header class="site-header">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Tessera</span></a>
+<nav class="site-nav" aria-label="Primary navigation">
+<a class="site-nav-link" href="/start/">Start</a>
+<a class="site-nav-link" href="/architecture/">Architecture</a>
+<a class="site-nav-link" href="/evidence/">Evidence</a>
+<a class="site-nav-link" href="/status/">Status</a>
+<a class="site-nav-link" href="/changelog/">Changelog</a>
+<a class="site-nav-link" rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">GitHub</a>
+</nav>
+<button type="button" class="theme-toggle" aria-label="Toggle dark and light theme" data-theme-toggle><span class="theme-toggle-icon" aria-hidden="true"></span><span class="theme-toggle-label">Dark</span></button>
+</header>
+<main class="page-body" id="top">
+
+<header class="page-header">
+<span class="page-header-eyebrow">Colophon</span>
+<h1 class="page-header-headline">The site, the author, the agreement.</h1>
+<p class="page-header-blurb">How Tessera is built, who built it, and the terms under which the receipts and the pipeline are shared.</p>
+</header>
+
+<section class="chapter" id="the-author">
+<div class="chapter-eyebrow">The author</div>
+<h2 class="chapter-title">A single architect, sustained.</h2>
+<div class="chapter-body">
+<p>Tessera is independently developed by Julian Torres. The architecture is a sustained argument that the LLM deployment stack's abstractions are inadequate, and that the right response is a different one. The argument is not a vision document; it is a calibrator, a quantizer, an artifact format, a fitness signal against the kernel, a C++ pipeline, a macOS app, and a constitutional model for receipts.</p>
+</div>
+</section>
+
+<section class="chapter" id="the-site">
+<div class="chapter-eyebrow">The site</div>
+<h2 class="chapter-title">How this site is built.</h2>
+<div class="chapter-body">
+<p>This site is <em>Tessera Observatory v1: the evidence-bound public projection of Tessera.</em> The bootstrap is hand-authored HTML, CSS, and JSON, with the convention that every page is a typed chapter composed from a small set of design tokens.</p>
+<p>The design system is Observatory: dark by default, single-family typography (the system stack at bootstrap; a self-hosted family when the slot is filled), instrument-panel density, monospace for identities and machine state. The accent identity is shared with <a href="https://prism-engine.tribunus.dev">prism-engine.tribunus.dev</a> — both projects are by the same architect on the same domain, and the visual identity is the shared brand.</p>
+<p>No third-party requests of any kind. No Google Fonts, no analytics that ship synchronously, no CDN-loaded images. The visitor's browser fetches everything from the same origin as the page.</p>
+</div>
+</section>
+
+<section class="chapter" id="the-stack">
+<div class="chapter-eyebrow">The stack</div>
+<h2 class="chapter-title">What runs behind this page.</h2>
+<div class="chapter-body">
+<table>
+<thead><tr><th>Layer</th><th>Choice</th></tr></thead>
+<tbody>
+<tr><td>Source</td><td>Hand-authored HTML in <code>site/</code> on the <code>feat/docs-bootstrap</code> branch.</td></tr>
+<tr><td>Build</td><td>None (static output). The <code>tessera-docs-ssg</code> binary is the next milestone; this bootstrap is the source-of-truth HTML it will eventually read.</td></tr>
+<tr><td>Hosting</td><td>GitHub Pages, custom domain <code>tessera.tribunus.dev</code> via the <code>CNAME</code> file in <code>site/</code>.</td></tr>
+<tr><td>Deploy</td><td>GitHub Actions, <code>actions/deploy-pages@v4</code>, triggered on push to <code>main</code> when files under <code>site/</code> change.</td></tr>
+<tr><td>Theme</td><td>Dark by default, light opt-in via a header button, FOUC-free inline init, <code>prefers-color-scheme</code> fallback, localStorage override.</td></tr>
+<tr><td>Accessibility</td><td>Skip link, focus ring, <code>aria-current</code> on the active nav, <code>prefers-reduced-motion</code> respected, WCAG 2.2 contrast targets.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section class="chapter" id="the-license">
+<div class="chapter-eyebrow">The license</div>
+<h2 class="chapter-title">The terms under which the work is shared.</h2>
+<div class="chapter-body">
+<p>The Tessera code is released under the project's open-source license. The shipped calibration artifacts (the GGUFs, the sidecar JSONs) are released under the same terms as the model they were quantized from, unless the model is the project's own. The Tessera calibration corpus is CC0 procedural text; the multimodal corpus is CC BY 4.0; see the corpus README for the per-source attribution.</p>
+<p>The contribution path is the repository. Issues, pull requests, and discussion are the surface. The proprietary models remain confidential where an engagement requires it. The receipt is recorded either way.</p>
+</div>
+</section>
+
+</main>
+<aside class="secondary-nav">
+<ul class="secondary-nav-list">
+<li class="secondary-nav-label">Navigate</li>
+<li><a href="/">Home</a></li>
+<li><a href="/start/">Start</a></li>
+<li><a href="/architecture/">Architecture</a></li>
+<li><a href="/evidence/">Evidence</a></li>
+<li><a href="/status/">Status</a></li>
+<li><a href="/changelog/">Changelog</a></li>
+<li><a href="/colophon/" aria-current="page">Colophon</a></li>
+</ul>
+</aside>
+<footer class="site-footer">
+<div class="site-footer-inner">
+<p>Tessera is independently developed by <strong>Julian Torres</strong>. Released under the project's license. <a href="/colophon/">Colophon</a> · <a rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">Repository</a></p>
+<p><a href="https://tessera.tribunus.dev">tessera.tribunus.dev</a></p>
+</div>
+</footer>
+</body>
+</html>

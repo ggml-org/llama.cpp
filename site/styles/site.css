@@ -1,0 +1,20 @@
+/* Tessera Observatory v1 -- site entry.
+ *
+ * Single entry point. Loads foundation, then components, in
+ * dependency order. All tokens are declared in foundation/
+ * tokens.css; components read from them.
+ *
+ * No @import in component files; they assume tokens.css is
+ * already loaded.
+ */
+
+@import url("/styles/foundation/tokens.css");
+@import url("/styles/foundation/fonts.css");
+@import url("/styles/foundation/typography.css");
+@import url("/styles/foundation/layout.css");
+
+@import url("/styles/components/site-header.css");
+@import url("/styles/components/hero.css");
+@import url("/styles/components/page.css");
+@import url("/styles/components/chapter.css");
+@import url("/styles/components/footer.css");

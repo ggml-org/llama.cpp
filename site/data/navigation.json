@@ -1,0 +1,29 @@
+{
+  "primary": [
+    { "label": "Start", "path": "/start/" },
+    { "label": "Architecture", "path": "/architecture/" },
+    { "label": "Evidence", "path": "/evidence/" },
+    { "label": "Status", "path": "/status/" },
+    { "label": "Changelog", "path": "/changelog/" },
+    { "label": "GitHub", "path": "https://github.com/Tribunus-dev/tessera", "external": true }
+  ],
+  "secondary": [
+    { "label": "Home", "path": "/", "from": "global" },
+    { "label": "Concepts", "path": "/architecture/", "from": "start" },
+    { "label": "Calibration", "path": "/architecture/", "from": "architecture" },
+    { "label": "Tessera Studio", "path": "/colophon/", "from": "architecture" },
+    { "label": "Run", "path": "/evidence/", "from": "evidence" },
+    { "label": "Roadmap", "path": "/status/", "from": "status" },
+    { "label": "Releases", "path": "/changelog/", "from": "changelog" },
+    { "label": "Colophon", "path": "/colophon/", "from": "global" }
+  ],
+  "footer": {
+    "canonical_origin": "https://tessera.tribunus.dev",
+    "license": "See repository LICENSE",
+    "author": {
+      "name": "Julian Torres",
+      "role": "Architect and sole developer"
+    },
+    "repository": "https://github.com/Tribunus-dev/tessera"
+  }
+}

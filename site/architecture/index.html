@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tessera — Architecture</title>
+<link rel="canonical" href="https://tessera.tribunus.dev/architecture/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="generator" content="tessera-docs-ssg">
+<meta name="build-id" content="bootstrap-001">
+<meta property="og:title" content="Tessera — Architecture">
+<meta property="og:description" content="Calibrate and quantize models with receipts the kernel agrees with.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tessera.tribunus.dev/architecture/">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="/styles/site.css">
+<script>
+(function(){try{
+  var k='tessera-theme';
+  var v=null;
+  try{v=localStorage.getItem(k);}catch(e){}
+  if(v!=='dark'&&v!=='light'){
+    try{
+      if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){v='light';}
+      else{v='dark';}
+    }catch(e){v='dark';}
+  }
+  document.documentElement.setAttribute('data-theme',v);
+  try{document.documentElement.style.colorScheme=v;}catch(e){}
+}catch(e){}})();
+</script>
+<script src="/scripts/theme.js" defer></script>
+<script src="/scripts/transitions-orchestrator.js" defer></script>
+<script src="/scripts/selection-controller.js" defer></script>
+</head>
+<body data-prism-route="/architecture/" data-prism-hydrated="false">
+<a href="#top" class="skip-link">Skip to main content</a>
+<header class="site-header">
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">Tessera</span></a>
+<nav class="site-nav" aria-label="Primary navigation">
+<a class="site-nav-link" href="/start/">Start</a>
+<a class="site-nav-link" href="/architecture/" aria-current="page">Architecture</a>
+<a class="site-nav-link" href="/evidence/">Evidence</a>
+<a class="site-nav-link" href="/status/">Status</a>
+<a class="site-nav-link" href="/changelog/">Changelog</a>
+<a class="site-nav-link" rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">GitHub</a>
+</nav>
+<button type="button" class="theme-toggle" aria-label="Toggle dark and light theme" data-theme-toggle><span class="theme-toggle-icon" aria-hidden="true"></span><span class="theme-toggle-label">Dark</span></button>
+</header>
+<main class="page-body" id="top">
+
+<header class="page-header">
+<span class="page-header-eyebrow">Architecture</span>
+<h1 class="page-header-headline">The pipeline is a chain of typed components.</h1>
+<p class="page-header-blurb">Each stage takes a typed input, applies a transformation, and emits a typed output. The output is durable. The next stage reads it. Nothing is recomputed from raw artifacts downstream.</p>
+</header>
+
+<section class="chapter" id="stage-1">
+<div class="chapter-eyebrow">Stage 1 · Calibration</div>
+<h2 class="chapter-title">The calibrator produces a typed importance matrix.</h2>
+<div class="chapter-body">
+<p><code>per_tensor_calibrate</code> reads the model and a corpus and produces per-tensor statistics: kurtosis, effective rank, outlier density, percentile bounds. The output is a typed component (<code>tensor_stats</code>) keyed by tensor name, model hash, and (in multimodal mode) modality. The calibrator's fitness is offline-Frobenius — the calibrator itself is not the ground truth, but its output is the basis for the GA's search.</p>
+<p>For multimodal models, the calibrator runs once per modality: text, image, audio, mm projector. The unified output is a single <code>tensor_stats</code> table with the modality stamp on every record.</p>
+</div>
+</section>
+
+<section class="chapter" id="stage-2">
+<div class="chapter-eyebrow">Stage 2 · AWQ policy search</div>
+<h2 class="chapter-title">The GA searches per-tensor alpha and clip against the kernel.</h2>
+<div class="chapter-body">
+<p><code>awq-evolve</code> reads the <code>tensor_stats</code> and runs an island-model GA. The fitness is the Frobenius distance between the original weight and the kernel's dequant output, evaluated through the exact code path the runtime will use. The GA's search is over continuous reconstruction knobs (per-tensor alpha and clip), not discrete bit-widths — no prior quantization work searches this space against the kernel directly.</p>
+<p>The output is a per-tensor policy: alpha, clip, and a verdict (which quant type to use for this tensor). The policy is a typed component (<code>calibration_policy</code>).</p>
+</div>
+</section>
+
+<section class="chapter" id="stage-3">
+<div class="chapter-eyebrow">Stage 3 · Quantization</div>
+<h2 class="chapter-title">The writer emits the GGUF with the policy in the metadata.</h2>
+<div class="chapter-body">
+<p><code>llama-quantize --tessera-mode</code> reads the policy, packs each tensor according to its verdict, and writes the GGUF. The policy is embedded in the metadata as a small string (the tensor-family list, not the U/V payloads). The full policy and the GA archive go in a sidecar JSON. SHA-256 in both, for audit.</p>
+<p>For a multimodal model, the writer absorbs three additional components: vision tower, audio tower, mm projector. The singular-GGUF is the constitutional commitment; the multimodal pipeline does not split the artifact across files.</p>
+</div>
+</section>
+
+<section class="chapter" id="stage-4">
+<div class="chapter-eyebrow">Stage 4 · Verification</div>
+<h2 class="chapter-title">The A/B harness re-dequants through the kernel and reports the same t_l².</h2>
+<div class="chapter-body">
+<p><code>tessera-ab-harness</code> re-runs the kernel dequant on the shipped artifact and compares the output to the original weight. The reported t_l² is the same number the GA optimized against. A green receipt is one where the kernel's dequant matches the calibrator's prediction within tolerance. A red receipt is a bug — either in the calibrator, the GA, or the kernel.</p>
+<p>The receipt is durable. The artifact is the proof. The proof is the claim.</p>
+</div>
+</section>
+
+<section class="chapter" id="why-not">
+<div class="chapter-eyebrow">Why this is different</div>
+<h2 class="chapter-title">The fitness is measured against the kernel, not the calibrator.</h2>
+<div class="chapter-body">
+<p>Most quantization pipelines search a proxy (offline Frobenius, a separate cost model, a benchmark) and ship the artifact. Tessera searches against the actual kernel dequant output. The fitness signal and the runtime signal are the same signal. The artifact is the proof of the search; the search is the proof of the artifact.</p>
+</div>
+</section>
+
+</main>
+<aside class="secondary-nav">
+<ul class="secondary-nav-list">
+<li class="secondary-nav-label">Navigate</li>
+<li><a href="/">Home</a></li>
+<li><a href="/start/">Start</a></li>
+<li><a href="/architecture/" aria-current="page">Architecture</a></li>
+<li><a href="/evidence/">Evidence</a></li>
+<li><a href="/status/">Status</a></li>
+<li><a href="/changelog/">Changelog</a></li>
+<li><a href="/colophon/">Colophon</a></li>
+</ul>
+</aside>
+<footer class="site-footer">
+<div class="site-footer-inner">
+<p>Tessera is independently developed by <strong>Julian Torres</strong>. Released under the project's license. <a href="/colophon/">Colophon</a> · <a rel="external" target="_blank" href="https://github.com/Tribunus-dev/tessera">Repository</a></p>
+<p><a href="https://tessera.tribunus.dev">tessera.tribunus.dev</a></p>
+</div>
+</footer>
+</body>
+</html>
