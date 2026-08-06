@@ -1300,10 +1300,6 @@ extern "C" {
 
         // called before rebuilding a sampling graph to clear any internal sampler state
         void (*backend_reset)(struct llama_sampler * smpl);
-
-        // copy mutable state from src into dst while keeping dst's references to the current sampling graph
-        // src and dst must have the same type and configuration
-        void (*copy_state)(const struct llama_sampler * src, struct llama_sampler * dst);
     };
 
     struct llama_sampler {
@@ -1324,8 +1320,6 @@ extern "C" {
     LLAMA_API void                   llama_sampler_apply (      struct llama_sampler * smpl, llama_token_data_array * cur_p);
     LLAMA_API void                   llama_sampler_reset (      struct llama_sampler * smpl);
     LLAMA_API struct llama_sampler * llama_sampler_clone (const struct llama_sampler * smpl);
-    // copy mutable sampler state without changing dst or its sampling graph bindings
-    // src and dst must have the same type and configuration
     LLAMA_API void                   llama_sampler_copy  (const struct llama_sampler * src, struct llama_sampler * dst);
     // important: do not free if the sampler has been added to a llama_sampler_chain (via llama_sampler_chain_add)
     LLAMA_API void                   llama_sampler_free  (      struct llama_sampler * smpl);

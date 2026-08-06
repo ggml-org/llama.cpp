@@ -324,7 +324,6 @@ static llama_sampler_i test_single_output_backend_sampler_i = {
     /* .backend_apply     = */ test_single_output_backend_sampler_backend_apply,
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
-    /* .copy_state        = */ nullptr,
 };
 
 static llama_sampler * test_single_output_backend_sampler_init(
@@ -1773,7 +1772,6 @@ static void test_backend_multi_output_dist_transaction(const test_params & param
     llama_batch_free(batch);
 
     llama_sampler_copy(saved.get(), chain.get());
-
     batch = decode();
     verify_random(0, randoms[2]);
     llama_batch_free(batch);
