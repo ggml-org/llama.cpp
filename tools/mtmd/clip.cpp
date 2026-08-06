@@ -3897,10 +3897,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
     };
 
     // set input pixel values
-    // onyx feeds host-patchified "onyx_patches" instead of raw pixels (handled in the switch below)
-    if (ctx->model.proj_type == PROJECTOR_TYPE_ONYX) {
-        // no generic pixel input
-    } else if (!imgs.is_audio) {
+    if (!imgs.is_audio) {
         size_t nelem = 0;
         for (const auto & img : imgs.entries) {
             nelem += img.nx() * img.ny() * 3;
@@ -3962,40 +3959,11 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 const int grid_w = pos_w;            // image_size_width  / patch_size
                 const int grid_h = pos_h;            // image_size_height / patch_size
                 const int n_tok  = grid_w * grid_h;
-                const int ps     = patch_size;
-                const int nx     = image_size_width;
-                const int pt     = hparams.onyx_patch_temporal;
                 const int pgrid  = (int) std::sqrt((double) ctx->model.position_embeddings->ne[1]); // 32
-                const int f      = hparams.n_merge;         // downsample 2
-                const int patch_dim = pt * 3 * ps * ps;
-                const auto & buf = imgs.entries[0].get_ro_buf();    // interleaved pixels (3ch image / 6ch video)
-                // channel count: 3 = image (duplicate frame across patch_temporal),
-                // 3*pt = video frame-pair (distinct frames per temporal slot).
-                const int nchan = (int) (buf.size() / ((size_t) nx * imgs.entries[0].ny()));
+                const int f      = hparams.n_merge;  // downsample 2
 
-                // --- patchify: [pt,c,ps,ps] per token; token = gy*grid_w + gx ---
-                std::vector<float> patches((size_t) patch_dim * n_tok, 0.0f);
-                for (int gy = 0; gy < grid_h; gy++) {
-                    for (int gx = 0; gx < grid_w; gx++) {
-                        const int tok = gy * grid_w + gx;
-                        for (int fr = 0; fr < pt; fr++) {
-                            for (int c = 0; c < 3; c++) {
-                                // image: same RGB for all temporal slots; video: distinct frame per slot
-                                const int src_c = (nchan == 3) ? c : (fr * 3 + c);
-                                for (int py = 0; py < ps; py++) {
-                                    for (int px = 0; px < ps; px++) {
-                                        const int iy = gy * ps + py;
-                                        const int ix = gx * ps + px;
-                                        const int d  = ((fr * 3 + c) * ps + py) * ps + px;
-                                        patches[(size_t) tok * patch_dim + d] =
-                                            buf[(size_t) nchan * ((size_t) iy * nx + ix) + src_c];
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                set_input_f32("onyx_patches", patches);
+                // pixel patchify runs inside the graph via build_inp() (ggml_conv_2d);
+                // pos-emb bilinear interp via resize_position_embeddings().
 
                 // --- sparse window grouping (pgrid x pgrid windows) ---
                 const int win = pgrid;

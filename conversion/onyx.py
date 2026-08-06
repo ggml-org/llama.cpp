@@ -115,6 +115,12 @@ class OnyxVisionModel(MmprojModel):
         if ".attn.q_proj." in name or ".attn.k_proj." in name:
             n_heads = int(self.hparams_vision["num_attention_heads"])
             data_torch = self._unpermute_for_rope(data_torch, n_heads)
+        # Lay out the pt=2 temporal slabs of the patch embedding as a conv2d for build_inp()
+        if name.endswith("patch_embedder.patch_embedding.weight"):
+            n_embd = data_torch.shape[0]
+            pt = int(self.hparams_vision["patch_temporal"])
+            ps = int(self.hparams_vision["patch_size"])
+            data_torch = data_torch.view(n_embd, pt, 3, ps, ps).sum(dim=1)  # (n_embd, 3, ps, ps)
         stem, _, suffix = name.rpartition(".")
         if stem in self._MM_MLP_MAP:
             tensor_key, idx = self._MM_MLP_MAP[stem]
