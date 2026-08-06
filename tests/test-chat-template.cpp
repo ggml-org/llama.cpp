@@ -234,14 +234,17 @@ static std::string format_using_common(
             const std::string & template_str,
             const std::string & bos_token,
             const std::string & eos_token,
-            std::vector<common_chat_msg> & messages,
-            std::vector<common_chat_tool> tools = {}) {
+            const std::vector<common_chat_msg> & messages,
+            const std::vector<common_chat_tool> & tools = {},
+            bool add_generation_prompt = true,
+            bool enable_thinking = true) {
     auto tmpls = common_chat_templates_init(/* model= */ nullptr, template_str, bos_token, eos_token);
     common_chat_templates_inputs inputs;
     inputs.use_jinja = true;
     inputs.messages = messages;
-    inputs.tools = std::move(tools);
-    inputs.add_generation_prompt = true;
+    inputs.tools = tools;
+    inputs.add_generation_prompt = add_generation_prompt;
+    inputs.enable_thinking = enable_thinking;
     auto output = common_chat_templates_apply(tmpls.get(), inputs).prompt;
     output = normalize_newlines(output);
     return output;
@@ -345,6 +348,44 @@ static common_chat_msg simple_msg(const std::string & role, const std::string & 
     msg.role = role;
     msg.content = content;
     return msg;
+}
+
+static common_chat_msg msg_with_reasoning(
+            const std::string & role,
+            const std::string & content,
+            const std::string & reasoning_content) {
+    common_chat_msg msg = simple_msg(role, content);
+    msg.reasoning_content = reasoning_content;
+    return msg;
+}
+
+static common_chat_msg msg_with_tool_call(
+            const std::string & role,
+            const std::string & content,
+            const std::string & name,
+            const std::string & arguments,
+            const std::string & id) {
+    common_chat_msg msg = simple_msg(role, content);
+    msg.tool_calls.push_back({ name, arguments, id });
+    return msg;
+}
+
+static common_chat_msg msg_with_tool_response(
+            const std::string & content,
+            const std::string & tool_call_id) {
+    common_chat_msg msg = simple_msg("tool", content);
+    msg.tool_call_id = tool_call_id;
+    return msg;
+}
+
+static std::string read_file_required(const std::string & path) {
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("Could not open file: " + path);
+    }
+    return std::string(
+        std::istreambuf_iterator<char>(file),
+        std::istreambuf_iterator<char>());
 }
 
 int main_automated_tests(void) {
@@ -651,6 +692,137 @@ int main_automated_tests(void) {
             /* .extra_conversation= */ {{"user", "What is the weather?"}, {"assistant_tool_call", "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"location\": \"NYC\"}}\n</tool_call>"}, {"tool_response", "{\"temperature\": 72}"}},
         }
     };
+
+    // Golden-output oracle provenance:
+    // - Qwen cases were rendered with Transformers apply_chat_template(
+    //   tokenize=false) using Qwen/Qwen3-0.6B tokenizer_config.json at
+    //   revision 7e4ae267688d671ddfca3122e4528ee980cf3234.
+    // - The Bielik case was rendered independently with Jinja2 3.1 against
+    //   the repository template fixture imported in llama.cpp commit
+    //   566059a26b0ce8faec4ea053605719d399c64cc5.
+    // The static strings below are therefore independent of llama.cpp's
+    // Jinja evaluator and catch semantic or whitespace regressions.
+    struct JinjaConformanceTestCase {
+        std::string name;
+        std::string template_str;
+        std::string expected_output;
+        std::string bos_token = "";
+        std::string eos_token = "";
+        std::vector<common_chat_msg> messages = {};
+        std::vector<common_chat_tool> tools = {};
+        bool add_generation_prompt = true;
+        bool enable_thinking = true;
+    };
+    std::vector<JinjaConformanceTestCase> jinja_conformance_test_cases {
+        {
+            /* .name= */ "Qwen/Qwen3-0.6B empty + repeated system, unicode, no-thinking assistant prefix",
+            /* .template_str= */ read_file_required("models/templates/Qwen-Qwen3-0.6B.jinja"),
+            /* .expected_output= */ U8C(R"hf(<|im_start|>system
+<|im_end|>
+<|im_start|>system
+Policy: keep whitespace.
+Line two.<|im_end|>
+<|im_start|>user
+Ping 🌍<|im_end|>
+<|im_start|>assistant
+Pong  ✓<|im_end|>
+<|im_start|>user
+Next?<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+)hf"),
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+            /* .messages= */ {
+                simple_msg("system", ""),
+                simple_msg("system", "Policy: keep whitespace.\nLine two."),
+                simple_msg("user", U8C("Ping 🌍")),
+                simple_msg("assistant", U8C("<think>\nDraft\n</think>\n\nPong  ✓")),
+                simple_msg("user", "Next?"),
+            },
+            /* .tools= */ {},
+            /* .add_generation_prompt= */ true,
+            /* .enable_thinking= */ false,
+        },
+        {
+            /* .name= */ "Qwen/Qwen3-0.6B tool call + tool response with unicode arguments",
+            /* .template_str= */ read_file_required("models/templates/Qwen-Qwen3-0.6B.jinja"),
+            /* .expected_output= */ U8C(R"hf(<|im_start|>system
+You are terse.
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "get_weather", "description": "Return weather for a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "City name"}, "unit": {"type": "string", "enum": ["c", "f"]}}, "required": ["city"]}}}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call><|im_end|>
+<|im_start|>user
+Weather in Łódź?<|im_end|>
+<|im_start|>assistant
+<tool_call>
+{"name": "get_weather", "arguments": {"city": "Łódź", "unit": "c"}}
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"temp":7}
+</tool_response><|im_end|>
+<|im_start|>assistant
+)hf"),
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+            /* .messages= */ {
+                simple_msg("system", "You are terse."),
+                simple_msg("user", U8C("Weather in Łódź?")),
+                msg_with_tool_call("assistant", "", "get_weather", U8C("{\"city\": \"Łódź\", \"unit\": \"c\"}"), "call_1"),
+                msg_with_tool_response("{\"temp\":7}", "call_1"),
+            },
+            /* .tools= */ {
+                {
+                    "get_weather",
+                    "Return weather for a city.",
+                    R"({"type":"object","properties":{"city":{"type":"string","description":"City name"},"unit":{"type":"string","enum":["c","f"]}},"required":["city"]})",
+                },
+            },
+        },
+        {
+            /* .name= */ "Bielik-11B-v3.0-Instruct reasoning_content + BOS + trailing think prefix",
+            /* .template_str= */ read_file_required("models/templates/Bielik-11B-v3.0-Instruct.jinja"),
+            /* .expected_output= */ U8C(R"hf(<s><|im_start|>system
+Odpowiadaj zwięźle.
+
+Zanim odpowiesz na pytanie, najpierw przemyśl swoje kroki i umieść swoje myśli wewnątrz tagów <think>...</think>. Musisz najpierw pomyśleć, zanim udzielisz odpowiedzi. WAŻNE: Powinieneś myśleć w tym samym języku, co pytanie użytkownika. Jeśli pytanie jest zadane po polsku, powinieneś również myśleć po polsku. Jeśli pytanie jest po angielsku, myślisz również po angielsku itd. ** PAMIĘTAJ! ** Pytanie po polsku -> myślenie po polsku -> odpowiedź po polsku!*** BARDZO WAŻNE!!! *** Jesteś Bielikiem, polskim modelem językowym. Twoją główną cechą jest umiejętność pisania po polsku. Jeśli użytkownik zadaje Ci pytania po polsku, ZAWSZE odpowiadaj po polsku. Nawet, jeśli korzystasz z narzędzia, którego większość instrukcji jest po angielsku, powinieneś przede wszystkim odpowiadać po polsku, jeśli użytkownik zadaje pytanie w tym języku. <|im_end|>
+<|im_start|>user
+Policz: 2 + 2<|im_end|>
+<|im_start|>assistant
+<think>
+Dodaję dwie liczby.
+</think>
+4<|im_end|>
+<|im_start|>user
+Dziękuję<|im_end|>
+<|im_start|>assistant
+<think>
+)hf"),
+            /* .bos_token= */ "<s>",
+            /* .eos_token= */ "</s>",
+            /* .messages= */ {
+                simple_msg("system", U8C("Odpowiadaj zwięźle.")),
+                simple_msg("user", "Policz: 2 + 2"),
+                msg_with_reasoning("assistant", "4", U8C("Dodaję dwie liczby.")),
+                simple_msg("user", U8C("Dziękuję")),
+            },
+        },
+    };
     std::vector<char> formatted_chat(1024);
     int32_t res;
 
@@ -715,6 +887,32 @@ int main_automated_tests(void) {
                                 test_case.eos_token,
                                 msgs);
             auto expected_output = normalize_newlines(test_case.expected_output_jinja.empty() ? test_case.expected_output : test_case.expected_output_jinja);
+            if (output != expected_output) {
+                std::cout << "Template:```\n" << test_case.template_str << "\n```";
+                std::cout << "-------------------------\n";
+                std::cout << "Expected:```\n" << expected_output << "\n```";
+                std::cout << "-------------------------\n";
+                std::cout << "Actual:```\n" << output << "\n```";
+                std::cout.flush();
+                assert(output == expected_output);
+            }
+        } catch (const std::exception & e) {
+            std::cerr << "ERROR: " << e.what() << "\n";
+            assert(false);
+        }
+    }
+    for (const auto & test_case : jinja_conformance_test_cases) {
+        std::cout << "\n\n=== " << test_case.name << " (jinja conformance) ===\n\n";
+        try {
+            auto output = format_using_common(
+                                test_case.template_str,
+                                test_case.bos_token,
+                                test_case.eos_token,
+                                test_case.messages,
+                                test_case.tools,
+                                test_case.add_generation_prompt,
+                                test_case.enable_thinking);
+            auto expected_output = normalize_newlines(test_case.expected_output);
             if (output != expected_output) {
                 std::cout << "Template:```\n" << test_case.template_str << "\n```";
                 std::cout << "-------------------------\n";
