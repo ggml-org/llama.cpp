@@ -37,18 +37,15 @@
 	let isComposing = $state(false);
 
 	/**
-	 * Track whether the editable area is visually empty. Browsers
-	 * disagree on what an empty contenteditable root contains (some
-	 * insert a placeholder `<br>` so the caret has a home, some
-	 * leave it as a pure empty node) - we drive the placeholder via
-	 * `data-empty="true|false"` so both shapes render correctly.
+	 * Drive the placeholder via `data-empty`. Browsers disagree on what
+	 * an empty contenteditable contains (a placeholder `<br>`, a
+	 * `<div><br></div>`, or nothing at all), so emptiness is decided by
+	 * the serialized source, not the DOM shape.
 	 */
-	function syncEmptyState() {
+	function syncEmptyState(serialized?: string) {
 		if (!rootElement) return;
-		const text = rootElement.textContent ?? '';
-		const onlyBr = rootElement.childNodes.length === 1 && rootElement.firstChild?.nodeName === 'BR';
-		const isEmpty = text.trim().length === 0 && onlyBr;
-		rootElement.dataset.empty = isEmpty ? 'true' : 'false';
+		const source = serialized ?? serializeContent(rootElement);
+		rootElement.dataset.empty = source.length === 0 ? 'true' : 'false';
 	}
 
 	/**
@@ -140,8 +137,8 @@
 	function handleInput() {
 		if (isComposing || !rootElement) return;
 
-		syncEmptyState();
 		const serialized = serializeContent(rootElement);
+		syncEmptyState(serialized);
 		if (serialized === lastEmittedValue) return;
 
 		lastEmittedValue = serialized;
@@ -157,11 +154,11 @@
 		isComposing = false;
 		if (!rootElement) return;
 		const serialized = serializeContent(rootElement);
+		syncEmptyState(serialized);
 		if (serialized === lastEmittedValue) return;
 		lastEmittedValue = serialized;
 		value = serialized;
 		onInput?.();
-		syncEmptyState();
 	}
 
 	/**

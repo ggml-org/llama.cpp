@@ -1,10 +1,17 @@
 /**
  * Maps between the chat-form contenteditable's markdown source and the
  * badge/text token stream the DOM is built from. A badge is one opaque
- * source contribution (`[name](file://path)`); only `root.childNodes` is
- * walked, never a badge's own subtree (its label length is not its source
- * length). The caret cannot land inside a badge, so offsets resolve to the
- * nearest badge edge.
+ * source contribution (`[name](file://path)`); a badge's own subtree is
+ * never walked (its label length is not its source length). The caret
+ * cannot land inside a badge, so offsets resolve to the nearest badge
+ * edge.
+ *
+ * The tokenizer emits a flat DOM (text nodes + badges), but browsers
+ * restructure it on Enter: Chromium appends `<div>` line wrappers,
+ * Firefox wraps the whole buffer in them, and Shift+Enter / mobile
+ * keyboards / execCommand produce `<br>` shapes. Serialization folds
+ * those back into `\n` so the source never diverges from what is on
+ * screen, and both offset mappers understand the same shapes.
  */
 
 import {
@@ -25,6 +32,10 @@ import { toolsStore } from '$lib/stores/tools.svelte';
 export type ContentToken =
 	| { kind: 'text'; text: string }
 	| { kind: 'badge'; name: string; path: string };
+
+// Block wrappers browsers insert for newlines (Chromium/Firefox use
+// `<div>`); each one folds back into a single `\n` during serialization.
+const BLOCK_TAG_NAMES = new Set(['DIV', 'P']);
 
 // Recognize completed `[name](file://path)` insertions. `file://` is
 // required so plain URLs stay as text; `)` is allowed only when not
@@ -72,32 +83,63 @@ export function tokenizeContent(input: string): ContentToken[] {
 }
 
 /**
- * Serialize a contenteditable subtree back to source. Only direct
- * `childNodes` are walked (a badge is one opaque contribution);
- * non-text, non-badge nodes are skipped so browser-injected
- * wrappers do not leak into the source.
+ * Serialize a contenteditable subtree back to source. A badge is one
+ * opaque contribution; `<br>` and block wrappers the browser inserted
+ * for newlines fold back into `\n` (a trailing `<br>` is the browser's
+ * caret placeholder, not a newline). Any other element is transparent.
  */
 export function serializeContent(root: HTMLElement): string {
 	let out = '';
 
-	for (const child of Array.from(root.childNodes)) {
-		if (child.nodeType === Node.TEXT_NODE) {
-			out += child.textContent ?? '';
-			continue;
+	const walk = (parent: Node) => {
+		let first = true; // no source-contributing sibling seen yet
+
+		for (const child of Array.from(parent.childNodes)) {
+			if (child.nodeType === Node.TEXT_NODE) {
+				const text = child.textContent ?? '';
+				if (text.length > 0) {
+					out += text;
+					first = false;
+				}
+				continue;
+			}
+
+			if (child.nodeType !== Node.ELEMENT_NODE) continue;
+
+			const el = child as HTMLElement;
+
+			if (el.dataset.mentionBadge === 'true') {
+				const name = el.dataset.mentionName ?? '';
+				const path = el.dataset.mentionPath ?? '';
+				if (name && path) {
+					out += `[${name}](file://${path})`;
+					first = false;
+				}
+				continue;
+			}
+
+			if (el.tagName === 'BR') {
+				if (el.nextSibling) {
+					out += '\n';
+					first = false;
+				}
+				continue;
+			}
+
+			if (BLOCK_TAG_NAMES.has(el.tagName)) {
+				if (!first) out += '\n';
+				walk(el);
+				first = false;
+				continue;
+			}
+
+			const before = out.length;
+			walk(el);
+			if (out.length > before) first = false;
 		}
+	};
 
-		if (child.nodeType !== Node.ELEMENT_NODE) continue;
-
-		const el = child as HTMLElement;
-		if (el.dataset.mentionBadge !== 'true') continue;
-
-		const name = el.dataset.mentionName ?? '';
-		const path = el.dataset.mentionPath ?? '';
-		if (name && path) {
-			out += `[${name}](file://${path})`;
-		}
-	}
-
+	walk(root);
 	return out;
 }
 
@@ -105,32 +147,93 @@ export function serializeContent(root: HTMLElement): string {
  * Plain-text offset of a `Range` in the root, so the caret can be restored
  * after a DOM rebuild. Null range (selection lost) falls back to buffer
  * length. Badges count their full source length, not their label width.
+ * Walked against the live DOM (not a clone) so a `<br>` keeps its
+ * trailing/not-trailing context.
  */
 export function rangeToTextOffset(root: HTMLElement, range: Range | null): number {
 	if (!range) return serializeContent(root).length;
 
+	// A point is at/before the caret iff it falls inside [root start, caret].
 	const pre = range.cloneRange();
 	pre.selectNodeContents(root);
 	pre.setEnd(range.endContainer, range.endOffset);
-
-	const tmp = document.createElement('div');
-	tmp.appendChild(pre.cloneContents());
+	const atOrBeforeCaret = (node: Node, offset: number) => pre.comparePoint(node, offset) !== 1;
 
 	let total = 0;
-	for (const child of Array.from(tmp.childNodes)) {
-		if (child.nodeType === Node.TEXT_NODE) {
-			total += (child.textContent ?? '').length;
-			continue;
+	let done = false;
+
+	const walk = (parent: Node) => {
+		let first = true;
+
+		for (const child of Array.from(parent.childNodes)) {
+			if (done) return;
+
+			if (child.nodeType === Node.TEXT_NODE) {
+				const text = child.textContent ?? '';
+				if (text.length === 0) continue;
+				if (!atOrBeforeCaret(child, 0)) {
+					done = true;
+					return;
+				}
+				if (range.endContainer === child) {
+					total += range.endOffset;
+					done = true;
+					return;
+				}
+				total += text.length;
+				first = false;
+				continue;
+			}
+
+			if (child.nodeType !== Node.ELEMENT_NODE) continue;
+
+			const el = child as HTMLElement;
+			const parentNode = el.parentNode as Node;
+			const elIndex = Array.prototype.indexOf.call(parentNode.childNodes, el);
+
+			if (el.dataset.mentionBadge === 'true') {
+				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+				if (len === 0) continue;
+				if (!atOrBeforeCaret(parentNode, elIndex + 1)) {
+					done = true;
+					return;
+				}
+				total += len;
+				first = false;
+				continue;
+			}
+
+			if (el.tagName === 'BR') {
+				if (!el.nextSibling) continue;
+				if (!atOrBeforeCaret(parentNode, elIndex + 1)) {
+					done = true;
+					return;
+				}
+				total += 1;
+				first = false;
+				continue;
+			}
+
+			if (BLOCK_TAG_NAMES.has(el.tagName)) {
+				if (!first) {
+					if (!atOrBeforeCaret(el, 0)) {
+						done = true;
+						return;
+					}
+					total += 1;
+				}
+				walk(el);
+				first = false;
+				continue;
+			}
+
+			const before = total;
+			walk(el);
+			if (total > before) first = false;
 		}
+	};
 
-		if (child.nodeType !== Node.ELEMENT_NODE) continue;
-
-		const el = child as HTMLElement;
-		if (el.dataset.mentionBadge !== 'true') continue;
-
-		total += badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
-	}
-
+	walk(root);
 	return total;
 }
 
@@ -281,44 +384,98 @@ export function leadingBadgeEdgeOffset(source: string, caret: number): number | 
  * Translate a plain-text offset into a degenerate `Range` at that position
  * in the DOM; out-of-range offsets clamp to buffer end. The caret cannot
  * land inside a badge, so zero offset lands BEFORE the badge and any
- * positive source offset lands AFTER it.
+ * positive source offset lands AFTER it. Understands the same browser
+ * block/`<br>` newline shapes as `serializeContent`.
  */
 export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 	const range = document.createRange();
 	let remaining = offset;
+	let landed = false;
 
-	for (const child of Array.from(root.childNodes)) {
-		if (child.nodeType === Node.TEXT_NODE) {
-			const text = child.textContent ?? '';
-			if (remaining <= text.length) {
-				range.setStart(child, remaining);
-				range.setEnd(child, remaining);
-				return range;
+	const walk = (parent: Node) => {
+		let first = true;
+
+		for (const child of Array.from(parent.childNodes)) {
+			if (landed) return;
+
+			if (child.nodeType === Node.TEXT_NODE) {
+				const text = child.textContent ?? '';
+				if (text.length === 0) continue;
+				if (remaining <= text.length) {
+					range.setStart(child, remaining);
+					range.setEnd(child, remaining);
+					landed = true;
+					return;
+				}
+				remaining -= text.length;
+				first = false;
+				continue;
 			}
-			remaining -= text.length;
-			continue;
-		}
 
-		if (child.nodeType !== Node.ELEMENT_NODE) continue;
+			if (child.nodeType !== Node.ELEMENT_NODE) continue;
 
-		const el = child as HTMLElement;
-		if (el.dataset.mentionBadge !== 'true') continue;
+			const el = child as HTMLElement;
 
-		const badgeLen = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
-		if (remaining <= badgeLen) {
-			if (remaining === 0) {
-				range.setStartBefore(el);
-				range.setEndBefore(el);
-			} else {
-				range.setStartAfter(el);
-				range.setEndAfter(el);
+			if (el.dataset.mentionBadge === 'true') {
+				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+				if (len === 0) continue;
+				if (remaining <= len) {
+					if (remaining === 0) {
+						range.setStartBefore(el);
+						range.setEndBefore(el);
+					} else {
+						range.setStartAfter(el);
+						range.setEndAfter(el);
+					}
+					landed = true;
+					return;
+				}
+				remaining -= len;
+				first = false;
+				continue;
 			}
-			return range;
+
+			if (el.tagName === 'BR') {
+				if (!el.nextSibling) continue;
+				if (remaining === 0) {
+					range.setStartBefore(el);
+					range.setEndBefore(el);
+					landed = true;
+					return;
+				}
+				remaining -= 1;
+				first = false;
+				continue;
+			}
+
+			if (BLOCK_TAG_NAMES.has(el.tagName)) {
+				if (!first) {
+					if (remaining === 0) {
+						// The boundary newline belongs to the previous line.
+						range.setStartBefore(el);
+						range.setEndBefore(el);
+						landed = true;
+						return;
+					}
+					remaining -= 1;
+				}
+				walk(el);
+				first = false;
+				continue;
+			}
+
+			const before = remaining;
+			walk(el);
+			if (remaining < before) first = false;
 		}
-		remaining -= badgeLen;
+	};
+
+	walk(root);
+
+	if (!landed) {
+		range.selectNodeContents(root);
+		range.collapse(false);
 	}
 
-	range.selectNodeContents(root);
-	range.collapse(false);
 	return range;
 }
