@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { File, Folder } from '@lucide/svelte';
-	import { MENTION_BADGE_CLASSNAME, MENTION_BADGE_ICON_CLASSNAME } from '$lib/utils';
+	import { MENTION_BADGE_CLASSNAME, MENTION_BADGE_ICON_CLASSNAME, getMentionBadgeLabel } from '$lib/utils';
+	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -13,6 +16,22 @@
 
 	// directories are encoded with a trailing `/` in the file:// target
 	const Icon = $derived(path.endsWith('/') ? Folder : File);
+
+	// Resolve the server home so ~ can abbreviate full-path labels.
+	const home = $derived(toolsStore.serverHome);
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		void toolsStore.resolveServerHome();
+	});
+
+	const label = $derived(
+		getMentionBadgeLabel(
+			name,
+			path,
+			settingsStore.getConfig(SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS),
+			home
+		)
+	);
 </script>
 
 {#if href}
@@ -25,7 +44,7 @@
 		class={['mention-badge-link', MENTION_BADGE_CLASSNAME, className]}
 	>
 		<Icon class={MENTION_BADGE_ICON_CLASSNAME} aria-hidden="true" />
-		<span class="shrink-0 truncate">{name}</span>
+		<span class="shrink-0 truncate">{label}</span>
 	</a>
 {:else}
 	<span
@@ -36,6 +55,6 @@
 		class={['chat-form-mention-badge', MENTION_BADGE_CLASSNAME, className]}
 	>
 		<Icon class={MENTION_BADGE_ICON_CLASSNAME} aria-hidden="true" />
-		<span class="shrink-0 truncate">{name}</span>
+		<span class="shrink-0 truncate">{label}</span>
 	</span>
 {/if}

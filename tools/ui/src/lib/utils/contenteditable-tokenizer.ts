@@ -34,8 +34,12 @@ import {
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	decodeFileLinkPath,
 	fileMentionLinkRe,
-	getMentionBadgeIconPaths
+	getMentionBadgeIconPaths,
+	getMentionBadgeLabel
 } from './mention-badge';
+import { SETTINGS_KEYS } from '$lib/constants';
+import { settingsStore } from '$lib/stores/settings.svelte';
+import { toolsStore } from '$lib/stores/tools.svelte';
 
 export type ContentToken =
 	| { kind: 'text'; text: string }
@@ -227,7 +231,12 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 
 		const label = document.createElement('span');
 		label.classList.add('shrink-0', 'truncate');
-		label.textContent = token.name;
+		label.textContent = getMentionBadgeLabel(
+			token.name,
+			decodeFileLinkPath(token.path),
+			settingsStore.getConfig(SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS),
+			toolsStore.serverHome
+		);
 
 		badge.appendChild(svg);
 		badge.appendChild(label);

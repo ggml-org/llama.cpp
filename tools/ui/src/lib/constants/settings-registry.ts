@@ -295,6 +295,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS,
+				label: 'Show full path in mentions',
+				help: 'Display the full file system path inside file and folder @-mention badges instead of just the file or folder name.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			}
 		]
 	},

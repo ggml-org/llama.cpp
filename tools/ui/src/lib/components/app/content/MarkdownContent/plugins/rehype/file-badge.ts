@@ -18,8 +18,12 @@ import {
 	MENTION_BADGE_ICON_CLASSNAME,
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	decodeFileLinkPath,
-	getMentionBadgeIconPaths
+	getMentionBadgeIconPaths,
+	getMentionBadgeLabel
 } from '$lib/utils';
+import { SETTINGS_KEYS } from '$lib/constants';
+import { settingsStore } from '$lib/stores/settings.svelte';
+import { toolsStore } from '$lib/stores/tools.svelte';
 import type { Plugin } from 'unified';
 import type { Root, Element } from 'hast';
 import { visit } from 'unist-util-visit';
@@ -99,7 +103,17 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 					type: 'element',
 					tagName: 'span',
 					properties: { className: ['shrink-0', 'truncate'] },
-					children: [{ type: 'text', value: label }]
+					children: [
+						{
+							type: 'text',
+							value: getMentionBadgeLabel(
+								label,
+								decodedPath,
+								settingsStore.getConfig(SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS),
+								toolsStore.serverHome
+							)
+						}
+					]
 				}
 			];
 		});

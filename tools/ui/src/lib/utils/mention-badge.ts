@@ -1,3 +1,5 @@
+import { abbreviateHome } from './path-display';
+
 /**
  * Visual contract shared between `MentionBadge.svelte` and the two
  * DOM-only paths (the contenteditable tokenizer + the rehype plugin
@@ -107,4 +109,23 @@ export const MENTION_BADGE_FOLDER_ICON_PATHS: readonly string[] = [
  */
 export function getMentionBadgeIconPaths(path: string): readonly string[] {
 	return path.endsWith('/') ? MENTION_BADGE_FOLDER_ICON_PATHS : MENTION_BADGE_FILE_ICON_PATHS;
+}
+
+/**
+ * Compute the visible label for a mention badge. Defaults to the
+ * file/folder name; with `showFullPath` it renders the full decoded
+ * path (a trailing `/` marker for folders is stripped so the label
+ * stays readable). A known `home` abbreviates its prefix to `~`,
+ * e.g. `~/src/main.rs`, matching the working-directory chip.
+ */
+export function getMentionBadgeLabel(
+	name: string,
+	path: string,
+	showFullPath: boolean,
+	home?: string | null
+): string {
+	if (!showFullPath) return name;
+	const decoded = decodeFileLinkPath(path.replace(/\/+$/, ''));
+	if (!decoded) return name;
+	return abbreviateHome(decoded, home);
 }
