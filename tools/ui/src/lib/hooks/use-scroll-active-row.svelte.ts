@@ -9,11 +9,8 @@ import { untrack } from 'svelte';
 export interface UseScrollActiveRowOptions {
 	/** Counter bumped by keyboard nav; `undefined` disables the effect. */
 	getTrigger: () => number | undefined;
-	/** Scroll container element. */
 	getContainer: () => HTMLDivElement | null;
-	/** Index of the active row. */
 	getIndex: () => number;
-	/** Number of rows in the list. */
 	getCount: () => number;
 	/** Attribute prefix, e.g. 'picker' for `[data-picker-index="0"]`. */
 	dataIndex: string;

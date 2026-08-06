@@ -19,20 +19,16 @@
 	} from '$lib/constants';
 
 	/**
-	 * Floating file/folder mention picker.
-	 *
-	 * Opens when the user types `@<query>` at a token boundary inside the
-	 * chat textarea. Returns the picked `FileMentionEntry` via `onSelect`
-	 * so the parent can splice a `[name](file:///<abs>)<space>` markdown
+	 * Floating file/folder mention picker. Opens when the user types
+	 * `@<query>` at a token boundary; returns the picked `FileMentionEntry`
+	 * via `onSelect` so the parent can splice a `[name](file:///<abs>)<space>`
 	 * link into the textarea at the cursor.
 	 *
-	 * The picker has no internal search input - the chatbot textarea is
-	 * the search surface, and `query` (what the user typed after `@`)
-	 * drives a `file_glob_search` tool call scoped to `scopePath` (the
-	 * conversation cwd, or the server home when unset). Closes via
-	 * Escape, outside-click, or selection. The parent owns the "user
-	 * dismissed this token, don't re-open until it changes" snapshot so
-	 * the picker stays simple.
+	 * The chat textarea is the search surface: `query` (what the user typed
+	 * after `@`) drives a `file_glob_search` tool call scoped to `scopePath`
+	 * (the conversation cwd, or the server home when unset). Closes via
+	 * Escape, outside-click, or selection. The parent owns the "dismissed
+	 * token, don't re-open until it changes" snapshot.
 	 */
 	interface Props {
 		class?: string;
@@ -43,11 +39,10 @@
 		onClose: () => void;
 		onSelect: (entry: FileMentionEntry) => void;
 		/**
-		 * Fired when `isOpen` becomes true. The chat textarea is the
-		 * picker's "search input", so the host focuses it here to keep
-		 * the chain `typed @ -> picker open -> still typing` continuous
-		 * even if focus drifted (e.g. closed via outside-click on the
-		 * chip trigger the next time the picker re-opens).
+		 * Fired when `isOpen` becomes true. The chat textarea is the picker's
+		 * "search input", so the host focuses it here to keep the chain
+		 * `typed @ -> picker open -> still typing` continuous even if focus
+		 * drifted (e.g. closed via outside-click on the chip trigger).
 		 */
 		onOpened?: () => void;
 	}
@@ -73,36 +68,30 @@
 	let searchResults = $state<FileMentionEntry[]>([]);
 	let searchError = $state<string | null>(null);
 
-	// Search depth from settings, coerced to a valid positive integer.
-	// The setting can hold an empty string or other non-numeric value
-	// (e.g. an empty input field), which the server would interpret as
-	// max_depth 0 = unlimited and walk the whole tree. Fall back to
-	// FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH for any invalid value.
+	// Coerce the depth setting to a positive integer; an empty/non-numeric
+	// value would otherwise reach the server as max_depth 0 = unlimited.
 	const searchDepth = $derived.by(() => {
 		const n = Number(config().mentionSearchMaxDepth);
 		return Number.isInteger(n) && n > 0 ? n : FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH;
 	});
 
-	// Absolute home directory on the server, resolved once per session by
-	// the tools store. Anchors the search scope fallback and the `~`
-	// abbreviation of result paths.
+	// Absolute home on the server, resolved once per session by the tools
+	// store. Anchors the search scope fallback and the `~` abbreviation.
 	const home = $derived(toolsStore.serverHome);
 
-	// The mention search shows a focused list; a smaller window than the
-	// working-directory picker is enough because entries are ranked client-side.
+	// A smaller window than the WD picker suffices: entries are ranked client-side.
 	const MENTION_SEARCH_LIMIT = 50;
 
-	// Debounced, abortable glob search. The chat textarea is the search
-	// surface, so the fetcher maps each hit to a FileMentionEntry for the
-	// picker list; stale responses are dropped by the hook's isCurrent guard.
+	// Debounced, abortable glob search; the fetcher maps each hit to a
+	// FileMentionEntry and the hook's isCurrent guard drops stale responses.
 	const search = useDebouncedSearch({
 		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen,
 		getQuery: () => trimmedQuery,
 		run: async (query, signal, isCurrent) => {
 			try {
-				// A trailing path separator targets a directory, so the shared
-				// search also lists its children. Accept both `/` and `\`.
+				// A trailing path separator targets a directory, so also list its
+				// children. Accept both `/` and `\`.
 				const res = await runGlobSearchWithChildren(
 					query,
 					scopePath ?? home ?? HOME_TILDE,
@@ -132,20 +121,15 @@
 		}
 	});
 
-	// The mention search only ever shows live results - a bare `@` with no
-	// query is a no-op (the picker is not even opened by the host).
+	// A bare `@` with no query is a no-op (the host does not even open the picker).
 	const trimmedQuery = $derived((query ?? '').trim());
 	const displayedItems = $derived(searchResults);
 
-	// Empty-message policy:
-	//  - search error -> surface it (network / scope issues)
-	//  - search returned nothing -> "No matching files or folders"
 	const emptyMessage = $derived(
 		searchError ? `Search failed - ${searchError}` : 'No matching files or folders'
 	);
 
-	// Tooltips only on wider viewports - hover surfaces get in the way on
-	// touch / narrow layouts. Same gate used elsewhere (ActionIcon, WD chip).
+	// Tooltips only on wider viewports; same gate used elsewhere (ActionIcon, WD chip).
 	const showTooltip = $derived(!isMobile.current);
 
 	$effect(() => {
@@ -159,18 +143,12 @@
 		}
 	});
 
-	// Fire `onOpened()` whenever the picker transitions to open. Keeps
-	// focus on the chat form textarea so typing after `@` flows naturally;
-	// reading only `isOpen` makes `onOpened` itself opaque to the
-	// reactive system, so hover / query churn cannot cause re-focus
-	// storms while the picker is already open.
+	// Keep focus on the chat textarea so typing after `@` flows naturally.
 	$effect(() => {
 		if (isOpen) onOpened?.();
 	});
 
-	// The chat textarea is the search surface: `query` (what the user typed
-	// after `@`) drives the debounced fetch directly. Empty query shows the
-	// recents panel instead of searching.
+	// `query` (what the user typed after `@`) drives the debounced fetch.
 	$effect(() => {
 		const q = (query ?? '').trim();
 		if (!isOpen || !q) {
@@ -201,10 +179,9 @@
 >
 	<!-- Invisible form-wide trigger: stops bits-ui's outside-click detector
 	     from closing the picker when the user clicks inside the textarea.
-	     We DO NOT use this trigger for opening (we open programmatically via
-	     `open={isOpen}`) so it's tabindex=-1 + pointer-events-none + opacity-0
-	     + aria-hidden. Positioning comes from `customAnchor` below, which
-	     sits at the form's top edge so the popover floats above the box. -->
+	     We open programmatically via `open={isOpen}`, so it is inert
+	     (tabindex=-1 + pointer-events-none + opacity-0 + aria-hidden).
+	     Positioning comes from `customAnchor` at the form's top edge. -->
 	<Popover.Trigger
 		class="pointer-events-none absolute inset-0 opacity-0"
 		tabindex={-1}

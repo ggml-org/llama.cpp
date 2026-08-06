@@ -1,13 +1,10 @@
 /**
- * Pure helpers for the working-directory picker search.
- *
- * The picker is backed by the server's `file_glob_search` built-in tool.
- * Queries that start from a root (`/`, `C:\`, `\\host\share`) or from `~`
- * navigate the directory tree (search the parent for the last segment);
- * anything else glob-matches home-relative entries. Paths are carried with
- * `/` separators, which is what the server returns and what Windows accepts.
- * These helpers build the glob, normalize results and rank them
- * client-side; the component owns the network/state plumbing.
+ * Pure helpers for the working-directory picker search, backed by the
+ * server's `file_glob_search` tool. Queries starting from a root (`/`,
+ * `C:\`, `\\host\share`) or `~` navigate the tree (search the parent for
+ * the last segment); anything else glob-matches home-relative entries.
+ * Paths use `/` separators, which is what the server returns and what
+ * Windows accepts.
  */
 
 import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
@@ -46,10 +43,7 @@ function toPosixSeparators(query: string): string {
 	return query.split(WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
 }
 
-/**
- * Length of the root prefix of `path`, or 0 when it has none. Covers the
- * POSIX root, a Windows drive (`C:/`) and a UNC share (`//host/share/`).
- */
+/** Length of the root prefix of `path`, or 0 when it has none. */
 export function rootPrefixLength(path: string): number {
 	const unc = path.match(UNC_ROOT_REGEX);
 	if (unc) return unc[0].length;
@@ -118,12 +112,7 @@ export interface GlobSearchArgs {
 	last?: string;
 }
 
-/**
- * Map any picker query to `file_glob_search` args. Turning a query into glob
- * params is identical for every picker: a root/`~` query navigates the tree
- * (search the parent for the last segment), anything else glob-matches
- * home-relative entries.
- */
+/** Map any picker query to `file_glob_search` args. */
 export function buildGlobSearchArgs(
 	query: string,
 	scopePath: string,

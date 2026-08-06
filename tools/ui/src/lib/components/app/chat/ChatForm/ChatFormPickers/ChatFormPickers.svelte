@@ -59,10 +59,7 @@
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
 	let mentionPickerRef: ChatFormMentionPicker | undefined = $state(undefined);
 
-	/**
-	 * Delegates keyboard events to the active picker child.
-	 * Returns true if the event was handled.
-	 */
+	/** Delegate keyboard events to the active picker child; true if handled. */
 	export function handleKeydown(event: KeyboardEvent): boolean {
 		if (isCommandPickerOpen && commandPickerRef?.handleKeydown(event)) {
 			return true;

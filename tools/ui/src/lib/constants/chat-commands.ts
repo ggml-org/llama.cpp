@@ -14,12 +14,10 @@ interface ChatCommandsOptions {
 /**
  * The slash commands surfaced by the `/` command picker, in display order.
  *
- * Availability is supplied as predicates (rather than importing stores here)
- * so this module stays free of store imports - it is re-exported through the
- * `$lib/constants` barrel, and importing stores at module load would create a
- * circular dependency (the stores themselves import from `$lib/constants`).
- * The host evaluates the predicates per-render so a command's `disabled`
- * state tracks its backing capability live.
+ * Availability is supplied as predicates rather than store imports: this
+ * module is re-exported through the `$lib/constants` barrel, and importing
+ * stores at module load would create a circular dependency (the stores
+ * themselves import from `$lib/constants`).
  */
 export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[] {
 	return [

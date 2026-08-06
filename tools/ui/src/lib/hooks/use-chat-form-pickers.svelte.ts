@@ -15,27 +15,22 @@ import {
  * state and store circular imports.
  */
 export interface UseChatFormPickersOptions {
-	/** Current chat input value. */
 	getValue: () => string;
-	/** Assign a new chat input value (also fires the form's onChange). */
+	/** Also fires the form's onChange. */
 	setValue: (value: string) => void;
-	/** Live caret offset in the active input; undefined when unmounted. */
+	/** Undefined when unmounted. */
 	getCaretOffset: () => number | undefined;
-	/** Move the caret in the active input. */
 	setCaretOffset: (offset: number) => void;
-	/** Refocus the chat input after a picker closes. */
 	focusInput: () => void;
-	/** Whether the model selector is rendered (gates `/model`). */
+	/** Gates `/model`. */
 	getShowModelSelector: () => boolean;
-	/** Predicate: MCP prompts are reachable (gates `/prompt`). */
+	/** Gates `/prompt`. */
 	hasPrompts: () => boolean;
-	/** Predicate: built-in tools present (gates `/cwd`). */
+	/** Gates `/cwd`. */
 	hasBuiltinTools: () => boolean;
-	/** Current working directory, if the user picked one. */
 	getCwd: () => string | null;
-	/** Server home directory (mention search fallback scope). */
+	/** Mention search fallback scope. */
 	getServerHome: () => string | null;
-	/** Open the model selector (dispatched by `/model`). */
 	openModelSelector: () => void;
 	/** Delegate a keydown to the mounted pickers component, if any. */
 	getPickersRef: () => { handleKeydown(event: KeyboardEvent): boolean } | undefined;
@@ -47,7 +42,6 @@ export interface UseChatFormPickersOptions {
  * textarea/caret/attachment handling stays in the chat form.
  */
 export function useChatFormPickers(opts: UseChatFormPickersOptions) {
-	// Picker state
 	let isCommandPickerOpen = $state(false);
 	let commandQuery = $state('');
 	let isPromptPickerOpen = $state(false);
@@ -69,13 +63,10 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	 */
 	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
 
-	// Scopes the @-mention search to the cwd the user picked (when set),
-	// falling back to the server home so the picker still finds matches
-	// before the user has chosen a directory.
+	// Scope the @-mention search to the picked cwd, falling back to the
+	// server home so the picker still finds matches before a directory is set.
 	const mentionScopePath = $derived(opts.getCwd() ?? opts.getServerHome() ?? null);
 
-	// Slash commands surfaced by the `/` command picker, filtered to those
-	// whose backing capability is currently available.
 	const availableCommands = $derived(
 		getChatCommands({
 			showModelSelector: opts.getShowModelSelector(),
@@ -115,7 +106,6 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		const cursor = opts.getCaretOffset() ?? value.length;
 
 		if (value.startsWith(PROMPT_TRIGGER_PREFIX)) {
-			// A leading `/` is a command: route to the command picker.
 			isMentionPickerOpen = false;
 			mentionQuery = '';
 			isPromptPickerOpen = false;
@@ -165,13 +155,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			return;
 		}
 
-		// Not a command: close the command picker and reset its snapshot.
 		isCommandPickerOpen = false;
 		commandQuery = '';
 		if (commandDismissedSnapshot !== null) {
 			commandDismissedSnapshot = null;
 		}
-		// A non-command edit abandons `/cwd`: close the picker.
+		// A non-command edit abandons `/cwd`.
 		if (isWorkingDirectoryPickerOpen) {
 			isWorkingDirectoryPickerOpen = false;
 		}

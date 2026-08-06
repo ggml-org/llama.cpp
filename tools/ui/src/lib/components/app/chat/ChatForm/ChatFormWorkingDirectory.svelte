@@ -36,27 +36,15 @@
 		class?: string;
 		disabled?: boolean;
 		directory?: string | null;
-		/**
-		 * Controlled open state. The host owns it so both the chip click and
-		 * the `/cwd` slash command can open the picker through the same path.
-		 */
+		/** Controlled open state; the host owns it so the chip click and the
+		 * `/cwd` slash command open the picker through the same path. */
 		isOpen: boolean;
-		/**
-		 * Two-way bound search query. The host keeps it in sync with the text
-		 * after `/cwd ` in the chat input, so typing in either surface updates
-		 * the other.
-		 */
+		/** Two-way bound query, kept in sync with the text after `/cwd `. */
 		query: string;
-		/**
-		 * Anchor at the top edge of the chat form so the popover floats above
-		 * the box, matching the mention picker.
-		 */
+		/** Anchor at the form's top edge so the popover floats above the box. */
 		customAnchor?: HTMLElement | null;
 		onChange?: (directory: string | null) => void;
-		/**
-		 * Lets the host refocus the chat input so typing can resume without
-		 * an extra click after the popover closes.
-		 */
+		/** Lets the host refocus the chat input after the popover closes. */
 		onClose?: () => void;
 		/** Fired when the chip is clicked so the host can open the picker. */
 		onOpen?: () => void;
@@ -74,9 +62,8 @@
 		onOpen
 	}: Props = $props();
 
-	// File System Access API is opt-in: when available (Chrome / Edge / Opera) the popover
-	// exposes a "Browse" button that opens the native folder picker. When unavailable the
-	// popover still works via the text input - no alerts, no upload semantics.
+	// File System Access API is opt-in: when available (Chrome / Edge / Opera)
+	// the popover exposes a "Browse" button; otherwise the text input suffices.
 	const pickerSupported =
 		typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 
@@ -86,9 +73,8 @@
 	let searchError = $state<string | null>(null);
 	let listContainer = $state<HTMLDivElement | null>(null);
 
-	// Highlight + keyboard-nav state (ArrowUp/Down, Escape, Enter). The
-	// scroll trigger is bumped only on keyboard nav, so the results list
-	// never auto-scrolls on mouse hover or result replacement.
+	// Highlight + keyboard-nav state. The scroll trigger is bumped only on
+	// keyboard nav, so the list never auto-scrolls on hover or result change.
 	const nav = usePickerNavigation({
 		isOpen: () => isOpen,
 		count: () => queryResults.length,
@@ -96,31 +82,26 @@
 		onSelect: (index) => commit(queryResults[index])
 	});
 
-	// Absolute home directory on the server, resolved once per session by
-	// the tools store. Anchors both the search scope and the chip's `~`
-	// abbreviation.
+	// Absolute home on the server, resolved once per session by the tools
+	// store. Anchors both the search scope and the chip's `~` abbreviation.
 	let homeBase = $derived(toolsStore.serverHome);
 
 	// Resolve home eagerly on mount so the chip can abbreviate before the
-	// user opens the picker. resolveServerHome() is cached, so repeat calls
-	// (e.g. from handleOpenChange) are no-ops.
+	// user opens the picker; resolveServerHome() is cached, so repeats are no-ops.
 	$effect(() => {
 		if (typeof window === 'undefined') return;
 		void toolsStore.resolveServerHome();
 	});
 
-	// Auto-focus the search input when the popover opens.
-	// HTML `autofocus` is unreliable on dynamically shown elements, so we
-	// use a microtask (0ms setTimeout) after the effect flushes.
+	// Auto-focus the search input when the popover opens; HTML `autofocus`
+	// is unreliable on dynamically shown elements.
 	$effect(() => {
 		if (!isOpen) return;
 		setTimeout(() => searchInputRef?.focus(), FOCUS_DELAY_MS);
 	});
 
-	// The search query is owned by the host (two-way bound to the text after
-	// `/cwd `). Watch it and run the debounced directory search whenever the
-	// picker is open, so typing in either the search input or the chat input
-	// drives the same results.
+	// The query is owned by the host (two-way bound to the text after `/cwd `);
+	// run the debounced search whenever the picker is open.
 	$effect(() => {
 		if (!isOpen) return;
 		const q = query.trim();
@@ -136,9 +117,8 @@
 		}
 	});
 
-	// Scrolls the highlighted row into view on keyboard nav only (and when
-	// a freshly prioritized list lands). Same behavior ChatFormPickerList
-	// provides for its own list.
+	// Scroll the highlighted row into view on keyboard nav only, matching
+	// ChatFormPickerList's behavior for its own list.
 	useScrollActiveRow({
 		getTrigger: () => nav.scrollTrigger,
 		getContainer: () => listContainer,
@@ -152,9 +132,7 @@
 	// directory is "entered".
 	let searchScope = $state(HOME_TILDE);
 
-	// Debounced, abortable directory search backed by the shared cache. The
-	// query is two-way bound to the text after `/cwd `, so typing in either
-	// the search input or the chat input drives the same results. Stale
+	// Debounced, abortable directory search backed by the shared cache; stale
 	// responses are dropped by the hook's isCurrent guard. An exactly-typed
 	// directory is "entered": the shared search lists its children too, so
 	// path navigation does not require a trailing slash.
@@ -173,8 +151,8 @@
 			}
 
 			try {
-				// Generous limit because ranking happens client-side; only
-				// the top MAX_RESULTS_SHOWN are shown.
+				// Generous limit because ranking happens client-side; only the
+				// top MAX_RESULTS_SHOWN are shown.
 				const res = await runGlobSearchWithChildren(
 					trimmed,
 					homeBase ?? HOME_TILDE,
@@ -195,8 +173,7 @@
 				queryResults = res.entries.map((e) => e.path).slice(0, MAX_RESULTS_SHOWN);
 				if (queryResults.length > 0) {
 					nav.reset(0);
-					// new results: scroll the list back to the top (first item is hovered)
-					nav.bumpScroll();
+					nav.bumpScroll(); // scroll the list back to the top (first item is hovered)
 				} else {
 					nav.reset(-1);
 				}
@@ -226,11 +203,9 @@
 		onChange?.(trimmed);
 	}
 
-	// Resolve a folder name picked via the browser-native picker (which exposes
-	// only the leaf name) to a server-side absolute path. Returns null when the
-	// server cannot locate a matching directory, so the caller can fail visibly
-	// instead of committing a bare leaf name that would resolve against the
-	// server process working directory.
+	// Resolve a browser-picked folder name (which exposes only the leaf name)
+	// to a server-side absolute path; null when the server cannot locate it,
+	// so the caller fails visibly instead of committing a bare leaf name.
 	async function resolveNativeName(name: string): Promise<string | null> {
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
@@ -334,8 +309,7 @@
 		}
 	}
 
-	// Tooltips only on wider viewports - hover surfaces get in the way on
-	// touch / narrow layouts. Mirrors the gate used in ActionIcon.
+	// Tooltips only on wider viewports; mirrors the gate used in ActionIcon.
 	let innerWidth = $state(0);
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>

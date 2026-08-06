@@ -1,6 +1,5 @@
-// Characters that delimit an `@`-mention token. An `@` starts a mention
-// only when preceded by start-of-string or one of these; identifier
-// chars are not delimiters, so a mid-word `@` does not trigger.
+// An `@` starts a mention only when preceded by start-of-string or one of
+// these; identifier chars are not delimiters, so a mid-word `@` does not.
 const TOKEN_BOUNDARY_CHARS = new Set([
 	' ',
 	'\t',
@@ -20,8 +19,7 @@ const TOKEN_BOUNDARY_CHARS = new Set([
 /**
  * Find the most-recent `@`-mention token whose extent includes `cursor`.
  * The token spans from its boundary `@` to the next boundary character,
- * so the search query covers the whole `@...` token regardless of caret.
- * Returns `null` when the cursor is not inside a valid mention.
+ * so the query covers the whole `@...` token regardless of caret.
  */
 export function findMentionToken(
 	value: string,
@@ -57,8 +55,8 @@ export function findMentionToken(
 }
 
 /**
- * Stable signature of a mention token for use as a "dismissed" marker.
- * While the picker is closed and this exact token is still intact, the
+ * Stable signature of a mention token for use as a "dismissed" marker:
+ * while the picker is closed and this exact token is still intact, the
  * picker does not silently re-open on in-token edits.
  */
 export interface MentionDismissSnapshot {

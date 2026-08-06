@@ -11,17 +11,12 @@
 	} from '$lib/components/app/chat';
 
 	/**
-	 * Slash-command picker.
-	 *
-	 * Opens when the user types `/` at the start of the chat input. The
-	 * chat input is the search surface: `query` (what the user typed after
-	 * `/`) filters the available commands by name/description. Selecting a
-	 * command hands it to the parent via `onSelect` so the parent can
-	 * dispatch the corresponding picker / selector.
-	 *
-	 * The parent owns the "user dismissed this token, don't act until it
-	 * changes" snapshot, so this picker stays simple - it just renders and
-	 * reports selection.
+	 * Slash-command picker. Opens when the user types `/` at the start of
+	 * the chat input; `query` (what the user typed after `/`) filters the
+	 * available commands by name/description. Selecting a command hands it
+	 * to the parent via `onSelect` to dispatch the corresponding picker.
+	 * The parent owns the "dismissed token, don't act until it changes"
+	 * snapshot, so this picker just renders and reports selection.
 	 */
 	interface Props {
 		class?: string;
@@ -53,8 +48,7 @@
 			: commands
 	);
 
-	// First enabled (selectable) command in the filtered list, or -1 when
-	// every match is disabled.
+	// First enabled command in the filtered list, or -1 when all are disabled.
 	function firstEnabledIndex(): number {
 		return filteredCommands.findIndex((c) => !c.disabled);
 	}
@@ -85,8 +79,7 @@
 		}
 	});
 
-	// Keep the highlight on an enabled command when the filtered list
-	// changes (typing more chars, availability flipping).
+	// Keep the highlight on an enabled command as the filtered list changes.
 	$effect(() => {
 		if (nav.hoveredIndex < 0 || nav.hoveredIndex >= filteredCommands.length) {
 			nav.reset(firstEnabledIndex());

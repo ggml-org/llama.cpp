@@ -1,21 +1,15 @@
 import { debounce } from '$lib/utils/debounce';
 
 /**
- * Shared debounced async-search machinery for the chat-form pickers.
- *
- * Each picker (mention, working-directory) glob-searches the server as the
- * user types. They all need the same low-level plumbing: an AbortController
- * plus a sequence counter to discard stale responses, a debounce, and a
- * live `isSearching` flag. This hook owns that plumbing; the caller supplies
- * a fetcher that performs the network call and commits its own results.
- *
- * The fetcher receives an `isCurrent` callback that returns false once a
- * newer search has started - the fetcher should return early then so it
- * never writes results from a superseded query.
+ * Shared debounced async-search machinery for the chat-form pickers: an
+ * AbortController plus a sequence counter to discard stale responses, a
+ * debounce, and a live `isSearching` flag. The caller supplies a fetcher
+ * that performs the network call and commits its own results; it receives
+ * an `isCurrent` callback that returns false once a newer search has
+ * started, so stale work never lands.
  */
 
 export interface UseDebouncedSearchOptions {
-	/** Debounce delay in ms before the debounced fetch fires. */
 	debounceMs: number;
 	/** Fire-time guard: a scheduled call that outlives a reset is dropped. */
 	canRun: () => boolean;
@@ -62,7 +56,6 @@ export function useDebouncedSearch(opts: UseDebouncedSearchOptions) {
 	}
 
 	return {
-		/** True while a fetch is in flight for the latest query. */
 		get isSearching() {
 			return isSearching;
 		},
@@ -70,11 +63,9 @@ export function useDebouncedSearch(opts: UseDebouncedSearchOptions) {
 		setLoading(value: boolean) {
 			isSearching = value;
 		},
-		/** Schedule a debounced search for `query`. */
 		run(query: string) {
 			schedule(query);
 		},
-		/** Abort the in-flight fetch and drop any scheduled call. */
 		cancel
 	};
 }

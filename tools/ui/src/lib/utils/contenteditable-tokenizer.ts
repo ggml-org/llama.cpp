@@ -1,11 +1,10 @@
 /**
- * Tokenizer for the chat-form contenteditable input: maps between the
- * markdown source and the badge/text token stream the DOM is built from.
- *
- * A badge is one opaque source contribution (`[name](file://path)`); only
- * `root.childNodes` is ever walked, never a badge's own subtree (its label
- * length is not its source length). The caret cannot land inside a badge
- * (`contenteditable=false`), so offsets resolve to the nearest badge edge.
+ * Maps between the chat-form contenteditable's markdown source and the
+ * badge/text token stream the DOM is built from. A badge is one opaque
+ * source contribution (`[name](file://path)`); only `root.childNodes` is
+ * walked, never a badge's own subtree (its label length is not its source
+ * length). The caret cannot land inside a badge, so offsets resolve to the
+ * nearest badge edge.
  */
 
 import {
@@ -33,10 +32,8 @@ export type ContentToken =
 const MENTION_BADGE_RE = fileMentionLinkRe('g');
 
 /**
- * Compute the byte-length contribution of one badge in source form.
- * Centralized so `serializeContent`, `rangeToTextOffset` and
- * `textOffsetToRange` agree on what counts; otherwise math of
- * `caret offset -> markdown offset` silently breaks.
+ * Source-form length of one badge, shared by the offset math so
+ * `serializeContent`, `rangeToTextOffset` and `textOffsetToRange` agree.
  */
 function badgeSourceLength(name: string, path: string): number {
 	if (!name || !path) return 0;
@@ -105,16 +102,9 @@ export function serializeContent(root: HTMLElement): string {
 }
 
 /**
- * Compute the plain-text character offset of a `Range` anchored
- * inside the contenteditable root. Used to capture caret position
- * before any DOM rebuild so we can restore it after.
- *
- * If `range` is null (selection lost during teardown) the position
- * falls back to buffer length. The body walks `tmp.childNodes`
- * only, so badges contribute their full source length, not their
- * visible label width. `cloneContents()` truncates the trailing
- * text node properly via the browser's range semantics, so its
- * `textContent` is the buffer length up to and including the caret.
+ * Plain-text offset of a `Range` in the root, so the caret can be restored
+ * after a DOM rebuild. Null range (selection lost) falls back to buffer
+ * length. Badges count their full source length, not their label width.
  */
 export function rangeToTextOffset(root: HTMLElement, range: Range | null): number {
 	if (!range) return serializeContent(root).length;
@@ -145,13 +135,10 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 }
 
 /**
- * Materialize a single token stream into a freshly-built DOM subtree
- * suitable for inserting in place of the live contenteditable body.
- * The returned fragment contains plain text nodes for text tokens
- * and `<span data-mention-badge="true">` elements for badges. The
- * badge's class string + inline folder SVG mirror
- * `MentionBadge.svelte` exactly; Tailwind scans both and gets the
- * same style applied.
+ * Materialize a token stream into a DOM subtree for the contenteditable
+ * body: text nodes for text tokens, `<span data-mention-badge="true">`
+ * elements for badges. The badge's class string + inline SVG mirror
+ * `MentionBadge.svelte` exactly so Tailwind styles both identically.
  */
 export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 	const fragment = document.createDocumentFragment();
@@ -214,12 +201,10 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
 
 /**
- * Word-jump target (Option+Arrow / Ctrl+Arrow) in source offsets, or
- * null when the jump crosses no badge and native word movement should
- * handle it. Badge spans are masked to word characters and act as
- * hard word-run boundaries, so a badge counts as exactly one word:
- * native word iteration treats the non-editable badge element
- * inconsistently and overshoots it by a full word in either direction.
+ * Word-jump target (Option+Arrow / Ctrl+Arrow) in source offsets, or null
+ * when the jump crosses no badge and native word movement should handle it.
+ * Badge spans are masked to word characters and act as hard word-run
+ * boundaries, so a badge counts as exactly one word.
  */
 export function badgeAwareWordJump(
 	source: string,
@@ -281,12 +266,10 @@ export function badgeAwareWordJump(
 }
 
 /**
- * Returns 0 when `caret` sits exactly at a leading badge's end edge,
- * null otherwise. Plain ArrowLeft at that spot has no native previous
- * position (the buffer starts with a non-editable element), so the
- * host snaps the caret to the buffer start manually. Covers post-edit
- * states where the leading pad from `buildFragment` is gone (e.g. the
- * user deleted the text before a mid-text badge).
+ * Returns 0 when `caret` sits exactly at a leading badge's end edge, null
+ * otherwise. Plain ArrowLeft there has no native previous position (the
+ * buffer starts with a non-editable element), so the host snaps the caret
+ * to the buffer start manually.
  */
 export function leadingBadgeEdgeOffset(source: string, caret: number): number | null {
 	const [first] = tokenizeContent(source);
@@ -295,15 +278,10 @@ export function leadingBadgeEdgeOffset(source: string, caret: number): number | 
 }
 
 /**
- * Translate a plain-text character offset into a `Range` placed at
- * that position in the DOM. Returns a degenerate range (collapsed
- * to a single point). Out-of-range `offset` clamps to buffer end.
- *
- * Inside a badge we cannot land caret, so the offset resolves to
- * one of the two badge edges: zero offset lands BEFORE the badge,
- * any positive source offset lands AFTER. This matches the
- * visible-edit behavior the user expects from a non-editable
- * inline element.
+ * Translate a plain-text offset into a degenerate `Range` at that position
+ * in the DOM; out-of-range offsets clamp to buffer end. The caret cannot
+ * land inside a badge, so zero offset lands BEFORE the badge and any
+ * positive source offset lands AFTER it.
  */
 export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 	const range = document.createRange();

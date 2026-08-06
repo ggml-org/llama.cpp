@@ -28,10 +28,9 @@ export function containsFileMentionLink(value: string): boolean {
 }
 
 /**
- * Encode a filesystem path into a `[name](file://path)` destination.
- * Spaces/parens break CommonMark (the badge renders as raw source), so
- * each segment is escaped; leading/trailing slashes are kept (trailing
- * marks a directory in the picker).
+ * Escape each path segment for a `[name](file://path)` destination;
+ * spaces/parens would otherwise break CommonMark. Keeps the trailing
+ * slash that marks a directory.
  */
 export function encodeFileLinkPath(path: string): string {
 	return path
@@ -55,8 +54,8 @@ export function decodeFileLinkPath(path: string): string {
 	}
 }
 
-// Directories are marked by a trailing `/` in the link target; this
-// survives copy/paste, so pick the glyph from the raw path.
+// A trailing `/` in the link target marks a directory; it survives
+// copy/paste, so pick the glyph from the raw path.
 export function getMentionBadgeIconPaths(path: string): readonly string[] {
 	return path.endsWith('/') ? MENTION_BADGE_FOLDER_ICON_PATHS : MENTION_BADGE_FILE_ICON_PATHS;
 }

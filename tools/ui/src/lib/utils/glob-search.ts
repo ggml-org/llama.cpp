@@ -1,11 +1,7 @@
 /**
- * Shared `file_glob_search` runners with a short-lived result cache.
- *
- * Both the working-directory picker and the file/folder mention picker
- * glob-search the server tree as the user types. They share this module so
- * a repeated query for the same (type, path, glob, depth) - e.g. opening one
- * picker right after the other on the same directory - reuses the last result
- * instead of re-walking the tree. Entries are considered fresh only within a
+ * Shared `file_glob_search` runners with a short-lived result cache, so a
+ * repeated query for the same (type, path, glob, depth) reuses the last
+ * result instead of re-walking the tree. Entries are fresh only within a
  * short TTL; anything older re-fetches.
  */
 

@@ -17,7 +17,7 @@ export function findCommandToken(
 
 /**
  * Stable signature of a slash-command token for use as a "dismissed"
- * marker. While the picker is closed and this exact token is still intact,
+ * marker: while the picker is closed and this exact token is still intact,
  * the picker does not re-open or instant-dispatch on in-token edits.
  */
 export interface CommandDismissSnapshot {

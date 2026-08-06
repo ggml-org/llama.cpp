@@ -12,7 +12,7 @@
 		searchQuery: string;
 		showSearchInput: boolean;
 		searchPlaceholder?: string;
-		// omit to distinguish "haven't searched yet" from "search returned nothing"
+		// Omit to distinguish "haven't searched yet" from "search returned nothing".
 		emptyMessage?: string;
 		autofocus?: boolean;
 		inputRef?: HTMLInputElement | null;
@@ -22,8 +22,8 @@
 		skeleton?: Snippet;
 		skeletonCount?: number;
 		footer?: Snippet;
-		// counter bumped by the picker on keyboard nav; scrolls the selected row
-		// into view without scrolling on mouse hover or result replacement
+		// Counter bumped by the picker on keyboard nav; scrolls the selected
+		// row into view without scrolling on hover or result replacement.
 		scrollTrigger?: number;
 	}
 
@@ -53,7 +53,7 @@
 	);
 
 	// selectedIndex/items.length are untracked so hover and result replacement
-	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger
+	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger.
 	useScrollActiveRow({
 		getTrigger: () => scrollTrigger,
 		getContainer: () => listContainer,

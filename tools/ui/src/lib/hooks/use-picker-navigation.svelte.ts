@@ -1,27 +1,20 @@
 import { KeyboardKey } from '$lib/enums';
 
 /**
- * Shared keyboard navigation state for the chat-form pickers.
- *
- * Command, mention and working-directory pickers all track a highlighted
- * row (`hoveredIndex`) plus a `scrollTrigger` counter that the list uses to
- * scroll the active row into view on keyboard nav only. Arrow up/down move
- * the highlight, Escape closes, Enter selects. This hook owns that shared
- * state and key handling; each picker supplies its own list length, an
- * optional movement resolver (the command picker skips disabled commands),
- * and close/select callbacks.
+ * Shared keyboard navigation state for the chat-form pickers: a highlighted
+ * row, a scroll trigger, and Arrow/Escape/Enter handling. Each picker
+ * supplies its list length, an optional movement resolver (the command
+ * picker skips disabled commands), and close/select callbacks.
  */
 export interface UsePickerNavigationOptions {
-	/** Whether the picker is open; gates all key handling. */
+	/** Gates all key handling. */
 	isOpen: () => boolean;
-	/** Current number of highlightable rows. */
 	count: () => number;
 	/**
 	 * Resolve the row to highlight for a movement step, or -1 when no move
 	 * is possible. Defaults to plain wraparound across `count()`.
 	 */
 	step?: (from: number, dir: 1 | -1) => number;
-	/** Called on Escape. */
 	onClose: () => void;
 	/** Called on Enter when `hoveredIndex` points at a selectable row. */
 	onSelect: (index: number) => void;
@@ -65,7 +58,6 @@ export function usePickerNavigation(opts: UsePickerNavigationOptions) {
 		hoveredIndex = index;
 	}
 
-	/** Returns true when the key was consumed by the picker. */
 	function handleKeydown(event: KeyboardEvent): boolean {
 		if (!opts.isOpen()) return false;
 

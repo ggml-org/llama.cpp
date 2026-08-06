@@ -19,10 +19,10 @@
 
 	let { class: className = '', href, name, path }: Props = $props();
 
-	// directories are encoded with a trailing `/` in the file:// target
+	// Directories are encoded with a trailing `/` in the file:// target.
 	const Icon = $derived(path.endsWith(PATH_SEPARATOR) ? Folder : File);
 
-	// Resolve the server home so ~ can abbreviate full-path labels.
+	// Resolve the server home so `~` can abbreviate full-path labels.
 	const home = $derived(toolsStore.serverHome);
 	$effect(() => {
 		if (typeof window === 'undefined') return;
