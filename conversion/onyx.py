@@ -112,18 +112,20 @@ class OnyxVisionModel(MmprojModel):
             return tensor.view(n_heads, 2, dim1 // n_heads // 2).transpose(1, 2).reshape(dim1)
         raise ValueError(f"_unpermute_for_rope: unexpected shape {tuple(tensor.shape)}")
 
-    # 3-layer projector MLP: emit as the standard V_MMPROJ numbered slots (mm.0/mm.1/mm.2)
+    # 3-layer projector MLP
     _MM_MLP_MAP = {
-        "model.vision_adapter.fc1.weight": "mm.0.weight",
-        "model.vision_adapter.fc2.weight": "mm.1.weight",
-        "model.vision_projection.weight":  "mm.2.weight",
+        "model.vision_adapter.fc1": (gguf.MODEL_TENSOR.V_MMPROJ, 0),
+        "model.vision_adapter.fc2": (gguf.MODEL_TENSOR.V_MMPROJ, 1),
+        "model.vision_projection":  (gguf.MODEL_TENSOR.V_MMPROJ, 2),
     }
 
     def modify_tensors(self, data_torch, name, bid):
         if ".attn.q_proj." in name or ".attn.k_proj." in name:
             n_heads = int(self.hparams_vision["num_attention_heads"])
             data_torch = self._unpermute_for_rope(data_torch, n_heads)
-        if name in self._MM_MLP_MAP:
-            yield (self._MM_MLP_MAP[name], data_torch)
+        stem, _, suffix = name.rpartition(".")
+        if stem in self._MM_MLP_MAP:
+            tensor_key, idx = self._MM_MLP_MAP[stem]
+            yield (self.format_tensor_name(tensor_key, bid=idx, suffix="." + suffix), data_torch)
             return
         yield (self.map_tensor_name(name), data_torch)
