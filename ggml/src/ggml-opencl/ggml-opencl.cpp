@@ -512,6 +512,10 @@ struct ggml_opencl_fa_kernels {
     // Cluster-parallel q8_0 decode
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_c8;
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_g8_c8;  // GQA8 cluster (dk=64)
+    // Head-split sibling of the above: MQ_GQA=4 x FA_HEAD_SUB=2 workgroups per
+    // KV head, to cut the 592 B/WI the GQA8 form reports (f16's head-split
+    // kernel is at 368 for the same shape).
+    std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_g8_c8_hs2;
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_hs2;
     // Per-shape workgroup size and head-split factor for the above. fa_hs_wg /
     // fa_hs_sub below are single scalars written by the DK=64 build site; once a
@@ -5825,6 +5829,41 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                         }
                     }
                     clReleaseProgram(prog_q8_g8c16);
+                }
+                // Head-split sibling: FA_HEAD_SUB=2 runs the gqa=8 shape as two
+                // MQ_GQA=4 workgroups per KV head. The measured reason to want
+                // it -- the q8 g8/c16 kernel reports private_mem 592 B/WI where
+                // the f16 head-split kernel for the same dk=64 gqa8 shape is at
+                // 368, and that occupancy gap is what the measured ceiling with
+                // the KV read removed pinned the deficit on. Costs one extra
+                // read of each KV row.
+                // Opt out with GGML_OPENCL_FA_Q8_HEAD_SUB=0.
+                static const bool q8_hs_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_HEAD_SUB");
+                    return !(e && e[0] == '0');
+                }();
+                if (q8_hs_on) {
+                    const std::string opts_q8_hs2 = opts +
+                        " -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16"
+                        " -D FA_HEAD_SUB=2" +
+                        (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_int;
+                    cl_program prog_q8_hs2 = build_program_from_source_ex(
+                        backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_hs2,
+                        /*fatal=*/false, "fa q8_0 c16 GQA4 hs2 dk64", backend_ctx->queue);
+                    if (prog_q8_hs2) {
+                        cl_kernel k_hs = clCreateKernel(prog_q8_hs2, "flash_attn_f32_q8_0_q1_vec_mq_split_c8", &err);
+                        if (err == CL_SUCCESS) {
+                            if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_hs, 128,
+                                                              "flash_attn_f32_q8_0_q1_vec_mq_split_c8 (hs2)", dk, dv)) {
+                                backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2[{dk, dv}] = k_hs;
+                                ggml_opencl_log_fa_kernel_spill(backend_ctx, k_hs,
+                                    "flash_attn_f32_q8_0_q1_vec_mq_split_g8_c8_hs2", dk, dv);
+                            } else {
+                                clReleaseKernel(k_hs);
+                            }
+                        }
+                        clReleaseProgram(prog_q8_hs2);
+                    }
                 }
             }
             // Cluster-parallel q4_0 decode kernel
@@ -15700,10 +15739,22 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
             } else if (nq1_only && is_q8_0 && gqa_ratio_dispatch == 8 &&
                 d_head_q == 64 && d_head_v == 64 &&
                 n_head == n_head_kv * 8 &&
-                backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8.count(dk_dv) > 0) {
+                (backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8.count(dk_dv) > 0 ||
+                 backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2.count(dk_dv) > 0)) {
                 // gpt-oss-class q8_0 KV: without this the model falls all the way
                 // back to the spilled scalar q1_split.
-                fd_k_split = backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8.at(dk_dv);
+                //
+                // Prefer the head-split sibling where it built: the GQA8 form
+                // reports private_mem 592 B/WI against the f16 head-split
+                // kernel's 368 for this same dk=64 gqa8 shape, and that
+                // occupancy gap -- not the dequant -- is what the measured
+                // ceiling with the KV read removed left unexplained.
+                if (backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2.count(dk_dv) > 0) {
+                    fd_k_split   = backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2.at(dk_dv);
+                    fd_head_sub  = 2;
+                } else {
+                    fd_k_split   = backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8.at(dk_dv);
+                }
                 use_fd_mq  = true;
                 fd_mq_wg   = 128;
             } else if (nq1_only && is_q8_0 && gqa_ratio_dispatch == 8 &&
