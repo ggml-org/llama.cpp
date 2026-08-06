@@ -365,12 +365,7 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
     auto it = sockets.find(endpoint);
     if (it != sockets.end()) {
         if (auto sock = it->second.lock()) {
-            // there is no transparent reconnect, so a socket whose transport has
-            // failed is dropped here and replaced by a fresh connection
-            if (!sock->is_broken()) {
-                return sock;
-            }
-            sockets.erase(it);
+            return sock;
         }
     }
     std::string host;
