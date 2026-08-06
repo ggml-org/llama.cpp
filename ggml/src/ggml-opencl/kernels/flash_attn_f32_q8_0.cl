@@ -1260,19 +1260,89 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
         }
 #endif
 
+        // This lane's partial score per head, before the cluster all-reduce.
+        ACC_TYPE mh_p[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+#ifdef FA_Q8_INT_QK
+            mh_p[h] = dot_s[h];
+#else
+            mh_p[h] = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
+#endif
+        }
+
+#if defined(FA_CL_MHRED) && MQ_GQA == 8 && FA_CL_C == 16 && FA_CL_DKQ == 1
+        // Multi-head fused cluster reduce, ported from the f16 kernel, which
+        // got it in the gpt-oss FD round while this fork did not.
+        //
+        // The per-head loop below runs MQ_GQA independent all-reduces over
+        // FA_CL_C lanes = MQ_GQA * log2(FA_CL_C) = 32 shuffles per KV row --
+        // and a probe showed this kernel's cost is NOT its KV read (deleting
+        // the read entirely still left it behind f16), so the shuffle chain is
+        // what there is to cut. One halving butterfly costs 4+2+1+1 = 8
+        // shuffles to reach one head per lane and 1+2+4 = 7 to expand every
+        // head back: 15 instead of 32.
+        //
+        // Rounds run in INCREASING xor distance so each head's summation tree
+        // is pairwise identical to the per-head butterfly's => bit-identical
+        // scores, not merely mathematically equivalent ones.
+        const int mh_b0 = lic & 1;
+        const int mh_b1 = lic & 2;
+        const int mh_b2 = lic & 4;
+
+        ACC_TYPE mh_r4[4];
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const ACC_TYPE keep = mh_b0 ? mh_p[j + 4] : mh_p[j];
+            const ACC_TYPE send = mh_b0 ? mh_p[j]     : mh_p[j + 4];
+            mh_r4[j] = keep + sub_group_shuffle_xor(send, 1);
+        }
+        ACC_TYPE mh_r2[2];
+        #pragma unroll
+        for (int j = 0; j < 2; ++j) {
+            const ACC_TYPE keep = mh_b1 ? mh_r4[j + 2] : mh_r4[j];
+            const ACC_TYPE send = mh_b1 ? mh_r4[j]     : mh_r4[j + 2];
+            mh_r2[j] = keep + sub_group_shuffle_xor(send, 2);
+        }
+        ACC_TYPE mh_r1 = (mh_b2 ? mh_r2[1] : mh_r2[0]) +
+                         sub_group_shuffle_xor(mh_b2 ? mh_r2[0] : mh_r2[1], 4);
+        mh_r1 += sub_group_shuffle_xor(mh_r1, 8);
+
+        ACC_TYPE mh_e2[2];
+        {
+            const ACC_TYPE other = sub_group_shuffle_xor(mh_r1, 4);
+            mh_e2[0] = mh_b2 ? other : mh_r1;
+            mh_e2[1] = mh_b2 ? mh_r1 : other;
+        }
+        ACC_TYPE mh_e4[4];
+        #pragma unroll
+        for (int j = 0; j < 2; ++j) {
+            const ACC_TYPE other = sub_group_shuffle_xor(mh_e2[j], 2);
+            mh_e4[j]     = mh_b1 ? other    : mh_e2[j];
+            mh_e4[j + 2] = mh_b1 ? mh_e2[j] : other;
+        }
+        ACC_TYPE mh_s[MQ_GQA];
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const ACC_TYPE other = sub_group_shuffle_xor(mh_e4[j], 1);
+            mh_s[j]     = mh_b0 ? other    : mh_e4[j];
+            mh_s[j + 4] = mh_b0 ? mh_e4[j] : other;
+        }
+#endif
+
         // Cluster-reduce (xor steps < FA_CL_C stay inside the cluster) + score.
         ACC_TYPE score[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) {
-#ifdef FA_Q8_INT_QK
-            ACC_TYPE s = dot_s[h];
+#if defined(FA_CL_MHRED) && MQ_GQA == 8 && FA_CL_C == 16 && FA_CL_DKQ == 1
+            ACC_TYPE s = mh_s[h];
 #else
-            ACC_TYPE s = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
-#endif
+            ACC_TYPE s = mh_p[h];
             #pragma unroll
             for (int step = 1; step < FA_CL_C; step <<= 1) {
                 s += sub_group_shuffle_xor(s, step);
             }
+#endif
             s *= scale;
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
