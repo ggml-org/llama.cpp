@@ -231,7 +231,7 @@ Normalizing by the sum of active weights prevents a batch with more critical tok
 Explicit annotations use half-open UTF-8 byte offsets into the raw `response` value. A token is selected when its reconstructed response-side byte range has any nonempty overlap with a span. Template-only special tokens cannot overlap a raw response span. Overlapping spans use their maximum weight.
 
 ```json
-{"prompt":"대한민국의 수도는 어디인가?","response":"대한민국의 수도는 서울입니다.","critical_spans":[{"start":26,"end":32,"weight":4.0}]}
+{"messages":[{"role":"user","content":"What is the time complexity of binary search?"},{"role":"assistant","content":"Binary search runs in O(log n) time."}],"critical_spans":[{"start":22,"end":30,"weight":4.0}]}
 ```
 
 `spans` uses only annotations. `confidence` selects supervised targets with `p(correct token) < threshold`. `hybrid` uses the maximum of the span and confidence weights. Constant confidence weighting uses `W`; linear weighting interpolates from 1 at the threshold to `W` at probability zero. When the confidence cap is active, the graph deterministically retains the lowest-confidence targets in each microbatch. Explicit spans are exempt from the cap. Cap selection reuses the target probabilities and the existing backend argsort plus row-scatter operations; its sort cost is `O(n log n)` on CPU and `O(n log^2 n)` for bitonic backend implementations, where `n` is the microbatch token count.
