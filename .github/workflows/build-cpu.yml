@@ -202,6 +202,20 @@ jobs:
           $dest = ".\build\bin\Release"
           Copy-Item (Join-Path $root "bin\libomp.dll") $dest
 
+      - name: Validate LLVM OpenMP imports
+        if: ${{ matrix.openmp }}
+        run: |
+          $dest = ".\build\bin\Release"
+          $imports = Get-ChildItem (Join-Path $dest "*") -File -Include *.dll,*.exe |
+            ForEach-Object { (& llvm-readobj --coff-imports $_.FullName) -join "`n" } |
+            Out-String
+          if ($imports -notmatch "(?im)^\s*Name: libomp\.dll$") {
+            throw "No built binary imports libomp.dll"
+          }
+          if ($imports -match "(?i)libomp140") {
+            throw "A built binary imports the non-redistributable libomp140 runtime"
+          }
+
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
         if: ${{ matrix.build == 'x64-openblas' }}
@@ -209,12 +223,28 @@ jobs:
           cp $env:RUNNER_TEMP/openblas/bin/libopenblas.dll ./build/bin/Release/openblas.dll
           cp $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt ./build/bin/Release/OpenBLAS-${env:OPENBLAS_VERSION}.txt
 
+      - name: Validate embedded LLVM license
+        if: ${{ matrix.arch == 'x64' }}
+        run: |
+          $licenses = (& .\build\bin\Release\llama.exe licenses) -join "`n"
+          $expected = "${{ matrix.openmp }}" -eq "true"
+          if (($licenses -match "License for LLVM") -ne $expected) {
+            throw "Unexpected LLVM license embedding state"
+          }
+
       - name: Test
         id: cmake_test
         if: ${{ matrix.arch == 'x64' }}
         run: |
           cd build
           ctest -L main -C Release --verbose --timeout 900
+
+      - name: Upload Windows ARM64 test binaries
+        if: ${{ matrix.build == 'arm64' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-arm64-openmp-ci
+          path: build/bin/Release/*
 
       # TODO: disabled for now, consider adding tests for all CPU variants instead
       # - name: Test (Intel SDE)
@@ -229,3 +259,29 @@ jobs:
       #     cd build
       #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
       #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
+
+  windows-arm64-openmp:
+    needs: [windows]
+    runs-on: windows-11-arm
+
+    steps:
+      - name: Download Windows ARM64 test binaries
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-arm64-openmp-ci
+          path: bin
+
+      - name: Test LLVM OpenMP runtime
+        run: |
+          $env:OMP_NUM_THREADS = 2
+          $imports = Get-ChildItem .\bin\* -File -Include *.dll,*.exe |
+            ForEach-Object { (& llvm-readobj --coff-imports $_.FullName) -join "`n" } |
+            Out-String
+          if ($imports -notmatch "(?im)^\s*Name: libomp\.dll$") {
+            throw "No ARM64 test binary imports libomp.dll"
+          }
+          $licenses = (& .\bin\llama.exe licenses) -join "`n"
+          if ($licenses -notmatch "License for LLVM") {
+            throw "LLVM license is not embedded in llama.exe"
+          }
+          & .\bin\test-quantize-fns.exe
