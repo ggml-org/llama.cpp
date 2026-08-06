@@ -1530,6 +1530,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MULTI_PROJ_NORM:      "v.proj_blk.{bid}.norm",
     MODEL_TENSOR.V_MULTI_PROJ_LINEAR:    "v.proj_blk.{bid}.linear",
     MODEL_TENSOR.V_MULTI_PROJ_POST_NORM: "v.proj_blk.{bid}.post_norm",
+
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
