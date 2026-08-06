@@ -12,7 +12,11 @@
 //     false (no work, no point calling v2).
 //
 //   meta decode:
-//     always C ref (v2 is 0.41-0.65x of C on M1 Pro).
+//     v2 iff n_total_pages (= n_rows * n_pages) >= 4096.
+//     On M1 base the v2 wins 1.09x at 135168+ elems; loses
+//     0.80-0.92x at 528-8448 elems; ties at 33792. The
+//     4096 threshold is conservative (33792 is the tie,
+//     135168 is the first clean v2 win at n_pages=16).
 //
 // The test also runs the C ref fallback helpers
 // (ts_decode_per_row_meta_ref, ts_apply_outlier_addback_ref)
@@ -73,18 +77,40 @@ bool test_dispatch_picks(void) {
                c.expected ? "v2" : "C ref",
                ok ? "OK" : "FAIL");
     }
-    // Meta decode cost model: always C ref.
-    for (int64_t n_rows : { (int64_t) 1, (int64_t) 16, (int64_t) 64,
-                            (int64_t) 256, (int64_t) 1024 }) {
-        for (int64_t n_pages : { (int64_t) 1, (int64_t) 16, (int64_t) 64 }) {
-            const bool got = ts_v2_dispatch_should_use_v2_meta(n_rows, n_pages);
-            const bool ok = (got == false);
-            if (!ok) failures++;
-            printf("  meta    n_rows=%-4lld n_pages=%-3lld -> %s (expected C ref) %s\n",
-                   (long long) n_rows, (long long) n_pages,
-                   got ? "v2" : "C ref",
-                   ok ? "OK" : "FAIL");
-        }
+    // Meta decode cost model: v2 iff n_total_pages >= 4096.
+    // n_total_pages = n_rows * n_pages. The threshold maps to
+    // n_rows >= 256 at n_pages=16 (the first clean v2 win in
+    // the bench data) and to n_rows >= 64 at n_pages=64.
+    struct MetaCase { int64_t n_rows; int64_t n_pages; bool expected; };
+    const MetaCase meta_cases[] = {
+        // Small N: C ref (v2 loses to scalar loop)
+        {   1,   1, false },  // n_total_pages=1
+        {   1,  16, false },  // n_total_pages=16 (528 elems, 0.80x)
+        {   1,  64, false },  // n_total_pages=64
+        {  16,  16, false },  // n_total_pages=256 (8448 elems, 0.92x)
+        {  16,  64, false },  // n_total_pages=1024
+        {  64,  16, false },  // n_total_pages=1024 (33792 elems, 0.99x tie)
+        {  63,  64, false },  // n_total_pages=4032 (just under boundary)
+        // Boundary + above: v2
+        {  64,  64, true  },  // n_total_pages=4096 (boundary, included)
+        {  65,  64, true  },  // n_total_pages=4160 (just over)
+        { 256,  16, true  },  // n_total_pages=4096 (135168 elems, 1.09x)
+        { 256,  64, true  },  // n_total_pages=16384
+        {1024,  16, true  },  // n_total_pages=16384 (540672 elems, 1.09x)
+        {1024,  64, true  },  // n_total_pages=65536
+        // Edge: n_total_pages=0 -> C ref
+        {   0,  16, false },  // n_total_pages=0 (no work)
+    };
+    for (const auto & c : meta_cases) {
+        const int64_t n_total_pages = c.n_rows * c.n_pages;
+        const bool got = ts_v2_dispatch_should_use_v2_meta(c.n_rows, c.n_pages);
+        const bool ok = (got == c.expected);
+        if (!ok) failures++;
+        printf("  meta    n_rows=%-4lld n_pages=%-3lld n_total_pages=%-7lld -> %s (expected %s) %s\n",
+               (long long) c.n_rows, (long long) c.n_pages, (long long) n_total_pages,
+               got ? "v2" : "C ref",
+               c.expected ? "v2" : "C ref",
+               ok ? "OK" : "FAIL");
     }
     return failures == 0;
 }

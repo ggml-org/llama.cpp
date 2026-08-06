@@ -1578,12 +1578,12 @@ v2 dequant, quant, and act_scale stay on the static rules
 cost model shows they always win at in_dim >= 1024.
 
 **Cost model** (threshold derived from
-`tests/bench-tessera-quants-v2.cpp` on M1 Pro):
+`tests/bench-tessera-quants-v2.cpp` on M1 base):
 
 | Function                     | Cost model rule                  | Crossover                          |
 |------------------------------|----------------------------------|------------------------------------|
 | `apply_outlier_addback_v2`   | v2 iff `n_total` in (0, 1024]    | `n_total = 1024` (v2's NEON path scratch cap) |
-| `decode_per_row_meta_v2`     | always C ref                     | n/a (v2 never wins)                |
+| `decode_per_row_meta_v2`     | v2 iff `n_total_pages` >= 4096   | `n_total_pages = 4096` (vDSP + NEON setup tax amortisation) |
 
 The helpers live in `ggml/src/ggml-quants-v2-dispatch.h`:
 
@@ -1592,8 +1592,9 @@ static inline bool ts_v2_dispatch_should_use_v2_outlier(int64_t n_total) {
     return n_total > 0 && n_total <= TS_V2_OUTLIER_NEON_PATH_MAX_N_TOTAL;
 }
 static inline bool ts_v2_dispatch_should_use_v2_meta(int64_t n_rows, int64_t n_pages) {
-    (void) n_rows; (void) n_pages;
-    return false;  // v2 is 0.41-0.65x of C; never wins
+    if (n_rows <= 0 || n_pages <= 0) return false;
+    const int64_t n_total_pages = n_rows * n_pages;
+    return n_total_pages >= TS_V2_META_DECODE_MIN_N_TOTAL_PAGES;
 }
 ```
 
@@ -1601,7 +1602,7 @@ static inline bool ts_v2_dispatch_should_use_v2_meta(int64_t n_rows, int64_t n_p
 preferred approach was a few lines of math comparing
 `v2_setup_tax + v2_per_row * n_rows` vs `c_per_row * n_rows`.
 The bench data shows the operations are memory-bandwidth
-bound at large n on M1 Pro: the v2 outlier at n_rows=1024
+bound at large n on M1 base: the v2 outlier at n_rows=1024
 ranges 486-6416us across runs (10x variance) and the C
 ref ranges 483-2105us. A per-row cost model derived from
 a linear fit through (n=1, n=1024) is dominated by the
@@ -1619,16 +1620,42 @@ the v2 above `n_total = 1024` wastes a function call + the
 `n_total > 1024` check inside v2, so the dispatch calls
 the C ref (`ts_apply_outlier_addback_ref`) directly. At
 `n_total <= 1024` the v2's NEON path is faster (1.5-1.98x
-on M1 Pro per the bench).
+on M1 base per the bench). At n_total=208896 the v2 is
+1.23x faster again because of function-call savings even
+though both implementations are memory-bandwidth bound.
+
+**Per-target retuning.** The constants
+(`TS_V2_OUTLIER_NEON_PATH_MAX_N_TOTAL = 1024`,
+`TS_V2_META_DECODE_MIN_N_TOTAL_PAGES = 4096`) are M1 base
+values. The A15 is a separate target; an on-device re-bench
+on the iPhone 13 Pro Max A15 is a follow-up. The threshold
+model is intentionally simple (one number per function) so
+per-target retuning is one bench run + one constant change
++ re-run the dispatch test. The dispatch header documents
+the source of each constant.
+
+**Regime router follow-on.** The static thresholds above
+are a v1 cost model: they don't learn from the actual
+kernel output. The regime router (next planned worker)
+extends this with a learned per-(family, shape) device
+preference trained against the L1-measured `t_l^2` on
+real dequant output. The v1 thresholds remain the
+fallback policy when the regime router has no data for
+a tensor.
 
 **Meta decode detail.** The v2's vDSP bulk calls
 (`vDSP_vflt8` + `vDSP_vsdiv` for lane scales, NEON
-`vcvt_f32_f16` for page scales) are slower per element
-than the C ref's scalar loop at every shape we measured
-(0.41-0.65x of C). The C ref (`ts_decode_per_row_meta_ref`)
-is a single scalar loop over the whole tile's meta. The
-v2 helper always returns false; the call site is kept for
-uniformity with the outlier decision.
+`vcvt_f32_f16` for page scales) have a per-call setup tax
+that only amortises above the threshold. On M1 base: v2
+loses 0.80-0.92x at 528-8448 elems, ties 0.99x at 33792
+elems, and wins 1.09x at 135168+ elems. The 4096 threshold
+maps to n_rows=256 at n_pages=16 (the first clean v2 win
+in the bench data) and to n_rows=64 at n_pages=64 (which
+is the typical Phase 0 / iPhone drafter shape). The
+threshold is conservative: routing the 33792-elem tie to
+v2 would lose 0.5% on a per-tile hot path; routing to C
+ref at 135168 elems would leave 9% on the table. The
+threshold is the cleanest boundary the bench data supports.
 
 **Per-shape dispatch picks** (from the bench's
 `bench_dispatch_picks()`):
@@ -1638,15 +1665,15 @@ uniformity with the outlier decision.
 | meta n_rows=1, n_pages=16 (528 elems)      | C ref      | n/a          |
 | meta n_rows=16, n_pages=16 (8448 elems)    | C ref      | n/a          |
 | meta n_rows=64, n_pages=16 (33792 elems)   | C ref      | n/a          |
-| meta n_rows=256, n_pages=16 (135168 elems) | C ref      | n/a          |
-| meta n_rows=1024, n_pages=16 (540672 elems)| C ref      | n/a          |
-| outlier n_rows=1, k=1024, n_total=51       | n/a        | v2 (NEON path) |
-| outlier n_rows=1, k=4096, n_total=204      | n/a        | v2 (NEON path) |
-| outlier n_rows=1, k=8192, n_total=409      | n/a        | v2 (NEON path) |
-| outlier n_rows=16, k=4096, n_total=3264    | n/a        | C ref (v2 falls back) |
-| outlier n_rows=64, k=4096, n_total=13056   | n/a        | C ref (v2 falls back) |
-| outlier n_rows=256, k=4096, n_total=52224  | n/a        | C ref (v2 falls back) |
-| outlier n_rows=1024, k=4096, n_total=208896| n/a        | C ref (v2 falls back) |
+| meta n_rows=256, n_pages=16 (135168 elems) | v2         | n/a          |
+| meta n_rows=1024, n_pages=16 (540672 elems)| v2         | n/a          |
+| outlier n_rows=1, k=1024, n_total=51       | n/a        | v2 (1.66x)   |
+| outlier n_rows=1, k=4096, n_total=204      | n/a        | v2 (1.78x)   |
+| outlier n_rows=1, k=8192, n_total=409      | n/a        | v2 (1.88x)   |
+| outlier n_rows=16, k=4096, n_total=3264    | n/a        | C ref (1.00x) |
+| outlier n_rows=64, k=4096, n_total=13056   | n/a        | C ref (0.99x) |
+| outlier n_rows=256, k=4096, n_total=52224  | n/a        | C ref (1.00x) |
+| outlier n_rows=1024, k=4096, n_total=208896| n/a        | C ref (1.23x) |
 
 **Implementation.** The dispatch's v2 path is a unit
 because the v2 dequant takes pre-decoded meta as a

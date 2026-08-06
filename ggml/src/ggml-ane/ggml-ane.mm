@@ -1306,13 +1306,16 @@ static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> 
 //                         GGML_TESSERA_T640_V2_MIN_K (1024);
 //                         the C reference in ggml-quants.c is
 //                         the documented fallback. The v2
-//                         dequant is 1.3-1.6x faster than the
-//                         C ref at in_dim >= 1024 on M1 Pro
-//                         (the radix-243 trit decode is the
-//                         bottleneck); the v2 quant and
-//                         act_scale are 3-4x and 1.9x faster
-//                         respectively. These three keep
-//                         static dispatch rules
+//                         dequant is 1.26-1.66x faster than the
+//                         C ref at in_dim >= 640 on M1 base
+//                         (16 GB, ~68 GB/s; the radix-243 trit
+//                         decode is the bottleneck); the v2
+//                         quant is 1.0-5.1x (small k ties,
+//                         large k wins 3-5x because the C ref
+//                         hits DRAM bandwidth on M1 base); the
+//                         v2 act_scale is 1.0-2.1x (small/med
+//                         wins, large k ties). These three
+//                         keep static dispatch rules
 //                         (v2 above the cutoff, C ref
 //                         below).
 //
@@ -1336,14 +1339,25 @@ static bool ggml_ane_gather_input_fp32(ggml_tensor * tensor, std::vector<float> 
 //                             directly above the threshold
 //                             to avoid a wasted function
 //                             call + the n_total > 1024
-//                             check inside v2.
+//                             check inside v2. On M1 base:
+//                             1.66-1.88x at n_total=51-409
+//                             (the iPhone drafter's single-
+//                             row tail), ties at 3264-52224,
+//                             1.23x at 208896.
 //
 //                           decode_per_row_meta_v2:
-//                             always C ref. v2 is 0.41-0.65x
-//                             of C across all measured
-//                             shapes on M1 Pro (the vDSP
-//                             bulk calls don't amortise for
-//                             the typical Phase 0 shapes).
+//                             v2 iff n_total_pages
+//                             (= n_rows * n_pages) >= 4096.
+//                             On M1 base the v2 wins 1.09x
+//                             at 135168+ elems (the vDSP +
+//                             NEON bulk calls amortise their
+//                             per-call setup tax), but
+//                             loses 0.80-0.92x at 528-8448
+//                             elems and ties at 33792. The
+//                             4096 threshold is conservative
+//                             (it routes the 33792-elem tie
+//                             to the C ref to avoid the
+//                             per-call tax on the hot path).
 //
 //                         The v2 dequant takes pre-decoded
 //                         meta as separate inputs; the C ref

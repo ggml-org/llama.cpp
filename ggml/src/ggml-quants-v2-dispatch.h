@@ -8,7 +8,14 @@
 // model below.
 //
 // Cost model: per-function threshold derived from the
-// bench (tests/bench-tessera-quants-v2.cpp) on M1 Pro.
+// bench (tests/bench-tessera-quants-v2.cpp) on the host
+// machine, which is an Apple M1 base (16 GB unified
+// memory, ~68 GB/s bandwidth, 4P+4E cores, 8-core GPU,
+// 11 TOPS ANE). The M1 base is the closest host to the
+// iPhone 13 Pro Max A15 (the demo's target); an on-device
+// re-bench on the A15 is a follow-up. The dispatch is
+// table-driven so the per-target constants are easy to
+// retune.
 //
 //   apply_outlier_addback_v2:
 //     v2 wins iff n_total in (0, 1024]. The v2's NEON path
@@ -20,15 +27,27 @@
 //     directly. The per-row crossover from a linear fit is
 //     noisy at large n (the operations are memory-bandwidth
 //     bound; the v2 outlier at n_rows=1024 ranges 486-6416us
-//     across runs on M1 Pro), so the threshold is pinned to
-//     the v2's internal NEON path boundary.
+//     across runs on M1), so the threshold is pinned to the
+//     v2's internal NEON path boundary. On M1 base: v2 wins
+//     1.66x at n_total=51, 1.78x at n_total=204, 1.88x at
+//     n_total=409, ties at 3264-52224, and recovers 1.23x at
+//     208896 (where the v2's NEON path is no longer active
+//     and both implementations are memory-bandwidth bound;
+//     the v2 stays slightly ahead because of the function
+//     call savings).
 //
 //   decode_per_row_meta_v2:
-//     v2 never wins. The v2's vDSP bulk calls (vDSP_vflt8 +
-//     vDSP_vsdiv + NEON vcvt_f32_f16) are slower per element
-//     than the C ref's scalar loop (0.41-0.65x of C across
-//     all shapes on M1 Pro). The v2 has no internal threshold
-//     that helps, so the dispatch always uses the C ref.
+//     v2 wins iff n_total_pages (= n_rows * n_pages) >=
+//     4096. The v2's vDSP bulk calls (vDSP_vflt8 + vDSP_vsdiv
+//     for lane scales, NEON vcvt_f32_f16 for page scales)
+//     have a per-call setup tax that is only amortised above
+//     the threshold. On M1 base: v2 loses at small N
+//     (0.80x at 528 elems, 0.92x at 8448 elems), ties at
+//     33792 elems (0.99x), wins at 135168 and 540672 elems
+//     (1.09x). The threshold of 4096 is conservative: at
+//     n_pages=16 it maps to n_rows >= 256, at n_pages=64
+//     to n_rows >= 64. Below the threshold the C ref's
+//     scalar loop wins on M1 base.
 //
 // The helpers here are static inline so the dispatch in
 // ggml-ane.mm can call them without a function-call
@@ -52,7 +71,29 @@ extern "C" {
 // Threshold: v2's NEON path scratch cap. Above this n_total
 // the v2 falls back to scalar. The dispatch uses this as
 // the crossover for the outlier addback cost model.
+//
+// This is a HARD v2-internal boundary (4 KB stack scratch cap
+// on the v2's NEON bulk path). The cost model threshold
+// matches it exactly; the v2 has no other path that's
+// faster than the C ref, so the dispatch is binary on this
+// single value. The constant is named with the v2's
+// internal property rather than the dispatch's policy
+// label so the header documents the source.
 #define TS_V2_OUTLIER_NEON_PATH_MAX_N_TOTAL 1024
+
+// Threshold: minimum n_total_pages for the v2 meta decode
+// cost model. n_total_pages = n_rows * n_pages. Below this
+// the v2's vDSP + NEON setup tax dominates and the C ref
+// scalar loop is faster. Above this the bulk calls amortise
+// and v2 wins by ~9% on M1 base.
+//
+// On M1 base: n_total_pages=256 -> C ref (0.92x), 1024 -> C
+// ref (0.99x tie), 4096 -> v2 (1.09x at n_pages=16 n_rows=256).
+// 4096 is the first clean v2 win in the measured data; using
+// 1024 here would route the tie case (33792 elems) to v2
+// and lose 0.5%, which is a real cost on a per-tile dispatch
+// hot path.
+#define TS_V2_META_DECODE_MIN_N_TOTAL_PAGES 4096
 
 // ---------------------------------------------------------------------------
 // Cost model: outlier addback
@@ -80,14 +121,17 @@ static inline bool ts_v2_dispatch_should_use_v2_outlier(int64_t n_total) {
 // for this call. Returns false if the dispatch should call the C
 // ref (ts_decode_per_row_meta_ref) directly.
 //
-// v2 is 0.41-0.65x of C across all measured shapes on M1 Pro, so
-// the cost model always returns false. The helper is kept for
-// symmetry with the outlier cost model and to make the dispatch
-// call site uniform.
+// On M1 base the v2 wins by 1.09x at n_total_pages >= 4096 (the
+// bulk vDSP + NEON calls amortise their per-call setup tax).
+// Below the threshold the C ref's scalar loop is faster
+// (0.80-0.99x). The threshold is conservative: 33792 elems
+// (n_total_pages=1024) is a 0.99x tie on M1 base and the
+// dispatch routes it to the C ref to avoid the per-call tax
+// on the hot path.
 static inline bool ts_v2_dispatch_should_use_v2_meta(int64_t n_rows, int64_t n_pages) {
-    (void) n_rows;
-    (void) n_pages;
-    return false;
+    if (n_rows <= 0 || n_pages <= 0) return false;
+    const int64_t n_total_pages = n_rows * n_pages;
+    return n_total_pages >= TS_V2_META_DECODE_MIN_N_TOTAL_PAGES;
 }
 
 // ---------------------------------------------------------------------------
