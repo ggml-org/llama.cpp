@@ -1,14 +1,6 @@
 <script lang="ts">
 	import { File, Folder } from '@lucide/svelte';
-	import {
-		abbreviateHome,
-		buildGlobSearchArgs,
-		joinPath,
-		lastPathSegment,
-		rankEntries,
-		runGlobSearch,
-		type GlobEntry
-	} from '$lib/utils';
+	import { abbreviateHome, runGlobSearchWithChildren, type GlobEntryResult } from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { FileMentionEntryType, GlobSearchType } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
@@ -22,12 +14,8 @@
 	import type { FileMentionEntry } from '$lib/types';
 	import {
 		FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
-		GLOB_WILDCARD,
 		HOME_TILDE,
-		PATH_NAV_MAX_DEPTH,
-		PATH_SEPARATOR,
-		SEARCH_DEBOUNCE_MS,
-		WINDOWS_SEPARATOR
+		SEARCH_DEBOUNCE_MS
 	} from '$lib/constants';
 
 	/**
@@ -112,62 +100,29 @@
 		canRun: () => isOpen,
 		getQuery: () => trimmedQuery,
 		run: async (query, signal, isCurrent) => {
-			const args = buildGlobSearchArgs(query, scopePath ?? home ?? HOME_TILDE, searchDepth);
 			try {
-				const res = await runGlobSearch(args, GlobSearchType.ALL, MENTION_SEARCH_LIMIT, signal);
+				// A trailing path separator targets a directory, so the shared
+				// search also lists its children. Accept both `/` and `\`.
+				const res = await runGlobSearchWithChildren(
+					query,
+					scopePath ?? home ?? HOME_TILDE,
+					searchDepth,
+					MENTION_SEARCH_LIMIT,
+					signal,
+					{ type: GlobSearchType.ALL, descendOnTrailingSeparator: true }
+				);
 				if (!isCurrent()) return;
 				if (res.error) {
 					searchResults = [];
 					searchError = res.error;
 					return;
 				}
-				const toEntry = (e: GlobEntry): FileMentionEntry => ({
-					path: joinPath(res.base, e.path),
-					name: lastPathSegment(e.path),
+				const toEntry = (e: GlobEntryResult): FileMentionEntry => ({
+					path: e.path,
+					name: e.name,
 					type: e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
 				});
-
-				let entries = rankEntries(res.entries, args.rankQuery).map(toEntry);
-
-				// A trailing path separator targets a directory: list its children
-				// too so the user can step into it from the picker, mirroring the
-				// WD picker. Accept both `/` and Windows `\` so it works either way.
-				if ((query.endsWith(PATH_SEPARATOR) || query.endsWith(WINDOWS_SEPARATOR)) && args.last) {
-					const last = args.last;
-					const exact = res.entries.find(
-						(e) => e.type === 'dir' && lastPathSegment(e.path).toLowerCase() === last.toLowerCase()
-					);
-					if (exact) {
-						const exactDir = joinPath(res.base, exact.path);
-						const childRes = await runGlobSearch(
-							{
-								path: exactDir,
-								include: GLOB_WILDCARD,
-								maxDepth: PATH_NAV_MAX_DEPTH,
-								rankQuery: ''
-							},
-							GlobSearchType.ALL,
-							MENTION_SEARCH_LIMIT,
-							signal
-						);
-						if (!isCurrent()) return;
-						if (!childRes.error) {
-							const children = childRes.entries
-								.map(
-									(e): FileMentionEntry => ({
-										path: joinPath(childRes.base, e.path),
-										name: lastPathSegment(e.path),
-										type:
-											e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
-									})
-								)
-								.sort((a, b) => a.path.localeCompare(b.path));
-							entries = [...entries, ...children];
-						}
-					}
-				}
-
-				searchResults = entries;
+				searchResults = res.entries.map(toEntry);
 				searchError = null;
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;

@@ -184,7 +184,12 @@ export {
 } from './working-directory';
 
 // Shared `file_glob_search` runner with a short-lived result cache
-export { runGlobSearch, type GlobSearchResult } from './glob-search';
+export {
+	runGlobSearch,
+	runGlobSearchWithChildren,
+	type GlobEntryResult,
+	type GlobSearchResult
+} from './glob-search';
 
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {

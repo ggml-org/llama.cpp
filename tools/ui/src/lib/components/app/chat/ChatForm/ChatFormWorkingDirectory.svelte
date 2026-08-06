@@ -6,13 +6,10 @@
 	import {
 		abbreviateHome,
 		buildCaseInsensitiveGlob,
-		buildGlobSearchArgs,
 		joinPath,
 		lastPathSegment,
-		rankEntries,
-		runGlobSearch,
-		type GlobEntry,
-		type GlobSearchResult
+		runGlobSearchWithChildren,
+		type GlobEntry
 	} from '$lib/utils';
 	import * as Popover from '$lib/components/ui/popover';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
@@ -23,12 +20,10 @@
 	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
 	import {
 		DEFAULT_MOBILE_BREAKPOINT,
-		GLOB_WILDCARD,
 		HOME_TILDE,
 		MAX_RESULTS_SHOWN,
 		NATIVE_LIMIT,
 		NATIVE_MAX_DEPTH,
-		PATH_NAV_MAX_DEPTH,
 		SEARCH_DEBOUNCE_MS,
 		SEARCH_LIMIT,
 		SEARCH_MAX_DEPTH
@@ -157,26 +152,12 @@
 	// directory is "entered".
 	let searchScope = $state(HOME_TILDE);
 
-	// Runs a directory listing through the shared cache, so a repeated query
-	// in the same directory does not re-walk the tree on the server.
-	async function searchDirs(
-		path: string,
-		include: string,
-		maxDepth: number,
-		signal: AbortSignal
-	): Promise<GlobSearchResult> {
-		return runGlobSearch(
-			{ path, include, maxDepth, rankQuery: '' },
-			GlobSearchType.DIR,
-			SEARCH_LIMIT,
-			signal
-		);
-	}
-
 	// Debounced, abortable directory search backed by the shared cache. The
 	// query is two-way bound to the text after `/cwd `, so typing in either
 	// the search input or the chat input drives the same results. Stale
-	// responses are dropped by the hook's isCurrent guard.
+	// responses are dropped by the hook's isCurrent guard. An exactly-typed
+	// directory is "entered": the shared search lists its children too, so
+	// path navigation does not require a trailing slash.
 	const search = useDebouncedSearch({
 		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen,
@@ -191,11 +172,17 @@
 				return;
 			}
 
-			const args = buildGlobSearchArgs(trimmed, homeBase ?? HOME_TILDE, SEARCH_MAX_DEPTH);
 			try {
-				// A generous limit is requested because ranking happens
-				// client-side; only the top 20 are shown.
-				const res = await searchDirs(args.path, args.include, args.maxDepth, signal);
+				// Generous limit because ranking happens client-side; only
+				// the top MAX_RESULTS_SHOWN are shown.
+				const res = await runGlobSearchWithChildren(
+					trimmed,
+					homeBase ?? HOME_TILDE,
+					SEARCH_MAX_DEPTH,
+					SEARCH_LIMIT,
+					signal,
+					{ type: GlobSearchType.DIR }
+				);
 				if (!isCurrent()) return;
 				if (res.error) {
 					queryResults = [];
@@ -203,31 +190,9 @@
 					searchError = res.error;
 					return;
 				}
-				const { base, entries } = res;
-				const ranked = rankEntries(entries, args.rankQuery);
-				let results = ranked.map((e) => joinPath(base, e.path));
-				searchScope = args.path;
 
-				// An exactly-typed directory is "entered": list its children too,
-				// so path navigation doesn't require a trailing slash.
-				const last = args.last;
-				const exact = last
-					? ranked.find((e) => lastPathSegment(e.path).toLowerCase() === last.toLowerCase())
-					: undefined;
-				if (exact) {
-					const exactDir = joinPath(base, exact.path);
-					const childRes = await searchDirs(exactDir, GLOB_WILDCARD, PATH_NAV_MAX_DEPTH, signal);
-					if (!isCurrent()) return;
-					if (!childRes.error) {
-						const children = childRes.entries
-							.map((e) => joinPath(childRes.base, e.path))
-							.sort((a, b) => a.localeCompare(b));
-						results = [...results, ...children];
-						searchScope = exactDir;
-					}
-				}
-
-				queryResults = results.slice(0, MAX_RESULTS_SHOWN);
+				searchScope = res.exactDir ?? res.args.path;
+				queryResults = res.entries.map((e) => e.path).slice(0, MAX_RESULTS_SHOWN);
 				if (queryResults.length > 0) {
 					nav.reset(0);
 					// new results: scroll the list back to the top (first item is hovered)
