@@ -87,8 +87,9 @@
 	let searchSeq = 0;
 
 	// Cache of the last file_glob_search result per (parent, include, max_depth),
-	// so repeated queries in the same directory don't re-walk the tree. Entries
-	// expire after a short TTL.
+	// so repeated queries in the same directory don't re-walk the tree. Entering
+	// a directory hits it every time: the children listed for an exactly typed
+	// segment are what the next keystroke, the trailing slash, asks for again.
 	const SEARCH_CACHE_TTL_MS = 2000;
 	const searchCache = new SvelteMap<string, { results: GlobEntry[]; base: string; at: number }>();
 
@@ -161,7 +162,11 @@
 		if (typeof res.error === 'string') return { base: '', entries: [], error: res.error };
 		const base = typeof res.base === 'string' ? res.base : '';
 		const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-		searchCache.set(key, { results: entries, base, at: Date.now() });
+		const now = Date.now();
+		for (const [k, v] of searchCache) {
+			if (now - v.at >= SEARCH_CACHE_TTL_MS) searchCache.delete(k);
+		}
+		searchCache.set(key, { results: entries, base, at: now });
 		return { base, entries };
 	}
 

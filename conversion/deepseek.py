@@ -17,8 +17,11 @@ from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logg
 from .qwen import QwenModel
 
 
-@ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM")
+@ModelBase.register("DeepseekOCRForCausalLM")
 class DeepseekOCRVisionModel(MmprojModel):
+    # HF dynamic_preprocess() max_num, which differs per model
+    preproc_max_tiles = 9
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR
@@ -42,6 +45,9 @@ class DeepseekOCRVisionModel(MmprojModel):
             self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
         # @bluebread: there's no window_size in config but just add it here anyway
         self.gguf_writer.add_vision_window_size(self.hparams.get("window_size", 14))
+
+        self.gguf_writer.add_vision_preproc_min_tiles(2)
+        self.gguf_writer.add_vision_preproc_max_tiles(self.preproc_max_tiles)
 
         # SAM configuration
         sam_hparams = hparams['sam']
@@ -93,8 +99,15 @@ class DeepseekOCRVisionModel(MmprojModel):
         return super().filter_tensors((name, gen))
 
 
+@ModelBase.register("UnlimitedOCRForCausalLM")
+class UnlimitedOCRVisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 32
+
+
 @ModelBase.register("DeepseekOCR2ForCausalLM")
 class DeepseekOCR2VisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 6
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR2

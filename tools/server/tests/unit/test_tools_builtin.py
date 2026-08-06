@@ -214,6 +214,27 @@ def test_tools_builtin_file_glob_search_max_depth_and_limit(tmp_path):
     assert "Total matches: 3" in res["plain_text_response"]
 
 
+def test_tools_builtin_file_glob_search_junk_dirs(tmp_path):
+    global server
+    server.start()
+
+    (tmp_path / "build" / "nested").mkdir(parents=True)
+    (tmp_path / "build" / "artifact.txt").write_text("built")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.cpp").write_text("int main() {}")
+
+    # a junk directory stays selectable as a working directory
+    res = call_tool("file_glob_search", {"path": str(tmp_path), "type": "dir", "max_depth": 1})
+    assert "build" in [e["path"] for e in res["entries"]]
+
+    # but it is never walked, so nothing inside it shows up
+    res = call_tool("file_glob_search", {"path": str(tmp_path), "type": "all"})
+    paths = [e["path"] for e in res["entries"]]
+    assert "src/main.cpp" in paths
+    assert "build/artifact.txt" not in paths
+    assert "build/nested" not in paths
+
+
 def test_tools_builtin_file_glob_search_rejects_invalid_type(tmp_path):
     global server
     server.start()
