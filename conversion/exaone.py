@@ -123,7 +123,9 @@ class Exaone4Model(TextModel):
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
 
-@ModelBase.register("ExaoneMoEForCausalLM")
+# note: transformers >= 5.1 renamed the class to "ExaoneMoeForCausalLM" (lowercase 'e'),
+#       so accept both spellings - LG AI have updated the configs of already-released models
+@ModelBase.register("ExaoneMoEForCausalLM", "ExaoneMoeForCausalLM")
 class ExaoneMoEModel(Exaone4Model):
     model_arch = gguf.MODEL_ARCH.EXAONE_MOE
 
