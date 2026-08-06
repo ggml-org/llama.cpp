@@ -11,9 +11,8 @@ import {
 } from '$lib/utils';
 
 /**
- * Cross-cutting dependencies the pickers need from the chat form. Injected
- * as getters/callbacks so the hook stays free of component-owned state
- * (the input value, caret, model selector) and store circular imports.
+ * Dependencies injected as getters so the hook stays free of component
+ * state and store circular imports.
  */
 export interface UseChatFormPickersOptions {
 	/** Current chat input value. */
@@ -43,13 +42,9 @@ export interface UseChatFormPickersOptions {
 }
 
 /**
- * State and orchestration for the chat form's pickers and the `/`+`@`
- * routing that drives them.
- *
- * Owns the open/query state for the command, prompt, mention and working-
- * directory pickers, the dismiss snapshots, the slash-command dispatch, and
- * the two-way `/cwd` token binding. The plain textarea/contenteditable swap,
- * caret pinning and file/attachment handling stay in the chat form.
+ * Chat-form picker state and the `/`+`@` routing that drives them.
+ * Owns open/query state, dismiss snapshots and slash-command dispatch;
+ * textarea/caret/attachment handling stays in the chat form.
  */
 export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	// Picker state
@@ -63,23 +58,14 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let workingDirectoryQuery = $state('');
 
 	/**
-	 * Snapshot of the most recent `@`-mention token the user dismissed
-	 * (via Escape, outside-click, or simply by deleting it). When the
-	 * picker is closed AND the same token is still intact in the buffer,
-	 * we do NOT auto-reopen - the user has explicitly told us this
-	 * `@<query>` should be treated as literal text. The snapshot
-	 * becomes stale the moment any character inside the token changes,
-	 * at which point the picker is allowed to reopen on the next input.
+	 * Last dismissed `@`-mention token; while intact, the picker does not
+	 * reopen, so an escaped `@<query>` stays literal until edited.
 	 */
 	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
 
 	/**
-	 * Snapshot of the most recent `/`-command token the user dismissed
-	 * (via Escape or outside-click). When the command picker is closed AND
-	 * the same token is still intact in the buffer, we neither reopen the
-	 * picker nor instant-dispatch - the user has explicitly told us this
-	 * `/name` should be treated as literal text. The snapshot becomes stale
-	 * the moment any character inside the token changes.
+	 * Last dismissed `/`-command token; while intact, the picker neither
+	 * reopens nor instant-dispatches, so an escaped `/name` stays literal.
 	 */
 	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
 
@@ -99,11 +85,8 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	);
 
 	/**
-	 * Dispatch a selected slash command. The command token is consumed
-	 * (the input is cleared) and the corresponding picker / selector is
-	 * opened. `args` (everything after the command name) seeds the target
-	 * picker's search where applicable - e.g. `/prompt rev` opens the MCP
-	 * prompt picker pre-filtered by `rev`.
+	 * Dispatch a selected slash command: consume the token and open the
+	 * target picker. `args` seeds the target search where applicable.
 	 */
 	function dispatchCommand(command: ChatFormCommand, args: string) {
 		switch (command.action) {
@@ -132,8 +115,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		const cursor = opts.getCaretOffset() ?? value.length;
 
 		if (value.startsWith(PROMPT_TRIGGER_PREFIX)) {
-			// A `/` at the start is a command, not a mention - close the
-			// mention and prompt pickers and route to the command picker.
+			// A leading `/` is a command: route to the command picker.
 			isMentionPickerOpen = false;
 			mentionQuery = '';
 			isPromptPickerOpen = false;
@@ -146,9 +128,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				return;
 			}
 
-			// Picker's been dismissed for THIS exact token - honor the
-			// "literal until delete + retype" rule: don't reopen or
-			// instant-dispatch until the token changes.
+			// Dismissed token stays literal until it changes.
 			const isDismissedSticky =
 				commandDismissedSnapshot !== null &&
 				commandDismissedSnapshot.name === token.name &&
@@ -160,10 +140,8 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				return;
 			}
 
-			// The command name is complete once a space follows it. An exact
-			// match dispatches instantly (Slack-style); a non-match falls
-			// through to the picker's empty state so the user can still
-			// submit the literal text. Disabled commands never dispatch.
+			// Name complete once a space follows; exact match dispatches
+			// instantly, non-match falls through. Disabled never dispatches.
 			const nameComplete = token.args.length > 0 || value.endsWith(' ');
 			if (nameComplete) {
 				const command = availableCommands.find((c) => c.name === token.name);
@@ -175,8 +153,8 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				}
 			}
 
-			// Still typing the name (or it doesn't match) - show the picker
-			// only when there is something to pick.
+			// Name incomplete or unmatched: show the picker only when there
+			// is something to pick.
 			if (availableCommands.length > 0) {
 				isCommandPickerOpen = true;
 				commandQuery = token.name;
@@ -187,14 +165,13 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			return;
 		}
 
-		// Not a command - close the command picker and reset the snapshot.
+		// Not a command: close the command picker and reset its snapshot.
 		isCommandPickerOpen = false;
 		commandQuery = '';
 		if (commandDismissedSnapshot !== null) {
 			commandDismissedSnapshot = null;
 		}
-		// A non-command edit while the `/cwd` picker is open means the user
-		// abandoned the command - close the picker.
+		// A non-command edit abandons `/cwd`: close the picker.
 		if (isWorkingDirectoryPickerOpen) {
 			isWorkingDirectoryPickerOpen = false;
 		}
@@ -202,20 +179,15 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		const token = findMentionToken(value, cursor);
 
 		if (token) {
-			// Picker's been dismissed for THIS exact token - honor the
-			// "literal until delete + retype" rule: don't reopen until the
-			// token changes (typed-then-Esc'd a slot, then kept typing
-			// inside the same `@<q>`).
+			// Dismissed token stays literal: don't reopen until it changes.
 			const isDismissedSticky =
 				mentionDismissedSnapshot !== null &&
 				mentionDismissedSnapshot.start === token.start &&
 				mentionDismissedSnapshot.query === token.query;
 
 			if (!isDismissedSticky) {
-				// Show the picker only if the user has typed at least one
-				// character after `@` (live search). A bare `@` is a no-op -
-				// re-typing into the token would otherwise flash an empty
-				// "start typing..." hint before the user types anything.
+				// Only search once a char follows `@`; a bare `@` is a no-op
+				// (otherwise the picker flashes an empty hint on re-type).
 				if (token.query.length > 0) {
 					mentionDismissedSnapshot = null;
 					isMentionPickerOpen = true;
@@ -232,8 +204,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		isMentionPickerOpen = false;
 		mentionQuery = '';
 
-		// Token gone or no longer intact - the snapshot is stale. Reset so
-		// the next fresh `@` opens immediately even at the same offset.
+		// Token gone or changed: reset the snapshot so a fresh `@` reopens.
 		if (mentionDismissedSnapshot !== null && !token) {
 			mentionDismissedSnapshot = null;
 		}
@@ -254,20 +225,15 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	}
 
 	function handleCommandSelect(command: ChatFormCommand) {
-		// Complete the command name in the input (with a trailing space) and
-		// let the normal input flow dispatch it. This way `/cw` + Enter yields
-		// `/cwd ` in the chat form, and the instant-dispatch-on-space path
-		// opens the target picker exactly as if the user had typed it.
+		// Complete the command name with a trailing space and let the normal
+		// input flow dispatch it (Enter on `/cw` behaves like typing `/cwd `).
 		opts.setValue(`/${command.name} `);
 		handleInput();
 	}
 
 	/**
-	 * Command picker dismissed (Esc, outside-click, or selection-complete).
-	 * Capture a `(name, args)` snapshot of the live token so subsequent
-	 * input events that produce the SAME token won't reopen the picker or
-	 * instant-dispatch - the user has explicitly told us that `/name`
-	 * should be literal until they delete or retype a fresh `/`.
+	 * Command picker dismissed: snapshot the live `(name, args)` token so
+	 * the same token stays literal until deleted or retyped.
 	 */
 	function handleCommandPickerClose() {
 		if (isCommandPickerOpen) {
@@ -275,19 +241,15 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		}
 		isCommandPickerOpen = false;
 		commandQuery = '';
-		// When a command was selected, the target picker/selector takes over
-		// and manages its own focus - don't yank focus back to the chat input.
+		// Target picker manages its own focus: don't yank it back to the input.
 		if (!isPromptPickerOpen && !isMentionPickerOpen && !isWorkingDirectoryPickerOpen) {
 			opts.focusInput();
 		}
 	}
 
 	/**
-	 * Mention picker dismissed (Esc, outside-click, or selection-complete).
-	 * Capture a `(start, query)` snapshot of the live token so subsequent
-	 * input events that produce the SAME token won't reopen the picker -
-	 * the user has explicitly told us that `@<query>` should be literal
-	 * until they delete or retype a fresh `@`.
+	 * Mention picker dismissed: snapshot the live `(start, query)` token
+	 * so the same token stays literal until deleted or retyped.
 	 */
 	function handleMentionPickerClose() {
 		if (isMentionPickerOpen) {
@@ -316,10 +278,8 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		opts.focusInput();
 	}
 
-	// Two-way binding between the text after `/cwd ` and the picker's search
-	// input: typing in the search input rewrites the `/cwd <query>` token in
-	// the chat input. The reverse direction (typing in the chat input) is
-	// handled by `handleInput` -> `dispatchCommand` -> `workingDirectoryQuery`.
+	// Two-way bind the text after `/cwd ` and the picker search input; the
+	// reverse direction is handled by handleInput -> dispatchCommand.
 	$effect(() => {
 		if (!isWorkingDirectoryPickerOpen) return;
 		const value = opts.getValue();
