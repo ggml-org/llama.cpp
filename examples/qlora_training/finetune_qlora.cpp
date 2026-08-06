@@ -691,6 +691,7 @@ static ggml_opt_dataset_t build_dataset(
     for (int64_t i = 0; i < ndata; ++i) {
         const int64_t off = i * stride;
         float reward_sum = 0.0f;
+        int64_t reward_count = 0;
         for (int32_t j = 0; j < n_ctx; ++j) {
             const int64_t idx = off + j;
             if (idx >= n_tokens) {
