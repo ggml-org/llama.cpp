@@ -473,15 +473,14 @@ llama_context::llama_context(
     }
 
     if (hparams.n_expert > 0 && !cparams.warmup && params.expert_hot_s != 0) {
-        const int sync_period = 50;
+        const int sync_period = params.expert_sync_period;
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
             &model, hparams.n_layer(), hparams.n_expert,
             params.expert_hot_s, sync_period,
             params.expert_hyst, params.expert_dwell);
-        // the GPU hot store is only supported on CUDA. On CPU it buys nothing
-        // and on Vulkan it corrupts output (see manuallog section 12).
-        // --expert-cache-force (or LLAMA_EXPERT_CACHE_FORCE) overrides the
-        // guard (testing/emergency only).
+        // enable the GPU hot store only on CUDA backends; a CPU store buys
+        // nothing and other backends are untested. --expert-cache-force
+        // overrides the guard for testing.
         const bool force = params.expert_cache_force || getenv("LLAMA_EXPERT_CACHE_FORCE") != nullptr;
         bool cache_enabled = false;
         for (auto & backend : backends) {
@@ -1433,7 +1432,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
     if (expert_heatmap && expert_hotstore) {
         if (!expert_hotstore->is_filled) {
-            expert_hotstore->copy_top_s(*expert_heatmap);
+            if (expert_heatmap->generated_tokens_count >= 3) { // defer first fill until 3 decode tokens seed the heatmap
+                expert_hotstore->copy_top_s(*expert_heatmap);
+            }
         } else {
             expert_hotstore->maybe_resync(*expert_heatmap, ubatch.n_tokens > 1);
             if (ubatch.n_tokens == 1 && getenv("LLAMA_EXPERT_HITRATE")) {
@@ -3577,6 +3578,7 @@ llama_context_params llama_context_default_params() {
         /*.expert_heat_decay           =*/ 0.999f,
         /*.expert_heat_log_period      =*/ 0,
         /*.expert_hot_s                =*/ 0,
+        /*.expert_sync_period          =*/ 1,
         /*.expert_hyst                 =*/ 1.3f,
         /*.expert_dwell                =*/ 0,
         /*.expert_cache_force         =*/ false,

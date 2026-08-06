@@ -1688,6 +1688,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.expert_heat_decay      = params.expert_heat_decay;
     cparams.expert_heat_log_period = params.expert_heat_log_period;
     cparams.expert_hot_s           = params.expert_hot_s;
+    cparams.expert_sync_period      = params.expert_sync_period;
     cparams.expert_hyst            = params.expert_hyst;
     cparams.expert_dwell           = params.expert_dwell;
     cparams.expert_cache_force      = params.expert_cache_force;

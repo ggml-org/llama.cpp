@@ -3361,10 +3361,12 @@ struct ggml_tensor * ggml_mul_mat_id_cold(
         struct ggml_tensor  * as,
         struct ggml_tensor  * b,
         struct ggml_tensor  * ids,
-        struct ggml_tensor  * cold_mask) {
+        struct ggml_tensor  * cold_mask,
+        struct ggml_tensor  * counts,
+        struct ggml_tensor  * ptrs) {
     GGML_ASSERT(!ggml_is_transposed(as));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
-    // cold_mask treated as integer for 0/non-zero check; f32 (0.0f, 1.0f) is fine
+    // cold_mask treated as integer for 0/non-zero check
     GGML_ASSERT(cold_mask->ne[0] == as->ne[2]);
     GGML_ASSERT(as->ne[3] == 1);
     GGML_ASSERT(b->ne[3] == 1);
@@ -3372,6 +3374,14 @@ struct ggml_tensor * ggml_mul_mat_id_cold(
     GGML_ASSERT(ids->ne[1] == b->ne[2]);
     GGML_ASSERT(as->ne[0] == b->ne[0]);
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0);
+    if (counts) {
+        GGML_ASSERT(counts->type == GGML_TYPE_I32);
+        GGML_ASSERT(counts->ne[0] >= as->ne[2] + 1);
+    }
+    if (ptrs) {
+        GGML_ASSERT(ptrs->type == GGML_TYPE_I64);
+        GGML_ASSERT(ptrs->ne[0] == as->ne[2]);
+    }
 
     const int64_t ne[4] = { as->ne[1], ids->ne[0], b->ne[2], 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
@@ -3381,6 +3391,8 @@ struct ggml_tensor * ggml_mul_mat_id_cold(
     result->src[1] = b;
     result->src[2] = ids;
     result->src[3] = cold_mask;
+    result->src[4] = counts;
+    result->src[5] = ptrs;
 
     return result;
 }

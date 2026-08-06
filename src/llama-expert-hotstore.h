@@ -21,7 +21,8 @@ struct llama_expert_hotstore {
     // expert weight tensors (gate/up/down, incl. chexps variants)
     std::vector<size_t> bytes_per_slot;
 
-    // one hot tensor per expert weight tensor, shape {ne0, ne1, hot_s}
+    // one hot tensor per expert weight tensor, shape {ne0, ne1, hot_s + 1};
+    // the last plane is the zeroed sentinel slot
     struct entry {
         int          layer_idx;
         ggml_tensor* src; // model tensor holding all n_experts slices
@@ -38,20 +39,20 @@ struct llama_expert_hotstore {
 
     // per-layer LUT and mask for in-graph routing.
     // hot_lut[e]   = slot index [0..hot_s-1] if e is hot, or hot_s (sentinel) if cold.
-    // cold_mask[e] = 1.0f if e is cold, else 0.0f (passed to mul_mat_id_cold).
+    // cold_mask[e] = 1 if e is cold, else 0 (read as int zero-check by mul_mat_id_cold).
     struct layer_lut {
         ggml_tensor * hot_lut   = nullptr; // i32[n_experts]
-        ggml_tensor * cold_mask = nullptr; // f32[n_experts]
+        ggml_tensor * cold_mask = nullptr; // i32[n_experts]
     };
     std::vector<layer_lut> luts; // size n_layers
-
-    // bumped on every resync that swapped >0 slots; build_moe_ffn_tiered
-    // compares to its own cached counter to know whether H2D is needed.
-    int64_t luts_version = 0;
 
     // keeps the GPU buffer (and its no_alloc context) alive
     ggml_context_ptr        ctx;
     ggml_backend_buffer_ptr buf;
+
+    // CPU context and buffer for host-side tensors (like cold_mask)
+    ggml_context_ptr        ctx_cpu;
+    ggml_backend_buffer_ptr buf_cpu;
 
     // true once the first copy of the top-S experts landed (once per session)
     bool is_filled = false;
@@ -61,7 +62,7 @@ struct llama_expert_hotstore {
     // tokens_total at the last sync (fill or re-sync) for boundary-cross check
     int64_t last_sync_tokens = 0;
 
-    // hysteresis gate (Trick 6): a resident slot is only swapped when a cold
+    // hysteresis gate: a resident slot is only swapped when a cold
     // expert scores >= hyst * the incumbent AND the slot has dwelled long enough
     float hyst  = 0.0f; // 0 = gate off (swap freely)
     int   dwell = 0;    // minimum syncs a resident must keep; 0 = off
@@ -82,11 +83,6 @@ llama_expert_hotstore(const llama_model * model, int n_layers,
     // using the given heatmap for the ranking. one-shot (guarded by is_filled).
     void copy_top_s(const llama_expert_heatmap & heatmap);
 
-    // static plant: fill slots 0..hot_s-1 with experts 0..hot_s-1 per layer,
-    // build LUTs/masks accordingly, no heatmap, no resync. Diagnostic only:
-    // isolates the dual-path graph from the heat/dynamic-copy path.
-    void plant_static();
-
     // re-sync the hot store to the current heatmap ranking, swapping only
     // the experts that changed (stable slots; unchanged experts not re-copied).
     void resync_top_s(const llama_expert_heatmap & heatmap);
@@ -103,8 +99,8 @@ llama_expert_hotstore(const llama_model * model, int n_layers,
     void log_hit_rate(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel);
 
     // rebuild hot_lut/cold_mask from slot_to_expert for every layer
-    // and H2D-copy them into the GPU tensors. bumps luts_version.
-    // called from copy_top_s (initial fill) and resync_top_s (swaps).
+    // and copy them into the tensors. called from copy_top_s (initial
+    // fill) and resync_top_s (swaps).
     void update_luts();
 
     void log() const;

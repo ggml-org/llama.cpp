@@ -795,16 +795,25 @@ static void common_params_fit_impl(
 
     set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
 
-    // autofit the expert hot store slots: the fit already chose how many MoE
-    // tensors go back on GPU; S = experts-per-layer that fit leaves on GPU.
+    // step 5: autofit the expert hot store slots when --expert-hot-s -1 is set.
+    // the fit above left some MoE bytes on GPU (final_gpu_model - dense_model_gpu);
+    // s = experts-per-layer that fit, minus one plane for the sentinel slot.
     if (n_expert_hot_s && total_moe_bytes > 0) {
         const dmds_t dmds_final = common_get_device_memory_data_impl(
             path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
         int64_t final_gpu_model = 0;
+        bool is_vulkan = false;
         for (size_t id = 0; id < nd; id++) {
             final_gpu_model += dmds_final[id].mb.model;
+            if (dev_names[id].find("Vulkan") != std::string::npos) {
+                is_vulkan = true;
+            }
         }
-        const int64_t moe_on_gpu = final_gpu_model - dense_model_gpu;
+        // Vulkan reserves per-layer descriptor/pool memory the fit does not
+        // account for; subtract an 8 MiB per offloaded layer estimate so S
+        // does not overshoot and OOM at graph capture.
+        const int64_t vulkan_padding = is_vulkan ? int64_t(hp_ngl) * 8 * MiB : 0;
+        const int64_t moe_on_gpu = final_gpu_model - dense_model_gpu - vulkan_padding;
         const int64_t s = moe_on_gpu > 0 ? int64_t(hp_nex) * moe_on_gpu / total_moe_bytes : 0;
         *n_expert_hot_s = s > 1 ? (int) (s - 1) : 0;
     }

@@ -60,6 +60,9 @@ void ggml_compute_forward_mul_mat_id_cold(
     const struct ggml_tensor * src1 = dst->src[1];
     const struct ggml_tensor * ids  = dst->src[2];
     const struct ggml_tensor * mask = dst->src[3];
+    // counts (optional) accumulates per-expert routed hits; ptrs (optional) is
+    // reserved for the RAM pool and is not used by this op
+    int32_t * counts = dst->src[4] ? (int32_t *) dst->src[4]->data : NULL;
 
     const int32_t * cold_mask = (const int32_t *) mask->data;
 
@@ -138,6 +141,11 @@ void ggml_compute_forward_mul_mat_id_cold(
                 const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
 
                 assert(i02 >= 0 && i02 < n_as);
+
+                if (counts) {
+                    counts[i02]++;
+                    counts[n_as]++;
+                }
 
                 if (cold_mask[i02] == 0) {
                     continue;

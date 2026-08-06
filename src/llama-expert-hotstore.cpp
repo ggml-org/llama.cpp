@@ -6,6 +6,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 
 #include <regex>
 
@@ -28,6 +29,10 @@ llama_expert_hotstore::llama_expert_hotstore(
     if (n_layers <= 0) {
         return;
     }
+    if (this->hot_s > this->n_experts) {
+        LLAMA_LOG_WARN("%s: clamping expert hot store S=%d to n_experts=%d\n", __func__, this->hot_s, this->n_experts);
+        this->hot_s = this->n_experts;
+    }
 
     for (const auto & [name, tensor] : llama_internal_get_tensor_map(model)) {
         std::smatch m;
@@ -48,9 +53,9 @@ llama_expert_hotstore::llama_expert_hotstore(
         entries_by_layer[e.layer_idx].push_back(&e);
     }
 
-    if (hot_s > 0) {
-        slot_to_expert.assign(n_layers, std::vector<int>(hot_s, -1));
-        dwell_count.assign(n_layers, std::vector<int>(hot_s, 0));
+    if (this->hot_s > 0) {
+        slot_to_expert.assign(n_layers, std::vector<int>(this->hot_s, -1));
+        dwell_count.assign(n_layers, std::vector<int>(this->hot_s, 0));
     }
 }
 
@@ -66,7 +71,7 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     // a no_alloc context just for the hot tensor metadata
     // (also holds the per-layer LUT/mask tensors created below)
     ggml_init_params params = {
-        /*.mem_size   =*/ ggml_tensor_overhead() * (entries.size() + 4 * n_layers),
+        /*.mem_size   =*/ ggml_tensor_overhead() * (entries.size() + 2 * n_layers),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
@@ -76,19 +81,26 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
         return false;
     }
 
-    // one hot tensor per model expert tensor, with hot_s expert slots plus
-    // 1 sentinel slot (index hot_s) that stays zero so cold selections read
-    // zeros via a valid in-range index (sentinel trick, oldtricks Trick 2).
+    ggml_init_params params_cpu = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * (2 * n_layers) + 1024 * 1024,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ctx_cpu = ggml_context_ptr(ggml_init(params_cpu));
+
+    // one hot tensor per expert weight tensor: hot_s expert slot planes plus
+    // a zeroed sentinel plane (index hot_s), so cold selections read zero
+    // through a valid in-range index.
     for (auto & e : entries) {
         e.dst = ggml_new_tensor_3d(ctx.get(), e.src->type, e.src->ne[0], e.src->ne[1], hot_s + 1);
     }
 
-    // per-layer LUTs and masks for in-graph routing (oldtricks Trick 4).
-    // hot_lut i32, cold_mask f32, both [n_experts].
+    // per-layer LUTs and masks for in-graph routing.
+    // hot_lut i32, cold_mask i32, both [n_experts].
     luts.assign(n_layers, layer_lut{});
     for (int il = 0; il < n_layers; il++) {
-        luts[il].hot_lut   = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_experts);
-        luts[il].cold_mask = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_experts);
+        luts[il].hot_lut   = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, n_experts);
+        luts[il].cold_mask = ggml_new_tensor_1d(ctx_cpu.get(), GGML_TYPE_I32, n_experts);
     }
 
     // check whether the buffer would fit before committing any VRAM
@@ -96,6 +108,7 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     if (need == 0) {
         LLAMA_LOG_ERROR("%s: hot store: zero-sized buffer, disabled\n", __func__);
         ctx.reset();
+        ctx_cpu.reset();
         return false;
     }
 
@@ -117,6 +130,13 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     }
     buf = ggml_backend_buffer_ptr(b);
     ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
+    ggml_backend_buffer_t b_cpu = ggml_backend_alloc_ctx_tensors_from_buft(ctx_cpu.get(), cpu_buft);
+    if (b_cpu) {
+        buf_cpu = ggml_backend_buffer_ptr(b_cpu);
+        ggml_backend_buffer_set_usage(buf_cpu.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    }
 
     // zero the whole buffer so the sentinel slot (index hot_s) AND every
     // not-yet-filled expert slot is zero; copy_top_s/resync_top_s only write
@@ -173,32 +193,6 @@ void llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
     LLAMA_LOG("=== Expert hot store: top-S experts copied to GPU ===\n");
 }
 
-void llama_expert_hotstore::plant_static() {
-    if (is_filled || hot_s <= 0 || entries.empty() || !buf) {
-        return;
-    }
-
-    // plant experts 0..hot_s-1 into slots 0..hot_s-1, one shot, no heatmap
-    for (int il = 0; il < n_layers; il++) {
-        auto & ste = slot_to_expert[il];
-        for (int p = 0; p < hot_s && p < n_experts; p++) {
-            ste[p] = p;
-        }
-        for (entry * e : entries_by_layer[il]) {
-            const size_t slot = ggml_nbytes(e->src) / (size_t) e->src->ne[2];
-            const char * src = e->src->data ? (const char *) ggml_get_data(e->src) : nullptr;
-            if (!src) continue;
-            for (int p = 0; p < hot_s && p < n_experts; p++) {
-                ggml_backend_tensor_set(e->dst, src + (size_t) p * slot, (size_t) p * slot, slot);
-            }
-        }
-    }
-
-    is_filled = true;
-    update_luts();
-    LLAMA_LOG("=== Expert hot store: STATIC plant of %d experts per layer ===\n", hot_s);
-}
-
 void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
     if (!is_filled || hot_s <= 0 || !buf) {
         return;
@@ -242,7 +236,7 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                     continue;
                 }
                 if (dc[p] < dwell) {
-                    continue; // incumbent must keep its slot (Trick 6)
+                    continue; // incumbent must keep its slot while under dwell
                 }
                 if (s_cold >= hyst * heatmap.get_score(il, ste[p])) {
                     const float s_inc = heatmap.get_score(il, ste[p]);
@@ -255,14 +249,19 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             return p_worst;
         };
 
-        // resident experts -> candidate cold experts, most significant first
+        // mark the resident experts so the top-S candidates below can be
+        // filtered to non-residents; at most one swap per layer per sync
         std::vector<char> resident_set(n_experts, 0);
         for (int p = 0; p < hot_s; p++) {
             if (ste[p] >= 0) {
                 resident_set[ste[p]] = 1;
             }
         }
+        int swapped_in_layer = 0;
         for (int e_cold : top) {
+            if (swapped_in_layer >= 1) {
+                break;
+            }
             if (e_cold < 0 || e_cold >= n_experts || resident_set[e_cold]) {
                 continue;
             }
@@ -281,6 +280,7 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             ste[p] = e_cold;
             dc[p]  = -elapsed; // fresh dwell: aging below brings it to 0
             swapped++;
+            swapped_in_layer++;
         }
 
         for (int p = 0; p < hot_s; p++) {
@@ -328,7 +328,7 @@ void llama_expert_hotstore::update_luts() {
     }
 
     std::vector<int32_t> hot_lut_h(n_experts);
-    std::vector<float>   cold_mask_h(n_experts);
+    std::vector<int32_t> cold_mask_h(n_experts);
 
     for (int il = 0; il < n_layers; il++) {
         const auto & ste = slot_to_expert[il];
@@ -336,7 +336,7 @@ void llama_expert_hotstore::update_luts() {
         // defaults: everyone cold
         for (int e = 0; e < n_experts; e++) {
             hot_lut_h[e]   = hot_s;     // sentinel slot (zero)
-            cold_mask_h[e] = 1.0f;
+            cold_mask_h[e] = 1;
         }
 
         // residents override
@@ -346,16 +346,13 @@ void llama_expert_hotstore::update_luts() {
                 continue;
             }
             hot_lut_h[e]   = p;         // its slot index
-            cold_mask_h[e] = 0.0f;
+            cold_mask_h[e] = 0;
         }
 
         const size_t bytes_i32 = n_experts * sizeof(int32_t);
-        const size_t bytes_f32 = n_experts * sizeof(float);
         ggml_backend_tensor_set(luts[il].hot_lut,   hot_lut_h.data(),   0, bytes_i32);
-        ggml_backend_tensor_set(luts[il].cold_mask, cold_mask_h.data(), 0, bytes_f32);
+        ggml_backend_tensor_set(luts[il].cold_mask, cold_mask_h.data(), 0, bytes_i32);
     }
-
-    luts_version++;
 }
 
 void llama_expert_hotstore::log_hit_rate(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel) {

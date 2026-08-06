@@ -18,17 +18,18 @@ llama_expert_heatmap::llama_expert_heatmap(
     decay_rate(decay_rate),
     log_period(log_period),
     tokens_total(0),
+    generated_tokens_count(0),
     heat(n_layers * n_experts, 0.0f) {
 }
 
-void llama_expert_heatmap::update(int layer_idx, const int32_t * expert_ids, int n_expert_used, int n_tokens) {
+void llama_expert_heatmap::update(int layer_idx, const int32_t * expert_ids, int n_expert_used, int n_tokens, float multiplier) {
     float * layer_heat = heat.data() + layer_idx * n_experts;
 
     for (int t = 0; t < n_tokens; t++) {
         for (int e = 0; e < n_expert_used; e++) {
             int32_t id = expert_ids[t * n_expert_used + e];
             if (id >= 0 && id < n_experts) {
-                layer_heat[id] += 1.0f;
+                layer_heat[id] += 1.0f * multiplier;
             }
         }
     }
@@ -41,6 +42,15 @@ void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, gg
     decay_all();
 
     int64_t n_tokens = 0;
+    float multiplier = 1.0f;
+    // weight the first few decode tokens 15x so the initial hot store fill is
+    // driven by generation routing rather than the prompt-processing ubatches
+    if (moe_sel_experts.front().second->ne[1] == 1) {
+        generated_tokens_count++;
+        if (generated_tokens_count <= 3) {
+            multiplier = 15.0f;
+        }
+    }
     for (const auto & [il, tensor] : moe_sel_experts) {
         n_tokens = tensor->ne[1];
 
@@ -51,7 +61,7 @@ void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, gg
         std::vector<int32_t> expert_ids(tensor->ne[0] * n_tokens);
         ggml_backend_tensor_get(tensor, expert_ids.data(), 0, expert_ids.size() * sizeof(int32_t));
 
-        update(il, expert_ids.data(), tensor->ne[0], n_tokens);
+        update(il, expert_ids.data(), tensor->ne[0], n_tokens, multiplier);
     }
 
     tokens_total += n_tokens;

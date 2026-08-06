@@ -1453,12 +1453,16 @@ extern "C" {
     // mul_mat_id restricted to cold experts only: computes only rows whose
     // expert is marked 1 in cold_mask (i32 [n_expert], 1 = cold); hot slots
     // are zeroed in the result
+    // counts (optional) accumulates per-expert routed hits, index [n_expert] = total;
+    // ptrs (optional) is reserved for the RAM pool and is not used by this op
     GGML_API struct ggml_tensor * ggml_mul_mat_id_cold(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids,
-            struct ggml_tensor  * cold_mask);
+            struct ggml_tensor  * cold_mask,
+            struct ggml_tensor  * counts,
+            struct ggml_tensor  * ptrs);
 
     // A: m columns, n rows,
     // B: p columns, n rows,

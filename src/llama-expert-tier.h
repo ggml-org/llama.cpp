@@ -4,28 +4,24 @@
 
 // Expert tier hook: drop-in replacement for ggml_mul_mat_id on expert weight
 // tensors that have a registered GPU hot store. Pure stock ggml ops, no
-// custom kernel, no per-model code.
+// custom kernels.
 //
-// How it works (matches oldtricks.md Trick 4 sentinel + LUT design):
-//   registered src w (full expert tensor on CPU/mmap) -> {dst_hot (S+1 slots
-//   on GPU), per-layer LUTs and masks}. When build_lora_mm_id is called with
-//   w, the hook remaps real expert ids through hot_lut/cold_lut, runs two
-//   mul_mat_id ops (hot on GPU slots, cold on the full CPU tensor), scales
-//   and masks each per routed expert, sums them. Result is byte-identical
-//   in shape to a stock mul_mat_id output and feeds straight back into the
-//   caller's downstream ops (bias add, activation, second build_lora_mm_id
-//   call for down, routing-weight mul).
+// A registered expert tensor w is split between a GPU hot store (the top-S
+// experts, held in dst_hot with hot_s+1 slot planes) and the CPU cold store
+// (the remaining experts, still inside w). build_lora_mm_id calls back into
+// llama_expert_tier_build, which computes:
+//   - hot:  expert ids remapped through hot_lut to slot indices, then a
+//           mul_mat_id on dst_hot. Cold experts land on the zeroed sentinel
+//           plane (index hot_s) and therefore contribute zero on the GPU.
+//   - cold: mul_mat_id_cold on w, which skips hot experts entirely
+//           (cold_mask[e] == 0) and computes only the cold-selected rows.
+//   - result = hot + cold.
+// The result has the same shape as a stock mul_mat_id output and feeds
+// straight back into the caller's downstream ops.
 //
-// GPU sentinel slot (index S of dst_hot) is zero-filled once at allocate
-// time and never written again, so cold experts routed to it return zero.
-// On the CPU side, we cannot grow a mmap'd expert tensor, so hot experts
-// are routed to a real dummy (expert 0) on the cold path; the dummy's
-// contribution is zeroed by cold_mask before the result is used.
-//
-// Masking happens at every mul_mat_id output, BEFORE bias add and BEFORE
-// activation. That lifts the no-biases constraint: at a hot slot the cold
-// mask zeroes the dummy contribution pre-activation, so the bias and
-// activation run on the correct real value for that slot.
+// The per-expert quant scale w_s is discarded on the tiered path. It is an
+// intentional approximation: applying it would add get_rows/mul nodes per
+// layer, and the scale factors are close to 1.
 
 // register one expert weight tensor -> its GPU hot tensor and per-layer LUTs.
 // Called by llama_expert_hotstore::allocate() after creating dst_hot and
@@ -48,7 +44,8 @@ bool llama_expert_tier_has(ggml_tensor * w);
 //   w     : expert weight tensor, ne = [in, out, n_experts], 3d, ne[3]==1
 //   cur   : activation, ne = [in, 1, n_tokens], 3d
 //   ids   : selected_experts, ne = [n_expert_used, n_tokens], 2d i32, REAL ids
-//   w_s   : per-expert quant scale, ne = [n_experts], f32; nullptr if none
+//   w_s   : per-expert quant scale, ne = [n_experts], f32; ignored by the
+//           tiered path (see above)
 ggml_tensor * llama_expert_tier_build(ggml_context * ctx,
                                       ggml_tensor * w,
                                       ggml_tensor * cur,

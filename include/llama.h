@@ -406,6 +406,7 @@ extern "C" {
         float expert_heat_decay;      // expert heatmap decay per update
         int   expert_heat_log_period; // expert heatmap log interval
         int   expert_hot_s;           // number of top-S expert slots for GPU hot store
+        int   expert_sync_period;      // hot store re-sync cadence in tokens
         float expert_hyst;            // hysteresis ratio for slot swaps
         int   expert_dwell;           // min updates a resident slot keeps before swap
         bool  expert_cache_force;      // bypass the CUDA-only hot store guard

@@ -2711,6 +2711,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD"));
     add_opt(common_arg(
+        {"--expert-sync-period"}, "N",
+        "expert hot store re-sync cadence in tokens (default: 1)",
+        [](common_params & params, int value) {
+            params.expert_sync_period = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_SYNC_PERIOD"));
+    add_opt(common_arg(
         {"--expert-hyst"}, "F",
         "expert hot store hysteresis ratio (default: 1.3, 0 = off)",
         [](common_params & params, const std::string & value) {
