@@ -460,6 +460,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
         SRV_INF("%s", "model loaded\n");
 
+        // in router mode, restore previously saved slot state for this model
+        ctx_server.auto_restore_slots();
+
         shutdown_handler = [&](int) {
             mcp_mgr.shutdown();
             // this will unblock start_loop()
@@ -515,6 +518,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
         // this call blocks the main thread until queue_tasks.terminate() is called
         ctx_server.start_loop();
+
+        // in router mode, save slot state before exit so it can be restored on reload
+        ctx_server.auto_save_slots();
 
         clean_up();
         if (ctx_http.thread.joinable()) {
