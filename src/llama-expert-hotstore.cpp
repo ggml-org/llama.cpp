@@ -42,6 +42,50 @@ static void release_pages(void * ptr, size_t len) {
     }
 }
 
+// uniform strided hash of a memory range: sample N chunks spread across the
+// whole slice and combine with FNV-1a (pure integer, bit-exact on every
+// device, so a correct copy always hashes identically).
+static uint64_t hash_slice(const uint8_t * data, size_t len) {
+    constexpr size_t N_CHUNKS = 64;
+    constexpr size_t CHUNK    = 256;
+    uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
+    if (len == 0) {
+        return h;
+    }
+    const size_t step = len / N_CHUNKS;
+    for (size_t i = 0; i < N_CHUNKS; i++) {
+        const size_t off = i * step;
+        for (size_t j = 0; j < CHUNK && off + j < len; j++) {
+            h ^= data[off + j];
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
+
+// verify a GPU slot plane against the source slice by hashing both (the GPU
+// side via a sparse read-back) and comparing. returns true on match.
+static bool verify_gpu_copy(ggml_tensor * dst, size_t slot_off, const uint8_t * src, size_t len) {
+    constexpr size_t N_CHUNKS = 64;
+    constexpr size_t CHUNK    = 256;
+    const uint64_t h_src = hash_slice(src, len);
+    uint64_t h_gpu = 1469598103934665603ULL;
+    if (len > 0) {
+        const size_t step = len / N_CHUNKS;
+        for (size_t i = 0; i < N_CHUNKS; i++) {
+            const size_t off = i * step;
+            const size_t n = std::min(CHUNK, len - off);
+            std::vector<uint8_t> buf(n);
+            ggml_backend_tensor_get(dst, buf.data(), slot_off + off, n);
+            for (size_t j = 0; j < n; j++) {
+                h_gpu ^= buf[j];
+                h_gpu *= 1099511628211ULL;
+            }
+        }
+    }
+    return h_src == h_gpu;
+}
+
 // matches the weight tensor of an expert tensor, e.g.:
 //   blk.0.ffn_gate_exps.weight
 //   blk.3.ffn_down_chexps.weight
@@ -285,6 +329,14 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
         return false;
     }
 
+    // release CPU pages of experts whose GPU copy was verified last sync, after
+    // a full token has generated from the GPU copy
+    for (auto & pr : pending_release) {
+        const size_t slot = ggml_nbytes(pr.first->src) / (size_t) pr.first->src->ne[2];
+        release_pages((void *) ((const char *) ggml_get_data(pr.first->src) + (size_t) pr.second * slot), slot);
+    }
+    pending_release.clear();
+
     // tokens elapsed since the previous sync, used to age dwell counters
     const int64_t elapsed = heatmap.tokens_total - last_sync_tokens;
     int swapped = 0;
@@ -363,6 +415,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                 continue;
             }
             const int e_out = ste[p];
+            bool verified = true;
             for (entry * ent : entries_by_layer[il]) {
                 const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
                 const char * src = ent->src->data ? (const char *) ggml_get_data(ent->src) : nullptr;
@@ -374,9 +427,20 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                 if (e_out >= 0) {
                     ggml_backend_tensor_get(ent->dst[g], (void *) (src + (size_t) e_out * slot), off, slot);
                 }
-                // move the new expert's slice to the GPU, then drop its RAM pages
+                // move the new expert's slice to the GPU
                 ggml_backend_tensor_set(ent->dst[g], src + (size_t) e_cold * slot, off, slot);
-                release_pages((void *) (src + (size_t) e_cold * slot), slot);
+                // verify the GPU copy landed; release the CPU slice only later
+                if (!verify_gpu_copy(ent->dst[g], off, (const uint8_t *) (src + (size_t) e_cold * slot), slot)) {
+                    verified = false;
+                }
+            }
+            if (verified) {
+                for (entry * ent : entries_by_layer[il]) {
+                    const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
+                    pending_release.emplace_back(ent, e_cold);
+                }
+            } else if (getenv("LLAMA_EXPERT_DEBUG")) {
+                LLAMA_LOG("=== expert hot store: hash mismatch on move-in of expert %d, keeping CPU copy ===\n", e_cold);
             }
             ste[p] = e_cold;
             dc[p]  = -elapsed; // fresh dwell: aging below brings it to 0

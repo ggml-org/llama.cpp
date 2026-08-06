@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "ggml-cpp.h"
@@ -75,6 +76,11 @@ struct llama_expert_hotstore {
     int   dwell = 0;    // minimum syncs a resident must keep; 0 = off
     // dwell_count[il][p] = syncs since slot p last changed (0 = fresh/empty)
     std::vector<std::vector<int>> dwell_count;
+
+    // experts whose GPU copy is hash-verified but whose CPU slice is not yet
+    // released (deferred madvise until a full token generated from the GPU).
+    // stored as (entry pointer, expert id); entries are stable after the ctor.
+    std::vector<std::pair<entry *, int>> pending_release;
 
 llama_expert_hotstore(const llama_model * model, int n_layers,
                       int n_experts, int hot_s, int sync_period = 0,
