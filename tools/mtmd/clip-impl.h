@@ -591,6 +591,8 @@ struct clip_image_u8 {
     }
 };
 
+struct mtmd_serialization; // forward declaration
+
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
 // For seq, buf.size() == nx*ny*3*nt
@@ -670,6 +672,9 @@ struct clip_image_f32 {
     bool is_placeholder() const {
         return buf.empty();
     }
+
+    void serialize(struct mtmd_serialization & ser) const;
+    void deserialize(struct mtmd_serialization & ser);
 
   private:
     std::vector<float> buf;
@@ -752,6 +757,9 @@ struct clip_image_f32_batch {
         }
         return new_batch;
     }
+
+    void serialize(struct mtmd_serialization & ser) const;
+    void deserialize(struct mtmd_serialization & ser);
 };
 
 //
