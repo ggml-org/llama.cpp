@@ -1678,8 +1678,8 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const std::st
             // assert that the offload happened (exact top-k logit count, filtered
             // top-p logits, mid-stream top-k reconfigure, top-k + penalties), so
             // they fail on HIP. Skip until TOP_K is supported on the ROCm backend.
-            if (test.name == "penalties"   || test.name == "set_sampler" ||
-                test.name == "mixed"       || test.name == "top_p") {
+            if (test.name == "penalties" || test.name == "set_sampler" ||
+                test.name == "mixed"     || test.name == "top_p") {
                 fprintf(stderr, "Skipping test '%s' on HIP backend (no backend TOP_K support)\n", test.name.c_str());
                 continue;
             }
