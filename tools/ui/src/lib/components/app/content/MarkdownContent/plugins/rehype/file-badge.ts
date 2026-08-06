@@ -13,15 +13,15 @@
  * require manipulating raw text and re-parsing.
  */
 
+import { decodeFileLinkPath, getMentionBadgeIconPaths, getMentionBadgeLabel } from '$lib/utils';
 import {
+	FILE_URI_PREFIX,
 	MENTION_BADGE_CLASSNAME,
 	MENTION_BADGE_ICON_CLASSNAME,
 	MENTION_BADGE_SVG_ATTRIBUTES,
-	decodeFileLinkPath,
-	getMentionBadgeIconPaths,
-	getMentionBadgeLabel
-} from '$lib/utils';
-import { FILE_URI_PREFIX, PATH_SEPARATOR, SETTINGS_KEYS } from '$lib/constants';
+	PATH_SEPARATOR,
+	SETTINGS_KEYS
+} from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type { Plugin } from 'unified';

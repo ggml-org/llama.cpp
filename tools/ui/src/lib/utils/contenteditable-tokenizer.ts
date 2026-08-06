@@ -29,15 +29,17 @@
  */
 
 import {
-	MENTION_BADGE_CLASSNAME,
-	MENTION_BADGE_ICON_CLASSNAME,
-	MENTION_BADGE_SVG_ATTRIBUTES,
 	decodeFileLinkPath,
 	fileMentionLinkRe,
 	getMentionBadgeIconPaths,
 	getMentionBadgeLabel
 } from './mention-badge';
-import { SETTINGS_KEYS } from '$lib/constants';
+import {
+	MENTION_BADGE_CLASSNAME,
+	MENTION_BADGE_ICON_CLASSNAME,
+	MENTION_BADGE_SVG_ATTRIBUTES,
+	SETTINGS_KEYS
+} from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 

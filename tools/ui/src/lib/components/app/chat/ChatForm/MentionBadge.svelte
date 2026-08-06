@@ -1,13 +1,14 @@
 <script lang="ts">
 	import { File, Folder } from '@lucide/svelte';
+	import { getMentionBadgeLabel } from '$lib/utils';
+	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import {
 		MENTION_BADGE_CLASSNAME,
 		MENTION_BADGE_ICON_CLASSNAME,
-		getMentionBadgeLabel
-	} from '$lib/utils';
-	import { settingsStore } from '$lib/stores/settings.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { SETTINGS_KEYS, PATH_SEPARATOR } from '$lib/constants';
+		PATH_SEPARATOR,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 
 	interface Props {
 		class?: string;
