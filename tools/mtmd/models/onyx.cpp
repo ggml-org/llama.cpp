@@ -16,8 +16,7 @@ ggml_cgraph * clip_graph_onyx::build() {
     const int sf = hparams.onyx_sparse_factor;   // 4
     const int n_tok     = n_patches;
     const int n_out     = (n_patches_x / ds) * (n_patches_y / ds);
-    const float rope_base  = hparams.rope_theta;                  // 10000
-    const float attn_scale = 1.0f / sqrtf((float) d_head);        // SDPA default
+    const float rope_base = hparams.rope_theta;  // 10000
 
     auto inp_i32 = [&](const char * name, int64_t n) {
         ggml_tensor * t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n);
@@ -26,11 +25,11 @@ ggml_cgraph * clip_graph_onyx::build() {
         return t;
     };
 
-    ggml_tensor * pos_w   = inp_i32("onyx_pos_w",   n_tok);
-    ggml_tensor * pos_h   = inp_i32("onyx_pos_h",   n_tok);
-    ggml_tensor * sp_perm = inp_i32("onyx_sp_perm", n_tok);
+    ggml_tensor * pos_w    = inp_i32("onyx_pos_w",    n_tok);
+    ggml_tensor * pos_h    = inp_i32("onyx_pos_h",    n_tok);
+    ggml_tensor * sp_perm  = inp_i32("onyx_sp_perm",  n_tok);
     ggml_tensor * inv_perm = inp_i32("onyx_inv_perm", n_tok);
-    ggml_tensor * ds_perm = inp_i32("onyx_ds_perm", n_tok);
+    ggml_tensor * ds_perm  = inp_i32("onyx_ds_perm",  n_tok);
 
     ggml_tensor * sp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tok, n_tok);
     ggml_set_name(sp_mask, "onyx_sp_mask");
@@ -41,53 +40,31 @@ ggml_cgraph * clip_graph_onyx::build() {
     x = ggml_add(ctx0, x, resize_position_embeddings(GGML_SCALE_MODE_BILINEAR));
     cb(x, "after_posemb", -1);
 
-    // ln_pre (LayerNorm)
-    x = build_norm(x, model.pre_ln_w, model.pre_ln_b, NORM_TYPE_NORMAL, eps, -1);
-
-    // group patches into 32x32 windows (sparse attention order)
+    // group patches into pgrid x pgrid windows (sparse attention order)
     x = ggml_get_rows(ctx0, x, sp_perm);
-    cb(x, "after_ln_pre", -1);
+    cb(x, "after_sp_perm", -1);
 
-    for (int il = 0; il < n_layer; il++) {
-        const auto & layer = model.layers[il];
+    // per-layer mask: sparse layers get sp_mask, global layers (every sf-th and last) get none
+    std::vector<ggml_tensor *> attn_mask_layers(n_layer);
+    for (int il = 0; il < n_layer; ++il) {
         const bool is_global = (il == n_layer - 1) || ((il + 1) % sf == 0);
-
-        ggml_tensor * inpL = x;
-
-        ggml_tensor * cur = build_norm(x, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
-
-        ggml_tensor * Q = ggml_add(ctx0, build_mm(layer.q_w, cur), layer.q_b);
-        ggml_tensor * K = ggml_add(ctx0, build_mm(layer.k_w, cur), layer.k_b);
-        ggml_tensor * V = ggml_add(ctx0, build_mm(layer.v_w, cur), layer.v_b);
-
-        Q = ggml_reshape_3d(ctx0, Q, d_head, n_head, n_tok);
-        K = ggml_reshape_3d(ctx0, K, d_head, n_head, n_tok);
-        V = ggml_reshape_3d(ctx0, V, d_head, n_head, n_tok);
-
-        // 2D RoPE: first half of head_dim uses width pos, second half uses height pos
-        Q = build_rope_2d(ctx0, Q, pos_w, pos_h, rope_base, false);
-        K = build_rope_2d(ctx0, K, pos_w, pos_h, rope_base, false);
-
-        ggml_tensor * mask = is_global ? nullptr : sp_mask;
-        cur = build_attn(layer.o_w, layer.o_b, Q, K, V, mask, attn_scale, il);
-
-        x = ggml_add(ctx0, inpL, cur);   // residual 1
-        inpL = x;
-
-        cur = build_norm(x, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
-        cur = build_ffn(cur,
-            layer.ff_up_w,   layer.ff_up_b,
-            nullptr,         nullptr,
-            layer.ff_down_w, layer.ff_down_b,
-            FFN_GELU_ERF, il);           // reference uses exact (erf) GELU
-        x = ggml_add(ctx0, inpL, cur);   // residual 2
-        cb(x, "layer_out", il);
+        attn_mask_layers[il] = is_global ? nullptr : sp_mask;
     }
 
-    // un-permute back to original grid order, then ln_post
+    // 2D RoPE: first half of head_dim uses width pos, second half uses height pos
+    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+        return build_rope_2d(ctx0, cur, pos_w, pos_h, rope_base, false);
+    };
+
+    build_vit_opts opts;
+    opts.attn_mask_layers = std::move(attn_mask_layers);
+
+    // pre_ln, per-layer transformer, post_ln (all inside build_vit); reference uses exact (erf) GELU
+    x = build_vit(x, n_tok, NORM_TYPE_NORMAL, FFN_GELU_ERF, nullptr, add_pos, opts);
+
+    // un-permute back to original grid order
     x = ggml_get_rows(ctx0, x, inv_perm);
-    x = build_norm(x, model.post_ln_w, model.post_ln_b, NORM_TYPE_NORMAL, eps, -1);
-    cb(x, "after_ln_post", -1);
+    cb(x, "after_inv_perm", -1);
 
     // pixel-shuffle downsample: gather f*f spatial neighbors then concat channel-outer.
     // out[c*(ds*ds)+s, o] = x[ds_perm gathered][o*(ds*ds)+s, c]
