@@ -1945,6 +1945,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             // read vocab size from metadata
             uint32_t n_tokens = 0;
             if (ml.get_key(LLM_KV_VOCAB_SIZE, n_tokens, false)) {
+                if (n_tokens > (1 << 20)) {
+                    throw std::runtime_error("vocab_size is too large");
+                }
                 LLAMA_LOG_WARN("%s: adding %u dummy tokens\n", __func__, n_tokens);
                 id_to_token.resize(n_tokens);
             }
@@ -2416,6 +2419,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         if (n_scores < n_tokens) {
             throw std::runtime_error("Index out of array bounds for scores (" + std::to_string(n_scores) + " < " + std::to_string(n_tokens) + ")\n");
         }
+        if (gguf_get_arr_type(ctx, score_idx) != GGUF_TYPE_FLOAT32) {
+            throw std::runtime_error("tokenizer.ggml.scores must be an array of FLOAT32");
+        }
         scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
     }
 
@@ -2425,6 +2431,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         const uint32_t n_toktypes = gguf_get_arr_n(ctx, toktype_idx);
         if (n_toktypes < n_tokens) {
             throw std::runtime_error("Index out of array bounds for toktypes (" + std::to_string(n_toktypes) + " < " + std::to_string(n_tokens) + ")\n");
+        }
+        if (gguf_get_arr_type(ctx, toktype_idx) != GGUF_TYPE_INT32) {
+            throw std::runtime_error("tokenizer.ggml.token_type must be an array of INT32");
         }
         toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
     }
@@ -2585,6 +2594,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             const int suppress_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SUPPRESS_TOKENS).c_str());
             if (suppress_idx != -1) {
                 const int n = gguf_get_arr_n(ctx, suppress_idx);
+                if (gguf_get_arr_type(ctx, suppress_idx) != GGUF_TYPE_INT32) {
+                    throw std::runtime_error("tokenizer.ggml.suppress_tokens must be an array of INT32");
+                }
                 const int32_t * data = (const int32_t *) gguf_get_arr_data(ctx, suppress_idx);
                 // drop out-of-range ids
                 suppress_tokens.reserve(n);
