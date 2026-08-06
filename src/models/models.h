@@ -1604,6 +1604,101 @@ struct llama_model_wavtokenizer_dec : public llama_model_base {
 };
 
 
+// Qwen3-TTS-12Hz Code2Wav vocoder (Qwen3TTSTokenizerV2Decoder).
+//
+// One frame = n_codebooks interleaved code ids (12.5 Hz); the graph turns
+// F frames into F*1920 samples of 24 kHz PCM. Pipeline mirrors the HF
+// decoder: RVQ lookup + split projections -> causal pre_conv -> causal
+// pre-transformer (RoPE, sliding-window attn, layer scale, SiLU gated
+// MLP) -> ConvNeXt upsample stages -> stem conv -> snake + transposed
+// conv decoder blocks with dilated residual units -> snake + output conv.
+//
+// Fully causal, cache-free: output for a frame depends only on current
+// and earlier frames, so chunks can be emitted at frame boundaries.
+struct llama_model_qwen3_tts_code2wav : public llama_model_base {
+    llama_model_qwen3_tts_code2wav(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // snake_beta(x) = x + b*sin^2(a*x); a, b are baked per-channel
+        // vectors with shape [1, C], broadcast over time-major [L, C]
+        ggml_tensor * build_snake(ggml_tensor * x, ggml_tensor * a, ggml_tensor * b) const;
+
+        // causal conv: symmetric pad p0 = (k-1)*d, then keep the first L
+        // outputs; only current and past samples contribute
+        ggml_tensor * build_causal_conv(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x, int64_t dilation) const;
+
+        ggml_tensor * build_causal_conv_dw(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x) const;
+
+        // transposed conv upsample by rate; emits exactly L*rate samples
+        ggml_tensor * build_upsample(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x, int64_t rate) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    // arch config from GGUF metadata
+    uint32_t n_codebooks    = 0;
+    uint32_t vq_dim         = 0;   // codebook embedding width
+    uint32_t latent_dim     = 0;   // pre_conv output / upsample width
+    uint32_t decoder_dim    = 0;   // stem output / first block width
+    uint32_t n_res_units    = 0;
+    uint32_t sample_rate    = 0;
+    float    f_convnext_eps = 0.0f;
+    std::vector<uint32_t> upsample_rates;      // decoder block strides
+    std::vector<uint32_t> upsample_ratios;     // convnext stage strides
+    std::vector<uint32_t> residual_dilations;
+
+    // tensors
+    std::vector<struct ggml_tensor *> c2w_codebook_embd;  // [n_codebooks]
+    struct ggml_tensor * c2w_vq_first_proj = nullptr;
+    struct ggml_tensor * c2w_vq_rest_proj  = nullptr;
+
+    struct ggml_tensor * c2w_pre_conv   = nullptr;
+    struct ggml_tensor * c2w_pre_conv_b = nullptr;
+
+    struct ggml_tensor * c2w_tf_in_proj   = nullptr;
+    struct ggml_tensor * c2w_tf_in_proj_b = nullptr;
+    struct ggml_tensor * c2w_tf_norm      = nullptr;
+    struct ggml_tensor * c2w_tf_out_proj  = nullptr;
+    struct ggml_tensor * c2w_tf_out_proj_b = nullptr;
+
+    // per transformer layer
+    std::vector<struct ggml_tensor *> tf_attn_norm;
+    std::vector<struct ggml_tensor *> tf_wq, tf_wk, tf_wv, tf_wo;
+    std::vector<struct ggml_tensor *> tf_attn_scale;
+    std::vector<struct ggml_tensor *> tf_ffn_norm;
+    std::vector<struct ggml_tensor *> tf_ffn_gate, tf_ffn_up, tf_ffn_down;
+    std::vector<struct ggml_tensor *> tf_ffn_scale;
+
+    // per convnext upsample stage
+    std::vector<struct ggml_tensor *> up_transconv, up_transconv_b;
+    std::vector<struct ggml_tensor *> up_dwconv,   up_dwconv_b;
+    std::vector<struct ggml_tensor *> up_norm,     up_norm_b;
+    std::vector<struct ggml_tensor *> up_pw1,      up_pw1_b;
+    std::vector<struct ggml_tensor *> up_pw2,      up_pw2_b;
+    std::vector<struct ggml_tensor *> up_gamma;
+
+    struct ggml_tensor * c2w_stem   = nullptr;
+    struct ggml_tensor * c2w_stem_b = nullptr;
+
+    // per decoder block
+    std::vector<struct ggml_tensor *> blk_snake_a, blk_snake_b;
+    std::vector<struct ggml_tensor *> blk_transconv, blk_transconv_b;
+
+    // per decoder block * residual unit
+    std::vector<struct ggml_tensor *> res_a1, res_b1, res_conv1, res_conv1_b;
+    std::vector<struct ggml_tensor *> res_a2, res_b2, res_conv2, res_conv2_b;
+
+    struct ggml_tensor * c2w_out_snake_a = nullptr;
+    struct ggml_tensor * c2w_out_snake_b = nullptr;
+    struct ggml_tensor * c2w_output      = nullptr;
+    struct ggml_tensor * c2w_output_b    = nullptr;
+};
+
+
 struct llama_model_plm : public llama_model_base {
     llama_model_plm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
