@@ -164,7 +164,7 @@ struct llama_model_llama4 : public llama_model_base {
 
 struct llama_model_llama_embed : public llama_model_llama {
     llama_model_llama_embed(const struct llama_model_params & params) : llama_model_llama(params) {}
-    // reuse load_arch_hparams and load_arch_tensors from llama_model_llama
+    void load_arch_tensors(llama_model_loader & ml) override;
 
     template <bool embed>
     using graph = llama_model_llama::graph<embed>;
