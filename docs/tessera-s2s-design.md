@@ -1,11 +1,13 @@
 # Tessera S2S: Route A (text bridge) + instrumentation for Route B
 
-Status: design. Architect decisions landed 2026-08-05: Talker quant via
-Tessera pipelines with chained end-to-end calibration (3.4), CustomVoice
-presets with voice cloning on indefinite hold (3.1, 7), trace code storage
-default-on with no opt-out (4). Route B consent lane researched 2026-08-05:
-Talker resynthesis is a voice-release lane, viable under eight binding
-conditions (section 8).
+Status: design + W2 converter landed. Architect decisions landed 2026-08-05:
+Talker quant via Tessera pipelines with chained end-to-end calibration (3.4),
+CustomVoice presets with voice cloning on indefinite hold (3.1, 7), trace code
+storage default-on with no opt-out (4). Route B consent lane researched
+2026-08-05: Talker resynthesis is a voice-release lane, viable under eight
+binding conditions (section 8). Talker GGUF conversion landed 2026-08-05:
+qwen3-tts-talker arch, 404 tensors, byte-parity verified
+(tools/tessera/verify_qwen3tts_gguf.py).
 Date: 2026-08-05
 
 ## 0. Driving decisions
@@ -121,7 +123,17 @@ packet within ~100 ms of Talker decode start on M-series.
 ### 3.3 Fork work
 
 - Converter: new arch qwen3-tts-talker. Reuse DFlash/MTP precedents for the
-  backbone + MTP composition.
+  backbone + MTP composition. LANDED 2026-08-05 (conversion/qwen3tts.py).
+  GGUF layout: backbone 28 layers at blk.0..27; code predictor 5 layers at
+  blk.28..32 (deliberately NOT nextn layers); codec ids (vocab 3072) stay
+  outside the 151936-token text vocab; codec control ids (pad 2148, bos 2149,
+  eos 2150, think 2154, nothink 2155, think_bos 2156, think_eos 2157) and
+  codec language ids ride as metadata; per-codebook predictor tensors carry
+  a .{cid} suffix (cp_codec_embd.{cid}, cp_head.{cid}, cids 0..14); the
+  speaker encoder is dropped (cloning on hold). The code predictor's
+  per-codebook embeddings live in backbone space (2048-dim) even though the
+  predictor hidden is 1024: the runtime adds them to the backbone hidden and
+  projects via cp_proj (small_to_mtp_projection).
 - Sampler/runner: frame bookkeeping (one frame = [c0..c15]); no id-range
   routing needed in Route A because the Talker runs in its own context.
 - CLI: tessera-s2s-cli for headless verification before Studio wiring
