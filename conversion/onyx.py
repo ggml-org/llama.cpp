@@ -65,9 +65,6 @@ class OnyxModel(TextModel):
 
 @ModelBase.register("OnyxForConditionalGeneration")
 class OnyxVisionModel(MmprojModel):
-    # fallback for rope_parameters.rope_theta
-    ROPE_THETA = 10000.0
-
     def get_vision_config(self) -> dict[str, Any] | None:
         c = self.global_config.get("vision_config")
         if not c:
@@ -83,7 +80,6 @@ class OnyxVisionModel(MmprojModel):
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ONYX)
         self.gguf_writer.add_vision_attention_layernorm_eps(float(c["layer_norm_eps"]))
         self.gguf_writer.add_vision_spatial_merge_size(int(c["merge_size"]))
-        self.gguf_writer.add_vision_rope_theta(float(c.get("rope_parameters", {}).get("rope_theta", self.ROPE_THETA)))
 
     @classmethod
     def filter_tensors(cls, item):

@@ -1528,7 +1528,6 @@ struct clip_model_loader {
                         hparams.onyx_patch_temporal = 2; // Onyx-arch invariant
                         hparams.onyx_sparse_factor  = 4; // 3 sparse layers + 1 global, repeating
                         get_u32(KEY_SPATIAL_MERGE_SIZE,  hparams.n_merge,             false);
-                        get_f32(KEY_V_ROPE_THETA,        hparams.rope_theta,          false);
                         hparams.set_limit_image_tokens(1, 4096);
                         hparams.set_warmup_n_tokens(32*32);
                     } break;
