@@ -15120,12 +15120,43 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
             const char * e = getenv("GGML_OPENCL_FA_MQN_GQA2");
             return e == NULL || e[0] != '0';
         }();
-        if (gqa == 4 || gqa == 8 || (gqa == 2 && mqn_gqa2)) {
+        // gqa == 16 is gemma-4-12B's global-attention shape (n_head 16, n_head_kv 1,
+        // DK=DV=512). It matches none of the arms above, so every one of its decode
+        // dispatches lands on the legacy q1_vec kernel with no flash-decoding split
+        // and no multi-query sharing -- dispatch-traced on the X2-90: 40/40 decode
+        // FA calls were `q1_vec (dk=512 dv=512 gqa=16)`. That kernel re-reads the KV
+        // cache once per query head, 16x here.
+        // head_sub 8 (not 4) so the program is MQ_GQA=2: at DV=512 the per-head lane
+        // state is what pushes this shape past the ~512 B/work-item occupancy cliff,
+        // which is the same reason dk512/gqa8 runs head_sub 4 rather than 2.
+        // On by default; GGML_OPENCL_FA_MQN_GQA16=0 opts out. Measured on two
+        // generations, gemma-4-12B Q4_0 tg32 at d8192, this route off -> on:
+        // X2-90 10.37 -> 13.79 (+33.0%), and A8X 3.63 -> 4.46 (+22.7%, three
+        // matched pairs from the same start temperature, the on arms agreeing to
+        // 0.2%). d0 is parity on the X2-90 (15.65 -> 15.72) because the MQ route
+        // barely engages at shallow n_kv, so shallow contexts are the floor here
+        // rather than a risk. Against `-fa 0` the same X2-90 arm turns -7.4% /
+        // -16.0% at d4096 / d8192 into +8.9% / +11.7%.
+        //
+        // No device predicate, matching the gqa 4, 8 and 2 arms it sits beside.
+        // X1E is the one generation with no usable number and is deliberately not
+        // gated out: gemma-4-12B is 6.26 GiB against an X1-class per-context
+        // allocation cap near 6 GB, so runs there abort in clCreateBuffer
+        // non-deterministically (d1024 aborted while d2048 ran) and the survivors
+        // carry a +-20% spread. The shape is unreachable in practice on X1E
+        // rather than untested-and-risky, and the aborts reproduce with this
+        // route off. A7X and E17 never reach this function at all -- supports_op
+        // declines f16-KV flash attention on both.
+        static const bool mqn_gqa16 = []{
+            const char * e = getenv("GGML_OPENCL_FA_MQN_GQA16");
+            return e == NULL || e[0] != '0';
+        }();
+        if (gqa == 4 || gqa == 8 || (gqa == 2 && mqn_gqa2) || (gqa == 16 && mqn_gqa16)) {
             // hs/nsg defaults are per-shape measurements on the X2-90; the env
             // knobs exist to re-tune them elsewhere. DK=256 gqa=8 must stay at
             // a 128-thread workgroup - the stock 192-thread g8 kernel is what
             // the X2-90 refuses per-kernel.
-            int hs  = (d_head_q == 512) ? ((gqa == 8) ? 4 : 1) : ((gqa == 8) ? 2 : 1);
+            int hs  = (d_head_q == 512) ? ((gqa == 8) ? 4 : ((gqa == 16) ? 8 : 1)) : ((gqa == 8) ? 2 : 1);
             int nsg = (d_head_q == 256 && gqa == 8) ? 2 : 4;
             static const int hs_env  = []{ const char * e = getenv("GGML_OPENCL_FA_MQN_HS");
                                            return (e && e[0]) ? atoi(e) : 0; }();
