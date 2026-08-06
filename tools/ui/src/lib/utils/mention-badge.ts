@@ -1,8 +1,11 @@
-import { abbreviateHome } from './path-display';
+import { abbreviateHome, lastPathSegment } from './path-display';
 import {
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS
 } from '$lib/constants/mention-badge';
+import { FILE_URI_PREFIX } from '$lib/constants';
+import { FileMentionEntryType } from '$lib/enums';
+import type { FileMentionEntry } from '$lib/types';
 
 export {
 	MENTION_BADGE_CLASSNAME,
@@ -72,4 +75,26 @@ export function getMentionBadgeLabel(
 	const decoded = decodeFileLinkPath(path.replace(/\/+$/, ''));
 	if (!decoded) return name;
 	return abbreviateHome(decoded, home);
+}
+
+/**
+ * Build the markdown link that replaces a mention token. Entry `path` is
+ * already rooted, so `file://` + `/abs` yields the canonical `file:///`;
+ * directories keep a trailing `/`. Cursor lands right after the trailing
+ * space so typing can continue. Returns null when no token matches.
+ */
+export function buildMentionInsertion(
+	entry: FileMentionEntry,
+	value: string,
+	token: { start: number; end: number }
+): { newValue: string; caretOffset: number } | null {
+	if (token.start < 0 || token.end > value.length || token.start > token.end) return null;
+	// Strip the entry's directory marker so it is not doubled below.
+	const cleanedPath = entry.path.replace(/\/+$/, '');
+	const pathWithSeparator =
+		entry.type === FileMentionEntryType.DIRECTORY ? `${cleanedPath}/` : cleanedPath;
+	const basename = lastPathSegment(cleanedPath) || entry.name;
+	const insertion = `[${basename}](${FILE_URI_PREFIX}${encodeFileLinkPath(pathWithSeparator)}) `;
+	const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);
+	return { newValue, caretOffset: token.start + insertion.length };
 }

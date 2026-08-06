@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS,
+	buildMentionInsertion,
 	containsFileMentionLink,
 	decodeFileLinkPath,
 	encodeFileLinkPath,
@@ -9,6 +10,7 @@ import {
 	getMentionBadgeIconPaths,
 	getMentionBadgeLabel
 } from '$lib/utils';
+import { FileMentionEntryType } from '$lib/enums';
 
 describe('encodeFileLinkPath', () => {
 	it('leaves a clean path unchanged', () => {
@@ -114,5 +116,59 @@ describe('decodeFileLinkPath', () => {
 
 	it('falls back to the input on malformed percent sequences', () => {
 		expect(decodeFileLinkPath('/a/%zz.txt')).toBe('/a/%zz.txt');
+	});
+});
+
+describe('buildMentionInsertion', () => {
+	const file = (path: string, name: string) => ({
+		path,
+		name,
+		type: FileMentionEntryType.FILE
+	});
+	const dir = (path: string, name: string) => ({
+		path,
+		name,
+		type: FileMentionEntryType.DIRECTORY
+	});
+
+	it('splices a root-anchored file link in place of the token', () => {
+		const value = 'hello @repo';
+		const result = buildMentionInsertion(file('/Users/foo/myRepo', 'myRepo'), value, {
+			start: 6,
+			end: 11
+		});
+		expect(result).not.toBeNull();
+		const { newValue, caretOffset } = result!;
+		expect(newValue).toBe('hello [myRepo](file:///Users/foo/myRepo) ');
+		expect(caretOffset).toBe(6 + '[myRepo](file:///Users/foo/myRepo) '.length);
+	});
+
+	it('keeps the trailing slash on the directory marker', () => {
+		const value = 'see @src';
+		const { newValue } = buildMentionInsertion(dir('/Users/foo/myRepo/src/', 'src'), value, {
+			start: 4,
+			end: 8
+		})!;
+		expect(newValue).toBe('see [src](file:///Users/foo/myRepo/src/) ');
+	});
+
+	it('escapes spaces and parens in the target', () => {
+		const value = '@pic';
+		const { newValue } = buildMentionInsertion(
+			file('/Users/foo/Desktop/Pic (1).png', 'Pic (1).png'),
+			value,
+			{ start: 0, end: 4 }
+		)!;
+		expect(newValue).toBe('[Pic (1).png](file:///Users/foo/Desktop/Pic%20(1).png) ');
+	});
+
+	it('re-adds the directory marker when the cleaned path empties', () => {
+		const { newValue } = buildMentionInsertion(dir('/', 'root'), '/', { start: 0, end: 1 })!;
+		expect(newValue).toBe('[root](file:///) ');
+	});
+
+	it('returns null for an out-of-range token', () => {
+		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { start: 0, end: 5 })).toBeNull();
+		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { start: 2, end: 1 })).toBeNull();
 	});
 });

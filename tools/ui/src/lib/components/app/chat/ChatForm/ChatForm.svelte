@@ -20,7 +20,6 @@
 	import {
 		ContentPartType,
 		FileExtensionText,
-		FileMentionEntryType,
 		KeyboardKey,
 		MimeTypeText,
 		SpecialFileType
@@ -47,12 +46,11 @@
 		PromptMessage
 	} from '$lib/types';
 	import {
+		buildMentionInsertion,
 		containsFileMentionLink,
-		encodeFileLinkPath,
 		findCommandToken,
 		findMentionToken,
 		isIMEComposing,
-		lastPathSegment,
 		parseClipboardContent,
 		uuid
 	} from '$lib/utils';
@@ -486,45 +484,28 @@
 	}
 
 	/**
-	 * Selection from the mention picker: splice `[name](file://<abs>)`
-	 * + trailing space in place of the `@<query>` token. Cursor lands
-	 * right after the trailing space so the user can keep typing
-	 * naturally. Uses the live cursor position (not the stale snapshot)
-	 * because the token might have been edited since we last saw it.
-	 *
-	 * URI shape follows RFC 8089: `file:` + `//` + absolute path. The
-	 * search entry's `path` is already rooted (begins with `/`), so the
-	 * prefix is `file://` not `file:///` - that yields the canonical
-	 * three-slash form `file:///Users/foo/bar` without an extra `/`.
-	 *
-	 * Directories get a trailing `/` so the link resolves to a folder
-	 * rather than being interpreted as a file with no extension.
+	 * Selection from the mention picker: splice a `[name](file://<abs>)`
+	 * link in place of the `@<query>` token (see buildMentionInsertion).
+	 * Uses the live cursor, not the stale snapshot, because the token may
+	 * have been edited since it was first seen.
 	 */
 	function handleMentionSelect(entry: FileMentionEntry) {
 		const cursor = inputRef?.getCaretOffset() ?? value.length;
 		const token = findMentionToken(value, cursor);
 		if (!token) return;
 
-		// Strip trailing `/` so that entry.path (which already ends
-		// in `/` for directories per the filesystem service) does
-		// not get a second `/` appended below. The directory marker
-		// is then re-added deterministically.
-		const cleanedPath = entry.path.replace(/\/+$/, '');
-		const pathWithSeparator =
-			entry.type === FileMentionEntryType.DIRECTORY ? `${cleanedPath}/` : cleanedPath;
-		const basename = lastPathSegment(cleanedPath) || entry.name;
-		const insertion = `[${basename}](file://${encodeFileLinkPath(pathWithSeparator)}) `;
-		const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);
+		const built = buildMentionInsertion(entry, value, token);
+		if (!built) return;
 
 		// Pin the post-insertion caret offset BEFORE the swap effect
 		// runs; otherwise the effect would clobber it with whatever
 		// the textarea's selection was at promotion time (browser-
 		// dependent: usually reset to 0).
-		pendingCaretOffset = token.start + insertion.length;
+		pendingCaretOffset = built.caretOffset;
 		caretOffsetPinned = true;
 
-		value = newValue;
-		onValueChange?.(newValue);
+		value = built.newValue;
+		onValueChange?.(built.newValue);
 
 		// Already in contenteditable mode: this insert does not flip the
 		// renderer, so the swap effect's caret restore never runs.

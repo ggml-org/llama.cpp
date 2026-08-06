@@ -228,7 +228,8 @@ export {
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS,
 	getMentionBadgeIconPaths,
-	getMentionBadgeLabel
+	getMentionBadgeLabel,
+	buildMentionInsertion
 } from './mention-badge';
 
 // Agentic content utilities (structured section derivation)
