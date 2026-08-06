@@ -437,6 +437,14 @@ static bool arch_supported(const llm_arch arch) {
     }
 #endif // GGML_USE_WEBGPU
 
+    // FIXME: jamba produces incorrect output (~0.55 NMSE vs CPU) on the HIP
+    // backend on RDNA3.5 (gfx1151); the SSM kernels need investigation.
+#ifdef GGML_USE_HIP
+    if (arch == LLM_ARCH_JAMBA) {
+        return false;
+    }
+#endif // GGML_USE_HIP
+
     return true;
 }
 

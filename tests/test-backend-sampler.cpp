@@ -1668,9 +1668,18 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const std::st
         }
     } else {
         for (const auto & test : BACKEND_TESTS) {
-            if (test.enabled_by_default) {
-                selected.push_back(&test);
+            if (!test.enabled_by_default) {
+                continue;
             }
+#ifdef GGML_USE_HIP
+            // TODO: remove this when https://github.com/ggml-org/llama.cpp/pull/26592 is merged
+            if (test.name == "penalties" || test.name == "set_sampler" ||
+                test.name == "mixed"     || test.name == "top_p") {
+                fprintf(stderr, "Skipping test '%s' on HIP backend (no backend TOP_K support)\n", test.name.c_str());
+                continue;
+            }
+#endif // GGML_USE_HIP
+            selected.push_back(&test);
         }
     }
 

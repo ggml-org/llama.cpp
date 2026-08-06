@@ -71,6 +71,26 @@ jobs:
           nvidia-smi
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
+  gpu-rocm:
+    runs-on: [self-hosted, Linux, AMD]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        # HIP_LAUNCH_BLOCKING=1: workaround for an async-execution correctness
+        # issue on integrated RDNA3.5 (gfx1151) where batched inference returns
+        # incorrect output (perplexity ~88 vs ~9.4). Serializing kernel launches
+        # restores correctness. Remove once the underlying ROCm/HIP issue is fixed.
+        env:
+          HIP_LAUNCH_BLOCKING: "1"
+        run: |
+          rocminfo
+          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
   gpu-vulkan-nvidia-cm:
     runs-on: [self-hosted, Linux, NVIDIA]
 
