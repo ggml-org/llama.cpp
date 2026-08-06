@@ -6,7 +6,7 @@
 	import { INPUT_CLASSES } from '$lib/constants';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
-
+	import { config } from '$lib/stores/settings.svelte';
 	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
 
 	interface Props {
@@ -64,6 +64,7 @@
 	let contentHeight = $state(0);
 
 	const MAX_HEIGHT = 200; // pixels
+	const currentConfig = config();
 
 	let showExpandButton = $derived(contentHeight > MAX_HEIGHT);
 
@@ -163,9 +164,18 @@
 								? `max-height: ${MAX_HEIGHT}px;`
 								: 'max-height: none;'}
 						>
-							<div bind:this={messageElement} class={isExpanded ? 'cursor-text' : ''}>
-								<MarkdownContent class="markdown-system-content" content={message.content} />
-							</div>
+							{#if !currentConfig.renderUserContentAsRawText}
+								<div bind:this={messageElement} class={isExpanded ? 'cursor-text' : ''}>
+									<MarkdownContent class="markdown-system-content" content={message.content} />
+								</div>
+							{:else}
+								<span
+									bind:this={messageElement}
+									class="text-md whitespace-pre-wrap {isExpanded ? 'cursor-text' : ''}"
+								>
+									{message.content}
+								</span>
+							{/if}
 
 							{#if !isExpanded && showExpandButton}
 								<div
