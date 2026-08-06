@@ -111,7 +111,7 @@ jobs:
         if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
-          SLOW_TESTS=1 pytest -v -x
+          pytest -v -x
 
       - name: Tests (Backend sampling)
         id: server_integration_tests_backend_sampling
@@ -177,5 +177,4 @@ jobs:
         if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
-          $env:SLOW_TESTS = "1"
           pytest -v -x
