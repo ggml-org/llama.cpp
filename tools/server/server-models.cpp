@@ -2079,9 +2079,8 @@ server_http_proxy::server_http_proxy(
         return has_next; // false if EOF or pipe broken
     };
 
-    // wire up the HTTP client
-    // note: do NOT capture `this` pointer, as it may be destroyed before the thread ends
-    httplib::ResponseHandler response_handler = [pipe, cli](const httplib::Response & response) {
+    // build the header message forwarded to the reader thread, stripping internal proxy headers
+    auto make_header_msg = [](const httplib::Response & response) {
         msg_t msg;
         msg.status = response.status;
         for (const auto & [key, value] : response.headers) {
@@ -2095,7 +2094,17 @@ server_http_proxy::server_http_proxy(
             }
             msg.headers[key] = value;
         }
-        return pipe->write(std::move(msg)); // send headers first
+        return msg;
+    };
+
+    // true once response_handler has already forwarded the headers
+    auto headers_sent = std::make_shared<std::atomic<bool>>(false);
+
+    // wire up the HTTP client
+    // note: do NOT capture `this` pointer, as it may be destroyed before the thread ends
+    httplib::ResponseHandler response_handler = [pipe, headers_sent, make_header_msg](const httplib::Response & response) {
+        headers_sent->store(true);
+        return pipe->write(make_header_msg(response)); // send headers first
     };
     httplib::ContentReceiverWithProgress content_receiver = [pipe](const char * data, size_t data_length, size_t, size_t) {
         // send data chunks
@@ -2169,13 +2178,16 @@ server_http_proxy::server_http_proxy(
 
     // start the proxy thread
     SRV_DBG("start proxy thread %s %s\n", req.method.c_str(), req.path.c_str());
-    this->thread = std::thread([cli, pipe, req]() {
+    this->thread = std::thread([cli, pipe, req, headers_sent, make_header_msg]() {
         auto result = cli->send(std::move(req));
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());
             SRV_ERR("http client error: %s\n", err_str.c_str());
             pipe->write({{}, 500, "", ""}); // header
             pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
+        } else if (!headers_sent->load()) {
+            // httplib skips response_handler for bodyless statuses like 204, send headers here instead
+            pipe->write(make_header_msg(*result));
         }
         pipe->close_write(); // signal EOF to reader
         SRV_DBG("%s", "client request thread ended\n");
