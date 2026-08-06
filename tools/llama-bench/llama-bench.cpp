@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cinttypes>
+#include <climits>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
@@ -18,6 +20,10 @@
 #include <thread>
 #include <vector>
 #include <unordered_set>
+
+#if defined(LLAMA_BENCH_ROCTX_PROFILE)
+#include <rocprofiler-sdk-roctx/roctx.h>
+#endif
 
 #include "arg.h"
 #include "build-info.h"
@@ -2109,6 +2115,18 @@ struct ctx_state {
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
 
+static size_t depth_state_get_size(llama_context * ctx, bool use_context_state) {
+    return use_context_state ? llama_state_get_size(ctx) : llama_state_seq_get_size(ctx, 0);
+}
+
+static size_t depth_state_get_data(llama_context * ctx, uint8_t * dst, size_t size, bool use_context_state) {
+    return use_context_state ? llama_state_get_data(ctx, dst, size) : llama_state_seq_get_data(ctx, dst, size, 0);
+}
+
+static size_t depth_state_set_data(llama_context * ctx, const uint8_t * src, size_t size, bool use_context_state) {
+    return use_context_state ? llama_state_set_data(ctx, src, size) : llama_state_seq_set_data(ctx, src, size, 0);
+}
+
 static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
@@ -2183,6 +2201,150 @@ static std::unique_ptr<printer> create_printer(output_formats format) {
     GGML_ABORT("fatal error");
 }
 
+class selected_region_profiler {
+public:
+    explicit selected_region_profiler(int repetitions) {
+        const char * enabled_text = std::getenv("LLAMA_BENCH_ROCPROF_SELECTED_REGIONS");
+        if (enabled_text == nullptr) {
+            return;
+        }
+        if (std::strcmp(enabled_text, "1") != 0) {
+            fail("LLAMA_BENCH_ROCPROF_SELECTED_REGIONS must be 1 when set");
+            return;
+        }
+#if !defined(LLAMA_BENCH_ROCTX_PROFILE)
+        fail("this llama-bench was built without rocprofiler-sdk-roctx support");
+#else
+        const char * skip_text = std::getenv("LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS");
+        if (skip_text == nullptr) {
+            skip_repetitions = 0;
+        } else {
+            char * end = nullptr;
+            errno = 0;
+            const long skip = std::strtol(skip_text, &end, 10);
+            if (errno != 0 || end == skip_text || *end != '\0' || skip < 0 || skip > INT_MAX) {
+                fail("LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS must be a non-negative integer");
+                return;
+            }
+            skip_repetitions = int(skip);
+        }
+        if (skip_repetitions >= repetitions) {
+            fail("LLAMA_BENCH_ROCPROF_SKIP_REPETITIONS must be below --repetitions");
+            return;
+        }
+        const char * boundaries_path = std::getenv("LLAMA_BENCH_ROCPROF_BOUNDARIES");
+        if (boundaries_path == nullptr || *boundaries_path == '\0') {
+            fail("LLAMA_BENCH_ROCPROF_BOUNDARIES is required for selected regions");
+            return;
+        }
+        boundaries = std::fopen(boundaries_path, "w");
+        if (boundaries == nullptr) {
+            fprintf(stderr, "failed to create selected-region boundaries %s: %s\n", boundaries_path, std::strerror(errno));
+            valid = false;
+            return;
+        }
+        std::fprintf(boundaries, "event\tbenchmark\tdepth\trepetition\ttimestamp_monotonic_ns\n");
+        if (std::fflush(boundaries) != 0) {
+            fail("failed to initialize selected-region boundary file");
+            return;
+        }
+        enabled = true;
+#endif
+    }
+
+    ~selected_region_profiler() {
+        if (boundaries != nullptr) {
+            std::fclose(boundaries);
+        }
+    }
+
+    bool is_valid() const {
+        return valid;
+    }
+
+    bool is_enabled() const {
+        return enabled;
+    }
+
+    int skipped_repetitions() const {
+        return skip_repetitions;
+    }
+
+    bool profiles_repetition(int zero_based_repetition) const {
+        return enabled && zero_based_repetition >= skip_repetitions;
+    }
+
+    bool begin(int benchmark, int64_t depth, int repetition) {
+#if defined(LLAMA_BENCH_ROCTX_PROFILE)
+        if (roctxProfilerResume(0) != 0) {
+            fail("rocprofiler selected-region resume failed");
+            return false;
+        }
+        return record("resume_return", benchmark, depth, repetition);
+#else
+        GGML_UNUSED(benchmark);
+        GGML_UNUSED(depth);
+        GGML_UNUSED(repetition);
+        return false;
+#endif
+    }
+
+    bool end(int benchmark, int64_t depth, int repetition) {
+#if defined(LLAMA_BENCH_ROCTX_PROFILE)
+        // test_gen synchronizes each token. Capture the authoritative end while
+        // profiling is still active, after all generation kernels completed.
+        if (!record("pause_call", benchmark, depth, repetition)) {
+            return false;
+        }
+        if (roctxProfilerPause(0) != 0) {
+            fail("rocprofiler selected-region pause failed");
+            return false;
+        }
+        return true;
+#else
+        GGML_UNUSED(benchmark);
+        GGML_UNUSED(depth);
+        GGML_UNUSED(repetition);
+        return false;
+#endif
+    }
+
+private:
+    static uint64_t monotonic_time_ns() {
+#if defined(LLAMA_BENCH_ROCTX_PROFILE)
+        struct timespec ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+            return 0;
+        }
+        return uint64_t(ts.tv_sec) * 1000000000ULL + uint64_t(ts.tv_nsec);
+#else
+        return 0;
+#endif
+    }
+
+    bool record(const char * event, int benchmark, int64_t depth, int repetition) {
+        const uint64_t timestamp = monotonic_time_ns();
+        if (timestamp == 0 || boundaries == nullptr ||
+            std::fprintf(boundaries, "%s\t%d\t%" PRId64 "\t%d\t%" PRIu64 "\n",
+                         event, benchmark, depth, repetition, timestamp) < 0 ||
+            std::fflush(boundaries) != 0) {
+            fail("failed to record selected-region boundary");
+            return false;
+        }
+        return true;
+    }
+
+    void fail(const char * message) {
+        fprintf(stderr, "%s\n", message);
+        valid = false;
+    }
+
+    bool enabled = false;
+    bool valid = true;
+    int skip_repetitions = 0;
+    FILE * boundaries = nullptr;
+};
+
 // satisfies -Wmissing-declarations
 int llama_bench(int argc, char ** argv);
 
@@ -2207,6 +2369,15 @@ int llama_bench(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
+
+    selected_region_profiler rocprof_regions(params.reps);
+    if (!rocprof_regions.is_valid()) {
+        return 1;
+    }
+    if (rocprof_regions.is_enabled() && params.progress) {
+        fprintf(stderr, "llama-bench: rocprof selected regions enabled; skipping %d repetition(s) per benchmark\n",
+                rocprof_regions.skipped_repetitions());
+    }
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
@@ -2251,6 +2422,18 @@ int llama_bench(int argc, char ** argv) {
     // store the llama_context state at the previous depth that we performed a test
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
     ctx_state cstate;
+
+    const char * depth_state_api_env = std::getenv("LLAMA_BENCH_DEPTH_STATE_API");
+    const std::string depth_state_api = depth_state_api_env ? depth_state_api_env : "sequence";
+    if (depth_state_api != "sequence" && depth_state_api != "context") {
+        fprintf(stderr, "llama-bench: invalid LLAMA_BENCH_DEPTH_STATE_API=%s (expected sequence or context)\n",
+                depth_state_api.c_str());
+        return 1;
+    }
+    const bool use_context_depth_state = depth_state_api == "context";
+    if (params.progress) {
+        fprintf(stderr, "llama-bench: depth state API: %s\n", depth_state_api.c_str());
+    }
 
     int  params_idx   = 0;
     auto params_count = params_instances.size();
@@ -2383,8 +2566,8 @@ int llama_bench(int argc, char ** argv) {
 
                 if (is_cached) {
                     // if previously we have computed at this depth, just restore the state
-                    const size_t ret = llama_state_seq_set_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
-                    if (ret == 0) {
+                    const size_t ret = depth_state_set_data(ctx, cstate.buf.data(), cstate.buf.size(), use_context_depth_state);
+                    if (ret != cstate.buf.size()) {
                         // if the old state is incompatible with the current context - reprocess from scratch
                         is_cached = false;
                     }
@@ -2405,8 +2588,15 @@ int llama_bench(int argc, char ** argv) {
 
                     // store the context state for reuse in later runs
                     cstate.depth = t.n_depth;
-                    cstate.buf.resize(llama_state_seq_get_size(ctx, 0));
-                    llama_state_seq_get_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
+                    cstate.buf.resize(depth_state_get_size(ctx, use_context_depth_state));
+                    const size_t copied = depth_state_get_data(ctx, cstate.buf.data(), cstate.buf.size(), use_context_depth_state);
+                    if (copied != cstate.buf.size()) {
+                        fprintf(stderr, "%s: error: saved %zu depth-state bytes, expected %zu\n",
+                                __func__, copied, cstate.buf.size());
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        exit(1);
+                    }
                 } else {
                     if (params.progress) {
                         fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d (cached)\n", params_idx, params_count,
@@ -2435,7 +2625,18 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
+                const bool profile_this_repetition = rocprof_regions.profiles_repetition(i);
+                if (profile_this_repetition && !rocprof_regions.begin(params_idx, t.n_depth, i + 1)) {
+                    llama_free(ctx);
+                    llama_model_free(lmodel);
+                    exit(1);
+                }
                 bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                if (profile_this_repetition && !rocprof_regions.end(params_idx, t.n_depth, i + 1)) {
+                    llama_free(ctx);
+                    llama_model_free(lmodel);
+                    exit(1);
+                }
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
                     llama_free(ctx);

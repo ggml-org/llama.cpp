@@ -3,6 +3,7 @@
 #include "ggml-backend-impl.h"
 
 #include "ggml-cuda/allreduce.cuh"
+#include "ggml-cuda/comm-precision.h"
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
@@ -83,6 +84,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -977,11 +979,28 @@ struct ggml_backend_cuda_comm_context {
 
     ggml_cuda_ar_pipeline *     ar_pipeline = nullptr;
 
+    bool rdna2_bf16_hidden_enabled     = false;
+    bool rdna2_bf16_hidden_topology    = false;
+    bool rdna2_bf16_hidden_logged      = false;
+    bool rdna2_bf16_hidden_miss_logged = false;
+
+    std::string                        rdna2_bf16_hidden_audit_path;
+    uint64_t                           audit_context_id = 0;
+    ggml_cuda_allreduce_audit_counters audit;
+    uint64_t audit_ne4096_calls            = 0;
+    uint64_t audit_ne4096_all_f32_calls    = 0;
+    uint64_t audit_ne4096_same_shape_calls = 0;
+    int64_t  audit_first_ne4096_shape[4]   = { 0, 0, 0, 0 };
+    bool     audit_first_ne4096_recorded   = false;
+
 #ifdef GGML_USE_NCCL
     std::vector<ncclComm_t>     comms;
 #endif // GGML_USE_NCCL
 
+    void write_rdna2_bf16_hidden_audit() const;
+
     ~ggml_backend_cuda_comm_context() {
+        write_rdna2_bf16_hidden_audit();
 #ifdef GGML_USE_NCCL
         for (ncclComm_t comm : comms) {
             NCCL_CHECK(ncclCommDestroy(comm));
@@ -991,12 +1010,60 @@ struct ggml_backend_cuda_comm_context {
     }
 };
 
+static std::mutex ggml_cuda_rdna2_bf16_hidden_audit_mutex;
+static std::atomic<uint64_t> ggml_cuda_rdna2_bf16_hidden_audit_next_context{0};
+
+void ggml_backend_cuda_comm_context::write_rdna2_bf16_hidden_audit() const {
+    if (rdna2_bf16_hidden_audit_path.empty()) {
+        return;
+    }
+
+    GGML_ASSERT(ggml_cuda_audit_nonzero_decision_count(audit) ==
+            audit.allreduce_calls - audit.zero_element_calls);
+
+    std::ostringstream line;
+    line << "{\"schema_version\":1,\"context_id\":" << audit_context_id
+         << ",\"candidate_enabled\":" << (rdna2_bf16_hidden_enabled ? "true" : "false")
+         << ",\"candidate_topology\":" << (rdna2_bf16_hidden_topology ? "true" : "false")
+         << ",\"backend_count\":" << dev_ids.size() << ",\"logical_devices\":[";
+    for (size_t i = 0; i < dev_ids.size(); ++i) {
+        line << (i == 0 ? "" : ",") << dev_ids[i];
+    }
+    line << "],\"allreduce_calls\":" << audit.allreduce_calls
+         << ",\"zero_element_calls\":" << audit.zero_element_calls
+         << ",\"candidate_eligible_calls\":" << audit.candidate_eligible_calls
+         << ",\"candidate_bf16_calls\":" << audit.candidate_bf16_calls
+         << ",\"candidate_disabled_fp32_calls\":" << audit.candidate_disabled_calls
+         << ",\"force_fp32_calls\":" << audit.force_fp32_calls
+         << ",\"force_candidate_conflict_calls\":" << audit.force_candidate_conflicts
+         << ",\"legacy_fp32_calls\":" << audit.legacy_fp32_calls
+         << ",\"legacy_bf16_calls\":" << audit.legacy_bf16_calls
+         << ",\"ne4096_calls\":" << audit_ne4096_calls
+         << ",\"ne4096_all_f32_calls\":" << audit_ne4096_all_f32_calls
+         << ",\"ne4096_same_shape_calls\":" << audit_ne4096_same_shape_calls
+         << ",\"first_ne4096_shape\":[" << audit_first_ne4096_shape[0] << ","
+         << audit_first_ne4096_shape[1] << "," << audit_first_ne4096_shape[2] << ","
+         << audit_first_ne4096_shape[3] << "]"
+         << ",\"complete\":true}\n";
+
+    std::lock_guard<std::mutex> lock(ggml_cuda_rdna2_bf16_hidden_audit_mutex);
+    if (!ggml_cuda_append_allreduce_audit_line(rdna2_bf16_hidden_audit_path.c_str(), line.str())) {
+        GGML_ABORT("failed to append RDNA2 BF16 hidden AllReduce audit file: %s",
+                rdna2_bf16_hidden_audit_path.c_str());
+    }
+}
+
 #ifdef GGML_USE_NCCL
 // AllReduce via NCCL. Reduces as FP32 for small tensors and BF16 for large
 // tensors (bandwidth-bound), then converts back to FP32.
 static bool ggml_backend_cuda_comm_allreduce_nccl(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
     const int64_t ne = ggml_nelements(tensors[0]);
+    const bool audit_enabled = !comm_ctx->rdna2_bf16_hidden_audit_path.empty();
+    if (audit_enabled) {
+        ggml_cuda_audit_record_call(comm_ctx->audit, ne == 0);
+    }
+
     // FIXME the input of llm_graph_context::build_in_out_ids can produce a tensor with 0 elements if n_outputs == 0
     // This then causes a crash in this function
     if (ne == 0) {
@@ -1004,19 +1071,82 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
     }
 
     const size_t n_backends = comm_ctx->backends.size();
+    GGML_ASSERT(n_backends <= GGML_CUDA_MAX_DEVICES);
+    bool all_f32        = true;
+    bool all_contiguous = true;
+    bool all_same_shape = true;
+    std::array<uint32_t, GGML_CUDA_MAX_DEVICES> tensor_flags{};
 
     for (size_t i = 0; i < n_backends; ++i) {
         GGML_ASSERT(tensors[i] != nullptr);
         GGML_ASSERT(ggml_nelements(tensors[i]) == ne);
-        GGML_ASSERT(ggml_is_contiguously_allocated(tensors[i]));
+
+        all_f32        = all_f32 && tensors[i]->type == GGML_TYPE_F32;
+        all_contiguous = all_contiguous && ggml_is_contiguously_allocated(tensors[i]);
+        tensor_flags[i] = tensors[i]->flags;
+        for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+            all_same_shape = all_same_shape && tensors[i]->ne[dim] == tensors[0]->ne[dim];
+        }
+    }
+    GGML_ASSERT(all_contiguous);
+    const bool force_fp32 = ggml_cuda_any_allreduce_force_flag(
+        tensor_flags.data(), n_backends, GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE);
+
+    ggml_cuda_allreduce_precision_input precision_input;
+    precision_input.candidate_enabled  = comm_ctx->rdna2_bf16_hidden_enabled;
+    precision_input.candidate_topology = comm_ctx->rdna2_bf16_hidden_topology;
+    precision_input.all_f32            = all_f32;
+    precision_input.all_contiguous     = all_contiguous;
+    precision_input.all_same_shape     = all_same_shape;
+    precision_input.force_fp32         = force_fp32;
+    precision_input.n_backends         = n_backends;
+    precision_input.nelements          = ne;
+    for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+        precision_input.ne[dim] = tensors[0]->ne[dim];
+    }
+
+    const bool candidate_eligible = ggml_cuda_is_rdna2_bf16_hidden_shape(precision_input);
+    const ggml_cuda_allreduce_precision precision = ggml_cuda_select_allreduce_precision(precision_input);
+
+    if (audit_enabled && ne == 4096) {
+        ++comm_ctx->audit_ne4096_calls;
+        comm_ctx->audit_ne4096_all_f32_calls += all_f32;
+        comm_ctx->audit_ne4096_same_shape_calls += all_same_shape;
+        if (!comm_ctx->audit_first_ne4096_recorded) {
+            for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+                comm_ctx->audit_first_ne4096_shape[dim] = tensors[0]->ne[dim];
+            }
+            comm_ctx->audit_first_ne4096_recorded = true;
+        }
+    }
+    if (audit_enabled) {
+        ggml_cuda_audit_record_decision(
+            comm_ctx->audit, candidate_eligible, comm_ctx->rdna2_bf16_hidden_enabled, force_fp32, precision);
+    }
+
+    if (comm_ctx->rdna2_bf16_hidden_enabled && ne == 4096 &&
+            precision != ggml_cuda_allreduce_precision::candidate_bf16 &&
+            !comm_ctx->rdna2_bf16_hidden_miss_logged) {
+        std::fprintf(stderr,
+                "guarded RDNA2 BF16 hidden AllReduce guard miss: ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
+                "] backends=%zu all_f32=%d contiguous=%d same_shape=%d force_fp32=%d\n",
+                tensors[0]->ne[0], tensors[0]->ne[1], tensors[0]->ne[2], tensors[0]->ne[3], n_backends,
+                all_f32, all_contiguous, all_same_shape, force_fp32);
+        comm_ctx->rdna2_bf16_hidden_miss_logged = true;
+    }
+    if (precision == ggml_cuda_allreduce_precision::candidate_bf16 && !comm_ctx->rdna2_bf16_hidden_logged) {
+        std::fprintf(stderr,
+                "using guarded RDNA2 BF16 hidden AllReduce: ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
+                "] backends=%zu force_fp32=0\n",
+                tensors[0]->ne[0], tensors[0]->ne[1], tensors[0]->ne[2], tensors[0]->ne[3], n_backends);
+        comm_ctx->rdna2_bf16_hidden_logged = true;
     }
 
     // For small tensors, simply reduce them as FP32. Output logits can also
     // require FP32 explicitly because reduced-precision accumulation can alter
-    // close token rankings.
-    // The following heuristic for how "small" a tensor should be is based on RTX 4090s connected via 16x PCIe 4.0.
-    const bool force_fp32 = (tensors[0]->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) != 0;
-    if (force_fp32 || (n_backends <= 2 && ne < 32768) || (n_backends == 3 && ne < 131072) || (n_backends >= 4 && ne < 262144)) {
+    // close token rankings. The candidate only changes the exact guarded shape.
+    if (precision == ggml_cuda_allreduce_precision::forced_fp32 ||
+            precision == ggml_cuda_allreduce_precision::legacy_fp32) {
         for (size_t i = 0; i < n_backends; ++i) {
             if ((tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
                 ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
@@ -1150,6 +1280,44 @@ static void ggml_backend_cuda_comm_free(void * comm_ctx_v) {
     delete static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
 }
 
+static bool ggml_backend_cuda_comm_is_four_distinct_rdna2(
+        const ggml_backend_cuda_comm_context * comm_ctx) {
+#ifdef GGML_USE_HIP
+    if (comm_ctx->dev_ids.size() != 4) {
+        return false;
+    }
+
+    const ggml_cuda_device_info & info = ggml_cuda_info();
+    std::array<ggml_cuda_allreduce_topology_device, 4> devices{};
+    for (size_t i = 0; i < comm_ctx->dev_ids.size(); ++i) {
+        const int dev_id = comm_ctx->dev_ids[i];
+        if (dev_id < 0 || dev_id >= info.device_count) {
+            return false;
+        }
+        const auto & device = info.devices[dev_id];
+        devices[i] = { dev_id, device.physical_device, device.physical_share_count,
+            GGML_CUDA_CC_IS_RDNA2(device.cc) };
+    }
+    return ggml_cuda_is_four_distinct_rdna2_topology(
+        devices.data(), devices.size(), info.device_count, info.physical_device_count);
+#else
+    GGML_UNUSED(comm_ctx);
+    return false;
+#endif // GGML_USE_HIP
+}
+
+static void ggml_backend_cuda_comm_log_rdna2_bf16_topology(
+        const ggml_backend_cuda_comm_context * comm_ctx) {
+    const ggml_cuda_device_info & info = ggml_cuda_info();
+    std::fprintf(stderr, "guarded RDNA2 BF16 hidden AllReduce armed across %zu devices\n", comm_ctx->dev_ids.size());
+    for (size_t rank = 0; rank < comm_ctx->dev_ids.size(); ++rank) {
+        const int dev_id = comm_ctx->dev_ids[rank];
+        const auto & device = info.devices[dev_id];
+        std::fprintf(stderr, "  rank %zu: logical=%d physical=%d cc=%d share_count=%d\n",
+                rank, dev_id, device.physical_device, device.cc, device.physical_share_count);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Init -- chained nccl -> internal -> none.  Each step tries to bring up its
 // resource; on failure it warns and recurses into the next step.
@@ -1178,6 +1346,9 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
     // Disabling NCCL path when CUDA virtual devices are in use since NCCL requires one distinct physical GPU per rank.
     const ggml_cuda_device_info & info = ggml_cuda_info();
     if (info.device_count > info.physical_device_count) {
+        if (ret->rdna2_bf16_hidden_enabled) {
+            GGML_ABORT("guarded RDNA2 BF16 hidden AllReduce requires four distinct physical NCCL/RCCL devices");
+        }
         GGML_LOG_WARN("NCCL disabled: virtual devices in use; "
                       "falling back to internal AllReduce\n");
         ggml_backend_cuda_comm_init_internal(ret);
@@ -1185,7 +1356,7 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
     }
 
     const size_t n = ret->dev_ids.size();
-    ret->comms.resize(n);
+    ret->comms.assign(n, nullptr);
     ncclResult_t rc = ncclCommInitAll(ret->comms.data(), (int) n, ret->dev_ids.data());
     if (rc == ncclSuccess) {
         ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_nccl;
@@ -1193,7 +1364,20 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
         return;
     }
 
+    for (ncclComm_t comm : ret->comms) {
+        if (comm == nullptr) {
+            continue;
+        }
+        const ncclResult_t cleanup_rc = ncclCommAbort(comm);
+        if (cleanup_rc != ncclSuccess) {
+            GGML_LOG_WARN("NCCL partial communicator cleanup failed: %s\n", ncclGetErrorString(cleanup_rc));
+        }
+    }
     ret->comms.clear();
+    if (ret->rdna2_bf16_hidden_enabled) {
+        GGML_ABORT("guarded RDNA2 BF16 hidden AllReduce NCCL/RCCL initialization failed: %s",
+                ncclGetErrorString(rc));
+    }
     GGML_LOG_WARN("NCCL init failed (%s); falling back to internal AllReduce\n",
                   ncclGetErrorString(rc));
 #else // GGML_USE_NCCL
@@ -1217,14 +1401,61 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
         }
     }
 
+    const char * candidate_env = std::getenv("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE");
+    const ggml_cuda_rdna2_bf16_hidden_option candidate_option =
+        ggml_cuda_parse_rdna2_bf16_hidden_option(candidate_env);
+
+    const char * audit_env = std::getenv("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE_AUDIT");
+    if (audit_env != nullptr && audit_env[0] == '\0') {
+        GGML_ABORT("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE_AUDIT must be unset or a nonempty path");
+    }
+
     auto * ret = new ggml_backend_cuda_comm_context;
     ret->backends.assign(backends, backends + n_backends);
     ret->dev_ids.reserve(n_backends);
     for (size_t i = 0; i < n_backends; i++) {
         ret->dev_ids.push_back(static_cast<ggml_backend_cuda_context *>(backends[i]->context)->device);
     }
+    ret->rdna2_bf16_hidden_topology = ggml_backend_cuda_comm_is_four_distinct_rdna2(ret);
+    if (audit_env != nullptr) {
+        ret->rdna2_bf16_hidden_audit_path = audit_env;
+        ret->audit_context_id = ggml_cuda_rdna2_bf16_hidden_audit_next_context.fetch_add(1);
+    }
 
-    const char * env = getenv("GGML_CUDA_ALLREDUCE");
+    const char * env = std::getenv("GGML_CUDA_ALLREDUCE");
+#if defined(GGML_USE_HIP)
+    constexpr bool hip_compiled = true;
+#else
+    constexpr bool hip_compiled = false;
+#endif
+#if defined(GGML_USE_NCCL)
+    constexpr bool nccl_compiled = true;
+#else
+    constexpr bool nccl_compiled = false;
+#endif
+    const ggml_cuda_rdna2_bf16_hidden_activation activation =
+        ggml_cuda_validate_rdna2_bf16_hidden_activation(
+            candidate_option, hip_compiled, nccl_compiled, env, ret->rdna2_bf16_hidden_topology);
+    switch (activation) {
+        case ggml_cuda_rdna2_bf16_hidden_activation::disabled:
+            break;
+        case ggml_cuda_rdna2_bf16_hidden_activation::enabled:
+            ret->rdna2_bf16_hidden_enabled = true;
+            ggml_backend_cuda_comm_log_rdna2_bf16_topology(ret);
+            break;
+        case ggml_cuda_rdna2_bf16_hidden_activation::invalid_option:
+            GGML_ABORT("invalid GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE value: '%s' (expected unset, 0, or 1)",
+                    candidate_env == nullptr ? "<unset>" : candidate_env);
+        case ggml_cuda_rdna2_bf16_hidden_activation::requires_hip:
+            GGML_ABORT("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1 requires a HIP build");
+        case ggml_cuda_rdna2_bf16_hidden_activation::requires_nccl:
+            GGML_ABORT("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1 requires RCCL/NCCL support");
+        case ggml_cuda_rdna2_bf16_hidden_activation::requires_explicit_nccl:
+            GGML_ABORT("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1 requires GGML_CUDA_ALLREDUCE=nccl");
+        case ggml_cuda_rdna2_bf16_hidden_activation::requires_four_distinct_rdna2:
+            GGML_ABORT("GGML_HIP_RDNA2_BF16_HIDDEN_ALLREDUCE=1 requires exactly four distinct RDNA2 physical devices");
+    }
+
     if (!env) {
         // Platform default: Linux uses NCCL, otherwise (generally Windows) internal
 #if defined(__linux__)
@@ -1834,6 +2065,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
 
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
+
+    if (ggml_cuda_op_dsv4_hc_mixes(ctx, src0, src1, dst, cc, warp_size)) {
+        return;
+    }
 
     if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
@@ -5125,7 +5360,15 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_TOP_K:
         case GGML_OP_ARGSORT:
 #ifndef GGML_CUDA_USE_CUB
-            return op->src[0]->ne[0] <= 1024;
+            {
+                // the bitonic sort pads each row to a power of 2 and keeps its indices in shared memory
+                const size_t smpb = ggml_cuda_info().devices[dev_ctx->device].smpb;
+                size_t max_ncols = 1;
+                while (max_ncols*2*sizeof(int) <= smpb) {
+                    max_ncols *= 2;
+                }
+                return op->src[0]->ne[0] <= (int64_t) max_ncols;
+            }
 #else
             return true;
 #endif

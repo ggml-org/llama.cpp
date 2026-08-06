@@ -26,6 +26,11 @@ enum class routing_mode : uint32_t {
     hot = 1,
 };
 
+enum class weight_fixture : uint32_t {
+    prototypes = 0,
+    unique = 1,
+};
+
 struct params {
     ggml_type type = GGML_TYPE_Q4_K;
     int64_t k = 4096;
@@ -36,12 +41,14 @@ struct params {
     int warmup = 10;
     int iterations = 50;
     routing_mode routing = routing_mode::uniform;
+    weight_fixture fixture = weight_fixture::prototypes;
     const char * device_name = nullptr;
     const char * dump_output = nullptr;
     const char * compare_output = nullptr;
     float atol = 1e-3f;
     float rtol = 1e-4f;
     bool disable_graphs = false;
+    bool auto_j16_hint = false;
 };
 
 struct output_file_header {
@@ -76,17 +83,19 @@ struct output_stats {
 void usage(const char * program) {
     std::printf("Synthetic routed quantized MUL_MAT_ID benchmark using the HIP GGML backend graph.\n\n");
     std::printf("usage: %s [options]\n\n", program);
-    std::printf("  --type TYPE             q4_k or q6_k (q4_k)\n");
+    std::printf("  --type TYPE             q4_k, q5_k, q6_k, iq2_xxs, iq2_s, iq3_xxs, or iq3_s (q4_k)\n");
     std::printf("  --k N                   input width, divisible by the quant block size (4096)\n");
     std::printf("  --n N                   expert output rows (512)\n");
     std::printf("  --batch N               routed tokens, 1..256 (32)\n");
     std::printf("  --experts N             number of expert matrices (64)\n");
     std::printf("  --top-k N               unique experts selected per token (10)\n");
     std::printf("  --routing MODE          uniform or hot (uniform)\n");
+    std::printf("  --fixture MODE          prototypes or unique (prototypes)\n");
     std::printf("  --warmup N              warmup graph executions (10)\n");
     std::printf("  --iterations N          timed graph executions (50)\n");
     std::printf("  --device NAME           exact ROCm GGML device name; defaults to the first GPU\n");
     std::printf("  --disable-graphs        set GGML_CUDA_DISABLE_GRAPHS before backend initialization\n");
+    std::printf("  --auto-j16-hint         mark weights with the model-selected MMQ J16 advisory flag\n");
     std::printf("  --dump-output FILE      write deterministic F32 output for later A/B comparison\n");
     std::printf("  --compare-output FILE   compare output against a matching baseline\n");
     std::printf("  --atol X                absolute A/B tolerance (1e-3)\n");
@@ -99,8 +108,28 @@ bool parse_type(const char * value, ggml_type & type) {
         type = GGML_TYPE_Q4_K;
         return true;
     }
+    if (std::strcmp(value, "q5_k") == 0) {
+        type = GGML_TYPE_Q5_K;
+        return true;
+    }
     if (std::strcmp(value, "q6_k") == 0) {
         type = GGML_TYPE_Q6_K;
+        return true;
+    }
+    if (std::strcmp(value, "iq2_xxs") == 0) {
+        type = GGML_TYPE_IQ2_XXS;
+        return true;
+    }
+    if (std::strcmp(value, "iq2_s") == 0) {
+        type = GGML_TYPE_IQ2_S;
+        return true;
+    }
+    if (std::strcmp(value, "iq3_xxs") == 0) {
+        type = GGML_TYPE_IQ3_XXS;
+        return true;
+    }
+    if (std::strcmp(value, "iq3_s") == 0) {
+        type = GGML_TYPE_IQ3_S;
         return true;
     }
     return false;
@@ -165,6 +194,16 @@ params parse_args(int argc, char ** argv) {
                 std::fprintf(stderr, "error: --routing must be uniform or hot\n");
                 std::exit(1);
             }
+        } else if (std::strcmp(arg, "--fixture") == 0) {
+            const char * value = require_value(arg);
+            if (std::strcmp(value, "prototypes") == 0) {
+                result.fixture = weight_fixture::prototypes;
+            } else if (std::strcmp(value, "unique") == 0) {
+                result.fixture = weight_fixture::unique;
+            } else {
+                std::fprintf(stderr, "error: --fixture must be prototypes or unique\n");
+                std::exit(1);
+            }
         } else if (std::strcmp(arg, "--warmup") == 0) {
             result.warmup = static_cast<int>(parse_i64(arg, require_value(arg), 0, 1000000));
         } else if (std::strcmp(arg, "--iterations") == 0) {
@@ -181,6 +220,8 @@ params parse_args(int argc, char ** argv) {
             result.rtol = parse_nonnegative_float(arg, require_value(arg));
         } else if (std::strcmp(arg, "--disable-graphs") == 0) {
             result.disable_graphs = true;
+        } else if (std::strcmp(arg, "--auto-j16-hint") == 0) {
+            result.auto_j16_hint = true;
         } else if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -211,15 +252,46 @@ float deterministic_value(size_t index, float phase) {
 void quantize_expert_weights(const params & p, std::vector<uint8_t> & packed) {
     const size_t row_bytes = ggml_row_size(p.type, p.k);
     std::vector<float> row(static_cast<size_t>(p.k));
+    std::vector<float> importance(static_cast<size_t>(p.k), 1.0f);
+
+    if (p.fixture == weight_fixture::unique) {
+        // Slow correctness fixture: every expert/output row has independent
+        // packed weights so coupled expert/row addressing errors cannot alias.
+        for (int64_t expert = 0; expert < p.experts; ++expert) {
+            for (int64_t out = 0; out < p.n; ++out) {
+                const size_t row_index = static_cast<size_t>(expert * p.n + out);
+                for (int64_t col = 0; col < p.k; ++col) {
+                    row[static_cast<size_t>(col)] = deterministic_value(
+                        row_index * static_cast<size_t>(p.k) + static_cast<size_t>(col),
+                        0.13f * static_cast<float>(expert + 1));
+                }
+                ggml_quantize_chunk(p.type, row.data(), packed.data() + row_index * row_bytes,
+                                    0, 1, p.k, importance.data());
+            }
+        }
+        return;
+    }
+
+    // Fast performance fixture: reuse a bounded deterministic row set in an
+    // expert-dependent pattern. It intentionally aliases coupled expert/row
+    // pairs; use --fixture unique for correctness validation.
+    constexpr size_t nprototypes = 1024;
+    std::vector<uint8_t> prototypes(nprototypes * row_bytes);
+    for (size_t prototype = 0; prototype < nprototypes; ++prototype) {
+        for (int64_t col = 0; col < p.k; ++col) {
+            row[static_cast<size_t>(col)] = deterministic_value(
+                prototype * static_cast<size_t>(p.k) + static_cast<size_t>(col), 0.13f * static_cast<float>(prototype + 1));
+        }
+        ggml_quantize_chunk(p.type, row.data(), prototypes.data() + prototype * row_bytes,
+                            0, 1, p.k, importance.data());
+    }
 
     for (int64_t expert = 0; expert < p.experts; ++expert) {
         for (int64_t out = 0; out < p.n; ++out) {
             const size_t row_index = static_cast<size_t>(expert * p.n + out);
-            for (int64_t col = 0; col < p.k; ++col) {
-                row[static_cast<size_t>(col)] = deterministic_value(
-                    row_index * static_cast<size_t>(p.k) + static_cast<size_t>(col), 0.13f * static_cast<float>(expert + 1));
-            }
-            ggml_quantize_chunk(p.type, row.data(), packed.data() + row_index * row_bytes, 0, 1, p.k, nullptr);
+            const size_t prototype = static_cast<size_t>(out + 257 * expert) % nprototypes;
+            std::memcpy(packed.data() + row_index * row_bytes,
+                        prototypes.data() + prototype * row_bytes, row_bytes);
         }
     }
 }
@@ -290,6 +362,7 @@ output_file_header make_output_header(const params & p, size_t elements) {
     output_file_header header;
     header.type = static_cast<uint32_t>(p.type);
     header.routing = static_cast<uint32_t>(p.routing);
+    header.reserved = static_cast<uint32_t>(p.fixture);
     header.k = static_cast<uint64_t>(p.k);
     header.n = static_cast<uint64_t>(p.n);
     header.batch = static_cast<uint64_t>(p.batch);
@@ -385,10 +458,11 @@ int main(int argc, char ** argv) {
     }
 
     std::printf("backend: %s (%s)\n", ggml_backend_name(backend.get()), ggml_backend_dev_description(device));
-    std::printf("routed MMID case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s\n",
+    std::printf("routed MMID case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s fixture=%s auto_j16_hint=%d\n",
                 ggml_type_name(p.type), static_cast<long long>(p.k), static_cast<long long>(p.n),
                 static_cast<long long>(p.batch), static_cast<long long>(p.experts), static_cast<long long>(p.top_k),
-                p.routing == routing_mode::uniform ? "uniform" : "hot");
+                p.routing == routing_mode::uniform ? "uniform" : "hot",
+                p.fixture == weight_fixture::prototypes ? "prototypes" : "unique", int(p.auto_j16_hint));
 
     const size_t row_bytes = ggml_row_size(p.type, p.k);
     const size_t weight_bytes = row_bytes * static_cast<size_t>(p.n) * static_cast<size_t>(p.experts);
@@ -411,6 +485,9 @@ int main(int argc, char ** argv) {
     }
 
     ggml_tensor * expert_weights = ggml_new_tensor_3d(ctx_weights.get(), p.type, p.k, p.n, p.experts);
+    if (p.auto_j16_hint) {
+        expert_weights->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMQ_J16;
+    }
     ggml_tensor * ids_full = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, p.experts, p.batch);
     ggml_tensor * ids = ggml_view_2d(ctx.get(), ids_full, p.top_k, p.batch, ids_full->nb[1], 0);
     ggml_tensor * activation = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, 1, p.batch);
