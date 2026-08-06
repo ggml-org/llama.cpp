@@ -1,16 +1,9 @@
 /**
  * Slash-command token detection for the chat form.
  *
- * Unlike the `@`-mention token, a slash command is only valid at the very
- * start of the input (offset 0) - `/foo` is a command, `hello /foo` is not.
- * The command name is the run of non-whitespace characters after `/`; the
- * args are everything after the first whitespace.
- *
- * Examples:
- *   `/`            -> { name: '', args: '', end: 1 }
- *   `/prompt`      -> { name: 'prompt', args: '', end: 7 }
- *   `/prompt rev`  -> { name: 'prompt', args: 'rev', end: 12 }
- *   `hello /prompt`-> null (not at offset 0)
+ * Unlike the `@`-mention token, a slash command is only valid at offset 0:
+ * `/foo` is a command, `hello /foo` is not. The name is the run of
+ * non-whitespace after `/`; args are everything after the first whitespace.
  */
 export function findCommandToken(
 	value: string
@@ -27,11 +20,8 @@ export function findCommandToken(
 
 /**
  * Stable signature of a slash-command token for use as a "dismissed"
- * marker. When the user hits Escape, the command picker records this so
- * subsequent in-token edits (typing more chars into `/prompt`) do not
- * silently re-open the picker or instant-dispatch. The signature changes
- * as soon as the user edits or deletes any character of the token, which
- * is the moment the picker is allowed to act again.
+ * marker. While the picker is closed and this exact token is still intact,
+ * the picker does not re-open or instant-dispatch on in-token edits.
  */
 export interface CommandDismissSnapshot {
 	name: string;

@@ -1,10 +1,7 @@
 /**
- * Token-boundary characters for the `@`-mention language. The mention starts
- * at a `@` whose previous character is either start-of-string or one of these
- * - typing `[` opens a markdown link, `,`/`;` separates list items,
- * whitespace splits words, and `(` follows function calls. The set is
- * conservative on purpose: `user@example.com` should NOT trigger because
- * the `@` is in the middle of an identifier.
+ * Characters that delimit an `@`-mention token. An `@` only starts a
+ * mention when the previous char is start-of-string or one of these, so
+ * `user@example.com` does not trigger (the `@` is mid-identifier).
  */
 const TOKEN_BOUNDARY_CHARS = new Set([
 	' ',
@@ -24,24 +21,9 @@ const TOKEN_BOUNDARY_CHARS = new Set([
 
 /**
  * Find the most-recent `@`-mention token whose extent includes `cursor`.
- *
- * The mention token starts at the last `@` at-or-before `cursor` that sits
- * at a token boundary. The token extends past the caret to the next
- * boundary character, so the search query always covers the whole `@...`
- * token no matter where the caret sits inside it.
- *
- * Returns `null` when the cursor is not currently inside a valid mention
- * (no `@` in range, the `@` is mid-identifier, or the cursor is before the
- * only `@`).
- *
- * Examples (cursor marked with `^`):
- *   `^`             -> null
- *   `@pr^`          -> { start: 0, end: 3, query: 'pr' }
- *   `hello @pr^`    -> { start: 6, end: 9, query: 'pr' }
- *   `@hel^lo`       -> { start: 0, end: 6, query: 'hello' }
- *   `em@^`          -> null (mid-identifier)
- *   `text@pr^`      -> null (mid-identifier; no space before `@`)
- *   `@pr hello^`    -> null (cursor is past the whitespace break)
+ * The token spans from its boundary `@` to the next boundary character,
+ * so the search query covers the whole `@...` token regardless of caret.
+ * Returns `null` when the cursor is not inside a valid mention.
  */
 export function findMentionToken(
 	value: string,
@@ -80,12 +62,8 @@ export function findMentionToken(
 
 /**
  * Stable signature of a mention token for use as a "dismissed" marker.
- *
- * When the user hits Escape, the picker records this signature so that
- * subsequent in-token edits (typing more chars into `@hello`) do not
- * silently re-open the picker. The signature changes as soon as the user
- * edits or deletes any character of the token, which is the moment the
- * picker is allowed to re-open.
+ * While the picker is closed and this exact token is still intact, the
+ * picker does not silently re-open on in-token edits.
  */
 export interface MentionDismissSnapshot {
 	start: number;
