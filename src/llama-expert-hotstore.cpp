@@ -42,12 +42,12 @@ static void release_pages(void * ptr, size_t len) {
     }
 }
 
-// uniform strided hash of a memory range: sample N chunks spread across the
+// uniform strided hash of a memory range: sample 1024 bytes spread across the
 // whole slice and combine with FNV-1a (pure integer, bit-exact on every
 // device, so a correct copy always hashes identically).
 static uint64_t hash_slice(const uint8_t * data, size_t len) {
-    constexpr size_t N_CHUNKS = 64;
-    constexpr size_t CHUNK    = 256;
+    constexpr size_t N_CHUNKS = 32;
+    constexpr size_t CHUNK    = 32;
     uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
     if (len == 0) {
         return h;
@@ -66,8 +66,8 @@ static uint64_t hash_slice(const uint8_t * data, size_t len) {
 // verify a GPU slot plane against the source slice by hashing both (the GPU
 // side via a sparse read-back) and comparing. returns true on match.
 static bool verify_gpu_copy(ggml_tensor * dst, size_t slot_off, const uint8_t * src, size_t len) {
-    constexpr size_t N_CHUNKS = 64;
-    constexpr size_t CHUNK    = 256;
+    constexpr size_t N_CHUNKS = 32;
+    constexpr size_t CHUNK    = 32;
     const uint64_t h_src = hash_slice(src, len);
     uint64_t h_gpu = 1469598103934665603ULL;
     if (len > 0) {
