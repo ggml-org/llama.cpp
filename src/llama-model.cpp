@@ -257,6 +257,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_chameleon(params);
         case LLM_ARCH_WAVTOKENIZER_DEC:
             return new llama_model_wavtokenizer_dec(params);
+        case LLM_ARCH_QWEN3_TTS_CODE2WAV:
+            return new llama_model_qwen3_tts_code2wav(params);
         case LLM_ARCH_PLM:
             return new llama_model_plm(params);
         case LLM_ARCH_BAILINGMOE:
@@ -2239,6 +2241,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_EUROBERT:
         case LLM_ARCH_WAVTOKENIZER_DEC:
+        case LLM_ARCH_QWEN3_TTS_CODE2WAV:
         case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_GEMMA_EMBEDDING:
         case LLM_ARCH_DREAM:
@@ -2694,6 +2697,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3_TTS_CODE2WAV:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
         case LLM_ARCH_OLMO2:

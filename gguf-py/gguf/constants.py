@@ -589,6 +589,7 @@ class MODEL_ARCH(IntEnum):
     TALKIE           = auto()
     MELLUM           = auto()
     QWEN3TTS_TALKER  = auto()
+    QWEN3_TTS_CODE2WAV = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -815,6 +816,43 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
+    C2W_CODEBOOK_EMBD    = auto()
+    C2W_VQ_FIRST_PROJ    = auto()
+    C2W_VQ_REST_PROJ     = auto()
+    C2W_PRE_CONV         = auto()
+    C2W_TF_IN_PROJ       = auto()
+    C2W_TF_ATTN_NORM     = auto()
+    C2W_TF_ATTN_Q        = auto()
+    C2W_TF_ATTN_K        = auto()
+    C2W_TF_ATTN_V        = auto()
+    C2W_TF_ATTN_O        = auto()
+    C2W_TF_ATTN_SCALE    = auto()
+    C2W_TF_FFN_NORM      = auto()
+    C2W_TF_FFN_GATE      = auto()
+    C2W_TF_FFN_UP        = auto()
+    C2W_TF_FFN_DOWN      = auto()
+    C2W_TF_FFN_SCALE     = auto()
+    C2W_TF_NORM          = auto()
+    C2W_TF_OUT_PROJ      = auto()
+    C2W_UP_TRANSCONV     = auto()
+    C2W_UP_DWCONV        = auto()
+    C2W_UP_NORM          = auto()
+    C2W_UP_PW1           = auto()
+    C2W_UP_PW2           = auto()
+    C2W_UP_GAMMA         = auto()
+    C2W_STEM             = auto()
+    C2W_BLOCK_SNAKE_A    = auto()
+    C2W_BLOCK_SNAKE_B    = auto()
+    C2W_BLOCK_TRANSCONV  = auto()
+    C2W_RES_SNAKE1_A     = auto()
+    C2W_RES_SNAKE1_B     = auto()
+    C2W_RES_CONV1        = auto()
+    C2W_RES_SNAKE2_A     = auto()
+    C2W_RES_SNAKE2_B     = auto()
+    C2W_RES_CONV2        = auto()
+    C2W_OUT_SNAKE_A      = auto()
+    C2W_OUT_SNAKE_B      = auto()
+    C2W_OUTPUT           = auto()
     SHORTCONV_CONV       = auto()
     SHORTCONV_INPROJ     = auto()
     SHORTCONV_OUTPROJ    = auto()
@@ -1192,6 +1230,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.QWEN3TTS_TALKER:  "qwen3-tts-talker",
+    MODEL_ARCH.QWEN3_TTS_CODE2WAV: "qwen3-tts-code2wav",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1416,6 +1455,43 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POSNET_ATTN_K:             "posnet.{bid}.attn_k",
     MODEL_TENSOR.POSNET_ATTN_V:             "posnet.{bid}.attn_v",
     MODEL_TENSOR.POSNET_ATTN_OUT:           "posnet.{bid}.attn_output",
+    MODEL_TENSOR.C2W_CODEBOOK_EMBD:         "c2w.codebook_embd.{bid}",
+    MODEL_TENSOR.C2W_VQ_FIRST_PROJ:         "c2w.vq_first_proj",
+    MODEL_TENSOR.C2W_VQ_REST_PROJ:          "c2w.vq_rest_proj",
+    MODEL_TENSOR.C2W_PRE_CONV:              "c2w.pre_conv",
+    MODEL_TENSOR.C2W_TF_IN_PROJ:            "c2w.tf.input_proj",
+    MODEL_TENSOR.C2W_TF_ATTN_NORM:          "c2w.tf.layers.{bid}.attn_norm",
+    MODEL_TENSOR.C2W_TF_ATTN_Q:             "c2w.tf.layers.{bid}.wq",
+    MODEL_TENSOR.C2W_TF_ATTN_K:             "c2w.tf.layers.{bid}.wk",
+    MODEL_TENSOR.C2W_TF_ATTN_V:             "c2w.tf.layers.{bid}.wv",
+    MODEL_TENSOR.C2W_TF_ATTN_O:             "c2w.tf.layers.{bid}.wo",
+    MODEL_TENSOR.C2W_TF_ATTN_SCALE:         "c2w.tf.layers.{bid}.attn_scale",
+    MODEL_TENSOR.C2W_TF_FFN_NORM:           "c2w.tf.layers.{bid}.ffn_norm",
+    MODEL_TENSOR.C2W_TF_FFN_GATE:           "c2w.tf.layers.{bid}.ffn_gate",
+    MODEL_TENSOR.C2W_TF_FFN_UP:             "c2w.tf.layers.{bid}.ffn_up",
+    MODEL_TENSOR.C2W_TF_FFN_DOWN:           "c2w.tf.layers.{bid}.ffn_down",
+    MODEL_TENSOR.C2W_TF_FFN_SCALE:          "c2w.tf.layers.{bid}.ffn_scale",
+    MODEL_TENSOR.C2W_TF_NORM:               "c2w.tf.norm",
+    MODEL_TENSOR.C2W_TF_OUT_PROJ:           "c2w.tf.output_proj",
+    MODEL_TENSOR.C2W_UP_TRANSCONV:          "c2w.upsample.{bid}.transconv",
+    MODEL_TENSOR.C2W_UP_DWCONV:             "c2w.upsample.{bid}.dwconv",
+    MODEL_TENSOR.C2W_UP_NORM:               "c2w.upsample.{bid}.norm",
+    MODEL_TENSOR.C2W_UP_PW1:                "c2w.upsample.{bid}.pwconv1",
+    MODEL_TENSOR.C2W_UP_PW2:                "c2w.upsample.{bid}.pwconv2",
+    MODEL_TENSOR.C2W_UP_GAMMA:              "c2w.upsample.{bid}.gamma",
+    MODEL_TENSOR.C2W_STEM:                  "c2w.stem",
+    MODEL_TENSOR.C2W_BLOCK_SNAKE_A:         "c2w.block.{bid}.alpha",
+    MODEL_TENSOR.C2W_BLOCK_SNAKE_B:         "c2w.block.{bid}.beta",
+    MODEL_TENSOR.C2W_BLOCK_TRANSCONV:       "c2w.block.{bid}.transconv",
+    MODEL_TENSOR.C2W_RES_SNAKE1_A:          "c2w.block.{bid}.res.{xid}.alpha1",
+    MODEL_TENSOR.C2W_RES_SNAKE1_B:          "c2w.block.{bid}.res.{xid}.beta1",
+    MODEL_TENSOR.C2W_RES_CONV1:             "c2w.block.{bid}.res.{xid}.conv1",
+    MODEL_TENSOR.C2W_RES_SNAKE2_A:          "c2w.block.{bid}.res.{xid}.alpha2",
+    MODEL_TENSOR.C2W_RES_SNAKE2_B:          "c2w.block.{bid}.res.{xid}.beta2",
+    MODEL_TENSOR.C2W_RES_CONV2:             "c2w.block.{bid}.res.{xid}.conv2",
+    MODEL_TENSOR.C2W_OUT_SNAKE_A:           "c2w.output.alpha",
+    MODEL_TENSOR.C2W_OUT_SNAKE_B:           "c2w.output.beta",
+    MODEL_TENSOR.C2W_OUTPUT:                "c2w.output",
     MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
     MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
     MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
