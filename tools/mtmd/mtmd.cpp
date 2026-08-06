@@ -198,7 +198,7 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
     MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
     MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
-    MTMD_POS_TYPE_MAX,       // for validation
+    MTMD_POS_TYPE_COUNT,     // for validation
 };
 
 struct mtmd_image_tokens {
@@ -267,7 +267,7 @@ struct mtmd_image_tokens {
         nx = ser.read<uint32_t>();
         ny = ser.read<uint32_t>();
         uint32_t pos_raw = ser.read<uint32_t>();
-        if (pos_raw >= MTMD_POS_TYPE_MAX) {
+        if (pos_raw >= MTMD_POS_TYPE_COUNT) {
             throw std::runtime_error("invalid pos type");
         }
         pos = (mtmd_pos_type)pos_raw;
@@ -366,7 +366,7 @@ struct mtmd_input_chunk {
     }
     void deserialize(mtmd_serialization & ser) {
         uint32_t type_raw = ser.read<uint32_t>();
-        if (type_raw >= MTMD_INPUT_CHUNK_TYPE_MAX) {
+        if (type_raw >= MTMD_INPUT_CHUNK_TYPE_COUNT) {
             throw std::runtime_error("invalid chunk type");
         }
         type = (mtmd_input_chunk_type)type_raw;
