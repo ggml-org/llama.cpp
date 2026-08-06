@@ -135,13 +135,17 @@
 				if ((query.endsWith(PATH_SEPARATOR) || query.endsWith(WINDOWS_SEPARATOR)) && args.last) {
 					const last = args.last;
 					const exact = res.entries.find(
-						(e) =>
-							e.type === 'dir' && lastPathSegment(e.path).toLowerCase() === last.toLowerCase()
+						(e) => e.type === 'dir' && lastPathSegment(e.path).toLowerCase() === last.toLowerCase()
 					);
 					if (exact) {
 						const exactDir = joinPath(res.base, exact.path);
 						const childRes = await runGlobSearch(
-							{ path: exactDir, include: GLOB_WILDCARD, maxDepth: PATH_NAV_MAX_DEPTH, rankQuery: '' },
+							{
+								path: exactDir,
+								include: GLOB_WILDCARD,
+								maxDepth: PATH_NAV_MAX_DEPTH,
+								rankQuery: ''
+							},
 							GlobSearchType.ALL,
 							MENTION_SEARCH_LIMIT,
 							signal
@@ -149,11 +153,13 @@
 						if (!isCurrent()) return;
 						if (!childRes.error) {
 							const children = childRes.entries
-								.map((e): FileMentionEntry => ({
-									path: joinPath(childRes.base, e.path),
-									name: lastPathSegment(e.path),
-									type: e.type === 'dir' ? 'directory' : 'file'
-								}))
+								.map(
+									(e): FileMentionEntry => ({
+										path: joinPath(childRes.base, e.path),
+										name: lastPathSegment(e.path),
+										type: e.type === 'dir' ? 'directory' : 'file'
+									})
+								)
 								.sort((a, b) => a.path.localeCompare(b.path));
 							entries = [...entries, ...children];
 						}
