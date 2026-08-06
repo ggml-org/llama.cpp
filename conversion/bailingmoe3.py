@@ -66,6 +66,18 @@ class BailingMoeV3Model(TextModel):
         self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
         self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
 
+        def clamp_limits(key: str) -> list[float] | None:
+            values = self.hparams.get(key)
+            if values is None:
+                return None
+            values = [0.0 if value is None else float(value) for value in values[:self.block_count]]
+            return values + [0.0] * (self.block_count - len(values))
+
+        if (values := clamp_limits("expert_swiglu_limit_list")) is not None:
+            self.gguf_writer.add_swiglu_clamp_exp(values)
+        if (values := clamp_limits("share_expert_swiglu_limit_list")) is not None:
+            self.gguf_writer.add_swiglu_clamp_shexp(values)
+
         if nextn_layers := self.hparams.get("num_nextn_predict_layers", 0):
             self.gguf_writer.add_nextn_predict_layers(nextn_layers)
 
