@@ -1672,12 +1672,7 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const std::st
                 continue;
             }
 #ifdef GGML_USE_HIP
-            // The ROCm backend does not support the TOP_K / ARGSORT op at vocab
-            // scale (no CUB; bitonic argsort is capped at ncols <= 1024), so
-            // top-k / top-p backend samplers cannot be offloaded. These tests
-            // assert that the offload happened (exact top-k logit count, filtered
-            // top-p logits, mid-stream top-k reconfigure, top-k + penalties), so
-            // they fail on HIP. Skip until TOP_K is supported on the ROCm backend.
+            // TODO: remove this when https://github.com/ggml-org/llama.cpp/pull/26592 is merged
             if (test.name == "penalties" || test.name == "set_sampler" ||
                 test.name == "mixed"     || test.name == "top_p") {
                 fprintf(stderr, "Skipping test '%s' on HIP backend (no backend TOP_K support)\n", test.name.c_str());
