@@ -361,6 +361,20 @@ You can download it from your Linux distro's package manager or from here: [ROCm
 
   Note: `GPU_TARGETS` is optional, omitting it will build the code for all GPUs in the current system.
 
+  Select one ROCm installation root before configuring llama.cpp. The build tree follows the imported ROCm targets discovered through `ROCM_PATH`. To pin the installed tree to the same root, use the standard `CMAKE_INSTALL_RPATH` setting:
+  ```bash
+  ROCM_ROOT=/opt/rocm                                # active native package
+  # ROCM_ROOT=/opt/rocm/core-7.14                   # version-pinned package
+  # ROCM_ROOT="$(rocm-sdk path --root)"             # Python package
+  # ROCM_ROOT=/path/to/extracted/rocm               # tarball or custom prefix
+  ROCM_PATH="$ROCM_ROOT" \
+      cmake -S . -B build -DGGML_HIP=ON \
+      -DCMAKE_INSTALL_RPATH="\$ORIGIN/../lib;$ROCM_ROOT/lib"
+  cmake --build build
+  cmake --install build --prefix /path/to/llama
+  ```
+  Omit `CMAKE_INSTALL_RPATH` to leave ROCm selection to the runtime environment. `/opt/rocm/lib` follows the active system ROCm alternative. This host-library selection is independent of `GPU_TARGETS`; TheRock packages architecture-neutral host libraries separately from GPU-specific kernel packs. Packagers must validate the complete dependency closure and distribution requirements before bundling ROCm libraries beside llama.cpp.
+
   Note that if you get the following error:
   ```
   clang: error: cannot find ROCm device library; provide its path via '--rocm-path' or '--rocm-device-lib-path', or pass '-nogpulib' to build without ROCm device library
