@@ -10,6 +10,18 @@ if TYPE_CHECKING:
 from .base import MmprojModel, ModelBase, TextModel, gguf
 
 
+def _unpermute_for_rope(tensor: "Tensor", n_heads: int) -> "Tensor":
+    """Invert transformers' `_permute_for_rope`: HF stores Q/K in rotate_half layout,
+    llama.cpp consumes the interleaved (NORM) layout."""
+    if tensor.ndim == 2:
+        dim1, dim2 = tensor.shape
+        return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+    if tensor.ndim == 1:
+        (dim1,) = tensor.shape
+        return tensor.view(n_heads, 2, dim1 // n_heads // 2).transpose(1, 2).reshape(dim1)
+    raise ValueError(f"_unpermute_for_rope: unexpected shape {tuple(tensor.shape)}")
+
+
 @ModelBase.register("OnyxForConditionalGeneration")
 class OnyxModel(TextModel):
     model_arch = gguf.MODEL_ARCH.ONYX
@@ -45,6 +57,12 @@ class OnyxModel(TextModel):
         shift = self.norm_shift(name)
         if shift != 0.0:
             data_torch = data_torch + shift
+
+        # Invert transformers' `_permute_for_rope` on Q/K, we keep ggml's NORM (interleaved) rope
+        if ".self_attn.q_proj." in name:
+            data_torch = _unpermute_for_rope(data_torch, int(self.hparams["num_attention_heads"]))
+        elif ".self_attn.k_proj." in name:
+            data_torch = _unpermute_for_rope(data_torch, int(self.hparams["num_key_value_heads"]))
 
         # Synthesize QK-norm weights to absorb qk_scale_factor.
         # Onyx implementation: scaleless RMSNorm followed by qk_scale_factor..

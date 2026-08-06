@@ -66,7 +66,8 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
-    // Onyx normalizes token embeddings with a scaleless RMSNorm that is already merged into the token embeddings in the transformers checkpoint.
+    inpL = build_norm(inpL, nullptr, nullptr, LLM_NORM_RMS, -1);
+    cb(inpL, "embd_norm", -1);
 
     ggml_tensor * inp_pos = build_inp_pos();
     auto * inp_attn = build_attn_inp_kv_iswa();
