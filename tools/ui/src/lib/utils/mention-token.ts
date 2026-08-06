@@ -26,8 +26,9 @@ const TOKEN_BOUNDARY_CHARS = new Set([
  * Find the most-recent `@`-mention token whose extent includes `cursor`.
  *
  * The mention token starts at the last `@` at-or-before `cursor` that sits
- * at a token boundary. The token ends at `cursor` - this matches the model
- * "while the user is typing inside the token, the picker is open".
+ * at a token boundary. The token extends past the caret to the next
+ * boundary character, so the search query always covers the whole `@...`
+ * token no matter where the caret sits inside it.
  *
  * Returns `null` when the cursor is not currently inside a valid mention
  * (no `@` in range, the `@` is mid-identifier, or the cursor is before the
@@ -37,6 +38,7 @@ const TOKEN_BOUNDARY_CHARS = new Set([
  *   `^`             -> null
  *   `@pr^`          -> { start: 0, end: 3, query: 'pr' }
  *   `hello @pr^`    -> { start: 6, end: 9, query: 'pr' }
+ *   `@hel^lo`       -> { start: 0, end: 6, query: 'hello' }
  *   `em@^`          -> null (mid-identifier)
  *   `text@pr^`      -> null (mid-identifier; no space before `@`)
  *   `@pr hello^`    -> null (cursor is past the whitespace break)
@@ -62,10 +64,17 @@ export function findMentionToken(
 
 	if (atIndex === -1) return null;
 
+	// Extend past the caret to the token's end boundary so the search query
+	// is the whole `@...` token regardless of the caret position.
+	let end = atIndex + 1;
+	while (end < value.length && !TOKEN_BOUNDARY_CHARS.has(value[end])) {
+		end++;
+	}
+
 	return {
 		start: atIndex,
-		end: cursor,
-		query: value.slice(atIndex + 1, cursor)
+		end,
+		query: value.slice(atIndex + 1, end)
 	};
 }
 

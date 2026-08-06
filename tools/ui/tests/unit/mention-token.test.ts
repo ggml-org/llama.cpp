@@ -35,9 +35,14 @@ describe('findMentionToken', () => {
 		expect(findMentionToken('user@abc', 8)).toBeNull();
 	});
 
-	it('uses the cursor between the @ and the end as the query', () => {
+	it('extracts the whole token up to the trailing boundary as the query', () => {
 		expect(findMentionToken('@', 1)).toEqual({ start: 0, end: 1, query: '' });
-		expect(findMentionToken('@hello', 4)).toEqual({ start: 0, end: 4, query: 'hel' });
+		expect(findMentionToken('@hello', 6)).toEqual({ start: 0, end: 6, query: 'hello' });
+	});
+
+	it('keeps the whole token as the query when the caret is mid-token', () => {
+		expect(findMentionToken('@hello', 4)).toEqual({ start: 0, end: 6, query: 'hello' });
+		expect(findMentionToken('@hello world', 4)).toEqual({ start: 0, end: 6, query: 'hello' });
 	});
 
 	it('ignores a boundary @ and keeps the most recent token', () => {
