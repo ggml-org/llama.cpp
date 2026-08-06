@@ -1194,6 +1194,31 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
         slope[h] = get_alibi_slope(max_bias, FA_Q8CL_HEAD_IDX(h), n_head_log2, m0, m1);
     }
 
+#ifdef FA_CL_MASK_BCAST
+    // At mask_ne2 == 1 every clustered head reads the same mask row, so keep
+    // one base and load the element ONCE PER POSITION rather than once per
+    // head -- and, more to the point, issue that load at the top of the KV
+    // iteration alongside the K row instead of inside the per-head score loop.
+    //
+    // In this kernel the mask was a late, scattered, dependent load with
+    // nothing to hide it: deleting it outright measured +8.8% @d4096 /
+    // +14.0% @d8192, the entire remaining deficit against the f16 kernel.
+    const global char * mask_base_b = NULL;
+    if (mask_void != NULL) {
+        mask_base_b = (const global char *) mask_void + mask_offset +
+                      (batch_idx % mask_ne3) * mask_nb3 +
+                      (ulong) q_idx * mask_nb1;
+    }
+    const int mask_bcast = mask_base_b != NULL && mask_ne2 == 1;
+    // Heads still need their own row whenever the mask is per-head.
+    const global char * mask_base[MQ_GQA];
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        mask_base[h] = (mask_base_b != NULL && !mask_bcast)
+            ? mask_base_b + (FA_Q8CL_HEAD_IDX(h) % mask_ne2) * mask_nb2
+            : NULL;
+    }
+#else
     const global char * mask_base[MQ_GQA];
     if (mask_void != NULL) {
         const int mask_batch_idx = batch_idx % mask_ne3;
@@ -1210,6 +1235,7 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) mask_base[h] = NULL;
     }
+#endif
 
     // Per-CLUSTER online state; o_acc holds this lane's V quartets {lic + FA_CL_C*i}.
     ACC_TYPE4 o_acc[MQ_GQA][FA_CL_DVQ];
@@ -1241,6 +1267,17 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
 
         const global char * k_row = k_base + k_row_base + (ulong) k_safe * k_nb1;
         const global char * v_row = v_base + v_row_base + (ulong) k_safe * v_nb1;
+
+#ifdef FA_CL_MASK_BCAST
+        // Issue the broadcast mask load with the K row so both are in flight.
+        // This is the point of the change: previously the mask was read inside
+        // the per-head score loop, i.e. AFTER the cluster reduce, where its
+        // latency is fully exposed.
+        ACC_TYPE mask_val = (ACC_TYPE) 0.0f;
+        if (mask_bcast) {
+            mask_val = (ACC_TYPE) ((const global MASK_DATA_TYPE *) mask_base_b)[k_safe];
+        }
+#endif
 
 #ifdef FA_Q8_INT_QK
         // dp4a K dot over this lane's quartets of the cluster's row.
@@ -1398,6 +1435,11 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
             }
 #endif
             s *= scale;
+#ifdef FA_CL_MASK_BCAST
+            if (mask_bcast) {
+                s += slope[h] * mask_val;
+            } else
+#endif
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_safe];

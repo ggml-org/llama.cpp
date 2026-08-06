@@ -5787,9 +5787,21 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                     const char * e = getenv("GGML_OPENCL_FA_Q8_MHRED");
                     return !(e && e[0] == '0');
                 }();
+                // Mask broadcast + hoist. The mask was read inside the per-head
+                // score loop, after the cluster reduce: deleting it outright
+                // measured +8.8/+14.0% at d4096/d8192, which is the entire
+                // remaining deficit against f16.
+                // GGML_OPENCL_FA_Q8_MASK_BCAST=0 opts out.
+                static const bool q8_maskb_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_MASK_BCAST");
+                    return !(e && e[0] == '0');
+                }();
+                const std::string opts_q8_maskb =
+                    q8_maskb_on ? " -D FA_CL_MASK_BCAST=1" : "";
                 const std::string opts_q8_g8c16 = opts +
                     " -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16" +
-                    (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_int;
+                    (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb +
+                    opts_q8_int;
                 cl_program prog_q8_g8c16 = build_program_from_source_ex(
                     backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_g8c16,
                     /*fatal=*/false, "fa q8_0 c16 GQA8 dk64", backend_ctx->queue);
@@ -5823,7 +5835,8 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                     const std::string opts_q8_hs2 = opts +
                         " -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16"
                         " -D FA_HEAD_SUB=2" +
-                        (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_int;
+                        (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb +
+                        opts_q8_int;
                     cl_program prog_q8_hs2 = build_program_from_source_ex(
                         backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_hs2,
                         /*fatal=*/false, "fa q8_0 c16 GQA4 hs2 dk64", backend_ctx->queue);
