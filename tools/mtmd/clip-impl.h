@@ -623,11 +623,11 @@ static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_
     out_w = cur_w;
     out_h = cur_h;
     if ((float) orig_w / orig_h > (float) cur_w / cur_h) {
-        const int new_h = (int) std::round((double) orig_h * cur_w / orig_w);
+        const int new_h = (int) std::floor((double) orig_h * cur_w / orig_w + 1e-7);
         off_y = (cur_h - new_h) / 2;
         out_h = cur_h - 2 * off_y;
     } else {
-        const int new_w = (int) std::round((double) orig_w * cur_h / orig_h);
+        const int new_w = (int) std::floor((double) orig_w * cur_h / orig_h + 1e-7);
         off_x = (cur_w - new_w) / 2;
         out_w = cur_w - 2 * off_x;
     }
