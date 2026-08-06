@@ -1260,6 +1260,28 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
     const ulong k_row_base = batch_idx * k_nb3 + head_kv_idx * k_nb2;
     const ulong v_row_base = batch_idx * v_nb3 + head_kv_idx * v_nb2;
 
+#if defined(FA_CL_MASK_BCAST) && defined(FA_CL_MASK_SG)
+    // Subgroup-staged mask.
+    //
+    // What is left of the mask cost is neither redundancy (the broadcast took
+    // that) nor issue distance (pipelining it measured 0, at identical
+    // private_mem), so it is the transaction itself: one extra scattered
+    // stream touched every iteration.
+    //
+    // The access pattern removes that for free. Cluster cl at iteration it
+    // reads kv_lo + cl + it*FA_CL_NCL, so across FA_CL_C iterations the
+    // subgroup's clusters touch exactly Q1_WG_SIZE CONSECUTIVE positions --
+    // one per lane. Load the block once, fully coalesced, and redistribute it
+    // by shuffle: FA_CL_C scattered loads become 1 coalesced load plus
+    // FA_CL_C shuffles.
+    //
+    // Deliberately NOT staged in LDS: this kernel is occupancy-bound (the
+    // head-split's 592 -> 352 B/WI bought +4.6/+7.2%) and that same change
+    // doubled the workgroups per KV head, so LDS would be spending exactly
+    // the resource the last win came from. Shuffles cost none.
+    ACC_TYPE mask_sg = (ACC_TYPE) 0.0f;
+#endif
+
     for (int it = 0; it < n_iter; ++it) {
         const int k_idx  = kv_lo + cl + it * FA_CL_NCL;
         const int valid  = k_idx < kv_hi;
@@ -1268,7 +1290,22 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
         const global char * k_row = k_base + k_row_base + (ulong) k_safe * k_nb1;
         const global char * v_row = v_base + v_row_base + (ulong) k_safe * v_nb1;
 
-#ifdef FA_CL_MASK_BCAST
+#if defined(FA_CL_MASK_BCAST) && defined(FA_CL_MASK_SG)
+        // Restage every FA_CL_C iterations, then shuffle out this cluster's
+        // element. mblk and mask_bcast are subgroup-uniform, so the reload is
+        // convergent and the shuffle index (cl + FA_CL_NCL*mblk) covers
+        // 0..Q1_WG_SIZE-1 exactly once per block. Tail lanes clamp like
+        // k_safe; their iterations are already dropped to FA_M_INIT.
+        const int mblk = it % FA_CL_C;
+        if (mask_bcast && mblk == 0) {
+            const int k_stg = kv_lo + it * FA_CL_NCL + tid_sg;
+            mask_sg = (ACC_TYPE) ((const global MASK_DATA_TYPE *) mask_base_b)
+                          [k_stg < kv_hi ? k_stg : (kv_hi - 1)];
+        }
+        const ACC_TYPE mask_val = mask_bcast
+            ? sub_group_shuffle(mask_sg, cl + FA_CL_NCL * mblk)
+            : (ACC_TYPE) 0.0f;
+#elif defined(FA_CL_MASK_BCAST)
         // Issue the broadcast mask load with the K row so both are in flight.
         // This is the point of the change: previously the mask was read inside
         // the per-head score loop, i.e. AFTER the cluster reduce, where its

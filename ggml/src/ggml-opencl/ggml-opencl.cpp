@@ -5821,9 +5821,22 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                 }();
                 const std::string opts_q8_maskb =
                     q8_maskb_on ? " -D FA_CL_MASK_BCAST=1" : "";
+                // Stage the mask a subgroup-block at a time: over FA_CL_C
+                // iterations the clusters touch Q1_WG_SIZE consecutive
+                // positions, so one coalesced load plus shuffles replaces
+                // FA_CL_C scattered ones. Needs the broadcast path (that is
+                // what makes the value one-per-position). Costs no LDS, which
+                // matters because this kernel is occupancy-bound.
+                // GGML_OPENCL_FA_Q8_MASK_SG=0 opts out.
+                static const bool q8_masksg_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_MASK_SG");
+                    return !(e && e[0] == '0');
+                }();
+                const std::string opts_q8_masksg =
+                    (q8_maskb_on && q8_masksg_on) ? " -D FA_CL_MASK_SG=1" : "";
                 const std::string opts_q8_g8c16 = opts +
                     " -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16" +
-                    (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb +
+                    (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb + opts_q8_masksg +
                     opts_q8_int;
                 cl_program prog_q8_g8c16 = build_program_from_source_ex(
                     backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_g8c16,
@@ -5858,7 +5871,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                     const std::string opts_q8_hs2 = opts +
                         " -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16"
                         " -D FA_HEAD_SUB=2" +
-                        (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb +
+                        (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb + opts_q8_masksg +
                         opts_q8_int;
                     cl_program prog_q8_hs2 = build_program_from_source_ex(
                         backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_hs2,
