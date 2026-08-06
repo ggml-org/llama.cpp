@@ -90,6 +90,21 @@ LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * m
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
 
+struct llama_memory_breakdown_entry {
+    const char * name;
+    size_t model;
+    size_t context;
+    size_t compute;
+};
+
+extern "C" {
+
+LLAMA_API const llama_memory_breakdown_entry * llama_get_memory_breakdown_entries(
+        const struct llama_context * ctx,
+        size_t * count);
+
+}
+
 // Set whether the context outputs nextn embeddings or not
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
