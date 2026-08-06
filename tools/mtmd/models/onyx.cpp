@@ -2,9 +2,7 @@
 
 // Onyx vision encoder: 50-layer ViT with 2D RoPE, sparse block-diagonal
 // window attention (every 4th + last layer global), pixel-shuffle downsample, then
-// adapter MLP + LLM's vision_projection. Output dim = 6656 (onyx n_embd),
-// injected via llama_batch.embd; the onyx LLM graph applies the scaleless rms_norm
-// (== reference perception_emb_norm).
+// adapter MLP + LLM's vision_projection.
 //
 // Several quantities are precomputed on host and fed as named graph inputs (filled in
 // clip.cpp set_input, PROJECTOR_TYPE_ONYX branch):
@@ -23,7 +21,8 @@ ggml_cgraph * clip_graph_onyx::build() {
 
     auto inp_i32 = [&](const char * name, int64_t n) {
         ggml_tensor * t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n);
-        ggml_set_name(t, name); ggml_set_input(t);
+        ggml_set_name(t, name);
+        ggml_set_input(t);
         return t;
     };
 
@@ -34,7 +33,8 @@ ggml_cgraph * clip_graph_onyx::build() {
     ggml_tensor * ds_perm = inp_i32("onyx_ds_perm", n_tok);
 
     ggml_tensor * sp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tok, n_tok);
-    ggml_set_name(sp_mask, "onyx_sp_mask"); ggml_set_input(sp_mask);
+    ggml_set_name(sp_mask, "onyx_sp_mask");
+    ggml_set_input(sp_mask);
 
     // patchify via build_inp (conv2d over raw pixels) + bilinear-resized learned pos-emb
     ggml_tensor * x = build_inp();                                                     // [n_embd, n_tok, 1]
