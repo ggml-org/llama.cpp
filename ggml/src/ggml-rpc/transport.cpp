@@ -127,7 +127,6 @@ struct socket_t::impl {
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
     bool flush();
-    bool is_broken() const;
     void get_caps(uint8_t * local_caps);
     void update_caps(const uint8_t * remote_caps);
 
@@ -595,14 +594,6 @@ bool socket_t::impl::flush() {
     return true;
 }
 
-bool socket_t::impl::is_broken() const {
-#ifdef GGML_RPC_RDMA_APPLE
-    return use_rdma && rdma && rdma->broken();
-#else
-    return false;
-#endif
-}
-
 /////////////////////////////////////////////////////////////////////////////
 
 socket_t::socket_t(std::unique_ptr<impl> p) : pimpl(std::move(p)) {}
@@ -619,10 +610,6 @@ bool socket_t::recv_data(void * data, size_t size) {
 
 bool socket_t::flush() {
     return pimpl->flush();
-}
-
-bool socket_t::is_broken() const {
-    return pimpl->is_broken();
 }
 
 void socket_t::get_caps(uint8_t * local_caps) {
