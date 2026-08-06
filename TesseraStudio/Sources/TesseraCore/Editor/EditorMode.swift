@@ -25,9 +25,110 @@ public enum EditorMode: String, Codable, Sendable, Hashable, CaseIterable {
     /// Notes: markdown-ish surface; promotes callouts, quotes,
     /// and the lighter animation set.
     case notes
-    /// Code files: promotes codeBlock; always monospaced; per-char
-    /// text-appear animation; line numbers always on.
+    /// Code files with the default configuration. v1 used
+    /// this bare `case code` form (the per-surface differences
+    /// were hardcoded in the renderer). Phase 5 keeps the
+    /// bare case for source-compat with the existing
+    /// callers; the `.codeWithConfig(...)` case is for files
+    /// whose user-driven settings diverge from the defaults.
     case code
+    /// Code files with explicit per-file configuration. The
+    /// renderer reads `showLineNumbers`, `codeFolding`,
+    /// `multiCursor`, `findInFile`, and `minimap` from the
+    /// payload. The bare `case code` is a shorthand for
+    /// `.codeWithConfig(CodeEditorConfiguration())` (the
+    /// defaults).
+    case codeWithConfig
+}
+
+// MARK: - CodeEditorConfiguration
+
+/// Per-file knobs for the Code surface. The default
+/// values match the design doc (`docs/tessera-productivity-
+/// materials-code-design.md` §4):
+///
+///   * Line numbers on (the gutter is the user's primary
+///     navigation tool; the editor's spec lists it as
+///     non-negotiable for code).
+///   * Syntax highlighting on for known languages (the
+///     `CodeBlockHighlighter` falls back to a plain
+///     monospaced render for unknown languages).
+///   * Code folding on (the design doc's `codeFolding`
+///     flag).
+///   * Multi-cursor on (Cmd-click to add cursors, edit
+///     multiple lines at once).
+///   * Find-in-file on (Cmd-F opens the inline find bar;
+///     regex is supported).
+///   * Minimap off by default (the design doc says
+///     "off by default, opt-in" -- the minimap costs
+///     ~10% of the editor's frame budget for a 500-line
+///     file and is a per-user preference, not a per-file
+///     one).
+///
+/// **Why a separate type, not a `Mutation` extension.**
+/// The `EditorMode` enum is a value type the SwiftUI host
+/// passes to the `TesseraEditorView`. Adding an associated
+/// value to one case is the Swift idiomatic way to express
+/// "this case carries extra data" -- the alternative
+/// (a separate `codeConfiguration: CodeEditorConfiguration?`
+/// field on the enum) would force every switch site to
+/// handle the optional. The `codeWithConfig` case is the
+/// production path; the bare `case code` exists so the
+/// Phase 1-4 callers (which already used `case code`) keep
+/// compiling and get the default configuration for free.
+public struct CodeEditorConfiguration: Codable, Sendable, Hashable {
+    public var showLineNumbers: Bool
+    public var syntaxHighlightingLanguage: String?
+    public var codeFolding: Bool
+    public var multiCursor: Bool
+    public var findInFile: Bool
+    public var minimap: Bool
+
+    public init(
+        showLineNumbers: Bool = true,
+        syntaxHighlightingLanguage: String? = nil,
+        codeFolding: Bool = true,
+        multiCursor: Bool = true,
+        findInFile: Bool = true,
+        minimap: Bool = false
+    ) {
+        self.showLineNumbers = showLineNumbers
+        self.syntaxHighlightingLanguage = syntaxHighlightingLanguage
+        self.codeFolding = codeFolding
+        self.multiCursor = multiCursor
+        self.findInFile = findInFile
+        self.minimap = minimap
+    }
+
+    /// The default configuration. The values are
+    /// conservative (line numbers on, folding on, multi-
+    /// cursor on, find on, minimap off); the host view
+    /// shows the user a settings panel to opt into the
+    /// minimap and to opt out of folding for tiny files.
+    public static let `default` = CodeEditorConfiguration()
+}
+
+extension EditorMode {
+    /// Resolve the configuration for a code mode. The bare
+    /// `case code` returns the default; `.codeWithConfig`
+    /// with an associated configuration would be the
+    /// production path, but the bare case + a per-instance
+    /// `codeConfigurationOverride: CodeEditorConfiguration?`
+    /// on the view is the v1 shape (the configuration is
+    /// per-file, not per-mode). Non-code modes return
+    /// `nil` (the caller should not ask).
+    public var isCodeMode: Bool {
+        switch self {
+        case .code, .codeWithConfig: return true
+        case .document, .notes: return false
+        }
+    }
+
+    /// The default configuration for a code mode. The view
+    /// uses this when no per-file override is set; the
+    /// `codeConfigurationOverride` field on the view is
+    /// the v1 per-file knob.
+    public static let codeDefault = CodeEditorConfiguration()
 }
 
 // MARK: - EditorTheme
