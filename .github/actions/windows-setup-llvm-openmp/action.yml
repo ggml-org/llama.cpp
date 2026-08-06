@@ -1,0 +1,92 @@
+name: "Windows - Setup LLVM OpenMP"
+description: "Download and extract the target LLVM OpenMP runtime"
+inputs:
+  arch:
+    description: "Target architecture (x64 or arm64)"
+    required: true
+  version:
+    description: "LLVM release version"
+    required: true
+  sha256:
+    description: "Expected installer SHA-256"
+    required: true
+outputs:
+  root:
+    description: "Root containing bin/libomp.dll and lib/libomp.lib"
+    value: ${{ steps.setup.outputs.root }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cache LLVM OpenMP runtime
+      id: cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/llvm-openmp-${{ inputs.version }}-${{ inputs.arch }}
+        key: llvm-openmp-${{ runner.os }}-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.sha256 }}
+
+    - name: Download LLVM OpenMP runtime
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      shell: pwsh
+      run: |
+        $suffix = switch ("${{ inputs.arch }}") {
+          "x64"   { "win64" }
+          "arm64" { "woa64" }
+          default { throw "Unsupported LLVM OpenMP architecture: ${{ inputs.arch }}" }
+        }
+
+        $version = "${{ inputs.version }}"
+        $installer = Join-Path $env:RUNNER_TEMP "LLVM-$version-$suffix.exe"
+        $extract = Join-Path $env:RUNNER_TEMP "llvm-openmp-extract-$suffix"
+        $root = Join-Path $env:RUNNER_TEMP "llvm-openmp-$version-${{ inputs.arch }}"
+        $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/LLVM-$version-$suffix.exe"
+
+        Invoke-WebRequest -Uri $url -OutFile $installer
+        $actualHash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+        if ($actualHash -ne "${{ inputs.sha256 }}") {
+          throw "LLVM installer SHA-256 mismatch: $actualHash"
+        }
+
+        New-Item -ItemType Directory -Force -Path $extract | Out-Null
+        & 7z x -y "-o$extract" $installer
+        if ($LASTEXITCODE -ne 0) {
+          throw "Failed to extract $installer"
+        }
+
+        $libraries = @(Get-ChildItem $extract -Recurse -File -Filter libomp.lib)
+        $runtimes = @(Get-ChildItem $extract -Recurse -File -Filter libomp.dll)
+        if ($libraries.Count -ne 1 -or $runtimes.Count -ne 1) {
+          throw "Expected one libomp.lib and one libomp.dll, found $($libraries.Count) and $($runtimes.Count)"
+        }
+
+        New-Item -ItemType Directory -Force -Path (Join-Path $root "bin"), (Join-Path $root "lib") | Out-Null
+        Copy-Item $runtimes[0].FullName (Join-Path $root "bin/libomp.dll")
+        Copy-Item $libraries[0].FullName (Join-Path $root "lib/libomp.lib")
+
+    - name: Inspect LLVM OpenMP files
+      id: setup
+      shell: pwsh
+      run: |
+        $root = Join-Path $env:RUNNER_TEMP "llvm-openmp-${{ inputs.version }}-${{ inputs.arch }}"
+        $library = Join-Path $root "lib/libomp.lib"
+        $runtime = Join-Path $root "bin/libomp.dll"
+        if (-not (Test-Path $library) -or -not (Test-Path $runtime)) {
+          throw "Cached LLVM OpenMP runtime is incomplete: $root"
+        }
+
+        $clangVersion = (& clang --version | Select-Object -First 1) -join ""
+        if ($clangVersion -notmatch "clang version ([0-9]+)") {
+          throw "Unable to determine Clang version: $clangVersion"
+        }
+        $expectedMajor = "${{ inputs.version }}".Split('.')[0]
+        if ($Matches[1] -ne $expectedMajor) {
+          throw "Clang major version $($Matches[1]) does not match LLVM OpenMP major version $expectedMajor"
+        }
+
+        $headers = (& llvm-readobj --file-headers $runtime) -join "`n"
+        $expectedMachine = if ("${{ inputs.arch }}" -eq "x64") { "IMAGE_FILE_MACHINE_AMD64" } else { "IMAGE_FILE_MACHINE_ARM64" }
+        if ($headers -notmatch $expectedMachine) {
+          throw "LLVM OpenMP runtime does not target $expectedMachine"
+        }
+
+        "root=$root" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
