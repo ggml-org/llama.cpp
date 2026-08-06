@@ -12,6 +12,7 @@ on:
       - master
     paths: [
       '.github/workflows/release.yml',
+      '.github/actions/windows-setup-llvm-openmp/action.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -31,6 +32,7 @@ env:
   GH_TOKEN: ${{ github.token }}
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+  LLVM_OPENMP_VERSION: 20.1.8
 
 # note: run this workflow one at a time for better cache reuse
 concurrency:
@@ -693,13 +695,23 @@ jobs:
       matrix:
         include:
           - arch: 'x64'
+            openmp_sha256: '3197846a2b19063687dd56e93e34cd941e3548d907f23a6131571321bdf9fe7b'
           - arch: 'arm64'
+            openmp_sha256: '7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e'
 
     steps:
       - name: Clone
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Setup LLVM OpenMP
+        id: llvm_openmp
+        uses: ./.github/actions/windows-setup-llvm-openmp
+        with:
+          arch: ${{ matrix.arch }}
+          version: ${{ env.LLVM_OPENMP_VERSION }}
+          sha256: ${{ matrix.openmp_sha256 }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -728,6 +740,7 @@ jobs:
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
+            -DGGML_OPENMP_LLVM_ROOT="${{ steps.llvm_openmp.outputs.root }}" ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
@@ -739,7 +752,10 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC\14.51.36231\debug_nonredist\${{ matrix.arch }}\Microsoft.VC145.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
+          $root = "${{ steps.llvm_openmp.outputs.root }}"
+          $dest = ".\build\bin\Release"
+          Copy-Item (Join-Path $root "bin\libomp.dll") $dest
+          Copy-Item LICENSE $dest
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts

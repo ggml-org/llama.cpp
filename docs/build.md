@@ -72,9 +72,10 @@ cmake --build build --config Release
     - Please remember to always use a Developer Command Prompt / PowerShell for VS2022 for git, build, test
     - For Windows on ARM (arm64, WoA) build with:
     ```bash
-    cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
+    cmake --preset arm64-windows-llvm-release -D GGML_OPENMP_LLVM_ROOT=<llvm-arm64-root>
     cmake --build build-arm64-windows-llvm-release
     ```
+    `GGML_OPENMP_LLVM_ROOT` must contain the target LLVM OpenMP runtime at `lib/libomp.lib` and `bin/libomp.dll`. This also works when cross-compiling for WoA from x64. Omit the option to use CMake's normal OpenMP detection, or pass `-D GGML_OPENMP=OFF` to disable OpenMP.
     For building with ninja generator and clang compiler as default:
       -set path:set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
       ```bash
