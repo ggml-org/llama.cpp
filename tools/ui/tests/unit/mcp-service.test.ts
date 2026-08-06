@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client';
 import { CORS_PROXY } from '$lib/constants';
 import { MCPConnectionPhase, MCPTransportType } from '$lib/enums';
 import { MCPService } from '$lib/services/mcp.service';
-import type { MCPConnectionLog, MCPServerConfig } from '$lib/types';
+import type { MCPConnection, MCPConnectionLog, MCPServerConfig } from '$lib/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type DiagnosticFetchFactory = (
@@ -328,5 +328,22 @@ describe('MCPService', () => {
 					log.message === 'Protocol error: runtime protocol error'
 			)
 		).toHaveLength(0);
+	});
+
+	it('falls back to structuredContent when content array is empty', async () => {
+		const connection = {
+			client: {
+				callTool: vi.fn().mockResolvedValue({
+					content: [],
+					structuredContent: { accounts: [{ id: 1 }], total: 1 }
+				})
+			},
+			requestTimeoutMs: 9000,
+			serverName: 'test-server'
+		} as unknown as MCPConnection;
+		const result = await MCPService.callTool(connection, { arguments: {}, name: 'tool' });
+
+		expect(result.isError).toBe(false);
+		expect(result.content).toBe('{"accounts":[{"id":1}],"total":1}');
 	});
 });
