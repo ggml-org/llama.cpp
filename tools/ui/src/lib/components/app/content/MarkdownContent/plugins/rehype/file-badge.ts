@@ -21,12 +21,15 @@ import {
 	getMentionBadgeIconPaths,
 	getMentionBadgeLabel
 } from '$lib/utils';
-import { SETTINGS_KEYS } from '$lib/constants';
+import { FILE_URI_PREFIX, PATH_SEPARATOR, SETTINGS_KEYS } from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type { Plugin } from 'unified';
 import type { Root, Element } from 'hast';
 import { visit } from 'unist-util-visit';
+
+// Trailing path separators mark a directory and are kept out of the label.
+const TRAILING_SEPARATOR_REGEX = /\/+$/;
 
 /**
  * Derive a friendly label from a `file://` URL, decoding the path so an
@@ -35,7 +38,7 @@ import { visit } from 'unist-util-visit';
  * rather than `[tools//]`.
  */
 function decodeHrefPath(href: string): string {
-	const stripped = href.startsWith('file://') ? href.slice('file://'.length) : href;
+	const stripped = href.startsWith(FILE_URI_PREFIX) ? href.slice(FILE_URI_PREFIX.length) : href;
 	return decodeFileLinkPath(stripped);
 }
 
@@ -44,8 +47,8 @@ function decodeHrefPath(href: string): string {
  */
 function labelFromFileUrl(href: string): string {
 	const decoded = decodeHrefPath(href);
-	const trimmed = decoded.replace(/\/+$/, '');
-	const slash = trimmed.lastIndexOf('/');
+	const trimmed = decoded.replace(TRAILING_SEPARATOR_REGEX, '');
+	const slash = trimmed.lastIndexOf(PATH_SEPARATOR);
 	return slash === -1 ? trimmed : trimmed.slice(slash + 1);
 }
 
@@ -83,7 +86,7 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 			const props = node.properties ?? {};
 			const href = typeof props.href === 'string' ? props.href : null;
 
-			if (!href || !href.startsWith('file://')) return;
+			if (!href || !href.startsWith(FILE_URI_PREFIX)) return;
 
 			const label = labelFromFileUrl(href);
 			const titleAttr = typeof props.title === 'string' ? props.title : href;
@@ -94,8 +97,8 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 				className: MENTION_BADGE_CLASSNAME.split(' ').filter(Boolean),
 				role: 'link',
 				tabIndex: 0,
-				'data-href': `file://${decodedPath}`,
-				title: titleAttr.startsWith('file://') ? decodedPath : titleAttr
+				'data-href': `${FILE_URI_PREFIX}${decodedPath}`,
+				title: titleAttr.startsWith(FILE_URI_PREFIX) ? decodedPath : titleAttr
 			};
 			node.children = [
 				iconElement(href),
