@@ -76,6 +76,7 @@
 void ggml_cann_repeat(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 void ggml_cann_swiglu(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+void ggml_cann_swiglu_oai(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 void ggml_cann_geglu(ggml_backend_cann_context & ctx, ggml_tensor * dst, int64_t approximate);
 
 /**
@@ -958,6 +959,24 @@ void ggml_cann_gated_linear_attn(ggml_backend_cann_context & ctx, ggml_tensor * 
  *            Expected to be of shape [M, K, N, 1].
  */
 void ggml_cann_mul_mat_id(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief Adds expert-specific rows to a tensor (MoE) using the CANN backend.
+ *
+ * Implements GGML_OP_ADD_ID. For each row (i2, i1) of src0, the row of src1
+ * selected by ids[i1, i2] is added element-wise and stored in dst.
+ *
+ *          Dimensions:
+ *              - src0 (a)  : [ne0, ne1, ne2, ne3], F32
+ *              - src1 (b)  : [ne0, ne11],          F32 (ne11 rows to select from)
+ *              - ids       : [ne1, ne2],           I32
+ *              - dst       : same shape as src0
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the result is stored. dst->op is
+ *            `GGML_OP_ADD_ID`.
+ */
+void ggml_cann_add_id(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
  * @brief Performs fused ADD + RMS_NORM operation using the CANN backend.

@@ -1788,6 +1788,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_ADD1:
             ggml_cann_binary_op<aclnn_add>(ctx, dst);
             break;
+        case GGML_OP_ADD_ID:
+            ggml_cann_add_id(ctx, dst);
+            break;
         case GGML_OP_SUB:
             ggml_cann_binary_op<aclnn_sub>(ctx, dst);
             break;
@@ -1871,6 +1874,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
                     break;
                 case GGML_GLU_OP_SWIGLU:
                     ggml_cann_swiglu(ctx, dst);
+                    break;
+                case GGML_GLU_OP_SWIGLU_OAI:
+                    ggml_cann_swiglu_oai(ctx, dst);
                     break;
                 case GGML_GLU_OP_GEGLU_QUICK:
                     ggml_cann_geglu_quick(ctx, dst);
@@ -2426,6 +2432,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 case GGML_GLU_OP_REGLU:
                 case GGML_GLU_OP_GEGLU:
                 case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
                     return true;
@@ -2470,6 +2477,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 default:
                     return false;
             }
+        case GGML_OP_ADD_ID:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_I32;
         // embedding
         case GGML_OP_GET_ROWS:
             {
@@ -2661,23 +2672,41 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 if (op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16) {
                     return false;
                 }
-                if (op->src[1]->type != GGML_TYPE_F16 && op->src[1]->type != GGML_TYPE_F32 &&
-                    op->src[1]->type != GGML_TYPE_BF16) {
+                if (op->src[0]->type != GGML_TYPE_F16 && op->src[0]->type != GGML_TYPE_F32 &&
+                    op->src[0]->type != GGML_TYPE_BF16) {
                     return false;
                 }
                 if (op->type != GGML_TYPE_F16 && op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_BF16) {
                     return false;
                 }
-                // TODO: support attention sinks [TAG_ATTN_SINKS]
-                if (op->src[4]) {
-                    return false;
-                }
-                if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
-                    // different head sizes of K and V are not supported yet
-                    return false;
-                }
+                // learnableSink is not compatible with ALiBi
+                float scale    = 0.0f;
+                float maxBias  = 0.0f;
                 float logitSoftcap = 0.0f;
-                memcpy(&logitSoftcap, (const float *) (op->op_params) + 2, sizeof(float));
+                memcpy(&scale,       (const float *) (op->op_params) + 0, sizeof(float));
+                memcpy(&maxBias,     (const float *) (op->op_params) + 1, sizeof(float));
+                memcpy(&logitSoftcap,(const float *) (op->op_params) + 2, sizeof(float));
+                if (op->src[4] && maxBias > 0.0f) {
+                    return false;
+                }
+                // V5 learnableSink: Q/K head dim only 64/128/192, V head dim only 64/128
+                if (op->src[4]) {
+                    int64_t dq = op->src[0]->ne[0];
+                    int64_t dv = op->src[2]->ne[0];
+                    if ((dq != 64 && dq != 128 && dq != 192) ||
+                        (dv != 64 && dv != 128)) {
+                        return false;
+                    }
+                }
+                // V5 asymmetric head dim (dq != dv) constraints:
+                // - With mask (pse_shift): dq must equal dv
+                // - Without mask: only dq=192, dv=128 is supported
+                if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
+                    if (op->src[3] ||
+                        op->src[1]->ne[0] != 192 || op->src[2]->ne[0] != 128) {
+                        return false;
+                    }
+                }
                 if (logitSoftcap != 0.0f) {
                     return false;
                 }
