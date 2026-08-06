@@ -2,7 +2,7 @@
 	import { File, Folder } from '@lucide/svelte';
 	import { abbreviateHome, runGlobSearchWithChildren, type GlobEntryResult } from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { FileMentionEntryType, GlobSearchType } from '$lib/enums';
+	import { BuiltInTool, FileMentionEntryType, GlobSearchType } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import * as Popover from '$lib/components/ui/popover';
@@ -65,6 +65,15 @@
 		onSelect: (index) => handleSelect(displayedItems[index])
 	});
 
+	// The mention search is backed by the file_glob_search builtin tool.
+	// When the server does not expose it (started without --tools) or the
+	// user disabled it, the picker still opens but explains why instead of
+	// firing searches that would only fail.
+	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
+	const fileSearchEnabled = $derived(
+		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
+	);
+
 	let searchResults = $state<FileMentionEntry[]>([]);
 	let searchError = $state<string | null>(null);
 
@@ -86,7 +95,7 @@
 	// FileMentionEntry and the hook's isCurrent guard drops stale responses.
 	const search = useDebouncedSearch({
 		debounceMs: SEARCH_DEBOUNCE_MS,
-		canRun: () => isOpen,
+		canRun: () => isOpen && fileSearchEnabled,
 		getQuery: () => trimmedQuery,
 		run: async (query, signal, isCurrent) => {
 			try {
@@ -125,9 +134,15 @@
 	const trimmedQuery = $derived((query ?? '').trim());
 	const displayedItems = $derived(searchResults);
 
-	const emptyMessage = $derived(
-		searchError ? `Search failed - ${searchError}` : 'No matching files or folders'
-	);
+	const emptyMessage = $derived.by(() => {
+		if (fileSearchKey === null) {
+			return 'File search is unavailable on this server (started without --tools)';
+		}
+		if (!fileSearchEnabled) {
+			return 'File search is disabled - enable "Search files" in Settings > Tools to use @-mentions';
+		}
+		return searchError ? `Search failed - ${searchError}` : 'No matching files or folders';
+	});
 
 	// Tooltips only on wider viewports; same gate used elsewhere (ActionIcon, WD chip).
 	const showTooltip = $derived(!isMobile.current);
@@ -151,7 +166,7 @@
 	// `query` (what the user typed after `@`) drives the debounced fetch.
 	$effect(() => {
 		const q = (query ?? '').trim();
-		if (!isOpen || !q) {
+		if (!isOpen || !q || !fileSearchEnabled) {
 			search.cancel();
 			searchResults = [];
 			searchError = null;
