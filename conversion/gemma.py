@@ -807,7 +807,7 @@ class Gemma4AssistantModel(Gemma4Model):
 
 @ModelBase.register("Gemma4DSparkModel")
 class Gemma4DSparkModel(Gemma4Model):
-    # DSpark draft with a Gemma4 backbone; same DeepSpec flat config schema and shared
+    # DSpark draft with a Gemma4 backbone
     model_arch = gguf.MODEL_ARCH.DFLASH
 
     def set_vocab(self):
@@ -826,13 +826,9 @@ class Gemma4DSparkModel(Gemma4Model):
             self.gguf_writer.add_mask_token_id(mask_token_id)
 
     def set_gguf_parameters(self):
-        assert not self.hparams.get("enable_moe_block", False), "Gemma4 DSpark with MoE blocks is not supported"
-        if self.hparams.get("markov_rank", 0) > 0:
-            assert self.hparams.get("markov_head_type") == "vanilla", "only the vanilla Markov head is supported"
-
-        # the draft uses full attention on every layer
-        assert all(lt == "full_attention" for lt in self.hparams["layer_types"])
-        self.hparams["sliding_window_pattern"] = 1
+        # inject Gemma3Model's pattern == 1 sentinel so the sliding_window inherited from the target config is not written
+        if all(lt == "full_attention" for lt in self.hparams["layer_types"]):
+            self.hparams["sliding_window_pattern"] = 1
 
         super().set_gguf_parameters()
 
@@ -860,9 +856,12 @@ class Gemma4DSparkModel(Gemma4Model):
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # "post_attention_layernorm" is ambiguous in the shared DFlash tensor map -- resolve it explicitly for the Gemma4 backbone
+        # the shared DFlash tensor map resolves these norm names Qwen-style -- remap them to their Gemma4 meaning
         if name.endswith(".post_attention_layernorm.weight"):
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_POST_NORM, bid), data_torch)
+            return
+        if name.endswith(".pre_feedforward_layernorm.weight"):
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid), data_torch)
             return
         yield from super().modify_tensors(data_torch, name, bid)
 
