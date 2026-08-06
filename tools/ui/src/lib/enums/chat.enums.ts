@@ -78,3 +78,20 @@ export enum PdfViewMode {
 	TEXT = 'text',
 	PAGES = 'pages'
 }
+
+/**
+ * Actions a slash command dispatches once selected.
+ */
+export enum ChatFormCommandAction {
+	PROMPT = 'prompt',
+	CWD = 'cwd',
+	MODEL = 'model'
+}
+
+/**
+ * Whether a picked file/folder mention resolves to a file or a directory.
+ */
+export enum FileMentionEntryType {
+	FILE = 'file',
+	DIRECTORY = 'directory'
+}

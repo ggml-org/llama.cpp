@@ -2,7 +2,8 @@
 	import { FolderOpen, Sparkles } from '@lucide/svelte';
 	import { MODEL_SELECTOR_ICON } from '$lib/constants';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import type { ChatFormCommand, ChatFormCommandAction } from '$lib/types';
+	import { ChatFormCommandAction } from '$lib/enums';
+	import type { ChatFormCommand } from '$lib/types';
 	import {
 		ChatFormPickerList,
 		ChatFormPickerListItem,
@@ -34,9 +35,9 @@
 	let { class: className = '', isOpen, query, commands, onClose, onSelect }: Props = $props();
 
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
-		prompt: Sparkles,
-		cwd: FolderOpen,
-		model: MODEL_SELECTOR_ICON
+		[ChatFormCommandAction.PROMPT]: Sparkles,
+		[ChatFormCommandAction.CWD]: FolderOpen,
+		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON
 	};
 
 	const trimmedQuery = $derived((query ?? '').trim().toLowerCase());

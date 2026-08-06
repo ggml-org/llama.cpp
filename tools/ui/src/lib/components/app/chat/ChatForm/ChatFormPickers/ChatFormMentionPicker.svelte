@@ -10,7 +10,7 @@
 		type GlobEntry
 	} from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { GlobSearchType } from '$lib/enums';
+	import { FileMentionEntryType, GlobSearchType } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import * as Popover from '$lib/components/ui/popover';
@@ -124,7 +124,7 @@
 				const toEntry = (e: GlobEntry): FileMentionEntry => ({
 					path: joinPath(res.base, e.path),
 					name: lastPathSegment(e.path),
-					type: e.type === 'dir' ? 'directory' : 'file'
+					type: e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
 				});
 
 				let entries = rankEntries(res.entries, args.rankQuery).map(toEntry);
@@ -157,7 +157,8 @@
 									(e): FileMentionEntry => ({
 										path: joinPath(childRes.base, e.path),
 										name: lastPathSegment(e.path),
-										type: e.type === 'dir' ? 'directory' : 'file'
+										type:
+											e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
 									})
 								)
 								.sort((a, b) => a.path.localeCompare(b.path));
@@ -288,11 +289,13 @@
 					onclick={() => handleSelect(entry)}
 					onmouseenter={() => nav.setHover(index)}
 				>
-					{@const Icon = entry.type === 'directory' ? Folder : File}
+					{@const Icon = entry.type === FileMentionEntryType.DIRECTORY ? Folder : File}
 					<Icon
 						class={[
 							'mt-0.5 h-4 w-4 shrink-0',
-							entry.type === 'directory' ? 'text-amber-500' : 'text-muted-foreground'
+							entry.type === FileMentionEntryType.DIRECTORY
+								? 'text-amber-500'
+								: 'text-muted-foreground'
 						]}
 					/>
 					<div class="flex min-w-0 flex-1 flex-col">

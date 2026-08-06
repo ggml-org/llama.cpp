@@ -1,4 +1,4 @@
-import type { ErrorDialogType } from '$lib/enums';
+import type { ChatFormCommandAction, ErrorDialogType, FileMentionEntryType } from '$lib/enums';
 import type { ApiChatCompletionToolCall } from './api';
 import type { DatabaseMessage, DatabaseMessageExtra } from './database';
 
@@ -175,14 +175,8 @@ export interface FileProcessingResult {
 export interface FileMentionEntry {
 	path: string;
 	name: string;
-	type: 'file' | 'directory';
+	type: FileMentionEntryType;
 }
-
-/**
- * Action a slash command dispatches once selected. Each maps to a concrete
- * picker / selector in the chat form.
- */
-export type ChatFormCommandAction = 'prompt' | 'cwd' | 'model';
 
 /**
  * A slash command surfaced by the `/` command picker. `name` is the command

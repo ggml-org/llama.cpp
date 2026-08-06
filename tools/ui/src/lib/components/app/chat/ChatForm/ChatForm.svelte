@@ -20,6 +20,7 @@
 	import {
 		ContentPartType,
 		FileExtensionText,
+		FileMentionEntryType,
 		KeyboardKey,
 		MimeTypeText,
 		SpecialFileType
@@ -509,7 +510,8 @@
 		// not get a second `/` appended below. The directory marker
 		// is then re-added deterministically.
 		const cleanedPath = entry.path.replace(/\/+$/, '');
-		const pathWithSeparator = entry.type === 'directory' ? `${cleanedPath}/` : cleanedPath;
+		const pathWithSeparator =
+			entry.type === FileMentionEntryType.DIRECTORY ? `${cleanedPath}/` : cleanedPath;
 		const basename = lastPathSegment(cleanedPath) || entry.name;
 		const insertion = `[${basename}](file://${encodeFileLinkPath(pathWithSeparator)}) `;
 		const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);

@@ -1,5 +1,5 @@
 import { getChatCommands, PROMPT_TRIGGER_PREFIX } from '$lib/constants';
-import { KeyboardKey } from '$lib/enums';
+import { ChatFormCommandAction, KeyboardKey } from '$lib/enums';
 import type { ChatFormCommand } from '$lib/types';
 import {
 	findCommandToken,
@@ -107,19 +107,19 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	 */
 	function dispatchCommand(command: ChatFormCommand, args: string) {
 		switch (command.action) {
-			case 'prompt':
+			case ChatFormCommandAction.PROMPT:
 				isWorkingDirectoryPickerOpen = false;
 				opts.setValue('');
 				isPromptPickerOpen = true;
 				promptSearchQuery = args.trim();
 				break;
-			case 'cwd':
+			case ChatFormCommandAction.CWD:
 				// Keep `/cwd <args>` in the input so the search field and the
 				// token stay two-way bound while the picker is open.
 				workingDirectoryQuery = args.trim();
 				isWorkingDirectoryPickerOpen = true;
 				break;
-			case 'model':
+			case ChatFormCommandAction.MODEL:
 				isWorkingDirectoryPickerOpen = false;
 				opts.setValue('');
 				opts.openModelSelector();

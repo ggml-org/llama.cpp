@@ -1,4 +1,5 @@
 import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants/working-directory';
+import { ChatFormCommandAction } from '$lib/enums';
 import type { ChatFormCommand } from '$lib/types';
 
 interface ChatCommandsOptions {
@@ -25,20 +26,20 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 		{
 			name: 'prompt',
 			description: 'Insert an MCP prompt',
-			action: 'prompt',
+			action: ChatFormCommandAction.PROMPT,
 			disabled: !options.hasPrompts()
 		},
 		{
 			name: 'cwd',
 			description: SET_WORKING_DIRECTORY_LABEL,
 			keywords: ['current working directory'],
-			action: 'cwd',
+			action: ChatFormCommandAction.CWD,
 			disabled: !options.hasBuiltinTools()
 		},
 		{
 			name: 'model',
 			description: 'Select model',
-			action: 'model',
+			action: ChatFormCommandAction.MODEL,
 			disabled: !options.showModelSelector
 		}
 	];
