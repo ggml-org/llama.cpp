@@ -890,6 +890,12 @@ static int ggml_backend_metal_tuning_fa_vec_baseline_ne(int dk, int dv) {
     return ggml_metal_tuning::fa_vec_baseline_ne(dk, dv);
 }
 
+static const char * ggml_backend_metal_tuning_device_token(ggml_backend_dev_t dev) {
+    ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
+
+    return ggml_metal_device_id_token(ggml_metal_device_get_props(ctx_dev)->device_id);
+}
+
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
@@ -908,6 +914,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
     }
     if (strcmp(name, "ggml_backend_metal_tuning_fa_vec_baseline_ne") == 0) {
         return (void *)ggml_backend_metal_tuning_fa_vec_baseline_ne;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_device_token") == 0) {
+        return (void *)ggml_backend_metal_tuning_device_token;
     }
 
     return NULL;

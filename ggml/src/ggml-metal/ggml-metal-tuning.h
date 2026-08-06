@@ -4,6 +4,7 @@
 #include "ggml.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace ggml_metal_tuning {
 
@@ -18,8 +19,8 @@ int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
 
 // NE baked into each (dk,dv) baseline instantiation in kernels/fa.metal.
-// Hand-maintained mirror; keep in sync with those instantiations (run_fa_vec_tune_check
-// exercises every (Q,NE), so a missing instantiation surfaces there).
+// Hand-maintained mirror; keep in sync with those instantiations.
+// The Metal test slice covers every legal config for dk=128 and dk=576.
 int fa_vec_baseline_ne(int dk, int dv);
 
 // Tuned table has two row kinds. Exact rows key a (ne11_b, ne01_b) bucket. Default rows
@@ -50,6 +51,19 @@ struct fa_vec_entry_t {
     fa_vec_key_t key;
     fa_vec_cfg_t cfg;
 };
+
+// legal NE values for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0.
+// single source shared by the offline tuner and test-backend-ops.
+inline std::vector<int> fa_vec_legal_ne(int dk, int dv) {
+    std::vector<int> r;
+    for (int ne : { 1, 2, 4 }) {
+        const int nl = 32 / ne;
+        if ((dk / 4) % nl == 0 && (dv / 4) % nl == 0) {
+            r.push_back(ne);
+        }
+    }
+    return r;
+}
 
 // test/tune-only override; when set, fa_vec_pick returns it directly.
 void         fa_vec_set_override(fa_vec_cfg_t cfg);
