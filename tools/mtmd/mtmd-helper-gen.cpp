@@ -468,13 +468,13 @@ void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx) {
 }
 
 void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx) {
-    if (ctx->pipeline) {
+    if (ctx && ctx->pipeline) {
         ctx->pipeline->reset();
     }
 }
 
 int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_helper_gen_audio_inp * inp) {
-    if (!ctx->pipeline) {
+    if (!ctx || !ctx->pipeline) {
         LOG_ERR("mtmd_helper_gen_audio: unsupported or missing gen-audio pipeline\n");
         return 1;
     }
@@ -482,7 +482,7 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
 }
 
 int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n_batch) {
-    if (!ctx->pipeline) {
+    if (!ctx || !ctx->pipeline) {
         return -1;
     }
     return ctx->pipeline->step_prompt(n_batch);
@@ -490,7 +490,7 @@ int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n
 
 int32_t mtmd_helper_gen_audio_step_gen(mtmd_helper_gen_audio * ctx, llama_token sampled,
                                        const float * h_state_in, const float ** h_state_out) {
-    if (!ctx->pipeline) {
+    if (!ctx || !ctx->pipeline) {
         return 1;
     }
     return ctx->pipeline->step_gen(sampled, h_state_in, h_state_out);
@@ -498,7 +498,7 @@ int32_t mtmd_helper_gen_audio_step_gen(mtmd_helper_gen_audio * ctx, llama_token 
 
 int32_t mtmd_helper_gen_audio_get_output(mtmd_helper_gen_audio * ctx, int32_t * out_sample_rate,
                                          const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) {
-    if (!ctx->pipeline) {
+    if (!ctx || !ctx->pipeline) {
         return 1;
     }
     return ctx->pipeline->get_output(out_sample_rate, out_data, out_data_len, out_n_samples);
