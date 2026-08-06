@@ -67,6 +67,20 @@ extern "C" {
     GGML_API ggml_backend_buffer_type_t     ggml_backend_buffer_get_type      (ggml_backend_buffer_t buffer);
     GGML_API void                           ggml_backend_buffer_reset         (ggml_backend_buffer_t buffer);
 
+    // Multi-buffer wrapper accessors.  Let downstream code operate on each
+    // underlying allocation of a multi-buffer wrapper individually (e.g. to
+    // export a separate CUDA-IPC handle per sub-buffer or to atomically
+    // swap one out).  `is_multi_buffer` is the runtime type check for the
+    // other three accessors; passing a non-multi-buffer returns 0 / NULL /
+    // false as documented in the implementation.  These APIs are not safe
+    // to call concurrently with operations that mutate the buffer (tensor
+    // allocation, `free`, `replace_sub_buffer`); readers can race only
+    // with other readers.
+    GGML_API bool                           ggml_backend_buffer_is_multi_buffer         (ggml_backend_buffer_t buffer);
+    GGML_API size_t                         ggml_backend_multi_buffer_n_sub_buffers     (ggml_backend_buffer_t buffer);
+    GGML_API ggml_backend_buffer_t          ggml_backend_multi_buffer_sub_buffer        (ggml_backend_buffer_t buffer, size_t i);
+    GGML_API bool                           ggml_backend_multi_buffer_replace_sub_buffer(ggml_backend_buffer_t buffer, size_t i, ggml_backend_buffer_t replacement);
+
     // tensor copy between different backends
     GGML_API void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor * dst);
 
