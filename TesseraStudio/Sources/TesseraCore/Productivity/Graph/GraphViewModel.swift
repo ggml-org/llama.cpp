@@ -81,6 +81,16 @@ public final class GraphViewModel {
     /// draws a halo around anchor nodes.
     public var anchorSet: Set<UUID> = []
 
+    /// Called when the user opens a node in its native
+    /// surface (the detail panel's Open button; the
+    /// spec's "double-click to open" gesture routes here
+    /// too once canvas hit-testing lands). Materials
+    /// surfaces wire this at construction time — the
+    /// calendar surface sets it via
+    /// ``CalendarGraphConnector``; nil leaves open a
+    /// no-op.
+    public var openEntityHandler: (@MainActor (GraphNode) -> Void)?
+
     private let store: GraphStore
     private let initialNodeCount: Int
 
@@ -210,6 +220,14 @@ public final class GraphViewModel {
     /// Clear the selection.
     public func clearSelection() {
         selectedNodeIDs.removeAll()
+    }
+
+    /// Open a node in its native surface via
+    /// ``openEntityHandler``. No-op when no handler is
+    /// wired (the graph is browsable without any surface
+    /// attached).
+    public func open(_ node: GraphNode) {
+        openEntityHandler?(node)
     }
 
     /// The single selected node, or nil when zero or many

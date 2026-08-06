@@ -296,6 +296,19 @@ private struct GraphDetailPanel: View {
                     }
                     .buttonStyle(.plain)
                 }
+                // "Open in <native surface>" — only shown
+                // when a surface wired an open handler
+                // (the calendar surface does; see
+                // CalendarGraphConnector).
+                if viewModel.openEntityHandler != nil {
+                    Button {
+                        viewModel.open(node)
+                    } label: {
+                        Label(openLabel(for: node), systemImage: "arrow.up.forward.square")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
                 Divider()
                 relatedEdgesSection(node: node)
                 Spacer()
@@ -303,6 +316,15 @@ private struct GraphDetailPanel: View {
             .padding()
         } else {
             EmptyView()
+        }
+    }
+
+    private func openLabel(for node: GraphNode) -> String {
+        switch node.entityType {
+        case "calendar_event", "event": return "Open in Calendar"
+        case "contact": return "Open in Contacts"
+        case "document", "note", "doc": return "Open in Editor"
+        default: return "Open"
         }
     }
 
