@@ -107,17 +107,6 @@ class OnyxVisionModel(MmprojModel):
             return None
         return super().filter_tensors((name, gen))
 
-    @staticmethod
-    def _unpermute_for_rope(tensor: "Tensor", n_heads: int) -> "Tensor":
-        """clip.cpp uses the interleaved convention, so we invert the permutation here."""
-        if tensor.ndim == 2:
-            dim1, dim2 = tensor.shape
-            return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
-        if tensor.ndim == 1:
-            (dim1,) = tensor.shape
-            return tensor.view(n_heads, 2, dim1 // n_heads // 2).transpose(1, 2).reshape(dim1)
-        raise ValueError(f"_unpermute_for_rope: unexpected shape {tuple(tensor.shape)}")
-
     # 3-layer projector MLP
     _MM_MLP_MAP = {
         "model.vision_adapter.fc1": (gguf.MODEL_TENSOR.V_MMPROJ, 0),
@@ -128,7 +117,7 @@ class OnyxVisionModel(MmprojModel):
     def modify_tensors(self, data_torch, name, bid):
         if ".attn.q_proj." in name or ".attn.k_proj." in name:
             n_heads = int(self.hparams_vision["num_attention_heads"])
-            data_torch = self._unpermute_for_rope(data_torch, n_heads)
+            data_torch = _unpermute_for_rope(data_torch, n_heads)
         # Lay out the pt=2 temporal slabs of the patch embedding as a conv2d for build_inp()
         if name.endswith("patch_embedder.patch_embedding.weight"):
             n_embd = data_torch.shape[0]
