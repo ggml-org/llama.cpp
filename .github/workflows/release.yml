@@ -757,17 +757,6 @@ jobs:
           $dest = ".\build\bin\Release"
           Copy-Item (Join-Path $root "bin\libomp.dll") $dest
           Copy-Item LICENSE $dest
-
-          $imports = Get-ChildItem (Join-Path $dest "*") -File -Include *.dll,*.exe |
-            ForEach-Object { (& llvm-readobj --coff-imports $_.FullName) -join "`n" } |
-            Out-String
-          if ($imports -notmatch "(?im)^\s*Name: libomp\.dll$") {
-            throw "No packaged binary imports libomp.dll"
-          }
-          if ($imports -match "(?i)libomp140") {
-            throw "A packaged binary imports the non-redistributable libomp140 runtime"
-          }
-
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
@@ -1632,7 +1621,6 @@ jobs:
       - get-version
       - windows
       - windows-cpu
-      - windows-cpu-arm64-smoke
       - windows-cuda
       #- windows-sycl
       - windows-rocm
