@@ -5773,8 +5773,19 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             // FA_CL_C as the f16 dk=64 program -- at DK_VEC=16 a width of 8 would
             // double the per-lane o_acc for MQ_GQA=8.
             if (is_q8 && dk == 64 && dv == 64 && backend_ctx->has_subgroup_shuffle) {
+                // The f16 g8/c16 program has carried FA_CL_MHRED since the
+                // gpt-oss FD round; this fork never got it, and the shuffle
+                // chain it removes is what this kernel is actually spending its
+                // time on -- deleting the KV read outright still left it behind
+                // f16, so the gap is not the dequant.
+                // Opt out with GGML_OPENCL_FA_Q8_MHRED=0.
+                static const bool q8_mhred_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_MHRED");
+                    return !(e && e[0] == '0');
+                }();
                 const std::string opts_q8_g8c16 = opts +
-                    " -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16" + opts_q8_int;
+                    " -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16" +
+                    (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_int;
                 cl_program prog_q8_g8c16 = build_program_from_source_ex(
                     backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_g8c16,
                     /*fatal=*/false, "fa q8_0 c16 GQA8 dk64", backend_ctx->queue);
