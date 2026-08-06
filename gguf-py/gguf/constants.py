@@ -11,6 +11,7 @@ GGUF_MAGIC             = 0x46554747  # "GGUF"
 GGUF_VERSION           = 3
 GGUF_DEFAULT_ALIGNMENT = 32
 GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h
+GGML_MAX_DIMS          = 4  # GGML_MAX_DIMS from ggml.h
 
 #
 # metadata keys
@@ -322,6 +323,7 @@ class Keys:
         PROJECTOR_TYPE        = "clip.projector_type"
         HAS_VISION_ENCODER    = "clip.has_vision_encoder"
         HAS_AUDIO_ENCODER     = "clip.has_audio_encoder"
+        HAS_GEN_AUDIO_ENCODER = "clip.has_gen_audio_encoder"
         HAS_LLAVA_PROJECTOR   = "clip.has_llava_projector"
 
     class ClipVision:
@@ -395,6 +397,18 @@ class Keys:
             WINDOW_SIZE     = "clip.audio.projector.window_size"
             DOWNSAMPLE_RATE = "clip.audio.projector.downsample_rate"
             HEAD_COUNT      = "clip.audio.projector.head_count"
+
+    class ClipGenAudio:
+        PROJECTOR_TYPE      = "clip.gen.audio.projector_type" # for mixed modality models
+        EMBEDDING_LENGTH    = "clip.gen.audio.embedding_length"
+        FEED_FORWARD_LENGTH = "clip.gen.audio.feed_forward_length"
+        BLOCK_COUNT         = "clip.gen.audio.block_count"
+        PROJECTION_DIM      = "clip.gen.audio.projection_dim"
+
+        class Attention:
+            HEAD_COUNT      = "clip.gen.audio.attention.head_count"
+            HEAD_COUNT_KV   = "clip.gen.audio.attention.head_count_kv"
+            LAYERNORM_EPS   = "clip.gen.audio.attention.layer_norm_epsilon"
 
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"
@@ -557,6 +571,7 @@ class MODEL_ARCH(IntEnum):
     TALKIE           = auto()
     MELLUM           = auto()
     NANBEIGE         = auto()
+    QWEN3TTS         = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -957,6 +972,65 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_DOWNSAMPLE_CONV = auto() # mimo-audio-tokenizer: post-transformer downsample conv
     A_ENC_DOWNSAMPLE_NORM = auto() # mimo-audio-tokenizer: post-transformer downsample norm
     A_ENC_RVQ_CODEBOOK    = auto() # mimo-audio-tokenizer: residual vector quantizer codebook, per quantizer index
+    A_ENC_CONV_RES2       = auto() # qwen3tts
+    A_ENC_SE_CONV1        = auto() # qwen3tts
+    A_ENC_SE_CONV2        = auto() # qwen3tts
+    A_ENC_ASP_ATTN        = auto() # qwen3tts
+    A_ENC_ASP_TDNN        = auto() # qwen3tts
+    # qwen3tts code_predictor: predicts the remaining RVQ codebooks
+    A_GEN_CODE_PROJ_IN     = auto() # small_to_mtp_projection
+    A_GEN_CODE_EMBD        = auto() # per-codebook embedding table, merged 3D [n_codebooks, vocab, dim]
+    A_GEN_CODE_HEAD        = auto() # per-codebook output head, merged 3D [n_codebooks, vocab, dim]
+    A_GEN_CODE_OUT_EMBD    = auto() # codebook-0 embedding, re-fed into the talker backbone (talker.model.codec_embedding)
+    A_GEN_CODE_ATTN_NORM   = auto()
+    A_GEN_CODE_ATTN_Q      = auto()
+    A_GEN_CODE_ATTN_Q_NORM = auto()
+    A_GEN_CODE_ATTN_K      = auto()
+    A_GEN_CODE_ATTN_K_NORM = auto()
+    A_GEN_CODE_ATTN_V      = auto()
+    A_GEN_CODE_ATTN_OUT    = auto()
+    A_GEN_CODE_FFN_NORM    = auto()
+    A_GEN_CODE_FFN_GATE    = auto()
+    A_GEN_CODE_FFN_UP      = auto()
+    A_GEN_CODE_FFN_DOWN    = auto()
+    A_GEN_CODE_OUTPUT_NORM = auto()
+    # qwen3tts code2wav: RVQ codes -> raw PCM
+    A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
+    A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj
+    A_GEN_WAV_QUANT_FIRST_CB = auto() # semantic RVQ codebook (1 layer), folded from embedding_sum/cluster_usage
+    A_GEN_WAV_QUANT_REST_IN        = auto() # acoustic RVQ, in_proj
+    A_GEN_WAV_QUANT_REST_OUT       = auto() # acoustic RVQ, out_proj
+    A_GEN_WAV_QUANT_REST_CB  = auto() # acoustic RVQ codebooks, merged 3D [15, vocab, dim]
+    A_GEN_WAV_PRE_CONV             = auto()
+    A_GEN_WAV_TFM_IN_PROJ          = auto()
+    A_GEN_WAV_TFM_OUT_PROJ         = auto()
+    A_GEN_WAV_TFM_OUTPUT_NORM      = auto()
+    A_GEN_WAV_TFM_ATTN_NORM        = auto()
+    A_GEN_WAV_TFM_ATTN_Q           = auto()
+    A_GEN_WAV_TFM_ATTN_K           = auto()
+    A_GEN_WAV_TFM_ATTN_V           = auto()
+    A_GEN_WAV_TFM_ATTN_OUT         = auto()
+    A_GEN_WAV_TFM_ATTN_SCALE       = auto() # layer scale (gamma) on the attn output
+    A_GEN_WAV_TFM_FFN_NORM         = auto()
+    A_GEN_WAV_TFM_FFN_GATE         = auto()
+    A_GEN_WAV_TFM_FFN_UP           = auto()
+    A_GEN_WAV_TFM_FFN_DOWN         = auto()
+    A_GEN_WAV_TFM_FFN_SCALE        = auto() # layer scale (gamma) on the FFN output
+    A_GEN_WAV_UP_CONV              = auto() # causal ConvTranspose1d, 2x upsample
+    A_GEN_WAV_UP_DWCONV            = auto() # ConvNeXt depthwise conv
+    A_GEN_WAV_UP_NORM              = auto() # ConvNeXt LayerNorm
+    A_GEN_WAV_UP_PW1               = auto() # ConvNeXt pointwise conv 1 (expand)
+    A_GEN_WAV_UP_PW2               = auto() # ConvNeXt pointwise conv 2 (project)
+    A_GEN_WAV_UP_GAMMA             = auto() # ConvNeXt layer scale
+    A_GEN_WAV_DAC_ENTRY            = auto() # DAC conv_pre
+    A_GEN_WAV_DAC_UP_SNAKE         = auto() # DAC per-block SnakeBeta before the upsample conv
+    A_GEN_WAV_DAC_UP_CONV          = auto() # DAC per-block causal ConvTranspose1d
+    A_GEN_WAV_DAC_RES_ACT1         = auto() # DAC residual unit, SnakeBeta before conv1
+    A_GEN_WAV_DAC_RES_CONV1        = auto() # DAC residual unit, dilated causal conv
+    A_GEN_WAV_DAC_RES_ACT2         = auto() # DAC residual unit, SnakeBeta before conv2
+    A_GEN_WAV_DAC_RES_CONV2        = auto() # DAC residual unit, pointwise causal conv
+    A_GEN_WAV_DAC_POST_SNAKE       = auto() # DAC final SnakeBeta
+    A_GEN_WAV_DAC_POST_CONV        = auto() # DAC conv_post -> 1-channel PCM
     A_MMPROJ              = auto()
     A_MMPROJ_FC           = auto()
     A_MM_NORM_PRE         = auto()
@@ -1169,6 +1243,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
+    MODEL_ARCH.QWEN3TTS:         "qwen3tts",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1566,6 +1641,63 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_DOWNSAMPLE_CONV:     "a.downsample.conv",
     MODEL_TENSOR.A_ENC_DOWNSAMPLE_NORM:     "a.downsample.norm",
     MODEL_TENSOR.A_ENC_RVQ_CODEBOOK:        "a.rvq.codebook",
+    MODEL_TENSOR.A_ENC_CONV_RES2:           "a.blk.{bid}.res2.{xid}",
+    MODEL_TENSOR.A_ENC_SE_CONV1:            "a.blk.{bid}.se_conv1",
+    MODEL_TENSOR.A_ENC_SE_CONV2:            "a.blk.{bid}.se_conv2",
+    MODEL_TENSOR.A_ENC_ASP_ATTN:            "a.asp_attn",
+    MODEL_TENSOR.A_ENC_ASP_TDNN:            "a.asp_tdnn",
+    MODEL_TENSOR.A_GEN_CODE_PROJ_IN:        "a.gen.code.proj_in",
+    MODEL_TENSOR.A_GEN_CODE_EMBD:           "a.gen.code.embd",
+    MODEL_TENSOR.A_GEN_CODE_HEAD:           "a.gen.code.head",
+    MODEL_TENSOR.A_GEN_CODE_OUT_EMBD:       "a.gen.code.out_embd",
+    MODEL_TENSOR.A_GEN_CODE_ATTN_NORM:      "a.gen.code.blk.{bid}.ln1", # reuses the generic clip.cpp block loader (TN_LN_1)
+    MODEL_TENSOR.A_GEN_CODE_ATTN_Q:         "a.gen.code.blk.{bid}.attn_q",
+    MODEL_TENSOR.A_GEN_CODE_ATTN_Q_NORM:    "a.gen.code.blk.{bid}.attn_q_norm",
+    MODEL_TENSOR.A_GEN_CODE_ATTN_K:         "a.gen.code.blk.{bid}.attn_k",
+    MODEL_TENSOR.A_GEN_CODE_ATTN_K_NORM:    "a.gen.code.blk.{bid}.attn_k_norm",
+    MODEL_TENSOR.A_GEN_CODE_ATTN_V:         "a.gen.code.blk.{bid}.attn_v",
+    MODEL_TENSOR.A_GEN_CODE_ATTN_OUT:       "a.gen.code.blk.{bid}.attn_out",
+    MODEL_TENSOR.A_GEN_CODE_FFN_NORM:       "a.gen.code.blk.{bid}.ln2", # reuses the generic clip.cpp block loader (TN_LN_2)
+    MODEL_TENSOR.A_GEN_CODE_FFN_GATE:       "a.gen.code.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.A_GEN_CODE_FFN_UP:         "a.gen.code.blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_GEN_CODE_FFN_DOWN:       "a.gen.code.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_GEN_CODE_OUTPUT_NORM:    "a.gen.code.output_norm",
+    MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN:  "a.gen.wav.quant.first.in_proj",
+    MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT: "a.gen.wav.quant.first.out_proj",
+    MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB:  "a.gen.wav.quant.first.codebook",
+    MODEL_TENSOR.A_GEN_WAV_QUANT_REST_IN:   "a.gen.wav.quant.rest.in_proj",
+    MODEL_TENSOR.A_GEN_WAV_QUANT_REST_OUT:  "a.gen.wav.quant.rest.out_proj",
+    MODEL_TENSOR.A_GEN_WAV_QUANT_REST_CB:   "a.gen.wav.quant.rest.codebook",
+    MODEL_TENSOR.A_GEN_WAV_PRE_CONV:        "a.gen.wav.pre_conv",
+    MODEL_TENSOR.A_GEN_WAV_TFM_IN_PROJ:     "a.gen.wav.tfm.in_proj",
+    MODEL_TENSOR.A_GEN_WAV_TFM_OUT_PROJ:    "a.gen.wav.tfm.out_proj",
+    MODEL_TENSOR.A_GEN_WAV_TFM_OUTPUT_NORM: "a.gen.wav.tfm.output_norm",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_NORM:   "a.gen.wav.tfm.blk.{bid}.ln1",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q:      "a.gen.wav.tfm.blk.{bid}.attn_q",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K:      "a.gen.wav.tfm.blk.{bid}.attn_k",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_V:      "a.gen.wav.tfm.blk.{bid}.attn_v",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_OUT:    "a.gen.wav.tfm.blk.{bid}.attn_out",
+    MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_SCALE:  "a.gen.wav.tfm.blk.{bid}.ls1",
+    MODEL_TENSOR.A_GEN_WAV_TFM_FFN_NORM:    "a.gen.wav.tfm.blk.{bid}.ln2",
+    MODEL_TENSOR.A_GEN_WAV_TFM_FFN_GATE:    "a.gen.wav.tfm.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.A_GEN_WAV_TFM_FFN_UP:      "a.gen.wav.tfm.blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_GEN_WAV_TFM_FFN_DOWN:    "a.gen.wav.tfm.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_GEN_WAV_TFM_FFN_SCALE:   "a.gen.wav.tfm.blk.{bid}.ls2",
+    MODEL_TENSOR.A_GEN_WAV_UP_CONV:         "a.gen.wav.up.blk.{bid}.conv",
+    MODEL_TENSOR.A_GEN_WAV_UP_DWCONV:       "a.gen.wav.up.blk.{bid}.dwconv",
+    MODEL_TENSOR.A_GEN_WAV_UP_NORM:         "a.gen.wav.up.blk.{bid}.norm",
+    MODEL_TENSOR.A_GEN_WAV_UP_PW1:          "a.gen.wav.up.blk.{bid}.pw1",
+    MODEL_TENSOR.A_GEN_WAV_UP_PW2:          "a.gen.wav.up.blk.{bid}.pw2",
+    MODEL_TENSOR.A_GEN_WAV_UP_GAMMA:        "a.gen.wav.up.blk.{bid}.gamma",
+    MODEL_TENSOR.A_GEN_WAV_DAC_ENTRY:       "a.gen.wav.dac.entry",
+    MODEL_TENSOR.A_GEN_WAV_DAC_UP_SNAKE:    "a.gen.wav.dac.blk.{bid}.snake",
+    MODEL_TENSOR.A_GEN_WAV_DAC_UP_CONV:     "a.gen.wav.dac.blk.{bid}.conv",
+    MODEL_TENSOR.A_GEN_WAV_DAC_RES_ACT1:    "a.gen.wav.dac.blk.{bid}.res.{xid}.act1",
+    MODEL_TENSOR.A_GEN_WAV_DAC_RES_CONV1:   "a.gen.wav.dac.blk.{bid}.res.{xid}.conv1",
+    MODEL_TENSOR.A_GEN_WAV_DAC_RES_ACT2:    "a.gen.wav.dac.blk.{bid}.res.{xid}.act2",
+    MODEL_TENSOR.A_GEN_WAV_DAC_RES_CONV2:   "a.gen.wav.dac.blk.{bid}.res.{xid}.conv2",
+    MODEL_TENSOR.A_GEN_WAV_DAC_POST_SNAKE:  "a.gen.wav.dac.post_snake",
+    MODEL_TENSOR.A_GEN_WAV_DAC_POST_CONV:   "a.gen.wav.dac.post_conv",
     MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
     MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
     MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
@@ -1820,6 +1952,63 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_CONV_NORM,
         MODEL_TENSOR.A_ENC_CONV_PW1,
         MODEL_TENSOR.A_ENC_CONV_PW2,
+        MODEL_TENSOR.A_ENC_CONV_RES2,
+        MODEL_TENSOR.A_ENC_SE_CONV1,
+        MODEL_TENSOR.A_ENC_SE_CONV2,
+        MODEL_TENSOR.A_ENC_ASP_ATTN,
+        MODEL_TENSOR.A_ENC_ASP_TDNN,
+        MODEL_TENSOR.A_GEN_CODE_PROJ_IN,
+        MODEL_TENSOR.A_GEN_CODE_EMBD,
+        MODEL_TENSOR.A_GEN_CODE_HEAD,
+        MODEL_TENSOR.A_GEN_CODE_OUT_EMBD,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_NORM,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_Q,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_Q_NORM,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_K,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_K_NORM,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_V,
+        MODEL_TENSOR.A_GEN_CODE_ATTN_OUT,
+        MODEL_TENSOR.A_GEN_CODE_FFN_NORM,
+        MODEL_TENSOR.A_GEN_CODE_FFN_GATE,
+        MODEL_TENSOR.A_GEN_CODE_FFN_UP,
+        MODEL_TENSOR.A_GEN_CODE_FFN_DOWN,
+        MODEL_TENSOR.A_GEN_CODE_OUTPUT_NORM,
+        MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN,
+        MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT,
+        MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB,
+        MODEL_TENSOR.A_GEN_WAV_QUANT_REST_IN,
+        MODEL_TENSOR.A_GEN_WAV_QUANT_REST_OUT,
+        MODEL_TENSOR.A_GEN_WAV_QUANT_REST_CB,
+        MODEL_TENSOR.A_GEN_WAV_PRE_CONV,
+        MODEL_TENSOR.A_GEN_WAV_TFM_IN_PROJ,
+        MODEL_TENSOR.A_GEN_WAV_TFM_OUT_PROJ,
+        MODEL_TENSOR.A_GEN_WAV_TFM_OUTPUT_NORM,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_NORM,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_V,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_OUT,
+        MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_SCALE,
+        MODEL_TENSOR.A_GEN_WAV_TFM_FFN_NORM,
+        MODEL_TENSOR.A_GEN_WAV_TFM_FFN_GATE,
+        MODEL_TENSOR.A_GEN_WAV_TFM_FFN_UP,
+        MODEL_TENSOR.A_GEN_WAV_TFM_FFN_DOWN,
+        MODEL_TENSOR.A_GEN_WAV_TFM_FFN_SCALE,
+        MODEL_TENSOR.A_GEN_WAV_UP_CONV,
+        MODEL_TENSOR.A_GEN_WAV_UP_DWCONV,
+        MODEL_TENSOR.A_GEN_WAV_UP_NORM,
+        MODEL_TENSOR.A_GEN_WAV_UP_PW1,
+        MODEL_TENSOR.A_GEN_WAV_UP_PW2,
+        MODEL_TENSOR.A_GEN_WAV_UP_GAMMA,
+        MODEL_TENSOR.A_GEN_WAV_DAC_ENTRY,
+        MODEL_TENSOR.A_GEN_WAV_DAC_UP_SNAKE,
+        MODEL_TENSOR.A_GEN_WAV_DAC_UP_CONV,
+        MODEL_TENSOR.A_GEN_WAV_DAC_RES_ACT1,
+        MODEL_TENSOR.A_GEN_WAV_DAC_RES_CONV1,
+        MODEL_TENSOR.A_GEN_WAV_DAC_RES_ACT2,
+        MODEL_TENSOR.A_GEN_WAV_DAC_RES_CONV2,
+        MODEL_TENSOR.A_GEN_WAV_DAC_POST_SNAKE,
+        MODEL_TENSOR.A_GEN_WAV_DAC_POST_CONV,
         MODEL_TENSOR.A_ENC_CONV_NORM_MEAN,
         MODEL_TENSOR.A_ENC_CONV_NORM_VAR,
         MODEL_TENSOR.A_ENC_MEL_FILTERS,
@@ -4647,6 +4836,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.QWEN3TTS: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
 }
 
 # tensors that will not be serialized
@@ -4921,6 +5126,8 @@ class VisionProjectorType:
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
+    QWEN3TTS_SPKENC = "qwen3tts_spkenc" # audio: ECAPA-TDNN speaker encoder
+    QWEN3TTS_GEN = "qwen3tts_gen" # audio generation: code_predictor
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
