@@ -8,7 +8,9 @@ void llama_model_bailingmoe3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,           hparams.n_lora_kv);
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,                  hparams.ssm_d_conv);
     ml.get_key(LLM_KV_KDA_HEAD_DIM,                     hparams.n_embd_head_kda);
-    ml.get_key(LLM_KV_KDA_SAFE_GATE,                    hparams.kda_safe_gate);
+    if (!ml.get_key(LLM_KV_KDA_SAFE_GATE, hparams.kda_safe_gate, false)) {
+        hparams.kda_safe_gate = true;
+    }
     ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,             hparams.kda_gate_lower_bound);
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,       hparams.n_ff_exp);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
