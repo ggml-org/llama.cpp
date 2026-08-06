@@ -9,7 +9,6 @@
 // Several quantities are precomputed on host and fed as named graph inputs (filled in
 // clip.cpp set_input, PROJECTOR_TYPE_ONYX branch):
 //   onyx_patches  [patch_dim, n_tok]  : patchified pixels ([pt,c,ps,ps] layout)
-//   onyx_pos_emb  [n_embd,   n_tok]   : bilinear-interpolated learned pos-emb (orig order)
 //   onyx_pos_w/_h [n_tok] i32         : 1-indexed RoPE positions (sparse-permuted order)
 //   onyx_sp_perm  [n_tok] i32         : window grouping permutation (applied after ln_pre)
 //   onyx_inv_perm [n_tok] i32         : inverse of sp_perm (applied after blocks)
@@ -34,9 +33,6 @@ ggml_cgraph * clip_graph_onyx::build() {
     ggml_tensor * patches = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, patch_dim, n_tok);
     ggml_set_name(patches, "onyx_patches"); ggml_set_input(patches);
 
-    ggml_tensor * pos_emb = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tok);
-    ggml_set_name(pos_emb, "onyx_pos_emb"); ggml_set_input(pos_emb);
-
     ggml_tensor * pos_w   = inp_i32("onyx_pos_w",   n_tok);
     ggml_tensor * pos_h   = inp_i32("onyx_pos_h",   n_tok);
     ggml_tensor * sp_perm = inp_i32("onyx_sp_perm", n_tok);
@@ -48,7 +44,7 @@ ggml_cgraph * clip_graph_onyx::build() {
 
     // patchify (conv1_linear as a matmul, no bias) + learned pos-emb
     ggml_tensor * x = build_mm(model.patch_embeddings_0, patches); // [n_embd, n_tok]
-    x = ggml_add(ctx0, x, pos_emb);
+    x = ggml_add(ctx0, x, resize_position_embeddings(GGML_SCALE_MODE_BILINEAR));
     cb(x, "after_posemb", -1);
 
     // ln_pre (LayerNorm)

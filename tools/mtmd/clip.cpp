@@ -1529,7 +1529,6 @@ struct clip_model_loader {
                         get_f32(KEY_V_ROPE_THETA,        hparams.rope_theta,          false);
                         get_u32(KEY_ONYX_PATCH_TEMPORAL, hparams.onyx_patch_temporal, false);
                         get_u32(KEY_ONYX_SPARSE_FACTOR,  hparams.onyx_sparse_factor,  false);
-                        get_u32(KEY_ONYX_POS_EMB_SIZE,   hparams.onyx_pos_emb_size,   false);
                         hparams.set_limit_image_tokens(1, 4096);
                         hparams.set_warmup_n_tokens(32*32);
                     } break;
@@ -3966,8 +3965,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 const int ps     = patch_size;
                 const int nx     = image_size_width;
                 const int pt     = hparams.onyx_patch_temporal;
-                const int pgrid  = hparams.onyx_pos_emb_size;  // 32
-                const int nemb   = hparams.n_embd;             // 1536
+                const int pgrid  = (int) std::sqrt((double) ctx->model.position_embeddings->ne[1]); // 32
                 const int f      = hparams.n_merge;         // downsample 2
                 const int patch_dim = pt * 3 * ps * ps;
                 const auto & buf = imgs.entries[0].get_ro_buf();    // interleaved pixels (3ch image / 6ch video)
@@ -3998,47 +3996,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                     }
                 }
                 set_input_f32("onyx_patches", patches);
-
-                // --- learned pos-emb bilinear interpolation (grid_sample align_corners=False,
-                //     zeros padding) from pgrid x pgrid to grid_h x grid_w ---
-                ggml_tensor * pe = ctx->model.position_embeddings; // [nemb, pgrid*pgrid]
-                std::vector<float> pe_host((size_t) nemb * pgrid * pgrid);
-                {
-                    std::vector<char> raw(ggml_nbytes(pe));
-                    ggml_backend_tensor_get(pe, raw.data(), 0, ggml_nbytes(pe));
-                    if (pe->type == GGML_TYPE_F32) {
-                        std::memcpy(pe_host.data(), raw.data(), ggml_nbytes(pe));
-                    } else {
-                        const auto * tt = ggml_get_type_traits(pe->type);
-                        tt->to_float(raw.data(), pe_host.data(), (int64_t) nemb * pgrid * pgrid);
-                    }
-                }
-                // Token layout is row-major with grid_w as the inner stride (matches the sparse
-                // window loop below). H axis samples pe rows scaled by grid_h; W axis samples
-                // pe cols scaled by grid_w. Self-cancelling on square grids.
-                std::vector<float> pos_emb((size_t) nemb * n_tok, 0.0f);
-                for (int t = 0; t < n_tok; t++) {
-                    const int   gy = t / grid_w;   // height index (0..grid_h-1)
-                    const int   gx = t % grid_w;   // width index  (0..grid_w-1)
-                    const float af = (gy + 0.5f) * pgrid / grid_h - 0.5f; // H axis
-                    const float bf = (gx + 0.5f) * pgrid / grid_w - 0.5f; // W axis
-                    const int   a0 = (int) std::floor(af); const float wa = af - a0;
-                    const int   b0 = (int) std::floor(bf); const float wb = bf - b0;
-                    const int   as[2] = { a0, a0 + 1 }; const float was[2] = { 1.0f - wa, wa };
-                    const int   bs[2] = { b0, b0 + 1 }; const float wbs[2] = { 1.0f - wb, wb };
-                    float * dst = pos_emb.data() + (size_t) t * nemb;
-                    for (int ka = 0; ka < 2; ka++) {
-                        if (as[ka] < 0 || as[ka] >= pgrid) continue;
-                        for (int kb = 0; kb < 2; kb++) {
-                            if (bs[kb] < 0 || bs[kb] >= pgrid) continue;
-                            const float w = was[ka] * wbs[kb];
-                            if (w == 0.0f) continue;
-                            const float * src = pe_host.data() + (size_t) (as[ka] * pgrid + bs[kb]) * nemb;
-                            for (int c = 0; c < nemb; c++) dst[c] += w * src[c];
-                        }
-                    }
-                }
-                set_input_f32("onyx_pos_emb", pos_emb);
 
                 // --- sparse window grouping (pgrid x pgrid windows) ---
                 const int win = pgrid;
