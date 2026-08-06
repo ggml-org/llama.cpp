@@ -12,7 +12,6 @@
 	import { GlobSearchType } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { recentMentionsStore } from '$lib/stores/recent-mentions.svelte';
 	import * as Popover from '$lib/components/ui/popover';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
@@ -134,28 +133,16 @@
 		}
 	});
 
-	// Most-recently-picked entries (deduped, capped, persisted to
-	// localStorage). Surfaced when the user opens the picker with no
-	// characters typed after `@`, so they can re-use a file or folder
-	// without re-typing the search.
-	const recentMentions = $derived(recentMentionsStore.items);
-
-	// What the list actually renders. Recents when the user has not
-	// typed anything after `@`, live search results otherwise.
+	// The mention search only ever shows live results - a bare `@` with no
+	// query is a no-op (the picker is not even opened by the host).
 	const trimmedQuery = $derived((query ?? '').trim());
-	const isShowingRecents = $derived(trimmedQuery === '');
-	const displayedItems = $derived(isShowingRecents ? recentMentions : searchResults);
+	const displayedItems = $derived(searchResults);
 
 	// Empty-message policy:
-	//  - recents empty -> nudge them to start typing
 	//  - search error -> surface it (network / scope issues)
 	//  - search returned nothing -> "No matching files or folders"
 	const emptyMessage = $derived(
-		isShowingRecents
-			? 'Start typing to search files and folders'
-			: searchError
-				? `Search failed - ${searchError}`
-				: 'No matching files or folders'
+		searchError ? `Search failed - ${searchError}` : 'No matching files or folders'
 	);
 
 	// Tooltips only on wider viewports - hover surfaces get in the way on
@@ -198,10 +185,6 @@
 	});
 
 	function handleSelect(entry: FileMentionEntry) {
-		// Bump to the front of the recent-mentions list before handing
-		// off so a re-pick of the same entry within the same mount
-		// already sees it at the top of the recents panel.
-		recentMentionsStore.add(entry);
 		onSelect(entry);
 		onClose();
 	}
@@ -245,17 +228,9 @@
 			className
 		]}
 	>
-		{#if isShowingRecents && recentMentions.length > 0}
-			<div
-				class="flex items-center justify-between px-4 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-			>
-				<span>Recently used</span>
-			</div>
-		{/if}
-
 		<ChatFormPickerList
 			items={displayedItems}
-			isLoading={isShowingRecents ? false : search.isSearching}
+			isLoading={search.isSearching}
 			selectedIndex={nav.hoveredIndex}
 			showSearchInput={false}
 			searchQuery={query ?? ''}

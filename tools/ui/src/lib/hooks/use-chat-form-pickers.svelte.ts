@@ -32,8 +32,6 @@ export interface UseChatFormPickersOptions {
 	hasPrompts: () => boolean;
 	/** Predicate: built-in tools present (gates `/cwd`). */
 	hasBuiltinTools: () => boolean;
-	/** Predicate: at least one recent mention exists (recents surface). */
-	hasRecents: () => boolean;
 	/** Current working directory, if the user picked one. */
 	getCwd: () => string | null;
 	/** Server home directory (mention search fallback scope). */
@@ -214,17 +212,11 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				mentionDismissedSnapshot.query === token.query;
 
 			if (!isDismissedSticky) {
-				// Show the picker only if it can actually render something
-				// useful: either the user has typed at least one
-				// character after `@` (live search), or we've previously
-				// picked at least one file/folder (recents surface). A
-				// bare `@` with no recents is a no-op - re-typing into
-				// the token would otherwise flash an empty "start
-				// typing..." hint before the user types anything.
-				const haveRecents = opts.hasRecents();
-				const haveQuery = token.query.length > 0;
-
-				if (haveRecents || haveQuery) {
+				// Show the picker only if the user has typed at least one
+				// character after `@` (live search). A bare `@` is a no-op -
+				// re-typing into the token would otherwise flash an empty
+				// "start typing..." hint before the user types anything.
+				if (token.query.length > 0) {
 					mentionDismissedSnapshot = null;
 					isMentionPickerOpen = true;
 					mentionQuery = token.query;

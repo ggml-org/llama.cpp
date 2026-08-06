@@ -29,7 +29,6 @@
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { recentMentionsStore } from '$lib/stores/recent-mentions.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
@@ -167,7 +166,6 @@
 		getShowModelSelector: () => showModelSelector,
 		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
 		hasBuiltinTools: () => toolsStore.builtinTools.length > 0,
-		hasRecents: () => recentMentionsStore.items.length > 0,
 		getCwd: () => cwd,
 		getServerHome: () => toolsStore.serverHome ?? null,
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
