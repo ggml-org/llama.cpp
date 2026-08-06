@@ -25,7 +25,9 @@
 		GLOB_WILDCARD,
 		HOME_TILDE,
 		PATH_NAV_MAX_DEPTH,
-		SEARCH_DEBOUNCE_MS
+		PATH_SEPARATOR,
+		SEARCH_DEBOUNCE_MS,
+		WINDOWS_SEPARATOR
 	} from '$lib/constants';
 
 	/**
@@ -127,9 +129,10 @@
 
 				let entries = rankEntries(res.entries, args.rankQuery).map(toEntry);
 
-				// A trailing `/` targets a directory: list its children too so the
-				// user can step into it from the picker, mirroring the WD picker.
-				if (query.endsWith('/') && args.last) {
+				// A trailing path separator targets a directory: list its children
+				// too so the user can step into it from the picker, mirroring the
+				// WD picker. Accept both `/` and Windows `\` so it works either way.
+				if ((query.endsWith(PATH_SEPARATOR) || query.endsWith(WINDOWS_SEPARATOR)) && args.last) {
 					const last = args.last;
 					const exact = res.entries.find(
 						(e) =>
