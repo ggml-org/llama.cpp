@@ -71,6 +71,10 @@ if (BLAS_FOUND)
     message(STATUS "BLAS found, Includes: ${BLAS_INCLUDE_DIRS}")
 
     target_compile_options(ggml-blas PRIVATE ${BLAS_LINKER_FLAGS})
+    # GCC on apple complains about vector conversions
+    if (APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(ggml-blas PRIVATE -flax-vector-conversions)
+    endif ()
 
     if ("${GGML_BLAS_VENDOR}" STREQUAL "")
         message(WARNING "GGML_BLAS_VENDOR is not set; some methods may not link properly.")
