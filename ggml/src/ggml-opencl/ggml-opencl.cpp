@@ -4857,6 +4857,13 @@ static bool ggml_opencl_ensure_fa_f32_f16_vec_512(ggml_backend_opencl_context * 
     static bool failed = false;
     if (failed) return false;
 
+    // Decline WITHOUT latching if the shared compile options are not up yet. This is
+    // reachable from supports_op, which llama.cpp calls before load_cl_kernels() has
+    // run, and a build attempted with an empty option prefix is missing -cl-std and
+    // fails on every subgroup builtin. Latching that would disable this kernel for
+    // the rest of the process rather than for one call.
+    if (backend_ctx->kernel_compile_opts.empty()) return false;
+
     const ggml_opencl_fa_dim * cfg = nullptr;
     for (const auto & d : g_opencl_fa_dims) {
         if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
