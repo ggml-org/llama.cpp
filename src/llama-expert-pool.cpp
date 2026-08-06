@@ -1,5 +1,8 @@
 #include "llama-expert-pool.h"
 
+#include "ggml.h"
+#include "ggml-cpu.h"
+
 #include <cstdlib>
 #include <cstring>
 #include <regex>
@@ -8,6 +11,11 @@ namespace llama_expert_pool {
 
 namespace {
     bool g_requested = false;
+
+    // C callback for the ggml cold op: resolve a per-expert slice by tensor
+    static const uint8_t * pool_slice_cb(const struct ggml_tensor * src0, int expert) {
+        return slice_for_tensor(src0, expert);
+    }
 
     // matches an expert weight tensor, e.g. blk.0.ffn_gate_exps.weight
     const std::regex g_re_exps("blk\\.(\\d+)\\.ffn_(up|down|gate|gate_up)_(ch|)exps\\.weight");
@@ -73,6 +81,7 @@ bool fill_tensor(const ggml_tensor * tensor, const uint8_t * data, size_t nbytes
             return false;
         }
         g_store.is_active = true;
+        ggml_mmid_cold_set_slice_fn(pool_slice_cb);
         for (int e = 0; e < n_experts; e++) {
             uint8_t * slice = (uint8_t *) std::malloc(slice_bytes);
             if (!slice) {
@@ -107,6 +116,22 @@ uint8_t * get_slice(size_t entry_idx, int expert) {
         return nullptr;
     }
     return slices[expert];
+}
+
+const uint8_t * slice_for_tensor(const ggml_tensor * tensor, int expert) {
+    if (!g_store.is_active || !tensor || expert < 0) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < g_store.entries.size(); i++) {
+        if (g_store.entries[i].tensor == tensor) {
+            auto & slices = g_store.slices[i];
+            if (expert >= (int) slices.size()) {
+                return nullptr;
+            }
+            return slices[expert];
+        }
+    }
+    return nullptr;
 }
 
 void free_slice(size_t entry_idx, int expert) {

@@ -45,4 +45,8 @@ namespace llama_expert_pool {
     void free_slice(size_t entry_idx, int expert);
     void set_slice(size_t entry_idx, int expert, const uint8_t * data);
 
+    // C-accessible lookup by tensor (for the ggml cold op hook); returns
+    // nullptr when the pool is inactive or the slice is freed
+    const uint8_t * slice_for_tensor(const ggml_tensor * tensor, int expert);
+
 } // namespace llama_expert_pool
