@@ -39,23 +39,37 @@ static __global__ void mm_ids_helper(
     int it_compact = 0; // Running index for the compact slice of this expert.
 
     if constexpr (n_expert_used_template == 0) {
-        // Generic implementation:
+        // Generic implementation. With expert tiering, several slots of one
+        // token can map to the same (sentinel) expert, so count hits per
+        // token and give each hitting lane its own store slot via its rank.
         for (int it = 0; it < n_tokens; ++it) {
-            int iex_used = -1; // The index at which the expert is used, if any.
+            int cnt = 0;
             for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
                 const int expert_used = ids[it*si1 + iex];
                 nex_prev += expert_used < expert;
-                if (expert_used == expert) {
-                    iex_used = iex;
+                cnt += expert_used == expert;
+            }
+
+            // inclusive warp scan of cnt; n_hit broadcast from the last lane
+            int rank = cnt;
+#pragma unroll
+            for (int offset = 1; offset < warp_size; offset <<= 1) {
+                const int tmp = __shfl_up_sync(0xFFFFFFFF, rank, offset, warp_size);
+                if (threadIdx.x >= static_cast<unsigned int>(offset)) {
+                    rank += tmp;
                 }
             }
+            const int n_hit = __shfl_sync(0xFFFFFFFF, rank, warp_size - 1, warp_size);
+            rank -= cnt; // exclusive scan: hits held by lower lanes
 
-            if (iex_used != -1) {
-                store[it_compact] = mm_ids_helper_store(it, iex_used);
-            }
-
-            if (warp_reduce_any<warp_size>(iex_used != -1)) {
-                it_compact++;
+            if (n_hit > 0) {
+                for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
+                    if (ids[it*si1 + iex] == expert) {
+                        store[it_compact + rank] = mm_ids_helper_store(it, iex);
+                        rank++;
+                    }
+                }
+                it_compact += n_hit;
             }
         }
     } else {
@@ -68,28 +82,43 @@ static __global__ void mm_ids_helper(
             const int iex = threadIdx.x % neu_padded; // The index at which the expert is used, if any.
             const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < n_tokens ?
                 ids[it*si1 + iex] : INT_MAX;
-            const int iex_used = expert_used == expert ? iex : -1;
+            const bool hit = expert_used == expert;
             nex_prev += expert_used < expert;
 
-            // Whether the threads at this token position have used the expert:
-            const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
+            // With expert tiering, several slots of one token can map to the same
+            // (sentinel) expert, so count hits per token instead of "any" and give
+            // each hitting lane its own store slot via its rank within the token.
+
+            // Inclusive scan of hit within the token's subgroup of lanes:
+            int scan = hit ? 1 : 0;
+#pragma unroll
+            for (int offset = 1; offset < neu_padded; offset <<= 1) {
+                const int tmp = __shfl_up_sync(0xFFFFFFFF, scan, offset, warp_size);
+                if ((threadIdx.x % neu_padded) >= static_cast<unsigned int>(offset)) {
+                    scan += tmp;
+                }
+            }
+
+            // Hits of this token; rank of this lane among the token's hitting lanes:
+            const int n_hit = __shfl_sync(0xFFFFFFFF, scan, threadIdx.x | (neu_padded - 1), warp_size);
+            const int rank  = scan - 1;
 
             // Do a scan over threads at lower token positions in warp to get the correct index for writing data:
             int it_compact_add_lower = 0;
 #pragma unroll
             for (int offset = neu_padded; offset < warp_size; offset += neu_padded) {
-                const int tmp = __shfl_up_sync(0xFFFFFFFF, it_compact_add_self, offset, warp_size);
+                const int tmp = __shfl_up_sync(0xFFFFFFFF, n_hit, offset, warp_size);
                 if (threadIdx.x >= static_cast<unsigned int>(offset)) {
                     it_compact_add_lower += tmp;
                 }
             }
 
-            if (iex_used != -1) {
-                store[it_compact + it_compact_add_lower] = mm_ids_helper_store(it, iex_used);
+            if (hit) {
+                store[it_compact + it_compact_add_lower + rank] = mm_ids_helper_store(it, iex);
             }
 
             // The thread with the highest index in the warp always has the sum over the whole warp, use it to increment all threads:
-            it_compact += __shfl_sync(0xFFFFFFFF, it_compact_add_lower + it_compact_add_self, warp_size - 1, warp_size);
+            it_compact += __shfl_sync(0xFFFFFFFF, it_compact_add_lower + n_hit, warp_size - 1, warp_size);
         }
     }
     nex_prev = warp_reduce_sum<warp_size>(nex_prev);
@@ -123,7 +152,7 @@ static __global__ void mm_ids_helper(
 template <int n_expert_used_template>
 static void launch_mm_ids_helper(
         const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
-        const int n_experts, const int n_tokens, const int n_expert_used_var, const int nchannels_y, const int si1, const int sis1, const bool write_inverse, cudaStream_t stream) {
+        const int n_experts, const int n_tokens, const int n_expert_used_var, const int nchannels_y, const int si1, const int sis1, const bool write_inverse, cudaStream_t stream, bool tiered_hot) {
     GGML_ASSERT(n_tokens          < (1 << 22) && "too few bits in mm_ids_helper_store");
     GGML_ASSERT(n_expert_used_var < (1 << 10) && "too few bits in mm_ids_helper_store");
 
@@ -134,7 +163,9 @@ static void launch_mm_ids_helper(
 
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);
-    const size_t nbytes_shared = n_tokens*sizeof(mm_ids_helper_store);
+    // with expert tiering (.hot stores), ids can map several slots of one token
+    // to the same (sentinel) expert; only then size for the true worst case
+    const size_t nbytes_shared = (tiered_hot ? n_tokens*n_expert_used_var : n_tokens)*sizeof(mm_ids_helper_store);
     GGML_ASSERT(nbytes_shared <= smpbo);
     mm_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>
         (ids, ids_src1, ids_dst, expert_bounds, n_tokens, n_expert_used_var, nchannels_y, si1, sis1, write_inverse);
@@ -142,28 +173,28 @@ static void launch_mm_ids_helper(
 
 void ggml_cuda_launch_mm_ids_helper(
         const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
-        const int n_experts, const int n_tokens, const int n_expert_used, const int nchannels_y, const int si1, const int sis1, const bool write_inverse, cudaStream_t stream) {
+        const int n_experts, const int n_tokens, const int n_expert_used, const int nchannels_y, const int si1, const int sis1, const bool write_inverse, cudaStream_t stream, bool tiered_hot) {
     switch (n_expert_used) {
         case  2:
-            launch_mm_ids_helper< 2>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            launch_mm_ids_helper< 2>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream, tiered_hot);
             break;
         case  4:
-            launch_mm_ids_helper< 4>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            launch_mm_ids_helper< 4>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream, tiered_hot);
             break;
         case  6:
-            launch_mm_ids_helper< 6>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            launch_mm_ids_helper< 6>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream, tiered_hot);
             break;
         case  8:
-            launch_mm_ids_helper< 8>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            launch_mm_ids_helper< 8>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream, tiered_hot);
             break;
         case 16:
-            launch_mm_ids_helper<16>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            launch_mm_ids_helper<16>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream, tiered_hot);
             break;
         case 32:
-            launch_mm_ids_helper<32>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            launch_mm_ids_helper<32>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream, tiered_hot);
             break;
         default:
-            launch_mm_ids_helper< 0>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            launch_mm_ids_helper< 0>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream, tiered_hot);
             break;
     }
 }

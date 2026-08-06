@@ -56,10 +56,8 @@ ggml_tensor * llama_expert_tier_build(ggml_context * ctx,
                                       ggml_tensor * cur,
                                       ggml_tensor * ids,
                                       ggml_tensor * w_s) {
-    // the CUDA mul_mat_id path assumes distinct expert ids per token; the
-    // sentinel slot produces duplicates that go out of bounds there, so the
-    // tier only engages for single-token decode.
-    if (cur->ne[2] > 1) return nullptr;
+    // the count+rank mmid helper (see mmid.cu) handles duplicate expert ids per
+    // token, so the tier is safe for any batch size.
 
     tier_entry ent;
     {
@@ -84,8 +82,11 @@ ggml_tensor * llama_expert_tier_build(ggml_context * ctx,
         ggml_tensor * ids_hot = remap_ids(ctx, ent.hot_lut[g], ids, n_experts, n_expert_used, n_tokens);
         ggml_tensor * h = ggml_mul_mat_id(ctx, ent.dst_hot[g], cur, ids_hot);
         // zero the rows routed to the sentinel plane: index the mask LUT (0
-        // at the sentinel) by ids_hot, repeat over the hidden dim, multiply
-        ggml_tensor * m = ggml_get_rows(ctx, ent.mask_lut[g], ids_hot);
+        // at the sentinel) by ids_hot, repeat over the hidden dim, multiply.
+        // flatten ids for get_rows (works for any n_tokens), then reshape.
+        ggml_tensor * flat = ggml_reshape_1d(ctx, ggml_cont(ctx, ids_hot), n_expert_used * n_tokens);
+        ggml_tensor * m = ggml_get_rows(ctx, ent.mask_lut[g], flat);
+        m = ggml_reshape_3d(ctx, m, 1, n_expert_used, n_tokens);
         h = ggml_mul(ctx, h, ggml_repeat(ctx, m, h));
         hot = hot ? ggml_add(ctx, hot, h) : h;
     }

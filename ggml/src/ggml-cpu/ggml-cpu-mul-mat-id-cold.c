@@ -18,16 +18,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <inttypes.h>
-
-static ggml_mmid_cold_slice_fn g_slice_fn = NULL;
-
-void ggml_mmid_cold_set_slice_fn(ggml_mmid_cold_slice_fn fn) {
-    g_slice_fn = fn;
-}
-
-ggml_mmid_cold_slice_fn ggml_mmid_cold_get_slice_fn(void) {
-    return g_slice_fn;
-}
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -180,15 +170,7 @@ void ggml_compute_forward_mul_mat_id_cold(
             continue;
         }
 
-        // prefer the registered per-expert slice source (expert pool), else
-        // read from the tensor's own contiguous data
-        const char * src0_cur;
-        if (g_slice_fn) {
-            const uint8_t * s = g_slice_fn(src0, (int) cur_a);
-            src0_cur = s ? (const char *) s : (const char *) src0->data + cur_a * nb02;
-        } else {
-            src0_cur = (const char *) src0->data + cur_a * nb02;
-        }
+        const char * src0_cur = (const char *) src0->data + cur_a * nb02;
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 

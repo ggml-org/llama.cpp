@@ -11,6 +11,37 @@
 #include <algorithm>
 #include <regex>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+// drop the physical pages backing [ptr, ptr+len) that are fully inside the
+// range (inward-rounded to page boundaries) so neighbors are never clobbered.
+// on mmap'd tensors the pages re-fault from the file; on anonymous memory they
+// are discarded (the tier never reads them again while GPU-resident).
+static void release_pages(void * ptr, size_t len) {
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    const size_t page = si.dwPageSize;
+#else
+    const long page = sysconf(_SC_PAGESIZE);
+#endif
+    const uintptr_t base   = (uintptr_t) ptr;
+    const uintptr_t start  = (base + (uintptr_t) page - 1) & ~((uintptr_t) page - 1);
+    const uintptr_t end    = (base + len) & ~((uintptr_t) page - 1);
+    if (start < end) {
+#ifdef _WIN32
+        VirtualFree((LPVOID) start, end - start, MEM_RESET);
+#else
+        madvise((void *) start, end - start, MADV_DONTNEED);
+#endif
+    }
+}
+
 // matches the weight tensor of an expert tensor, e.g.:
 //   blk.0.ffn_gate_exps.weight
 //   blk.3.ffn_down_chexps.weight
@@ -121,6 +152,7 @@ bool llama_expert_hotstore::allocate(
         for (auto & e : entries) {
             e.dst.resize(n_devices);
             e.dst[g] = ggml_new_tensor_3d(ctx_dev[g].get(), e.src->type, e.src->ne[0], e.src->ne[1], local_slots + 1);
+            ggml_set_name(e.dst[g], (std::string(e.src->name) + ".hot").c_str());
         }
         for (int il = 0; il < n_layers; il++) {
             luts[il].hot_lut.resize(n_devices);
@@ -211,11 +243,11 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
     }
 
     for (int il = 0; il < n_layers; il++) {
-        const std::vector<int> top = heatmap.get_top_s(il, hot_s);
         auto & ste = slot_to_expert[il];
         auto & dc  = dwell_count[il];
-        for (int p = 0; p < (int) top.size() && p < hot_s; p++) {
-            ste[p] = top[p];
+        // startup batch: the first S experts of each layer go to the GPU
+        for (int p = 0; p < hot_s; p++) {
+            ste[p] = p;
             dc[p]  = dwell; // initial fill is eligible to be corrected next sync
         }
 
@@ -235,6 +267,8 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
                     continue;
                 }
                 ggml_backend_tensor_set(e->dst[g], src + (size_t) ex * slot, (size_t) (p - slot_start[g]) * slot, slot);
+                // real reclaim: the expert now lives on the GPU, drop its RAM pages
+                release_pages((void *) (src + (size_t) ex * slot), slot);
             }
         }
     }
@@ -242,7 +276,7 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
     last_sync_tokens = heatmap.tokens_total;
     is_filled = true;
     update_luts();
-    LLAMA_LOG("=== Expert hot store: top-S experts copied to GPU ===\n");
+    LLAMA_LOG("=== Expert hot store: startup batch moved to GPU ===\n");
     return true;
 }
 
@@ -324,17 +358,25 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             if (p < 0) {
                 break; // no slot free or displaceable under the gate
             }
+            const int g = slot_device(slot_start, slot_end, p);
+            if (g < 0) {
+                continue;
+            }
+            const int e_out = ste[p];
             for (entry * ent : entries_by_layer[il]) {
                 const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
                 const char * src = ent->src->data ? (const char *) ggml_get_data(ent->src) : nullptr;
                 if (!src) {
                     continue;
                 }
-                const int g = slot_device(slot_start, slot_end, p);
-                if (g < 0) {
-                    continue;
+                const size_t off = (size_t) (p - slot_start[g]) * slot;
+                // move the displaced expert's slice back into RAM (repopulate pages)
+                if (e_out >= 0) {
+                    ggml_backend_tensor_get(ent->dst[g], (void *) (src + (size_t) e_out * slot), off, slot);
                 }
-                ggml_backend_tensor_set(ent->dst[g], src + (size_t) e_cold * slot, (size_t) (p - slot_start[g]) * slot, slot);
+                // move the new expert's slice to the GPU, then drop its RAM pages
+                ggml_backend_tensor_set(ent->dst[g], src + (size_t) e_cold * slot, off, slot);
+                release_pages((void *) (src + (size_t) e_cold * slot), slot);
             }
             ste[p] = e_cold;
             dc[p]  = -elapsed; // fresh dwell: aging below brings it to 0

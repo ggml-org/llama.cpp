@@ -1,5 +1,4 @@
 #include "llama-model-loader.h"
-#include "llama-expert-pool.h"
 
 #include "ggml-alloc.h"
 #include "ggml.h"
@@ -1385,26 +1384,11 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
             memcpy(cur->data, (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
         }
     } else {
-        int il = -1;
-        if (llama_expert_pool::requested() && llama_expert_pool::match_exps(ggml_get_name(cur), il)) {
-            // tier + no-mmap: route the exps into the per-slice pool as well,
-            // so slices can be physically freed when moved to the GPU.
-            GGML_ASSERT(cur->data != nullptr);
-            const auto & file = files.at(w.idx);
-            file->seek(w.offs, SEEK_SET);
-            const size_t nbytes = ggml_nbytes(cur);
-            std::vector<uint8_t> buf(nbytes);
-            file->read_raw(buf.data(), nbytes);
-            std::memcpy(cur->data, buf.data(), nbytes);
-            llama_expert_pool::register_tensor(cur, il, (int) cur->ne[2], nbytes / (size_t) cur->ne[2]);
-            llama_expert_pool::fill_tensor(cur, buf.data(), nbytes);
-        } else {
-            GGML_ASSERT(cur->data != nullptr);
-            GGML_ASSERT(w.idx < files.size());
-            const auto & file = files.at(w.idx);
-            file->seek(w.offs, SEEK_SET);
-            file->read_raw(cur->data, ggml_nbytes(cur));
-        }
+        GGML_ASSERT(cur->data != nullptr);
+        GGML_ASSERT(w.idx < files.size());
+        const auto & file = files.at(w.idx);
+        file->seek(w.offs, SEEK_SET);
+        file->read_raw(cur->data, ggml_nbytes(cur));
     }
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {

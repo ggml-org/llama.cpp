@@ -147,13 +147,6 @@ extern "C" {
     GGML_BACKEND_API void ggml_cpu_fp32_to_bf16(const float *, ggml_bf16_t *, int64_t);
     GGML_BACKEND_API void ggml_cpu_bf16_to_fp32(const ggml_bf16_t *, float *, int64_t);
 
-    // optional per-expert slice source for the MoE cold op. when set, the op
-    // reads expert slices from the hook instead of src0->data (used by the
-    // llama expert pool). return nullptr to fall back to the tensor's data.
-    typedef const uint8_t * (*ggml_mmid_cold_slice_fn)(const struct ggml_tensor * src0, int expert);
-    GGML_BACKEND_API void ggml_mmid_cold_set_slice_fn(ggml_mmid_cold_slice_fn fn);
-    GGML_BACKEND_API ggml_mmid_cold_slice_fn ggml_mmid_cold_get_slice_fn(void);
-
 #ifdef __cplusplus
 }
 #endif

@@ -197,8 +197,10 @@ void ggml_cuda_mul_mat_q(
         const int si1  = ids->nb[1] / ggml_element_size(ids);
         const int sis1 = nb12 / nb11;
 
+        const size_t src0_name_len = strlen(src0->name);
+        const bool tiered_hot_ids = src0_name_len >= 4 && strcmp(src0->name + src0_name_len - 4, ".hot") == 0;
         ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-            ne02, ne12, n_expert_used, ne11, si1, sis1, /*write_inverse =*/ dedup_bcast, stream);
+            ne02, ne12, n_expert_used, ne11, si1, sis1, dedup_bcast, stream, tiered_hot_ids);
         CUDA_CHECK(cudaGetLastError());
     }
 
@@ -244,6 +246,11 @@ void ggml_cuda_mul_mat_q(
                                          ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
     const int64_t s13 = ne12*s12;
 
+    // Tiered hot stores (name suffix .hot) map duplicate ids to a sentinel slot, so one
+    // expert can hold up to ne_get_rows columns; stock ids keep the tighter n_tokens bound.
+    const size_t src0_name_len = strlen(src0->name);
+    const bool is_tiered_hot = src0_name_len >= 4 && strcmp(src0->name + src0_name_len - 4, ".hot") == 0;
+
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
     const mmq_args args = {
         src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), expert_bounds.get(), dst_d,
@@ -251,7 +258,7 @@ void ggml_cuda_mul_mat_q(
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
-        ne12};
+        is_tiered_hot ? ne_get_rows : ne12};
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }

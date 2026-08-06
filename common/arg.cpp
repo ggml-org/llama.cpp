@@ -6,7 +6,6 @@
 #include "download.h"
 #include "json-schema-to-grammar.h"
 #include "llama.h"
-#include "llama-expert-pool.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -2737,9 +2736,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "-1 = autofit slots from free VRAM, 0 = disabled, N = manual top-N slots",
         [](common_params & params, int value) {
             params.expert_hot_s = value;
-            if (value != 0) {
-                llama_expert_pool::mark_requested();
-            }
         }
     ).set_env("LLAMA_ARG_EXPERT_HOT_S"));
     add_opt(common_arg(
