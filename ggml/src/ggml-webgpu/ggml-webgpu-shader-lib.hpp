@@ -893,7 +893,7 @@ inline size_t ggml_webgpu_flash_attn_wg_mem_bytes(uint32_t q_tile,
     f32_elems += q_tile * kv_tile;            // inter_shmem
     f32_elems += q_tile;                      // row_max_shmem
     f32_elems += q_tile;                      // exp_sum_shmem
-    GGML_LOG_DEBUG("f32_elems: %ld, f32_size_bytes: %d\n", f32_elems, GGML_WEBGPU_F32_SIZE_BYTES);
+    // GGML_LOG_DEBUG("f32_elems: %ld, f32_size_bytes: %d\n", f32_elems, GGML_WEBGPU_F32_SIZE_BYTES);
     return f16_elems * GGML_WEBGPU_F16_SIZE_BYTES + f32_elems * GGML_WEBGPU_F32_SIZE_BYTES;
 }
 
@@ -917,8 +917,10 @@ inline uint32_t ggml_webgpu_flash_attn_max_kv_tile(size_t   limit_bytes,
     }
     const size_t max_kv_tile = (limit_bytes - base_q_bytes) / bytes_per_kv;
 
-    GGML_LOG_DEBUG("base_q_bytes: %ld, one_kv_bytes: %ld, bytes_per_kv: %ld\n", base_q_bytes, one_kv_bytes,
-                   bytes_per_kv);
+    if (base_q_bytes > 16000) {
+        printf("base_q_bytes: %ld, one_kv_bytes: %ld, bytes_per_kv: %ld\n", base_q_bytes, one_kv_bytes,
+                       bytes_per_kv);
+    }
 
     return (uint32_t) ((max_kv_tile / kv_granularity) * kv_granularity);
 }
@@ -2820,10 +2822,25 @@ class ggml_webgpu_shader_lib {
         key.common.v_direct &= decisions.use_sg_matrix && key.common.v_type == GGML_TYPE_F16;
         key.use_sg_matrix = decisions.use_sg_matrix;
 
-        const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
+        uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
             context.wg_mem_limit_bytes, decisions.q_tile, decisions.use_sg_matrix ? context.sg_mat_n : 1u,
             key.common.head_dim_qk, key.common.head_dim_v, key.common.has_mask,
             key.common.k_direct || key.common.v_direct);
+
+        if (max_kv_tile == 0) {
+            GGML_ASSERT(decisions.use_sg_matrix);
+            // switch to flash_attn_reg_tile path
+            decisions.use_sg_matrix = false;
+            decisions.q_tile = GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE;
+            key.common.k_direct = false;
+            key.common.v_direct = false;
+            key.use_sg_matrix = false;
+            max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
+            context.wg_mem_limit_bytes, decisions.q_tile, 1u,
+            key.common.head_dim_qk, key.common.head_dim_v, key.common.has_mask,
+            key.common.k_direct || key.common.v_direct);
+            GGML_ASSERT(max_kv_tile > 0);
+        }
 
         GGML_LOG_DEBUG(
             "%s: max_kv_tile: %u, wg_mem_limit_bytes: %zu, q_tile: %u, kv_granularity: %u, head_dim_qk: %u, "
@@ -2831,8 +2848,6 @@ class ggml_webgpu_shader_lib {
             __func__, max_kv_tile, context.wg_mem_limit_bytes, decisions.q_tile,
             decisions.use_sg_matrix ? context.sg_mat_n : 1u, key.common.head_dim_qk, key.common.head_dim_v,
             key.common.has_mask, key.common.k_direct, key.common.v_direct);
-
-        GGML_ASSERT(max_kv_tile > 0);
 
         decisions.kv_tile = decisions.use_sg_matrix ?
                                 std::min(max_kv_tile, context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES) :
