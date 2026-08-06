@@ -219,6 +219,7 @@ export {
 // a Svelte mount)
 export {
 	containsFileMentionLink,
+	fileMentionLinkRe,
 	encodeFileLinkPath,
 	decodeFileLinkPath,
 	MENTION_BADGE_CLASSNAME,

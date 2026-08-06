@@ -1,31 +1,11 @@
 /**
- * Tokenizer for the chat-form contenteditable input.
+ * Tokenizer for the chat-form contenteditable input: maps between the
+ * markdown source and the badge/text token stream the DOM is built from.
  *
- * The chat input renders some user-typed segments as plain text and
- * others (`[name](file://...)` markdown links produced by the @
- * picker) as inline badge chips. This module owns the two-way
- * mapping between the underlying markdown source string and a flat
- * token stream the DOM is built from.
- *
- * Hard rules that the invariants below rely on:
- *
- * 1. A badge span's own inner DOM (`<svg>`, label `<span>`, inner
- *    text) must NEVER be observed as input source. The badge's
- *    inner text length is NOT the badge's source length; a chip
- *    labelled "chat" can represent `[chat](file://long/path)` in
- *    the source. Iterating a badge's subtree would leak the label
- *    into the source; only `root.childNodes` is walked and each
- *    badge is one opaque contribution.
- *
- * 2. Anything inside a badge subtree is invisible to source/diff
- *    math. The badge root contributes `[name](file://path)` and
- *    nothing else; its descendants (svg, label span, inner text)
- *    are implementation detail that must not leak into source.
- *
- * 3. `textOffsetToRange` cannot place the caret inside a badge
- *    (the badge is `contenteditable=false`). We collapse to the
- *    nearest editable edge (`setStartBefore` / `setStartAfter`)
- *    so the user-visible caret lands cleanly.
+ * A badge is one opaque source contribution (`[name](file://path)`); only
+ * `root.childNodes` is ever walked, never a badge's own subtree (its label
+ * length is not its source length). The caret cannot land inside a badge
+ * (`contenteditable=false`), so offsets resolve to the nearest badge edge.
  */
 
 import {
@@ -47,21 +27,9 @@ export type ContentToken =
 	| { kind: 'text'; text: string }
 	| { kind: 'badge'; name: string; path: string };
 
-/**
- * Recognize completed `[name](file://path)` insertions across the buffer.
- *
- * - `file://` is required so a normal web link like `[foo](https://...)`
- *   is left untouched in the stream.
- * - The path allows `)` only when it is not followed by whitespace or
- *   `[` - this admits macOS paths like `Screenshot (1).png` and
- *   folders named `Foo (Stuff)/bar` while still cutting the match
- *   at the closing `)` of an adjacent badge (`[a](file:///p)[b]...`)
- *   and at the link's actual end. This is the same shape
- *   `handleMentionSelect` emits from the picker.
- * - The match consumes the markdown link only; any trailing whitespace
- *   typed or pasted after stays in a separate text token so the
- *   round trip is byte-exact.
- */
+// Recognize completed `[name](file://path)` insertions. `file://` is
+// required so plain URLs stay as text; `)` is allowed only when not
+// followed by whitespace or `[` (adjacent badges keep terminating).
 const MENTION_BADGE_RE = fileMentionLinkRe('g');
 
 /**
@@ -107,15 +75,10 @@ export function tokenizeContent(input: string): ContentToken[] {
 }
 
 /**
- * Serialize a contenteditable subtree back to markdown source form.
- *
- * Iterates `root.childNodes` directly so a badge is one opaque
- * contribution: its descendants are NEVER walked. Text nodes
- * (direct children) contribute their textContent verbatim. Any
- * non-text, non-badge element is skipped (defensive - the
- * contenteditable root should not contain anything else by
- * construction, but browsers can inject wrappers in some edit
- * scenarios and we don't want those to leak into the source).
+ * Serialize a contenteditable subtree back to source. Only direct
+ * `childNodes` are walked (a badge is one opaque contribution);
+ * non-text, non-badge nodes are skipped so browser-injected
+ * wrappers do not leak into the source.
  */
 export function serializeContent(root: HTMLElement): string {
 	let out = '';

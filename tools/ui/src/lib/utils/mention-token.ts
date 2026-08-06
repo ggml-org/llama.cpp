@@ -1,8 +1,6 @@
-/**
- * Characters that delimit an `@`-mention token. An `@` only starts a
- * mention when the previous char is start-of-string or one of these, so
- * `user@example.com` does not trigger (the `@` is mid-identifier).
- */
+// Characters that delimit an `@`-mention token. An `@` starts a mention
+// only when preceded by start-of-string or one of these; identifier
+// chars are not delimiters, so a mid-word `@` does not trigger.
 const TOKEN_BOUNDARY_CHARS = new Set([
 	' ',
 	'\t',
@@ -46,8 +44,6 @@ export function findMentionToken(
 
 	if (atIndex === -1) return null;
 
-	// Extend past the caret to the token's end boundary so the search query
-	// is the whole `@...` token regardless of the caret position.
 	let end = atIndex + 1;
 	while (end < value.length && !TOKEN_BOUNDARY_CHARS.has(value[end])) {
 		end++;

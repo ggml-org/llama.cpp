@@ -1,9 +1,6 @@
 /**
- * Slash-command token detection for the chat form.
- *
- * Unlike the `@`-mention token, a slash command is only valid at offset 0:
- * `/foo` is a command, `hello /foo` is not. The name is the run of
- * non-whitespace after `/`; args are everything after the first whitespace.
+ * Slash-command token detection for the chat form. Valid only at offset
+ * 0; the name is the non-whitespace run after `/`, args the rest.
  */
 export function findCommandToken(
 	value: string
