@@ -914,10 +914,10 @@ void ggml_gemm_q4_0_16x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-    for (int y = 0; y < nr / 4; y++) {
-        const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
-        for (int x = 0; x < nc / ncols_interleaved; x++) {
-            const block_q4_0x16 * b_ptr = (const block_q4_0x16 *) vx + (x * nb);
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_q4_0x16 * b_ptr = (const block_q4_0x16 *) vx + (x * nb);
+        for (int y = 0; y < nr / 4; y++) {
+            const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
 
             // 4x16 Accumulators
             vfloat32m2_t sumf_0 = __riscv_vfmv_v_f_f32m2(0.0f, 16);
