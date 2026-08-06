@@ -92,8 +92,6 @@
 #define KEY_A_LOCAL_GROUP_SIZE     "clip.audio.local_group_size"     // mimo-v2.5: input_local_transformer grouping size
 #define KEY_AUDIO_SUBSAMPLING_FACTOR "clip.audio.subsampling_factor"
 
-#define KEY_ONYX_PATCH_TEMPORAL "clip.vision.onyx.patch_temporal"
-#define KEY_ONYX_SPARSE_FACTOR  "clip.vision.onyx.sparse_attention_factor"
 
 //
 // tensor name constants

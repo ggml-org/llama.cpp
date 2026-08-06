@@ -74,12 +74,7 @@ class OnyxVisionModel(MmprojModel):
             return None
         # Onyx actually uses dynamic size, initialize with nominal size
         image_size = c["pos_emb_height"] * c["patch_size"] * c["merge_size"]
-        # Derive sparse_attention_factor from layer_types
-        fulls = [i for i, t in enumerate(c["layer_types"]) if t == "full_attention"]
-        if not fulls:
-            raise ValueError("vision_config.layer_types has no full_attention layer")
-        sparse_factor = fulls[0] + 1
-        return {**c, "image_size": image_size, "sparse_attention_factor": sparse_factor}
+        return {**c, "image_size": image_size}
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -89,9 +84,6 @@ class OnyxVisionModel(MmprojModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(float(c["layer_norm_eps"]))
         self.gguf_writer.add_vision_spatial_merge_size(int(c["merge_size"]))
         self.gguf_writer.add_vision_rope_theta(float(c.get("rope_parameters", {}).get("rope_theta", self.ROPE_THETA)))
-
-        self.gguf_writer.add_uint32("clip.vision.onyx.patch_temporal",          int(c["patch_temporal"]))
-        self.gguf_writer.add_uint32("clip.vision.onyx.sparse_attention_factor", int(c["sparse_attention_factor"]))
 
     @classmethod
     def filter_tensors(cls, item):

@@ -1525,10 +1525,10 @@ struct clip_model_loader {
                         hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
                         hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
                         hparams.rope_theta = 10000.0f;
+                        hparams.onyx_patch_temporal = 2; // Onyx-arch invariant
+                        hparams.onyx_sparse_factor  = 4; // 3 sparse layers + 1 global, repeating
                         get_u32(KEY_SPATIAL_MERGE_SIZE,  hparams.n_merge,             false);
                         get_f32(KEY_V_ROPE_THETA,        hparams.rope_theta,          false);
-                        get_u32(KEY_ONYX_PATCH_TEMPORAL, hparams.onyx_patch_temporal, false);
-                        get_u32(KEY_ONYX_SPARSE_FACTOR,  hparams.onyx_sparse_factor,  false);
                         hparams.set_limit_image_tokens(1, 4096);
                         hparams.set_warmup_n_tokens(32*32);
                     } break;
