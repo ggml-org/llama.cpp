@@ -1505,7 +1505,7 @@ struct server_tool_web_search : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Search the web using DuckDuckGo. Returns a list of results containing titles, URLs, and snippets."},
+                {"description", "Search the web using search engine. Returns a list of results containing titles, URLs, and snippets."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
@@ -1521,7 +1521,7 @@ struct server_tool_web_search : server_tool {
     }
 
     json invoke(json params, server_tool::stream *) const override {
-        std::string query = params.at("query").get<std::string>();
+        std::string query = json_value(params, "query", std::string("https://ddg.gg/html/?q="));
         std::string engine= params.at("engine").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
