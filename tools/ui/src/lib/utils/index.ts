@@ -191,6 +191,30 @@ export {
 	type GlobSearchResult
 } from './glob-search';
 
+// Mention-token detection (for the `@`-triggered file/folder mention picker)
+export {
+	findMentionToken,
+	takeMentionDismissSnapshot,
+	type MentionDismissSnapshot
+} from './mention-token';
+
+// Mention-chip visual contract shared by the rehype file-badge plugin,
+// plus the `[name](file://...)` link helpers the mention picker splices in
+export {
+	fileMentionLinkRe,
+	encodeFileLinkPath,
+	decodeFileLinkPath,
+	MENTION_BADGE_CLASSNAME,
+	MENTION_BADGE_ICON_CLASSNAME,
+	MENTION_BADGE_SVG_ATTRIBUTES,
+	MENTION_BADGE_FILE_ICON_PATHS,
+	MENTION_BADGE_FOLDER_ICON_PATHS,
+	getMentionBadgeIconPaths,
+	getMentionBadgeLabel,
+	buildMentionInsertion,
+	mentionLinkEndingAt
+} from './mention-badge';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,

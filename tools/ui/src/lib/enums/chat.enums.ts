@@ -78,3 +78,8 @@ export enum PdfViewMode {
 	TEXT = 'text',
 	PAGES = 'pages'
 }
+
+export enum FileMentionEntryType {
+	FILE = 'file',
+	DIRECTORY = 'directory'
+}

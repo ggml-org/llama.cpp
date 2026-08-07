@@ -31,8 +31,10 @@ export const SETTINGS_KEYS = {
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
 	SHOW_BUILD_VERSION: 'showBuildVersion',
+	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	RENDER_THINKING_AS_MARKDOWN: 'renderThinkingAsMarkdown',
+	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',
