@@ -85,7 +85,7 @@ def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60) 
         last_status = _get_model_status(model_id)
         if last_status in desired:
             return last_status
-        time.sleep(1)
+        time.sleep(0.01)
     raise AssertionError(
         f"Timed out waiting for {model_id} to reach {desired}, last status: {last_status}"
     )
@@ -460,7 +460,7 @@ def _wait_for_sse_event(collected: list, event_type: str, model: str, timeout: i
     while time.time() < deadline:
         if any(e.get("event") == event_type and e.get("model") == model for e in collected):
             return True
-        time.sleep(0.5)
+        time.sleep(0.01)
     return False
 
 

@@ -14,10 +14,10 @@ fi
 if [ $# -lt 1 ]
 then
     if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
-        pytest -v -x
+        pytest --durations=30 -v -x
     else
-        pytest -v -x -m "not slow"
+        pytest --durations=30 -v -x -m "not slow"
     fi
 else
-    pytest "$@"
+    pytest --durations=30 "$@"
 fi
