@@ -21,6 +21,7 @@ Options:
   --bf16 PATH                  BF16 intermediate path
   --output PATH                final Q4_0-S8 GGUF path
   --mmproj-output PATH         Q8_0 vision projector path
+  --imatrix PATH               optional llama.cpp imatrix for the final pass
   --threads N                  quantizer threads (default: physical core count)
   --keep-bf16                  retain the BF16 intermediate (default: retain)
   --remove-bf16                remove BF16 only after successful quantization
@@ -51,6 +52,7 @@ OUT_DIR=
 BF16=
 FINAL=
 MMPROJ=
+IMATRIX=
 THREADS=
 KEEP_BF16=1
 REMOVE_BF16=0
@@ -70,6 +72,7 @@ while (($#)); do
         --bf16)           [[ $# -ge 2 ]] || die "--bf16 needs a path"; BF16=$2; shift 2 ;;
         --output)         [[ $# -ge 2 ]] || die "--output needs a path"; FINAL=$2; shift 2 ;;
         --mmproj-output)  [[ $# -ge 2 ]] || die "--mmproj-output needs a path"; MMPROJ=$2; shift 2 ;;
+        --imatrix)       [[ $# -ge 2 ]] || die "--imatrix needs a path"; IMATRIX=$2; shift 2 ;;
         --threads)        [[ $# -ge 2 ]] || die "--threads needs a number"; THREADS=$2; shift 2 ;;
         --keep-bf16)      KEEP_BF16=1; REMOVE_BF16=0; shift ;;
         --remove-bf16)    KEEP_BF16=0; REMOVE_BF16=1; shift ;;
@@ -106,6 +109,10 @@ mkdir -p -- "$OUT_DIR"
 BF16=$(readlink -m -- "$BF16")
 FINAL=$(readlink -m -- "$FINAL")
 MMPROJ=$(readlink -m -- "$MMPROJ")
+if [[ -n "$IMATRIX" ]]; then
+    IMATRIX=$(readlink -f -- "$IMATRIX")
+    [[ -f "$IMATRIX" ]] || die "imatrix does not exist: $IMATRIX"
+fi
 WORK="$OUT_DIR/q4_0-s8-plan"
 PLAN_LOG="$WORK/q4_k_m-dry-run.log"
 PLAN_TSV="$WORK/tensor-plan.tsv"
@@ -289,7 +296,12 @@ if [[ -e "$FINAL" && "$FORCE" -ne 1 ]]; then
 fi
 
 echo "[4/5] quantizing pure Q4_0 with Q8_0/F16 overrides using $THREADS threads"
-"$QUANT" --pure --tensor-type-file "$OVERRIDES" "$BF16" "$FINAL" Q4_0 "$THREADS"
+QUANT_ARGS=(--pure --tensor-type-file "$OVERRIDES")
+if [[ -n "$IMATRIX" ]]; then
+    echo "using imatrix: $IMATRIX"
+    QUANT_ARGS+=(--imatrix "$IMATRIX")
+fi
+"$QUANT" "${QUANT_ARGS[@]}" "$BF16" "$FINAL" Q4_0 "$THREADS"
 [[ -s "$FINAL" ]] || die "quantizer did not create a non-empty final file"
 
 echo "[5/5] validating metadata and tensor types"
