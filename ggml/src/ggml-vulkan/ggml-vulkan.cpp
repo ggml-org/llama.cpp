@@ -921,7 +921,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_dequant_mul_mat_vec_id_q8_1_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT];
 
     vk_pipeline pipeline_mul_mat_vec_p021_f16_f32[p021_max_gqa_ratio];
-    vk_pipeline pipeline_mul_mat_vec_nc_f16_f32;
+    vk_pipeline pipeline_mul_mat_vec_nc_f16_f32[p021_max_gqa_ratio];
     vk_pipeline pipeline_get_rows[GGML_TYPE_COUNT];
     vk_pipeline pipeline_get_rows_f32[GGML_TYPE_COUNT];
     vk_pipeline pipeline_get_rows_back_f32;
@@ -1303,6 +1303,7 @@ struct vk_mat_vec_p021_push_constants {
     uint32_t b_offset;
     uint32_t d_offset;
     uint32_t fusion_flags;
+    uint32_t row_base;
 };
 
 struct vk_mat_vec_nc_push_constants {
@@ -1319,6 +1320,7 @@ struct vk_mat_vec_nc_push_constants {
     uint32_t nb13;
     uint32_t nb23;
     uint32_t fusion_flags;
+    uint32_t row_base;
 };
 
 struct vk_mat_mat_id_push_constants {
@@ -5462,7 +5464,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             ggml_vk_create_pipeline2(device, device->pipeline_mul_mat_vec_p021_f16_f32[i], "mul_mat_vec_p021_f16_f32"+std::to_string(i+1), mul_mat_vec_p021_f16_f32_len,              mul_mat_vec_p021_f16_f32_data,              "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_p021_push_constants), {1, 1, 1}, {device->subgroup_size, i + 1}, 1, true);
         }
     }
-    ggml_vk_create_pipeline(device, device->pipeline_mul_mat_vec_nc_f16_f32, "mul_mat_vec_nc_f16_f32", mul_mat_vec_nc_f16_f32_len, mul_mat_vec_nc_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_nc_push_constants), {1, 1, 1}, {}, 1);
+    for (uint32_t i = 0; i < p021_max_gqa_ratio; ++i) {
+        ggml_vk_create_pipeline2(device, device->pipeline_mul_mat_vec_nc_f16_f32[i], "mul_mat_vec_nc_f16_f32"+std::to_string(i+1), mul_mat_vec_nc_f16_f32_len, mul_mat_vec_nc_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_nc_push_constants), {1, 1, 1}, {32, i + 1}, 1);
+    }
 
     ggml_vk_create_pipeline(device, device->pipeline_norm_f32, "norm_f32", norm_f32_len, norm_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_group_norm_f32, "group_norm_f32", group_norm_f32_len, group_norm_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
@@ -9099,6 +9103,16 @@ static void ggml_vk_quantize_q8_1(ggml_backend_vk_context * ctx, vk_context& sub
     ggml_vk_sync_buffers(ctx, subctx);
 }
 
+static uint32_t ggml_vk_max_wg_y(ggml_backend_vk_context * ctx) {
+    uint32_t max_wg_y = ctx->device->properties.limits.maxComputeWorkGroupCount[1];
+    // GGML_VK_MAX_WG_Y_DEBUG forces a smaller chunk size so the row-chunked
+    // dispatch path can be correctness-tested below the real device limit.
+    if (const char * dbg = getenv("GGML_VK_MAX_WG_Y_DEBUG")) {
+        max_wg_y = std::min(max_wg_y, (uint32_t)std::max(1, atoi(dbg)));
+    }
+    return max_wg_y;
+}
+
 static vk_pipeline ggml_vk_get_64b_indexing_pipeline(ggml_backend_vk_context * ctx, vk_pipeline &pipeline) {
     GGML_UNUSED(ctx);
 #if defined(VK_EXT_shader_64bit_indexing)
@@ -9745,8 +9759,9 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
     }
 
     {
-        // Request descriptor sets
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+        // Request descriptor sets — one per row chunk (see the dispatch loop)
+        const uint32_t wg_y = ggml_vk_max_wg_y(ctx);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, ((uint32_t)src0->ne[1] + wg_y - 1) / wg_y);
     }
 
     vk_subbuffer d_D = ggml_vk_tensor_subbuffer(ctx, cgraph->nodes[node_idx + ctx->num_additional_fused_ops], true);
@@ -9777,7 +9792,7 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
 
     vk_mat_vec_p021_push_constants pc = {
         (uint32_t)ne00, (uint32_t)ne01, (uint32_t)ne02, (uint32_t)ne12,
-        0, 0, fusion_flags
+        0, 0, fusion_flags, 0
     };
 
     init_pushconst_tensor_offsets(ctx, pc, src0, src1, nullptr, nullptr, cgraph->nodes[node_idx + ctx->num_additional_fused_ops]);
@@ -9788,14 +9803,22 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
         workgroups_z /= gqa_ratio;
     }
 
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-        {
-            d_Qx,
-            d_Qy,
-            d_D,
-            d_F0,
-            d_F1,
-        }, pc, { 1, (uint32_t)ne01, workgroups_z });
+    // ne01 (n_kv rows for attention K·Q) can exceed the device's max
+    // workgroup count in y; chunk the dispatch with a row_base offset.
+    const uint32_t max_wg_y = ggml_vk_max_wg_y(ctx);
+
+    for (uint32_t row0 = 0; row0 < (uint32_t)ne01; row0 += max_wg_y) {
+        const uint32_t chunk_rows = std::min(max_wg_y, (uint32_t)ne01 - row0);
+        pc.row_base = row0;
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+            {
+                d_Qx,
+                d_Qy,
+                d_D,
+                d_F0,
+                d_F1,
+            }, pc, { 1, chunk_rows, workgroups_z });
+    }
 }
 
 static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
@@ -9838,14 +9861,24 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     const uint32_t channel_stride_x = nb02 / sizeof(ggml_fp16_t);
     const uint32_t channel_stride_y = nb12 / sizeof(float);
 
-    vk_pipeline pipeline = ctx->device->pipeline_mul_mat_vec_nc_f16_f32;
+    // Grouped-query attention: when gqa_ratio channels of src1 (the query
+    // heads) share each channel of src0 (the K cache), one workgroup handles
+    // the whole group and loads src0 only once, saving gqa_ratio-1 redundant
+    // passes over the K cache. Same scheme as ggml_vk_mul_mat_vec_p021_f16_f32.
+    uint32_t gqa_ratio = (uint32_t)(ne12 / ne02);
+    if (gqa_ratio > p021_max_gqa_ratio || gqa_ratio == 0 || ne12 != ne02 * gqa_ratio) {
+        gqa_ratio = 1;
+    }
+
+    vk_pipeline pipeline = ctx->device->pipeline_mul_mat_vec_nc_f16_f32[gqa_ratio - 1];
     if (ggml_nbytes(src0) > ctx->device->properties.limits.maxStorageBufferRange) {
         pipeline = ggml_vk_get_64b_indexing_pipeline(ctx, pipeline);
     }
 
     {
-        // Request descriptor sets
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+        // Request descriptor sets — one per row chunk (see the dispatch loop)
+        const uint32_t wg_y = ggml_vk_max_wg_y(ctx);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, ((uint32_t)ne01 + wg_y - 1) / wg_y);
     }
 
     vk_subbuffer d_D = ggml_vk_tensor_subbuffer(ctx, cgraph->nodes[node_idx + ctx->num_additional_fused_ops], true);
@@ -9877,19 +9910,33 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
         row_stride_x, channel_stride_x, channel_stride_y,
         (uint32_t)(ne12 / ne02), (uint32_t)ne12,
         0, 0,
-        nb03, nb13, nb23, fusion_flags
+        nb03, nb13, nb23, fusion_flags, 0
     };
+
+    uint32_t workgroups_z = (uint32_t)ne12;
+    // When gqa_ratio > 1, each workgroup does gqa_ratio channels and we can launch fewer workgroups
+    if (gqa_ratio > 1) {
+        workgroups_z /= gqa_ratio;
+    }
+
+    // ne01 (the row count — n_kv for attention K·Q) can exceed the device's
+    // max workgroup count in y; chunk the dispatch with a row_base offset.
+    const uint32_t max_wg_y = ggml_vk_max_wg_y(ctx);
 
     init_pushconst_tensor_offsets(ctx, pc, src0, src1, nullptr, nullptr, cgraph->nodes[node_idx + ctx->num_additional_fused_ops]);
 
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-        {
-            d_Qx,
-            d_Qy,
-            d_D,
-            d_F0,
-            d_F1,
-        }, pc, { (uint32_t)ne03, (uint32_t)ne01, (uint32_t)ne12 });
+    for (uint32_t row0 = 0; row0 < (uint32_t)ne01; row0 += max_wg_y) {
+        const uint32_t chunk_rows = std::min(max_wg_y, (uint32_t)ne01 - row0);
+        pc.row_base = row0;
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+            {
+                d_Qx,
+                d_Qy,
+                d_D,
+                d_F0,
+                d_F1,
+            }, pc, { (uint32_t)ne03, chunk_rows, workgroups_z });
+    }
 }
 
 static int ggml_vk_fwht_pipeline_idx(int64_t n) {
@@ -9999,13 +10046,17 @@ static void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, c
         src1->nb[1] <= src1->nb[3] &&
         src0->ne[3] == 1 &&
         src1->ne[3] == 1 &&
-        src0->ne[1] <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
+        // no ne[1] (row count) limit: the dispatch is chunked over rows, so
+        // large-context attention (n_kv > maxComputeWorkGroupCount[1]) stays
+        // on this GQA-aware path instead of the generic mat-vec
         src1->ne[2] <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]) {
         ggml_vk_mul_mat_vec_p021_f16_f32(ctx, subctx, cgraph, node_idx);
     } else if (src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && dst->ne[1] == 1 &&
                !ggml_is_permuted(src0) && !ggml_is_permuted(src1) &&
                src0->ne[3] <= ctx->device->properties.limits.maxComputeWorkGroupCount[0] &&
-               src0->ne[1] <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
+               // no ne[1] (row count) limit: the dispatch is chunked over rows,
+               // so large-context attention (n_kv > maxComputeWorkGroupCount[1])
+               // stays on this path instead of the generic mat-vec
                src1->ne[2] <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]) {
         ggml_vk_mul_mat_vec_nc_f16_f32(ctx, subctx, cgraph, node_idx);
     // mul_mat_vec supports batching ne12*ne13 when ne11==1, or treating ne11 as the batch size (up to four)
