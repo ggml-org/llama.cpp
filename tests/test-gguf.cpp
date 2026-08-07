@@ -729,6 +729,59 @@ static bool handcrafted_check_tensor_data(const gguf_context * gguf_ctx, const u
     return ok;
 }
 
+static FILE * get_zero_dim_tensor_file() {
+    FILE * file = tmpfile();
+    if (!file) {
+        return nullptr;
+    }
+
+    helper_write(file, GGUF_MAGIC, 4);
+    helper_write(file, uint32_t(GGUF_VERSION));
+    helper_write(file, uint64_t(1)); // tensors
+    helper_write(file, uint64_t(0)); // key-value pairs
+
+    const char name[] = "zero_dim";
+    helper_write(file, uint64_t(sizeof(name) - 1));
+    helper_write(file, name, sizeof(name) - 1);
+    helper_write(file, uint32_t(2));
+    helper_write(file, int64_t(1));
+    helper_write(file, int64_t(0));
+    helper_write(file, int32_t(GGML_TYPE_I8));
+    helper_write(file, uint64_t(0));
+
+    while (ftell(file) % GGUF_DEFAULT_ALIGNMENT != 0) {
+        helper_write(file, char(0));
+    }
+    rewind(file);
+    return file;
+}
+
+static std::pair<int, int> test_zero_dim_tensor() {
+    FILE * file = get_zero_dim_tensor_file();
+#ifdef _WIN32
+    if (!file) {
+        printf("failed to create tmpfile(), needs elevated privileges on Windows\n");
+        return std::make_pair(0, 0);
+    }
+#else
+    GGML_ASSERT(file);
+#endif // _WIN32
+
+    struct gguf_init_params params = {
+        /*no_alloc =*/ true,
+        /*ctx      =*/ nullptr,
+    };
+    struct gguf_context * ctx = gguf_init_from_file_ptr(file, params);
+    const int tensor_id = ctx ? gguf_find_tensor(ctx, "zero_dim") : -1;
+    const int64_t * shape = tensor_id >= 0 ? gguf_get_tensor_ne(ctx, tensor_id) : nullptr;
+    const bool passed = ctx && tensor_id >= 0 && shape && shape[0] == 1 && shape[1] == 0;
+
+    printf("%s: zero_dim_tensor_is_accepted: %s\n", __func__, passed ? "OK" : "FAIL");
+    gguf_free(ctx);
+    fclose(file);
+    return std::make_pair(passed ? 1 : 0, 1);
+}
+
 static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
     int npass = 0;
     int ntest = 0;
@@ -1417,6 +1470,11 @@ int main(int argc, char ** argv) {
     int ntest = 0;
     {
         std::pair<int, int> result = test_handcrafted_file(seed);
+        npass += result.first;
+        ntest += result.second;
+    }
+    {
+        std::pair<int, int> result = test_zero_dim_tensor();
         npass += result.first;
         ntest += result.second;
     }
