@@ -519,7 +519,7 @@ task_params eval_llama_cmpl_schema(
                 const json & data) {
     task_params params;
 
-    // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
+    // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
     params.sampling      = params_base.sampling;
     params.speculative   = params_base.speculative;
     params.n_keep        = params_base.n_keep;

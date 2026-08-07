@@ -24,7 +24,8 @@ export {
 	MessageRole,
 	MessageType,
 	PdfViewMode,
-	ReasoningFormat
+	ReasoningFormat,
+	FileMentionEntryType
 } from './chat.enums';
 
 export { SessionRecordType } from './conversation-import.enums';
