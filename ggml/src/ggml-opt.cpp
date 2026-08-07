@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cinttypes>
+#include <cstring>
 #include <map>
 #include <random>
 #include <vector>
@@ -58,10 +59,23 @@ struct ggml_opt_context {
     std::vector<struct ggml_tensor *> grad_accs;
     std::vector<struct ggml_tensor *> grad_m;
     std::vector<struct ggml_tensor *> grad_v;
+    std::vector<ggml_backend_buffer_t> bufs_momenta;  // per-param moment buffers (one per param node)
+    std::vector<struct ggml_context *> ctxs_momenta;  // corresponding ggml contexts (keep alive for tensor metadata)
+
+    struct quantized_state {
+        std::vector<uint8_t> m;
+        std::vector<uint8_t> v;
+        int64_t ne = 0;
+        int64_t ne_padded = 0;
+    };
+    std::vector<quantized_state> quantized_states;
+    std::vector<struct ggml_tensor *> quantized_params;
+    std::vector<struct ggml_tensor *> quantized_grads;
 
     int64_t iter               = 1;
     int32_t opt_period         = 1;
     int32_t opt_i              = 0;
+    int32_t grad_checkpoint_interval = 0;
     bool    loss_per_datapoint = false;
 
     ggml_opt_get_optimizer_params get_opt_pars    = nullptr;
@@ -70,6 +84,91 @@ struct ggml_opt_context {
 
     enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
 };
+
+static bool ggml_opt_optimizer_is_adamw(enum ggml_opt_optimizer_type optimizer) {
+    return optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW ||
+        optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_F16 ||
+        optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0 ||
+        optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K ||
+        optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL;
+}
+
+static enum ggml_type ggml_opt_optimizer_state_type(enum ggml_opt_optimizer_type optimizer) {
+    switch (optimizer) {
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_F16:   return GGML_TYPE_F16;
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0:  return GGML_TYPE_Q8_0;
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K:  return GGML_TYPE_Q6_K;
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL:return GGML_TYPE_IQ4_NL;
+        default:                                  return GGML_TYPE_COUNT;
+    }
+}
+
+static bool ggml_opt_has_device_q8_adamw(ggml_backend_buffer_type_t buft) {
+    ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+    if (!dev) {
+        return false;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (!reg) {
+        return false;
+    }
+
+    const char * name = ggml_backend_reg_name(reg);
+    return strcmp(name, "CUDA") == 0 || strcmp(name, "ROCm") == 0;
+}
+
+static void ggml_opt_step_adamw_quantized(ggml_opt_context_t opt_ctx, const ggml_opt_optimizer_params & opt_pars) {
+    const enum ggml_type state_type = ggml_opt_optimizer_state_type(opt_ctx->optimizer);
+    const enum ggml_type state_type_v = state_type == GGML_TYPE_F16 ? GGML_TYPE_F16 : GGML_TYPE_Q8_0;
+    GGML_ASSERT(state_type != GGML_TYPE_COUNT);
+
+    const ggml_type_traits * traits = ggml_get_type_traits(state_type);
+    const ggml_type_traits * traits_v = ggml_get_type_traits(state_type_v);
+    GGML_ASSERT(traits->to_float && traits->from_float_ref && traits_v->to_float && traits_v->from_float_ref);
+
+    const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));
+    const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));
+    const float keep   = 1.0f - opt_pars.adamw.alpha*opt_pars.adamw.wd;
+    const float v_floor = state_type_v == GGML_TYPE_Q8_0 ? 8.0e-6f : 1.0e-6f;
+
+    for (size_t i = 0; i < opt_ctx->quantized_states.size(); ++i) {
+        ggml_opt_context::quantized_state & state = opt_ctx->quantized_states[i];
+        ggml_tensor * param = opt_ctx->quantized_params[i];
+        ggml_tensor * grad  = opt_ctx->quantized_grads[i];
+        GGML_ASSERT(param && grad);
+        GGML_ASSERT(param->type == GGML_TYPE_F32 && grad->type == GGML_TYPE_F32);
+
+        std::vector<float> weight(state.ne_padded, 0.0f);
+        std::vector<float> gradient(state.ne_padded, 0.0f);
+        std::vector<float> m(state.ne_padded);
+        std::vector<float> v(state.ne_padded);
+        ggml_backend_tensor_get(param, weight.data(), 0, state.ne*sizeof(float));
+        ggml_backend_tensor_get(grad, gradient.data(), 0, state.ne*sizeof(float));
+        traits->to_float(state.m.data(), m.data(), state.ne_padded);
+        traits_v->to_float(state.v.data(), v.data(), state.ne_padded);
+
+        for (int64_t j = 0; j < state.ne; ++j) {
+            float g = gradient[j];
+            if (!std::isfinite(g)) {
+                g = 0.0f;
+            }
+            if (opt_pars.adamw.gclip > 0.0f) {
+                g = fmaxf(-opt_pars.adamw.gclip, fminf(opt_pars.adamw.gclip, g));
+            }
+            m[j] = m[j]*opt_pars.adamw.beta1 + g*(1.0f - opt_pars.adamw.beta1);
+            v[j] = fmaxf(v_floor, v[j]*opt_pars.adamw.beta2 + g*g*(1.0f - opt_pars.adamw.beta2));
+            const float update = opt_pars.adamw.alpha*(m[j]*beta1h)/(sqrtf(v[j]*beta2h) + opt_pars.adamw.eps);
+            if (std::isfinite(update) && std::isfinite(weight[j])) {
+                weight[j] = weight[j]*keep - update;
+            }
+        }
+
+        traits->from_float_ref(m.data(), state.m.data(), state.ne_padded);
+        traits_v->from_float_ref(v.data(), state.v.data(), state.ne_padded);
+        ggml_backend_tensor_set(param, weight.data(), 0, state.ne*sizeof(float));
+    }
+}
 
 struct ggml_opt_result {
     int64_t              ndata    = 0;
@@ -230,6 +329,7 @@ struct ggml_opt_optimizer_params ggml_opt_get_default_optimizer_params(void * us
     result.adamw.beta2 = 0.999f;
     result.adamw.eps   = 1e-8f;
     result.adamw.wd    = 0.0f;
+    result.adamw.gclip = 0.0f;
 
     result.sgd.alpha   = 1e-3f;
     result.sgd.wd      = 0.0f;
@@ -253,9 +353,10 @@ struct ggml_opt_params ggml_opt_default_params(
         /*loss_type       =*/ loss_type,
         /*build_type      =*/ GGML_OPT_BUILD_TYPE_OPT,
         /*opt_period      =*/ 1,
-        /*get_opt_pars    =*/ ggml_opt_get_default_optimizer_params,
-        /*get_opt_pars_ud =*/ nullptr,
-        /*optimizer       =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
+        /*get_opt_pars              =*/ ggml_opt_get_default_optimizer_params,
+        /*get_opt_pars_ud          =*/ nullptr,
+        /*grad_checkpoint_interval =*/ 0,
+        /*optimizer                =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
     };
 }
 
@@ -330,6 +431,10 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
 
     const bool need_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    const bool need_q8_device_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
+        opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0;
+    const bool need_quantized_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
+        ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT;
 
     ggml_set_input(opt_ctx->inputs);
     ggml_set_output(opt_ctx->outputs);
@@ -352,7 +457,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         //   - pred (if using static graphs)
         //   - ncorrect (if using static graphs, 2 tensors).
         constexpr size_t n_loss = 1;
-        const size_t tensors_per_param = (accumulate ? 1 : 0) + (need_momenta ? 2 : 0);
+        const size_t tensors_per_param = (accumulate ? 1 : 0) + ((need_momenta || need_q8_device_momenta) ? 2 : 0);
         const size_t tensors_const = opt_ctx->static_graphs ? 9 : 0;
         const size_t size_meta = (n_loss + tensors_per_param*n_param + tensors_const) * ggml_tensor_overhead();
         struct ggml_init_params params = {
@@ -469,14 +574,43 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             }
         }
 
-        if (need_momenta && opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
+        if ((need_momenta || need_q8_device_momenta) && opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
             opt_ctx->grad_m.resize(n_nodes);
             opt_ctx->grad_v.resize(n_nodes);
             for (int i = 0; i < n_nodes; ++i) {
                 ggml_tensor * node = opt_ctx->gf->nodes[i];
                 if (node->flags & GGML_TENSOR_FLAG_PARAM) {
-                    opt_ctx->grad_m[i] = ggml_new_tensor(opt_ctx->ctx_static, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
-                    opt_ctx->grad_v[i] = ggml_new_tensor(opt_ctx->ctx_static, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                    // Allocate moments on the same buffer type as the param tensor so
+                    // the ADAMW op runs on the correct backend (avoids cross-device mismatch
+                    // when some LoRA tensors are on CPU and others on GPU with partial offload).
+                    ggml_backend_buffer_type_t param_buft = node->buffer
+                        ? ggml_backend_buffer_get_type(node->buffer)
+                        : ggml_backend_cpu_buffer_type();
+
+                    if (need_q8_device_momenta && !ggml_opt_has_device_q8_adamw(param_buft)) {
+                        opt_ctx->grad_m[i] = nullptr;
+                        opt_ctx->grad_v[i] = nullptr;
+                        continue;
+                    }
+
+                    // Allocate a tiny context + buffer for this pair of moment tensors.
+                    const size_t sz = 2 * ggml_tensor_overhead();
+                    struct ggml_init_params mip = { sz, nullptr, true };
+                    struct ggml_context * mctx = ggml_init(mip);
+                    if (need_q8_device_momenta) {
+                        const int64_t ne = ggml_nelements(node);
+                        const int64_t block_size = ggml_blck_size(GGML_TYPE_Q8_0);
+                        const int64_t ne_padded = (ne + block_size - 1)/block_size*block_size;
+                        opt_ctx->grad_m[i] = ggml_new_tensor_1d(mctx, GGML_TYPE_Q8_0, ne_padded);
+                        opt_ctx->grad_v[i] = ggml_new_tensor_1d(mctx, GGML_TYPE_Q8_0, ne_padded);
+                    } else {
+                        opt_ctx->grad_m[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                        opt_ctx->grad_v[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                    }
+                    ggml_backend_buffer_t mbuf = ggml_backend_alloc_ctx_tensors_from_buft(mctx, param_buft);
+                    ggml_backend_buffer_clear(mbuf, 0);
+                    opt_ctx->bufs_momenta.push_back(mbuf);
+                    opt_ctx->ctxs_momenta.push_back(mctx); // keep alive for tensor metadata
                 } else {
                     opt_ctx->grad_m[i] = nullptr;
                     opt_ctx->grad_v[i] = nullptr;
@@ -485,9 +619,78 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         }
     }
 
+    // Gradient checkpointing: mark every Nth forward node as OUTPUT so the allocator
+    // keeps its memory alive through the backward pass.  The backward graph already
+    // contains the forward ops (gb_grad is a superset of gf), so the checkpointed
+    // activations are naturally available for backward matmuls without recomputation.
+    // This prevents the allocator from aliasing those buffers to later ops, cutting
+    // peak activation VRAM at the cost of slightly larger static allocation.
+    if (opt_ctx->grad_checkpoint_interval > 0) {
+        const int interval = opt_ctx->grad_checkpoint_interval;
+        const int n_fwd    = opt_ctx->gf->n_nodes;
+        int ckpt_count = 0;
+        for (int i = interval - 1; i < n_fwd; i += interval) {
+            struct ggml_tensor * node = opt_ctx->gf->nodes[i];
+            // Only checkpoint F32 compute nodes — skip I32 index tensors and already-output nodes.
+            if (node->type != GGML_TYPE_F32) continue;
+            if (node->flags & GGML_TENSOR_FLAG_OUTPUT)  continue;
+            if (node->flags & GGML_TENSOR_FLAG_INPUT)   continue;
+            node->flags |= GGML_TENSOR_FLAG_OUTPUT;
+            ckpt_count++;
+        }
+        if (ckpt_count > 0) {
+            GGML_LOG_DEBUG("%s: gradient checkpointing: marked %d/%d nodes as persistent (interval=%d)\n",
+                __func__, ckpt_count, n_fwd, interval);
+        }
+    }
+
     // gb_grad == graph backward gradients, forward pass, then backward pass to calculate gradients.
     opt_ctx->gb_grad = ggml_graph_dup(opt_ctx->ctx_compute, opt_ctx->gf, /*force_grads =*/ true);
     ggml_build_backward_expand(opt_ctx->ctx_compute, opt_ctx->gb_grad, opt_ctx->grad_accs.data());
+
+    if (need_quantized_momenta) {
+        const enum ggml_type state_type = ggml_opt_optimizer_state_type(opt_ctx->optimizer);
+        const ggml_type_traits * traits = ggml_get_type_traits(state_type);
+        GGML_ASSERT(traits->to_float && traits->from_float_ref);
+        ggml_quantize_init(state_type);
+
+        opt_ctx->quantized_params.clear();
+        opt_ctx->quantized_grads.clear();
+        size_t state_i = 0;
+        for (int i = 0; i < opt_ctx->gf->n_nodes; ++i) {
+            ggml_tensor * node = opt_ctx->gf->nodes[i];
+            ggml_tensor * grad = ggml_graph_get_grad(opt_ctx->gb_grad, node);
+            if (!grad || !(node->flags & GGML_TENSOR_FLAG_PARAM)) {
+                continue;
+            }
+            GGML_ASSERT(node->type == GGML_TYPE_F32 && grad->type == GGML_TYPE_F32);
+            if (need_q8_device_momenta && opt_ctx->grad_m[i]) {
+                continue;
+            }
+            const int64_t ne = ggml_nelements(node);
+            const enum ggml_type state_type_v = state_type == GGML_TYPE_F16 ? GGML_TYPE_F16 : GGML_TYPE_Q8_0;
+            const int64_t block_size = std::max(ggml_blck_size(state_type), ggml_blck_size(state_type_v));
+            const int64_t ne_padded = ((ne + block_size - 1)/block_size)*block_size;
+            if (state_i == opt_ctx->quantized_states.size()) {
+                ggml_opt_context::quantized_state state;
+                state.ne = ne;
+                state.ne_padded = ne_padded;
+                const size_t nbytes = ggml_row_size(state_type, ne_padded);
+                state.m.resize(nbytes);
+                state.v.resize(ggml_row_size(state_type_v, ne_padded));
+                std::vector<float> zeros(ne_padded, 0.0f);
+                traits->from_float_ref(zeros.data(), state.m.data(), ne_padded);
+                ggml_get_type_traits(state_type_v)->from_float_ref(zeros.data(), state.v.data(), ne_padded);
+                opt_ctx->quantized_states.push_back(std::move(state));
+            } else {
+                GGML_ASSERT(opt_ctx->quantized_states[state_i].ne == ne);
+            }
+            opt_ctx->quantized_params.push_back(node);
+            opt_ctx->quantized_grads.push_back(grad);
+            state_i++;
+        }
+        GGML_ASSERT(state_i == opt_ctx->quantized_states.size());
+    }
 
     if (opt_ctx->buf_static) {
         if (opt_ctx->build_type == GGML_OPT_BUILD_TYPE_GRAD) {
@@ -503,7 +706,8 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     // gb_opt == graph backward optimize, forward pass, then backward pass to calculate gradients, then optimizer step.
     opt_ctx->gb_opt = ggml_graph_dup(opt_ctx->ctx_compute, opt_ctx->gb_grad, /*force_grads =*/ true);
 
-    opt_ctx->opt_step_params = ggml_new_tensor_1d(opt_ctx->ctx_cpu, GGML_TYPE_F32, need_momenta ? 7 : 2);
+    opt_ctx->opt_step_params = ggml_new_tensor_1d(opt_ctx->ctx_cpu, GGML_TYPE_F32,
+        ggml_opt_optimizer_is_adamw(optimizer) ? 8 : 2);
     ggml_tensor * adamw_params = opt_ctx->opt_step_params;
     ggml_set_input(adamw_params);
     const char * optimizer_name = ggml_opt_optimizer_name(opt_ctx->optimizer);
@@ -520,17 +724,28 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                 v = opt_ctx->grad_v[i];
                 ggml_format_name(m, "AdamW m for %s", node->name);
                 ggml_format_name(v, "AdamW v for %s", node->name);
+            } else if (need_q8_device_momenta && opt_ctx->grad_m[i]) {
+                m = opt_ctx->grad_m[i];
+                v = opt_ctx->grad_v[i];
+                ggml_format_name(m, "AdamW Q8_0 m for %s", node->name);
+                ggml_format_name(v, "AdamW Q8_0 v for %s", node->name);
             }
             struct ggml_tensor * opt_step;
             switch (optimizer) {
                 case GGML_OPT_OPTIMIZER_TYPE_ADAMW:
                     opt_step = ggml_opt_step_adamw(opt_ctx->ctx_compute, node, grad, m, v, adamw_params);
                     break;
+                case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0:
+                    if (!m || !v) {
+                        continue;
+                    }
+                    opt_step = ggml_opt_step_adamw(opt_ctx->ctx_compute, node, grad, m, v, adamw_params);
+                    break;
                 case GGML_OPT_OPTIMIZER_TYPE_SGD:
                     opt_step = ggml_opt_step_sgd(opt_ctx->ctx_compute, node, grad, adamw_params);
                     break;
                 default:
-                    GGML_ABORT("fatal error");
+                    continue;
             }
             ggml_format_name(opt_step, "%s step for %s", optimizer_name, node->name);
             ggml_build_forward_expand(opt_ctx->gb_opt, opt_step);
@@ -555,10 +770,11 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
     result->build_type_alloc = params.build_type;
     result->inputs           = params.inputs;
     result->outputs          = params.outputs;
-    result->opt_period       = params.opt_period;
-    result->get_opt_pars     = params.get_opt_pars;
-    result->get_opt_pars_ud  = params.get_opt_pars_ud;
-    result->optimizer        = params.optimizer;
+    result->opt_period                = params.opt_period;
+    result->grad_checkpoint_interval  = params.grad_checkpoint_interval;
+    result->get_opt_pars              = params.get_opt_pars;
+    result->get_opt_pars_ud           = params.get_opt_pars_ud;
+    result->optimizer                 = params.optimizer;
 
     GGML_ASSERT(result->opt_period >= 1);
 
@@ -587,6 +803,12 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     }
     ggml_backend_buffer_free(opt_ctx->buf_static);
     ggml_backend_buffer_free(opt_ctx->buf_cpu);
+    for (ggml_backend_buffer_t buf : opt_ctx->bufs_momenta) {
+        ggml_backend_buffer_free(buf);
+    }
+    for (struct ggml_context * ctx : opt_ctx->ctxs_momenta) {
+        ggml_free(ctx);
+    }
     ggml_free(opt_ctx->ctx_static);
     ggml_free(opt_ctx->ctx_cpu);
     ggml_free(opt_ctx->ctx_copy);
@@ -596,6 +818,13 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
 void ggml_opt_reset(ggml_opt_context_t opt_ctx, bool optimizer) {
     if (optimizer) {
         ggml_graph_reset(opt_ctx->gb_opt);
+        for (ggml_backend_buffer_t buf : opt_ctx->bufs_momenta) {
+            ggml_backend_buffer_clear(buf, 0);
+        }
+        for (ggml_opt_context::quantized_state & state : opt_ctx->quantized_states) {
+            std::fill(state.m.begin(), state.m.end(), 0);
+            std::fill(state.v.begin(), state.v.end(), 0);
+        }
         opt_ctx->iter = 1;
     } else {
         ggml_graph_reset(opt_ctx->gb_grad);
@@ -727,6 +956,17 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
     if (opt_ctx->build_type == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period > 1 && opt_ctx->opt_i == 0) {
         ggml_graph_reset(opt_ctx->gb_grad);
     }
+
+    // For non-static graphs the compute graph is rebuilt every call, so ggml_graph_reset
+    // is not called and grad_accs may carry over values from the previous accumulation window.
+    // Explicitly zero them at the start of each gradient-accumulation cycle.
+    if (!opt_ctx->static_graphs && backward && opt_ctx->opt_i == 0) {
+        for (struct ggml_tensor * ga : opt_ctx->grad_accs) {
+            if (ga) {
+                ggml_set_zero(ga);
+            }
+        }
+    }
     if (backward) {
         const int32_t opt_i_next = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
         opt_ctx->build_type = opt_i_next == 0 ? GGML_OPT_BUILD_TYPE_OPT : GGML_OPT_BUILD_TYPE_GRAD;
@@ -747,7 +987,12 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
             graph = opt_ctx->gb_grad;
         } break;
         case GGML_OPT_BUILD_TYPE_OPT: {
-            graph = opt_ctx->gb_opt;
+            const bool has_device_q8_step =
+                opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0 &&
+                !opt_ctx->bufs_momenta.empty();
+            graph = ggml_opt_optimizer_state_type(opt_ctx->optimizer) == GGML_TYPE_COUNT || has_device_q8_step
+                ? opt_ctx->gb_opt
+                : opt_ctx->gb_grad;
         } break;
     }
     GGML_ASSERT(graph);
@@ -781,11 +1026,16 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
 
 void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
     GGML_ASSERT(opt_ctx->eval_ready);
-    if (opt_ctx->allocated_graph == opt_ctx->gb_opt) {
+    const bool do_optimizer_step = opt_ctx->build_type == GGML_OPT_BUILD_TYPE_OPT;
+    if (do_optimizer_step) {
         const ggml_opt_optimizer_params & opt_pars = opt_ctx->get_opt_pars(opt_ctx->get_opt_pars_ud);
 
         switch (opt_ctx->optimizer) {
-            case GGML_OPT_OPTIMIZER_TYPE_ADAMW: {
+            case GGML_OPT_OPTIMIZER_TYPE_ADAMW:
+            case GGML_OPT_OPTIMIZER_TYPE_ADAMW_F16:
+            case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0:
+            case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K:
+            case GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL: {
                 GGML_ASSERT(opt_pars.adamw.alpha > 0.0f);
                 GGML_ASSERT(opt_pars.adamw.beta1 >= 0.0f);
                 GGML_ASSERT(opt_pars.adamw.beta1 <= 1.0f);
@@ -794,6 +1044,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
                 GGML_ASSERT(opt_pars.adamw.eps >= 0.0f);
                 GGML_ASSERT(opt_pars.adamw.wd >= 0.0f);
                 GGML_ASSERT(opt_pars.adamw.wd <= 1.0f);
+                GGML_ASSERT(opt_pars.adamw.gclip >= 0.0f);
 
                 // beta1, beta2 after applying warmup
                 const float beta1h = 1.0f / (1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));
@@ -807,6 +1058,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
                 adamw_par_data[4] = opt_pars.adamw.wd;
                 adamw_par_data[5] = beta1h;
                 adamw_par_data[6] = beta2h;
+                adamw_par_data[7] = opt_pars.adamw.gclip;
             } break;
             case GGML_OPT_OPTIMIZER_TYPE_SGD: {
                 GGML_ASSERT(opt_pars.sgd.alpha > 0.0f);
@@ -822,7 +1074,11 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
     }
 
     ggml_backend_sched_graph_compute(opt_ctx->backend_sched, opt_ctx->allocated_graph_copy);
-    opt_ctx->iter += opt_ctx->allocated_graph == opt_ctx->gb_opt;
+    if (do_optimizer_step && ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT) {
+        const ggml_opt_optimizer_params & opt_pars = opt_ctx->get_opt_pars(opt_ctx->get_opt_pars_ud);
+        ggml_opt_step_adamw_quantized(opt_ctx, opt_pars);
+    }
+    opt_ctx->iter += do_optimizer_step;
     opt_ctx->opt_i = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
 
     if (!opt_ctx->static_graphs) {
@@ -1086,6 +1342,14 @@ GGML_API const char * ggml_opt_optimizer_name(enum ggml_opt_optimizer_type o) {
     switch (o) {
         case GGML_OPT_OPTIMIZER_TYPE_ADAMW:
             return "adamw";
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_F16:
+            return "adamw_f16";
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0:
+            return "adamw_q8_0";
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K:
+            return "adamw_q6_k";
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL:
+            return "adamw_iq4_nl";
         case GGML_OPT_OPTIMIZER_TYPE_SGD:
             return "sgd";
         default:

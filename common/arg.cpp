@@ -3887,7 +3887,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-draft-poll", "--poll-draft"}, "<0|1>",
-        "Use polling to wait for draft model work (default: same as --poll)",
+        "Use polling to wait for draft model work (default: same as --poll])",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams.poll = value;
         }
@@ -4309,41 +4309,184 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         { "-lr", "--learning-rate" }, "ALPHA",
         string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
         [](common_params & params, const std::string & value) { params.lr.lr0 = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg({ "-lr-min", "--learning-rate-min" }, "ALPHA",
         string_format("(if >0) final learning rate after decay (if -decay-epochs is set, default=%.2g)",
             (double) params.lr.lr_min),
         [](common_params & params, const std::string & value) { params.lr.lr_min = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-decay-epochs", "--learning-rate-decay-epochs"}, "ALPHA",
         string_format("(if >0) decay learning rate to -lr-min after this many epochs (exponential decay, default=%.2g)", (double) params.lr.decay_epochs),
         [](common_params & params, const std::string & value) { params.lr.decay_epochs = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-wd", "--weight-decay"}, "WD",
         string_format("adamw or sgd optimizer weight decay (0 is off; recommend very small e.g. 1e-9) (default: %.2g).", (double) params.lr.wd),
         [](common_params & params, const std::string & value) { params.lr.wd = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-val-split", "--val-split"}, "FRACTION",
         string_format("fraction of data to use as validation set for training (default: %.2g).", (double) params.val_split),
         [](common_params & params, const std::string & value) { params.val_split = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    // qlora flags
+    add_opt(common_arg(
+        {"--lora-rank"}, "N",
+        string_format("LoRA rank r (default: %d)", params.lora_rank),
+        [](common_params & params, int value) { params.lora_rank = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lora-alpha"}, "F",
+        string_format("LoRA alpha (default: %d = use rank value)", (int) params.lora_alpha),
+        [](common_params & params, const std::string & value) { params.lora_alpha = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lora-targets"}, "SUBSTRINGS",
+        string_format("comma-separated substrings of tensor names to add LoRA to (default: %s)", params.lora_targets.c_str()),
+        [](common_params & params, const std::string & value) { params.lora_targets = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lora-out"}, "FNAME",
+        string_format("output LoRA adapter GGUF path (default: %s)", params.lora_out.c_str()),
+        [](common_params & params, const std::string & value) { params.lora_out = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--resume"}, "FNAME",
+        "resume QLoRA training from a checkpoint GGUF created by --save-every",
+        [](common_params & params, const std::string & value) { params.lora_resume = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--train-file"}, "FNAME",
+        "JSONL training dataset (fields: messages|prompt+response|text)",
+        [](common_params & params, const std::string & value) { params.train_file = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"-dthr", "--dataset-threads"}, "N",
+        "JSONL loading worker threads (default: physical CPU core count)",
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("dataset-threads must be at least 1");
+            }
+            params.dataset_threads = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--save-every"}, "N",
+        "save adapter checkpoint every N dataset windows during training (default: 0 = only at end)",
+        [](common_params & params, int value) { params.save_every = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--freeze-layers"}, "N",
+        "freeze first N transformer layers — no LoRA adapters allocated for blk.0..blk.N-1 (default: 0 = train all layers)",
+        [](common_params & params, int value) { params.lora_freeze_layers = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grad-checkpoint"}, "N",
+        "gradient checkpointing interval to reduce peak activation VRAM (0 = disabled, default: 0)",
+        [](common_params & params, int value) { params.grad_checkpoint_interval = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lora-qat"}, "TYPE",
+        "LoRA fake quantization: none, q3_k, q4_k, q4_0, mxfp4, q6_k, q8_0 (default: none)",
+        [](common_params & params, const std::string & value) {
+            if (value != "none" && value != "q3_k" && value != "q4_k" && value != "q4_0" && value != "mxfp4" && value != "q6_k" && value != "q8_0") {
+                throw std::invalid_argument("invalid --lora-qat");
+            }
+            params.lora_qat = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--optimizer-restart-every"}, "N",
+        "reset optimizer state every N epochs, matching repeated resume runs (0 = disabled)",
+        [](common_params & params, int value) { params.optimizer_restart_every = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--lr-scheduler"}, "TYPE",
+        "QLoRA learning-rate scheduler: constant or cosine (default: constant)",
+        [](common_params & params, const std::string & value) {
+            if (value != "constant" && value != "cosine") {
+                throw std::invalid_argument("--lr-scheduler must be constant or cosine");
+            }
+            params.lr_scheduler = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--warmup-steps"}, "N",
+        "QLoRA linear learning-rate warmup steps (default: 0)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("--warmup-steps must be non-negative");
+            }
+            params.warmup_steps = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--warmup-init-ratio"}, "RATIO",
+        "QLoRA initial warmup learning rate as a fraction of peak LR (default: 0.1)",
+        [](common_params & params, const std::string & value) {
+            const float ratio = std::stof(value);
+            if (!(ratio > 0.0f && ratio <= 1.0f)) {
+                throw std::invalid_argument("--warmup-init-ratio must be greater than 0 and at most 1");
+            }
+            params.warmup_init_ratio = ratio;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--verbose-loss"},
+        "print one structured SFT loss line per dataset window",
+        [](common_params & params) { params.verbose_loss = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--train-on-prompt"},
+        "compute loss on prompt tokens too, not just the response (default: response-only loss)",
+        [](common_params & params) { params.train_on_prompt = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--shuffle-dataset"},
+        "shuffle dataset windows at the start of each epoch (default: sequential order)",
+        [](common_params & params) { params.shuffle_dataset = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grpo-mode"},
+        "enable GRPO IPC training loop (prompts and rewards supplied via stdin/stdout)",
+        [](common_params & params) { params.grpo_mode = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--n-gen"}, "N",
+        string_format("GRPO: number of generations per prompt (default: %d)", params.grpo_n_gen),
+        [](common_params & params, int value) { params.grpo_n_gen = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--n-steps"}, "N",
+        string_format("GRPO: total optimizer steps (default: %d)", params.grpo_n_steps),
+        [](common_params & params, int value) { params.grpo_n_steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grpo-temp"}, "F",
+        string_format("GRPO: sampling temperature for rollout generation (default: %.2f)", (double) params.grpo_temperature),
+        [](common_params & params, const std::string & value) { params.grpo_temperature = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--grpo-max-tokens"}, "N",
+        string_format("GRPO: max tokens per generation (default: %d)", params.grpo_max_tokens),
+        [](common_params & params, int value) { params.grpo_max_tokens = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-epochs", "--epochs"}, "N",
         string_format("optimizer max # of epochs (default: %d)", params.lr.epochs),
         [](common_params & params, int epochs) { params.lr.epochs = epochs; }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
-        {"-opt", "--optimizer"}, "sgd|adamw", "adamw or sgd",
+        {"-opt", "--optimizer"}, "sgd|adamw|adamw_f16|adamw_q8_0|adamw_q6_k|adamw_iq4_nl",
+        "optimizer (adamw_q8_0 uses device state when LoRA tensors are on CUDA or ROCm; q6_k/iq4_nl use CPU state)",
         [](common_params & params, const std::string & name) {
             params.optimizer = common_opt_get_optimizer(name.c_str());
             if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
-                throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
+                throw std::invalid_argument("invalid --optimizer");
             }
         }
-    ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"--check"},
         string_format("check rather than generate results (default: %s)", params.check ? "true" : "false"),

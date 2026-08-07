@@ -334,16 +334,26 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
 
         auto * buft = ggml_backend_buffer_get_type(model_tensor->buffer);
 
-        // do not load loras to extra buffer types (i.e. bufts for repacking) -> use the CPU in that case
+        // do not load loras to extra buffer types (i.e. bufts for repacking)
+        // try device-native buft first (keeps LoRA on GPU), fall back to CPU only as last resort
         for (auto & ex : buft_extra) {
             if (ex == buft) {
-                LLAMA_LOG_WARN("%s: lora for '%s' cannot use buft '%s', fallback to CPU\n", __func__, model_tensor->name, ggml_backend_buft_name(buft));
-
-                auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-                if (!cpu_dev) {
-                    throw std::runtime_error(format("%s: no CPU backend found", __func__));
+                // try to get the device's native (non-repack) buffer type
+                auto * dev = ggml_backend_buft_get_device(buft);
+                auto * native_buft = dev ? ggml_backend_dev_buffer_type(dev) : nullptr;
+                if (native_buft && native_buft != buft) {
+                    LLAMA_LOG_WARN("%s: lora for '%s' cannot use repack buft '%s', using device-native '%s'\n",
+                        __func__, model_tensor->name, ggml_backend_buft_name(buft), ggml_backend_buft_name(native_buft));
+                    buft = native_buft;
+                } else {
+                    LLAMA_LOG_WARN("%s: lora for '%s' cannot use buft '%s', fallback to CPU\n",
+                        __func__, model_tensor->name, ggml_backend_buft_name(buft));
+                    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                    if (!cpu_dev) {
+                        throw std::runtime_error(format("%s: no CPU backend found", __func__));
+                    }
+                    buft = ggml_backend_dev_buffer_type(cpu_dev);
                 }
-                buft = ggml_backend_dev_buffer_type(cpu_dev);
 
                 break;
             }

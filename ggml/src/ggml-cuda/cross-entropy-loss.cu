@@ -13,6 +13,18 @@ static __global__ void cross_entropy_loss_f32(
     logits += int64_t(blockIdx.x)*nclasses;
     labels += int64_t(blockIdx.x)*nclasses;
 
+    float labels_sum = 0.0f;
+    for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
+        labels_sum += labels[i];
+    }
+    labels_sum = warp_reduce_sum(labels_sum);
+    if (labels_sum == 0.0f) {
+        if (threadIdx.x == 0) {
+            dst[blockIdx.x] = 0.0f;
+        }
+        return;
+    }
+
     // Find maximum for softmax:
     float max_logit = -INFINITY;
     for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
@@ -38,7 +50,10 @@ static __global__ void cross_entropy_loss_f32(
     float loss = 0.0f;
     for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
         const float logit_i = use_shared ? tmp[i] : logits[i];
-        loss += (logit_i - max_logit - sum) * labels[i];
+        const float label_i = labels[i];
+        if (label_i != 0.0f) {
+            loss += (logit_i - max_logit - sum) * label_i;
+        }
     }
     loss = -warp_reduce_sum(loss) / (float)k;
 
@@ -58,6 +73,18 @@ static __global__ void cross_entropy_loss_back_f32(
     logits += int64_t(blockIdx.x)*nclasses;
     labels += int64_t(blockIdx.x)*nclasses;
     dst    += int64_t(blockIdx.x)*nclasses;
+
+    float labels_sum = 0.0f;
+    for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
+        labels_sum += labels[i];
+    }
+    labels_sum = warp_reduce_sum(labels_sum);
+    if (labels_sum == 0.0f) {
+        for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
+            dst[i] = 0.0f;
+        }
+        return;
+    }
 
     float maxval = -INFINITY;
     for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
@@ -84,10 +111,12 @@ static __global__ void cross_entropy_loss_back_f32(
     sum = warp_reduce_sum(sum);
     const float sm_scale = 1.0f/sum;
 
+    // Sum of labels for this row. For standard one-hot labels this is 1;
+    // for masked/unlabeled rows it is 0 and the gradient must be 0 too.
     const float d_by_nrows = *grad/gridDim.x;
     for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
         const float val = use_shared ? tmp[i] : dst[i];
-        dst[i] = (val*sm_scale - labels[i])*d_by_nrows;
+        dst[i] = (val*sm_scale*labels_sum - labels[i])*d_by_nrows;
     }
 }
 
