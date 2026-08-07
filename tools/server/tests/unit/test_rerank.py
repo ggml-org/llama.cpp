@@ -144,3 +144,16 @@ def test_rerank_tei_top_n(top_n, expected_len):
     res = server.make_request("POST", "/rerank", data=data)
     assert res.status_code == 200
     assert len(res.body) == expected_len
+
+
+@pytest.mark.parametrize("endpoint", ["/embeddings", "/v1/embeddings"])
+def test_rerank_rejects_embeddings(endpoint):
+    global server
+    server.start()
+
+    res = server.make_request("POST", endpoint, data={
+        "input": "Machine learning is",
+    })
+
+    assert res.status_code == 501
+    assert "does not support embeddings" in res.body["error"]["message"]
