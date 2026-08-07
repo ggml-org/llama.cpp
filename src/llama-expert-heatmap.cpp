@@ -39,7 +39,15 @@ void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, gg
         return;
     }
 
-    decay_all();
+    // batch the decay: apply decay_rate^2 every two updates instead of
+    // decay_rate every update (identical long-run weighting, half the work)
+    ++update_counter;
+    if (update_counter % 2 == 0) {
+        const float rate = decay_rate * decay_rate;
+        for (int i = 0; i < n_layers * n_experts; i++) {
+            heat[i] *= rate;
+        }
+    }
 
     int64_t n_tokens = 0;
     float multiplier = 1.0f;
@@ -113,7 +121,11 @@ float llama_expert_heatmap::get_score(int layer_idx, int expert_id) const {
     if (layer_idx < 0 || layer_idx >= n_layers || expert_id < 0 || expert_id >= n_experts) {
         return 0.0f;
     }
-    return heat[layer_idx * n_experts + expert_id];
+    float s = heat[layer_idx * n_experts + expert_id];
+    if (generated_tokens_count <= 3) {
+        s *= 5.0f; // start-up boost: force the store toward the true hot set
+    }
+    return s;
 }
 
 std::vector<int> llama_expert_heatmap::get_top_s(int layer_idx, int s) const {

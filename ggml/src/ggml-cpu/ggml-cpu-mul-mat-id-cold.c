@@ -18,6 +18,17 @@
 #include <string.h>
 #include <stdint.h>
 #include <inttypes.h>
+
+static ggml_mmid_cold_slice_fn g_slice_fn = NULL;
+static ggml_mmid_cold_hash_fn  g_hash_fn  = NULL;
+
+void ggml_mmid_cold_set_slice_fn(ggml_mmid_cold_slice_fn fn) {
+    g_slice_fn = fn;
+}
+
+void ggml_mmid_cold_set_hash_fn(ggml_mmid_cold_hash_fn fn) {
+    g_hash_fn = fn;
+}
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -170,7 +181,37 @@ void ggml_compute_forward_mul_mat_id_cold(
             continue;
         }
 
-        const char * src0_cur = (const char *) src0->data + cur_a * nb02;
+        // prefer the registered per-expert slice source (expert preload), else
+        // read from the tensor's own data
+        const char * src0_cur;
+        if (g_slice_fn) {
+            const uint8_t * s = g_slice_fn(src0, (int) cur_a);
+            if (s && getenv("LLAMA_EXPERT_DEBUG")) {
+                static int once = 0;
+                if (!once) {
+                    once = 1;
+                    uint64_t h = 0xcbf29ce484222325ULL;
+                    for (int i = 0; i < 1024; i++) {
+                        h ^= s[i];
+                        h *= 0x100000001b3ULL;
+                    }
+                    const uint64_t exp = g_hash_fn ? g_hash_fn(src0, (int) cur_a) : 0;
+                    fprintf(stderr, "coldop: expert %d tensor %s fnv=%016" PRIx64 " expected=%016" PRIx64 " %s\n",
+                        (int) cur_a, src0->name, h, exp,
+                        h == exp ? "MATCH" : "MISMATCH");
+                }
+            }
+            src0_cur = s ? (const char *) s : (const char *) src0->data + cur_a * nb02;
+        } else {
+            if (getenv("LLAMA_EXPERT_DEBUG")) {
+                static int once = 0;
+                if (!once) {
+                    once = 1;
+                    fprintf(stderr, "coldop: HOOK NULL, reading tensor data (ghost)\n");
+                }
+            }
+            src0_cur = (const char *) src0->data + cur_a * nb02;
+        }
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 

@@ -14,6 +14,7 @@ struct llama_expert_heatmap {
     int   log_period;
     int64_t tokens_total; // real tokens seen (not multiplied by layers)
     int64_t generated_tokens_count; // decode tokens seen; drives first-fill deferral
+    int update_counter = 1; // batched decay every 2 updates; start at 1 for early stability
     std::vector<float> heat;
 
     llama_expert_heatmap(int n_layers, int n_experts,

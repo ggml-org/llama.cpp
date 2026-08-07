@@ -1,5 +1,7 @@
 #include "llama-context.h"
 
+#include "llama-expert-preload.h"
+
 #include "ggml.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
@@ -477,10 +479,10 @@ llama_context::llama_context(
             &model, hparams.n_layer(), hparams.n_expert,
             params.expert_hot_s, sync_period,
             params.expert_hyst, params.expert_dwell);
-        // enable the GPU hot store only on CUDA backends; a CPU store buys
-        // nothing and other backends are untested. --expert-cache-force
-        // overrides the guard for testing.
+        // enable the GPU hot store on any GPU backend (CUDA, Vulkan, ROCm,
+        // SYCL, Metal, ...). --expert-cache-force overrides the guard.
         const bool force = params.expert_cache_force || getenv("LLAMA_EXPERT_CACHE_FORCE") != nullptr;
+        llama_expert_preload::set_force(force);
         bool cache_enabled = false;
         std::vector<ggml_backend_buffer_type_t> gpu_bufts;
         for (auto & backend : backends) {
@@ -489,19 +491,14 @@ llama_context::llama_context(
             if (type == GGML_BACKEND_DEVICE_TYPE_CPU || type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
                 continue;
             }
-            const char * name = ggml_backend_dev_name(dev);
-            const bool supported = name != nullptr && strncmp(name, "CUDA", 4) == 0;
-            if (!force && !supported) {
-                continue; // skip unsupported GPU backends; collect the rest
-            }
             gpu_bufts.push_back(ggml_backend_get_default_buffer_type(backend.get()));
         }
         if (!gpu_bufts.empty()) {
             cache_enabled = expert_hotstore->allocate(gpu_bufts, model.tensor_split(), (int) gpu_bufts.size());
         }
-        // launch hint: cache did not engage, usually a non-CUDA (or no) accelerator
+        // launch hint: cache did not engage, usually no GPU accelerator
         if (!cache_enabled && !force) {
-            LLAMA_LOG_WARN("%s: expert cache is OFF: %d slots requested but no CUDA backend in use (use --ecf to force it on)\n",
+            LLAMA_LOG_WARN("%s: expert cache is OFF: %d slots requested but no GPU backend in use (use --ecf to force it on)\n",
                 __func__, params.expert_hot_s);
         }
         expert_hotstore->log();
@@ -1422,6 +1419,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    // the store fill is deferred to the first token: copy the startup batch
+    // from the gguf file (sequentially, hash-verified) so the graph never
+    // computes against an unverified or load-time-corrupted store.
+    if (expert_heatmap && expert_hotstore && !expert_hotstore->is_filled) {
+        expert_hotstore->copy_top_s(*expert_heatmap);
+    }
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
@@ -1435,11 +1439,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
     if (expert_heatmap && expert_hotstore) {
         if (!expert_hotstore->is_filled) {
-            if (expert_heatmap->generated_tokens_count >= 3) { // defer first fill until 3 decode tokens seed the heatmap
-                expert_hotstore->copy_top_s(*expert_heatmap);
-            }
+            // fill happens pre-graph on the first ubatch (see above)
         } else {
             expert_hotstore->maybe_resync(*expert_heatmap, ubatch.n_tokens > 1);
+            // sync the moved store data into the graph's stream before the next
+            // graph launch, so the resync's copies never contend with the next
+            // token's generation
+            synchronize();
             if (ubatch.n_tokens == 1 && getenv("LLAMA_EXPERT_HITRATE")) {
                 expert_hotstore->log_hit_rate(res->moe_sel_experts);
             }

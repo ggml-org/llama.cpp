@@ -41,7 +41,7 @@ configure_file(${TEMPLATE_FILE} ${OUTPUT_FILE})
 set(TARGET llama-common-base)
 add_library(${TARGET} STATIC ${OUTPUT_FILE})
 
-target_include_directories(${TARGET} PUBLIC .)
+target_include_directories(${TARGET} PUBLIC . ../src)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)

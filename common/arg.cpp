@@ -6,6 +6,7 @@
 #include "download.h"
 #include "json-schema-to-grammar.h"
 #include "llama.h"
+#include "llama-expert-preload.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -2736,6 +2737,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "-1 = autofit slots from free VRAM, 0 = disabled, N = manual top-N slots",
         [](common_params & params, int value) {
             params.expert_hot_s = value;
+            llama_expert_preload::set_slots(value);
         }
     ).set_env("LLAMA_ARG_EXPERT_HOT_S"));
     add_opt(common_arg(
@@ -2744,6 +2746,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "enable the expert cache (hot store) on non-CUDA backends (testing/emergency only)",
         [](common_params & params, bool value) {
             params.expert_cache_force = value;
+            llama_expert_preload::set_force(value);
+        }
+    ));
+    add_opt(common_arg(
+        {"--expert-no-evict"},
+        {},
+        "never evict experts from the hot store (fill-only, no move-back)",
+        [](common_params & params, bool value) {
+            llama_expert_preload::set_no_evict(value);
         }
     ));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0

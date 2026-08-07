@@ -64,23 +64,61 @@ struct llama_expert_hotstore {
 
     // true once the first copy of the top-S experts landed (once per session)
     bool is_filled = false;
+    // true when the store buffer was streamed by the loader (startup batch
+    // already resident), so the fill does not copy again
+    bool preloaded = false;
 
     // re-sync cadence in tokens; 0 disables periodic re-sync
     int sync_period = 0;
     // tokens_total at the last sync (fill or re-sync) for boundary-cross check
     int64_t last_sync_tokens = 0;
 
+    // start-up full sync: after the 3-token heat boost, mirror the store to the
+    // top-S over the next `full_sync_remaining` tokens (budget hot_s/4 per token)
+    bool  full_sync_done = false;
+    int   full_sync_remaining = 0;
+
     // hysteresis gate: a resident slot is only swapped when a cold
     // expert scores >= hyst * the incumbent AND the slot has dwelled long enough
     float hyst  = 0.0f; // 0 = gate off (swap freely)
     int   dwell = 0;    // minimum syncs a resident must keep; 0 = off
+    // max concurrent transfers in flight per layer, per direction (eviction
+    // queue + promotion queue). higher = faster store adaptation, at the cost
+    // of more slots temporarily in transition (not counted).
+    int max_concurrent_moves = 3;
     // dwell_count[il][p] = syncs since slot p last changed (0 = fresh/empty)
     std::vector<std::vector<int>> dwell_count;
 
-    // experts whose GPU copy is hash-verified but whose CPU slice is not yet
-    // released (deferred madvise until a full token generated from the GPU).
-    // stored as (entry pointer, expert id); entries are stable after the ctor.
-    std::vector<std::pair<entry *, int>> pending_release;
+    // swap lifecycle handshake. slot_to_expert holds the physical slot
+    // content; gpu_routed holds the experts whose output actually comes from
+    // the GPU. a moved-in expert stays CPU-counted (gpu_routed=0) while it is
+    // pending verification; all pending copies are verified every token, and a
+    // confirmed one is routed to the GPU only on the following token. a
+    // moved-out expert is copied back on read, becomes CPU-counted, and runs
+    // one full generation on the CPU before its GPU copy is considered gone.
+    struct pending_move_in {
+        int  expert;
+        int  p;          // slot holding the copy
+        bool verified;
+        int  countdown;  // 1 = route to the GPU on the next token
+        int  failures;   // consecutive failed verifies (anti-stall)
+    };
+    struct pending_move_out {
+        int  expert;
+        int  p;          // slot to free once the CPU takes over
+        bool verified;   // staging copy matches the launch hash
+        int  countdown;  // 1 = CPU output counts on the next token
+        int  failures;   // consecutive failed verifies (anti-stall)
+    };
+    std::vector<std::vector<char>>                gpu_routed; // [il][e]
+    std::vector<std::vector<pending_move_in>>     pending_in; // [il]
+    std::vector<std::vector<pending_move_out>>    pending_out;// [il]
+
+    // per-layer staging buffer: one expert slot per exps tensor of the layer,
+    // holding the in-flight evicted expert's slices while the CPU copy is
+    // verified against the launch hash (the GPU output stays valid meanwhile).
+    std::vector<uint8_t> cpu_staging;
+    std::vector<size_t>  cpu_staging_off; // [il] offset into cpu_staging
 
 llama_expert_hotstore(const llama_model * model, int n_layers,
                       int n_experts, int hot_s, int sync_period = 0,
@@ -105,6 +143,10 @@ llama_expert_hotstore(const llama_model * model, int n_layers,
     // the experts that changed (stable slots; unchanged experts not re-copied).
     // returns true if any slot changed (caller should synchronize the GPU).
     bool resync_top_s(const llama_expert_heatmap & heatmap);
+
+    // --ecf mode: mirror the entire store to the top-S every token (direct
+    // swaps, hash-verified, copy-on-read). no pacing queues.
+    bool resync_full_mirror(const llama_expert_heatmap & heatmap, int budget = 1);
 
     // cadence-gated wrapper: re-sync only if tokens_total crossed sync_period;
     // multi_slot freezes the hot store (static slots, no swapping). returns

@@ -1,4 +1,5 @@
 #include "llama-model-loader.h"
+#include "llama-expert-preload.h"
 
 #include "ggml-alloc.h"
 #include "ggml.h"
@@ -13,6 +14,8 @@
 #include <cstring>
 #include <future>
 #include <regex>
+#include <sys/mman.h>
+#include <unistd.h>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
@@ -530,6 +533,7 @@ llama_model_loader::llama_model_loader(
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
+    llama_expert_preload::set_model_path(fname.c_str());
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -1296,6 +1300,28 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     struct ggml_tensor * tensor = ggml_dup_tensor(ctx, &t_meta);
     ggml_set_name(tensor, ggml_get_name(&t_meta));
 
+    // expert tier + no-mmap: the exps data lives in our buffers (GPU store for
+    // the hot experts, host buffer for the cold). give the tensor a valid ghost
+    // buffer so the model allocation skips it and the graph stays satisfied;
+    // the tier and the cold-op hook never read the tensor's own data.
+    if (!use_mmap && llama_expert_preload::tier_will_engage()) {
+        int il = -1;
+        if (llama_expert_preload::is_exps(tn.str().c_str(), il)) {
+            static ggml_backend_buffer_t ghost = nullptr;
+            static size_t ghost_size = 0;
+            const size_t nbytes = ggml_nbytes(&t_meta);
+            if (!ghost || nbytes > ghost_size) {
+                if (ghost) {
+                    ggml_backend_buffer_free(ghost);
+                }
+                ghost = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), nbytes);
+                ggml_backend_buffer_set_usage(ghost, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ghost_size = nbytes;
+            }
+            ggml_backend_tensor_alloc(ghost, tensor, ggml_backend_buffer_get_base(ghost));
+        }
+    }
+
     if (duplicated) {
         size_data += ggml_nbytes(&t_meta);
     } else {
@@ -1511,6 +1537,49 @@ bool llama_model_loader::load_all_data(
             ggml_backend_name(upload_backend));
     }
 
+    // tier + no-mmap + manual -ehs: stream the startup batch (first S experts
+    // per layer) into a GPU store buffer so those slices never commit RAM.
+    if (!use_mmap && llama_expert_preload::tier_will_engage() && !bufs.empty()) {
+        size_t gpu_total = 0;
+        size_t cpu_total = 0;
+        int n_entries = 0;
+        int n_layers = 0;
+        int n_experts = 0;
+        for (const auto & [name, w] : weights_map) {
+            int il = -1;
+            if (llama_expert_preload::is_exps(name.c_str(), il)) {
+                const size_t plane = ggml_nbytes(w.tensor) / (size_t) w.tensor->ne[2];
+                gpu_total += (size_t) (llama_expert_preload::get_slots() + 1) * plane;
+                cpu_total += (size_t) w.tensor->ne[2] * plane;
+                n_entries++;
+                n_layers = std::max(n_layers, il + 1);
+                n_experts = (int) w.tensor->ne[2];
+            }
+        }
+        if (n_entries > 0 && gpu_total > 0) {
+            // room for the per-layer hot_lut (i32[n_experts]) and mask_lut
+            // (f32[slots+1]) tensors after the slots; 256-aligned so backends
+            // with minStorageBufferOffsetAlignment can bind them for get_rows
+            gpu_total = llama_expert_preload::store_total_bytes(
+                gpu_total, n_layers, n_experts, llama_expert_preload::get_slots());
+            // the store should live in VRAM when possible, else fall back to a
+            // host buffer (slower but functional)
+            ggml_backend_buffer_type_t buft = nullptr;
+            for (const auto & [idx, b] : bufs) {
+                ggml_backend_buffer_type_t bt = ggml_backend_buffer_get_type(b);
+                ggml_backend_dev_t d = ggml_backend_buft_get_device(bt);
+                if (d && ggml_backend_dev_type(d) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    buft = bt;
+                    break;
+                }
+            }
+            if (!buft) {
+                buft = ggml_backend_cpu_buffer_type();
+            }
+            llama_expert_preload::begin(buft, gpu_total, cpu_total, n_entries);
+        }
+    }
+
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
@@ -1558,12 +1627,40 @@ bool llama_model_loader::load_all_data(
             const auto & file = files.at(weight->idx);
 
             if (ggml_backend_buffer_is_host(cur->buffer)) {
-                file->seek(weight->offs, SEEK_SET);
-                file->read_raw(cur->data, n_size);
-                if (check_tensors) {
-                    validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
-                        return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
-                    }));
+                int il = -1;
+                if (llama_expert_preload::tier_will_engage() && llama_expert_preload::is_exps(ggml_get_name(cur), il)) {
+                    // stream the startup batch: first S slices to the GPU store,
+                    // the rest (cold) into our host buffer (the model tensor's
+                    // data is only a placeholder; the cold-op hook reads ours)
+                    const size_t plane = n_size / (size_t) cur->ne[2];
+                    const int S = llama_expert_preload::get_slots();
+                    if (getenv("LLAMA_EXPERT_DEBUG")) {
+                        fprintf(stderr, "loader: exps %s off=%lld n_size=%zu plane=%zu\n",
+                            ggml_get_name(cur), (long long) weight->offs, n_size, plane);
+                    }
+                    std::vector<uint8_t> buf(n_size);
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(buf.data(), n_size);
+                    const size_t idx = llama_expert_preload::register_tensor(cur, plane, (int) cur->ne[2], S,
+                        weight->offs, file->file_id());
+                    std::vector<uint8_t> store_data((size_t) (S + 1) * plane, 0);
+                    std::memcpy(store_data.data(), buf.data(), (size_t) S * plane);
+                    llama_expert_preload::write_entry(idx, store_data.data(), store_data.size());
+                    llama_expert_preload::write_cold(idx, buf.data() + (size_t) S * plane,
+                        (size_t) (cur->ne[2] - S) * plane);
+                    if (check_tensors) {
+                        validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
+                            return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
+                        }));
+                    }
+                } else {
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(cur->data, n_size);
+                    if (check_tensors) {
+                        validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
+                            return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
+                        }));
+                    }
                 }
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
