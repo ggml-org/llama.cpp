@@ -20,3 +20,7 @@ struct ggml_cuda_moe_mmq_args {
 };
 
 bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_args & args);
+
+bool ggml_cuda_moe_cutlass_prefill_requested();
+bool ggml_cuda_moe_cutlass_decode_requested();
+bool ggml_cuda_moe_cutlass_decode_log_requested();

@@ -43,6 +43,7 @@ struct ggml_cuda_moe_weight_view {
     alignas(128) uint64_t tma_map[ggml_cuda_moe_tma_modes][ggml_cuda_moe_tma_map_qwords] = {};
     cudaEvent_t ready                                                                    = nullptr;
     cudaEvent_t last_use                                                                 = nullptr;
+    ggml_type   type                                                                     = GGML_TYPE_COUNT;
 };
 
 bool ggml_cuda_moe_repack_weight(ggml_backend_cuda_context & ctx,
@@ -51,7 +52,14 @@ bool ggml_cuda_moe_repack_weight(ggml_backend_cuda_context & ctx,
                                  ggml_cuda_moe_weight_view & view,
                                  cudaStream_t                stream        = nullptr,
                                  size_t                      cache_entries = 2,
-                                 bool                        wait_ready    = true);
+                                 bool                        wait_ready    = true,
+                                 bool                        preserve_source = false);
+
+bool ggml_cuda_moe_repack_weight_pair(ggml_backend_cuda_context & ctx,
+                                      const ggml_tensor *         first,
+                                      const ggml_tensor *         second,
+                                      ggml_cuda_moe_weight_view & view,
+                                      cudaStream_t                stream = nullptr);
 
 void ggml_cuda_moe_weight_wait_ready(const ggml_cuda_moe_weight_view & view, cudaStream_t stream);
 

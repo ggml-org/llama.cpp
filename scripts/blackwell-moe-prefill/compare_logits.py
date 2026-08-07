@@ -19,6 +19,11 @@ def json_number(value: float) -> float | None:
     return value if math.isfinite(value) else None
 
 
+def log_softmax(values: np.ndarray) -> np.ndarray:
+    shifted = values - np.max(values)
+    return shifted - np.log(np.sum(np.exp(shifted)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("reference", type=Path)
@@ -54,6 +59,32 @@ def main() -> int:
     mismatched = np.flatnonzero(~close_mask)
     passed = finite and close and nmse <= args.max_nmse
 
+    reference_norm = float(np.linalg.norm(reference64))
+    candidate_norm = float(np.linalg.norm(candidate64))
+    cosine = (
+        float(np.dot(reference64, candidate64) / (reference_norm * candidate_norm))
+        if reference_norm != 0.0 and candidate_norm != 0.0
+        else float("nan")
+    )
+    abs_diff = np.abs(diff)
+    percentiles = np.percentile(abs_diff, [50.0, 90.0, 99.0, 99.9])
+    top1_reference = int(np.argmax(reference64))
+    top1_candidate = int(np.argmax(candidate64))
+
+    topk_overlap: dict[str, int] = {}
+    for k in (10, 50):
+        count = min(k, reference.size)
+        reference_topk = np.argpartition(reference64, -count)[-count:]
+        candidate_topk = np.argpartition(candidate64, -count)[-count:]
+        topk_overlap[str(k)] = int(np.intersect1d(reference_topk, candidate_topk).size)
+
+    reference_log_probability = log_softmax(reference64)
+    candidate_log_probability = log_softmax(candidate64)
+    reference_probability = np.exp(reference_log_probability)
+    kl_divergence = float(np.sum(
+        reference_probability * (reference_log_probability - candidate_log_probability)
+    ))
+
     first_diff_index = int(different[0]) if different.size else None
     first_mismatch_index = int(mismatched[0]) if mismatched.size else None
 
@@ -61,10 +92,23 @@ def main() -> int:
         "count": int(reference.size),
         "max_abs": json_number(float(np.max(np.abs(diff)))),
         "mean_abs": json_number(float(np.mean(np.abs(diff)))),
+        "p50_abs": json_number(float(percentiles[0])),
+        "p90_abs": json_number(float(percentiles[1])),
+        "p99_abs": json_number(float(percentiles[2])),
+        "p999_abs": json_number(float(percentiles[3])),
         "rmse": json_number(float(np.sqrt(mse))),
         "nmse": json_number(nmse),
+        "nrmse": json_number(float(math.sqrt(nmse))),
+        "cosine_similarity": json_number(cosine),
+        "kl_divergence": json_number(kl_divergence),
         "finite": finite,
         "allclose": close,
+        "mismatch_count": int(mismatched.size),
+        "mismatch_fraction": float(mismatched.size / reference.size),
+        "top1_reference": top1_reference,
+        "top1_candidate": top1_candidate,
+        "top1_match": top1_reference == top1_candidate,
+        "topk_overlap": topk_overlap,
         "first_diff_index": first_diff_index,
         "first_diff_reference": None if first_diff_index is None else json_number(float(reference[first_diff_index])),
         "first_diff_candidate": None if first_diff_index is None else json_number(float(candidate[first_diff_index])),

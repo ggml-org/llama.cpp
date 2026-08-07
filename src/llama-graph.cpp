@@ -77,6 +77,14 @@ static bool can_use_cuda_direct_causal(
     return true;
 }
 
+static bool use_cuda_moe_nvfp4_input_scale() {
+    static const bool enabled = [] {
+        const char * value = std::getenv("LLAMA_CUDA_MOE_NVFP4_INPUT_SCALE");
+        return value != nullptr && std::atoi(value) != 0;
+    }();
+    return enabled;
+}
+
 static ggml_tensor * build_cuda_direct_causal_marker(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
@@ -1616,16 +1624,32 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
-          ggml_tensor * w_s) const {
-    ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
+          ggml_tensor * w_s,
+          ggml_tensor * a_s) const {
+    ggml_tensor * cur_base = cur;
+    ggml_tensor * selected_a_s = nullptr;
+
+    auto select_expert_scale = [&](ggml_tensor * scale) {
+        const int64_t n_expert = scale->ne[0];
+        const int64_t n_tokens = ids->ne[1];
+        ggml_tensor * selected = ggml_reshape_3d(ctx0, scale, 1, n_expert, 1);
+        selected = ggml_repeat_4d(ctx0, selected, 1, n_expert, n_tokens, 1);
+        return ggml_get_rows(ctx0, selected, ids);
+    };
+
+    if (a_s && use_cuda_moe_nvfp4_input_scale()) {
+        selected_a_s = select_expert_scale(a_s);
+        cur_base = ggml_repeat_4d(ctx0, cur_base, cur_base->ne[0], ids->ne[0], ids->ne[1], 1);
+        cur_base = ggml_div(ctx0, cur_base, selected_a_s);
+    }
+
+    ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur_base, ids);
 
     if (w_s) {
-        const int64_t n_expert = w_s->ne[0];
-        const int64_t n_tokens = cur->ne[2];
-        ggml_tensor * s = ggml_reshape_3d(ctx0, w_s, 1, n_expert, 1);
-        s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
-        s = ggml_get_rows(ctx0, s, ids);
-        res = ggml_mul(ctx0, res, s);
+        res = ggml_mul(ctx0, res, select_expert_scale(w_s));
+    }
+    if (selected_a_s) {
+        res = ggml_mul(ctx0, res, selected_a_s);
     }
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
@@ -1984,7 +2008,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         ggml_tensor * up_exps_in_s,
+         ggml_tensor * gate_exps_in_s,
+         ggml_tensor * down_exps_in_s) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -2005,7 +2032,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         up_exps_s,
         gate_exps_s,
         down_exps_s,
-        selected_experts_in
+        selected_experts_in,
+        up_exps_in_s,
+        gate_exps_in_s,
+        down_exps_in_s
     );
 }
 
@@ -2033,7 +2063,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         ggml_tensor * up_exps_in_s,
+         ggml_tensor * gate_exps_in_s,
+         ggml_tensor * down_exps_in_s) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -2187,7 +2220,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
+        ggml_tensor * gate_up = build_lora_mm_id(
+            gate_up_exps, cur, selected_experts, up_exps_s, up_exps_in_s); // [n_ff*2, n_expert_used, n_tokens]
         cb(gate_up, "ffn_moe_gate_up", il);
 
         if (up_exps_s) {
@@ -2206,7 +2240,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(up, "ffn_moe_up", il);
     } else {
         // separate gate and up path
-        up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s); // [n_ff, n_expert_used, n_tokens]
+        up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s, up_exps_in_s); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
         if (up_exps_s) {
@@ -2219,7 +2253,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
 
         if (gate_exps) {
-            cur = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
+            cur = build_lora_mm_id(
+                gate_exps, cur, selected_experts, gate_exps_s, gate_exps_in_s); // [n_ff, n_expert_used, n_tokens]
             cb(cur, "ffn_moe_gate", il);
         } else {
             cur = up;
@@ -2308,7 +2343,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    experts = build_lora_mm_id(
+        down_exps, cur, selected_experts, down_exps_s, down_exps_in_s); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_s) {

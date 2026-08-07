@@ -4,6 +4,15 @@ This directory keeps the experiment commands and decision gates for the GPT-OSS
 MXFP4 prefill investigation. The core backend changes remain disabled unless the
 corresponding build or conversion option is selected.
 
+This is a research branch, not one proposed upstream patch. It also contains
+Qwen NVFP4 prefill, CUTLASS decode tests, native CUDA ceilings, and Attention
+experiments. The measured results are in [`RESULTS.md`](RESULTS.md).
+
+The parts worth splitting for review are the fused W13 model layout, shared MoE
+scheduling and epilogues, the optional SM120 CUTLASS W13/W2 path, and Qwen
+NVFP4 prefill as a follow-up. The relaxed Attention ceiling, CUTLASS decode,
+large sweep matrix, and one-off probes should stay in the research branch.
+
 ## Baseline pipeline profile
 
 Build the CUDA backend with NVTX support:
@@ -171,16 +180,207 @@ stderr. A graph mismatch or silent fallback therefore fails the run instead of
 recording native MMQ numbers as CUTLASS results.
 
 The packed values replace the original device tensor contents. Unsupported
-graphs can fall back before the first repack, including startup warmup and
-small-token decode. After repacking, the same weights cannot be consumed by an
-MMQ fallback. Use a separate process for each variant.
+graphs can fall back before the first repack. After repacking, the same weights
+cannot be consumed by an MMQ fallback. Use a separate process for each variant.
 CUTLASS repacking uses the dedicated weight stream by default; W13 waits for its
 own transform while the W2 transform can continue in parallel. Set
 `GGML_CUDA_MOE_MMQ_REPACK_ASYNC=0` to serialize the first-use transform.
 
-CUTLASS writes BF16 intermediates and uses MXFP8 activations, so its logits are
-not expected to be bitwise identical to the native MXFP4 path. Record the full
-metrics before timing:
+`GGML_CUDA_MOE_MMQ_CUTLASS_DECODE=1` enables the experimental one to eight
+token CUTLASS paths. GPT-OSS uses its fused MXFP4 graph, while Qwen NVFP4
+dispatches each expert `MUL_MAT_ID` through an NVFP4 x NVFP4 grouped GEMM. In
+both cases each routed row is a separate GEMM problem. GPT-OSS decode builds a
+direct identity route plan in one kernel instead of sorting the one to 32
+routed rows with the prefill histogram and prefix-sum scheduler.
+
+The GPT-OSS call chain, storage lifetime, memory budget, and remote acceptance
+gates are recorded in
+[`gpt_oss_mxfp4_decode.md`](gpt_oss_mxfp4_decode.md). Use
+`validate_cutlass_decode.sh` for backend correctness,
+`validate_gpt_oss_mxfp4_decode_logits.sh` for separate-process full-model
+logits, `bench_gpt_oss_mxfp4_decode.sh` for throughput, and
+`profile_gpt_oss_mxfp4_decode_nsys.sh` for the native/CUTLASS Nsys comparison.
+
+The Qwen path is limited to 256 experts, top-8 routing, aligned expert shapes,
+and SM120. Separate gate/up with N=512 and fused W13 with N=1024 are both
+accepted. It repacks the canonical `block_nvfp4` values and UE4M3 scales into
+CUTLASS layouts, dynamically quantizes A with 16-value scale vectors, and
+scatters BF16 results back into the existing graph. Per-expert global scales,
+standard SwiGLU, routing weights, reduction, and the shared expert remain on
+the existing llama.cpp path. CUDA graphs must be disabled. The path is accepted
+only when stderr contains `MoE CUTLASS NVFP4 decode dispatch`.
+
+`GGML_CUDA_MOE_MMQ_CUTLASS_DECODE_FUSED=1` enables the strict M=1 Qwen oracle.
+It quantizes the hidden state once, joins gate and up into one routed W13 GEMM,
+quantizes the SwiGLU output in the W13 epilogue, runs one routed W2 GEMM, and
+applies the down scale, routing weight, and expert reduction in one final
+kernel. Gate and up use a persistent paired CUTLASS cache; W2 uses the existing
+in-place CUTLASS layout. The matcher accepts only the 2048/512, 256-expert,
+top-8 NVFP4 graph with standard SwiGLU. Other graphs use the native path. A run
+is accepted only when stderr contains `MoE CUTLASS NVFP4 fused decode dispatch`.
+If a matching M=1 expert GEMM reaches the per-op dispatcher, the strict oracle
+aborts instead of recording a partially fused result.
+
+The oracle keeps the canonical gate/up tensors and adds about 288 MiB of paired
+W13 values and scales per matched MoE layer. The in-place W2 layout adds about
+16 MiB of scale storage per layer. This memory cost is intentional for the
+performance ceiling experiment and is not an upstream cache design.
+
+Two accuracy experiments isolate the remaining numerical differences:
+
+```text
+LLAMA_CUDA_MOE_NVFP4_INPUT_SCALE=1
+GGML_CUDA_MOE_MMQ_CUTLASS_DECODE_OUTPUT_F32=1
+```
+
+The first applies the stored per-expert activation scales before W13 and W2 and
+restores the scale after each GEMM. The second keeps CUTLASS output in F32
+instead of rounding it to BF16 before scattering it into the graph. Both are
+off by default.
+
+## Qwen NVFP4 prefill
+
+The full Qwen prefill path is selected by `GGML_CUDA_MOE_MMQ_BACKEND=cutlass`.
+It is limited to SM120, 256 experts, top-8 routing, hidden size 2048, expert
+size 512, standard SwiGLU, NVFP4 expert weights, and at least 256 tokens. The
+matcher replaces only the routed expert branch. A shared expert and its gate
+remain ordinary graph nodes and consume the fused routed result.
+
+The path performs these steps on one CUDA stream:
+
+1. Copy strided expert IDs and routing weights to compact buffers.
+2. Build one histogram and prefix-sum schedule for W13 and W2.
+3. Quantize each token once to expert-sorted NVFP4 A1 storage.
+4. Run one grouped W13 GEMM over a persistent paired gate/up layout.
+5. Apply gate/up scales and SwiGLU while producing NVFP4 A2 storage.
+6. Run grouped W2 and apply the down scale, routing weight, and top-8 reduction.
+
+The paired W13 cache and copied W2 cache preserve the canonical GGUF tensors,
+so MMVQ and unsupported graphs can still use the original weights. The cache
+cost is about 432 MiB per routed MoE layer for this shape. Transient buffers at
+8192 tokens require about another 480 MiB and are returned to the CUDA pool
+after the fused call. CUDA graph capture occurs only after warmup has populated
+the persistent weight cache; subsequent captures reuse the same device
+addresses.
+
+Graphs that use `LLAMA_CUDA_MOE_NVFP4_INPUT_SCALE=1`, fused gate/up tensors,
+other shapes, short batches, non-CUDA buffers, or a different activation fall
+back without changing the canonical weights.
+
+The call chain and storage contracts are recorded in
+[`qwen_nvfp4_prefill.md`](qwen_nvfp4_prefill.md).
+
+Run backend correctness tests in eager and CUDA graph modes:
+
+```bash
+bash validate_qwen_nvfp4_prefill.sh \
+  build-sm120-cutlass/bin/test-backend-ops \
+  results
+```
+
+Compare full-model prefill logits against the native path:
+
+```bash
+bash validate_qwen_nvfp4_prefill_logits.sh \
+  build-sm120-cutlass/bin/llama-debug \
+  /models/Qwen3.6-35B-A3B-NVFP4.gguf \
+  results
+```
+
+Measure native eager, CUTLASS eager, and CUTLASS with CUDA graphs:
+
+```bash
+bash bench_qwen_nvfp4_prefill.sh \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/Qwen3.6-35B-A3B-NVFP4.gguf \
+  results
+```
+
+Collect native and CUTLASS Nsys profiles with stage-level NVTX ranges:
+
+```bash
+bash profile_qwen_nvfp4_prefill_nsys.sh \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/Qwen3.6-35B-A3B-NVFP4.gguf \
+  results
+```
+
+Validate the one, two, four, and eight-token backend graphs against the native
+path before measuring the full model:
+
+```bash
+bash validate_cutlass_decode.sh \
+  build-sm120-cutlass/bin/test-backend-ops \
+  results
+```
+
+Validate Qwen NVFP4 W13 and W2 shapes separately. The script covers M=1, 2, 4,
+and 8 for each individual GEMM, then checks complete W13, SwiGLU, W2, routing,
+and reduction blocks at M=1 and 8. Both BF16 and F32 per-op outputs are tested,
+followed by the fused M=1 oracle:
+
+```bash
+bash validate_cutlass_nvfp4_decode.sh \
+  build-sm120-cutlass/bin/test-backend-ops \
+  results
+```
+
+Validate the M=1 MoE path with single-token full-model logits. The default
+prompt is `Hello`; set `DECODE_LOGITS_PROMPT` if it is not one token for the
+model tokenizer. The script records native, calibrated native, dynamic CUTLASS,
+calibrated CUTLASS, BF16 output, and F32 output in separate processes. It writes
+NMSE, NRMSE, absolute-error percentiles, cosine similarity, KL divergence, and
+top-k overlap to `summary.md`. Set `VLLM_LOGITS_FILE` to a raw float32 logits
+file to add the same comparisons against vLLM:
+
+```bash
+bash validate_cutlass_nvfp4_decode_logits.sh \
+  build-sm120-cutlass/bin/llama-debug \
+  /models/Qwen3.6-35B-A3B-NVFP4.gguf \
+  results
+```
+
+Compare native MMVQ and the calibrated/dynamic CUTLASS variants with the same
+generation workload. Set `DECODE_FULL_MATRIX=1` to add the dynamic F32 case.
+The runner writes the throughput comparison to `summary.md`:
+
+```bash
+bash bench_cutlass_decode.sh \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/gpt-oss-120b-fused-w13.gguf \
+  results
+```
+
+Use the same A/B runner for Qwen NVFP4:
+
+```bash
+bash bench_cutlass_decode.sh \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/Qwen3.6-35B-A3B-NVFP4.gguf \
+  results
+```
+
+The decode Nsys runner profiles native, dynamic BF16 CUTLASS, fused M=1 BF16,
+calibrated BF16 CUTLASS, and calibrated F32 CUTLASS in separate processes. Set
+`DECODE_NSYS_FULL_MATRIX=1` to add calibrated native and dynamic F32. It keeps
+the one-token llama-bench warmup so the timed CUTLASS run does not include
+weight repacking. `summary.md` reports the transform separately and normalizes
+the remaining kernel totals by the warmup and measured decode steps.
+
+```bash
+bash profile_cutlass_decode_nsys.sh \
+  build-sm120-cutlass/bin/llama-bench \
+  /models/gpt-oss-120b-fused-w13.gguf \
+  results
+```
+
+Passing the Qwen NVFP4 GGUF to the same script produces the native MMVQ versus
+CUTLASS comparison and separates scheduling, activation quantization, grouped
+GEMM, one-time weight repacking, and the remaining graph epilogues.
+
+The GPT-OSS CUTLASS path writes BF16 intermediates and uses MXFP8 activations,
+so its logits are not expected to be bitwise identical to the native MXFP4
+path. Record the full metrics before timing:
 
 ```bash
 bash validate_cutlass_moe.sh \

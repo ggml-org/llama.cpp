@@ -218,7 +218,8 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 #define NCCL_CHECK(err) CUDA_CHECK_GEN(err, ncclSuccess, ncclGetErrorString)
 #endif // GGML_USE_NCCL
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)
+#if !defined(GGML_USE_HIP) && \
+    (!defined(GGML_CUDA_NO_VMM) || (!defined(GGML_USE_MUSA) && CUDART_VERSION >= 12080))
 static const char * cu_get_error_str(CUresult err) {
     const char * err_str;
     cuGetErrorString(err, &err_str);
@@ -1411,10 +1412,19 @@ struct ggml_cuda_stream_context {
     }
 };
 
+uint64_t ggml_cuda_buffer_get_generation(ggml_backend_buffer_t buffer);
+
 struct ggml_cuda_moe_weight_cache_entry {
     const ggml_tensor * source = nullptr;
     const void * source_data = nullptr;
+    ggml_backend_buffer_t source_buffer = nullptr;
+    uint64_t source_buffer_generation = 0;
+    const ggml_tensor * source_secondary = nullptr;
+    const void * source_secondary_data = nullptr;
+    ggml_backend_buffer_t source_secondary_buffer = nullptr;
+    uint64_t source_secondary_buffer_generation = 0;
     int layout = 0;
+    bool preserves_source = false;
     int64_t ne[3] = {};
     void * data = nullptr;
     bool owns_data = false;

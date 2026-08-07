@@ -57,15 +57,16 @@ def kernel_category(name: str) -> str:
         return "KQ mask"
     if "moe_tma_w13" in lower or "moe_tma_persistent" in lower:
         return "MoE GEMM"
-    if "cutlass" in lower and "gemm" in lower:
+    if "cutlass::device_kernel<cutlass::gemm::kernel::gemmuniversal" in lower:
         return "MoE GEMM"
-    if "mul_mat_q<(ggml_type)39" in lower:
+    if "mul_mat_q<(ggml_type)39" in lower or "mul_mat_q<(ggml_type)40" in lower:
         return "MoE GEMM"
     if "quantize_mmq" in lower or "moe_quantize" in lower or "moe_cutlass_quantize" in lower:
         return "MoE activation quant"
     if "moe_mmq_repack" in lower:
         return "MoE weight repack (one-time)"
-    if "mm_ids_helper" in lower or "mm_ids_prefix" in lower or "topk" in lower or "top_k" in lower:
+    if ("mm_ids_helper" in lower or "mm_ids_prefix" in lower or "moe_cutlass_stage_routes" in lower or
+            "topk" in lower or "top_k" in lower):
         return "MoE routing"
     if "moe_mmq_" in lower or "moe_cutlass_" in lower or "swiglu_oai" in lower or "add_id_kernel" in lower:
         return "MoE epilogue"
@@ -107,20 +108,26 @@ def main() -> int:
             "nvtx": nvtx_rows,
         }
 
+    baseline = case_data.get("baseline")
+    if baseline is None:
+        baseline = next(
+            (data for data in case_data.values() if data["entry"].get("backend") == "native"),
+            None,
+        )
     baseline_rows = {
         int(row["n_ubatch"]): row
-        for row in case_data.get("baseline", {}).get("bench", [])
+        for row in (baseline["bench"] if baseline is not None else [])
     }
 
     print("# Blackwell prefill Nsys summary")
     print(
-        "\nProfiled throughput includes Nsys overhead and the first-use weight repack. "
-        "It is not the warmed acceptance benchmark.\n"
+        "\nBenchmark throughput uses the measured samples and includes Nsys overhead. "
+        "CUDA totals include all traced work; the first-use weight repack is reported separately.\n"
     )
     print("| Case | Validation | Tokens | Ubatch | Latency ms | tok/s | vs baseline |")
     print("|---|---|---:|---:|---:|---:|---:|")
     for label, data in case_data.items():
-        validation = data["entry"]["validation"]
+        validation = data["entry"].get("validation", data["entry"].get("backend", ""))
         for row in data["bench"]:
             ubatch = int(row["n_ubatch"])
             throughput = float(row["avg_ts"])
@@ -144,8 +151,16 @@ def main() -> int:
         traced_totals[label] = (total_ns, repack_ns)
 
     baseline_steady_ns = None
-    if "baseline" in traced_totals:
-        baseline_total, baseline_repack = traced_totals["baseline"]
+    baseline_label = next(
+        (
+            label
+            for label, data in case_data.items()
+            if label == "baseline" or data["entry"].get("backend") == "native"
+        ),
+        None,
+    )
+    if baseline_label is not None:
+        baseline_total, baseline_repack = traced_totals[baseline_label]
         baseline_steady_ns = baseline_total - baseline_repack
 
     print("\n## Summed CUDA kernel time")

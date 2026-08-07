@@ -1,4 +1,4 @@
-# GPT-OSS-120B prefill on Blackwell
+# Blackwell 4-bit MoE results
 
 On one RTX PRO 6000 Blackwell, the bitwise-compatible path improves
 GPT-OSS-120B MXFP4 prefill from 9,168 to 17,708 tok/s at pp8192. This is a
@@ -13,6 +13,12 @@ A later direct CUTLASS run reached 24,763 tok/s. Its W13 and W2 grouped GEMMs
 took 111.73 ms, compared with 105.07 ms in vLLM. A follow-up replaced the three
 slow support stages and reached 25,714 tok/s. The optimized support path is
 bitwise identical to the earlier CUTLASS support path.
+
+The Qwen3.6-35B-A3B NVFP4 path also benefits from CUTLASS. At pp8192 it
+improves from 10,065 to 13,549 tok/s. Decode is different: native MMVQ reaches
+201.87 tok/s on GPT-OSS, while the CUTLASS path reaches 170.21 tok/s. The
+useful split is therefore CUTLASS for supported prefill graphs and MMVQ for
+single-token decode.
 
 These are direct prefill measurements, not serving throughput. I did not
 compare them directly with the llama-benchy number because llama-benchy
@@ -60,6 +66,86 @@ enough grouped-MMQ work, while the generic path loses efficiency at that size.
 The ceiling gains another 5,593 tok/s over the strict path. Nsys attributes
 nearly all of that difference to Attention and RoPE rather than another MoE
 change.
+
+## Qwen3.6-35B-A3B NVFP4 prefill
+
+This run used the same RTX PRO 6000, batch and ubatch 8192, 25 CPU threads,
+FlashAttention, and five repetitions. The native and CUTLASS modes ran in
+separate processes.
+
+| Prompt | Native eager | CUTLASS eager | Speedup | CUTLASS graphs |
+| ---: | ---: | ---: | ---: | ---: |
+| 512 | 9,819.79 tok/s | 12,998.69 tok/s | 1.324x | 12,979.09 tok/s |
+| 2048 | 11,362.81 tok/s | 15,309.67 tok/s | 1.347x | 15,160.20 tok/s |
+| 8192 | 10,065.18 tok/s | 13,548.77 tok/s | 1.346x | 13,551.11 tok/s |
+
+CUDA graphs do not move the result. The gain comes from the expert path, not
+from lower launch overhead.
+
+The Nsys run used pp8192. Kernel totals include the warmup and measured pass;
+the throughput column uses the measured pass. The repack is first-use work and
+is excluded from the steady total.
+
+| Component | Native | CUTLASS |
+| --- | ---: | ---: |
+| Profiled prefill | 9,977.8 tok/s | 13,377.0 tok/s |
+| All steady CUDA kernels | 1,291.861 ms | 863.054 ms |
+| MoE GEMM | 282.364 ms | 63.213 ms |
+| Expert scheduling | 61.069 ms | 1.108 ms |
+| Activation quantization | 45.941 ms | 27.656 ms |
+| CUTLASS epilogues | - | 35.316 ms |
+| Attention | 76.195 ms | 75.589 ms |
+| First-use weight repack | 0 | 74.715 ms |
+
+The native graph runs separate gate, up, and down expert operations. The
+CUTLASS path schedules once, quantizes A1 once, runs a fused W13, produces A2
+in the SwiGLU epilogue, then runs W2 and the final route reduction. Backend
+correctness passed 6/6 cases in eager mode and 6/6 with CUDA graphs. These are
+backend graph tests; a full-model logits comparison is still separate work.
+
+## GPT-OSS MXFP4 decode
+
+The decode comparison generated 128 tokens with batch and ubatch 512, 25 CPU
+threads, and five repetitions. Both modes used eager execution.
+
+| Path | Latency | Decode | Relative to MMVQ |
+| --- | ---: | ---: | ---: |
+| Native MMVQ | 634.085 ms | 201.868 tok/s | 1.000x |
+| CUTLASS full | 752.039 ms | 170.207 tok/s | 0.843x |
+
+The 32-token Nsys run shows the same result:
+
+| Component | Native MMVQ | CUTLASS |
+| --- | ---: | ---: |
+| Profiled decode | 194.349 tok/s | 163.225 tok/s |
+| Steady GPU time per token | 5.882 ms | 6.634 ms |
+| Quantized mat-vec | 4.584 ms | 2.939 ms |
+| CUTLASS MoE GEMM | - | 1.745 ms |
+| MoE epilogue | 0.041 ms | 0.794 ms |
+| CUTLASS activation quantization | - | 0.138 ms |
+| Expert routing | 0.097 ms | 0.097 ms |
+| Kernel launches per token | 831 | 831 |
+| First-use weight repack | 0 | 256.736 ms |
+
+All 36 expert layers used the direct-CTA CUTLASS path; this is not a fallback
+result. Backend correctness passed all six token-count, graph-order, and
+routing-distribution cases. At M=1, CUTLASS cannot fill its tensor-core tiles
+or amortize quantization and epilogue work. MMVQ remains the better decode
+kernel.
+
+## Runtime dispatch
+
+The measurements support a simple default:
+
+```text
+supported SM120 W4A4 prefill -> CUTLASS
+single-token decode          -> MMVQ
+everything else              -> existing llama.cpp path
+```
+
+High-concurrency decode may cross over to CUTLASS, but that is a server
+workload and was not measured here. It should not change the single-stream
+default.
 
 ## Direct CUTLASS follow-up
 
@@ -270,6 +356,25 @@ take about 40.0 ms across 108 launches. Earlier notes quoted about 106.7 ms for
 the grouped GEMMs and 32.8 ms for Attention after broader grouping; the table
 uses the raw named-kernel totals of 105.041 and 32.422 ms.
 
+## Branch scope
+
+This branch grew into a test bed. I would not submit it as one patch. It
+contains the native CUDA experiments, the CUTLASS path, Attention ceilings,
+Qwen support, decode oracles, and the profiling matrix.
+
+The pieces that can reasonably be reviewed on their own are:
+
+1. Fused W13 GGUF conversion and loading.
+2. Shared expert scheduling, activation quantization, and the two MoE
+   epilogues.
+3. The optional SM120 CUTLASS build and MXFP4 W13/W2 path.
+4. Qwen NVFP4 prefill as a follow-up using the same backend interface.
+5. Backend correctness and benchmark scripts with each patch.
+
+The relaxed Attention ceiling, CUTLASS decode path, large experiment matrix,
+and one-off probes are results, not upstream candidates. The decode path is
+useful evidence for keeping MMVQ as the default.
+
 ## Remaining gap
 
 The three support-kernel experiments reached their compute targets. Input
@@ -305,8 +410,5 @@ gap, and the optimized CUDA support kernels close the three surrounding compute
 gaps. Further gains now depend more on launch integration and Attention than on
 another rewrite of the grouped-GEMM mainloop.
 
-I implemented the fused W13 layout, shared MoE scheduling and epilogues, SM120
-TMA W13/W2, direct causal Attention, add-plus-RMSNorm, and the faster numerical-
-relaxed Attention version in the same branch so their effects could be measured
-separately. The code and benchmark switches keep these versions independently
-selectable for review and cherry-picking.
+The branch keeps the versions separately selectable so the smaller pieces can
+be extracted without carrying the full experiment matrix.

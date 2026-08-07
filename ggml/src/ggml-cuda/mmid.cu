@@ -312,22 +312,34 @@ bool ggml_cuda_launch_mm_ids_prefix(const int32_t * __restrict__ ids,
                                     int n_expert_used,
                                     int si1,
                                     cudaStream_t stream) {
-    if (n_experts <= 0 || n_experts > MM_IDS_PREFIX_THREADS || n_tokens <= 0 || n_expert_used != 4 ||
+    if (n_experts <= 0 || n_experts > MM_IDS_PREFIX_THREADS || n_tokens <= 0 ||
+        (n_expert_used != 4 && n_expert_used != 8) ||
         si1 < n_expert_used) {
         return false;
     }
 
     const int n_rows   = (int) ((int64_t) n_tokens * n_expert_used);
     const int n_blocks = ggml_cuda_mm_ids_prefix_block_count(n_tokens, n_expert_used);
-    mm_ids_prefix_count<4><<<n_blocks, MM_IDS_PREFIX_THREADS, n_experts * sizeof(int32_t), stream>>>(
-        ids, block_counts, n_rows, n_experts, si1);
+    if (n_expert_used == 4) {
+        mm_ids_prefix_count<4><<<n_blocks, MM_IDS_PREFIX_THREADS, n_experts * sizeof(int32_t), stream>>>(
+            ids, block_counts, n_rows, n_experts, si1);
+    } else {
+        mm_ids_prefix_count<8><<<n_blocks, MM_IDS_PREFIX_THREADS, n_experts * sizeof(int32_t), stream>>>(
+            ids, block_counts, n_rows, n_experts, si1);
+    }
     CUDA_CHECK(cudaGetLastError());
     mm_ids_prefix_scan<<<1, MM_IDS_PREFIX_THREADS, 0, stream>>>(
         block_counts, block_offsets, expert_bounds, n_blocks, n_experts);
     CUDA_CHECK(cudaGetLastError());
-    mm_ids_prefix_scatter<4><<<n_blocks, MM_IDS_PREFIX_THREADS,
-                               MM_IDS_PREFIX_WARPS * n_experts * sizeof(int32_t), stream>>>(
-        ids, block_offsets, expert_bounds, ids_src1, ids_dst, row_expert, n_rows, n_experts, si1);
+    if (n_expert_used == 4) {
+        mm_ids_prefix_scatter<4><<<n_blocks, MM_IDS_PREFIX_THREADS,
+                                   MM_IDS_PREFIX_WARPS * n_experts * sizeof(int32_t), stream>>>(
+            ids, block_offsets, expert_bounds, ids_src1, ids_dst, row_expert, n_rows, n_experts, si1);
+    } else {
+        mm_ids_prefix_scatter<8><<<n_blocks, MM_IDS_PREFIX_THREADS,
+                                   MM_IDS_PREFIX_WARPS * n_experts * sizeof(int32_t), stream>>>(
+            ids, block_offsets, expert_bounds, ids_src1, ids_dst, row_expert, n_rows, n_experts, si1);
+    }
     CUDA_CHECK(cudaGetLastError());
     return true;
 }

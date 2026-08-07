@@ -9,11 +9,14 @@
 #    include "moe-profile.cuh"
 #endif
 
+#include <atomic>
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+static constexpr int moe_mmq_cutlass_decode_max_tokens = 8;
 
 enum class moe_mmq_w13_epilogue_mode {
     staged,
@@ -69,6 +72,8 @@ struct moe_mmq_config {
     bool                        cutlass_cta_quant;
     bool                        cutlass_cta_activation;
     bool                        cutlass_validate_support;
+    bool                        cutlass_decode;
+    bool                        cutlass_decode_log;
     int                         cutlass_activation_rows;
     int                         repack_cache_entries;
     int                         activation_format;
@@ -285,6 +290,8 @@ static const moe_mmq_config & moe_mmq_get_config() {
             backend == moe_mmq_backend::cutlass &&
                 !moe_mmq_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_CTA_ACTIVATION_DISABLE"),
             backend == moe_mmq_backend::cutlass && moe_mmq_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_VALIDATE_SUPPORT"),
+            moe_mmq_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_DECODE"),
+            moe_mmq_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_DECODE_LOG"),
             moe_mmq_env_cutlass_activation_rows(),
             moe_mmq_env_int("GGML_CUDA_MOE_MMQ_REPACK_CACHE_ENTRIES", 2, 2, 16),
             moe_mmq_env_activation_format(backend),
@@ -317,6 +324,12 @@ static const moe_mmq_config & moe_mmq_get_config() {
             if (!result.w13.persistent || !result.w2.persistent) {
                 GGML_ABORT("the CUTLASS MoE backend requires both grouped GEMM stages");
             }
+            if (result.cutlass_decode_log && !result.cutlass_decode) {
+                GGML_ABORT("CUTLASS MoE decode logging requires the decode path");
+            }
+            if (result.cutlass_decode && !result.cutlass_cta_quant) {
+                GGML_ABORT("the CUTLASS MoE decode path requires CTA input quantization");
+            }
             if (result.tma_warp_specialized || result.tma_require || result.use_weight_pipeline) {
                 GGML_ABORT("the CUTLASS MoE backend cannot use native TMA options");
             }
@@ -330,8 +343,13 @@ static const moe_mmq_config & moe_mmq_get_config() {
                 result.w2_epilogue != moe_mmq_w2_epilogue_mode::fused) {
                 GGML_ABORT("unfused CUTLASS W2 requires the staged or fused epilogue");
             }
-        } else if (result.weight_layout == ggml_cuda_moe_weight_layout::cutlass) {
-            GGML_ABORT("cutlass weights require the CUTLASS MoE backend");
+        } else {
+            if (result.weight_layout == ggml_cuda_moe_weight_layout::cutlass) {
+                GGML_ABORT("cutlass weights require the CUTLASS MoE backend");
+            }
+            if (result.cutlass_decode || result.cutlass_decode_log) {
+                GGML_ABORT("CUTLASS MoE decode options require the CUTLASS backend");
+            }
         }
         if (result.use_weight_pipeline) {
             if (result.weight_layout != ggml_cuda_moe_weight_layout::split) {
@@ -379,7 +397,8 @@ static ggml_cuda_moe_cutlass_config moe_mmq_cutlass_config(const moe_mmq_cutlass
                                                             int64_t                              n_rows,
                                                             int64_t                              n_cols,
                                                             int                                  n_experts,
-                                                            bool                                 pdl) {
+                                                            bool                                 pdl,
+                                                            bool                                 route_groups = false) {
     int tile_n = config.tile_n;
     if (tile_n == 0) {
         if (config.swap_ab) {
@@ -389,7 +408,7 @@ static ggml_cuda_moe_cutlass_config moe_mmq_cutlass_config(const moe_mmq_cutlass
             tile_n = n_cols % 128 == 0 ? 128 : n_cols % 64 == 0 ? 64 : 32;
         }
     }
-    return { tile_n, config.swap_ab, pdl };
+    return { tile_n, config.swap_ab, pdl, route_groups };
 }
 
 template <int J>
@@ -622,12 +641,13 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
                                 const moe_mmq_config &               config,
                                 const ggml_cuda_moe_weight_view &    w13_weight,
                                 const ggml_cuda_moe_weight_view &    w2_weight,
-                                const int32_t *                      ids_src1,
-                                const int32_t *                      ids_dst,
-                                const int32_t *                      row_expert,
+                                int32_t *                            ids_src1,
+                                int32_t *                            ids_dst,
+                                int32_t *                            row_expert,
                                 const int32_t *                      expert_bounds,
                                 int                                  sm_count,
-                                int64_t                              ids_stride) {
+                                int64_t                              ids_stride,
+                                bool                                 route_groups) {
     const int64_t n_experts     = args.gate_up->ne[2];
     const int64_t n_expert_used = args.ids->ne[0];
     const int64_t n_tokens      = args.ids->ne[1];
@@ -638,9 +658,9 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
     const int64_t w2_k          = w2_weight.ncols;
     cudaStream_t  stream        = ctx.stream();
     const ggml_cuda_moe_cutlass_config w13_config =
-        moe_mmq_cutlass_config(config.cutlass_w13, n_rows, 2 * n_ff, n_experts, config.cutlass_pdl);
+        moe_mmq_cutlass_config(config.cutlass_w13, n_rows, 2 * n_ff, n_experts, config.cutlass_pdl, route_groups);
     const ggml_cuda_moe_cutlass_config w2_config =
-        moe_mmq_cutlass_config(config.cutlass_w2, n_rows, n_embd, n_experts, config.cutlass_pdl);
+        moe_mmq_cutlass_config(config.cutlass_w2, n_rows, n_embd, n_experts, config.cutlass_pdl, route_groups);
 
     GGML_ASSERT(w13_k >= n_embd && w13_k % 128 == 0);
     GGML_ASSERT(w2_k >= n_ff && w2_k % 128 == 0);
@@ -650,9 +670,11 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
     ggml_cuda_pool_alloc<uint8_t> w2_input(ctx.pool());
     ggml_cuda_pool_alloc<uint8_t> w2_scales(ctx.pool());
     uint8_t * w13_input_data = w13_input.alloc(ggml_cuda_moe_cutlass_activation_size(n_rows, w13_k));
-    uint8_t * w13_scale_data = w13_scales.alloc(ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w13_k));
+    uint8_t * w13_scale_data =
+        w13_scales.alloc(ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w13_k, route_groups));
     uint8_t * w2_input_data  = w2_input.alloc(ggml_cuda_moe_cutlass_activation_size(n_rows, w2_k));
-    uint8_t * w2_scale_data  = w2_scales.alloc(ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w2_k));
+    uint8_t * w2_scale_data =
+        w2_scales.alloc(ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w2_k, route_groups));
 
     ggml_cuda_pool_alloc<__nv_bfloat16> w13_compact_alloc(ctx.pool());
     ggml_cuda_pool_alloc<__nv_bfloat16> w2_compact_alloc(ctx.pool());
@@ -664,29 +686,33 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
 #ifdef GGML_CUDA_MOE_PROFILE
     {
         const ggml_cuda_moe_profile_scope profile_scope(
+            route_groups ? "ffn_moe.cutlass_quant_input_direct_cta" :
             config.cutlass_cta_quant ? "ffn_moe.cutlass_quant_input_cta" : "ffn_moe.cutlass_quant_input");
 #endif
         const bool cta_quant = config.cutlass_cta_quant && ggml_cuda_moe_cutlass_quantize_broadcast_cta(
-            (const float *) args.input->data, (const int32_t *) args.ids->data, ids_src1, expert_bounds,
-            w13_input_data, w13_scale_data, n_embd, w13_k, args.input->nb[2] / sizeof(float), n_tokens, n_experts,
-            n_expert_used, ids_stride, stream);
+            (const float *) args.input->data, (const int32_t *) args.ids->data, ids_src1, ids_dst, row_expert,
+            expert_bounds, w13_input_data, w13_scale_data, n_embd, w13_k, args.input->nb[2] / sizeof(float),
+            n_tokens, n_experts, n_expert_used, ids_stride, route_groups, stream);
+        if (route_groups && !cta_quant) {
+            GGML_ABORT("the CUTLASS MoE decode route plan could not be fused with input quantization");
+        }
         if (!cta_quant) {
             ggml_cuda_moe_cutlass_quantize_broadcast(
                 (const float *) args.input->data, (const int32_t *) args.ids->data, ids_src1, expert_bounds,
                 w13_input_data, w13_scale_data, n_embd, w13_k, args.input->nb[2] / sizeof(float), n_tokens, n_experts,
-                n_expert_used, ids_stride, stream);
+                n_expert_used, ids_stride, route_groups, stream);
         }
         if (config.cutlass_validate_support && cta_quant) {
             ggml_cuda_pool_alloc<uint8_t> reference_input(ctx.pool());
             ggml_cuda_pool_alloc<uint8_t> reference_scales(ctx.pool());
             const size_t input_size = ggml_cuda_moe_cutlass_activation_size(n_rows, w13_k);
-            const size_t scale_size = ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w13_k);
+            const size_t scale_size = ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w13_k, route_groups);
             uint8_t * reference_input_data  = reference_input.alloc(input_size);
             uint8_t * reference_scale_data  = reference_scales.alloc(scale_size);
             ggml_cuda_moe_cutlass_quantize_broadcast(
                 (const float *) args.input->data, (const int32_t *) args.ids->data, ids_src1, expert_bounds,
                 reference_input_data, reference_scale_data, n_embd, w13_k, args.input->nb[2] / sizeof(float), n_tokens,
-                n_experts, n_expert_used, ids_stride, stream);
+                n_experts, n_expert_used, ids_stride, route_groups, stream);
             moe_mmq_validate_equal(ctx, w13_input_data, reference_input_data, input_size, "input activation");
             moe_mmq_validate_equal(ctx, w13_scale_data, reference_scale_data, scale_size, "input scales");
         }
@@ -696,8 +722,9 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
         const ggml_cuda_moe_profile_scope profile_scope("ffn_moe.cutlass_w13");
 #endif
         ggml_cuda_moe_weight_wait_ready(w13_weight, stream);
-        if (!ggml_cuda_moe_cutlass_gemm(ctx, w13_weight, w13_input_data, w13_scale_data, expert_bounds, w13_compact,
-                                        n_experts, n_rows, 2 * n_ff, w13_k, sm_count, w13_config, stream, true)) {
+        if (!ggml_cuda_moe_cutlass_gemm(ctx, w13_weight, w13_input_data, w13_scale_data, expert_bounds, row_expert,
+                                        w13_compact, n_experts, n_rows, 2 * n_ff, w13_k, sm_count, w13_config, stream,
+                                        true)) {
             GGML_ABORT("required CUTLASS W13 launch failed");
         }
         ggml_cuda_moe_weight_mark_used(w13_weight, stream);
@@ -719,7 +746,8 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
         }
         ggml_cuda_moe_cutlass_quantize_routes(
             (const float *) args.activation->data, (const int32_t *) args.ids->data, ids_src1, expert_bounds,
-            w2_input_data, w2_scale_data, n_ff, w2_k, n_tokens, n_experts, n_expert_used, ids_stride, stream);
+            w2_input_data, w2_scale_data, n_ff, w2_k, n_tokens, n_experts, n_expert_used, ids_stride, route_groups,
+            stream);
     } else {
 #ifdef GGML_CUDA_MOE_PROFILE
         const ggml_cuda_moe_profile_scope profile_scope(
@@ -729,24 +757,24 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
         const bool cta_activation = config.cutlass_cta_activation && ggml_cuda_moe_cutlass_w13_epilogue_cta(
             w13_compact, (const float *) args.gate_up_bias->data, (const int32_t *) args.ids->data, ids_dst,
             row_expert, expert_bounds, w2_input_data, w2_scale_data, n_ff, w2_k, n_rows, n_experts, n_expert_used,
-            config.cutlass_activation_rows, ids_stride, stream);
+            config.cutlass_activation_rows, ids_stride, route_groups, stream);
         if (!cta_activation) {
             ggml_cuda_moe_cutlass_w13_epilogue(
                 w13_compact, (const float *) args.gate_up_bias->data, (const int32_t *) args.ids->data, ids_dst,
                 expert_bounds, w2_input_data, w2_scale_data, n_ff, w2_k, n_rows, n_experts, n_expert_used, ids_stride,
-                stream);
+                route_groups, stream);
         }
         if (config.cutlass_validate_support && cta_activation) {
             ggml_cuda_pool_alloc<uint8_t> reference_input(ctx.pool());
             ggml_cuda_pool_alloc<uint8_t> reference_scales(ctx.pool());
             const size_t input_size = ggml_cuda_moe_cutlass_activation_size(n_rows, w2_k);
-            const size_t scale_size = ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w2_k);
+            const size_t scale_size = ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w2_k, route_groups);
             uint8_t * reference_input_data = reference_input.alloc(input_size);
             uint8_t * reference_scale_data = reference_scales.alloc(scale_size);
             ggml_cuda_moe_cutlass_w13_epilogue(
                 w13_compact, (const float *) args.gate_up_bias->data, (const int32_t *) args.ids->data, ids_dst,
                 expert_bounds, reference_input_data, reference_scale_data, n_ff, w2_k, n_rows, n_experts,
-                n_expert_used, ids_stride, stream);
+                n_expert_used, ids_stride, route_groups, stream);
             moe_mmq_validate_equal(ctx, w2_input_data, reference_input_data, input_size, "W13 activation");
             moe_mmq_validate_equal(ctx, w2_scale_data, reference_scale_data, scale_size, "W13 activation scales");
         }
@@ -757,8 +785,9 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
         const ggml_cuda_moe_profile_scope profile_scope("ffn_moe.cutlass_w2");
 #endif
         ggml_cuda_moe_weight_wait_ready(w2_weight, stream);
-        if (!ggml_cuda_moe_cutlass_gemm(ctx, w2_weight, w2_input_data, w2_scale_data, expert_bounds, w2_compact,
-                                        n_experts, n_rows, n_embd, w2_k, sm_count, w2_config, stream, true)) {
+        if (!ggml_cuda_moe_cutlass_gemm(ctx, w2_weight, w2_input_data, w2_scale_data, expert_bounds, row_expert,
+                                        w2_compact, n_experts, n_rows, n_embd, w2_k, sm_count, w2_config, stream,
+                                        true)) {
             GGML_ABORT("required CUTLASS W2 launch failed");
         }
         ggml_cuda_moe_weight_mark_used(w2_weight, stream);
@@ -789,18 +818,38 @@ static bool moe_mmq_run_cutlass(ggml_backend_cuda_context &         ctx,
     return true;
 }
 
+bool ggml_cuda_moe_cutlass_prefill_requested() {
+    const moe_mmq_config & config = moe_mmq_get_config();
+    return !config.disabled && config.backend == moe_mmq_backend::cutlass &&
+           config.cutlass_fusion == moe_mmq_cutlass_fusion::full &&
+           !moe_mmq_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_NVFP4_PREFILL_DISABLE");
+}
+
+bool ggml_cuda_moe_cutlass_decode_requested() {
+    const moe_mmq_config & config = moe_mmq_get_config();
+    return !config.disabled && config.backend == moe_mmq_backend::cutlass && config.cutlass_decode;
+}
+
+bool ggml_cuda_moe_cutlass_decode_log_requested() {
+    const moe_mmq_config & config = moe_mmq_get_config();
+    return !config.disabled && config.backend == moe_mmq_backend::cutlass && config.cutlass_decode_log;
+}
+
 bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_args & args) {
     const moe_mmq_config & config      = moe_mmq_get_config();
     const auto &           device_info = ggml_cuda_info().devices[ctx.device];
     const int              cc          = device_info.cc;
     const int64_t          n_tokens    = args.ids->ne[1];
+    const bool cutlass_decode = config.backend == moe_mmq_backend::cutlass && config.cutlass_decode &&
+                                n_tokens <= moe_mmq_cutlass_decode_max_tokens;
 
     if (config.disabled) {
         return false;
     }
 
     const bool inplace_layout = config.weight_layout == ggml_cuda_moe_weight_layout::tma_inplace;
-    if (!blackwell_mma_available(cc) || (!inplace_layout && n_tokens < 256) || n_tokens >= (1 << 22) ||
+    if (!blackwell_mma_available(cc) || (!inplace_layout && !cutlass_decode && n_tokens < 256) ||
+        n_tokens >= (1 << 22) ||
         (size_t) n_tokens > device_info.smpbo / sizeof(uint32_t)) {
         return false;
     }
@@ -839,7 +888,7 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
         if (!logged) {
             GGML_LOG_INFO(
                 "MoE MMQ: backend=%s cutlass-fusion=%s cutlass-pdl=%d cutlass-prefix=%d cutlass-cta-quant=%d "
-                "cutlass-cta-activation=%d cutlass-validate=%d cutlass-activation-rows=%d plan=%d "
+                "cutlass-cta-activation=%d cutlass-validate=%d cutlass-decode=%d cutlass-activation-rows=%d plan=%d "
                 "w13-epilogue=%s w2-epilogue=%s weights=%s "
                 "cp-async=%d weight-pipeline=%d "
                 "async-repack=%d repack-cache=%d activation-format=%s tma-warp=%d tma-require=%d tma-tail=%d "
@@ -848,8 +897,8 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
                 "cutlass={w13-tile-n=%d,w13-swap=%d,w2-tile-n=%d,w2-swap=%d} padded=%d\n",
                 moe_mmq_backend_name(config.backend), moe_mmq_cutlass_fusion_name(config.cutlass_fusion),
                 config.cutlass_pdl, config.cutlass_prefix_schedule, config.cutlass_cta_quant,
-                config.cutlass_cta_activation, config.cutlass_validate_support, config.cutlass_activation_rows,
-                config.shared_plan,
+                config.cutlass_cta_activation, config.cutlass_validate_support, config.cutlass_decode,
+                config.cutlass_activation_rows, config.shared_plan,
                 moe_mmq_w13_epilogue_name(config.w13_epilogue),
                 moe_mmq_w2_epilogue_name(config.w2_epilogue),
                 moe_mmq_weight_layout_name(config.weight_layout), config.use_cp_async, config.use_weight_pipeline,
@@ -886,9 +935,9 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
         const ggml_cuda_moe_profile_scope profile_scope("ffn_moe.weight_repack");
 #endif
         if (!ggml_cuda_moe_repack_weight(ctx, args.gate_up, w13_layout, w13_weight, repack_stream,
-                                         config.repack_cache_entries, !config.async_repack) ||
+                                         config.repack_cache_entries, !config.async_repack, false) ||
             !ggml_cuda_moe_repack_weight(ctx, args.down, w2_layout, w2_weight, repack_stream,
-                                         config.repack_cache_entries, !config.async_repack)) {
+                                         config.repack_cache_entries, !config.async_repack, false)) {
             if (config.backend == moe_mmq_backend::cutlass) {
                 GGML_ABORT("required CUTLASS MoE weight repack is not available");
             }
@@ -918,11 +967,14 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
     ggml_cuda_pool_alloc<int32_t> row_expert(ctx.pool());
     ggml_cuda_pool_alloc<int32_t> prefix_block_counts(ctx.pool());
     ggml_cuda_pool_alloc<int32_t> prefix_block_offsets(ctx.pool());
+    bool                          route_plan  = false;
     bool                          prefix_plan = false;
     if (config.shared_plan) {
         ids_src1.alloc(n_rows);
         ids_dst.alloc(n_rows);
-        expert_bounds.alloc(n_experts + 1);
+        if (!cutlass_decode) {
+            expert_bounds.alloc(n_experts + 1);
+        }
 #ifdef GGML_CUDA_MOE_PROFILE
         const ggml_cuda_moe_profile_scope profile_scope(
             config.backend == moe_mmq_backend::cutlass && config.cutlass_prefix_schedule ?
@@ -930,7 +982,10 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
 #endif
         const int si1  = args.ids->nb[1] / ggml_element_size(args.ids);
         const int sis1 = args.input->nb[2] / args.input->nb[1];
-        if (config.backend == moe_mmq_backend::cutlass && config.cutlass_prefix_schedule) {
+        if (cutlass_decode) {
+            row_expert.alloc(n_rows);
+            route_plan = true;
+        } else if (config.backend == moe_mmq_backend::cutlass && config.cutlass_prefix_schedule) {
             const int n_blocks = ggml_cuda_mm_ids_prefix_block_count(n_tokens, n_expert_used);
             row_expert.alloc(n_rows);
             prefix_block_counts.alloc((size_t) n_blocks * n_experts);
@@ -940,11 +995,14 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
                 prefix_block_counts.get(), prefix_block_offsets.get(), n_experts, n_tokens, n_expert_used, si1,
                 ctx.stream());
         }
-        if (!prefix_plan) {
+        if (!route_plan && !prefix_plan) {
             ggml_cuda_launch_mm_ids_helper(
                 (const int32_t *) args.ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(), n_experts,
                 n_tokens, n_expert_used, args.input->ne[1], si1, sis1,
                 /*write_inverse=*/true, ctx.stream());
+        }
+        if (cutlass_decode && !route_plan) {
+            GGML_ABORT("the CUTLASS MoE decode path requires a direct route plan");
         }
         if (prefix_plan && config.cutlass_validate_support) {
             ggml_cuda_pool_alloc<int32_t> reference_ids_src1(ctx.pool());
@@ -965,15 +1023,28 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
                                    (n_experts + 1) * sizeof(int32_t), "expert bounds");
         }
         CUDA_CHECK(cudaGetLastError());
-        if (config.log_distribution) {
+        if (config.log_distribution && !route_plan) {
             moe_mmq_log_distribution(expert_bounds.get(), n_experts, n_rows, w13_tile_rows, w2_tile_rows, ctx.stream());
         }
     }
 
     if (config.backend == moe_mmq_backend::cutlass) {
+        if (cutlass_decode && config.cutlass_decode_log) {
+            static std::atomic<int> dispatch_index{0};
+            static const int log_limit =
+                moe_mmq_env_int("GGML_CUDA_MOE_MMQ_CUTLASS_DECODE_LOG_LIMIT", 128, 1, 4096);
+            const int index = dispatch_index.fetch_add(1, std::memory_order_relaxed);
+            if (index < log_limit) {
+                GGML_LOG_INFO(
+                    "MoE MMQ CUTLASS decode dispatch: index=%d weight=%s tokens=%lld rows=%lld groups=routes "
+                    "schedule=direct-cta\n",
+                    index, args.gate_up->name, (long long) n_tokens, (long long) n_rows);
+            }
+        }
         return moe_mmq_run_cutlass(ctx, args, config, w13_weight, w2_weight, ids_src1.get(), ids_dst.get(),
-                                   prefix_plan ? row_expert.get() : nullptr, expert_bounds.get(), device_info.nsm,
-                                   ids_stride);
+                                   route_plan || prefix_plan ? row_expert.get() : nullptr, expert_bounds.get(),
+                                   device_info.nsm,
+                                   ids_stride, cutlass_decode);
     }
 
     ggml_cuda_pool_alloc<int32_t> w13_tile_offsets(ctx.pool());
