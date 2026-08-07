@@ -17,8 +17,11 @@ from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logg
 from .qwen import QwenModel
 
 
-@ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM")
+@ModelBase.register("DeepseekOCRForCausalLM")
 class DeepseekOCRVisionModel(MmprojModel):
+    # HF dynamic_preprocess() max_num, which differs per model
+    preproc_max_tiles = 9
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR
@@ -42,6 +45,9 @@ class DeepseekOCRVisionModel(MmprojModel):
             self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
         # @bluebread: there's no window_size in config but just add it here anyway
         self.gguf_writer.add_vision_window_size(self.hparams.get("window_size", 14))
+
+        self.gguf_writer.add_vision_preproc_min_tiles(2)
+        self.gguf_writer.add_vision_preproc_max_tiles(self.preproc_max_tiles)
 
         # SAM configuration
         sam_hparams = hparams['sam']
@@ -93,8 +99,15 @@ class DeepseekOCRVisionModel(MmprojModel):
         return super().filter_tensors((name, gen))
 
 
+@ModelBase.register("UnlimitedOCRForCausalLM")
+class UnlimitedOCRVisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 32
+
+
 @ModelBase.register("DeepseekOCR2ForCausalLM")
 class DeepseekOCR2VisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 6
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR2
@@ -447,11 +460,42 @@ class DeepseekV2Model(TextModel):
 class DeepseekV32Model(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK32
     skip_mtp = False
+    supports_mtp_export = True
+    _n_main_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.block_count = self.hparams["num_hidden_layers"]
+        if not self.no_mtp:
+            self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        # DeepSeek V3.2 appends the NextN/MTP block past num_hidden_layers
+        # (model.layers.61 -> blk.61 in the 62-block file).
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        # --no-mtp: drop the appended NextN block entirely.
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY NextN-block tensors plus the shared embeddings/
+        # norm/lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        return name, gen
 
     def set_vocab(self):
         from transformers import AutoTokenizer
@@ -463,7 +507,7 @@ class DeepseekV32Model(DeepseekV2Model):
         super().set_gguf_parameters()
 
         # NextN/MTP prediction layers
-        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+        if not self.no_mtp and (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
         # DSA indexer parameters
@@ -489,6 +533,13 @@ class DeepseekV4Model(TextModel):
         for key, value in raw_hparams.items():
             self.hparams.setdefault(key, value)
 
+        # workaround for special rope_parameters (main/compress) in transformers 5.x
+        if self.rope_parameters.get("full_attention", self.rope_parameters).get("rope_type") is None:
+            if (rope_scaling := raw_hparams.get("rope_scaling")) is not None:
+                if "rope_type" not in rope_scaling and (rope_type := rope_scaling.get("type")) is not None:
+                    rope_scaling["rope_type"] = rope_type
+                self.rope_parameters.update(**rope_scaling)
+
         self.block_count = self.hparams["num_hidden_layers"]
         if self.mtp_only:
             self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
@@ -504,7 +555,10 @@ class DeepseekV4Model(TextModel):
             logger.info("Skipping %d DeepSeek-V4 MTP tensor(s) for conversion v0", type(self)._skipped_mtp_tensors)
 
         # add a default chat template; if the model has a built-in template, it will be overridden later
-        template_path = Path(__file__).parent.parent / "models" / "templates" / "deepseek-ai-DeepSeek-V4.jinja"
+        model_id_hint = self.remote_hf_model_id or self.dir_model.name
+        is_0731 = "0731" in model_id_hint
+        template_name = "deepseek-ai-DeepSeek-V4-Flash-0731.jinja" if is_0731 else "deepseek-ai-DeepSeek-V4.jinja"
+        template_path = Path(__file__).parent.parent / "models" / "templates" / template_name
         if template_path.is_file():
             with open(template_path, "r", encoding="utf-8") as f:
                 self.gguf_writer.add_chat_template(f.read())
@@ -620,7 +674,8 @@ class DeepseekV4Model(TextModel):
         self.gguf_writer.add_hyper_connection_sinkhorn_iterations(hparams["hc_sinkhorn_iters"])
         self.gguf_writer.add_hyper_connection_epsilon(hparams["hc_eps"])
         self.gguf_writer.add_hash_layer_count(hparams["num_hash_layers"])
-        self.gguf_writer.add_embedding_length_out(hparams["hidden_size"] * hparams["hc_mult"])
+        if self.model_arch == gguf.MODEL_ARCH.DEEPSEEK4:
+            self.gguf_writer.add_embedding_length_out(hparams["hidden_size"] * hparams["hc_mult"])
         if self.mtp_only and (num_nextn_predict_layers := hparams.get("num_nextn_predict_layers", 0)) > 0:
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
@@ -899,45 +954,69 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # the target's num_hidden_layers has nothing to do with the drafter: the block count is
-        # the number of MTP stages actually present in the shards (3 for this checkpoint)
+        # The target's num_hidden_layers has nothing to do with the drafter: the block count is
+        # the number of MTP stages actually present in the shards (3 for this checkpoint).
         self.block_count = 1 + max(
-            int(m.group(1)) for name in self.model_tensors
-            if (m := re.match(r"layers\.(\d+)\.", name))
+            int(match.group(1)) for name in self.model_tensors
+            if (match := re.match(r"layers\.(\d+)\.", name))
         )
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
         # MTP blocks force compress_ratio=0 (plain sliding-window attention, no lightning
         # indexer) and never use hash-routed layers; patch the shared target hparams here since
-        # generate_extra_tensors() (which reads num_hash_layers) runs before set_gguf_parameters
+        # generate_extra_tensors() (which reads num_hash_layers) runs before set_gguf_parameters.
         self.hparams["compress_ratios"] = [0] * self.block_count
         self.hparams["num_hash_layers"] = 0
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        # the drafter only ships 3 of the target's 48 shards; model.safetensors.index.json still
-        # lists the full target weight map, so read the shards actually present on disk instead
-        # of trusting it (filter_tensors then drops anything that isn't a "mtp.*" tensor)
+        # Local DSpark checkpoints only ship the MTP shards; the target index may list the full
+        # backbone, so enumerate the shards that are actually present instead of trusting it.
+        if remote_hf_model_id is None:
+            tensors: dict[str, Callable[[], Tensor]] = {}
+            for part_name in ModelBase.get_model_part_names(self.dir_model, "model", ".safetensors"):
+                logger.info(f"gguf: indexing model part '{part_name}'")
+                with gguf.utility.SafetensorsLocal(self.dir_model / part_name) as model_part:
+                    for name in model_part.keys():
+                        data: gguf.utility.LocalTensor = model_part[name]
+                        if self.lazy:
+                            data_gen = lambda data=data: LazyTorchTensor.from_local_tensor(data)  # noqa: E731
+                        else:
+                            dtype = LazyTorchTensor._dtype_str_map[data.dtype]
+                            data_gen = lambda data=data, dtype=dtype: torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape)  # noqa: E731
+                        if titem := self.filter_tensors((name, data_gen)):
+                            tensor_name, tensor_gen = titem
+                            tensors[tensor_name] = tensor_gen
+            return tensors
+
+        with open(self.dir_model / "model.safetensors.index.json", "r", encoding="utf-8") as f:
+            weight_map = json.load(f)["weight_map"]
+
+        part_names = sorted({
+            part_name for name, part_name in weight_map.items()
+            if name.startswith("mtp.")
+        })
         tensors: dict[str, Callable[[], Tensor]] = {}
-        for part_name in ModelBase.get_model_part_names(self.dir_model, "model", ".safetensors"):
-            logger.info(f"gguf: indexing model part '{part_name}'")
-            with gguf.utility.SafetensorsLocal(self.dir_model / part_name) as model_part:
-                for name in model_part.keys():
-                    data: gguf.utility.LocalTensor = model_part[name]
-                    if self.lazy:
-                        data_gen = lambda data=data: LazyTorchTensor.from_local_tensor(data)  # noqa: E731
-                    else:
-                        dtype = LazyTorchTensor._dtype_str_map[data.dtype]
-                        data_gen = lambda data=data, dtype=dtype: torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape)  # noqa: E731
+
+        for part_name in part_names:
+            from huggingface_hub import hf_hub_download
+
+            logger.info("gguf: caching remote DSpark part '%s'", part_name)
+            part_path = Path(hf_hub_download(repo_id=remote_hf_model_id, filename=part_name))
+            with gguf.utility.SafetensorsLocal(part_path) as model_part:
+                for name in model_part:
+                    data = model_part[name]
+                    data_gen = lambda data=data: LazyTorchTensor.from_local_tensor(data)  # noqa: E731
                     if titem := self.filter_tensors((name, data_gen)):
-                        tname, tgen = titem
-                        tensors[tname] = tgen
+                        tensor_name, tensor_gen = titem
+                        tensors[tensor_name] = tensor_gen
+
         return tensors
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-        # only "mtp.*" tensors are shipped in these shards; the index also lists the (absent)
-        # target backbone tensors, silently drop anything that isn't a draft tensor
+        # Only "mtp.*" tensors are shipped in these shards; the index also lists absent target
+        # backbone tensors, so silently drop anything that is not a draft tensor.
         if not name.startswith("mtp."):
             return None
         return super().filter_tensors((cls._rekey_mtp_tensor_name(name), gen))
@@ -947,8 +1026,16 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
         match = re.match(r"mtp\.(\d+)\.(.+)$", name)
         if match is None:
             raise ValueError(f"Unexpected DSpark tensor {name!r}")
+
         stage, rest = match.group(1), match.group(2)
-        if rest in DeepseekV4DSparkModel._DSPARK_ROOT_MAP or rest in ("main_proj.scale", "norm.weight", "hc_head_fn", "hc_head_base", "hc_head_scale"):
+        root_names = (
+            "main_proj.scale",
+            "norm.weight",
+            "hc_head_fn",
+            "hc_head_base",
+            "hc_head_scale",
+        )
+        if rest in DeepseekV4DSparkModel._DSPARK_ROOT_MAP or rest in root_names:
             return rest
         return f"layers.{stage}.{rest}"
 
@@ -965,9 +1052,11 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
             )
         logger.info(f"DSpark: Using tokenizer from target model: {self.target_model_dir}")
         original_dir = self.dir_model
-        self.dir_model = self.target_model_dir
-        super().set_vocab()
-        self.dir_model = original_dir
+        try:
+            self.dir_model = self.target_model_dir
+            super().set_vocab()
+        finally:
+            self.dir_model = original_dir
 
         self.gguf_writer.add_mask_token_id(self.hparams["dspark_noise_token_id"])
 
@@ -975,5 +1064,5 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
         super().set_gguf_parameters()
 
         self.gguf_writer.add_block_size(self.hparams["dspark_block_size"])
-        extract_layer_ids = [i + 1 for i in self.hparams["dspark_target_layer_ids"]]
-        self.gguf_writer.add_target_layers(extract_layer_ids)
+        self.gguf_writer.add_target_layers([layer + 1 for layer in self.hparams["dspark_target_layer_ids"]])
+

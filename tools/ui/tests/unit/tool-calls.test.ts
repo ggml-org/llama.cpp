@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AgenticSectionType, BuiltInTool } from '$lib/enums';
 import type { AgenticSection } from '$lib/utils';
 import { parseToolArgs } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
+import { lastPathSegment, abbreviateHome, formatCwdMessage, parseCwdMessage } from '$lib/utils';
 import {
 	parseWriteFileMeta,
 	type WriteFileMeta
@@ -26,6 +27,90 @@ function makeSection(
 		...overrides
 	};
 }
+
+describe('lastPathSegment', () => {
+	it('returns the last segment of an absolute path', () => {
+		expect(lastPathSegment('/Users/me/code/my-project')).toBe('my-project');
+	});
+
+	it('returns the last segment of a tilde-relative path', () => {
+		expect(lastPathSegment('~/git/llama.brand')).toBe('llama.brand');
+	});
+
+	it('strips trailing slashes', () => {
+		expect(lastPathSegment('/foo/bar/')).toBe('bar');
+	});
+
+	it('strips multiple trailing slashes', () => {
+		expect(lastPathSegment('/foo/bar///')).toBe('bar');
+	});
+
+	it('returns the input unchanged when there is no slash', () => {
+		expect(lastPathSegment('project')).toBe('project');
+	});
+
+	it('returns tilde when only tilde is given', () => {
+		expect(lastPathSegment('~/')).toBe('~');
+	});
+});
+
+describe('abbreviateHome', () => {
+	it('abbreviates paths under home with a tilde', () => {
+		expect(abbreviateHome('/Users/al/Documents/x.txt', '/Users/al')).toBe('~/Documents/x.txt');
+	});
+
+	it('abbreviates home itself to a bare tilde', () => {
+		expect(abbreviateHome('/Users/al', '/Users/al')).toBe('~');
+	});
+
+	it('returns paths outside home unchanged', () => {
+		expect(abbreviateHome('/opt/project', '/Users/al')).toBe('/opt/project');
+	});
+
+	it('does not abbreviate a mere prefix match', () => {
+		expect(abbreviateHome('/Users/alice/x', '/Users/al')).toBe('/Users/alice/x');
+	});
+
+	it('returns the path unchanged when home is unknown', () => {
+		expect(abbreviateHome('/Users/al/Documents', null)).toBe('/Users/al/Documents');
+	});
+});
+
+describe('formatCwdMessage / parseCwdMessage', () => {
+	it('formats a cwd change matching the UI text, with a file link', () => {
+		expect(formatCwdMessage('/Users/al/Documents', '/Users/al')).toBe(
+			'Set working directory to [file:///Users/al/Documents](~/Documents).'
+		);
+	});
+
+	it('falls back to the basename display when home is unknown', () => {
+		expect(formatCwdMessage('/opt/project', null)).toBe(
+			'Set working directory to [file:///opt/project](project).'
+		);
+	});
+
+	it('round-trips through the parser', () => {
+		const info = parseCwdMessage(formatCwdMessage('/Users/al/Documents', '/Users/al'));
+		expect(info?.path).toBe('/Users/al/Documents');
+		expect(info?.display).toBe('~/Documents');
+	});
+
+	it('parses a cwd message even when guidance follows the link', () => {
+		expect(
+			parseCwdMessage(
+				'Set working directory to [file:///a/b](~/b). Tool calls run with this as their working directory.'
+			)
+		).toEqual({ path: '/a/b', display: '~/b' });
+	});
+
+	it('parses the cleared marker', () => {
+		expect(parseCwdMessage('Working directory cleared')).toEqual({ path: null, display: '' });
+	});
+
+	it('returns null for non-cwd content', () => {
+		expect(parseCwdMessage('hello there')).toBeNull();
+	});
+});
 
 describe('parseToolArgs (shared)', () => {
 	it('returns null when the section has no toolArgs', () => {
