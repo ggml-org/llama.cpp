@@ -33,6 +33,7 @@ export {
 export {
 	highlightCode,
 	detectIncompleteCodeBlock,
+	splitGluedClosingCodeFences,
 	trimCodePadding,
 	type IncompleteCodeBlock
 } from './code';
