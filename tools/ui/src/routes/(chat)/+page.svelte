@@ -3,6 +3,7 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
@@ -39,6 +40,14 @@
 			if (model) {
 				try {
 					await modelsStore.selectModelById(model.id);
+
+					// start loading right away so the model is warming while the first prompt is typed;
+					// not awaited, so the UI stays usable during the load
+					if (isRouterMode() && !modelsStore.isModelLoaded(model.id)) {
+						modelsStore
+							.loadModel(model.id)
+							.catch((error) => console.error('Failed to load model:', error));
+					}
 				} catch (error) {
 					console.error('Failed to select model:', error);
 					requestedModelName = modelParam;
