@@ -227,48 +227,51 @@ static bool common_pull_file(httplib::Client & cli,
     const char * func = __func__; // avoid __func__ inside a lambda
     size_t progress_step = 0;
 
-    auto res = cli.Get(resolve_path, headers,
-        [&](const httplib::Response &response) {
-            if (p.downloaded > 0 && response.status != 206) {
-                LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", func, response.status);
-                return false;
-            }
-            if (p.downloaded == 0 && response.status != 200) {
-                LOG_WRN("%s: download received non-successful status code: %d\n", func, response.status);
-                return false;
-            }
-            if (p.total == 0 && response.has_header("Content-Length")) {
-                try {
-                    size_t content_length = std::stoull(response.get_header_value("Content-Length"));
-                    p.total = p.downloaded + content_length;
-                } catch (const std::exception &e) {
-                    LOG_WRN("%s: invalid Content-Length header: %s\n", func, e.what());
+    auto res = common_http_request_with_ipv4_fallback(cli, [&] {
+        return cli.Get(
+            resolve_path, headers,
+            [&](const httplib::Response & response) {
+                if (p.downloaded > 0 && response.status != 206) {
+                    LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n",
+                            func, response.status);
+                    return false;
                 }
-            }
-            return true;
-        },
-        [&](const char *data, size_t len) {
-            ofs.write(data, len);
-            if (!ofs) {
-                LOG_ERR("%s: error writing to file: %s\n", func, path_tmp.c_str());
-                return false;
-            }
-            p.downloaded += len;
-            progress_step += len;
-
-            if (progress_step >= p.total / 1000 || p.downloaded == p.total) {
-                if (callback) {
-                    callback->on_update(p);
-                    if (callback->is_cancelled()) {
-                        return false;
+                if (p.downloaded == 0 && response.status != 200) {
+                    LOG_WRN("%s: download received non-successful status code: %d\n", func, response.status);
+                    return false;
+                }
+                if (p.total == 0 && response.has_header("Content-Length")) {
+                    try {
+                        size_t content_length = std::stoull(response.get_header_value("Content-Length"));
+                        p.total               = p.downloaded + content_length;
+                    } catch (const std::exception & e) {
+                        LOG_WRN("%s: invalid Content-Length header: %s\n", func, e.what());
                     }
                 }
-                progress_step = 0;
-            }
-            return true;
-        },
-        nullptr
-    );
+                return true;
+            },
+            [&](const char * data, size_t len) {
+                ofs.write(data, len);
+                if (!ofs) {
+                    LOG_ERR("%s: error writing to file: %s\n", func, path_tmp.c_str());
+                    return false;
+                }
+                p.downloaded += len;
+                progress_step += len;
+
+                if (progress_step >= p.total / 1000 || p.downloaded == p.total) {
+                    if (callback) {
+                        callback->on_update(p);
+                        if (callback->is_cancelled()) {
+                            return false;
+                        }
+                    }
+                    progress_step = 0;
+                }
+                return true;
+            },
+            nullptr);
+    });
 
     if (!res) {
         LOG_ERR("%s: download failed: %s (status: %d)\n",
@@ -318,7 +321,7 @@ static int common_download_file_single_online(const std::string & url,
         LOG_DBG("%s: no previous model file found %s\n", __func__, path.c_str());
     }
 
-    auto head = cli.Head(parts.path);
+    auto head = common_http_request_with_ipv4_fallback(cli, [&] { return cli.Head(parts.path); });
     if (!head || head->status < 200 || head->status >= 300) {
         LOG_TRC("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
         if (file_exists) {
@@ -452,14 +455,16 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
     }
 
     std::vector<char> buf;
-    auto res = cli.Get(parts.path, headers,
-        [&](const char *data, size_t len) {
-            buf.insert(buf.end(), data, data + len);
-            return params.max_size == 0 ||
-                   buf.size() <= static_cast<size_t>(params.max_size);
-        },
-        nullptr
-    );
+    auto res = common_http_request_with_ipv4_fallback(cli, [&] {
+        buf.clear();  // drop anything buffered by a failed first attempt
+        return cli.Get(
+            parts.path, headers,
+            [&](const char * data, size_t len) {
+                buf.insert(buf.end(), data, data + len);
+                return params.max_size == 0 || buf.size() <= static_cast<size_t>(params.max_size);
+            },
+            nullptr);
+    });
 
     if (!res) {
         throw std::runtime_error("error: cannot make GET request");
