@@ -70,6 +70,7 @@ if (Vulkan_FOUND)
                              ggml-vulkan-graph.cpp
                              ggml-vulkan-backend.cpp
                              ggml-vulkan-debug.cpp
+                             ggml-vulkan-perf.cpp
                              ggml-vulkan-types.h
                              ggml-vulkan-push-constants.h
                              ggml-vulkan-common.h
