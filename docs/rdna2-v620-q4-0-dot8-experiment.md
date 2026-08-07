@@ -57,10 +57,10 @@ Qwen benchmark settings: four V620s, layer split `1/1/1/1`, `--flash-attn on`, `
 
 Thirty timed graph executions on the first V620:
 
-| Shape KxN | Stock | 36-byte + sidecar DOT8 | Change |
+| Shape KxN | Stock | 36-byte + sidecar DOT8 | Time change |
 |---:|---:|---:|---:|
-| 2048x512 | 25.80 us | 30.97 us | -20.0% |
-| 512x2048 | 29.37 us | 27.23 us | +7.3% |
+| 2048x512 | 25.80 us | 30.97 us | +20.0% |
+| 512x2048 | 29.37 us | 27.23 us | -7.3% |
 
 The two shapes have opposite behavior, so neither is a standalone justification for enabling the path.
 
