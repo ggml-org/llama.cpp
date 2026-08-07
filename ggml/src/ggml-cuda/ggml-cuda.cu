@@ -1789,11 +1789,14 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
-                             dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+                             dst->type == GGML_TYPE_F32 &&
+                             ggml_cuda_should_use_mmvq(src0->type, cc,
+                                                       tensor->op == GGML_OP_MUL_MAT_ID ? src1->ne[2] : src1->ne[1]);
 
     // fusion is not universally faster on Pascal
-    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     if (cc <= GGML_CUDA_CC_PASCAL) {
         return false;
     }
