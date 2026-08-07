@@ -18,6 +18,7 @@ export * from './binary-detection';
 export * from './built-in-tools';
 export * from './cache';
 export * from './chat-form';
+export * from './chat-commands';
 export * from './cli-flags';
 export * from './code-blocks';
 export * from './icons';

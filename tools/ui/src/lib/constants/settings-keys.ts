@@ -23,7 +23,7 @@ export const SETTINGS_KEYS = {
 	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
-	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
+	RENDER_CONTENT_AS_RAW_TEXT: 'renderContentAsRawText',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
@@ -33,7 +33,6 @@ export const SETTINGS_KEYS = {
 	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
-	RENDER_THINKING_AS_MARKDOWN: 'renderThinkingAsMarkdown',
 	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
 	// Sampling
 	TEMPERATURE: 'temperature',

@@ -45,6 +45,9 @@
 	let promptArgs = $state<Record<string, string>>({});
 	let selectedIndex = $state(0);
 	let internalSearchQuery = $state('');
+	// Bumped on ArrowUp/ArrowDown only, so the list scrolls on keyboard
+	// nav but not on hover or result changes.
+	let scrollTrigger = $state(0);
 	let promptError = $state<string | null>(null);
 	let selectedIndexBeforeArgumentForm = $state<number | null>(null);
 
@@ -295,6 +298,7 @@
 			event.preventDefault();
 			if (filteredPrompts.length > 0) {
 				selectedIndex = (selectedIndex + 1) % filteredPrompts.length;
+				scrollTrigger++;
 			}
 
 			return true;
@@ -304,6 +308,7 @@
 			event.preventDefault();
 			if (filteredPrompts.length > 0) {
 				selectedIndex = selectedIndex === 0 ? filteredPrompts.length - 1 : selectedIndex - 1;
+				scrollTrigger++;
 			}
 
 			return true;
@@ -400,6 +405,7 @@
 			searchPlaceholder="Search prompts..."
 			emptyMessage="No MCP prompts available"
 			itemKey={(prompt) => prompt.serverName + ':' + prompt.name}
+			{scrollTrigger}
 		>
 			{#snippet item(prompt, index, isSelected)}
 				{@const server = serverSettingsMap.get(prompt.serverName)}

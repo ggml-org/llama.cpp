@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Folder, X } from '@lucide/svelte';
 	import { abbreviateWorkingDir } from '$lib/utils';
+	import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ActionIcon } from '$lib/components/app/actions';
 
@@ -21,7 +22,7 @@
 	}: Props = $props();
 
 	const displayLabel = $derived(
-		directory ? abbreviateWorkingDir(directory, homeBase) : 'Select working directory'
+		directory ? abbreviateWorkingDir(directory, homeBase) : SET_WORKING_DIRECTORY_LABEL
 	);
 	// Full path surface: hover the abbreviated label to recall the exact directory.
 	const displayLabelTitle = $derived(directory ?? '');

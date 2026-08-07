@@ -8,6 +8,9 @@
 
 export const GLOB_WILDCARD = '*';
 
+/** Label shown for the working-directory picker / `/cwd` slash command. */
+export const SET_WORKING_DIRECTORY_LABEL = 'Set working directory';
+
 /** Character that starts and ends a glob character-class fragment. */
 export const GLOB_RANGE_OPEN = '[';
 export const GLOB_RANGE_CLOSE = ']';

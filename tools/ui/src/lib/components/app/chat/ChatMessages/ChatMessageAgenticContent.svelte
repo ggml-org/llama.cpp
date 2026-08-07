@@ -41,7 +41,6 @@
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
 	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
 	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
 	const showMessageStats = $derived(Boolean(config().showMessageStats));
@@ -186,7 +185,6 @@
 			{section}
 			open={isExpanded(index, section)}
 			{isStreaming}
-			{renderThinkingAsMarkdown}
 			{hasReasoningError}
 			attachments={message?.extra}
 			onToggle={() => toggleExpanded(index, section)}

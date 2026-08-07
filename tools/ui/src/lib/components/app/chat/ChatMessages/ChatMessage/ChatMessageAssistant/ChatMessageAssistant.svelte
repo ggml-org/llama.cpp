@@ -183,8 +183,8 @@
 		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="bottom" />
 	{/if}
 
-	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel}
+	{#if displayedModel}
+		<div class="info my-6 grid gap-4 tabular-nums">
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
@@ -200,8 +200,8 @@
 					showMessageStats={currentConfig.showMessageStats}
 				/>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 
 	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActionIcons

@@ -8,6 +8,7 @@ import {
 	singleModelName
 } from '$lib/stores/models.svelte';
 import { isRouterMode } from '$lib/stores/server.svelte';
+import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
 import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 import type { ModelOption } from '$lib/types/models';
 
@@ -139,11 +140,9 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			handleOpenChange(false);
 
 			requestAnimationFrame(() => {
-				const textarea = document.querySelector<HTMLTextAreaElement>(
-					'[data-slot="chat-form"] textarea'
-				);
+				const input = document.querySelector<HTMLElement>(CHAT_INPUT_FOCUS_SELECTOR);
 
-				textarea?.focus({ preventScroll: true });
+				input?.focus({ preventScroll: true });
 			});
 		}
 

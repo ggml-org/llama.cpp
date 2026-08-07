@@ -233,18 +233,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			},
 			{
-				key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
-				label: 'Render user content as Markdown',
-				help: 'Render user messages using markdown formatting in the chat.',
+				key: SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT,
+				label: 'Render content as raw text',
+				help: 'Display user, system and thinking content as plain text instead of formatted Markdown. Markdown is the default so that @-mention badges render in sent messages.',
 				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
-			},
-			{
-				key: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
-				label: 'Render thinking as Markdown',
-				help: 'Render the reasoning/thinking block content as formatted Markdown instead of plain text.',
-				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			},
@@ -724,6 +716,9 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			type: s.type,
 			isExperimental: s.isExperimental,
 			isPositiveInteger: s.isPositiveInteger,
+			placeholder: s.placeholder,
+			min: s.min,
+			max: s.max,
 			dependsOn: s.dependsOn,
 			help: s.help,
 			options: s.options,
