@@ -19,6 +19,8 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -400,6 +402,19 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(
 struct ggml_backend_meta_simple_tensor_container {
     std::vector<ggml_context_ptr> ctxs;
     std::map<const ggml_tensor *, std::vector<ggml_tensor *>> simple_tensors;
+
+    // Dedicated per-device arena for MUL_MAT_ID routing ids (src[2]). These
+    // are small I32 index maps produced by the router (argsort / get_rows) and
+    // consumed by every routed matmul. The upstream allocator reuses their
+    // compute-buffer slot as soon as the ids die (the last routed matmul), so
+    // unrelated tensors -- e.g. the next layer's routing logits/probs or the
+    // hyper-connection mixes -- land at the same offset and can clobber the
+    // ids while the meta backend still executes the (async) subgraphs.
+    // Giving them a private arena guarantees the ids are never aliased.
+    std::unordered_set<const ggml_tensor *> ids_arena_tensors; // underlying roots
+    std::unordered_map<const ggml_tensor *, size_t> ids_arena_offsets;
+    std::vector<ggml_backend_buffer_ptr> ids_arena_bufs;
+    bool ids_arena_enabled = false;
     // Snapshots of the source tensor structs, used by persistent single-owner
     // containers (scratch pools) to treat entries left behind at recycled
     // arena addresses as misses.
@@ -1352,6 +1367,17 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
         }
         if (t_ij->view_src != nullptr) {
             t_ij->data = (char *) t_ij->view_src->data + t_ij->view_offs;
+        } else if (stc.ids_arena_enabled && j < stc.ids_arena_bufs.size()) {
+            // MUL_MAT_ID routing ids go into the private arena (never aliased).
+            auto ids_it = stc.ids_arena_tensors.find(tensor);
+            if (ids_it != stc.ids_arena_tensors.end() && stc.ids_arena_bufs[j] != nullptr) {
+                t_ij->buffer = stc.ids_arena_bufs[j].get();
+                t_ij->data = (char *) ggml_backend_buffer_get_base(stc.ids_arena_bufs[j].get())
+                    + stc.ids_arena_offsets.at(tensor);
+            } else if (simple_buf != nullptr) {
+                t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
+                    + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(tensor->buffer));
+            }
         } else if (simple_buf != nullptr) {
             t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
                 + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(tensor->buffer));
@@ -2328,6 +2354,38 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 ggml_reset(ctx.get());
             }
             stc.simple_tensors.clear();
+            // Dedicated ids arena: the routing ids of every MUL_MAT_ID live in
+            // their own per-device buffer so no other tensor can alias them.
+            stc.ids_arena_tensors.clear();
+            stc.ids_arena_offsets.clear();
+            stc.ids_arena_bufs.clear();
+            stc.ids_arena_enabled = false;
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                if (node->op == GGML_OP_MUL_MAT_ID && node->src[2] != nullptr) {
+                    const ggml_tensor * ids_root = node->src[2];
+                    while (ids_root->view_src != nullptr && ids_root->view_src->buffer != nullptr &&
+                           ggml_backend_buffer_is_meta(ids_root->view_src->buffer)) {
+                        ids_root = ids_root->view_src;
+                    }
+                    if (ids_root->buffer != nullptr && ggml_backend_buffer_is_meta(ids_root->buffer)) {
+                        stc.ids_arena_tensors.insert(ids_root);
+                    }
+                }
+            }
+            if (!stc.ids_arena_tensors.empty()) {
+                stc.ids_arena_enabled = true;
+                size_t ids_arena_size = 0;
+                for (const ggml_tensor * t : stc.ids_arena_tensors) {
+                    stc.ids_arena_offsets[t] = GGML_PAD(ids_arena_size, GGML_MEM_ALIGN);
+                    ids_arena_size = stc.ids_arena_offsets[t] + ggml_nbytes(t);
+                }
+                stc.ids_arena_bufs.resize(n_backends);
+                for (size_t j = 0; j < n_backends; j++) {
+                    stc.ids_arena_bufs[j].reset(
+                        ggml_backend_alloc_buffer(backend_ctx->backend_configs[j].backend, ids_arena_size));
+                }
+            }
         }
         size_t n_subgraphs  = 0;
         size_t max_tmp_size = 0;

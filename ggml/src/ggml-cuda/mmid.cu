@@ -123,6 +123,55 @@ static __global__ void mm_ids_helper(
     expert_bounds[gridDim.x] = nex_prev + it_compact;
 }
 
+
+// Duplicate-safe inverse-map helper for broadcast gate/up activations.
+// Hash-routed models can intentionally select the same expert more than once
+// for a token. The original helper stores one occurrence per expert and leaves
+// duplicate token slots uninitialized. This helper assigns every occurrence a
+// distinct compact row while retaining the expert-major layout expected by MMQ.
+static __global__ void mm_ids_helper_inverse(
+        const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
+        const int n_experts, const int n_tokens, const int n_expert_used, const int si1) {
+    const int expert = blockIdx.x;
+    const int lane = threadIdx.x;
+    const int n_slots = n_tokens * n_expert_used;
+
+    __shared__ int n_matches;
+    if (lane == 0) {
+        n_matches = 0;
+    }
+    __syncthreads();
+
+    int n_lower = 0;
+    for (int slot = lane; slot < n_slots; slot += blockDim.x) {
+        const int token = slot / n_expert_used;
+        const int iex   = slot % n_expert_used;
+        const int expert_used = ids[token*si1 + iex];
+        n_lower += expert_used < expert;
+    }
+    n_lower = warp_reduce_sum(n_lower);
+    __syncthreads();
+
+    for (int slot = lane; slot < n_slots; slot += blockDim.x) {
+        const int token = slot / n_expert_used;
+        const int iex   = slot % n_expert_used;
+        const int expert_used = ids[token*si1 + iex];
+        if (expert_used == expert) {
+            const int compact = atomicAdd(&n_matches, 1);
+            ids_dst[n_lower + compact] = slot;
+            ids_src1[slot] = n_lower + compact;
+        }
+    }
+    __syncthreads();
+
+    if (lane == 0) {
+        expert_bounds[expert] = n_lower;
+        if (expert == n_experts - 1) {
+            expert_bounds[n_experts] = n_lower + n_matches;
+        }
+    }
+}
+
 template <int n_expert_used_template>
 static void launch_mm_ids_helper(
         const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
@@ -137,6 +186,11 @@ static void launch_mm_ids_helper(
 
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);
+    if (write_inverse) {
+        mm_ids_helper_inverse<<<num_blocks, block_size, 0, stream>>>
+            (ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used_var, si1);
+        return;
+    }
     const size_t nbytes_shared = n_tokens*sizeof(mm_ids_helper_store);
     GGML_ASSERT(nbytes_shared <= smpbo);
     mm_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>

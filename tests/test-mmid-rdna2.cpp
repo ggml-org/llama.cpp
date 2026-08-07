@@ -42,13 +42,13 @@ struct params {
     int iterations = 50;
     routing_mode routing = routing_mode::uniform;
     weight_fixture fixture = weight_fixture::prototypes;
+    bool explicit_multi = false;
     const char * device_name = nullptr;
     const char * dump_output = nullptr;
     const char * compare_output = nullptr;
     float atol = 1e-3f;
     float rtol = 1e-4f;
     bool disable_graphs = false;
-    bool auto_j16_hint = false;
 };
 
 struct output_file_header {
@@ -91,11 +91,11 @@ void usage(const char * program) {
     std::printf("  --top-k N               unique experts selected per token (10)\n");
     std::printf("  --routing MODE          uniform or hot (uniform)\n");
     std::printf("  --fixture MODE          prototypes or unique (prototypes)\n");
+    std::printf("  --explicit-multi        src1 = [k, top_k, batch] (replicas the DSV4 down-exps ne11>1 form)\n");
     std::printf("  --warmup N              warmup graph executions (10)\n");
     std::printf("  --iterations N          timed graph executions (50)\n");
     std::printf("  --device NAME           exact ROCm GGML device name; defaults to the first GPU\n");
     std::printf("  --disable-graphs        set GGML_CUDA_DISABLE_GRAPHS before backend initialization\n");
-    std::printf("  --auto-j16-hint         mark weights with the model-selected MMQ J16 advisory flag\n");
     std::printf("  --dump-output FILE      write deterministic F32 output for later A/B comparison\n");
     std::printf("  --compare-output FILE   compare output against a matching baseline\n");
     std::printf("  --atol X                absolute A/B tolerance (1e-3)\n");
@@ -208,6 +208,9 @@ params parse_args(int argc, char ** argv) {
             result.warmup = static_cast<int>(parse_i64(arg, require_value(arg), 0, 1000000));
         } else if (std::strcmp(arg, "--iterations") == 0) {
             result.iterations = static_cast<int>(parse_i64(arg, require_value(arg), 1, 1000000));
+        } else if (std::strcmp(arg, "--explicit-multi") == 0) {
+            result.explicit_multi = true;
+            continue;
         } else if (std::strcmp(arg, "--device") == 0) {
             result.device_name = require_value(arg);
         } else if (std::strcmp(arg, "--dump-output") == 0) {
@@ -220,8 +223,6 @@ params parse_args(int argc, char ** argv) {
             result.rtol = parse_nonnegative_float(arg, require_value(arg));
         } else if (std::strcmp(arg, "--disable-graphs") == 0) {
             result.disable_graphs = true;
-        } else if (std::strcmp(arg, "--auto-j16-hint") == 0) {
-            result.auto_j16_hint = true;
         } else if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -458,16 +459,17 @@ int main(int argc, char ** argv) {
     }
 
     std::printf("backend: %s (%s)\n", ggml_backend_name(backend.get()), ggml_backend_dev_description(device));
-    std::printf("routed MMID case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s fixture=%s auto_j16_hint=%d\n",
+    std::printf("routed MMID case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s fixture=%s\n",
                 ggml_type_name(p.type), static_cast<long long>(p.k), static_cast<long long>(p.n),
                 static_cast<long long>(p.batch), static_cast<long long>(p.experts), static_cast<long long>(p.top_k),
                 p.routing == routing_mode::uniform ? "uniform" : "hot",
-                p.fixture == weight_fixture::prototypes ? "prototypes" : "unique", int(p.auto_j16_hint));
+                p.fixture == weight_fixture::prototypes ? "prototypes" : "unique");
 
     const size_t row_bytes = ggml_row_size(p.type, p.k);
     const size_t weight_bytes = row_bytes * static_cast<size_t>(p.n) * static_cast<size_t>(p.experts);
     std::vector<uint8_t> weights_packed(weight_bytes);
-    std::vector<float> activations(static_cast<size_t>(p.k * p.batch));
+    const int64_t n_act_cols = p.explicit_multi ? p.top_k : 1;
+    std::vector<float> activations(static_cast<size_t>(p.k * n_act_cols * p.batch));
     std::vector<int32_t> ids_host(static_cast<size_t>(p.experts * p.batch));
     quantize_expert_weights(p, weights_packed);
     fill_activations(activations);
@@ -485,12 +487,11 @@ int main(int argc, char ** argv) {
     }
 
     ggml_tensor * expert_weights = ggml_new_tensor_3d(ctx_weights.get(), p.type, p.k, p.n, p.experts);
-    if (p.auto_j16_hint) {
-        expert_weights->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMQ_J16;
-    }
     ggml_tensor * ids_full = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, p.experts, p.batch);
     ggml_tensor * ids = ggml_view_2d(ctx.get(), ids_full, p.top_k, p.batch, ids_full->nb[1], 0);
-    ggml_tensor * activation = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, 1, p.batch);
+    ggml_tensor * activation = p.explicit_multi
+        ? ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, p.top_k, p.batch)
+        : ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, 1, p.batch);
     ggml_tensor * output = ggml_mul_mat_id(ctx.get(), expert_weights, activation, ids);
     ggml_cgraph * graph = ggml_new_graph(ctx.get());
     ggml_build_forward_expand(graph, output);
