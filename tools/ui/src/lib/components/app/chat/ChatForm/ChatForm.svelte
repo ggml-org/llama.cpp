@@ -129,12 +129,9 @@
 		$state(undefined);
 	let inputRef: ChatInputHandle | undefined = $state(undefined);
 
-	// One-way promotion gate: render the simple textarea by default,
-	// swap in the contenteditable once a `file://` markdown link lands
-	// in the buffer. The promotion is sticky for the lifetime of the
-	// composition - backspacing every file link out does NOT demote,
-	// preventing the swap-thrash that comes from a textarea tearing
-	// down and remounting mid-edit.
+	// Render-mode gate: the plain textarea by default, the contenteditable
+	// while the buffer carries a `file://` mention link (badges need a DOM
+	// the textarea cannot provide). Demotes back once no link remains.
 	let useContenteditable = $state(false);
 
 	// Audio Recording State
