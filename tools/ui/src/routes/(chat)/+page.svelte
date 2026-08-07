@@ -12,6 +12,7 @@
 	let qParam = $derived(page.url.searchParams.get('q'));
 	let modelParam = $derived(page.url.searchParams.get('model'));
 	let newChatParam = $derived(page.url.searchParams.get(NEW_CHAT_PARAM));
+	let loadParam = $derived(page.url.searchParams.get('load'));
 
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
@@ -26,6 +27,7 @@
 
 		url.searchParams.delete('q');
 		url.searchParams.delete('model');
+		url.searchParams.delete('load');
 		url.searchParams.delete(NEW_CHAT_PARAM);
 
 		replaceState(url.toString(), {});
@@ -41,9 +43,9 @@
 				try {
 					await modelsStore.selectModelById(model.id);
 
-					// start loading right away so the model is warming while the first prompt is typed;
+					// with ?load=true, start loading right away so the model is ready sooner;
 					// not awaited, so the UI stays usable during the load
-					if (isRouterMode() && !modelsStore.isModelLoaded(model.id)) {
+					if (loadParam === 'true' && isRouterMode() && !modelsStore.isModelLoaded(model.id)) {
 						modelsStore
 							.loadModel(model.id)
 							.catch((error) => console.error('Failed to load model:', error));
