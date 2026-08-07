@@ -363,6 +363,7 @@ struct local_model {
     std::string name;
     std::string path;
     std::string path_mmproj;
+    std::string path_mtp;
 };
 
 common_presets common_preset_context::load_from_models_dir(const std::string & models_dir) const {
@@ -376,10 +377,13 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         common_file_info model_file;
         common_file_info first_shard_file;
         common_file_info mmproj_file;
+        common_file_info mtp_file;
         for (const auto & file : files) {
             if (string_ends_with(file.name, ".gguf")) {
                 if (file.name.find("mmproj") != std::string::npos) {
                     mmproj_file = file;
+                } else if (file.name.rfind("mtp-", 0) != std::string::npos) {
+                    mtp_file = file;
                 } else if (file.name.find("-00001-of-") != std::string::npos) {
                     first_shard_file = file;
                 } else {
@@ -391,7 +395,8 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         local_model model{
             /* name        */ name,
             /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
-            /* path_mmproj */ mmproj_file.path // can be empty
+            /* path_mmproj */ mmproj_file.path, // can be empty
+            /* path_mtp    */ mtp_file.path // can be empty
         };
         if (!model.path.empty()) {
             models.push_back(model);
@@ -409,7 +414,8 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
             local_model model{
                 /* name        */ name,
                 /* path        */ file.path,
-                /* path_mmproj */ ""
+                /* path_mmproj */ "",
+                /* path_mtp    */ ""
             };
             models.push_back(model);
         }
@@ -423,6 +429,10 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         preset.set_option(*this, "LLAMA_ARG_MODEL", model.path);
         if (!model.path_mmproj.empty()) {
             preset.set_option(*this, "LLAMA_ARG_MMPROJ", model.path_mmproj);
+        }
+        if (!model.path_mtp.empty()) {
+            preset.set_option(*this, "LLAMA_ARG_SPEC_TYPE", "draft-mtp");
+            preset.set_option(*this, "LLAMA_ARG_SPEC_DRAFT_MODEL", model.path_mtp);
         }
         out[preset.name] = preset;
     }
