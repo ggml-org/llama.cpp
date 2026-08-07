@@ -639,6 +639,15 @@ bool ggml_backend_dev_offload_op(ggml_backend_dev_t device, const struct ggml_te
     return false;
 }
 
+bool ggml_backend_dev_reset(ggml_backend_dev_t device) {
+    GGML_ASSERT(device);
+    if (device->iface.reset != NULL) {
+        return device->iface.reset(device);
+    }
+
+    return false;
+}
+
 // Backend (reg)
 
 const char * ggml_backend_reg_name(ggml_backend_reg_t reg) {
