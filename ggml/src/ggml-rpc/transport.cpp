@@ -8,6 +8,7 @@
 #  endif
 #  include <windows.h>
 #  include <winsock2.h>
+#  include <ws2tcpip.h>
 #else
 #  include <arpa/inet.h>
 #  include <sys/socket.h>
@@ -585,6 +586,14 @@ static bool set_reuse_addr(sockfd_t sockfd) {
     return ret == 0;
 }
 
+static void close_socket(sockfd_t sockfd) {
+#ifdef _WIN32
+    closesocket(sockfd);
+#else
+    close(sockfd);
+#endif
+}
+
 socket_ptr socket_t::accept() {
     auto client_socket_fd = ::accept(pimpl->fd, NULL, NULL);
     if (!is_valid_fd(client_socket_fd)) {
@@ -598,51 +607,93 @@ socket_ptr socket_t::accept() {
 }
 
 socket_ptr socket_t::create_server(const char * host, int port) {
-    auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    struct addrinfo hints = {};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_PASSIVE;
+
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    const char * node = (host && host[0]) ? host : nullptr;
+    struct addrinfo * res = nullptr;
+    if (getaddrinfo(node, port_str, &hints, &res) != 0 || !res) {
+        GGML_LOG_ERROR("Failed to resolve host address: %s\n", host ? host : "(any)");
+        return nullptr;
+    }
+
+    sockfd_t sockfd = (sockfd_t)-1;
+    for (struct addrinfo * ai = res; ai != nullptr; ai = ai->ai_next) {
+        sockfd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (!is_valid_fd(sockfd)) {
+            continue;
+        }
+        if (!set_reuse_addr(sockfd)) {
+            GGML_LOG_ERROR("Failed to set SO_REUSEADDR\n");
+            close_socket(sockfd);
+            sockfd = (sockfd_t)-1;
+            continue;
+        }
+        // Enable dual-stack (IPv4+IPv6) on IPv6 sockets
+        if (ai->ai_family == AF_INET6) {
+            int flag = 0;
+            setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&flag, sizeof(flag));
+        }
+        if (bind(sockfd, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0) {
+            break;
+        }
+        close_socket(sockfd);
+        sockfd = (sockfd_t)-1;
+    }
+    freeaddrinfo(res);
+
     if (!is_valid_fd(sockfd)) {
         return nullptr;
     }
-    if (!set_reuse_addr(sockfd)) {
-        GGML_LOG_ERROR("Failed to set SO_REUSEADDR\n");
-        return nullptr;
-    }
-    if (inet_addr(host) == INADDR_NONE) {
-        GGML_LOG_ERROR("Invalid host address: %s\n", host);
-        return nullptr;
-    }
-    struct sockaddr_in serv_addr;
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = inet_addr(host);
-    serv_addr.sin_port = htons(port);
-
-    if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
-        return nullptr;
-    }
     if (listen(sockfd, 1) < 0) {
+        close_socket(sockfd);
         return nullptr;
     }
     return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
 }
 
 socket_ptr socket_t::connect(const char * host, int port) {
-    auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (!is_valid_fd(sockfd)) {
-        return nullptr;
-    }
-    if (!set_no_delay(sockfd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
-        return nullptr;
-    }
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    struct hostent * server = gethostbyname(host);
-    if (server == NULL) {
+    struct addrinfo hints = {};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    struct addrinfo * res = nullptr;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
         GGML_LOG_ERROR("Cannot resolve host '%s'\n", host);
         return nullptr;
     }
-    memcpy(&addr.sin_addr.s_addr, server->h_addr, server->h_length);
-    if (::connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+
+    sockfd_t sockfd = (sockfd_t)-1;
+    for (struct addrinfo * ai = res; ai != nullptr; ai = ai->ai_next) {
+        sockfd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (!is_valid_fd(sockfd)) {
+            continue;
+        }
+        if (!set_no_delay(sockfd)) {
+            GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+            close_socket(sockfd);
+            sockfd = (sockfd_t)-1;
+            continue;
+        }
+        if (::connect(sockfd, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0) {
+            break;
+        }
+        close_socket(sockfd);
+        sockfd = (sockfd_t)-1;
+    }
+    freeaddrinfo(res);
+
+    if (!is_valid_fd(sockfd)) {
         return nullptr;
     }
     return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
