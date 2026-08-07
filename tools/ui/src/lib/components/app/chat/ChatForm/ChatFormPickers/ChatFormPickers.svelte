@@ -1,16 +1,19 @@
 <script lang="ts">
+	import ChatFormMentionPicker from './ChatFormMentionPicker.svelte';
 	import ChatFormPickerMcpPrompts from './ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
-	import ChatFormPickerMcpResources from './ChatFormPickerMcpResources.svelte';
-	import type { GetPromptResult, MCPPromptInfo } from '$lib/types';
+	import type { FileMentionEntry, GetPromptResult, MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		isPromptPickerOpen?: boolean;
 		promptSearchQuery?: string;
-		isInlineResourcePickerOpen?: boolean;
-		resourceSearchQuery?: string;
+		isMentionPickerOpen?: boolean;
+		mentionQuery?: string;
+		mentionAnchor?: HTMLElement | null;
+		scopePath?: string | null;
 		onPromptPickerClose?: () => void;
-		onInlineResourcePickerClose?: () => void;
-		onInlineResourceSelect?: () => void;
+		onMentionPickerClose?: () => void;
+		onMentionOpened?: () => void;
+		onMentionSelect?: (entry: FileMentionEntry) => void;
 		onPromptLoadStart?: (
 			placeholderId: string,
 			promptInfo: MCPPromptInfo,
@@ -18,25 +21,26 @@
 		) => void;
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
-		onInlineResourceBrowse?: () => void;
 	}
 
 	let {
 		isPromptPickerOpen,
 		promptSearchQuery,
-		isInlineResourcePickerOpen,
-		resourceSearchQuery,
+		isMentionPickerOpen,
+		mentionQuery,
+		mentionAnchor,
+		scopePath,
 		onPromptPickerClose,
-		onInlineResourcePickerClose,
-		onInlineResourceSelect,
+		onMentionPickerClose,
+		onMentionOpened,
+		onMentionSelect,
 		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError,
-		onInlineResourceBrowse
+		onPromptLoadError
 	}: Props = $props();
 
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
-	let resourcePickerRef: ChatFormPickerMcpResources | undefined = $state(undefined);
+	let mentionPickerRef: ChatFormMentionPicker | undefined = $state(undefined);
 
 	/**
 	 * Delegates keyboard events to the active picker child.
@@ -47,7 +51,7 @@
 			return true;
 		}
 
-		if (isInlineResourcePickerOpen && resourcePickerRef?.handleKeydown(event)) {
+		if (isMentionPickerOpen && mentionPickerRef?.handleKeydown(event)) {
 			return true;
 		}
 
@@ -65,11 +69,13 @@
 	{onPromptLoadError}
 />
 
-<ChatFormPickerMcpResources
-	bind:this={resourcePickerRef}
-	isOpen={isInlineResourcePickerOpen}
-	searchQuery={resourceSearchQuery}
-	onClose={onInlineResourcePickerClose}
-	onResourceSelect={onInlineResourceSelect}
-	onBrowse={onInlineResourceBrowse}
+<ChatFormMentionPicker
+	bind:this={mentionPickerRef}
+	isOpen={isMentionPickerOpen ?? false}
+	query={mentionQuery ?? ''}
+	customAnchor={mentionAnchor}
+	scopePath={scopePath ?? null}
+	onClose={onMentionPickerClose ?? (() => {})}
+	onOpened={onMentionOpened}
+	onSelect={onMentionSelect ?? (() => {})}
 />

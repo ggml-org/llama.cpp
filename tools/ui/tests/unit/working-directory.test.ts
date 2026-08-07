@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
 	splitPathQuery,
 	buildCaseInsensitiveGlob,
+	buildGlobSearchArgs,
 	rankEntries,
 	joinPath,
 	highlightMatch
 } from '$lib/utils';
+import { GLOB_WILDCARD, PATH_NAV_MAX_DEPTH } from '$lib/constants';
 
 describe('splitPathQuery', () => {
 	it('treats a plain query as a home-relative glob (not navigation)', () => {
@@ -122,5 +124,43 @@ describe('highlightMatch', () => {
 
 	it('returns non-matching text when the query is absent', () => {
 		expect(highlightMatch('abc', 'z')).toEqual([{ text: 'abc', match: false }]);
+	});
+});
+
+describe('buildGlobSearchArgs', () => {
+	const DEPTH = 6;
+
+	it('glob-matches home-relative within the scope path', () => {
+		const args = buildGlobSearchArgs('docs', '/home', DEPTH);
+		expect(args.path).toBe('/home');
+		expect(args.include).toBe(buildCaseInsensitiveGlob('docs'));
+		expect(args.maxDepth).toBe(DEPTH);
+		expect(args.rankQuery).toBe('docs');
+		expect(args.last).toBeUndefined();
+	});
+
+	it('navigates home for a `~` path query', () => {
+		const args = buildGlobSearchArgs('~/proj', '/home', DEPTH);
+		expect(args.path).toBe('~');
+		expect(args.include).toBe(buildCaseInsensitiveGlob('proj'));
+		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
+		expect(args.rankQuery).toBe('proj');
+		expect(args.last).toBe('proj');
+	});
+
+	it('lists the scope root when a path query has no last segment', () => {
+		const args = buildGlobSearchArgs('~/', '/home', DEPTH);
+		expect(args.path).toBe('~');
+		expect(args.include).toBe(GLOB_WILDCARD);
+		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
+	});
+
+	it('navigates an absolute path under its root', () => {
+		const args = buildGlobSearchArgs('/usr/local/bin', '/home', DEPTH);
+		expect(args.path).toBe('/usr/local');
+		expect(args.include).toBe(buildCaseInsensitiveGlob('bin'));
+		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
+		expect(args.rankQuery).toBe('bin');
+		expect(args.last).toBe('bin');
 	});
 });

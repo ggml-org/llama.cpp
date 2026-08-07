@@ -15,6 +15,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
+	import { rehypeFileBadge } from './plugins/rehype/file-badge';
 	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
 	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
@@ -174,6 +175,7 @@
 			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
+			.use(rehypeFileBadge) // Render file:// anchors as inline badge chips
 			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
 			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-block">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions

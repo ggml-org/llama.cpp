@@ -15,8 +15,7 @@
 		SETTING_CONFIG_DEFAULT,
 		INITIAL_FILE_SIZE,
 		PROMPT_CONTENT_SEPARATOR,
-		PROMPT_TRIGGER_PREFIX,
-		RESOURCE_TRIGGER_PREFIX
+		PROMPT_TRIGGER_PREFIX
 	} from '$lib/constants';
 	import {
 		ContentPartType,
@@ -39,8 +38,23 @@
 		activeConversation,
 		pendingCwd
 	} from '$lib/stores/conversations.svelte';
-	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
-	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
+	import type {
+		FileMentionEntry,
+		GetPromptResult,
+		MCPPromptInfo,
+		MCPResourceInfo,
+		PromptMessage
+	} from '$lib/types';
+	import {
+		buildMentionInsertion,
+		findMentionToken,
+		isIMEComposing,
+		mentionLinkEndingAt,
+		parseClipboardContent,
+		takeMentionDismissSnapshot,
+		type MentionDismissSnapshot,
+		uuid
+	} from '$lib/utils';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -108,11 +122,18 @@
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
 
+	// Invisible anchor at the form's top edge so the mention popover floats above the box.
+	let mentionAnchor: HTMLDivElement | null = $state(null);
+
 	// Picker State
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
-	let isInlineResourcePickerOpen = $state(false);
-	let resourceSearchQuery = $state('');
+	let isMentionPickerOpen = $state(false);
+	let mentionQuery = $state('');
+
+	// Last dismissed `@`-mention token; while intact the picker does not
+	// reopen, so an escaped `@<query>` stays literal until edited.
+	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
 
 	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
 
@@ -219,26 +240,44 @@
 	function handleInput() {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 		const hasServers = mcpStore.hasEnabledServers(perChatOverrides);
+		const cursor = textareaRef?.getCaretOffset() ?? value.length;
+		const mentionToken = findMentionToken(value, cursor);
+
+		// A `@` mention takes precedence; typing one switches from any other open picker.
+		if (mentionToken && mentionToken.query.length > 0) {
+			isPromptPickerOpen = false;
+			promptSearchQuery = '';
+
+			const isDismissedSticky =
+				mentionDismissedSnapshot !== null &&
+				mentionDismissedSnapshot.start === mentionToken.start &&
+				mentionDismissedSnapshot.query === mentionToken.query;
+
+			if (!isDismissedSticky) {
+				mentionDismissedSnapshot = null;
+				isMentionPickerOpen = true;
+				mentionQuery = mentionToken.query;
+				return;
+			}
+
+			isMentionPickerOpen = false;
+			mentionQuery = '';
+			return;
+		}
+
+		isMentionPickerOpen = false;
+		mentionQuery = '';
+		// Token gone or changed: reset the snapshot so a fresh `@` reopens.
+		if (mentionDismissedSnapshot !== null && !mentionToken) {
+			mentionDismissedSnapshot = null;
+		}
 
 		if (value.startsWith(PROMPT_TRIGGER_PREFIX) && hasServers) {
 			isPromptPickerOpen = true;
 			promptSearchQuery = value.slice(1);
-			isInlineResourcePickerOpen = false;
-			resourceSearchQuery = '';
-		} else if (
-			value.startsWith(RESOURCE_TRIGGER_PREFIX) &&
-			hasServers &&
-			mcpStore.hasResourcesCapability(perChatOverrides)
-		) {
-			isInlineResourcePickerOpen = true;
-			resourceSearchQuery = value.slice(1);
-			isPromptPickerOpen = false;
-			promptSearchQuery = '';
 		} else {
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
-			isInlineResourcePickerOpen = false;
-			resourceSearchQuery = '';
 		}
 	}
 
@@ -247,15 +286,30 @@
 			return;
 		}
 
+		// Backspace at a mention link's end deletes the whole token at once.
+		if (event.key === KeyboardKey.BACKSPACE && !event.ctrlKey && !event.metaKey && !event.altKey) {
+			const el = textareaRef?.getElement();
+			if (el instanceof HTMLTextAreaElement && el.selectionStart === el.selectionEnd) {
+				const link = mentionLinkEndingAt(value, el.selectionStart);
+				if (link) {
+					event.preventDefault();
+					value = value.slice(0, link.start) + value.slice(link.end);
+					onValueChange?.(value);
+					queueMicrotask(() => textareaRef?.setCaretOffset(link.start));
+					return;
+				}
+			}
+		}
+
 		if (event.key === KeyboardKey.ESCAPE && isPromptPickerOpen) {
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
 			return;
 		}
 
-		if (event.key === KeyboardKey.ESCAPE && isInlineResourcePickerOpen) {
-			isInlineResourcePickerOpen = false;
-			resourceSearchQuery = '';
+		if (event.key === KeyboardKey.ESCAPE && isMentionPickerOpen) {
+			isMentionPickerOpen = false;
+			mentionQuery = '';
 			return;
 		}
 
@@ -432,33 +486,33 @@
 		textareaRef?.focus();
 	}
 
-	function handleInlineResourcePickerClose() {
-		isInlineResourcePickerOpen = false;
-		resourceSearchQuery = '';
-		textareaRef?.focus();
+	function handleMentionPickerClose() {
+		if (isMentionPickerOpen) {
+			const cursor = textareaRef?.getCaretOffset() ?? value.length;
+			mentionDismissedSnapshot = takeMentionDismissSnapshot(value, cursor);
+		}
+		isMentionPickerOpen = false;
+		mentionQuery = '';
+		refocusInput();
 	}
 
-	function handleInlineResourceSelect() {
-		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
-			value = '';
-			onValueChange?.('');
-		}
+	// Splice the `[name](file:///<abs path>)` link in place of the `@<query>`
+	// token, restoring the caret after the bindable value settles.
+	function handleMentionSelect(entry: FileMentionEntry) {
+		const cursor = textareaRef?.getCaretOffset() ?? value.length;
+		const token = findMentionToken(value, cursor);
+		if (!token) return;
 
-		isInlineResourcePickerOpen = false;
-		resourceSearchQuery = '';
-		textareaRef?.focus();
-	}
+		const built = buildMentionInsertion(entry, value, token);
+		if (!built) return;
 
-	function handleBrowseResources() {
-		isInlineResourcePickerOpen = false;
-		resourceSearchQuery = '';
+		value = built.newValue;
+		onValueChange?.(built.newValue);
 
-		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
-			value = '';
-			onValueChange?.('');
-		}
-
-		isResourceDialogOpen = true;
+		queueMicrotask(() => {
+			textareaRef?.focus();
+			textareaRef?.setCaretOffset(built.caretOffset);
+		});
 	}
 
 	async function handleMicClick() {
@@ -505,16 +559,24 @@
 		bind:this={pickersRef}
 		{isPromptPickerOpen}
 		{promptSearchQuery}
-		{isInlineResourcePickerOpen}
-		{resourceSearchQuery}
+		{isMentionPickerOpen}
+		{mentionQuery}
+		{mentionAnchor}
+		scopePath={cwd}
 		onPromptPickerClose={handlePromptPickerClose}
-		onInlineResourcePickerClose={handleInlineResourcePickerClose}
-		onInlineResourceSelect={handleInlineResourceSelect}
+		onMentionPickerClose={handleMentionPickerClose}
+		onMentionOpened={() => textareaRef?.focus()}
+		onMentionSelect={handleMentionSelect}
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
-		onInlineResourceBrowse={handleBrowseResources}
 	/>
+
+	<div
+		bind:this={mentionAnchor}
+		class="pointer-events-none absolute top-0 right-0 left-0 h-px"
+		aria-hidden="true"
+	></div>
 
 	<div
 		class="{INPUT_CLASSES} overflow-hidden rounded-4xl md:rounded-3xl backdrop-blur-md {disabled
