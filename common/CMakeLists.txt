@@ -84,6 +84,8 @@ add_library(${TARGET}
     llguidance.cpp
     log.cpp
     log.h
+    moe-prune.cpp
+    moe-prune.h
     ngram-cache.cpp
     ngram-cache.h
     ngram-map.cpp
@@ -106,6 +108,7 @@ add_library(${TARGET}
     trie.h
     unicode.cpp
     unicode.h
+    ../examples/gguf-hash/deps/sha256/sha256.c
     jinja/lexer.cpp
     jinja/lexer.h
     jinja/parser.cpp
@@ -126,7 +129,7 @@ set_target_properties(${TARGET} PROPERTIES
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
-target_include_directories(${TARGET} PUBLIC . ../vendor)
+target_include_directories(${TARGET} PUBLIC . ../vendor PRIVATE ../examples/gguf-hash/deps)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (LLAMA_SUBPROCESS)

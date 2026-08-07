@@ -14,6 +14,7 @@ llama_add_compile_flags()
 
 if (EMSCRIPTEN)
 else()
+    add_subdirectory(aikar-prune)
     add_subdirectory(batched-bench)
     add_subdirectory(gguf-split)
     add_subdirectory(imatrix)

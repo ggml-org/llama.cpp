@@ -22,6 +22,20 @@
 #include <string>
 #include <unordered_set>
 
+void llm_graph_input_moe_mask::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+    std::vector<float> values(n_expert, 0.0f);
+    for (int32_t expert : disabled_experts) {
+        values[expert] = -INFINITY;
+    }
+    ggml_backend_tensor_set(mask, values.data(), 0, values.size() * sizeof(float));
+}
+
+bool llm_graph_input_moe_mask::can_reuse(const llm_graph_params & params) {
+    GGML_UNUSED(params);
+    return true;
+}
+
 // dedup helpers
 
 static ggml_tensor * build_attn_inp_kq_mask(
@@ -1441,7 +1455,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_embd_head_v    (hparams.n_embd_head_v()),
     n_embd_v_gqa     (hparams.n_embd_v_gqa()),
     n_expert         (hparams.n_expert),
-    n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
+    n_expert_used    (cparams.warmup && !hparams.moe_prune_active ? hparams.n_expert : hparams.n_expert_used),
     freq_base        (cparams.rope_freq_base),
     freq_scale       (cparams.rope_freq_scale),
     ext_factor       (cparams.yarn_ext_factor),
@@ -1988,6 +2002,24 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(logits, "ffn_moe_logits_biased", il);
     }
 
+    ggml_tensor * prune_mask = nullptr;
+    if (il >= 0 && hparams.moe_disabled_experts[il].any()) {
+        std::vector<int32_t> disabled_experts;
+        for (int32_t expert = 0; expert < n_expert; ++expert) {
+            if (hparams.moe_disabled_experts[il][expert]) {
+                disabled_experts.push_back(expert);
+            }
+        }
+        auto inp = std::make_unique<llm_graph_input_moe_mask>(n_expert, disabled_experts);
+        inp->mask = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_expert);
+        ggml_set_input(inp->mask);
+        prune_mask = inp->mask;
+        res->add_input(std::move(inp));
+
+        logits = ggml_add(ctx0, logits, prune_mask);
+        cb(logits, "ffn_moe_logits_masked", il);
+    }
+
     ggml_tensor * probs = nullptr;
     switch (gating_op) {
         case LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX:
@@ -2028,6 +2060,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     if (arch == LLM_ARCH_GROVEMOE) {
         selection_probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
         cb(selection_probs, "ffn_moe_probs_biased", il);
+    }
+
+    if (prune_mask != nullptr) {
+        selection_probs = ggml_add(ctx0, selection_probs, prune_mask);
+        cb(selection_probs, "ffn_moe_probs_pruned", il);
     }
 
     // select top n_group_used expert groups

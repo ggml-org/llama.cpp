@@ -5,6 +5,7 @@
 #include "common.h"
 #include "fit.h"
 #include "log.h"
+#include "moe-prune.h"
 #include "llama.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -1253,6 +1254,20 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     pimpl->model.reset(model);
+
+    if (!params.moe_prune_profile.empty()) {
+        try {
+            const common_moe_prune_model_info info = common_moe_prune_inspect_model(params.model.path);
+            const common_moe_prune_profile profile = common_moe_prune_profile_load(params.moe_prune_profile);
+            common_moe_prune_profile_validate(profile, info);
+            common_moe_prune_profile_apply(model, profile);
+            COM_INF("loaded immutable MoE pruning profile: %s\n", params.moe_prune_profile.c_str());
+        } catch (const std::exception & e) {
+            COM_ERR("failed to load MoE pruning profile: %s\n", e.what());
+            pimpl->model.reset();
+            return;
+        }
+    }
 
     if (model_only) {
         return;

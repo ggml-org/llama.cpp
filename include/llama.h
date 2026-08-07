@@ -303,6 +303,12 @@ extern "C" {
         ggml_backend_buffer_type_t buft;
     };
 
+    struct llama_moe_prune_layer {
+        int32_t layer;
+        const int32_t * disabled_experts;
+        size_t n_disabled_experts;
+    };
+
     struct llama_model_params {
         // NULL-terminated list of devices to use for offloading (if NULL, all available devices are used)
         ggml_backend_dev_t * devices;
@@ -524,6 +530,15 @@ extern "C" {
             "use llama_model_free instead");
 
     LLAMA_API void llama_model_free(struct llama_model * model);
+
+    LLAMA_API bool llama_model_set_moe_prune(
+                  struct llama_model * model,
+        const struct llama_moe_prune_layer * layers,
+                                  size_t n_layers,
+                                    char * error,
+                                  size_t error_size);
+
+    LLAMA_API int32_t llama_model_n_expert_used(const struct llama_model * model);
 
     LLAMA_API struct llama_context * llama_init_from_model(
                      struct llama_model * model,

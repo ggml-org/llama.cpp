@@ -2936,6 +2936,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_DOWNLOAD, LLAMA_EXAMPLE_TOKENIZE}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
+        {"--moe-prune-profile"}, "FNAME",
+        "load one immutable Gemma 4 MoE expert pruning profile",
+        [](common_params & params, const std::string & value) {
+            params.moe_prune_profile = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MOE_PRUNE_PROFILE"));
+    add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {

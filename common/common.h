@@ -493,6 +493,7 @@ struct common_params {
     struct common_params_diffusion   diffusion;
 
     struct common_params_model model;
+    std::string moe_prune_profile; // immutable MoE pruning profile loaded with the model
 
     std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
     std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT

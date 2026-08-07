@@ -2,6 +2,8 @@
 
 Fast, lightweight, pure C/C++ HTTP server based on [httplib](https://github.com/yhirose/cpp-httplib), [nlohmann::json](https://github.com/nlohmann/json) and **llama.cpp**.
 
+Static Gemma 4 MoE expert pruning is documented in [../../docs/moe-pruning.md](../../docs/moe-pruning.md). Use `--moe-prune-profile FNAME` to load one immutable profile during model initialization.
+
 Set of LLM REST APIs and a web UI to interact with llama.cpp.
 
 **Features:**
