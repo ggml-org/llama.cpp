@@ -29,12 +29,10 @@ export class ParameterSyncService {
 	 * Converts samplers array to semicolon-delimited string for UI display.
 	 *
 	 * @param serverParams - Raw generation settings from server `/props` endpoint
-	 * @param uiSettings - Optional UI-specific settings from server
 	 * @returns Record of extracted parameter key-value pairs with normalized precision
 	 */
 	static extractServerDefaults(
-		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null,
-		uiSettings?: Record<string, string | number | boolean>
+		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null
 	): ParameterRecord {
 		const extracted: ParameterRecord = {};
 
@@ -54,18 +52,6 @@ export class ParameterSyncService {
 			// Handle samplers array conversion to string
 			if (serverParams.samplers && Array.isArray(serverParams.samplers)) {
 				extracted[SETTINGS_KEYS.SAMPLERS] = serverParams.samplers.join(';');
-			}
-		}
-
-		if (uiSettings) {
-			for (const param of SYNCABLE_PARAMETERS) {
-				if (param.canSync && param.serverKey in uiSettings) {
-					const value = uiSettings[param.serverKey];
-
-					if (value !== undefined) {
-						extracted[param.key] = this.roundFloatingPoint(value);
-					}
-				}
 			}
 		}
 
