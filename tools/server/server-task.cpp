@@ -1607,6 +1607,24 @@ json server_task_result_slot_erase::to_json() {
 }
 
 //
+// server_task_result_get_cvector
+//
+
+json server_task_result_get_cvector::to_json() {
+    json result = json::array();
+    for (size_t i = 0; i < cvectors.size(); ++i) {
+        auto & cvec = cvectors[i];
+        json entry = {
+            {"id",            i},
+            {"path",          cvec.fname},
+            {"scale",         cvec.strength},
+        };
+        result.push_back(std::move(entry));
+    }
+    return result;
+}
+
+//
 // server_task_result_get_lora
 //
 
@@ -1628,6 +1646,14 @@ json server_task_result_get_lora::to_json() {
         result.push_back(std::move(entry));
     }
     return result;
+}
+
+//
+// server_task_result_apply_cvector
+//
+
+json server_task_result_apply_cvector::to_json() {
+    return json {{ "success", true }};
 }
 
 //
