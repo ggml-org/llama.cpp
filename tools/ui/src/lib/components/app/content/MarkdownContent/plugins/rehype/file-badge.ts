@@ -1,10 +1,12 @@
 /**
  * Rehype plugin that rewrites `file://` markdown anchors into the
- * inline chip used by `MentionBadge.svelte`. The badge class string
- * is shared with the Svelte component (and with the contenteditable
- * tokenizer) via `@mention-badge`, so the model gutter in the chat
- * input, the assistant reply, and the user-bubble preview all show
- * the same chip.
+ * inline mention chip. The badge class string is shared with the
+ * contenteditable tokenizer via `$lib/constants/mention-badge`, so
+ * the chat input and the rendered messages show the same chip.
+ *
+ * The chip is presentational: `file://` navigation is blocked from
+ * http(s) pages, so the anchor is rewritten to a plain `<span>` (no
+ * link role, no tab stop); the full path stays available on `title`.
  *
  * Why a `rehype` step (not a markdown-it rule): the AST after
  * remark-rehype already represents `[label](file://path)` as a
@@ -53,9 +55,9 @@ function labelFromFileUrl(href: string): string {
 }
 
 /**
- * Build the inline icon as a hast `<svg>` element tree. Mirrors the
- * lucide component picked by `MentionBadge.svelte` so the Svelte-
- * rendered and DOM-built paths produce visually identical output.
+ * Build the inline icon as a hast `<svg>` element tree, mirroring the
+ * contenteditable tokenizer's badge icon so both paths produce
+ * visually identical output.
  *
  * @param href - The `file://` link target; a trailing `/` marks a
  * directory and selects the folder icon, matching the convention
@@ -95,9 +97,6 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 			node.tagName = 'span';
 			node.properties = {
 				className: MENTION_BADGE_CLASSNAME.split(' ').filter(Boolean),
-				role: 'link',
-				tabIndex: 0,
-				'data-href': `${FILE_URI_PREFIX}${decodedPath}`,
 				title: titleAttr.startsWith(FILE_URI_PREFIX) ? decodedPath : titleAttr
 			};
 			node.children = [

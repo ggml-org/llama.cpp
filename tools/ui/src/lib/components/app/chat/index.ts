@@ -286,25 +286,6 @@ export { default as ChatFormContenteditable } from './ChatForm/ChatFormContented
 export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
 
 /**
- * Inline `file://` mention chip - the visual representation of a
- * single `[name](file://...)` mention embedded in chat content.
- * Renders with a folder glyph prefix, font-mono label, and a
- * subtle bordered-pill background (matches the `ModelId` chip
- * shape so the model selector and the chat input share one
- * pill vocabulary). The contenteditable tokenizer and the
- * markdown `rehypeFileBadge` plugin emit the same DOM shape via
- * the shared class string in `$lib/utils/mention-badge` - keep
- * the class literal in sync if you retheme this component.
- *
- * - Without `href`: renders as a non-interactive `<span>`
- *   suitable for preview chips / chip rails etc.
- * - With `href`: renders as `<a target="_blank">`, the path
- *   also goes into `data-href` so an external host (e.g. the
- *   OS file manager) can resolve it on click.
- */
-export { default as MentionBadge } from './ChatForm/MentionBadge.svelte';
-
-/**
  * Working directory selector for agent mode. Renders a chip below the chat
  * form; clicking it opens a popover with a directory picker backed by the
  * server's `file_glob_search` built-in tool (POST /tools). The picked

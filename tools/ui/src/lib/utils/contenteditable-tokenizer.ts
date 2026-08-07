@@ -240,8 +240,8 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 /**
  * Materialize a token stream into a DOM subtree for the contenteditable
  * body: text nodes for text tokens, `<span data-mention-badge="true">`
- * elements for badges. The badge's class string + inline SVG mirror
- * `MentionBadge.svelte` exactly so Tailwind styles both identically.
+ * elements for badges. The badge's class string + inline SVG are shared
+ * with the rehype plugin via `$lib/constants/mention-badge`.
  */
 export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 	const fragment = document.createDocumentFragment();
@@ -268,8 +268,6 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 		badge.className = MENTION_BADGE_CLASSNAME;
 		badge.contentEditable = 'false';
 
-		// Icon - matches the lucide component picked by MentionBadge.svelte
-		// so the DOM-built badge is visually identical.
 		const svg = document.createElementNS(MENTION_BADGE_SVG_ATTRIBUTES['xmlns'], 'svg');
 		for (const [attr, value] of Object.entries(MENTION_BADGE_SVG_ATTRIBUTES)) {
 			svg.setAttribute(attr, value);

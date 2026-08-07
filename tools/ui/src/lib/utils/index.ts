@@ -222,9 +222,8 @@ export {
 // Source-space undo/redo history for the chat-form contenteditable
 export { SourceHistory, type SourceHistoryEntry } from './source-history';
 
-// Mention-badge visual contract (used by MentionBadge.svelte and the
-// contenteditable / rehype DOM paths that build the same chip without
-// a Svelte mount)
+// Mention-badge visual contract (used by the contenteditable / rehype
+// DOM paths that build the same chip without a Svelte mount)
 export {
 	containsFileMentionLink,
 	fileMentionLinkRe,
