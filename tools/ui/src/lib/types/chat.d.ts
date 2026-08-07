@@ -1,4 +1,4 @@
-import type { ErrorDialogType } from '$lib/enums';
+import type { ErrorDialogType, FileMentionEntryType } from '$lib/enums';
 import type { ApiChatCompletionToolCall } from './api';
 import type { DatabaseMessage, DatabaseMessageExtra } from './database';
 
@@ -108,7 +108,8 @@ export interface ChatStreamCallbacks {
 	createToolResultMessage?: (
 		toolCallId: string,
 		content: string,
-		extras?: DatabaseMessageExtra[]
+		extras?: DatabaseMessageExtra[],
+		toolCwd?: string
 	) => Promise<DatabaseMessage>;
 	updateToolResultMessage?: (
 		messageId: string,
@@ -164,4 +165,14 @@ export interface AttachmentDisplayItemsOptions {
 export interface FileProcessingResult {
 	extras: DatabaseMessageExtra[];
 	emptyFiles: string[];
+}
+
+/**
+ * A file or folder picked in the @-mention picker. `path` is the absolute
+ * server-side path; `name` is the basename.
+ */
+export interface FileMentionEntry {
+	path: string;
+	name: string;
+	type: FileMentionEntryType;
 }
