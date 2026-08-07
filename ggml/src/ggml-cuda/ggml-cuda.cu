@@ -32,9 +32,6 @@
 #include "ggml-cuda/moe-mmq.cuh"
 #include "ggml-cuda/moe-mmq-cutlass.cuh"
 #include "ggml-cuda/mmq.cuh"
-#ifdef GGML_CUDA_MOE_PROFILE
-#include "ggml-cuda/moe-profile.cuh"
-#endif
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/norm.cuh"
@@ -1840,25 +1837,6 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     ggml_tensor *       src1 = tensor->src[1];
     const ggml_tensor * dst  = tensor;
 
-    if (tensor->op == GGML_OP_MUL_MAT_ID) {
-        const bool cutlass_decode = ggml_cuda_moe_cutlass_decode_requested();
-        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
-        if (ggml_cuda_moe_cutlass_decode_log_requested() && src0->ne[2] > 1 &&
-            !logged.test_and_set(std::memory_order_relaxed)) {
-            GGML_LOG_INFO(
-                "MoE CUDA decode fusion candidate: name=%s weight=%s[%lld,%lld,%lld,%lld] "
-                "input=%s[%lld,%lld,%lld,%lld] output=[%lld,%lld,%lld,%lld] cutlass=%d\n",
-                tensor->name, ggml_type_name(src0->type), (long long) src0->ne[0], (long long) src0->ne[1],
-                (long long) src0->ne[2], (long long) src0->ne[3], ggml_type_name(src1->type),
-                (long long) src1->ne[0], (long long) src1->ne[1], (long long) src1->ne[2],
-                (long long) src1->ne[3], (long long) dst->ne[0], (long long) dst->ne[1],
-                (long long) dst->ne[2], (long long) dst->ne[3], cutlass_decode);
-        }
-        if (src0->type == GGML_TYPE_NVFP4 && cutlass_decode) {
-            return false;
-        }
-    }
-
     const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
@@ -1946,29 +1924,6 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
-
-    if (ggml_cuda_moe_cutlass_decode_requested() || ggml_cuda_moe_cutlass_decode_fused_requested()) {
-        static std::atomic_flag logged_entry = ATOMIC_FLAG_INIT;
-        if (ggml_cuda_moe_cutlass_decode_log_requested() && src0->ne[2] > 1 &&
-            !logged_entry.test_and_set(std::memory_order_relaxed)) {
-            GGML_LOG_INFO(
-                "MoE CUDA decode dispatcher: name=%s weight=%s[%lld,%lld,%lld,%lld] "
-                "input=[%lld,%lld,%lld,%lld] ids=[%lld,%lld,%lld,%lld]\n",
-                dst->name, ggml_type_name(src0->type), (long long) src0->ne[0], (long long) src0->ne[1],
-                (long long) src0->ne[2], (long long) src0->ne[3], (long long) src1->ne[0],
-                (long long) src1->ne[1], (long long) src1->ne[2], (long long) src1->ne[3],
-                (long long) ids->ne[0], (long long) ids->ne[1], (long long) ids->ne[2],
-                (long long) ids->ne[3]);
-        }
-        if (ggml_cuda_moe_cutlass_decode_mul_mat_id(ctx, src0, src1, ids, dst)) {
-            return;
-        }
-        static std::atomic_flag logged_fallback = ATOMIC_FLAG_INIT;
-        if (ggml_cuda_moe_cutlass_decode_log_requested() && src0->ne[2] > 1 &&
-            !logged_fallback.test_and_set(std::memory_order_relaxed)) {
-            GGML_LOG_INFO("MoE CUDA decode dispatcher: falling back for %s\n", dst->name);
-        }
-    }
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -2120,11 +2075,6 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 }
 
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
-#ifdef GGML_CUDA_MOE_PROFILE
-    const ggml_cuda_moe_profile_scope profile_scope(
-        dst->name, std::strstr(dst->name, "ffn_moe_") != nullptr);
-#endif
-
     switch (dst->op) {
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
@@ -3127,37 +3077,6 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         }
     }
 
-    if (is_equal({ GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL }, ops) &&
-        ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx, node_idx + 2 })) {
-        static const bool add_rms_norm_fusion = []() {
-            const char * value = getenv("GGML_CUDA_ADD_RMS_NORM_FUSION");
-            return value != nullptr && std::atoi(value) != 0;
-        }();
-        if (!add_rms_norm_fusion) {
-            return false;
-        }
-
-        const ggml_tensor * add = cgraph->nodes[node_idx];
-        const ggml_tensor * rms_norm = cgraph->nodes[node_idx + 1];
-        const ggml_tensor * mul = cgraph->nodes[node_idx + 2];
-        const ggml_tensor * weight = mul->src[0] == rms_norm ? mul->src[1] : mul->src[0];
-
-        if (rms_norm->src[0] != add || (mul->src[0] != rms_norm && mul->src[1] != rms_norm) ||
-            add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32 ||
-            add->type != GGML_TYPE_F32 || rms_norm->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32 ||
-            weight->type != GGML_TYPE_F32 || !ggml_are_same_shape(add->src[0], add->src[1]) ||
-            !ggml_are_same_shape(add, rms_norm) || !ggml_are_same_shape(rms_norm, mul) ||
-            weight->ne[0] != add->ne[0] || weight->ne[1] != 1 || weight->ne[2] != 1 || weight->ne[3] != 1 ||
-            !ggml_is_contiguous_rows(add->src[0]) || !ggml_is_contiguous_rows(add->src[1]) ||
-            !ggml_is_contiguous(weight) || !ggml_is_contiguous(add) || !ggml_is_contiguous(mul)) {
-            return false;
-        }
-
-        int out_nodes[] = { node_idx, node_idx + 2 };
-        return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, 3, out_nodes, 2,
-                /*is_topk_moe=*/false, add->src[0], add->src[1]);
-    }
-
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -3433,9 +3352,8 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
         return 0;
     }
     const int64_t n_tokens = first->src[2] != nullptr ? first->src[2]->ne[1] : 0;
-    const bool decode = n_tokens == 1 && ggml_cuda_moe_cutlass_decode_fused_requested();
     const bool prefill = n_tokens >= 256 && ggml_cuda_moe_cutlass_prefill_requested();
-    if (!decode && !prefill) {
+    if (!prefill) {
         return 0;
     }
     if (first->src[0]->type != GGML_TYPE_NVFP4 ||
@@ -3578,15 +3496,13 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
 
     const int count = end_idx - node_idx + 1;
     const int out_nodes[] = { end_idx };
-    const bool log_rejection = decode && ggml_cuda_moe_cutlass_decode_log_requested();
-    const char * log_prefix = log_rejection ? "MoE CUTLASS NVFP4" : nullptr;
     const std::array<const ggml_tensor *, 3> scale_sources = { gate_scale, up_scale, down_scale };
     if (!ggml_cuda_can_fuse_moe_nvfp4_subgraph(
-            cgraph, node_idx, count, end_idx, scale_sources, log_prefix) ||
+            cgraph, node_idx, count, end_idx, scale_sources, nullptr) ||
         !ggml_cuda_check_fusion_memory_ranges(
             cgraph, node_idx, count, out_nodes, 1, false, first->src[1], nullptr,
             first->src[2], weights,
-            log_prefix)) {
+            nullptr)) {
         return 0;
     }
 
@@ -3748,22 +3664,6 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
-
-    if (node->op == GGML_OP_MUL_MAT_ID && ggml_cuda_moe_cutlass_decode_log_requested()) {
-        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
-        if (node->src[0]->ne[2] > 1 && !logged.test_and_set(std::memory_order_relaxed)) {
-            GGML_LOG_INFO(
-                "MoE CUDA graph candidate: name=%s weight=%s[%lld,%lld,%lld,%lld] "
-                "input=[%lld,%lld,%lld,%lld] ids=[%lld,%lld,%lld,%lld]\n",
-                node->name, ggml_type_name(node->src[0]->type), (long long) node->src[0]->ne[0],
-                (long long) node->src[0]->ne[1], (long long) node->src[0]->ne[2],
-                (long long) node->src[0]->ne[3], (long long) node->src[1]->ne[0],
-                (long long) node->src[1]->ne[1], (long long) node->src[1]->ne[2],
-                (long long) node->src[1]->ne[3], (long long) node->src[2]->ne[0],
-                (long long) node->src[2]->ne[1], (long long) node->src[2]->ne[2],
-                (long long) node->src[2]->ne[3]);
-        }
-    }
 
     if (node->op == GGML_OP_MUL_MAT_ID) {
         ggml_cuda_moe_cutlass_nvfp4_args fused_args;
@@ -4454,11 +4354,6 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return fused_node_count - 1;
     }
 
-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
-        ggml_cuda_op_add_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
-        return 2;
-    }
-
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
@@ -4642,15 +4537,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
-                    if (node->op == GGML_OP_MUL_MAT_ID && ggml_cuda_moe_cutlass_decode_log_requested()) {
-                        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
-                        if (node->src[0]->ne[2] > 1 && !logged.test_and_set(std::memory_order_relaxed)) {
-                            const ggml_tensor * last = cgraph->nodes[i + nodes_to_skip];
-                            GGML_LOG_INFO(
-                                "MoE CUDA graph fusion selected: first=%s last=%s nodes=%d\n",
-                                node->name, last->name, nodes_to_skip + 1);
-                        }
-                    }
 #ifdef GGML_CUDA_DEBUG
                     const int last_fused = i + nodes_to_skip;
                     GGML_LOG_INFO("nodes_fused: %d, first: %s (%s), last: %s (%s)\n",
@@ -5421,19 +5307,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
-                if (op->op == GGML_OP_MUL_MAT_ID && ggml_cuda_moe_cutlass_decode_log_requested()) {
-                    static std::atomic_flag logged = ATOMIC_FLAG_INIT;
-                    if (a->ne[2] > 1 && !logged.test_and_set(std::memory_order_relaxed)) {
-                        GGML_LOG_INFO(
-                            "MoE CUDA device support query: name=%s weight=%s[%lld,%lld,%lld,%lld] "
-                            "input=%s[%lld,%lld,%lld,%lld] buffers=[%s,%s]\n",
-                            op->name, ggml_type_name(a->type), (long long) a->ne[0], (long long) a->ne[1],
-                            (long long) a->ne[2], (long long) a->ne[3], ggml_type_name(b->type),
-                            (long long) b->ne[0], (long long) b->ne[1], (long long) b->ne[2],
-                            (long long) b->ne[3], a->buffer ? ggml_backend_buffer_name(a->buffer) : "null",
-                            b->buffer ? ggml_backend_buffer_name(b->buffer) : "null");
-                    }
-                }
                 if (a->nb[0] != ggml_element_size(a) || b->nb[0] != ggml_element_size(b)) {
                     return false; // TODO this could in principle be implemented though currently there is no use case.
                 }
@@ -5726,7 +5599,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CONT:
             return true;
         case GGML_OP_DIAG_MASK_INF:
-            return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
+            return true;
         case GGML_OP_SOFT_MAX:
             return true;
         case GGML_OP_SOFT_MAX_BACK: {
@@ -5841,17 +5714,7 @@ static int64_t get_op_batch_size(const ggml_tensor * op) {
 static bool ggml_backend_cuda_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
 
-    const int64_t batch_size = get_op_batch_size(op);
-    if (op->op == GGML_OP_MUL_MAT_ID && ggml_cuda_moe_cutlass_decode_log_requested()) {
-        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
-        if (op->src[0]->ne[2] > 1 && !logged.test_and_set(std::memory_order_relaxed)) {
-            GGML_LOG_INFO(
-                "MoE CUDA offload query: name=%s batch=%lld minimum=%d selected=%d\n",
-                op->name, (long long) batch_size, dev_ctx->op_offload_min_batch_size,
-                batch_size >= dev_ctx->op_offload_min_batch_size);
-        }
-    }
-    return batch_size >= dev_ctx->op_offload_min_batch_size;
+    return get_op_batch_size(op) >= dev_ctx->op_offload_min_batch_size;
 }
 
 static ggml_backend_event_t ggml_backend_cuda_device_event_new(ggml_backend_dev_t dev) {

@@ -2433,22 +2433,6 @@ extern "C" {
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);
 
-    // window == 0 selects full causal attention.
-    GGML_API void ggml_flash_attn_ext_set_causal(
-            struct ggml_tensor * a,
-            int32_t              window);
-
-    // Returns -1 when the causal specialization is disabled.
-    GGML_API int32_t ggml_flash_attn_ext_get_causal_window(
-            const struct ggml_tensor * a);
-
-    GGML_API void ggml_flash_attn_ext_set_rope(
-            struct ggml_tensor       * a,
-            const struct ggml_tensor * rope);
-
-    GGML_API bool ggml_flash_attn_ext_has_rope(
-            const struct ggml_tensor * a);
-
     GGML_API void ggml_flash_attn_ext_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);

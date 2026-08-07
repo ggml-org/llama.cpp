@@ -1662,68 +1662,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
-template <ggml_cuda_moe_weight_layout layout, ggml_type type, int J, bool fallback>
-static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_mxfp4_repacked(
-        const char * __restrict__ x, const uint8_t * __restrict__ scales, int scale_stride,
-        int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
-    constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
-    constexpr int nwarps      = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
-    constexpr int I           = ggml_cuda_mmq_get_I(type, J, fallback);
-    constexpr int sram_stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
-
-    int *      x_qs = (int *) x_tile;
-    uint32_t * x_sc = (uint32_t *) (x_qs + 2 * MMQ_TILE_NE_K);
-
-    constexpr int iter_k = ggml_cuda_mmq_get_K_vram(type, J, fallback);
-    constexpr int threads_per_row = iter_k / QK_MXFP4;
-    constexpr int rows_per_warp   = warp_size / threads_per_row;
-    const int k_block             = threadIdx.x % threads_per_row;
-    const int row_in_warp         = threadIdx.x / threads_per_row;
-
-#pragma unroll
-    for (int i0 = 0; i0 < I; i0 += rows_per_warp * nwarps) {
-        int i = i0 + threadIdx.y * rows_per_warp + row_in_warp;
-        if constexpr (fallback) {
-            i = min(i, i_max);
-        }
-
-        const int64_t block_index = (int64_t) kbx0 + (int64_t) i * stride + k_block;
-        const int64_t row = block_index / stride;
-        const int block_in_row = block_index - row * stride;
-        const char * qs = nullptr;
-        uint8_t e = 0;
-
-        if constexpr (layout == ggml_cuda_moe_weight_layout::split) {
-            qs = x + block_index * (QK_MXFP4 / 2);
-            e = scales[row * scale_stride + block_in_row];
-        } else {
-            static_assert(layout == ggml_cuda_moe_weight_layout::interleaved, "invalid repacked weight layout");
-            const int64_t group = row * (stride / ggml_cuda_moe_repack_group_blocks) +
-                block_in_row / ggml_cuda_moe_repack_group_blocks;
-            const int block_in_group = block_in_row % ggml_cuda_moe_repack_group_blocks;
-            const char * record = x + group * ggml_cuda_moe_repack_group_bytes;
-            qs = record + block_in_group * (QK_MXFP4 / 2);
-            e = record[ggml_cuda_moe_repack_group_blocks * (QK_MXFP4 / 2) + block_in_group];
-        }
-
-        const int k0 = k_block * 4;
-        memcpy(x_qs + i * sram_stride + k0, qs, QK_MXFP4 / 2);
-        if (k_block % 2 == 0) {
-            uint8_t e1 = 0;
-            if constexpr (layout == ggml_cuda_moe_weight_layout::split) {
-                e1 = scales[row * scale_stride + block_in_row + 1];
-            } else {
-                const int64_t group = row * (stride / ggml_cuda_moe_repack_group_blocks) +
-                    block_in_row / ggml_cuda_moe_repack_group_blocks;
-                const int block_in_group = block_in_row % ggml_cuda_moe_repack_group_blocks;
-                const char * record = x + group * ggml_cuda_moe_repack_group_bytes;
-                e1 = record[ggml_cuda_moe_repack_group_blocks * (QK_MXFP4 / 2) + block_in_group + 1];
-            }
-            x_sc[i * sram_stride + k_block / 2] = (uint32_t) e | ((uint32_t) e1 << 8);
-        }
-    }
-}
-
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4(
         const char * __restrict__ x, int * __restrict__ x_tile, const int kb0, const int i_max, const int stride) {
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();

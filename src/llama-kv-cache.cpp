@@ -7,9 +7,7 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cinttypes>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -1870,97 +1868,6 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
     }
 }
 
-template<typename T>
-static bool set_input_kq_mask_contiguous(const args_set_input_kq_mask & args, T * data, bool causal_attn) {
-    const auto & ubatch = *args.ubatch;
-
-    if (!causal_attn || args.hparams.use_alibi || args.swa_type != LLAMA_SWA_TYPE_NONE ||
-            ubatch.is_pos_2d() || args.n_stream != 1 || ubatch.n_tokens == 0 ||
-            ubatch.n_seq_tokens != ubatch.n_tokens || ubatch.n_seqs != 1 || ubatch.n_seqs_unq != 1) {
-        return false;
-    }
-
-    if (ubatch.n_seq_id[0] != 1) {
-        return false;
-    }
-
-    const llama_seq_id seq_id = ubatch.seq_id[0][0];
-    if (seq_id < 0 || seq_id >= (llama_seq_id) args.seq_to_stream.size()) {
-        return false;
-    }
-
-    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-        if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq_id ||
-                (i > 0 && ubatch.pos[i] != ubatch.pos[i - 1] + 1)) {
-            return false;
-        }
-    }
-
-    const uint32_t stream = args.seq_to_stream[seq_id];
-    if (stream >= args.v_cells.size()) {
-        return false;
-    }
-
-    const auto & cells = args.v_cells[stream];
-    if (args.n_kv > cells.size()) {
-        return false;
-    }
-
-    int64_t n_used = 0;
-    llama_pos first_pos = -1;
-    for (int64_t j = 0; j < args.n_kv; ++j) {
-        if (cells.is_empty(j)) {
-            for (; j < args.n_kv; ++j) {
-                if (!cells.is_empty(j)) {
-                    return false;
-                }
-            }
-            break;
-        }
-
-        if (!cells.seq_has(j, seq_id)) {
-            return false;
-        }
-
-        const llama_pos pos = cells.pos_get(j);
-        if (n_used == 0) {
-            first_pos = pos;
-        } else if (pos != first_pos + n_used) {
-            return false;
-        }
-        ++n_used;
-    }
-
-    const T mask_keep = llama_cast<T>(0.0f);
-    const T mask_drop = llama_cast<T>(-INFINITY);
-
-    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-        const int64_t n_keep = std::max<int64_t>(0, std::min<int64_t>(n_used, (int64_t) ubatch.pos[i] - first_pos + 1));
-        T * row = data + args.n_kv * i;
-        std::fill(row, row + n_keep, mask_keep);
-        std::fill(row + n_keep, row + args.n_kv, mask_drop);
-    }
-
-    return true;
-}
-
-template<typename T>
-static bool set_input_kq_mask_dispatch(
-        const args_set_input_kq_mask & args, T * data, bool causal_attn,
-        bool contiguous_disabled, bool contiguous_validate) {
-    if (contiguous_disabled || !set_input_kq_mask_contiguous(args, data, causal_attn)) {
-        set_input_kq_mask_impl<T>(args, data, causal_attn);
-        return false;
-    }
-
-    if (contiguous_validate) {
-        std::vector<T> reference(args.n_kv * args.ubatch->n_tokens);
-        set_input_kq_mask_impl<T>(args, reference.data(), causal_attn);
-        GGML_ASSERT(std::memcmp(data, reference.data(), reference.size() * sizeof(T)) == 0);
-    }
-    return true;
-}
-
 void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     const uint32_t n_tokens = ubatch->n_tokens;
 
@@ -1988,31 +1895,10 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         /*.n_tps            =*/ n_tps,
     };
 
-    static const bool contiguous_disabled = [] {
-        const char * value = std::getenv("LLAMA_KQ_MASK_CONTIGUOUS_DISABLE");
-        return value != nullptr && std::atoi(value) != 0;
-    }();
-    static const bool contiguous_validate = [] {
-        const char * value = std::getenv("LLAMA_KQ_MASK_CONTIGUOUS_VALIDATE");
-        return value != nullptr && std::atoi(value) != 0;
-    }();
-    static const bool contiguous_log = [] {
-        const char * value = std::getenv("LLAMA_KQ_MASK_CONTIGUOUS_LOG");
-        return value != nullptr && std::atoi(value) != 0;
-    }();
-
-    bool used_contiguous = false;
     if (dst->type == GGML_TYPE_F16) {
-        used_contiguous = set_input_kq_mask_dispatch<ggml_fp16_t>(
-            args, (ggml_fp16_t *) dst->data, causal_attn, contiguous_disabled, contiguous_validate);
+        set_input_kq_mask_impl<ggml_fp16_t>(args, (ggml_fp16_t *) dst->data, causal_attn);
     } else {
-        used_contiguous = set_input_kq_mask_dispatch<float>(
-            args, (float *) dst->data, causal_attn, contiguous_disabled, contiguous_validate);
-    }
-
-    if (contiguous_log) {
-        LLAMA_LOG_INFO("KQ mask: contiguous=%d, n_tokens=%u, n_kv=%" PRId64 "\n",
-            used_contiguous, n_tokens, n_kv);
+        set_input_kq_mask_impl<float>(args, (float *) dst->data, causal_attn);
     }
 
     //const int64_t t_end = ggml_time_us();

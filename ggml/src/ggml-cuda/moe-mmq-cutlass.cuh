@@ -4,12 +4,6 @@
 
 bool ggml_cuda_moe_cutlass_compiled();
 
-bool ggml_cuda_moe_cutlass_decode_mul_mat_id(ggml_backend_cuda_context & ctx,
-                                             const ggml_tensor *         src0,
-                                             const ggml_tensor *         src1,
-                                             const ggml_tensor *         ids,
-                                             ggml_tensor *               dst);
-
 struct ggml_cuda_moe_cutlass_nvfp4_args {
     const ggml_tensor * gate;
     const ggml_tensor * up;
@@ -22,8 +16,6 @@ struct ggml_cuda_moe_cutlass_nvfp4_args {
     const ggml_tensor * weights;
     ggml_tensor *       dst;
 };
-
-bool ggml_cuda_moe_cutlass_decode_fused_requested();
 
 bool ggml_cuda_moe_cutlass_nvfp4(ggml_backend_cuda_context &              ctx,
                                  const ggml_cuda_moe_cutlass_nvfp4_args & args);
@@ -72,21 +64,6 @@ bool ggml_cuda_moe_cutlass_quantize_broadcast_cta(const float *   src,
                                                   bool            route_groups,
                                                   cudaStream_t    stream);
 
-void ggml_cuda_moe_cutlass_quantize_routes(const float *   src,
-                                           const int32_t * ids,
-                                           const int32_t * ids_src1,
-                                           const int32_t * expert_bounds,
-                                           uint8_t *       dst,
-                                           uint8_t *       scales,
-                                           int64_t         n_cols,
-                                           int64_t         n_cols_padded,
-                                           int64_t         n_tokens,
-                                           int             n_experts,
-                                           int             n_expert_used,
-                                           int64_t         ids_stride,
-                                           bool            route_groups,
-                                           cudaStream_t    stream);
-
 bool ggml_cuda_moe_cutlass_gemm(ggml_backend_cuda_context &       ctx,
                                 const ggml_cuda_moe_weight_view & weight,
                                 const uint8_t *                   activation,
@@ -102,13 +79,6 @@ bool ggml_cuda_moe_cutlass_gemm(ggml_backend_cuda_context &       ctx,
                                 ggml_cuda_moe_cutlass_config      config,
                                 cudaStream_t                      stream,
                                 bool                              require);
-
-void ggml_cuda_moe_cutlass_scatter(const void *    src,
-                                   const int32_t * ids_dst,
-                                   float *         dst,
-                                   int64_t         n_cols,
-                                   int64_t         n_rows,
-                                   cudaStream_t    stream);
 
 void ggml_cuda_moe_cutlass_w13_epilogue(const void *    gate_up,
                                         const float *   bias,

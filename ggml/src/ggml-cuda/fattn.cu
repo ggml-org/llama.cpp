@@ -41,14 +41,13 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
-    const bool direct_causal = ggml_flash_attn_ext_get_causal_window(dst) >= 0;
 
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
 
     // Edge cases like no mask, ALiBi, unpadded K/V, or misaligned addresses for large data transfers
     //     are put into the template specialization without GQA optimizations.
-    bool use_gqa_opt = (mask || direct_causal) && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    bool use_gqa_opt = mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
     for (const ggml_tensor * t : {Q, K, V, mask}) {
         if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
@@ -118,29 +117,10 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
-    const bool direct_causal = ggml_flash_attn_ext_get_causal_window(dst) >= 0;
-
-    static const bool sm120_causal_schedule = [] {
-        const char * value = getenv("GGML_CUDA_FATTN_SM120_CAUSAL_SCHEDULE");
-        return value != nullptr && std::atoi(value) != 0;
-    }();
 
     switch (Q->ne[0]) {
         case 64:
             GGML_ASSERT(V->ne[0] == 64);
-            if (sm120_causal_schedule && blackwell_mma_available(cc) && direct_causal && mask == nullptr &&
-                Q->ne[3] == 1 && Q->ne[1] >= 128 && Q->ne[1] <= 8192 && Q->ne[2] == 8 * K->ne[2]) {
-                static const bool logged = [] {
-                    const char * value = getenv("GGML_CUDA_FATTN_LOG_CONFIG");
-                    if (value != nullptr && std::atoi(value) != 0) {
-                        GGML_LOG_INFO("FlashAttention: sm120-causal=1 ncols1=16 ncols2=8\n");
-                    }
-                    return true;
-                }();
-                GGML_UNUSED(logged);
-                ggml_cuda_flash_attn_ext_mma_f16_case<64, 64, 16, 8>(ctx, dst);
-                break;
-            }
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2< 64,  64>(ctx, dst);
             break;
         case 80:
@@ -386,7 +366,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
-    const bool direct_causal = ggml_flash_attn_ext_get_causal_window(dst) >= 0;
 
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -396,7 +375,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // The effective batch size for the kernel can be increased by gqa_ratio.
     // The kernel versions without this optimization are also used for ALiBi, if there is no mask, or if the KV cache is not padded,
-    bool gqa_opt_applies = gqa_ratio >= 2 && (mask || direct_causal) && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
     for (const ggml_tensor * t : {Q, K, V, mask}) {
         if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
@@ -590,10 +569,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
-    const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst);
-    GGML_ASSERT((ggml_flash_attn_ext_get_causal_window(dst) < 0 && !ggml_flash_attn_ext_has_rope(dst)) ||
-                kernel == BEST_FATTN_KERNEL_MMA_F16);
-    switch (kernel) {
+    switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
         case BEST_FATTN_KERNEL_TILE:
@@ -609,17 +585,5 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 }
 
 bool ggml_cuda_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
-    const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(device, dst);
-    if (kernel == BEST_FATTN_KERNEL_NONE) {
-        return false;
-    }
-    if (ggml_flash_attn_ext_get_causal_window(dst) >= 0 && kernel != BEST_FATTN_KERNEL_MMA_F16) {
-        return false;
-    }
-    if (ggml_flash_attn_ext_has_rope(dst)) {
-        const int cc = ggml_cuda_info().devices[device].cc;
-        return kernel == BEST_FATTN_KERNEL_MMA_F16 && cc >= GGML_CUDA_CC_BLACKWELL &&
-            dst->src[0]->ne[0] == 64 && ggml_flash_attn_ext_get_causal_window(dst) >= 0;
-    }
-    return true;
+    return ggml_cuda_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
 }

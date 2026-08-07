@@ -1,8 +1,5 @@
 #include "ggml-cuda/common.cuh"
 #include "ggml.h"
-#ifdef GGML_CUDA_MOE_PROFILE
-#include "moe-profile.cuh"
-#endif
 #include "topk-moe.cuh"
 
 #include <cmath>
@@ -354,10 +351,6 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
                            const ggml_tensor *             scale,
                            const ggml_tensor *             bias,
                            const ggml_cuda_topk_moe_args & args) {
-#ifdef GGML_CUDA_MOE_PROFILE
-    const ggml_cuda_moe_profile_scope profile_scope("ffn_moe.routing");
-#endif
-
     GGML_ASSERT(logits->type == GGML_TYPE_F32);
     GGML_ASSERT(weights->type == GGML_TYPE_F32);
     GGML_ASSERT(ids->type == GGML_TYPE_I32);

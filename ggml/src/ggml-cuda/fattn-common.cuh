@@ -18,18 +18,6 @@
 // The macro on the following line shifts it by a factor of 2**3=8, as was needed to fix https://github.com/ggml-org/llama.cpp/issues/18606 .
 #define FATTN_KQ_MAX_OFFSET (3.0f*0.6931f)
 
-struct flash_attn_rope_params {
-    const int32_t * pos;
-    const float *   freq_factors;
-    int32_t         n_dims;
-    float           freq_scale;
-    float           ext_factor;
-    float           attn_factor;
-    float           corr_low;
-    float           corr_high;
-    float           theta_scale;
-};
-
 typedef void (* fattn_kernel_t)(
         const char * __restrict__ Q,
         const char * __restrict__ K,
@@ -45,8 +33,6 @@ typedef void (* fattn_kernel_t)(
         const float m1,
         const uint32_t n_head_log2,
         const float logit_softcap,
-        const int32_t causal_window,
-        const flash_attn_rope_params rope,
         const int32_t ne00, const uint3   ne01, const int32_t ne02, const int32_t ne03,
                             const int32_t nb01, const int32_t nb02, const int32_t nb03,
         const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
@@ -998,33 +984,6 @@ void launch_fattn(
 
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
-    const int causal_window = ggml_flash_attn_ext_get_causal_window(dst);
-    flash_attn_rope_params rope = {};
-    if (ggml_flash_attn_ext_has_rope(dst)) {
-        GGML_ASSERT(dst->src[5] != nullptr && dst->src[5]->type == GGML_TYPE_I32);
-        GGML_ASSERT(ggml_get_op_params_i32(dst, 6) == GGML_ROPE_TYPE_NEOX);
-        GGML_ASSERT(ggml_get_op_params_i32(dst, 5) == Q->ne[0]);
-
-        float freq_base;
-        float beta_fast;
-        float beta_slow;
-        memcpy(&freq_base, (const int32_t *) dst->op_params +  8, sizeof(float));
-        memcpy(&rope.freq_scale,  (const int32_t *) dst->op_params +  9, sizeof(float));
-        memcpy(&rope.ext_factor,  (const int32_t *) dst->op_params + 10, sizeof(float));
-        memcpy(&rope.attn_factor, (const int32_t *) dst->op_params + 11, sizeof(float));
-        memcpy(&beta_fast,        (const int32_t *) dst->op_params + 12, sizeof(float));
-        memcpy(&beta_slow,        (const int32_t *) dst->op_params + 13, sizeof(float));
-
-        float corr_dims[2];
-        rope.n_dims = ggml_get_op_params_i32(dst, 5);
-        rope.pos = (const int32_t *) dst->src[5]->data;
-        rope.freq_factors = dst->src[6] != nullptr ? (const float *) dst->src[6]->data : nullptr;
-        ggml_rope_yarn_corr_dims(
-            rope.n_dims, ggml_get_op_params_i32(dst, 7), freq_base, beta_fast, beta_slow, corr_dims);
-        rope.corr_low = corr_dims[0];
-        rope.corr_high = corr_dims[1];
-        rope.theta_scale = powf(freq_base, -2.0f / rope.n_dims);
-    }
 
     ggml_tensor * KQV = dst;
 
@@ -1132,7 +1091,7 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
-    if (causal_window < 0 && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
+    if (mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
 
@@ -1170,18 +1129,7 @@ void launch_fattn(
         blocks_num.y = 1;
         blocks_num.z = 1;
 
-        static const bool causal_tiles_enabled = [] {
-            const char * value = getenv("GGML_CUDA_FATTN_CAUSAL_TILES");
-            return value != nullptr && std::atoi(value) != 0;
-        }();
-        static const bool sm120_causal_schedule = [] {
-            const char * value = getenv("GGML_CUDA_FATTN_SM120_CAUSAL_SCHEDULE");
-            return value != nullptr && std::atoi(value) != 0;
-        }();
-        const bool use_causal_tiles = (causal_tiles_enabled || sm120_causal_schedule) &&
-            cc >= GGML_CUDA_CC_BLACKWELL && causal_window >= 0 && Q->ne[0] == 64 && Q->ne[3] == 1;
-
-        if (use_stream_k && !use_causal_tiles) {
+        if(use_stream_k) {
             const int nblocks_stream_k_raw = std::min(max_blocks, ntiles_KV*ntiles_dst);
             // Round down to a multiple of ntiles_dst so that each output tile gets the same number of blocks (avoids fixup).
             // Only do this if the occupancy loss from rounding is acceptable.
@@ -1268,7 +1216,7 @@ void launch_fattn(
         sinks ? ((const char *) sinks->data) : nullptr,
         KV_max.ptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
-        scale, max_bias, m0, m1, n_head_log2, logit_softcap, causal_window, rope,
+        scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
         K->ne[0], K->ne[1], K->ne[2], K->ne[3], nb11, nb12, nb13,
         nb21, nb22, nb23,

@@ -33,8 +33,6 @@ static __global__ void flash_attn_ext_vec(
         const float m1,
         const uint32_t n_head_log2,
         const float logit_softcap,
-        const int32_t causal_window,
-        const flash_attn_rope_params rope,
         const int32_t ne00, const uint3   ne01, const int32_t ne02, const int32_t ne03,
                             const int32_t nb01, const int32_t nb02, const int32_t nb03,
         const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
@@ -56,7 +54,7 @@ static __global__ void flash_attn_ext_vec(
     // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(D == 128 || D == 256)) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
-            max_bias, m0, m1, n_head_log2, logit_softcap, causal_window, rope,
+            max_bias, m0, m1, n_head_log2, logit_softcap,
             ne00, ne01, ne02, ne03,
                   nb01, nb02, nb03,
             ne10, ne11, ne12, ne13,
@@ -517,7 +515,7 @@ static __global__ void flash_attn_ext_vec(
     }
 #else
     GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale,
-        max_bias, m0, m1, n_head_log2, logit_softcap, causal_window, rope,
+        max_bias, m0, m1, n_head_log2, logit_softcap,
         ne00, ne01, ne02, ne03,
               nb01, nb02, nb03,
         ne10, ne11, ne12, ne13,
