@@ -24,6 +24,7 @@ cd "$ROOT"
 python3 scripts/apply-tiered-dram-pinned-fallback.py
 python3 scripts/apply-tiered-dram-matmul-staging.py
 python3 scripts/apply-tiered-no-prompt-echo.py
+python3 scripts/apply-tiered-hotpath-optimizations.py
 
 python3 - <<'PY'
 from pathlib import Path
