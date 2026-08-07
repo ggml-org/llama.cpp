@@ -3471,6 +3471,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
 
         // iterate tensor dims and find the slowest moving dim and stride
         int last_dim=0;
+        int last_str=0;
         size_t largest_str=0;
         for(int i = 0; i< 4; i++){
             // last stride is always the largest
