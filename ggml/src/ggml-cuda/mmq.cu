@@ -5,6 +5,18 @@
 
 #include <cstdint>
 
+static void mmq_args_set_x_scale(mmq_args & args, const ggml_cuda_mm_fusion_args_host * fusion) {
+    if (!fusion || !fusion->x_scale) {
+        return;
+    }
+
+    GGML_ASSERT(args.type_x == GGML_TYPE_NVFP4);
+    GGML_ASSERT(fusion->x_scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(fusion->x_scale));
+    GGML_ASSERT(ggml_nelements(fusion->x_scale) == (args.ids_dst ? args.nchannels_y : 1));
+    args.x_scale = (const float *) fusion->x_scale->data;
+}
+
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     switch (args.type_x) {
         case GGML_TYPE_Q1_0:
@@ -83,7 +95,8 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
 }
 
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+        const ggml_cuda_mm_fusion_args_host * fusion) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
@@ -165,13 +178,14 @@ void ggml_cuda_mul_mat_q(
                                 ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
         const int64_t s13 = ne12*s12;
 
-        const mmq_args args = {
+        mmq_args args = {
             src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
             src0->type == GGML_TYPE_NVFP4 && use_native_fp4 ? src1_scale.ptr : nullptr,
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             ne1};
+        mmq_args_set_x_scale(args, fusion);
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -245,7 +259,7 @@ void ggml_cuda_mul_mat_q(
     const int64_t s13 = ne12*s12;
 
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
-    const mmq_args args = {
+    mmq_args args = {
         src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), expert_bounds.get(), dst_d,
         src1_scale.ptr,
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
@@ -253,6 +267,7 @@ void ggml_cuda_mul_mat_q(
         ne03, ne13, s03, s13, s3,
         ne12};
 
+    mmq_args_set_x_scale(args, fusion);
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
 
