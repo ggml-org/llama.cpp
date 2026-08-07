@@ -384,6 +384,7 @@ You can download it from your Linux distro's package manager or from here: [ROCm
   ```
   If necessary, adapt `GPU_TARGETS` to the GPU arch you want to compile for. The above example uses `gfx1100` that corresponds to Radeon RX 7900XTX/XT/GRE. You can find a list of targets [here](https://llvm.org/docs/AMDGPUUsage.html#processors)
   Find your gpu version string by matching the most significant version information from `rocminfo | grep gfx | head -1 | awk '{print $2}'` with the list of processors, e.g. `gfx1035` maps to `gfx1030`.
+  RDNA4 GPUs (`gfx1200`, `gfx1201`) are also supported. Set `GPU_TARGETS` to your card's target (e.g. `gfx1200` for the RX 9060 XT, `gfx1201` for the RX 9070/9070 XT).
 
 
 The environment variable [`HIP_VISIBLE_DEVICES`](https://rocm.docs.amd.com/en/latest/understand/gpu_isolation.html#hip-visible-devices) can be used to specify which GPU(s) will be used.
