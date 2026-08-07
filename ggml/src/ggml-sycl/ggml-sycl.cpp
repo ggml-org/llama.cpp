@@ -3469,6 +3469,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
         scope_op_debug_print    scope_dbg_print(__func__, "/to_fp16_nc_sycl", dst, /*num_src=*/2,
                                                 " : converting src1 to fp16");
 
+#if GGML_SYCL_DNNL
         // iterate tensor dims and find the slowest moving dim and stride
         int last_dim=0;
         int last_str=0;
@@ -3488,7 +3489,6 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
             }
 
         }
-#if GGML_SYCL_DNNL
         // oneDNN handles strided data and does not need overhead of ggml_get_to_fp16_nc_sycl
         const int64_t ne_src1 = src1->nb[last_str] * src1->ne[last_dim] / type_size_src1;
         src1_f16_alloc.alloc(ne_src1);
