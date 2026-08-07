@@ -233,9 +233,9 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			},
 			{
-				key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_RAW_TEXT,
-				label: 'Render user content as raw text',
-				help: 'Display user messages as plain text instead of formatted Markdown.',
+				key: SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT,
+				label: 'Render content as raw text',
+				help: 'Display user, system and thinking content as plain text instead of formatted Markdown. Markdown is the default so that @-mention badges render in sent messages.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY

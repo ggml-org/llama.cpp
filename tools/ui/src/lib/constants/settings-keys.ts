@@ -23,7 +23,7 @@ export const SETTINGS_KEYS = {
 	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
-	RENDER_USER_CONTENT_AS_RAW_TEXT: 'renderUserContentAsRawText',
+	RENDER_CONTENT_AS_RAW_TEXT: 'renderContentAsRawText',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',

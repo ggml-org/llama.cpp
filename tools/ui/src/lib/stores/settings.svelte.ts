@@ -135,16 +135,27 @@ class SettingsStore {
 				...savedVal
 			};
 
-			// Migrate legacy `renderUserContentAsMarkdown` (true = render as
-			// markdown) into `renderUserContentAsRawText` (true = render as
-			// plain text) - inverted semantics.
-			const LEGACY_USER_CONTENT_KEY = 'renderUserContentAsMarkdown';
-			if (LEGACY_USER_CONTENT_KEY in savedVal) {
-				if (!(SETTINGS_KEYS.RENDER_USER_CONTENT_AS_RAW_TEXT in savedVal)) {
-					this.config[SETTINGS_KEYS.RENDER_USER_CONTENT_AS_RAW_TEXT] =
-						!savedVal[LEGACY_USER_CONTENT_KEY];
+			// Migrate the legacy render keys into `renderContentAsRawText`
+			// (inverted semantics: the old keys opted INTO markdown). Any
+			// explicit raw-text preference wins when the legacy keys disagree.
+			const LEGACY_MARKDOWN_KEYS = ['renderUserContentAsMarkdown', 'renderThinkingAsMarkdown'];
+			const LEGACY_RAW_TEXT_KEY = 'renderUserContentAsRawText'; // this branch's intermediate key
+			const legacyKeys = [...LEGACY_MARKDOWN_KEYS, LEGACY_RAW_TEXT_KEY].filter(
+				(key) => key in savedVal
+			);
+			if (legacyKeys.length > 0) {
+				if (!(SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT in savedVal)) {
+					if (LEGACY_RAW_TEXT_KEY in savedVal) {
+						this.config[SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT] = savedVal[LEGACY_RAW_TEXT_KEY];
+					} else {
+						this.config[SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT] = LEGACY_MARKDOWN_KEYS.filter(
+							(key) => key in savedVal
+						).some((key) => savedVal[key] === false);
+					}
 				}
-				delete (savedVal as Record<string, unknown>)[LEGACY_USER_CONTENT_KEY];
+				for (const key of legacyKeys) {
+					delete (this.config as Record<string, unknown>)[key];
+				}
 				this.saveConfig();
 			}
 
