@@ -15,7 +15,7 @@ The recipe remains script-only and uses existing GGUF tensor types. It now start
 
 ### `fixed` (default)
 
-This preserves the stock Q4_0 recipe exactly and adds only the 29 Q4_0 -> Q8_0 promotions selected by the Q4_K_M oracle. It intentionally retains the stock Q5_0, Q4_1, Q6_K, and BF16 entries so its KLD can isolate the sensitivity promotions.
+This preserves the stock Q4_0 precision recipe and adds only the 29 Q4_0 -> Q8_0 promotions selected by the Q4_K_M oracle. It retains the stock Q5_0, Q4_1, and Q6_K entries so its KLD can isolate the sensitivity promotions. The two stock BF16 MTP entries are emitted as F32 by llama-quantize, which is a precision increase.
 
 ### `native`
 

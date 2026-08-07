@@ -266,13 +266,15 @@ for raw in log_path.read_text(errors="replace").splitlines():
         final_type = "q8_0"
         reason = f"stock-Q4_0-to-Q8_{ref_type.upper()}"
         promotions += 1
+    if stock_type == "bf16":
+        # llama-quantize emits these stock MTP entries as F32 from the BF16
+        # source; this is a precision-preserving upgrade, not a downgrade.
+        final_type = "f32"
+        reason = "BF16-to-F32-preserve"
     if stage == "native":
         if stock_type in {"q5_0", "q4_1", "q6_k"}:
             final_type = "q8_0"
             reason = f"V620-{stock_type.upper()}-to-Q8_0"
-        elif stock_type == "bf16":
-            final_type = "f32"
-            reason = "V620-BF16-to-F32"
     elif stage != "fixed":
         raise SystemExit(f"unsupported stage: {stage}")
 
