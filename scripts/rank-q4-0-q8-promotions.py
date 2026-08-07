@@ -114,6 +114,10 @@ def main() -> int:
     parser.add_argument("--q8-fraction", type=float, default=25.0,
                         help="maximum fraction of final quantized bytes in Q8_0 (default: 25)")
     parser.add_argument("--chunk-rows", type=int, default=1024)
+    parser.add_argument("--max-tensor-mib", type=float, default=0.0,
+                        help="only consider tensors up to this Q4 size; 0 means unlimited")
+    parser.add_argument("--protect-low-bandwidth", action="store_true",
+                        help="always retain small SSM/shared-expert/attention-KV tensors as Q8")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not 0 <= args.q8_fraction <= 100:
@@ -149,6 +153,9 @@ def main() -> int:
             if typ == "q8_0":
                 base_q8_bytes += size
         if typ != "q4_0":
+            continue
+        if args.max_tensor_mib > 0 and tensor_bytes(shape, "q4_0") / (1024 ** 2) > args.max_tensor_mib:
+            skipped["size"] += 1
             continue
         # Recurrent state controls are too sensitive for a Q4/Q8 choice;
         # preserve them as F32 in the BF16-derived builder policy.
@@ -186,6 +193,7 @@ def main() -> int:
         q8_bytes = tensor_bytes(shape, "q8_0")
         candidates.append({
             "name": name,
+            "low_bandwidth": bool(re.search(r"(?:shexp\.weight$|\.ssm_out\.weight$|\.attn_[kv]\.weight$|\.attn_output\.weight$|\.nextn\.eh_proj\.weight$)", name)),
             "q4_bytes": q4_bytes,
             "q8_bytes": q8_bytes,
             "extra_bytes": q8_bytes - q4_bytes,
@@ -199,16 +207,30 @@ def main() -> int:
     candidates.sort(key=lambda item: (item["score"], item["gain"]), reverse=True)
     target = args.q8_fraction / 100.0
     selected = []
+    selected_names = set()
     selected_q8_bytes = base_q8_bytes
     selected_extra_bytes = 0
+
+    def add_item(item):
+        nonlocal selected_q8_bytes, selected_extra_bytes
+        selected.append(item)
+        selected_names.add(item["name"])
+        selected_q8_bytes += item["q8_bytes"]
+        selected_extra_bytes += item["extra_bytes"]
+
+    if args.protect_low_bandwidth:
+        for item in candidates:
+            if item["low_bandwidth"]:
+                add_item(item)
+
     for item in candidates:
+        if item["name"] in selected_names:
+            continue
         proposed_q8 = selected_q8_bytes + item["q8_bytes"]
         proposed_extra = selected_extra_bytes + item["extra_bytes"]
         proposed_fraction = proposed_q8 / max(1, base_quant_bytes + proposed_extra)
         if proposed_fraction <= target or not selected and target > 0:
-            selected.append(item)
-            selected_q8_bytes = proposed_q8
-            selected_extra_bytes = proposed_extra
+            add_item(item)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w") as output:
@@ -225,8 +247,12 @@ def main() -> int:
     final_quant = base_quant_bytes + selected_extra_bytes
     weighted = sum(1 for item in candidates if item["weighted"])
     print(f"base tensors: {len(base_types)}; Q4 candidates: {len(candidates)}")
+    if args.max_tensor_mib > 0:
+        print(f"maximum candidate tensor size: {args.max_tensor_mib:.3f} MiB")
     print(f"selected promotions: {len(selected)}")
     print(f"estimated Q8 fraction: {100 * final_q8 / max(1, final_quant):.3f}%")
+    if args.protect_low_bandwidth:
+        print(f"protected low-bandwidth promotions: {sum(1 for item in selected if item['low_bandwidth'])}")
     print(f"importance-weighted candidates: {weighted}")
     if skipped:
         print(f"skipped: {dict(skipped)}")

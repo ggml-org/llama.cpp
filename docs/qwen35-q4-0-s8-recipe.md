@@ -19,7 +19,7 @@ With `--stock-q4-0`, this preserves the historical stock precision recipe and ad
 
 ### `auto`
 
-This derives the base map from BF16, estimates weighted Q4_0 versus Q8_0 reconstruction error for every eligible tensor, and promotes the highest-value tensors until the configured Q8 byte fraction is reached. Use `--auto-q8-fraction PCT` to control the size/quality tradeoff. SSM alpha/beta tensors are preserved as F32.
+This derives the base map from BF16, estimates weighted Q4_0 versus Q8_0 reconstruction error for every eligible tensor, and promotes the highest-value tensors until the configured Q8 byte fraction is reached. Use `--auto-q8-fraction PCT` to control the size/quality tradeoff, and `--auto-max-tensor-mib N` to restrict upgrades to low-bandwidth tensors. SSM alpha/beta tensors are preserved as F32.
 
 ### `native`
 

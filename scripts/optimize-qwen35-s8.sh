@@ -22,6 +22,7 @@ Options:
   --objective NAME         mtp|decode|prompt|balanced (default: balanced)
   --quality-tolerance PCT  allowed KLD increase over stock (default: 0)
   --auto-q8-fraction PCT  auto-stage final Q8 byte fraction (default: 25)
+  --auto-max-tensor-mib N auto-stage maximum promoted tensor size (default: unlimited)
   --skip-build             evaluate existing candidate files only
   --skip-kld               skip KLD evaluation
   --skip-bench             skip V620 benchmarking
@@ -49,6 +50,7 @@ THREADS=
 OBJECTIVE=balanced
 QUALITY_TOLERANCE=0
 AUTO_Q8_FRACTION=25
+AUTO_MAX_TENSOR_MIB=0
 SKIP_BUILD=0
 SKIP_KLD=0
 SKIP_BENCH=0
@@ -71,6 +73,7 @@ while (($#)); do
         --objective)         [[ $# -ge 2 ]] || die "--objective needs a name"; OBJECTIVE=$2; shift 2 ;;
         --quality-tolerance) [[ $# -ge 2 ]] || die "--quality-tolerance needs a percentage"; QUALITY_TOLERANCE=$2; shift 2 ;;
         --auto-q8-fraction) [[ $# -ge 2 ]] || die "--auto-q8-fraction needs a percentage"; AUTO_Q8_FRACTION=$2; shift 2 ;;
+        --auto-max-tensor-mib) [[ $# -ge 2 ]] || die "--auto-max-tensor-mib needs a size"; AUTO_MAX_TENSOR_MIB=$2; shift 2 ;;
         --skip-build)        SKIP_BUILD=1; shift ;;
         --skip-kld)          SKIP_KLD=1; shift ;;
         --skip-bench)        SKIP_BENCH=1; shift ;;
@@ -84,6 +87,7 @@ done
 [[ "$OBJECTIVE" == mtp || "$OBJECTIVE" == decode || "$OBJECTIVE" == prompt || "$OBJECTIVE" == balanced ]] || die "invalid objective: $OBJECTIVE"
 [[ "$QUALITY_TOLERANCE" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid quality tolerance: $QUALITY_TOLERANCE"
 [[ "$AUTO_Q8_FRACTION" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid auto Q8 fraction: $AUTO_Q8_FRACTION"
+[[ "$AUTO_MAX_TENSOR_MIB" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid auto max tensor size: $AUTO_MAX_TENSOR_MIB"
 INPUT=$(readlink -f -- "$INPUT")
 BF16=$(readlink -f -- "$BF16")
 OUT_ROOT=$(readlink -m -- "$OUT_ROOT")
@@ -140,6 +144,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
         [[ -n "$STOCK_Q40" ]] && args+=(--stock-q4-0 "$STOCK_Q40")
         [[ -n "$IMATRIX" ]] && args+=(--imatrix "$IMATRIX")
         [[ "$stage" == auto ]] && args+=(--auto-q8-fraction "$AUTO_Q8_FRACTION")
+        [[ "$stage" == auto && "$AUTO_MAX_TENSOR_MIB" != 0 ]] && args+=(--auto-max-tensor-mib "$AUTO_MAX_TENSOR_MIB")
         [[ "$FORCE" -eq 1 ]] && args+=(--force)
         echo "[build] $stage"
         "$BUILDER" "${args[@]}" >"$OUT_ROOT/$stage-build.log" 2>&1 || {

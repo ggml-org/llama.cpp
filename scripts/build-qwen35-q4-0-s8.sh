@@ -32,6 +32,7 @@ Options:
   --no-imatrix                 disable imatrix use and force plain RTN
   --threads N                  quantizer threads (default: physical core count)
   --auto-q8-fraction PCT      auto-stage maximum final Q8_0 byte fraction (default: 25)
+  --auto-max-tensor-mib N    auto-stage only promotes tensors no larger than N MiB (default: unlimited)
   --keep-bf16                  retain the BF16 intermediate (default: retain)
   --remove-bf16                remove BF16 only after successful quantization
   --skip-mmproj                do not create the vision projector
@@ -65,6 +66,7 @@ MMPROJ=
 STOCK_Q40="${S8_STOCK_Q4_0:-}"
 STAGE=fixed
 AUTO_Q8_FRACTION=25
+AUTO_MAX_TENSOR_MIB=0
 IMATRIX="${S8_IMATRIX_PATH:-${HOME}/models/qwen35-imatrix/imatrix_unsloth.gguf_file}"
 USE_IMATRIX=1
 THREADS=
@@ -92,6 +94,7 @@ while (($#)); do
         --no-imatrix)    IMATRIX=; USE_IMATRIX=0; shift ;;
         --threads)        [[ $# -ge 2 ]] || die "--threads needs a number"; THREADS=$2; shift 2 ;;
         --auto-q8-fraction) [[ $# -ge 2 ]] || die "--auto-q8-fraction needs a percentage"; AUTO_Q8_FRACTION=$2; shift 2 ;;
+        --auto-max-tensor-mib) [[ $# -ge 2 ]] || die "--auto-max-tensor-mib needs a size"; AUTO_MAX_TENSOR_MIB=$2; shift 2 ;;
         --keep-bf16)      KEEP_BF16=1; REMOVE_BF16=0; shift ;;
         --remove-bf16)    KEEP_BF16=0; REMOVE_BF16=1; shift ;;
         --skip-mmproj)    SKIP_MMPROJ=1; shift ;;
@@ -115,6 +118,7 @@ if [[ -n "$STOCK_Q40" ]]; then
 fi
 [[ "$STAGE" == stock || "$STAGE" == fixed || "$STAGE" == native || "$STAGE" == auto ]] || die "invalid stage: $STAGE (use stock, fixed, native, or auto)"
 [[ "$AUTO_Q8_FRACTION" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid auto Q8 fraction: $AUTO_Q8_FRACTION"
+[[ "$AUTO_MAX_TENSOR_MIB" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid auto max tensor size: $AUTO_MAX_TENSOR_MIB"
 awk "BEGIN { exit !($AUTO_Q8_FRACTION <= 100) }" || die "auto Q8 fraction must be <= 100"
 "$PYTHON" -V >/dev/null 2>&1 || die "cannot run Python interpreter: $PYTHON"
 QUANT="$BUILD_DIR/bin/llama-quantize"
@@ -213,7 +217,8 @@ echo "[4/6] deriving the Q4_K_M sensitivity plan"
 "$QUANT" --dry-run "$BF16" Q4_K_M >"$PLAN_LOG" 2>&1
 if [[ "$STAGE" == auto ]]; then
     echo "[4/6] ranking BF16 Q4_0 -> Q8_0 promotions"
-    rank_args=(--bf16 "$BF16" --q8-fraction "$AUTO_Q8_FRACTION" --output "$AUTO_PLAN")
+    rank_args=(--bf16 "$BF16" --q8-fraction "$AUTO_Q8_FRACTION" --protect-low-bandwidth --output "$AUTO_PLAN")
+    [[ "$AUTO_MAX_TENSOR_MIB" != 0 ]] && rank_args+=(--max-tensor-mib "$AUTO_MAX_TENSOR_MIB")
     if [[ -n "$STOCK_Q40" ]]; then
         rank_args+=(--base-map "$STOCK_Q40")
     else
