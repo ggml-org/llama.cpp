@@ -98,8 +98,19 @@ export interface ApiModelDataEntry {
 	aliases?: string[];
 	/** Informational tags for this model */
 	tags?: string[];
+	/** Modality capabilities, reported by the router for every model regardless of load state */
+	architecture?: ApiModelArchitecture;
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
+}
+
+/**
+ * Modality capabilities of a model, as advertised by the ROUTER /models endpoint.
+ * Read from the model manifest, so it is available before the model is loaded.
+ */
+export interface ApiModelArchitecture {
+	/** Accepted input modalities, always contains "text" */
+	input_modalities: string[];
 }
 
 /**
