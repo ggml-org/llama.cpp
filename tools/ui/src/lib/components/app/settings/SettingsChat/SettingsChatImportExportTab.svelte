@@ -159,8 +159,10 @@
 		try {
 			const input = document.createElement('input');
 
+			// No `accept` filter: iOS resolves each entry to a UTI and has none for
+			// `.jsonl`, which greys out exported conversations in the file picker.
+			// `parseImportFile` detects the format from the file contents instead.
 			input.type = HtmlInputType.FILE;
-			input.accept = `${FileExtensionText.JSON},${FileExtensionText.JSONL},${FileExtensionText.ZIP}`;
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];
@@ -199,9 +201,17 @@
 				.snapshot(fullImportData)
 				.filter((item) => selectedIds.has(item.conv.id));
 
-			await conversationsStore.importConversationsData(selectedData);
+			const { imported, skipped } = await conversationsStore.importConversationsData(selectedData);
 
-			importedConversations = selectedConversations;
+			// A conversation already in the database is left untouched, so the summary
+			// lists what was written and the toast accounts for the rest.
+			if (skipped.length > 0) {
+				toast.info(
+					`Skipped ${skipped.length} conversation${skipped.length === 1 ? '' : 's'} already in your library`
+				);
+			}
+
+			importedConversations = imported;
 			showImportSummary = true;
 			showExportSummary = false;
 			showImportDialog = false;

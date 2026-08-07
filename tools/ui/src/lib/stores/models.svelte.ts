@@ -1,7 +1,12 @@
 import { base } from '$app/paths';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-import { ServerModelStatus, ServerModelsSseEventType, ModelModality } from '$lib/enums';
+import {
+	ServerModelStatus,
+	ServerModelsSseEventType,
+	ModelModality,
+	FileTypeCategory
+} from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
 import { serverStore, isRouterMode } from '$lib/stores/server.svelte';
@@ -394,6 +399,7 @@ class ModelsStore {
 				model: modelId,
 				description: details?.description,
 				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+				modalities: this.buildArchitectureModalities(item.architecture),
 				details: details?.details,
 				meta: item.meta ?? null,
 				parsedId: ModelsService.parseModelId(modelId),
@@ -997,6 +1003,21 @@ class ModelsStore {
 			vision: modalities.vision ?? false,
 			audio: modalities.audio ?? false,
 			video: modalities.video ?? false
+		};
+	}
+
+	/** Map the router modalities, the only source available while a model is not loaded. */
+	private buildArchitectureModalities(
+		architecture: ApiModelDataEntry['architecture']
+	): ModelModalities | undefined {
+		if (!architecture) return undefined;
+
+		const inputs = architecture.input_modalities;
+
+		return {
+			vision: inputs.includes(FileTypeCategory.IMAGE),
+			audio: inputs.includes(FileTypeCategory.AUDIO),
+			video: inputs.includes(FileTypeCategory.VIDEO)
 		};
 	}
 
