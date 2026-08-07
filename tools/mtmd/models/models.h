@@ -358,7 +358,7 @@ private:
     const bool add_newline;
 
     // the input image is a stack of tiles on the Y axis: [overview, tile(0,0), tile(0,1), ...]
-    const clip_image_anyres anyres;
+    const clip_image_f32::anyres_info anyres;
     const int n_tiles;
     const int tile_side; // patches per tile side
 

@@ -225,8 +225,7 @@ struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
-// llava-next "anyres": stacks the overview and all tiles into one image, so that clip can
-// assemble them into the final token sequence in a single graph
+// llava-next "anyres": stacks the overview and all tiles into one image, assembled by clip in a single graph
 struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
