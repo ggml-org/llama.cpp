@@ -25,6 +25,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
+    SERVER_TASK_TYPE_SLOT_CLONE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
 };
@@ -166,6 +167,7 @@ struct server_task {
         int id_slot;
         std::string filename;
         std::string filepath;
+        int id_slot_target = -1; // used by SERVER_TASK_TYPE_SLOT_CLONE
     };
     slot_action slot_action;
 
@@ -557,6 +559,14 @@ struct server_task_result_slot_save_load : server_task_result {
 
 struct server_task_result_slot_erase : server_task_result {
     size_t n_erased;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_slot_clone : server_task_result {
+    int    id_slot_target = -1;
+    size_t n_tokens;
+    double t_ms;
 
     virtual json to_json() override;
 };

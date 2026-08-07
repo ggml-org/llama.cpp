@@ -1132,6 +1132,35 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 }
 ```
 
+### POST `/slots/{id_slot}?action=clone_to`: Clone the prompt cache of the specified slot into another slot.
+
+Copies the KV cache of the source slot into the target slot **by reference**, without any recomputation. This is useful for parallel branching: fork multiple independent continuations (branches) from a common trunk prompt while paying the prefill cost only once.
+
+Unlike `save`/`restore`, this action performs no disk I/O and therefore does **not** require `--slot-save-path`.
+
+*Options:*
+
+`target`: ID of the destination slot. Can be passed as a query parameter (`?action=clone_to&target=1`) or in the request body (`{"target": 1}`).
+
+**Response format**
+
+```json
+{
+    "id_slot": 0,
+    "id_slot_target": 1,
+    "n_cloned": 1745,
+    "timings": {
+        "clone_ms": 0.042
+    }
+}
+```
+
+*Notes:*
+
+- Returns HTTP 400 if either slot ID is out of range, if source and target are the same slot, if the source slot is empty (nothing to clone), or if `target` is missing/invalid.
+- Not supported with `--context-shift` or `--cache-reuse`: the cloned cells are shared by reference, so shifting or reusing them would silently corrupt all branches (HTTP 501).
+- The clone has point-in-time semantics: the target receives the source state as it is at clone time. Clone while the trunk is idle; further generation on either slot afterwards diverges independently.
+
 ### GET `/lora-adapters`: Get list of all LoRA adapters
 
 This endpoint returns the loaded LoRA adapters. You can add adapters using `--lora` when starting the server, for example: `--lora my_adapter_1.gguf --lora my_adapter_2.gguf ...`

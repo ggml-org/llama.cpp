@@ -2694,6 +2694,79 @@ private:
                     res->n_erased = n_erased;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_SLOT_CLONE:
+                {
+                    const int id_slot   = task.slot_action.id_slot;
+                    const int id_target = task.slot_action.id_slot_target;
+                    // explicit range check: get_slot_by_id wraps around by
+                    // design, but for cloning an out-of-range id is an error
+                    if (id_slot < 0 || id_slot >= (int) slots.size()
+                            || id_target < 0 || id_target >= (int) slots.size()) {
+                        send_error(task, "Invalid slot ID (out of range)", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    server_slot * slot   = get_slot_by_id(id_slot);
+                    server_slot * target = get_slot_by_id(id_target);
+                    if (slot == nullptr || target == nullptr) {
+                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (slot == target) {
+                        send_error(task, "Source and target slots must be different", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (!check_slot_no_media(*slot, task.id) || !check_slot_no_media(*target, task.id)) {
+                        break;
+                    }
+                    if (slot->is_processing() || target->is_processing()) {
+                        // slot busy: defer and retry later, same as save/restore
+                        SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
+                        queue_tasks.defer(std::move(task));
+                        break;
+                    }
+                    // ctx_shift guard: with KV shifting or cache reuse active,
+                    // cells shared by reference would be shifted for ALL
+                    // branches -> silent cross-branch corruption. Reject it.
+                    if (params_base.ctx_shift || params_base.n_cache_reuse > 0) {
+                        send_error(task, "clone_to is incompatible with --context-shift/--cache-reuse "
+                                         "(shared KV cells would shift across branches)",
+                                   ERROR_TYPE_NOT_SUPPORTED);
+                        break;
+                    }
+                    const size_t n_tokens = slot->prompt.tokens.size();
+                    if (n_tokens == 0) {
+                        send_error(task, "Source slot is empty, nothing to clone", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    const int64_t t_start = ggml_time_us();
+
+                    // clone the KV without recomputation: the target sequence
+                    // is erased and replaced with REFERENCES to the source KV
+                    // cells (seq_cp); the cloned prompt lets the next task on
+                    // the target find the prefix in cache.
+                    common_context_seq_rm(ctx_tgt, target->id, -1, -1);
+                    common_context_seq_cp(ctx_tgt, slot->id, target->id, -1, -1);
+                    if (ctx_dft) {
+                        common_context_seq_rm(ctx_dft, target->id, -1, -1);
+                        common_context_seq_cp(ctx_dft, slot->id, target->id, -1, -1);
+                    }
+                    target->prompt = slot->prompt.clone();
+                    target->n_decoded   = slot->n_decoded;
+                    target->n_remaining = slot->n_remaining;
+                    target->n_prompt_tokens_cache     = slot->n_prompt_tokens_cache;
+                    target->n_prompt_tokens_processed = slot->n_prompt_tokens_processed;
+
+                    const int64_t t_end = ggml_time_us();
+
+                    auto res = std::make_unique<server_task_result_slot_clone>();
+                    res->id             = task.id;
+                    res->id_slot        = id_slot;
+                    res->id_slot_target = id_target;
+                    res->n_tokens       = n_tokens;
+                    res->t_ms           = (t_end - t_start) / 1000.0;
+                    queue_results.send(std::move(res));
+                } break;
             case SERVER_TASK_TYPE_GET_LORA:
                 {
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
@@ -4577,10 +4650,6 @@ void server_routes::init_routes() {
 
     this->post_slots = [this](const server_http_req & req) {
         auto res = create_response();
-        if (params.slot_save_path.empty()) {
-            res->error(format_error_response("This server does not support slots action. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
-            return res;
-        }
 
         std::string id_slot_str = req.get_param("id_slot");
 
@@ -4593,6 +4662,17 @@ void server_routes::init_routes() {
         }
 
         std::string action = req.get_param("action");
+
+        // clone_to copies the KV between slots of the same server with no
+        // disk I/O, so it does NOT require --slot-save-path
+        if (action == "clone_to") {
+            return handle_slots_clone_to(req, id_slot);
+        }
+
+        if (params.slot_save_path.empty()) {
+            res->error(format_error_response("This server does not support slots action. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
 
         if (action == "save") {
             return handle_slots_save(req, id_slot);
@@ -5280,6 +5360,54 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
     }
 
     GGML_ASSERT(dynamic_cast<server_task_result_slot_erase*>(result.get()) != nullptr);
+    res->ok(result->to_json());
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_slots_clone_to(const server_http_req & req, int id_slot) {
+    auto res = create_response();
+
+    // target from query param (?action=clone_to&target=N), fallback to body {"target": N}
+    std::string target_str = req.get_param("target");
+    if (target_str.empty() && !req.body.empty()) {
+        try {
+            const json request_data = json::parse(req.body);
+            if (request_data.contains("target")) {
+                target_str = std::to_string(request_data.at("target").get<int>());
+            }
+        } catch (const std::exception &) {}
+    }
+
+    int id_target;
+    try {
+        id_target = std::stoi(target_str);
+    } catch (const std::exception &) {
+        res->error(format_error_response("Invalid or missing target slot ID", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    auto & rd = res->rd;
+    {
+        server_task task(SERVER_TASK_TYPE_SLOT_CLONE);
+        task.id = rd.get_new_id();
+        task.slot_action.id_slot        = id_slot;
+        task.slot_action.id_slot_target = id_target;
+        rd.post_task(std::move(task));
+    }
+
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        // connection was closed
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
+
+    if (result->is_error()) {
+        res->error(result->to_json());
+        return res;
+    }
+
+    GGML_ASSERT(dynamic_cast<server_task_result_slot_clone *>(result.get()) != nullptr);
     res->ok(result->to_json());
     return res;
 }
