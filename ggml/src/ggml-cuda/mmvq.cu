@@ -37,6 +37,10 @@ static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
+static constexpr __host__ __device__ int ggml_cuda_mmvq_physical_warp_size() {
+    return ggml_cuda_vendor_policy::mmvq_warp_size(ggml_cuda_get_physical_warp_size());
+}
+
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:    return vec_dot_q1_0_q8_1;
@@ -283,6 +287,10 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 
 // Host function: returns the max batch size for the current arch+type at runtime.
 int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
+    if (!ggml_cuda_vendor_policy::supports_mmvq) {
+        return 0;
+    }
+
     // NVIDIA: Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
         if (cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
@@ -316,6 +324,10 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
 }
 
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
+    if (!ggml_cuda_vendor_policy::supports_mmvq) {
+        return false;
+    }
+
     if (!ggml_is_quantized(type)) {
         return false;
     }
@@ -581,7 +593,7 @@ static constexpr __host__ __device__ int calc_rows_per_block(int ncols_dst, int 
 }
 
 template <ggml_type type, int ncols_dst, bool has_fusion, bool small_k = false, bool halve_iters = false>
-__launch_bounds__(calc_nwarps(type, ncols_dst, get_device_table_id(), small_k, halve_iters)*ggml_cuda_get_physical_warp_size(), 1)
+__launch_bounds__(calc_nwarps(type, ncols_dst, get_device_table_id(), small_k, halve_iters)*ggml_cuda_mmvq_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q(
         const void * vx_ptr, const void * vy_ptr, const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion, float * dst_ptr,
         const uint32_t ncols_x, const uint3 nchannels_y, const uint32_t stride_row_x, const uint32_t stride_col_y,
@@ -600,7 +612,7 @@ static __global__ void mul_mat_vec_q(
     constexpr mmvq_parameter_table_id table_id = get_device_table_id();
     constexpr int nwarps = calc_nwarps(type, ncols_dst, table_id, small_k, halve_iters);
     constexpr int rows_per_cuda_block = calc_rows_per_block(ncols_dst, table_id, small_k, nwarps);
-    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int warp_size = ggml_cuda_mmvq_physical_warp_size();
 
     constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda(type);
 
@@ -833,7 +845,7 @@ static __global__ void mul_mat_vec_q(
 // Block: (warp_size, ncols_dst) - each warp handles one token independently.
 // No shared memory reduction needed since each warp works alone.
 template <ggml_type type, int c_rows_per_block, bool has_fusion = false>
-__launch_bounds__(get_mmvq_mmid_max_batch_for_device<type>()*ggml_cuda_get_physical_warp_size(), 1)
+__launch_bounds__(get_mmvq_mmid_max_batch_for_device<type>()*ggml_cuda_mmvq_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q_moe(
         const void * vx_ptr, const void * vy_ptr, const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion,
         float * dst_ptr,
@@ -849,7 +861,7 @@ static __global__ void mul_mat_vec_q_moe(
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
     constexpr int qi  = ggml_cuda_type_traits<type>::qi;
     constexpr int vdr = get_vdr_mmvq(type);
-    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int warp_size = ggml_cuda_mmvq_physical_warp_size();
 
     constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda(type);
 
@@ -1075,7 +1087,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
     const int device = ggml_cuda_get_device();
     const int                     cc        = ggml_cuda_info().devices[device].cc;
-    const int warp_size = ggml_cuda_info().devices[device].warp_size;
+    const int warp_size = ggml_cuda_vendor_policy::mmvq_warp_size(ggml_cuda_info().devices[device].warp_size);
     const mmvq_parameter_table_id table_id  = get_device_table_id(cc);
 
     const bool has_ids = ids != nullptr;

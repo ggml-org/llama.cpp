@@ -36,9 +36,37 @@
 #include "vendors/hip.h"
 #elif defined(GGML_USE_MUSA)
 #include "vendors/musa.h"
+#elif defined(GGML_USE_MACA)
+#include "vendors/maca.h"
 #else
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
+
+#ifndef GGML_CUDA_VENDOR_NVIDIA_MMA
+#define GGML_CUDA_VENDOR_NVIDIA_MMA 1
+#endif
+
+#ifndef GGML_CUDA_VENDOR_REDUCE_ADD
+#define GGML_CUDA_VENDOR_REDUCE_ADD 1
+#endif
+
+#ifndef GGML_CUDA_VENDOR_POLICY
+struct ggml_cuda_default_vendor_policy {
+    static constexpr bool supports_mmf = true;
+    static constexpr bool supports_mmvq = true;
+    static constexpr bool supports_mmvq_fusion = true;
+    static constexpr bool supports_transposed_mmvf = true;
+
+    static constexpr __host__ __device__ int mmvq_warp_size(int warp_size) {
+        return warp_size;
+    }
+
+};
+
+#define GGML_CUDA_VENDOR_POLICY ggml_cuda_default_vendor_policy
+#endif
+
+using ggml_cuda_vendor_policy = GGML_CUDA_VENDOR_POLICY;
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
@@ -281,23 +309,23 @@ static const char * cu_get_error_str(CUresult err) {
 #endif // defined(GGML_USE_HIP) && defined(RDNA4)
 
 // The Volta instructions are in principle available on Turing or newer but they are effectively unusable:
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
+#if !defined(GGML_USE_HIP) && GGML_CUDA_VENDOR_NVIDIA_MMA && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
 #define VOLTA_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
 
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
+#if !defined(GGML_USE_HIP) && GGML_CUDA_VENDOR_NVIDIA_MMA && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 #define TURING_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#if !defined(GGML_USE_HIP) && GGML_CUDA_VENDOR_NVIDIA_MMA && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #define AMPERE_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN
+#if !defined(GGML_USE_HIP) && GGML_CUDA_VENDOR_NVIDIA_MMA && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN
 #    define BLACKWELL_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL
 
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#if !defined(GGML_USE_HIP) && GGML_CUDA_VENDOR_NVIDIA_MMA && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #define CP_ASYNC_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
@@ -381,7 +409,7 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
-static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
+static constexpr __host__ __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;
 #else
@@ -451,7 +479,7 @@ struct ggml_cuda_unroll<1> {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#if !defined(GGML_USE_HIP) && GGML_CUDA_VENDOR_REDUCE_ADD && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     return __reduce_add_sync(0xffffffff, x);
 #else
 #pragma unroll
@@ -740,7 +768,9 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 
 #else // defined(GGML_USE_HIP)
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
+#if defined(GGML_CUDA_VENDOR_DP4A)
+    return GGML_CUDA_VENDOR_DP4A(a, b, c);
+#elif __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     return __dp4a(a, b, c);
 #else // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     const int8_t * a8 = (const int8_t *) &a;
