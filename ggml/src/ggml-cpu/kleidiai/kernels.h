@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 //
 
@@ -43,6 +43,12 @@ struct kernel_info {
         const void* lhs_packed, const void* rhs_packed,
         void* dst, size_t dst_stride_row, size_t dst_stride_col,
         float clamp_min, float clamp_max);
+
+    void (*run_kernel_lut_ex)(
+        size_t m, size_t n, size_t k, size_t bl,
+        const void* lhs_packed, const void* rhs_packed,
+        void* dst, size_t dst_stride_row, size_t dst_stride_col,
+        float clamp_min, float clamp_max, const int32_t* lut);
 };
 
 struct lhs_packing_info {
@@ -76,6 +82,9 @@ struct rhs_packing_info {
     void (*pack_func_ex)(size_t num_groups, size_t n, size_t k, size_t nr, size_t kr, size_t sr, size_t bl,
         size_t rhs_stride, const void * rhs, const void * bias, const void * scale, void * rhs_packed, size_t extra_bytes, const void * params);
 
+    void (*pack_func_lut_ex)(size_t num_groups, size_t n, size_t k, size_t nr, size_t kr, size_t sr, size_t bl,
+        size_t rhs_stride, const void * rhs, const void * bias, const void * scale, void * rhs_packed, size_t extra_bytes, const void * params, const int32_t* lut);
+
     rhs_repack_mode repack_mode = RHS_REPACK_PER_KERNEL;
 };
 
@@ -98,3 +107,4 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, c
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q8_0(cpu_feature features);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_f32(cpu_feature features);
+ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q2_0c(cpu_feature features);

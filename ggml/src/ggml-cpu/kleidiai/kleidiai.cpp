@@ -3,9 +3,12 @@
 //
 #include <arm_neon.h>
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <atomic>
 #include <cfloat>
+#include <cctype>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -17,25 +20,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
-#include <set>
+#include <limits>
+#include <map>
 #include <iostream>
 #include <climits>
 #if defined(__linux__)
 #include <asm/hwcap.h>
+#include <dirent.h>
 #include <sys/auxv.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifndef HWCAP2_SME2
-#define HWCAP2_SME2 (1UL << 37)
-#endif
 #elif defined(__APPLE__)
-#include <string_view>
 #include <sys/sysctl.h>
 #include <sys/types.h>
-#elif defined(_WIN32)
-#include <windows.h>
-#include <excpt.h>
 #endif
 
 #include "kleidiai.h"
@@ -43,13 +41,14 @@
 #include "ggml-cpu.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
+#include "ggml-aarch64.h"
 #include "ggml-backend-impl.h"
 #include "ggml-threading.h"
 #include "traits.h"
 
 #include "kernels.h"
 
-#include "kai_common.h"
+#include "kai/kai_common.h"
 
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
@@ -64,10 +63,11 @@ struct ggml_kleidiai_context {
     ggml_kleidiai_kernels * kernels_q4;
     ggml_kleidiai_kernels * kernels_q8;
     ggml_kleidiai_kernels * kernels_f32;
-    int sme_thread_cap; // <= 0 means “SME disabled/unknown”;
-    int thread_hint;    // <= 0 means “no hint”
+    ggml_kleidiai_kernels * kernels_q2c;
+    int sme_thread_cap; // <= 0 means "SME disabled/unknown"
+    int thread_hint;    // <= 0 means "no hint"
     int chunk_multiplier;
-} static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, nullptr, 0, -1, 4 };
+} static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, nullptr, nullptr, 0, -1, 4 };
 
 static inline bool is_sme_family(cpu_feature f) {
     return (f & (CPU_FEATURE_SME | CPU_FEATURE_SME2)) != CPU_FEATURE_NONE;
@@ -93,24 +93,110 @@ static const char* cpu_feature_to_string(cpu_feature f) {
     }
 }
 
+#if defined(__linux__) && defined(__aarch64__)
+static bool parse_cpu_dir_name(const char * name, size_t * cpu) {
+    if (strncmp(name, "cpu", 3) != 0 || name[3] < '0' || name[3] > '9') {
+        return false;
+    }
+
+    char * end = nullptr;
+    errno = 0;
+    const unsigned long long value = strtoull(name + 3, &end, 10);
+    if (errno != 0 || *end != '\0' ||
+        value > (unsigned long long) std::numeric_limits<size_t>::max()) {
+        return false;
+    }
+
+    *cpu = (size_t) value;
+    return true;
+}
+
+static std::vector<size_t> detect_cpu_ids() {
+    std::vector<size_t> cpus;
+
+    DIR * dir = opendir("/sys/devices/system/cpu");
+    if (dir == nullptr) {
+        return cpus;
+    }
+
+    while (dirent * entry = readdir(dir)) {
+        size_t cpu = 0;
+        if (parse_cpu_dir_name(entry->d_name, &cpu)) {
+            cpus.push_back(cpu);
+        }
+    }
+    closedir(dir);
+
+    std::sort(cpus.begin(), cpus.end());
+    cpus.erase(std::unique(cpus.begin(), cpus.end()), cpus.end());
+    return cpus;
+}
+#endif
+
+#if defined(__APPLE__) && defined(__aarch64__)
+static bool apple_sme_counted_perf_level(std::string name) {
+    for (std::string::size_type i = 0; i < name.size(); ++i) {
+        name[i] = (char) std::tolower((unsigned char) name[i]);
+    }
+
+    // Conservative ceiling: only count perf-level names observed to provide full SME throughput.
+    // Future names should be calibrated here before they raise the automatic SME thread cap.
+    return name.find("super") != std::string::npos ||
+           name.find("performance") != std::string::npos;
+}
+#endif
+
+static void add_smcus_from_smidr(uint64_t smidr, size_t & num_private, std::map<uint32_t, size_t> & shared_counts) {
+    // Arm ARM: SMIDR_EL1. SH==0 is implementation-defined, keep the existing
+    // conservative policy and only treat zero affinity as private.
+    const uint32_t sh = (uint32_t)((smidr >> 13) & 0x3);
+    const uint32_t nsmc = (uint32_t)((smidr >> 56) & 0xF);
+    const size_t shared_count = nsmc == 0xF ? 1 : (size_t)nsmc + 1;
+    const uint32_t affinity = (uint32_t)(smidr & 0xFFFu);
+    const uint32_t affinity2 = (uint32_t)((smidr >> 32) & 0xFFFFFu);
+    const uint32_t id = (affinity2 << 12) | affinity;
+
+    switch (sh) {
+        case 2: // private SMCU
+            ++num_private;
+            break;
+        case 3: // shared SMCU
+            if (shared_counts[id] < shared_count) {
+                shared_counts[id] = shared_count;
+            }
+            break;
+        case 0:
+            if (id == 0) {
+                ++num_private;
+            } else if (shared_counts[id] < shared_count) {
+                shared_counts[id] = shared_count;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 static size_t detect_num_smcus() {
-    if (!ggml_cpu_has_sme()) {
+    auto runtime_feat = ggml_get_aarch64_runtime_features();
+    if (!runtime_feat.has_sme) {
         return 0;
     }
 
 #if defined(__linux__) && defined(__aarch64__)
-    // Linux/aarch64: Best-effort count of Streaming Mode Compute Units (SMCUs) via SMIDR_EL1 sysfs.
+    // Best-effort count of Streaming Mode Compute Units (SMCUs) via SMIDR_EL1 sysfs.
     size_t num_private = 0;
-    std::set<uint32_t> shared_ids;
+    std::map<uint32_t, size_t> shared_counts;
 
-    for (size_t cpu = 0;; ++cpu) {
+    const std::vector<size_t> cpus = detect_cpu_ids();
+    for (const size_t cpu : cpus) {
         const std::string path =
             "/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
             "/regs/identification/smidr_el1";
 
         std::ifstream file(path);
         if (!file.is_open()) {
-            break;
+            continue;
         }
 
         uint64_t smidr = 0;
@@ -118,54 +204,69 @@ static size_t detect_num_smcus() {
             continue;
         }
 
-        // Arm ARM: SMIDR_EL1
-        const uint32_t sh = (uint32_t)((smidr >> 13) & 0x3);
-        // Build an "affinity-like" identifier for shared SMCUs.
-        // Keep the original packing logic, but isolate it here.
-        const uint32_t id = (uint32_t)((smidr & 0xFFFu) | ((smidr >> 20) & 0xFFFFF000u));
-
-        switch (sh) {
-            case 0b10: // private SMCU
-                ++num_private;
-                break;
-            case 0b11: // shared SMCU
-                shared_ids.emplace(id);
-                break;
-            case 0b00:
-                // Ambiguous / implementation-defined. Be conservative:
-                // treat id==0 as private, otherwise as shared.
-                if (id == 0) ++num_private;
-                else shared_ids.emplace(id);
-                break;
-            default:
-                break;
-        }
+        add_smcus_from_smidr(smidr, num_private, shared_counts);
     }
 
-    return num_private + shared_ids.size();
+    size_t total = num_private;
+    for (const auto & entry : shared_counts) {
+        total += entry.second;
+    }
+    return total;
 
 #elif defined(__APPLE__) && defined(__aarch64__)
-    // table for known M4 variants. Users can override via GGML_KLEIDIAI_SME=<n>.
-    char chip_name[256] = {};
-    size_t size = sizeof(chip_name);
+    int perf_levels = 0;
+    size_t size = sizeof(perf_levels);
+    if (sysctlbyname("hw.nperflevels", &perf_levels, &size, nullptr, 0) != 0 ||
+        size != sizeof(perf_levels) || perf_levels <= 0) {
+        return 0;
+    }
 
-    if (sysctlbyname("machdep.cpu.brand_string", chip_name, &size, nullptr, 0) == 0) {
-        const std::string brand(chip_name);
+    size_t units = 0;
+    for (int i = 0; i < perf_levels; ++i) {
+        char key[64] = {};
+        int physical_cpus = 0;
+        int cpus_per_l2 = 0;
 
-        struct ModelSMCU { const char *match; size_t smcus; };
-        static const ModelSMCU table[] = {
-            { "M4 Ultra", 2 },
-            { "M4 Max",   2 },
-            { "M4 Pro",   2 },
-            { "M4",       1 },
-        };
+        snprintf(key, sizeof(key), "hw.perflevel%d.physicalcpu", i);
+        size = sizeof(physical_cpus);
+        if (sysctlbyname(key, &physical_cpus, &size, nullptr, 0) != 0 ||
+            size != sizeof(physical_cpus) || physical_cpus <= 0) {
+            continue;
+        }
 
-        for (const auto &e : table) {
-            if (brand.find(e.match) != std::string::npos) {
-                return e.smcus;
-            }
+        snprintf(key, sizeof(key), "hw.perflevel%d.cpusperl2", i);
+        size = sizeof(cpus_per_l2);
+        if (sysctlbyname(key, &cpus_per_l2, &size, nullptr, 0) != 0 ||
+            size != sizeof(cpus_per_l2) || cpus_per_l2 <= 0) {
+            continue;
+        }
+
+        snprintf(key, sizeof(key), "hw.perflevel%d.name", i);
+        size = 0;
+        if (sysctlbyname(key, nullptr, &size, nullptr, 0) != 0 || size == 0) {
+            continue;
+        }
+
+        std::string name(size, '\0');
+        if (sysctlbyname(key, &name[0], &size, nullptr, 0) != 0) {
+            continue;
+        }
+        name.resize(size);
+        while (!name.empty() && name.back() == '\0') {
+            name.pop_back();
+        }
+
+        if (apple_sme_counted_perf_level(name)) {
+            units += (size_t) ((physical_cpus + cpus_per_l2 - 1) / cpus_per_l2);
         }
     }
+
+    return units;
+
+#elif defined(_WIN32) && (defined(_M_ARM64) || defined(__aarch64__))
+    // No verified Windows arm64 SMCU detection path yet. Return unknown and use
+    // GGML_KLEIDIAI_SME=N as a diagnostics/debug override for SME thread cap
+    // calibration until a detection mechanism is verified on real hardware.
     return 0;
 
 #else
@@ -198,15 +299,18 @@ static void init_kleidiai_context(void) {
     if (!initialized) {
         initialized = true;
 
+        // Optional diagnostics/debug overrides, production defaults come from runtime detection.
         const char *env_sme         = getenv("GGML_KLEIDIAI_SME");
         const char *env_threads     = getenv("GGML_TOTAL_THREADS");
         const char *env_chunk_mult  = getenv("GGML_KLEIDIAI_CHUNK_MULTIPLIER");
 
+        auto runtime_feat = ggml_get_aarch64_runtime_features();
+
         size_t detected_smcus = 0;
 
-        ctx.features  = (ggml_cpu_has_dotprod()     ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
-                        (ggml_cpu_has_matmul_int8() ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
-                        ((ggml_cpu_has_sve() && ggml_cpu_get_sve_cnt() == QK8_0) ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
+        ctx.features  = (runtime_feat.has_dotprod ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
+                        (runtime_feat.has_i8mm     ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
+                        (runtime_feat.sve_cnt == QK8_0 ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
 
         if (env_threads) {
             bool ok = false;
@@ -224,60 +328,61 @@ static void init_kleidiai_context(void) {
             }
         }
 
-        // SME policy:
-        // - env unset => auto-detect SMCUs; enable SME only if detected > 0.
-        // - env=0     => force off.
-        // - env>0     => force N cores, if the binary was built with SME.
         int sme_cores = 0;
         bool sme_env_ok = false;
         bool sme_env_set = (env_sme != nullptr);
 
+        const bool has_supported_sme_family = runtime_feat.has_sme;
+        bool sme_cap_detected = false;
+
+        if (has_supported_sme_family) {
+            detected_smcus = detect_num_smcus();
+            sme_cap_detected = detected_smcus > 0;
+            // Some platforms expose SME without exposing a calibrated SMCU count.
+            // Use one SME thread as the conservative default, add platform SMCU detection to raise it.
+            sme_cores = sme_cap_detected ? (int)detected_smcus : 1;
+
+            if (!sme_env_set && !sme_cap_detected) {
+                GGML_LOG_INFO("kleidiai: SME detected, SMCU count unavailable, using conservative SME thread cap=1\n");
+            }
+        }
+
+        // Runtime-detect SME support and available SMCUs first. The detected SMCU
+        // count is used as the SME thread cap, and GGML_KLEIDIAI_SME can debug-override that:
+        //   - unset: use runtime detection.
+        //   - 0:     disable SME-family kernels.
+        //   - N > 0: use N as the SME thread cap, if an SME-family kernel is selectable.
         if (sme_env_set) {
             bool ok = false;
             int v = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
             sme_env_ok = ok;
 
-            if (!ok) {
-                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; falling back to runtime SME-core detection\n");
-                detected_smcus = detect_num_smcus();
-                sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
-            } else if (v == 0) {
-                sme_cores = 0;
-            } else if (!ggml_cpu_has_sme()) {
-                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but the binary was not built with SME; disabling SME\n", v);
-                sme_cores = 0;
+            if (ok) {
+                if (has_supported_sme_family) {
+                    sme_cores = v;
+                } else {
+                    if (v > 0) {
+                        GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but SME is not supported on this CPU; disabling SME-family kernels\n", v);
+                    }
+                    sme_cores = 0;
+                }
             } else {
-                sme_cores = v;
+                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; using automatic SME thread cap\n");
             }
-        } else {
-            detected_smcus = detect_num_smcus();
-            sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
         }
 
-        if (!sme_env_set && ggml_cpu_has_sme() && sme_cores == 0) {
-            GGML_LOG_WARN("kleidiai: runtime SME-core detection returned 0; falling back to NEON\n");
-        }
-
-        if (sme_cores > 0) {
+        if (sme_cores > 0 && has_supported_sme_family) {
             ctx.features |= CPU_FEATURE_SME;
-#if defined(__aarch64__) && defined(__linux__)
-            // ARM guarantees SME2 implies SME, so only check SME2 when SME is enabled.
-            if (getauxval(AT_HWCAP2) & HWCAP2_SME2) {
+            if (runtime_feat.has_sme2) {
                 ctx.features |= CPU_FEATURE_SME2;
             }
-#elif defined(__aarch64__) && defined(__APPLE__)
-            int feat_sme2 = 0;
-            size_t size = sizeof(feat_sme2);
-            if (sysctlbyname("hw.optional.arm.FEAT_SME2", &feat_sme2, &size, NULL, 0) == 0 && feat_sme2) {
-                ctx.features |= CPU_FEATURE_SME2;
-            }
-#endif
         }
 
         // Kernel selection
         ctx.kernels_q4  = ggml_kleidiai_select_kernels_q4_0(ctx.features);
         ctx.kernels_q8  = ggml_kleidiai_select_kernels_q8_0(ctx.features);
         ctx.kernels_f32 = ggml_kleidiai_select_kernels_f32(ctx.features);
+        ctx.kernels_q2c = ggml_kleidiai_select_kernels_q2_0c(ctx.features);
 
         if (!ctx.kernels_q4) {
             GGML_LOG_INFO("kleidiai: no compatible q4 kernels found for CPU features mask %d\n", (int)ctx.features);
@@ -297,16 +402,26 @@ static void init_kleidiai_context(void) {
             GGML_LOG_INFO("kleidiai: primary f32 kernel feature %s\n", cpu_feature_to_string(ctx.kernels_f32->required_cpu));
         }
 
-        ctx.sme_thread_cap = (ctx.features & CPU_FEATURE_SME) ? sme_cores : 0;
+        if (!ctx.kernels_q2c) {
+            GGML_LOG_INFO("kleidiai: no compatible q2c kernels found for CPU features mask %d\n", (int)ctx.features);
+        } else {
+            GGML_LOG_INFO("kleidiai: primary q2c kernel feature %s\n", cpu_feature_to_string(ctx.kernels_q2c->required_cpu));
+        }
 
-        if (ctx.features & CPU_FEATURE_SME) {
-            const bool has_sme2 = (ctx.features & CPU_FEATURE_SME2) != CPU_FEATURE_NONE;
+        const bool has_selected_sme_family_kernel =
+            (ctx.kernels_q4  && is_sme_family(ctx.kernels_q4->required_cpu)) ||
+            (ctx.kernels_q8  && is_sme_family(ctx.kernels_q8->required_cpu)) ||
+            (ctx.kernels_f32 && is_sme_family(ctx.kernels_f32->required_cpu)) ||
+            (ctx.kernels_q2c && is_sme_family(ctx.kernels_q2c->required_cpu));
+        ctx.sme_thread_cap = has_selected_sme_family_kernel ? sme_cores : 0;
+
+        if (has_selected_sme_family_kernel) {
             if (sme_env_set && sme_env_ok && sme_cores > 0) {
-                GGML_LOG_INFO("kleidiai: SME%s enabled (GGML_KLEIDIAI_SME=%d override)\n",
-                    has_sme2 ? "2" : "", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME enabled (GGML_KLEIDIAI_SME=%d debug override)\n", sme_cores);
+            } else if (sme_cap_detected) {
+                GGML_LOG_INFO("kleidiai: SME enabled (runtime-detected SME thread cap=%d)\n", sme_cores);
             } else {
-                GGML_LOG_INFO("kleidiai: SME%s enabled (runtime-detected SME cores=%d)\n",
-                    has_sme2 ? "2" : "", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME enabled (runtime SME detected, conservative thread cap=%d)\n", sme_cores);
             }
         } else {
             GGML_LOG_INFO("kleidiai: SME disabled\n");
@@ -450,6 +565,10 @@ static inline ggml_kleidiai_kernels * kleidiai_primary_kernel_f32() {
     return ctx.kernels_f32;
 }
 
+static inline ggml_kleidiai_kernels * kleidiai_primary_kernel_q2c() {
+    return ctx.kernels_q2c;
+}
+
 template <typename SelectFallback>
 static int kleidiai_collect_kernel_chain_common(
         ggml_kleidiai_kernels * primary,
@@ -467,7 +586,7 @@ static int kleidiai_collect_kernel_chain_common(
     }
 
     if (is_sme_family(primary->required_cpu)) {
-        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~CPU_FEATURE_SME & ~CPU_FEATURE_SME2);
+        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~(CPU_FEATURE_SME | CPU_FEATURE_SME2));
         if (fallback_mask != CPU_FEATURE_NONE) {
             ggml_kleidiai_kernels * fallback = select_fallback(fallback_mask);
             if (fallback && fallback != primary &&
@@ -506,6 +625,12 @@ static int kleidiai_collect_f32_chain(std::array<ggml_kleidiai_kernels *, GGML_K
     ggml_kleidiai_kernels * primary = kleidiai_primary_kernel_f32();
     return kleidiai_collect_kernel_chain_common(primary, ctx.features, out,
         [&](cpu_feature mask) { return ggml_kleidiai_select_kernels_f32(mask); });
+}
+
+static int kleidiai_collect_q2c_chain(std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> & out) {
+    ggml_kleidiai_kernels * primary = kleidiai_primary_kernel_q2c();
+    return kleidiai_collect_kernel_chain_common(primary, ctx.features, out,
+        [&](cpu_feature mask) { return ggml_kleidiai_select_kernels_q2_0c(mask); });
 }
 
 static inline int64_t ggml_ne(const ggml_tensor * tensor, int dim) {
@@ -548,8 +673,11 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const size_t n = op->src[0]->ne[1];
         const size_t m = op->src[1]->ne[1];
 
-        if (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) {
-            const size_t qk = (op->src[0]->type == GGML_TYPE_Q4_0) ? QK4_0 : QK8_0;
+        if (op->src[0]->type == GGML_TYPE_Q4_0 ||
+            op->src[0]->type == GGML_TYPE_Q8_0 ||
+            op->src[0]->type == GGML_TYPE_Q2_0C) {
+            const size_t qk = op->src[0]->type == GGML_TYPE_Q4_0 ? QK4_0 :
+                              op->src[0]->type == GGML_TYPE_Q8_0 ? QK8_0 : QKQ2_0C;
 
             size_t cursor = 0;
             bool any_slot = false;
@@ -610,9 +738,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
             size = cursor;
             return true;
-        }
-
-        if (op->src[0]->type == GGML_TYPE_F16) {
+        } else if (op->src[0]->type == GGML_TYPE_F16) {
             const int64_t lhs_batch_size0 = op->src[1]->ne[2];
             const int64_t rhs_batch_size0 = op->src[0]->ne[2];
             GGML_ASSERT(rhs_batch_size0 > 0);
@@ -672,6 +798,8 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                 return compute_forward_f32(params, dst);
             } else if (dst->src[0]->type == GGML_TYPE_F16) {
                 return compute_forward_fp16(params, dst);
+            } else if (dst->src[0]->type == GGML_TYPE_Q2_0C && ctx.kernels_q2c != nullptr) {
+                return compute_forward_q2_0c(params, dst);
             }
         } else if (dst->op == GGML_OP_GET_ROWS) {
             if (dst->src[0]->type == GGML_TYPE_Q4_0 || dst->src[0]->type == GGML_TYPE_Q8_0) {
@@ -1077,13 +1205,14 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const int ith_total = params->ith;
 
         int sme_slot = -1;
+        int non_sme_slot = -1;
         for (int i = 0; i < runtime_count; ++i) {
             if (is_sme_family(runtime[i].kernels->required_cpu)) {
                 sme_slot = i;
                 break;
             }
         }
-        int non_sme_slot = -1;
+
         for (int i = 0; i < runtime_count; ++i) {
             if (!is_sme_family(runtime[i].kernels->required_cpu)) {
                 non_sme_slot = i;
@@ -1333,6 +1462,103 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         return true;
     }
 
+    bool compute_forward_q2_0c(struct ggml_compute_params * params, struct ggml_tensor * dst) {
+        GGML_ASSERT(dst->src[0]->type == GGML_TYPE_Q2_0C);
+        GGML_ASSERT(dst->src[1]->type == GGML_TYPE_F32);
+        GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+        const ggml_tensor * src0 = dst->src[0];
+        const ggml_tensor * src1 = dst->src[1];
+
+        GGML_TENSOR_BINARY_OP_LOCALS
+
+        ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, dst);
+
+        // Look-up table used to unpack the int2 values
+        static const int32_t lut_i8_i2[4] = {-3, -1, 1, 3};
+
+        if (!kernels) {
+            return false;
+        }
+
+        bool is_gemv = src1->ne[1] == 1;
+        kernel_info * kernel = is_gemv ? &kernels->gemv : &kernels->gemm;
+        lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
+
+        GGML_ASSERT(kernel);
+        if (!lhs_info->get_packed_offset_ex || !lhs_info->pack_func_ex ||
+            !kernel->get_rhs_packed_offset_ex || !kernel->run_kernel_lut_ex || !kernel->get_dst_offset) {
+            return false;
+        }
+
+        const int ith = params->ith;
+        const int nth_raw = params->nth;
+        const int nth = nth_raw > 0 ? nth_raw : 1;
+
+        const size_t k = ne00;
+        const size_t m = ne11;
+        const size_t n = ne01;
+
+        size_t mr = kernel->get_mr();
+        size_t kr = kernel->get_kr();
+        size_t sr = kernel->get_sr();
+
+        const uint8_t * lhs        = static_cast<const uint8_t *>(src1->data);
+        uint8_t * lhs_packed       = (uint8_t*)params->wdata;
+        const uint8_t * rhs_packed = static_cast<const uint8_t *>(src0->data);
+
+        const size_t n_step = kernel->get_n_step();
+        const size_t num_n_per_thread = kai_roundup(kai_roundup(n, nth) / nth, n_step);
+        const size_t n_start = ith * num_n_per_thread;
+
+        size_t n_to_process = 0;
+        if (n_start < n) {
+            n_to_process = num_n_per_thread;
+            if ((n_start + n_to_process) > n) {
+                n_to_process = n - n_start;
+            }
+        }
+
+        // Calculate number of columns to be processed per thread
+        const size_t num_m_per_thread = kai_roundup(m, mr * nth) / nth;
+        const size_t m_start = ith * num_m_per_thread;
+        size_t m_to_process = num_m_per_thread;
+        if ((m_start + m_to_process) > m) {
+            m_to_process = m - m_start;
+        }
+
+        if (m_start < m) {
+            // Transform LHS
+
+            const size_t src_stride        = src1->nb[1];
+            const float * src_ptr          = reinterpret_cast<const float *>(lhs + lhs_info->get_offset(m_start, dst->src[1]->nb[1]));
+            const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(m_start, k, QKQ2_0C, mr, kr, sr);
+            void * lhs_packed_ptr          = static_cast<void *>(lhs_packed + lhs_packed_offset);
+
+            // Pack this thread's chunk with m_idx_start = 0 and per-thread output pointer
+            lhs_info->pack_func_ex(m_to_process, k, QKQ2_0C, mr, kr, sr, 0, src_ptr, src_stride, lhs_packed_ptr);
+        }
+
+        ggml_barrier(params->threadpool);
+
+        if (n_to_process > 0) {
+            const size_t dst_stride        = dst->nb[1];
+            const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
+            const size_t rhs_packed_offset = kernel->get_rhs_packed_offset_ex(n_start, k, 0);
+            const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
+            const void * rhs_ptr           = static_cast<const void *>(rhs_packed + rhs_packed_offset);
+            const void * lhs_ptr           = static_cast<const void *>(lhs_packed + lhs_packed_offset);
+            float * dst_ptr                = reinterpret_cast<float *>(static_cast<uint8_t *>(dst->data) + dst_offset);
+
+            if (n_to_process > 0) {
+                kernel->run_kernel_lut_ex(m, n_to_process, k, 0, lhs_ptr, rhs_ptr, dst_ptr, dst_stride,
+                                    sizeof(float), -FLT_MAX, FLT_MAX, &lut_i8_i2[0]);
+            }
+        }
+
+        return true;
+    }
+
     bool compute_forward_get_rows(struct ggml_compute_params * params, struct ggml_tensor * dst) {
         GGML_ASSERT(dst->src[0]->type == GGML_TYPE_Q4_0 || dst->src[0]->type == GGML_TYPE_Q8_0);
         const ggml_tensor * src0 = dst->src[0];
@@ -1425,11 +1651,74 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         return true;
     }
 
+    void split_values_scales_offsets_per_channel(
+        const block_q2_0c *data,
+        size_t n,
+        size_t k,
+        uint8_t *values_out,
+        float *scales_out)
+    {
+        const size_t blocks_per_row = k / QKQ2_0C;
+        const size_t bytes_per_block = QKQ2_0C / 4;
+
+        for (size_t row = 0; row < n; ++row) {
+            for (size_t b = 0; b < blocks_per_row; ++b) {
+                size_t block_idx = row * blocks_per_row + b;
+
+                const block_q2_0c *src_block = &data[block_idx];
+
+                // 1. Copy packed values (8 bytes per block)
+                memcpy(&values_out[block_idx * bytes_per_block], src_block->qs, bytes_per_block);
+
+                // 2. Copy scale
+                // We copy only the first value because it is per-channel
+                if(b == 0) {
+                    scales_out[row] = GGML_FP16_TO_FP32(src_block->d);
+                }
+            }
+        }
+    }
+
 public:
     int repack(struct ggml_tensor * tensor, const void * data, size_t data_size) {
-        GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_F32);
+        GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 ||
+                    tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_Q2_0C);
         const size_t n = tensor->ne[1];
         const size_t k = tensor->ne[0];
+
+        if (tensor->type == GGML_TYPE_Q2_0C) {
+            if (!ctx.kernels_q2c || !ctx.kernels_q2c->rhs_info.pack_func_lut_ex) {
+                return -1;
+            }
+
+            static const int32_t lut_i8_i2[4] = {-3, -1, 1, 3};
+
+            const size_t bytes_per_block = QKQ2_0C / 4;
+            const size_t blocks_per_row = k / QKQ2_0C;
+            const size_t total_blocks   = n * blocks_per_row;
+
+            const block_q2_0c * src = (const block_q2_0c *) data;
+            std::vector<uint8_t> values_buf(total_blocks * bytes_per_block);
+            std::vector<float> scales_buf(n);
+
+            split_values_scales_offsets_per_channel(src, n, k, values_buf.data(), scales_buf.data());
+
+            const size_t nr = ctx.kernels_q2c->gemm.get_nr();
+            const size_t kr = ctx.kernels_q2c->gemm.get_kr();
+            const size_t sr = ctx.kernels_q2c->gemm.get_sr();
+
+            struct kai_rhs_pack_qs4cxs1s0_param params;
+            params.lhs_zero_point = 1;
+            params.rhs_zero_point = 2;
+
+            ctx.kernels_q2c->rhs_info.pack_func_lut_ex(
+                1, n, k, nr, kr, sr, 0, 0,
+                values_buf.data(), nullptr, scales_buf.data(),
+                tensor->data, 0, &params, &lut_i8_i2[0]);
+
+            GGML_UNUSED(data_size);
+            return 0;
+        }
 
         kleidiai_weight_header * header = kleidiai_weight_header_from_ptr(tensor->data);
         if (!header) {
@@ -1625,12 +1914,25 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alignment(ggml_backend_b
 static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     GGML_UNUSED(buft);
 
-    if (tensor->type != GGML_TYPE_Q4_0 && tensor->type != GGML_TYPE_Q8_0 && tensor->type != GGML_TYPE_F32) {
+    if (tensor->type != GGML_TYPE_Q4_0 &&
+        tensor->type != GGML_TYPE_Q8_0 &&
+        tensor->type != GGML_TYPE_F32 &&
+        tensor->type != GGML_TYPE_Q2_0C) {
         return ggml_nbytes(tensor);
     }
 
     const size_t n = tensor->ne[1];
     const size_t k = tensor->ne[0];
+
+    if (tensor->type == GGML_TYPE_Q2_0C) {
+        if (!ctx.kernels_q2c || !ctx.kernels_q2c->rhs_info.packed_size_ex) {
+            return ggml_nbytes(tensor);
+        }
+
+        const size_t packed = ctx.kernels_q2c->rhs_info.packed_size_ex(
+            n, k, ctx.kernels_q2c->gemm.get_nr(), ctx.kernels_q2c->gemm.get_kr(), ctx.kernels_q2c->gemm.get_sr());
+        return std::max(packed, ggml_nbytes(tensor));
+    }
 
     size_t cursor = sizeof(kleidiai_weight_header);
     cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
@@ -1683,6 +1985,24 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
         const int slot_total = kleidiai_collect_kernel_chain(op, kernel_chain);
+
+        if ((op->op == GGML_OP_MUL_MAT ) &&
+            (op->src[0]->type == GGML_TYPE_Q2_0C) &&
+            op->src[0]->buffer &&
+            (ggml_n_dims(op->src[0]) == 2) &&
+            op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
+            if (ctx.kernels_q2c == nullptr) {
+                return false;
+            }
+            if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
+                return false;
+            }
+            if ((op->src[1]->type == GGML_TYPE_F32) &&
+                ggml_ne(op->src[1], 2) == 1 && ggml_ne(op->src[1], 3) == 1) {
+                return true;
+            }
+        }
+
         const bool src0_is_kleidiai =
             op->src[0]->buffer &&
             (ggml_n_dims(op->src[0]) == 2) &&
