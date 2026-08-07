@@ -70,8 +70,8 @@ struct server_subproc {
     }
 };
 
-struct lru_sched {
-    lru_sched(server_models & models) : models(models) {}
+struct server_lru_sched {
+    server_lru_sched(server_models & models) : models(models) {}
 
     bool has_capacity(std::unique_lock<std::mutex> & lk) {
         check_lock(lk);
@@ -412,7 +412,7 @@ server_models::server_models(
               base_params(params),
               base_env(get_environment()),
               base_preset(ctx_preset.load_from_args(argc, argv)),
-              sched(std::make_unique<lru_sched>(*this)) {
+              sched(std::make_unique<server_lru_sched>(*this)) {
     // clean up base preset
     unset_reserved_args(base_preset, true);
     // set binary path
@@ -424,7 +424,7 @@ server_models::server_models(
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
     load_models();
-    debug_fake_timing = !common_get_env("LLAMA_DEBUG_FAKE_TIMING").empty();
+    debug_fake_timing = !common_get_env("LLAMA_SERVER_DEBUG_FAKE_TIMING").empty();
 }
 
 server_models::~server_models() = default;

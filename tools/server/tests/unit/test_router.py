@@ -145,7 +145,7 @@ def test_router_models_max_evicts_lru():
     assert _get_model_status(first) == "unloaded"
 
 
-# lru_sched tests (relying on LLAMA_DEBUG_FAKE_TIMING)
+# server_lru_sched tests (relying on LLAMA_SERVER_DEBUG_FAKE_TIMING)
 
 MODEL_A = "ggml-org/tinygemma3-GGUF:Q8_0"
 MODEL_B = "ggml-org/test-model-stories260K:F32"

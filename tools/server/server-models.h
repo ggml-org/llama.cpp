@@ -106,12 +106,12 @@ struct server_model_meta {
 };
 
 struct server_models_routes;
-struct server_subproc; // defined in server-models.cpp
-struct lru_sched;      // defined in server-models.cpp
+struct server_subproc;   // defined in server-models.cpp
+struct server_lru_sched; // defined in server-models.cpp
 
 struct server_models {
     friend struct server_models_routes;
-    friend struct lru_sched;
+    friend struct server_lru_sched;
 
 private:
     struct instance_t {
@@ -198,7 +198,7 @@ private:
     common_preset base_preset; // base preset from llama-server CLI args
 
     // queue of requests waiting for a models_max slot
-    std::unique_ptr<lru_sched> sched;
+    std::unique_ptr<server_lru_sched> sched;
 
     // if true, add some delay to simulate works (useful for testing)
     bool debug_fake_timing = false;
