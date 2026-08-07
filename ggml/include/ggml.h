@@ -655,6 +655,7 @@ extern "C" {
         GGML_TENSOR_FLAG_COMPUTE             = 16, // ...must be computed
         GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE = 32, // ...must not use a reduced-precision collective
         GGML_TENSOR_FLAG_MUL_MAT_ID_MMQ_J16   = 64, // advisory backend hint; mathematical semantics are unchanged
+        GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6 = 128, // advisory RDNA2 routed MMVQ six-row hint
     };
 
     enum ggml_tri_type {

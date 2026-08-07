@@ -43,6 +43,7 @@ struct params {
     routing_mode routing = routing_mode::uniform;
     weight_fixture fixture = weight_fixture::prototypes;
     bool explicit_multi = false;
+    bool mmvq_batch6_hint = false;
     const char * device_name = nullptr;
     const char * dump_output = nullptr;
     const char * compare_output = nullptr;
@@ -92,6 +93,7 @@ void usage(const char * program) {
     std::printf("  --routing MODE          uniform or hot (uniform)\n");
     std::printf("  --fixture MODE          prototypes or unique (prototypes)\n");
     std::printf("  --explicit-multi        src1 = [k, top_k, batch] (replicas the DSV4 down-exps ne11>1 form)\n");
+    std::printf("  --mmvq-batch6-hint      mark quantized routed weights as RDNA2 six-row MMVQ-safe\n");
     std::printf("  --warmup N              warmup graph executions (10)\n");
     std::printf("  --iterations N          timed graph executions (50)\n");
     std::printf("  --device NAME           exact ROCm GGML device name; defaults to the first GPU\n");
@@ -210,6 +212,9 @@ params parse_args(int argc, char ** argv) {
             result.iterations = static_cast<int>(parse_i64(arg, require_value(arg), 1, 1000000));
         } else if (std::strcmp(arg, "--explicit-multi") == 0) {
             result.explicit_multi = true;
+            continue;
+        } else if (std::strcmp(arg, "--mmvq-batch6-hint") == 0) {
+            result.mmvq_batch6_hint = true;
             continue;
         } else if (std::strcmp(arg, "--device") == 0) {
             result.device_name = require_value(arg);
@@ -487,6 +492,9 @@ int main(int argc, char ** argv) {
     }
 
     ggml_tensor * expert_weights = ggml_new_tensor_3d(ctx_weights.get(), p.type, p.k, p.n, p.experts);
+    if (p.mmvq_batch6_hint) {
+        expert_weights->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6;
+    }
     ggml_tensor * ids_full = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, p.experts, p.batch);
     ggml_tensor * ids = ggml_view_2d(ctx.get(), ids_full, p.top_k, p.batch, ids_full->nb[1], 0);
     ggml_tensor * activation = p.explicit_multi

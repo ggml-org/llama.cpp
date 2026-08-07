@@ -279,6 +279,16 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     return MMVQ_MAX_BATCH_SIZE;
 }
 
+int get_mmvq_mmid_max_batch(const ggml_tensor * src0, int cc) {
+    const int max_batch = get_mmvq_mmid_max_batch(src0->type, cc);
+    if ((src0->flags & GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6) != 0 &&
+            (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K) &&
+            (GGML_CUDA_CC_IS_RDNA1(cc) || GGML_CUDA_CC_IS_RDNA2(cc))) {
+        return 6;
+    }
+    return max_batch;
+}
+
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
     if (!ggml_is_quantized(type)) {
         return false;
@@ -337,6 +347,11 @@ static constexpr __device__ int get_mmvq_mmid_max_batch_for_device() {
 #elif defined(RDNA3)
     return get_mmvq_mmid_max_batch_rdna3(type);
 #elif defined(RDNA2) || defined(RDNA1)
+    // The Q4_K/Q6_K kernels are compiled for the experimental six-row
+    // launch shape; host dispatch still requires the model-scoped tensor hint.
+    if (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q6_K) {
+        return 6;
+    }
     return get_mmvq_mmid_max_batch_rdna1_rdna2(type);
 #elif defined(CDNA)
     return get_mmvq_mmid_max_batch_cdna(type);
