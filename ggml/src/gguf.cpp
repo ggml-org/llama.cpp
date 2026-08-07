@@ -682,7 +682,12 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             // check that the total number of elements is representable
-            if (ok && ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
+            // Zero-sized tensors are valid and must not be used as divisors.
+            bool has_zero_dim = false;
+            for (uint32_t j = 0; j < GGML_MAX_DIMS; ++j) {
+                has_zero_dim |= info.t.ne[j] == 0;
+            }
+            if (ok && !has_zero_dim && ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
                        (INT64_MAX/info.t.ne[2] <= info.t.ne[0]*info.t.ne[1]) ||
                        (INT64_MAX/info.t.ne[3] <= info.t.ne[0]*info.t.ne[1]*info.t.ne[2]))) {
 
