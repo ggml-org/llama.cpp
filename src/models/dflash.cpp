@@ -371,15 +371,20 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     // KV cache injection
     if (ubatch.embd) {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+        auto inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd_inp_enc());
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp_enc(), n_tokens);
         ggml_set_input(inp->embd);
 
-        ggml_tensor * inp_g = inp->embd;
-        cb(inp_g, "inp_g_embeddings", -1);
+        ggml_tensor * inp_feat = inp->embd;
+        cb(inp_feat, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
+
+        // fuse the target features through the encoder
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_feat);
+        inp_g = build_norm(inp_g, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
+        cb(inp_g, "inp_g_embeddings", -1);
 
         for (int il = 0; il < n_layer; ++il) {
             const auto & layer = model.layers[il];
@@ -572,15 +577,20 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 
     // KV cache injection: fused target features from the encoder
     if (ubatch.embd) {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+        auto inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd_inp_enc());
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp_enc(), n_tokens);
         ggml_set_input(inp->embd);
 
-        ggml_tensor * inp_g = inp->embd;
-        cb(inp_g, "inp_g_embeddings", -1);
+        ggml_tensor * inp_feat = inp->embd;
+        cb(inp_feat, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
+
+        // fuse the target features through the encoder
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_feat);
+        inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
+        cb(inp_g, "inp_g_embeddings", -1);
 
         for (int il = 0; il < n_layer; ++il) {
             const auto & layer = model.layers[il];
