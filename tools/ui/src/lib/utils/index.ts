@@ -222,6 +222,9 @@ export {
 	type ContentToken
 } from './contenteditable-tokenizer';
 
+// Source-space undo/redo history for the chat-form contenteditable
+export { SourceHistory, type SourceHistoryEntry } from './source-history';
+
 // Mention-chip visual contract shared by the rehype file-badge plugin,
 // plus the `[name](file://...)` link helpers the mention picker splices in
 export {
