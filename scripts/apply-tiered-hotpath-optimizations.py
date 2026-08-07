@@ -16,6 +16,33 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 
 replace_once(
+'''static void expert_slab_range(
+        const ggml_tensor * tensor,
+        const tensor_state * state,
+        size_t tensor_offset,
+        int32_t expert,
+        size_t * slab_begin,
+        size_t * slab_end) {
+    *slab_begin = tensor_offset + static_cast<size_t>(expert) * tensor->nb[2];
+    *slab_end = tensor_offset + static_cast<size_t>(expert + 1) * tensor->nb[2];
+    if (expert < tensor->ne[2] - 1) {
+        *slab_end += std::min<size_t>(tensor->nb[2], 512);
+    }
+    *slab_end = std::min(state->size, *slab_end);
+    if (*slab_begin >= *slab_end || *slab_end > state->size) {
+        throw std::runtime_error("MUL_MAT_ID expert slab exceeds its base tensor");
+    }
+}
+
+''',
+'''// Expert slab ranges are computed inline by the batched staging path.
+// Keep no dead helper here because CUDA CI promotes unused-function warnings to errors.
+
+''',
+"remove unused expert slab helper",
+)
+
+replace_once(
 '''// Identifies tiered buffers by init_tensor's function pointer rather than a
 // ggml_backend_buft_name() string compare, since this runs for every src of
 // every graph node, every token.
