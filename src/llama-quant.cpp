@@ -1021,7 +1021,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<uint8_t> & quantized_buffer,
         std::vector<float> & dequantized_buffer,
         const wce_cache * ref_wce = nullptr,
-        const mse_cache * ref_mse = nullptr
+        const mse_cache * ref_mse = nullptr,
+        const float * values_winsorized = nullptr
     ) -> quant_error
     {
         const int64_t n_per_row = t->ne[0];
@@ -1053,6 +1054,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         const bool has_vals = values_sample != nullptr;
         const bool has_acts = activations_sample != nullptr;
         const bool use_wce = has_acts && has_vals && is_angle_sensitive(t->name);
+        const float * valw = values_winsorized ? values_winsorized : values_sample;
 
         // Sampled stats for MSE
         std::vector<double> local_row_sq_norm;
@@ -1067,7 +1069,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 size_t off = 0;
                 for (int64_t s = 0; s < ne2; ++s) {
                     const int64_t rs = rows_sample[s];
-                    const float * val = has_vals ? values_sample + s * n_per_row : nullptr;
+                    const float * val = has_vals ? valw + s * n_per_row : nullptr;
                     const float * act = has_acts ? activations_sample + s * n_per_row : nullptr;
                     for (int64_t r = 0; r < rs; ++r) {
                         const float * x = f32_sample.data() + off;
@@ -1119,7 +1121,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 const int64_t rs = rows_sample[s];
                 if (rs == 0) { continue; }
 
-                const float * v = values_sample + s * n_per_row;
+                const float * v  = values_sample + s * n_per_row;
+                const float * vw = valw + s * n_per_row;
                 double slice_sum = 0.0;
 
                 for (int64_t r = 0; r < rs; ++r, ++sample_idx) {
@@ -1134,7 +1137,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
                     if (calc_nx) {
                         for (int64_t j = 0; j < n_per_row; ++j) {
-                            const double w = std::max(0.0f, v[j]);
+                            const double w = std::max(0.0f, vw[j]);
                             const double xj = wx[j];
                             const double yj = wy[j];
                             const double yw = yj * w;
@@ -1145,7 +1148,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     } else {
                         nx = (* cached_norm_x)[sample_idx];
                         for (int64_t j = 0; j < n_per_row; ++j) {
-                            const double w = std::max(0.0f, v[j]);
+                            const double w = std::max(0.0f, vw[j]);
                             const double yj = wy[j];
                             const double yw = yj * w;
                             dot += (double) wx[j] * yw;
@@ -1185,8 +1188,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             const int64_t rs = rows_sample[s];
             if (rs == 0) { continue; }
 
-            const float * val = has_vals ? values_sample + s * n_per_row : nullptr;
-            const float * act = has_acts ? activations_sample + s * n_per_row : nullptr;
+            const float * val  = has_vals ? values_sample + s * n_per_row : nullptr;
+            const float * mval = has_vals ? valw + s * n_per_row : nullptr;
+            const float * act  = has_acts ? activations_sample + s * n_per_row : nullptr;
 
             std::vector<double> slice_mse_norm;
             slice_mse_norm.reserve(rs);
@@ -1199,18 +1203,18 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 double w_err = 0.0;
                 double bias_num = 0.0;
 
-                if (val && act) {
+                if (mval && act) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
-                        const double w = std::max(0.0f, val[j]);
+                        const double w = std::max(0.0f, mval[j]);
                         const double a = act[j];
                         const double e = (double)y[j] - (double)x[j];
                         w_err += w * e * e;
                         bias_num += a * e;
                     }
                     w_err += bias_num * bias_num;
-                } else if (val) {
+                } else if (mval) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
-                        const double w = std::max(0.0f, val[j]);
+                        const double w = std::max(0.0f, mval[j]);
                         const double e = (double)y[j] - (double)x[j];
                         w_err += w * e * e;
                     }
@@ -1876,6 +1880,41 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         prepare_broadcast(val_ptr, val_sz, val_cache, val_vec_ptr);
         prepare_broadcast(act_ptr, act_sz, act_cache, act_vec_ptr);
 
+        // Cap (winsorize) each row-slice at exp(med + 4 * 1.4826 * mad) of ln(val) to reduce noise and prevent skewness
+        // Activation-side equivalent of the ±4 sigma weight clip in outlier_smoothing
+        std::vector<float> val_metric;
+        const float * ptr_val_metric = nullptr;
+        if (val_vec_ptr) {
+            val_metric.assign(val_vec_ptr, val_vec_ptr + (size_t)ne2 * n_per_row);
+            std::vector<float> scratch;
+            for (int64_t s = 0; s < ne2; ++s) {
+                const float * vrow = val_vec_ptr + s * n_per_row;
+                scratch.clear();
+                for (int64_t j = 0; j < n_per_row; ++j) {
+                    const float v = vrow[j];
+                    if (v > 0.0f) { scratch.push_back(std::log(v)); }
+                }
+
+                if (scratch.size() < 8 || scratch.size() < (size_t)n_per_row / 2) { continue; } // too few positive entries; leave untouched
+                auto mid = scratch.begin() + scratch.size() / 2;
+                std::nth_element(scratch.begin(), mid, scratch.end());
+                const float med = * mid;
+                for (auto & d : scratch) { d = std::fabs(d - med); }
+                std::nth_element(scratch.begin(), mid, scratch.end());
+                const float mad = * mid;
+                if (mad <= 1e-6f * std::max(1.0f, std::fabs(med))) { continue; } // abnormal row stats: leave untouched
+                const float cap = std::exp(med + 4.0f * 1.4826f * mad);
+                float * dst = val_metric.data() + s * n_per_row;
+                float row_max = -INFINITY;
+                for (int64_t j = 0; j < n_per_row; ++j) {
+                    row_max = std::max(row_max, dst[j]);
+                    dst[j] = std::min(dst[j], cap);
+                }
+            }
+
+            ptr_val_metric = val_metric.data();
+        }
+
         const bool use_wce = val_vec_ptr && act_vec_ptr && is_angle_sensitive(remapped_name);
 
         // Precompute WCE reference stats
@@ -1890,7 +1929,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             for (int64_t s = 0; s < ne2; ++s) {
                 const int64_t rs = rows_sample[s];
                 if (rs == 0) { continue; }
-                const float * v = val_vec_ptr + s * n_per_row;
+                const float * v = ptr_val_metric + s * n_per_row;
                 for (int64_t r = 0; r < rs; ++r) {
                     const float * wx = f32_sample.data() + off;
                     double norm_x = 0.0;
@@ -1911,7 +1950,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             size_t off = 0;
             for (int64_t s = 0; s < ne2; ++s) {
                 const int64_t rs = rows_sample[s];
-                const float * val = has_vals ? val_vec_ptr + s * n_per_row : nullptr;
+                const float * val = has_vals ? ptr_val_metric + s * n_per_row : nullptr;
                 const float * act = has_acts ? act_vec_ptr + s * n_per_row : nullptr;
                 for (int64_t r = 0; r < rs; ++r) {
                     const float * x = f32_sample.data() + off;
@@ -1993,7 +2032,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 q_buf,
                 dq_buf,
                 ptr_ref_wce,
-                ptr_ref_mse
+                ptr_ref_mse,
+                ptr_val_metric
             );
 
             double error = qe.error;
