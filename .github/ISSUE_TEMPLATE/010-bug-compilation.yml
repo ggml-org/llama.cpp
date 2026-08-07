@@ -8,9 +8,12 @@ body:
       value: >
         Thanks for taking the time to fill out this bug report!
         This issue template is intended for bug reports where the compilation of llama.cpp fails.
-        Before opening an issue, please confirm that the compilation still fails with `-DGGML_CCACHE=OFF`.
+        Before opening an issue, please confirm that the compilation still fails
+        after recreating the CMake build directory and with `-DGGML_CCACHE=OFF`.
         If the compilation succeeds with ccache disabled you should be able to permanently fix the issue
         by clearing `~/.cache/ccache` (on Linux).
+
+        Please fill out this template yourself, copypasting language model outputs is [strictly prohibited](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md#ai-usage-policy).
   - type: textarea
     id: commit
     attributes:
@@ -40,7 +43,7 @@ body:
     attributes:
         label: GGML backends
         description: Which GGML backends do you know to be affected?
-        options: [AMX, BLAS, CPU, CUDA, HIP, Kompute, Metal, Musa, RPC, SYCL, Vulkan]
+        options: [AMX, BLAS, CANN, CPU, CUDA, Hexagon, HIP, Metal, Musa, OpenCL, OpenVINO, RPC, SYCL, VirtGPU, Vulkan, WebGPU, zDNN, ZenDNN]
         multiple: true
     validations:
       required: true

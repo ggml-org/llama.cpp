@@ -3,6 +3,7 @@
   glibc,
   config,
   stdenv,
+  stdenvNoCC,
   runCommand,
   cmake,
   ninja,
@@ -16,8 +17,11 @@
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
-  curl,
+  openssl,
   shaderc,
+  spirv-headers,
+  nodejs,
+  importNpmLock,
   useBlas ?
     builtins.all (x: !x) [
       useCuda
@@ -32,8 +36,8 @@
   useMpi ? false,
   useRocm ? config.rocmSupport,
   rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
-  enableCurl ? true,
   useVulkan ? false,
+  useRpc ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -41,12 +45,14 @@
   effectiveStdenv ? if useCuda then cudaPackages.backendStdenv else stdenv,
   enableStatic ? effectiveStdenv.hostPlatform.isStatic,
   precompileMetalShaders ? false,
+  useWebUi ? true,
 }:
 
 let
   inherit (lib)
     cmakeBool
     cmakeFeature
+    optionalAttrs
     optionals
     strings
     ;
@@ -100,6 +106,7 @@ let
     vulkan-headers
     vulkan-loader
     shaderc
+    spirv-headers
   ];
 in
 
@@ -126,19 +133,39 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  postPatch = ''
-    substituteInPlace ./ggml/src/ggml-metal/ggml-metal.m \
-      --replace '[bundle pathForResource:@"ggml-metal" ofType:@"metal"];' "@\"$out/bin/ggml-metal.metal\";"
-    substituteInPlace ./ggml/src/ggml-metal/ggml-metal.m \
-      --replace '[bundle pathForResource:@"default" ofType:@"metallib"];' "@\"$out/bin/default.metallib\";"
+  # Builds the webui locally, taking care not to require updating any sha256 hash.
+  webui = stdenvNoCC.mkDerivation {
+    pname = "webui";
+    version = llamaVersion;
+    src = lib.cleanSource ../../tools/ui;
+
+    nativeBuildInputs = [
+      nodejs
+      importNpmLock.linkNodeModulesHook
+    ];
+
+    # no sha256 required when using buildNodeModules
+    npmDeps = importNpmLock.buildNodeModules {
+      npmRoot = ../../tools/ui;
+      inherit nodejs;
+    };
+
+    installPhase = ''
+      LLAMA_UI_OUT_DIR=$out npm run build --offline
+    '';
+  };
+
+  postPatch = lib.optionalString useWebUi ''
+    cp -r ${finalAttrs.webui} tools/ui/dist
+    chmod -R u+w tools/ui/dist
   '';
 
-  # With PR#6015 https://github.com/ggerganov/llama.cpp/pull/6015,
+  # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,
   # `default.metallib` may be compiled with Metal compiler from XCode
   # and we need to escape sandbox on MacOS to access Metal compiler.
   # `xcrun` is used find the path of the Metal compiler, which is varible
   # and not on $PATH
-  # see https://github.com/ggerganov/llama.cpp/pull/6118 for discussion
+  # see https://github.com/ggml-org/llama.cpp/pull/6118 for discussion
   __noChroot = effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders;
 
   nativeBuildInputs =
@@ -163,14 +190,14 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]
     ++ optionals useVulkan vulkanBuildInputs
-    ++ optionals enableCurl [ curl ];
+    ++ [ openssl ];
 
   cmakeFlags =
     [
       (cmakeBool "LLAMA_BUILD_SERVER" true)
+      (cmakeBool "LLAMA_BUILD_WEBUI" useWebUi)
       (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
       (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
-      (cmakeBool "LLAMA_CURL" enableCurl)
       (cmakeBool "GGML_NATIVE" false)
       (cmakeBool "GGML_BLAS" useBlas)
       (cmakeBool "GGML_CUDA" useCuda)
@@ -178,6 +205,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeBool "GGML_METAL" useMetalKit)
       (cmakeBool "GGML_VULKAN" useVulkan)
       (cmakeBool "GGML_STATIC" enableStatic)
+      (cmakeBool "GGML_RPC" useRpc)
     ]
     ++ optionals useCuda [
       (
@@ -197,7 +225,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ];
 
   # Environment variables needed for ROCm
-  env = optionals useRocm {
+  env = optionalAttrs useRocm {
     ROCM_PATH = "${rocmPackages.clr}";
     HIP_DEVICE_LIB_PATH = "${rocmPackages.rocm-device-libs}/amdgcn/bitcode";
   };
@@ -220,7 +248,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     broken = (useMetalKit && !effectiveStdenv.isDarwin);
 
     description = "Inference of LLaMA model in pure C/C++${descriptionSuffix}";
-    homepage = "https://github.com/ggerganov/llama.cpp/";
+    homepage = "https://github.com/ggml-org/llama.cpp/";
     license = lib.licenses.mit;
 
     # Accommodates `nix run` and `lib.getExe`

@@ -147,7 +147,7 @@ ranges_nfd: list[tuple[int, int, int]] = [(0, 0, 0)]  # start, last, nfd
 for codepoint, norm in table_nfd:
     start = ranges_nfd[-1][0]
     if ranges_nfd[-1] != (start, codepoint - 1, norm):
-        ranges_nfd.append(None)  # type: ignore[arg-type]  # dummy, will be replaced below
+        ranges_nfd.append((0, 0, 0))  # dummy, will be replaced below
         start = codepoint
     ranges_nfd[-1] = (start, codepoint, norm)
 

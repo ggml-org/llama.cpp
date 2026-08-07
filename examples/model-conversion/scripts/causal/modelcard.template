@@ -1,0 +1,13 @@
+---
+base_model:
+- {base_model}
+---
+# {model_name} GGUF
+
+Recommended way to run this model:
+
+```sh
+llama-server -hf {namespace}/{model_name}-GGUF
+```
+
+Then, access http://localhost:8080

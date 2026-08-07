@@ -21,35 +21,43 @@ if (MUSAToolkit_FOUND)
     message(STATUS "MUSA Toolkit found")
 
     if (NOT DEFINED MUSA_ARCHITECTURES)
-        set(MUSA_ARCHITECTURES "21;22")
+        set(MUSA_ARCHITECTURES "21;22;31")
     endif()
     message(STATUS "Using MUSA architectures: ${MUSA_ARCHITECTURES}")
 
     file(GLOB   GGML_HEADERS_MUSA "../ggml-cuda/*.cuh")
     list(APPEND GGML_HEADERS_MUSA "../../include/ggml-cuda.h")
+    list(APPEND GGML_HEADERS_MUSA "../ggml-musa/mudnn.cuh")
 
     file(GLOB   GGML_SOURCES_MUSA "../ggml-cuda/*.cu")
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-wmma*.cu")
+    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
+    list(APPEND GGML_SOURCES_MUSA ${SRCS})
+    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
     file(GLOB   SRCS "../ggml-cuda/template-instances/mmq*.cu")
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
+
+    if (GGML_MUSA_MUDNN_COPY)
+        file(GLOB   SRCS "../ggml-musa/*.cu")
+        list(APPEND GGML_SOURCES_MUSA ${SRCS})
+        add_compile_definitions(GGML_MUSA_MUDNN_COPY)
+    endif()
 
     if (GGML_CUDA_FA_ALL_QUANTS)
         file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*.cu")
         list(APPEND GGML_SOURCES_MUSA ${SRCS})
         add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
     else()
-        file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu")
-        list(APPEND GGML_SOURCES_MUSA ${SRCS})
-        file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu")
-        list(APPEND GGML_SOURCES_MUSA ${SRCS})
-        file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*f16-f16.cu")
-        list(APPEND GGML_SOURCES_MUSA ${SRCS})
+        list(APPEND GGML_SOURCES_MUSA
+            ../ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
+            ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
+            ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
+            ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
     endif()
 
     set_source_files_properties(${GGML_SOURCES_MUSA} PROPERTIES LANGUAGE CXX)
     foreach(SOURCE ${GGML_SOURCES_MUSA})
-        set(COMPILE_FLAGS "-x musa -mtgpu")
+        set(COMPILE_FLAGS "-Od3 -fno-strict-aliasing -ffast-math -fsigned-char -x musa -mtgpu -fmusa-flush-denormals-to-zero")
         foreach(ARCH ${MUSA_ARCHITECTURES})
             set(COMPILE_FLAGS "${COMPILE_FLAGS} --cuda-gpu-arch=mp_${ARCH}")
         endforeach()
@@ -62,13 +70,15 @@ if (MUSAToolkit_FOUND)
                             )
 
     # TODO: do not use CUDA definitions for MUSA
-    target_compile_definitions(ggml PUBLIC GGML_USE_CUDA)
+    if (NOT GGML_BACKEND_DL)
+        target_compile_definitions(ggml PUBLIC GGML_USE_CUDA)
+    endif()
 
     add_compile_definitions(GGML_USE_MUSA)
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
-    if (GGML_CUDA_GRAPHS)
-        add_compile_definitions(GGML_CUDA_USE_GRAPHS)
+    if (GGML_MUSA_GRAPHS)
+        add_compile_definitions(GGML_MUSA_GRAPHS)
     endif()
 
     if (GGML_CUDA_FORCE_MMQ)
@@ -83,8 +93,8 @@ if (MUSAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_NO_VMM)
     endif()
 
-    if (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-        add_compile_definitions(GGML_CUDA_F16)
+    if (NOT GGML_CUDA_FA)
+        add_compile_definitions(GGML_CUDA_NO_FA)
     endif()
 
     if (GGML_CUDA_NO_PEER_COPY)
@@ -93,8 +103,15 @@ if (MUSAToolkit_FOUND)
 
     if (GGML_STATIC)
         target_link_libraries(ggml-musa PRIVATE MUSA::musart_static MUSA::mublas_static)
+        # TODO: mudnn has not provided static libraries yet
+        # if (GGML_MUSA_MUDNN_COPY)
+        #     target_link_libraries(ggml-musa PRIVATE mudnn_static)
+        # endif()
     else()
         target_link_libraries(ggml-musa PRIVATE MUSA::musart MUSA::mublas)
+        if (GGML_MUSA_MUDNN_COPY)
+            target_link_libraries(ggml-musa PRIVATE mudnn)
+        endif()
     endif()
 
     if (GGML_CUDA_NO_VMM)

@@ -39,15 +39,6 @@
     },
 
     {
-        "name": "arm64-windows-msvc", "hidden": true,
-        "architecture": { "value": "arm64",    "strategy": "external" },
-        "toolset":      { "value": "host=x64", "strategy": "external" },
-        "cacheVariables": {
-            "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/arm64-windows-msvc.cmake"
-        }
-    },
-
-    {
         "name": "arm64-windows-llvm", "hidden": true,
         "architecture": { "value": "arm64",    "strategy": "external" },
         "toolset":      { "value": "host=x64", "strategy": "external" },
@@ -64,6 +55,17 @@
             "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/arm64-apple-clang.cmake"
         }
     },
+    {
+        "name": "x64-linux-gcc", "hidden": true,
+        "cacheVariables": {
+            "CMAKE_C_COMPILER": "gcc",
+            "CMAKE_CXX_COMPILER": "g++"
+        }
+    },
+    { "name": "x64-linux-gcc-debug", "inherits": [ "base", "x64-linux-gcc", "debug" ] },
+    { "name": "x64-linux-gcc-release", "inherits": [ "base", "x64-linux-gcc", "release" ] },
+    { "name": "x64-linux-gcc-reldbg", "inherits": [ "base", "x64-linux-gcc", "reldbg" ] },
+    { "name": "x64-linux-gcc+static-release", "inherits": [ "base", "x64-linux-gcc", "release", "static" ] },
 
     { "name": "arm64-windows-llvm-debug", "inherits": [ "base", "arm64-windows-llvm", "debug" ] },
     { "name": "arm64-windows-llvm-release", "inherits": [ "base", "arm64-windows-llvm", "reldbg" ] },
@@ -72,10 +74,6 @@
     { "name": "arm64-apple-clang-debug", "inherits": [ "base", "arm64-apple-clang", "debug" ] },
     { "name": "arm64-apple-clang-release", "inherits": [ "base", "arm64-apple-clang", "reldbg" ] },
     { "name": "arm64-apple-clang+static-release", "inherits": [ "base", "arm64-apple-clang",  "reldbg", "static" ] },
-
-    { "name": "arm64-windows-msvc-debug", "inherits": [ "base", "arm64-windows-msvc",  "debug"   ] },
-    { "name": "arm64-windows-msvc-release", "inherits": [ "base", "arm64-windows-msvc",  "reldbg" ] },
-    { "name": "arm64-windows-msvc+static-release", "inherits": [ "base", "arm64-windows-msvc",  "reldbg", "static" ] },
 
     { "name": "x64-windows-llvm-debug", "inherits": [ "base", "x64-windows-llvm", "debug" ] },
     { "name": "x64-windows-llvm-release", "inherits": [ "base", "x64-windows-llvm", "release" ] },

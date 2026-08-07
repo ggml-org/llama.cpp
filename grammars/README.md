@@ -1,6 +1,6 @@
 # GBNF Guide
 
-GBNF (GGML BNF) is a format for defining [formal grammars](https://en.wikipedia.org/wiki/Formal_grammar) to constrain model outputs in `llama.cpp`. For example, you can use it to force the model to generate valid JSON, or speak only in emojis. GBNF grammars are supported in various ways in `examples/main` and `examples/server`.
+GBNF (GGML BNF) is a format for defining [formal grammars](https://en.wikipedia.org/wiki/Formal_grammar) to constrain model outputs in `llama.cpp`. For example, you can use it to force the model to generate valid JSON, or speak only in emojis. GBNF grammars are supported in various ways in `tools/cli`, `tools/completion` and `tools/server`.
 
 ## Background
 
@@ -67,6 +67,30 @@ Parentheses `()` can be used to group sequences, which allows for embedding alte
 - `{m,n}` repeats the precedent symbol or sequence at between `m` and `n` times (included)
 - `{0,n}` repeats the precedent symbol or sequence at most `n` times (included)
 
+## Tokens
+
+Tokens allow grammars to match specific tokenizer tokens rather than character sequences. This is useful for constraining outputs based on special tokens (like `<think>` or `</think>`).
+
+Tokens can be specified in two ways:
+
+1. **Token ID**: Use angle brackets with the token ID in square brackets: `<[token-id]>`. For example, `<[1000]>` matches the token with ID 1000.
+
+2. **Token string**: Use angle brackets with the token text directly: `<token>`. For example, `<think>` will match the token whose text is exactly `<think>`. This only works if the string tokenizes to exactly one token in the vocabulary, otherwise the grammar will fail to parse.
+
+You can negate token matches using the `!` prefix: `!<[1000]>` or `!<think>` matches any token *except* the specified one.
+
+```
+# Match a thinking block: <think>...</think>
+# Using token strings (requires these to be single tokens in the vocab)
+root ::= <think> thinking </think> .*
+thinking ::= !</think>*
+
+# Equivalent grammar using explicit token IDs
+# Assumes token 1000 = <think>, token 1001 = </think>
+root ::= <[1000]> thinking <[1001]> .*
+thinking ::= !<[1001]>*
+```
+
 ## Comments and newlines
 
 Comments can be specified with `#`:
@@ -98,7 +122,7 @@ This guide provides a brief overview. Check out the GBNF files in this directory
 
 ## Troubleshooting
 
-Grammars currently have performance gotchas (see https://github.com/ggerganov/llama.cpp/issues/4218).
+Grammars currently have performance gotchas (see https://github.com/ggml-org/llama.cpp/issues/4218).
 
 ### Efficient optional repetitions
 
@@ -110,23 +134,25 @@ While semantically correct, the syntax `x? x? x?.... x?` (with N repetitions) ma
 
 You can use GBNF grammars:
 
-- In [llama-server](../examples/server)'s completion endpoints, passed as the `grammar` body field
-- In [llama-cli](../examples/main), passed as the `--grammar` & `--grammar-file` flags
-- With [llama-gbnf-validator](../examples/gbnf-validator) tool, to test them against strings.
+- In [llama-server](../tools/server)'s completion endpoints, passed as the `grammar` body field
+- In [llama-cli](../tools/cli) and [llama-completion](../tools/completion), passed as the `--grammar` & `--grammar-file` flags
+- With [test-gbnf-validator](../tests/test-gbnf-validator.cpp), to test them against strings.
 
 ## JSON Schemas → GBNF
 
 `llama.cpp` supports converting a subset of https://json-schema.org/ to GBNF grammars:
 
-- In [llama-server](../examples/server):
+- In [llama-server](../tools/server):
     - For any completion endpoints, passed as the `json_schema` body field
     - For the `/chat/completions` endpoint, passed inside the `response_format` body field (e.g. `{"type", "json_object", "schema": {"items": {}}}` or `{ type: "json_schema", json_schema: {"schema": ...} }`)
-- In [llama-cli](../examples/main), passed as the `--json` / `-j` flag
+- In [llama-cli](../tools/cli) and [llama-completion](../tools/completion), passed as the `--json` / `-j` flag
 - To convert to a grammar ahead of time:
     - in CLI, with [examples/json_schema_to_grammar.py](../examples/json_schema_to_grammar.py)
-    - in JavaScript with [json-schema-to-grammar.mjs](../examples/server/public_legacy/json-schema-to-grammar.mjs) (this is used by the [server](../examples/server)'s Web UI)
 
-Take a look at [tests](../tests/test-json-schema-to-grammar.cpp) to see which features are likely supported (you'll also find usage examples in https://github.com/ggerganov/llama.cpp/pull/5978, https://github.com/ggerganov/llama.cpp/pull/6659 & https://github.com/ggerganov/llama.cpp/pull/6555).
+> [!NOTE]
+> The JSON schema is only used to constrain the model output and is not injected into the prompt. The model has no visibility into the schema, so if you want it to understand the expected structure, describe it explicitly in your prompt. This does not apply to tool calling, where schemas are injected into the prompt.
+
+Take a look at [tests](../tests/test-json-schema-to-grammar.cpp) to see which features are likely supported (you'll also find usage examples in https://github.com/ggml-org/llama.cpp/pull/5978, https://github.com/ggml-org/llama.cpp/pull/6659 & https://github.com/ggml-org/llama.cpp/pull/6555).
 
 ```bash
 llama-cli \
@@ -185,10 +211,10 @@ Here is also a list of known limitations (contributions welcome):
 - `additionalProperties` defaults to `false` (produces faster grammars + reduces hallucinations).
 - `"additionalProperties": true` may produce keys that contain unescaped newlines.
 - Unsupported features are skipped silently. It is currently advised to use the command-line Python converter (see above) to see any warnings, and to inspect the resulting grammar / test it w/ [llama-gbnf-validator](../examples/gbnf-validator/gbnf-validator.cpp).
-- Can't mix `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggerganov/llama.cpp/issues/7703)
+- Can't mix `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggml-org/llama.cpp/issues/7703)
 - [prefixItems](https://json-schema.org/draft/2020-12/json-schema-core#name-prefixitems) is broken (but [items](https://json-schema.org/draft/2020-12/json-schema-core#name-items) works)
 - `minimum`, `exclusiveMinimum`, `maximum`, `exclusiveMaximum`: only supported for `"type": "integer"` for now, not `number`
-- Nested `$ref`s are broken (https://github.com/ggerganov/llama.cpp/issues/8073)
+- Nested `$ref`s are broken (https://github.com/ggml-org/llama.cpp/issues/8073)
 - [pattern](https://json-schema.org/draft/2020-12/json-schema-validation#name-pattern)s must start with `^` and end with `$`
 - Remote `$ref`s not supported in the C++ version (Python & JavaScript versions fetch https refs)
 - `string` [formats](https://json-schema.org/draft/2020-12/json-schema-validation#name-defined-formats) lack `uri`, `email`
@@ -207,7 +233,7 @@ And a non-exhaustive list of other unsupported features that are unlikely to be 
 > [!WARNING]
 > The JSON schemas spec states `object`s accept [additional properties](https://json-schema.org/understanding-json-schema/reference/object#additionalproperties) by default.
 > Since this is slow and seems prone to hallucinations, we default to no additional properties.
-> You can set `"additionalProperties": true` in the the schema of any object to explicitly allow additional properties.
+> You can set `"additionalProperties": true` in the schema of any object to explicitly allow additional properties.
 
 If you're using [Pydantic](https://pydantic.dev/) to generate schemas, you can enable additional properties with the `extra` config on each model class:
 

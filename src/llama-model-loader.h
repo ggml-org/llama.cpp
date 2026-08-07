@@ -4,16 +4,21 @@
 
 #include "llama-impl.h"
 #include "llama-arch.h"
+#include "llama-hparams.h"
 #include "llama-mmap.h"
 
 #include "ggml-cpp.h"
 
 #include <cstddef>
+#include <cstring>
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
+
+// lists of buffer types used for each layer
+using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
 
 enum llama_fver {
     GGUF_FILE_VERSION_V1 = 1,
@@ -58,8 +63,11 @@ struct llama_model_loader {
         }
     };
 
-    static const int TENSOR_NOT_REQUIRED = 1;
-    static const int TENSOR_DUPLICATED   = 2;
+    static const int TENSOR_NOT_REQUIRED    = 1 << 0;
+    static const int TENSOR_DUPLICATED      = 1 << 1;
+    static const int TENSOR_SKIP            = 1 << 2;
+    static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
+    static const int TENSOR_ALLOW_RESHAPE   = 1 << 4;
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -69,7 +77,10 @@ struct llama_model_loader {
     size_t   n_bytes    = 0;
 
     bool use_mmap = false;
+    bool use_direct_io = false;
     bool check_tensors;
+    bool no_alloc;
+    bool load_mtp;
 
     llama_files files;
     llama_ftype ftype;
@@ -77,10 +88,14 @@ struct llama_model_loader {
 
     llama_mmaps mappings;
 
-    std::map<std::string, struct llama_tensor_weight, weight_name_comparer> weights_map;
-    std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
+    std::map<std::string, llama_tensor_weight, weight_name_comparer> weights_map;
+    std::unordered_map<std::string, llama_model_kv_override> kv_overrides;
+    const llama_model_tensor_buft_override * tensor_buft_overrides;
 
-    gguf_context_ptr meta;
+    gguf_context_ptr metadata_ptr;
+    struct gguf_context * metadata; // either metadata_ptr.get() or externally set
+    llama_model_set_tensor_data_t set_tensor_data;
+    void * set_tensor_data_ud;
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
@@ -90,7 +105,35 @@ struct llama_model_loader {
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
-    llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, const struct llama_model_kv_override * param_overrides_p);
+    // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
+    struct ggml_backend_buft_comparator {
+        bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
+            return strcmp(ggml_backend_buft_name(lhs), ggml_backend_buft_name(rhs)) < 0;
+        }
+    };
+
+    std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
+
+    // track tensors that had to be moved for debugging:
+    size_t n_tensors_moved = 0;
+    std::string first_tensor_moved_name;
+    std::string first_tensor_moved_type_name;
+    ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
+    ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
+
+    llama_model_loader(
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
+        const std::string & fname,
+        std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
+        FILE * file,
+        llama_load_mode load_mode,
+        bool check_tensors,
+        bool no_alloc,
+        bool load_mtp,
+        const llama_model_kv_override * param_overrides_p,
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
@@ -121,6 +164,8 @@ struct llama_model_loader {
     template<typename T>
     bool get_key_or_arr(enum llm_kv kid, T & result, uint32_t n, bool required = true);
 
+    bool get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required = true);
+
     std::string get_arch_name() const;
 
     enum llm_arch get_arch() const;
@@ -133,13 +178,17 @@ struct llama_model_loader {
 
     struct ggml_tensor * require_tensor_meta(const std::string & name) const;
 
-    const struct ggml_tensor * check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const;
+    const struct ggml_tensor * check_tensor_dims(
+            const std::string & name,
+            const std::vector<int64_t> & ne,
+            bool required,
+            bool allow_reshape) const;
 
-    struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::initializer_list<int64_t> & ne, int flags = 0);
+    struct ggml_tensor * create_tensor(
+        const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
+        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
 
-    struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
-
-    void done_getting_tensors() const;
+    void done_getting_tensors(bool partial = false) const;
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 

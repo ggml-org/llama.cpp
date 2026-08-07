@@ -4,7 +4,7 @@
   # the module `{ pkgs ... }: { /* config */ }` implicitly uses
   # `_module.args.pkgs` (defined in this case by flake-parts).
   perSystem =
-    { system, ... }:
+    { lib, system, ... }:
     {
       _module.args = {
         # Note: bringing up https://zimbatm.com/notes/1000-instances-of-nixpkgs
@@ -33,7 +33,7 @@
                 "CUDA EULA"
                 "cuDNN EULA"
               ]
-            ) (p.meta.licenses or [ p.meta.license ]);
+            ) (p.meta.licenses or (lib.toList p.meta.license));
         };
         # Ensure dependencies use ROCm consistently
         pkgsRocm = import inputs.nixpkgs {

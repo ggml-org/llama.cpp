@@ -124,15 +124,26 @@ struct ContentView: View {
                     }
                 }
             }.sheet(isPresented: $showingHelp) {    // Sheet for help modal
-                VStack(alignment: .leading) {
+                NavigationView {
                     VStack(alignment: .leading) {
-                        Text("1. Make sure the model is in GGUF Format")
-                               .padding()
-                        Text("2. Copy the download link of the quantized model")
-                               .padding()
+                        VStack(alignment: .leading) {
+                            Text("1. Make sure the model is in GGUF Format")
+                                    .padding()
+                            Text("2. Copy the download link of the quantized model")
+                                    .padding()
+                        }
+                        Spacer()
                     }
-                    Spacer()
-                   }
+                    .navigationTitle("Help")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") {
+                                showingHelp = false
+                            }
+                        }
+                    }
+                }
             }
         }
     }

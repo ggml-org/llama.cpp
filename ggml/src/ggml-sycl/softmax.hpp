@@ -15,10 +15,10 @@
 
 #include "common.hpp"
 
-void ggml_sycl_op_soft_max(ggml_backend_sycl_context &ctx, const ggml_tensor *src0,
-    const ggml_tensor *src1, ggml_tensor *dst,
-    const float *src0_dd, const float *src1_dd,
-    float *dst_dd,
-    const queue_ptr &main_stream);
+#define SYCL_SOFT_MAX_BLOCK_SIZE 1024
+
+void ggml_sycl_op_soft_max(ggml_backend_sycl_context &ctx, ggml_tensor *dst);
+
+void ggml_sycl_op_soft_max_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 #endif // GGML_SYCL_SOFTMAX_HPP

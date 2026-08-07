@@ -1,6 +1,6 @@
 //
 // MIT license
-// Copyright (C) 2024 Intel Corporation
+// Copyright (C) 2025 Intel Corporation
 // SPDX-License-Identifier: MIT
 //
 
@@ -14,8 +14,36 @@
 #define GGML_SYCL_VECDOTQ_HPP
 
 #include "dpct/helper.hpp"
+#include "ggml.h"
+#include "type.hpp"
+#include "quants.hpp"
 
-typedef float (*vec_dot_q_sycl_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & iqs);
+typedef float (*vec_dot_q_sycl_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
+                                  const int & iqs);
+
+static __dpct_inline__ int get_int_b1(const void * x, const int & i32) {
+    const uint8_t * x8 = (const uint8_t *) x;
+
+    int x32  = x8[4*i32 + 0] <<  0;
+    x32     |= x8[4*i32 + 1] <<  8;
+    x32     |= x8[4*i32 + 2] << 16;
+    x32     |= x8[4*i32 + 3] << 24;
+
+    return x32;
+}
+
+static __dpct_inline__ int get_int_b2(const void * x, const int & i32) {
+    const uint16_t * x16 = (const uint16_t *) x; // assume at least 2 byte alignment
+
+    int x32  = x16[2*i32 + 0] <<  0;
+    x32     |= x16[2*i32 + 1] << 16;
+
+    return x32;
+}
+
+static __dpct_inline__ int get_int_b4(const void * x, const int & i32) {
+    return ((const int *) x)[i32]; // assume at least 4 byte alignment
+}
 
 static __dpct_inline__ int get_int_from_int8(const int8_t* x8, const int& i32) {
   const uint16_t* x16 =
@@ -57,6 +85,32 @@ static __dpct_inline__ int get_int_from_uint8_aligned(
       (const int*)(x8 + sizeof(int) * i32)); // assume at least 4 byte alignment
 }
 
+static __dpct_inline__ int byte_sub_4(const int a, const int b) {
+  const uint32_t ua = static_cast<uint32_t>(a);
+  const uint32_t ub = static_cast<uint32_t>(b);
+  return static_cast<int>(((ua | 0x80808080u) - ub) ^ 0x80808080u);
+}
+
+static __dpct_inline__ float vec_dot_q6_K_q8_1_impl_mmvq_scalar(
+    const int vl, const int vh, const int u0, const int u1, const int8_t sc0,
+    const int8_t sc1, const float d, const float d80, const float d81) {
+    static_assert(QR6_K == 2, "q6_K MMVQ scalar fast path assumes QR6_K == 2");
+
+    const int vil0 = (vl >> 0) & 0x0F0F0F0F;
+    const int vih0 = ((vh >> 0) << 4) & 0x30303030;
+    const int vi0 = byte_sub_4(vil0 | vih0, 0x20202020);
+
+    const int vil1 = (vl >> 4) & 0x0F0F0F0F;
+    const int vih1 = ((vh >> 4) << 4) & 0x30303030;
+    const int vi1 = byte_sub_4(vil1 | vih1, 0x20202020);
+
+    const float sumf =
+        d80 * (dpct::dp4a(vi0, u0, 0) * sc0) +
+        d81 * (dpct::dp4a(vi1, u1, 0) * sc1);
+
+    return d * sumf;
+}
+
 static __dpct_inline__ void get_int_from_table_16(const uint32_t &q4,
                                                   const uint8_t *values,
                                                   int &val1, int &val2) {
@@ -70,6 +124,28 @@ static __dpct_inline__ void get_int_from_table_16(const uint32_t &q4,
     v1 = values[q8[0]] | (values[q8[1]] << 8);
     v2 = values[q8[2]] | (values[q8[3]] << 8);
     val2 = v1 | (v2 << 16);
+}
+
+static __dpct_inline__ sycl::int2 get_int_from_table_16(
+    const int& q4, const int8_t* table) {
+  const uint32_t* table32 = (const uint32_t*)table;
+  uint32_t tmp[2];
+  const uint32_t low_high_selection_indices =
+      (0x32103210 | ((q4 & 0x88888888) >> 1));
+#pragma unroll
+  for (uint32_t i = 0; i < 2; ++i) {
+    const uint32_t shift = 16 * i;
+
+    const uint32_t low =
+        dpct::byte_level_permute(table32[0], table32[1], q4 >> shift);
+    const uint32_t high =
+        dpct::byte_level_permute(table32[2], table32[3], q4 >> shift);
+    tmp[i] = dpct::byte_level_permute(
+        low, high, low_high_selection_indices >> shift);
+  }
+  return sycl::int2(
+      dpct::byte_level_permute(tmp[0], tmp[1], 0x6420),
+      dpct::byte_level_permute(tmp[0], tmp[1], 0x7531));
 }
 
 #define VDR_Q2_K_Q8_1_MMVQ 1
@@ -229,36 +305,396 @@ vec_dot_q6_K_q8_1_impl_mmvq(const int &vl, const int &vh,
                             const int *__restrict__ u,
                             const int8_t *__restrict__ scales, const float &d,
                             const float *__restrict__ d8) {
+    return vec_dot_q6_K_q8_1_impl_mmvq_scalar(
+        vl, vh, u[0], u[1], scales[0], scales[4], d, d8[0], d8[1]);
+}
 
-    float sumf = 0.0f;
+#define VDR_Q1_0_Q8_1_MMVQ 1
+#define VDR_Q1_0_Q8_1_MMQ  4
 
+static __dpct_inline__ float
+vec_dot_q1_0_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+
+    const block_q1_0 * bq1_0 = (const block_q1_0 *) vbq;
+
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+    const float        d1          = bq1_0->d;
+    const int          v           = get_int_from_uint8_aligned(bq1_0->qs, iqs);
+
+    int vi_bytes[8];
 #pragma unroll
-    for (int i = 0; i < QR6_K; ++i) {
-        const int sc = scales[4*i];
-
-        const int vil = (vl >> (4*i)) & 0x0F0F0F0F;
-
-        const int vih = ((vh >> (4*i)) << 4) & 0x30303030;
-
-        const int vi = dpct::vectorized_binary<sycl::char4>(
-            (vil | vih), 0x20202020, dpct::sub_sat()); // vi = (vil | vih) - 32
-
-        sumf += d8[i] * (dpct::dp4a(vi, u[i], 0) * sc); // SIMD dot product
+    for (int j = 0; j < 8; ++j) {
+        const int shift = j * 4;
+        const int bits4 = (v >> shift) & 0x0F;
+        const int b0    = (bits4 & 0x01) ? 1 : -1;
+        const int b1    = (bits4 & 0x02) ? 1 : -1;
+        const int b2    = (bits4 & 0x04) ? 1 : -1;
+        const int b3    = (bits4 & 0x08) ? 1 : -1;
+        vi_bytes[j]     = (b0 & 0xFF) | ((b1 & 0xFF) << 8) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 24);
     }
 
-    return d*sumf;
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int u = get_int_from_int8_aligned(bq8_1_chunk->qs, j);
+        sumi        = ggml_sycl_dp4a(vi_bytes[j], u, sumi);
+    }
+
+    return d1 * bq8_1_chunk->ds[0] * sumi;
 }
 
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
 // MMVQ = mul_mat_vec_q, MMQ = mul_mat_q
 
+template <ggml_type T> struct reorder_vec_dot_q_sycl {
+    static_assert(T != T, "ggml_type for reorder vecdot not implemented");
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q4_0;
+
+    using q4_0_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q4_0>;
+    using q4_0_traits = typename q4_0_block::traits;
+
+    __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4, const sycl::half2 & ds8) {
+        int sumi = 0;
+
+#pragma unroll
+        for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
+            const int vi0 = (v[i] >> 0) & 0x0F0F0F0F;
+            const int vi1 = (v[i] >> 4) & 0x0F0F0F0F;
+
+            // SIMD dot product of quantized values
+            sumi = dpct::dp4a(vi0, u[2 * i + 0], sumi);
+            sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
+        }
+
+        const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
+
+        // second part effectively subtracts 8 from each quant value
+        return d4 * (sumi * ds8f.x() - (8 * q4_0_traits::vdr_mmvq / q4_0_traits::qi) * ds8f.y());
+    }
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t * bq4_0 = static_cast<const uint8_t *>(vbq) + ibx_offset.first;
+        const ggml_half d = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset.first));
+        int             v[q4_0_traits::vdr_mmvq];
+        int             u[2 * q4_0_traits::vdr_mmvq];
+
+
+#pragma unroll
+        for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
+            v[i]         = get_int_from_uint8(bq4_0, iqs + i);
+            u[2 * i + 0] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
+            u[2 * i + 1] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i + q4_0_traits::qi);
+        }
+
+        return vec_dot_q4_0_q8_1_impl(v, u, d, *q8_1_ds);
+    };
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q8_0;
+
+    using q8_0_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q8_0>;
+    using q8_0_traits = typename q8_0_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t * base = static_cast<const uint8_t *>(vbq);
+        const int8_t *  qs   = reinterpret_cast<const int8_t *>(base + ibx_offset.first);
+        const ggml_half  d   = *reinterpret_cast<const ggml_half *>(base + d_offset.first);
+
+        int v[q8_0_traits::vdr_mmvq];
+        int u[q8_0_traits::vdr_mmvq];
+
+#pragma unroll
+        for (size_t i = 0; i < q8_0_traits::vdr_mmvq; ++i) {
+            v[i] = get_int_from_int8(qs, iqs + i);
+            u[i] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
+        }
+
+        int sumi = 0;
+#pragma unroll
+        for (size_t i = 0; i < q8_0_traits::vdr_mmvq; ++i) {
+            sumi = dpct::dp4a(v[i], u[i], sumi);
+        }
+
+        const sycl::half2 ds_values = *q8_1_ds;
+        return static_cast<float>(d) * static_cast<float>(ds_values[0]) * sumi;
+    }
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q3_K> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q3_K;
+
+    using q3_k_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q3_K>;
+    using q3_k_traits = typename q3_k_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t *  base   = static_cast<const uint8_t *>(vbq);
+        const uint8_t *  qs     = base + ibx_offset.first;
+        const uint8_t *  hmask  = base + ibx_offset.second;
+        const uint8_t *  scales = base + d_offset.first;
+        const ggml_half  d      = *reinterpret_cast<const ggml_half *>(base + d_offset.second);
+
+        const int bq8_offset   = QR3_K * (iqs / (QI3_K / 2));
+        const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1 / 2);
+
+        const int vl = get_int_from_uint8(qs, iqs);
+        const int vh = ~get_int_from_uint8(hmask, iqs % (QI3_K / 2)) >> bq8_offset;
+
+        int   u[QR3_K];
+        float d8[QR3_K];
+
+#pragma unroll
+        for (int i = 0; i < QR3_K; ++i) {
+            const int8_t * quant_base_ptr = q8_1_quant_ptr + (bq8_offset + i) * QK8_1;
+            u[i]                          = get_int_from_int8_aligned(quant_base_ptr, iqs % QI8_1);
+            d8[i]                         = (*(q8_1_ds + bq8_offset + i))[0];
+        }
+
+        return vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, scales, scale_offset, static_cast<float>(d), d8);
+    }
+};
+
+static inline float vec_dot_q4_K_q8_1_common(const int * __restrict__ q4, const uint16_t * __restrict__ scales,
+                                             const ggml_half2 & dm, const block_q8_1 * __restrict__ bq8_1,
+                                             const int &        iqs) {
+    int   v[2];
+    int   u[2 * QR4_K];
+    float d8[QR4_K];
+
+    v[0] = q4[0];
+    v[1] = q4[4];
+
+    uint16_t  aux[2];
+    const int j = (QR4_K * ((iqs / 2) / (QI8_1 / 2))) / 2;
+    if (j < 2) {
+        aux[0] = scales[j + 0] & 0x3f3f;
+        aux[1] = scales[j + 2] & 0x3f3f;
+    } else {
+        aux[0] = ((scales[j + 2] >> 0) & 0x0f0f) | ((scales[j - 2] & 0xc0c0) >> 2);
+        aux[1] = ((scales[j + 2] >> 4) & 0x0f0f) | ((scales[j - 0] & 0xc0c0) >> 2);
+    }
+
+    const uint8_t * sc = (const uint8_t *) aux;
+    const uint8_t * m  = sc + 2;
+
+    const int bq8_offset = QR4_K * ((iqs / 2) / (QI8_1 / 2));
+
+    for (int i = 0; i < QR4_K; ++i) {
+        const block_q8_1 * bq8i = bq8_1 + bq8_offset + i;
+        d8[i]                   = bq8i->ds[0];
+
+        const int * q8 = (const int *) bq8i->qs + ((iqs / 2) % 4);
+        u[2 * i + 0]   = q8[0];
+        u[2 * i + 1]   = q8[4];
+    }
+
+    return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, dm, d8);
+}
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q4_K;
+
+    using q4_k_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q4_K>;
+    using q4_k_traits = typename q4_k_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t *    base           = static_cast<const uint8_t *>(vbq);
+        const uint8_t *    qs             = base + ibx_offset.first;
+        const uint8_t *    scs            = base + d_offset.first;
+        const ggml_half2 * dms            = reinterpret_cast<const ggml_half2 *>(base + d_offset.second);
+
+        const int        bq8_offset = QR4_K * ((iqs / 2) / (QI8_1 / 2));
+        const int *      q4         = (const int *) (qs + 16 * bq8_offset + 4 * ((iqs / 2) % 4));
+        const uint16_t * scales     = (const uint16_t *) scs;
+
+        int   v[2];
+        int   u[2 * QR4_K];
+        float d8[QR4_K];
+
+        v[0] = q4[0];
+        v[1] = q4[4];
+
+        uint16_t  aux[2];
+        const int j = (QR4_K * ((iqs / 2) / (QI8_1 / 2))) / 2;
+        if (j < 2) {
+            aux[0] = scales[j + 0] & 0x3f3f;
+            aux[1] = scales[j + 2] & 0x3f3f;
+        } else {
+            aux[0] = ((scales[j + 2] >> 0) & 0x0f0f) | ((scales[j - 2] & 0xc0c0) >> 2);
+            aux[1] = ((scales[j + 2] >> 4) & 0x0f0f) | ((scales[j - 0] & 0xc0c0) >> 2);
+        }
+
+        const uint8_t * sc = (const uint8_t *) aux;
+        const uint8_t * m  = sc + 2;
+
+        for (int i = 0; i < QR4_K; ++i) {
+            const int8_t* quant_base_ptr = q8_1_quant_ptr + (bq8_offset + i) * QK8_1;
+            sycl::half2 ds_values = *(q8_1_ds + bq8_offset + i);
+
+            d8[i]                   = ds_values[0];
+
+            const int * q8 = (const int *) quant_base_ptr + ((iqs / 2) % 4);
+            u[2 * i + 0]   = q8[0];
+            u[2 * i + 1]   = q8[4];
+        }
+
+        return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, *dms, d8);
+    }
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q5_K> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q5_K;
+
+    using q5_k_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q5_K>;
+    using q5_k_traits = typename q5_k_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t *    base           = static_cast<const uint8_t *>(vbq);
+        const uint8_t *    qs             = base + ibx_offset.first;   // low 4 bits
+        const uint8_t *    qh_base        = base + ibx_offset.second;  // high bit
+        const uint8_t *    scs            = base + d_offset.first;
+        const ggml_half2 * dms            = reinterpret_cast<const ggml_half2 *>(base + d_offset.second);
+
+        const int        bq8_offset = QR5_K * ((iqs / 2) / (QI8_1 / 2));
+        const int *      ql_ptr     = (const int *) (qs + 16 * bq8_offset + 4 * ((iqs / 2) % 4));
+        const int *      qh_ptr     = (const int *) (qh_base + 4 * ((iqs / 2) % 4));
+        const uint16_t * scales     = (const uint16_t *) scs;
+
+        int   vl[2];
+        int   vh[2];
+        int   u[2 * QR5_K];
+        float d8[QR5_K];
+
+        vl[0] = ql_ptr[0];
+        vl[1] = ql_ptr[4];
+
+        vh[0] = qh_ptr[0] >> bq8_offset;
+        vh[1] = qh_ptr[4] >> bq8_offset;
+
+        uint16_t  aux[2];
+        const int j = (QR5_K * ((iqs / 2) / (QI8_1 / 2))) / 2;
+        if (j < 2) {
+            aux[0] = scales[j + 0] & 0x3f3f;
+            aux[1] = scales[j + 2] & 0x3f3f;
+        } else {
+            aux[0] = ((scales[j + 2] >> 0) & 0x0f0f) | ((scales[j - 2] & 0xc0c0) >> 2);
+            aux[1] = ((scales[j + 2] >> 4) & 0x0f0f) | ((scales[j - 0] & 0xc0c0) >> 2);
+        }
+
+        const uint8_t * sc = (const uint8_t *) aux;
+        const uint8_t * m  = sc + 2;
+
+        for (int i = 0; i < QR5_K; ++i) {
+            const int8_t* quant_base_ptr = q8_1_quant_ptr + (bq8_offset + i) * QK8_1;
+            sycl::half2 ds_values = *(q8_1_ds + bq8_offset + i);
+
+            d8[i]                   = ds_values[0];
+
+            const int * q8 = (const int *) quant_base_ptr + ((iqs / 2) % 4);
+            u[2 * i + 0]   = q8[0];
+            u[2 * i + 1]   = q8[4];
+        }
+
+        return vec_dot_q5_K_q8_1_impl_vmmq(vl, vh, u, sc, m, *dms, d8);
+    }
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q6_K> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q6_K;
+
+    using q6_k_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q6_K>;
+    using q6_k_traits = typename q6_k_block::traits;
+
+    __dpct_inline__ float vec_dot_q6_K_q8_1_impl_mmvq(const int vl, const int vh, const int * __restrict__ u,
+                                                      const int8_t * __restrict__ scales, const float d,
+                                                      const float * __restrict__ d8) {
+        return vec_dot_q6_K_q8_1_impl_mmvq_scalar(
+            vl, vh, u[0], u[1], scales[0], scales[4], d, d8[0], d8[1]);
+    }
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr, const sycl::half2 * q8_1_ds,
+                     const int iqs) {
+        const uint8_t *   base   = static_cast<const uint8_t *>(vbq);
+        const uint8_t *   ql     = base + ibx_offset.first;
+        const uint8_t *   qh     = base + ibx_offset.second;
+        const int8_t *    scales = reinterpret_cast<const int8_t *>(base + d_offset.first);
+        const ggml_half * d      = (const ggml_half *) (base + d_offset.second);
+
+        const int bq8_offset   = 2 * QR6_K * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 4);
+        const int scale_offset = (QI6_K / 4) * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 8);
+        const int vh_shift     = 2 * ((iqs % (QI6_K / 2)) / (QI6_K / 4));
+
+        const int vl = get_int_from_uint8(ql, iqs);
+        const int vh = get_int_from_uint8(qh, (QI6_K / 4) * (iqs / (QI6_K / 2)) + iqs % (QI6_K / 4)) >> vh_shift;
+
+        const int8_t * scs = scales + scale_offset;
+
+        const int u0 = get_int_from_int8_aligned(
+            q8_1_quant_ptr + bq8_offset * QK8_1, iqs % QI8_1);
+        const int u1 = get_int_from_int8_aligned(
+            q8_1_quant_ptr + (bq8_offset + 2) * QK8_1, iqs % QI8_1);
+        const float d80 = (*(q8_1_ds + bq8_offset + 0))[0];
+        const float d81 = (*(q8_1_ds + bq8_offset + 2))[0];
+
+        return vec_dot_q6_K_q8_1_impl_mmvq_scalar(
+            vl, vh, u0, u1, scs[0], scs[4], *d, d80, d81);
+    }
+};
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
+#define VDR_Q2_0_Q8_1_MMVQ 1
+
 template <int vdr>
-static __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int *v, const int *u,
-                                                    const float &d4,
-                                                    const sycl::half2 &ds8) {
+static __dpct_inline__ float vec_dot_q2_0_q8_1_impl(
+    const int * v,
+    const int * u,
+    const float & d2,
+    const sycl::half2 & ds8) {
+    int sumi = 0;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const uint8_t q = (uint8_t) ((uint32_t) v[i] >> (8 * j));
+
+            // unpack 2-bit values to byte lanes (0..3), then apply zero-point
+            // correction with ds8f.y() below, mirroring the q4_0 style.
+            int vi = 0;
+            vi |= (((q >> 0) & 0x3) & 0xFF) << 0;
+            vi |= (((q >> 2) & 0x3) & 0xFF) << 8;
+            vi |= (((q >> 4) & 0x3) & 0xFF) << 16;
+            vi |= (((q >> 6) & 0x3) & 0xFF) << 24;
+
+            sumi = dpct::dp4a(vi, u[4 * i + j], sumi);
+        }
+    }
+
+    const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
+    // q2_0 has zero-point 1. Scale ds8f.y() by processed-lane ratio,
+    // consistent with q4_0's explicit zero-point subtraction style.
+    return d2 * (sumi * ds8f.x() - ((float) vdr / (float) QI2_0) * ds8f.y());
+}
+
+template <int vdr>
+static __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4,
+                                                    const sycl::half2 & ds8) {
     int sumi = 0;
 #pragma unroll
     for (int i = 0; i < vdr; ++i) {
@@ -270,8 +706,7 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int *v, const int *u,
         sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
     }
 
-    const sycl::float2 ds8f =
-        ds8.convert<float, sycl::rounding_mode::automatic>();
+    const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
 
     // second part effectively subtracts 8 from each quant value
     return d4 * (sumi * ds8f.x() - (8 * vdr / QI4_0) * ds8f.y());
@@ -418,6 +853,19 @@ static __dpct_inline__ float vec_dot_q8_0_q8_1_impl(const int *v, const int *u,
     return d8_0*d8_1 * sumi;
 }
 
+template <typename T, int vdr>
+static __dpct_inline__ T vec_dot_q8_0_q8_1_impl(const int * v, const int * u, const T & d8_0, const T & d8_1) {
+    int sumi = 0;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+        // SIMD dot product of quantized values
+        sumi = ggml_sycl_dp4a(v[i], u[i], sumi);
+    }
+
+    return d8_0*d8_1 * ((T) sumi);
+}
+
 template <int vdr>
 static __dpct_inline__ float vec_dot_q8_1_q8_1_impl(const int *v, const int *u,
                                                     const sycl::half2 &dm8,
@@ -456,16 +904,51 @@ vec_dot_q4_0_q8_1(const void *__restrict__ vbq,
     const block_q4_0 * bq4_0 = (const block_q4_0 *) vbq;
 
     int v[VDR_Q4_0_Q8_1_MMVQ];
-    int u[2*VDR_Q4_0_Q8_1_MMVQ];
+    int u[2 * VDR_Q4_0_Q8_1_MMVQ];
 
 #pragma unroll
     for (int i = 0; i < VDR_Q4_0_Q8_1_MMVQ; ++i) {
-        v[i]     = get_int_from_uint8(bq4_0->qs, iqs + i);
-        u[2*i+0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
-        u[2*i+1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI4_0);
+        v[i]         = get_int_from_uint8(bq4_0->qs, iqs + i);
+        u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
+        u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + QI4_0);
     }
 
     return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
+}
+
+static __dpct_inline__ float
+vec_dot_q2_0_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+
+    const block_q2_0 * bq2_0 = (const block_q2_0 *) vbq;
+
+    int v[2 * VDR_Q2_0_Q8_1_MMVQ];
+    int u[8 * VDR_Q2_0_Q8_1_MMVQ];
+
+#pragma unroll
+    for (int i = 0; i < VDR_Q2_0_Q8_1_MMVQ; ++i) {
+        const int base = 4 * (iqs + i);
+
+        // Q2_0 has QK2_0 = 64 and uses 2 x QK8_1 blocks on the RHS.
+        v[2 * i + 0] = get_int_from_uint8(bq2_0->qs, iqs + i);
+        v[2 * i + 1] = get_int_from_uint8(bq2_0->qs, iqs + i + QI2_0);
+
+        u[8 * i + 0] = get_int_from_int8_aligned(bq8_1[0].qs, base + 0);
+        u[8 * i + 1] = get_int_from_int8_aligned(bq8_1[0].qs, base + 1);
+        u[8 * i + 2] = get_int_from_int8_aligned(bq8_1[0].qs, base + 2);
+        u[8 * i + 3] = get_int_from_int8_aligned(bq8_1[0].qs, base + 3);
+
+        u[8 * i + 4] = get_int_from_int8_aligned(bq8_1[1].qs, base + 0);
+        u[8 * i + 5] = get_int_from_int8_aligned(bq8_1[1].qs, base + 1);
+        u[8 * i + 6] = get_int_from_int8_aligned(bq8_1[1].qs, base + 2);
+        u[8 * i + 7] = get_int_from_int8_aligned(bq8_1[1].qs, base + 3);
+    }
+
+    const float sum0 = vec_dot_q2_0_q8_1_impl<VDR_Q2_0_Q8_1_MMVQ>(
+        v + 0, u + 0, bq2_0->d, bq8_1[0].ds);
+    const float sum1 = vec_dot_q2_0_q8_1_impl<VDR_Q2_0_Q8_1_MMVQ>(
+        v + VDR_Q2_0_Q8_1_MMVQ, u + 4 * VDR_Q2_0_Q8_1_MMVQ, bq2_0->d, bq8_1[1].ds);
+    return sum0 + sum1;
 }
 
 static __dpct_inline__ float
@@ -485,6 +968,59 @@ vec_dot_q4_1_q8_1(const void *__restrict__ vbq,
     }
 
     return vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMVQ>(v, u, bq4_1->dm, bq8_1->ds);
+}
+
+#define VDR_MXFP4_Q8_1_MMVQ 2
+#define VDR_MXFP4_Q8_1_MMQ  4
+
+static __dpct_inline__ float vec_dot_mxfp4_q8_1(const void * __restrict__ vbq,
+                                                const block_q8_1 * __restrict__ bq8_1,
+                                                const int & iqs) {
+    const block_mxfp4 * bq4 = (const block_mxfp4 *) vbq;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b1(bq4->qs, iqs + l);
+        const sycl::int2 v      = get_int_from_table_16(aux_q4, kvalues_mxfp4);
+        sumi = ggml_sycl_dp4a(v.x(), q8[l + 0], sumi);
+        sumi = ggml_sycl_dp4a(v.y(), q8[l + 4], sumi);
+    }
+
+    const float d = ggml_sycl_e8m0_to_fp32(bq4->e) * 0.5f * (bq8_1->ds)[0];
+    return d * sumi;
+}
+
+#define VDR_NVFP4_Q8_1_MMVQ 4
+#define VDR_NVFP4_Q8_1_MMQ  8
+
+static __dpct_inline__ float vec_dot_nvfp4_q8_1(const void * __restrict__ vbq,
+                                                const block_q8_1 * __restrict__ bq8_1,
+                                                const int32_t & iqs) {
+    const block_nvfp4 * bq4 = (const block_nvfp4 *) vbq;
+    float sum = 0.0f;
+#pragma unroll
+    for (int i = 0; i < VDR_NVFP4_Q8_1_MMVQ/2; i++) {
+        const int32_t iqs0 = iqs + 2*i;
+        const int32_t iqs1 = iqs0 + 1;
+        const int32_t is = iqs0 >> 1;
+        const sycl::int2   v0   = get_int_from_table_16(get_int_b4(bq4->qs, iqs0), kvalues_mxfp4);
+        const sycl::int2   v1   = get_int_from_table_16(get_int_b4(bq4->qs, iqs1), kvalues_mxfp4);
+        const block_q8_1 * bq8 = bq8_1 + (is >> 1);
+        const int32_t i8 = ((is & 1) << 2);
+
+        int sumi = ggml_sycl_dp4a(v0.x(), get_int_b4(bq8->qs, i8 + 0), 0);
+        sumi     = ggml_sycl_dp4a(v0.y(), get_int_b4(bq8->qs, i8 + 2), sumi);
+        sumi     = ggml_sycl_dp4a(v1.x(), get_int_b4(bq8->qs, i8 + 1), sumi);
+        sumi     = ggml_sycl_dp4a(v1.y(), get_int_b4(bq8->qs, i8 + 3), sumi);
+
+        const float d = ggml_sycl_ue4m3_to_fp32(bq4->d[is]) * (bq8->ds)[0];
+        sum += d * float(sumi);
+    }
+
+    return sum;
 }
 
 static __dpct_inline__ float
@@ -600,52 +1136,17 @@ vec_dot_q3_K_q8_1(const void *__restrict__ vbq,
     return vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, bq3_K->scales, scale_offset, d, d8);
 }
 
-static __dpct_inline__ float
-vec_dot_q4_K_q8_1(const void *__restrict__ vbq,
-                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
-
+static __dpct_inline__ float vec_dot_q4_K_q8_1(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
+                                               const int & iqs) {
 #ifndef GGML_QKK_64
+
     const block_q4_K * bq4_K = (const block_q4_K *) vbq;
 
-    int    v[2];
-    int    u[2*QR4_K];
-    float d8[QR4_K];
+    const int        bq8_offset = QR4_K * ((iqs / 2) / (QI8_1 / 2));
+    const int *      q4         = (const int *) (bq4_K->qs + 16 * bq8_offset + 4 * ((iqs / 2) % 4));
+    const uint16_t * scales     = (const uint16_t *) bq4_K->scales;
 
-    // iqs is in 0,2..30. bq8_offset = iqs/4 -> bq8_offset = 0, 2, 4, 6
-    const int bq8_offset = QR4_K * ((iqs/2) / (QI8_1/2));
-
-    // iqs = 0....3 -> bq8_offset = 0, want q4_offset = 0, 4, 8, 12
-    // iqs = 4....7 -> bq8_offset = 2, want q4_offset = 32, 36, 40, 44
-    // iqs = 8...11 -> bq8_offset = 4, want q4_offset = 64, 68, 72, 76
-    // iqs = 12..15 -> bq8_offset = 6, want q4_offset = 96, 100, 104, 108
-
-    const int * q4 = (const int *)(bq4_K->qs + 16 * bq8_offset + 4 * ((iqs/2)%4));
-    v[0] = q4[0];
-    v[1] = q4[4];
-
-    const uint16_t * scales = (const uint16_t *)bq4_K->scales;
-    uint16_t aux[2];
-    const int j = bq8_offset/2;
-    if (j < 2) {
-        aux[0] = scales[j+0] & 0x3f3f;
-        aux[1] = scales[j+2] & 0x3f3f;
-    } else {
-        aux[0] = ((scales[j+2] >> 0) & 0x0f0f) | ((scales[j-2] & 0xc0c0) >> 2);
-        aux[1] = ((scales[j+2] >> 4) & 0x0f0f) | ((scales[j-0] & 0xc0c0) >> 2);
-    }
-    const uint8_t * sc = (const uint8_t *)aux;
-    const uint8_t * m  = sc + 2;
-
-    for (int i = 0; i < QR4_K; ++i) {
-        const block_q8_1 * bq8i = bq8_1 + bq8_offset + i;
-        d8[i] = bq8i->ds[0];
-
-        const int * q8 = (const int *)bq8i->qs + ((iqs/2)%4);
-        u[2*i+0] = q8[0];
-        u[2*i+1] = q8[4];
-    }
-
-    return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, bq4_K->dm, d8);
+    return vec_dot_q4_K_q8_1_common(q4, scales, bq4_K->dm, bq8_1, iqs);
 
 #else
 
@@ -799,16 +1300,15 @@ vec_dot_q6_K_q8_1(const void *__restrict__ vbq,
 
     const int8_t * scales = bq6_K->scales + scale_offset;
 
-    int    u[QR6_K];
-    float d8[QR6_K];
+    const int u0 = get_int_from_int8_aligned(
+        bq8_1[bq8_offset + 0].qs, iqs % QI8_1);
+    const int u1 = get_int_from_int8_aligned(
+        bq8_1[bq8_offset + 2].qs, iqs % QI8_1);
+    const float d80 = bq8_1[bq8_offset + 0].ds[0];
+    const float d81 = bq8_1[bq8_offset + 2].ds[0];
 
-#pragma unroll
-    for (int i = 0; i < QR6_K; ++i) {
-        u[i]  = get_int_from_int8_aligned(bq8_1[bq8_offset + 2*i].qs, iqs % QI8_1);
-        d8[i] = bq8_1[bq8_offset + 2 * i].ds[0];
-    }
-
-    return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
+    return vec_dot_q6_K_q8_1_impl_mmvq_scalar(
+        vl, vh, u0, u1, scales[0], scales[4], bq6_K->d, d80, d81);
 }
 
 

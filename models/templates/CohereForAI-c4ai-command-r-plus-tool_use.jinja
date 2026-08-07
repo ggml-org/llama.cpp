@@ -1,0 +1,202 @@
+
+{%- macro json_to_python_type(json_spec) %}
+{%- set basic_type_map = {
+    "string": "str",
+    "number": "float",
+    "integer": "int",
+    "boolean": "bool"
+} %}
+
+{%- if basic_type_map[json_spec.type] is defined %}
+    {{- basic_type_map[json_spec.type] }}
+{%- elif json_spec.type == "array" %}
+    {{- "List[" +  json_to_python_type(json_spec.items) + "]"}}
+{%- elif json_spec.type == "object" %}
+    {{- "Dict[str, " + json_to_python_type(json_spec.additionalProperties) + ']'}}
+{%- elif json_spec.type is iterable %}
+    {{- "Union[" }}
+    {%- for t in json_spec.type %}
+      {{- json_to_python_type({"type": t}) }}
+      {%- if not loop.last %}
+        {{- "," }} 
+    {%- endif %}
+    {%- endfor %}
+    {{- "]" }}
+{%- else %}
+    {{- "Any" }}
+{%- endif %}
+{%- endmacro %}
+
+{%- macro old_tool_parser(tools) %}
+{%- for tool in tools %}
+    {%- if loop.index0 != 0 %}
+        {{- '\n\n' }}
+    {%- endif %}
+    {{- '```python\ndef ' + tool.name + '(' }}
+    {%- for param_name, param_fields in tool.parameter_definitions|items %}
+        {%- if loop.index0 != 0 %}
+            {{- ', '}}
+        {%- endif %}
+        {{- param_name + ': ' }}
+        {%- if not param_fields.required %}
+            {{- 'Optional[' + param_fields.type + '] = None'}}
+        {%- else %}
+            {{- param_fields.type }}
+        {%- endif %}
+    {%- endfor %}
+    {{- ') -> List[Dict]:\n    """'}}
+    {{- tool.description }}
+    {%- if tool.parameter_definitions|length != 0 %}
+        {{- '\n\n    Args:\n        '}}
+        {%- for param_name, param_fields in tool.parameter_definitions|items %}
+            {%- if loop.index0 != 0 %}
+                {{- '\n        ' }}
+            {%- endif %}
+            {{- param_name + ' ('}}
+            {%- if not param_fields.required %}
+                {{- 'Optional[' + param_fields.type + ']'}}
+            {%- else %}
+                {{- param_fields.type }}
+            {%- endif %}
+            {{- '): ' + param_fields.description }}
+        {%- endfor %}
+    {%- endif %}
+    {{- '\n    """\n    pass\n```' }}
+{%- endfor %}
+{%- endmacro %}
+
+{%- macro new_tool_parser(tools) %}
+{%- for tool in tools %}
+  {%- if loop.index0 != 0 %}
+    {{- '\n\n'}}
+  {%- endif %}
+  {%- if tool.function is defined %}
+    {%- set tool = tool.function %}
+  {%- endif %}
+  {{-'```python
+def ' + tool.name + '('}}
+  {%- for param_name, param_fields in tool.parameters.properties|items %}
+    {%- if loop.index0 != 0 %}
+      {{- ', '}}
+    {%- endif %}
+    {{-param_name + ": "}} 
+    {%- if not param_name in tool.parameters.required %}
+      {{-'Optional[' + json_to_python_type(param_fields) + '] = None'}}
+    {%- else %}
+      {{- json_to_python_type(param_fields) }}
+    {%- endif %}
+  {%- endfor %}
+  {{- ') -> List[Dict]:
+    """'}}
+  {{- tool.description }}
+  {%- if tool.parameters.properties|length != 0 %}
+    {{- '\n\n    Args:\n        '}}
+    {%- for param_name, param_fields in tool.parameters.properties|items %}
+      {%- if loop.index0 != 0 %}
+        {{- '\n        ' }}
+      {%- endif %}
+      {{- param_name + ' ('}}
+      {%- if not param_name in tool.parameters.required %}
+        {{-'Optional[' + json_to_python_type(param_fields) + ']'}}
+      {%- else %}
+        {{- json_to_python_type(param_fields) }}
+      {%- endif %}
+      {{- '): ' + param_fields.description }}
+    {%- endfor %}
+    {%- endif %}
+    {{- '\n    """\n    pass\n```' }}
+{%- endfor %}
+{%- endmacro %}
+
+{{- bos_token }}
+{%- if messages[0]['role'] == 'system' %}
+  {%- set loop_messages = messages[1:] %}
+  {%- set system_message = messages[0]['content'] %}
+{%- else %}
+  {%- set loop_messages = messages %}
+  {%- set system_message = '## Task and Context\nYou help people answer their questions and other requests interactively. You will be asked a very wide array of requests on all kinds of topics. You will be equipped with a wide range of search engines or similar tools to help you, which you use to research your answer. You should focus on serving the user\'s needs as best you can, which will be wide-ranging.\n\n## Style Guide\nUnless the user asks for a different style of answer, you should answer in full sentences, using proper grammar and spelling.' %}
+{%- endif %}
+{{- '<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>' }}
+{{- '# Safety Preamble' }}
+{{- '
+The instructions in this section override those in the task description and style guide sections. Don\'t answer questions that are harmful or immoral.' }}
+{{- '
+
+# System Preamble' }}
+{{- '
+## Basic Rules' }}
+{{- '
+You are a powerful conversational AI trained by Cohere to help people. You are augmented by a number of tools, and your job is to use and consume the output of these tools to best help the user. You will see a conversation history between yourself and a user, ending with an utterance from the user. You will then see a specific instruction instructing you what kind of response to generate. When you answer the user\'s requests, you cite your sources in your answers, according to those instructions.' }}
+{{- '
+
+# User Preamble' }}
+{{- '
+' + system_message }}
+{{-'
+
+## Available Tools
+Here is a list of tools that you have available to you:
+
+'}}
+{%- set ns = namespace(new_tools=true) %}
+{%- for tool in tools %}
+    {%- if tool.parameter_definitions is defined %}
+        {%- set ns.new_tools = false %}
+    {%- endif %}
+{%- endfor %}
+{%- if ns.new_tools %}
+    {{- new_tool_parser(tools) }}
+{%- else %}
+    {{- old_tool_parser(tools) }}
+{%- endif %}
+{{- '<|END_OF_TURN_TOKEN|>'}}
+{%- for message in loop_messages %}
+  {%- set content = message['content'] %}
+  {%- if message.role == 'user' %}
+    {{- '<|START_OF_TURN_TOKEN|><|USER_TOKEN|>' + content|trim + '<|END_OF_TURN_TOKEN|>' }}
+  {%- elif message.role == 'system' %}
+    {{- '<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>' + content|trim + '<|END_OF_TURN_TOKEN|>' }}
+  {%- elif message.role == 'assistant' and message.tool_calls is defined %}
+    {{- '<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>' }}
+    {%- if message.content is defined %}
+        {{- message.content|trim }}
+    {%- endif %}
+    {{- '\nAction:\n```json\n[\n' }}
+    {%- for tool_call in message.tool_calls %}
+        {%- if tool_call.function is defined %}
+            {%- set tool_call = tool_call.function %}
+        {%- endif %}
+        {{- '{\n'|indent(4, first=true) }}
+        {{- '"tool_name": "'|indent(8, first=true) + tool_call.name + '",\n' }}
+        {{- '"parameters": '|indent(8, first=true) }}
+        {%- if tool_call.arguments is defined and tool_call.arguments|length > 0 %}    
+            {{- tool_call.arguments|tojson(indent=4)|indent(8) }}
+            {{- '\n' }}
+        {%- else %}
+            {{- '{}\n' }}
+        {%- endif %}
+        {{- '}'|indent(4, first=true) }}
+        {%- if not loop.last %}
+            {{- ',\n' }}
+        {%- endif %}
+    {%- endfor %}
+    {{- "\n]```\n" }}
+  {%- elif message.role == 'assistant' %}
+    {{- '<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>'  + content|trim + '<|END_OF_TURN_TOKEN|>' }}
+  {%- elif message.role == 'tool' %}
+    {{- '<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|><results>\n' }}
+    {{- message.content|trim }}
+    {{- '</results><|END_OF_TURN_TOKEN|>' }}
+  {%- endif %}
+{%- endfor %}
+{{-'<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>Write \'Action:\' followed by a json-formatted list of actions that you want to perform in order to produce a good response to the user\'s last input. You can use any of the supplied tools any number of times, but you should aim to execute the minimum number of necessary actions for the input. You should use the `directly-answer` tool if calling the other tools is unnecessary. The list of actions you want to call should be formatted as a list of json objects, for example:
+```json
+[
+    {
+        "tool_name": title of the tool in the specification,
+        "parameters": a dict of parameters to input into the tool as they are defined in the specs, or {} if it takes no parameters
+    }
+]```<|END_OF_TURN_TOKEN|>'}}
+{%- if add_generation_prompt %}
+  {{- '<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>' }}
+{%- endif %}

@@ -48,13 +48,18 @@ class LazyMeta(ABCMeta):
         # NOTE: doing this from a metaclass is very convenient
         # TODO: make this even more comprehensive
         for binary_op in (
-            "lt", "le", "eq", "ne", "ge", "gt", "not"
-            "abs", "add", "and", "floordiv", "invert", "lshift", "mod", "mul", "matmul",
-            "neg", "or", "pos", "pow", "rshift", "sub", "truediv", "xor",
+            "lt", "le", "eq", "ne", "ge", "gt",
+            "add", "and", "floordiv", "lshift", "mod", "mul", "matmul",
+            "or", "pow", "rshift", "sub", "truediv", "xor",
             "iadd", "iand", "ifloordiv", "ilshift", "imod", "imul", "ior", "irshift", "isub", "ixor",
             "radd", "rand", "rfloordiv", "rmul", "ror", "rpow", "rsub", "rtruediv", "rxor",
         ):
             attr_name = f"__{binary_op}__"
+            # evaluation on the meta tensor is needed in case there's broadcasting
+            namespace[attr_name] = mk_wrap(attr_name, meta_noop=False)
+
+        for unary_op in ("not", "abs", "invert", "neg", "pos"):
+            attr_name = f"__{unary_op}__"
             # the result of these operators usually has the same shape and dtype as the input,
             # so evaluation on the meta tensor can be skipped.
             namespace[attr_name] = mk_wrap(attr_name, meta_noop=True)
@@ -133,12 +138,22 @@ class LazyBase(ABC, metaclass=LazyMeta):
                     if isinstance(meta_noop, tuple):
                         dtype, shape = meta_noop
                         assert callable(shape)
-                        res = cls.meta_with_dtype_and_shape(dtype, shape(res.shape))
+                        res = cls.meta_with_dtype_and_shape(dtype, shape(res.shape))  # ty: ignore[call-top-callable]
                     else:
                         res = cls.meta_with_dtype_and_shape(meta_noop, res.shape)
 
             if isinstance(res, cls._tensor_type):
                 return cls(meta=cls.eager_to_meta(res), args=args, kwargs=kwargs, func=fn)
+            elif isinstance(res, tuple) and all(isinstance(t, cls._tensor_type) for t in res):
+                # share the evaluation between lazy tuple elements
+                shared_args: list = [args, None]
+
+                def eager_tuple_element(a: list[Any], i: int = 0, /, **kw) -> LazyBase:
+                    assert len(a) == 2
+                    if a[1] is None:
+                        a[1] = fn(*a[0], **kw)
+                    return a[1][i]
+                return tuple(cls(meta=cls.eager_to_meta(res[i]), args=(shared_args, i), kwargs=kwargs, func=eager_tuple_element) for i in range(len(res)))
             else:
                 del res  # not needed
                 # non-tensor return likely relies on the contents of the args

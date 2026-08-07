@@ -1,11 +1,14 @@
 // Warns users that this filename was deprecated, and provides a link for more information.
 
+#include <clocale>
 #include <cstdio>
 #include <string>
 #include <unordered_map>
 
 // Main
 int main(int argc, char** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     std::string filename = "main";
     if (argc >= 1) {
         filename = argv[0];
@@ -28,7 +31,7 @@ int main(int argc, char** argv) {
     fprintf(stdout, "\n");
     fprintf(stdout, "WARNING: The binary '%s' is deprecated.\n", filename.c_str());
     fprintf(stdout, " Please use '%s' instead.\n", replacement_filename.c_str());
-    fprintf(stdout, " See https://github.com/ggerganov/llama.cpp/tree/master/examples/deprecation-warning/README.md for more information.\n");
+    fprintf(stdout, " See https://github.com/ggml-org/llama.cpp/tree/master/examples/deprecation-warning/README.md for more information.\n");
     fprintf(stdout, "\n");
 
     return EXIT_FAILURE;

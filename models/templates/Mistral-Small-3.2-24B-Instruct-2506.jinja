@@ -1,0 +1,124 @@
+{%- set today = strftime_now("%Y-%m-%d") %}
+{%- set default_system_message = "You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.\nYour knowledge base was last updated on 2023-10-01. The current date is " + today + ".\n\nWhen you're not sure about some information or when the user's request requires up-to-date or specific data, you must use the available tools to fetch the information. Do not hesitate to use tools whenever they can provide a more accurate or complete response. If no relevant tools are available, then clearly state that you don't have the information and avoid making up anything.
+
+If the user's question is not clear, ambiguous, or does not provide enough context for you to accurately answer the question, you do not try to answer it right away and you rather ask the user to clarify their request (e.g. \"What are some good restaurants around me?\" => \"Where are you?\" or \"When is the next flight to Tokyo\" => \"Where do you travel from?\").
+You are always very attentive to dates, and when asked about information at specific dates, you discard information that is at another date.
+You follow these instructions in all languages, and always respond to the user in the language they use or request.
+Next sections describe the capabilities that you have.
+
+# WEB BROWSING INSTRUCTIONS
+
+You cannot perform any web search or access internet to open URLs, links etc. If it seems like the user is expecting you to do so, you clarify the situation and ask the user to copy paste the text directly in the chat.
+
+# MULTI-MODAL INSTRUCTIONS
+
+You have the ability to read images, but you cannot generate images. You also cannot transcribe audio files or videos.
+You cannot read nor transcribe audio files or videos.
+
+# TOOL CALLING INSTRUCTIONS
+
+You may have access to tools that you can use to fetch information or perform actions. You must use these tools in the following situations:
+
+1. When the request requires up-to-date information.
+2. When the request requires specific data that you do not have in your knowledge base.
+3. When the request involves actions that you cannot perform without tools.
+
+Always prioritize using tools to provide the most accurate and helpful response. If tools are not available, inform the user that you cannot perform the requested action at the moment." %}
+
+{{- bos_token }}
+
+{%- set system_prompt = default_system_message %}
+{%- set loop_messages = messages %}
+
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{%- if messages|length > 0 and messages[0]['role'] == 'system' %}
+    {%- if messages[0]['content'] is string %}
+        {%- set system_prompt = messages[0]['content'] %}
+    {%- else %}
+        {%- set system_prompt = messages[0]['content'][0]['text'] %}
+    {%- endif %}
+    {%- set loop_messages = messages[1:] %}
+{%- endif %}
+
+{%- set user_messages = loop_messages | selectattr("role", "equalto", "user") | list %}
+
+{%- set ns = namespace(index=0) %}
+{%- for message in loop_messages %}
+    {%- if not (message.role == "tool" or (message.get('tool_calls'))) %}
+        {%- if (message["role"] == "user") != (ns.index % 2 == 0) %}
+            {{- raise_exception("After the optional system message, conversation roles must alternate user/assistant/user/assistant/...") }}
+        {%- endif %}
+        {%- set ns.index = ns.index + 1 %}
+    {%- endif %}
+{%- endfor %}
+
+{{- '[SYSTEM_PROMPT]' + system_prompt + '[/SYSTEM_PROMPT]' }}
+
+{%- for message in loop_messages %}
+    {%- if message['role'] == 'system' %}
+        {%- if message['content'] is string %}
+            {{- '[SYSTEM_PROMPT]' + message['content'] + '[/SYSTEM_PROMPT]' }}
+        {%- else %}
+            {{- '[SYSTEM_PROMPT]' + message['content'][0]['text'] + '[/SYSTEM_PROMPT]' }}
+        {%- endif %}
+    {%- elif message['role'] == 'user' %}
+        {%- if tools is not none and (message == user_messages[-1]) %}
+            {{- '[AVAILABLE_TOOLS]' + tools|tojson + '[/AVAILABLE_TOOLS]' }}
+        {%- endif %}
+        {{- '[INST]' }}
+        {%- if message['content'] is string %}
+            {{- message['content'] }}
+        {%- else %}
+            {%- for block in message['content'] %}
+                {%- if block['type'] == 'text' %}
+                    {{- block['text'] }}
+                {%- elif block['type'] in ['image', 'image_url'] %}
+                    {{- '[IMG]' }}
+                {%- else %}
+                    {{- raise_exception('Only text and image blocks are supported in message content!') }}
+                {%- endif %}
+            {%- endfor %}
+        {%- endif %}
+        {{- '[/INST]' }}
+    {%- elif message['role'] == 'assistant' %}
+        {%- if message.get('tool_calls') %}
+            {%- for tool_call in message.tool_calls %}
+                {{- '[TOOL_CALLS]' + tool_call.function.name }}
+                {%- if not tool_call.id is defined or tool_call.id is not string or tool_call.id|length != 9 %}
+                    {{- raise_exception("Tool call IDs should be alphanumeric strings with length 9!") }}
+                {%- endif %}
+                {{- '[CALL_ID]' + tool_call.id }}
+                {{- '[ARGS]' + tool_call['function']['arguments']|tojson }}
+            {%- endfor %}
+            {{- eos_token }}
+        {%- elif message['content'] is string %}
+            {{- message['content'] + eos_token }}
+        {%- else %}
+            {%- for block in message['content'] %}
+                {%- if block['type'] == 'text' %}
+                    {{- block['text'] }}
+                {%- elif block['type'] in ['image', 'image_url'] %}
+                    {{- '[IMG]' }}
+                {%- else %}
+                    {{- raise_exception('Only text and image blocks are supported in assistant content!') }}
+                {%- endif %}
+            {%- endfor %}
+            {{- eos_token }}
+        {%- endif %}
+    {%- elif message['role'] == 'tool_results' or message['role'] == 'tool' %}
+        {%- if message.content is defined and message.content.content is defined %}
+            {%- set content = message.content.content %}
+        {%- else %}
+            {%- set content = message.content %}
+        {%- endif %}
+        {%- if not message.tool_call_id is defined or message.tool_call_id is not string or message['tool_call_id']|length != 9 %}
+            {{- raise_exception("Tool call IDs should be alphanumeric strings with length 9!") }}
+        {%- endif %}
+        {{- '[TOOL_RESULTS]' + message.tool_call_id + '[TOOL_CONTENT]' + content|string + '[/TOOL_RESULTS]' }}
+    {%- else %}
+        {{- raise_exception('Only system, user, assistant, and tool roles are supported!') }}
+    {%- endif %}
+{%- endfor %}

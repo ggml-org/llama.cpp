@@ -1,6 +1,6 @@
 //
 // MIT license
-// Copyright (C) 2024 Intel Corporation
+// Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: MIT
 //
 
@@ -15,9 +15,9 @@
 
 #include "common.hpp"
 
-void ggml_sycl_op_im2col(
-        ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-        ggml_tensor *dst, const float *src0_dd, const float *src1_dd, float *dst_dd,
-        const queue_ptr &main_stream);
+#define SYCL_IM2COL_BLOCK_SIZE 256
+
+void ggml_sycl_op_im2col(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_op_im2col_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 #endif // GGML_SYCL_IM2COL_HPP

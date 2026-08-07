@@ -17,10 +17,10 @@ Version:        %( date "+%%Y%%m%%d" )
 Release:        1%{?dist}
 Summary:        CPU Inference of LLaMA model in pure C/C++ (no CUDA/OpenCL)
 License:        MIT
-Source0:        https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.tar.gz
+Source0:        https://github.com/ggml-org/llama.cpp/archive/refs/heads/master.tar.gz
 BuildRequires:  coreutils make gcc-c++ git cuda-toolkit
 Requires:       cuda-toolkit
-URL:            https://github.com/ggerganov/llama.cpp
+URL:            https://github.com/ggml-org/llama.cpp
 
 %define debug_package %{nil}
 %define source_date_epoch_from_changelog 0
@@ -37,6 +37,7 @@ make -j GGML_CUDA=1
 %install
 mkdir -p %{buildroot}%{_bindir}/
 cp -p llama-cli %{buildroot}%{_bindir}/llama-cuda-cli
+cp -p llama-completion %{buildroot}%{_bindir}/llama-cuda-completion
 cp -p llama-server %{buildroot}%{_bindir}/llama-cuda-server
 cp -p llama-simple %{buildroot}%{_bindir}/llama-cuda-simple
 
@@ -68,6 +69,7 @@ rm -rf %{_builddir}/*
 
 %files
 %{_bindir}/llama-cuda-cli
+%{_bindir}/llama-cuda-completion
 %{_bindir}/llama-cuda-server
 %{_bindir}/llama-cuda-simple
 /usr/lib/systemd/system/llamacuda.service

@@ -2,11 +2,13 @@
 import logging
 import sys
 from pathlib import Path
-from gguf.gguf_reader import GGUFReader
 
 logger = logging.getLogger("reader")
 
+# Necessary to load the local gguf package
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from gguf.gguf_reader import GGUFReader
 
 
 def read_gguf_file(gguf_file_path):

@@ -1,0 +1,56 @@
+
+#!/usr/bin/env pwsh
+
+# Basedir on device
+$basedir=".\pkg-snapdragon"
+
+if ($args.Count -eq 0) {
+    Write-Host "No arguments provided.Expected the tool and argument to run."
+    exit -1
+}
+
+$tool=$args[0]
+$cli_opts=@()
+
+if ($args.Count -gt 1) {
+    $cli_opts=$args[1..($args.Count - 1)]
+    $remainingArgs = $args[1..($args.Count - 1)]
+}
+
+$device="HTP0"
+if ($null -ne $env:D) {
+    $device=$env:D
+}
+
+if ($null -ne $env:V) {
+    $env:GGML_HEXAGON_VERBOSE=$env:V
+}
+
+if ($null -ne $env:SCHED) {
+    $env:GGML_SCHED_DEBUG=$env:SCHED; $cli_opts="$cli_opts -v"
+}
+
+if ($null -ne $env:PROF) {
+    $env:GGML_HEXAGON_PROFILE=$env:PROF
+}
+
+if ($null -ne $env:OPSTAGE) {
+    $env:GGML_HEXAGON_OPSTAGE=$env:OPSTAGE
+}
+
+if ($null -ne $env:NHVX) {
+    $env:GGML_HEXAGON_NHVX=$env:NHVX
+}
+
+if ($null -ne $env:NDEV) {
+    $env:GGML_HEXAGON_NDEV=$env:NDEV
+}
+
+if ($null -ne $env:HB) {
+    $env:GGML_HEXAGON_HOSTBUF=$env:HB
+}
+
+$env:ADSP_LIBRARY_PATH="$basedir\lib"
+
+& "$basedir\bin\$tool" `
+    $cli_opts

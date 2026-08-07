@@ -6,6 +6,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <clocale>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -13,28 +14,28 @@
 #include <vector>
 
 int main(int argc, char ** argv){
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_LOOKUP)) {
         return 1;
     }
 
-    common_init();
-
     // max. number of additional tokens to draft if match is found
-    const int n_draft = params.speculative.n_max;
-
-    const bool dump_kv_cache = params.dump_kv_cache;
+    const int n_draft = params.speculative.draft.n_max;
 
     // init llama.cpp
     llama_backend_init();
     llama_numa_init(params.numa);
 
     // load the model
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model.get();
-    llama_context * ctx = llama_init.context.get();
+    auto * model = llama_init->model();
+    auto * ctx   = llama_init->context();
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -53,18 +54,18 @@ int main(int argc, char ** argv){
         const int64_t t_start_draft_us = ggml_time_us();
         common_ngram_cache_update(ngram_cache_context, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX, inp, inp.size(), false);
 
-        if (!params.lookup_cache_static.empty()) {
+        if (!params.speculative.ngram_cache.lookup_cache_static.empty()) {
             try {
-                ngram_cache_static = common_ngram_cache_load(params.lookup_cache_static);
+                ngram_cache_static = common_ngram_cache_load(params.speculative.ngram_cache.lookup_cache_static);
             } catch (std::ifstream::failure const &) {
-                LOG_ERR("failed to open static lookup cache: %s", params.lookup_cache_static.c_str());
+                LOG_ERR("failed to open static lookup cache: %s", params.speculative.ngram_cache.lookup_cache_static.c_str());
                 exit(1);
             }
         }
 
-        if (!params.lookup_cache_dynamic.empty()) {
+        if (!params.speculative.ngram_cache.lookup_cache_dynamic.empty()) {
             try {
-                ngram_cache_dynamic = common_ngram_cache_load(params.lookup_cache_dynamic);
+                ngram_cache_dynamic = common_ngram_cache_load(params.speculative.ngram_cache.lookup_cache_dynamic);
             } catch (std::ifstream::failure const &) {} // if the file does not exist it will simply be created at the end of the program
         }
 
@@ -108,20 +109,11 @@ int main(int argc, char ** argv){
 
     std::vector<llama_token> draft;
 
-    llama_batch batch_tgt = llama_batch_init(params.n_ctx, 0, 1);
-
-    // debug
-    struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, 1);
+    llama_batch batch_tgt = llama_batch_init(llama_n_ctx(ctx), 0, 1);
 
     const auto t_dec_start = ggml_time_us();
 
     while (true) {
-        // debug
-        if (dump_kv_cache) {
-            llama_kv_cache_view_update(ctx, &kvc_view);
-            common_kv_cache_dump_view_seqs(kvc_view, 40);
-        }
-
         // print current draft sequence
         LOG_DBG("drafted %s\n", string_from(ctx, draft).c_str());
 
@@ -192,7 +184,7 @@ int main(int argc, char ** argv){
 
         // KV cache management
         // clean the cache of draft tokens that weren't accepted
-        llama_kv_cache_seq_rm(ctx, 0, n_past, -1);
+        llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past, -1);
 
         common_batch_clear(batch_tgt);
         common_batch_add(batch_tgt, draft[0], n_past, { 0 }, true);
@@ -221,7 +213,7 @@ int main(int argc, char ** argv){
 
     // Update dynamic ngram cache with context ngram cache and save it to disk:
     common_ngram_cache_merge(ngram_cache_dynamic, ngram_cache_context);
-    common_ngram_cache_save(ngram_cache_dynamic, params.lookup_cache_dynamic);
+    common_ngram_cache_save(ngram_cache_dynamic, params.speculative.ngram_cache.lookup_cache_dynamic);
 
     LOG("\n\n");
 

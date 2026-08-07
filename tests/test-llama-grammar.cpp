@@ -3,7 +3,8 @@
 #endif
 
 #include "llama.h"
-#include "llama-grammar.h"
+
+#include "../src/llama-grammar.h"
 
 #include <cassert>
 #include <stdexcept>
@@ -122,7 +123,23 @@ int main()
 
     std::vector<std::vector<llama_grammar_element>> expected_stacks = {
         {
-            {LLAMA_GRETYPE_RULE_REF, 5},
+            {LLAMA_GRETYPE_CHAR, 61},
+            {LLAMA_GRETYPE_RULE_REF, 7},
+            {LLAMA_GRETYPE_CHAR, 40},
+        },
+        {
+            {LLAMA_GRETYPE_CHAR, 61},
+            {LLAMA_GRETYPE_RULE_REF, 7},
+            {LLAMA_GRETYPE_RULE_REF, 3},
+            {LLAMA_GRETYPE_CHAR, 48},
+        },
+        {
+            {LLAMA_GRETYPE_CHAR, 61},
+            {LLAMA_GRETYPE_RULE_REF, 7},
+            {LLAMA_GRETYPE_RULE_REF, 3},
+            {LLAMA_GRETYPE_CHAR, 48},
+        },
+        {
             {LLAMA_GRETYPE_CHAR, 61},
             {LLAMA_GRETYPE_RULE_REF, 7},
             {LLAMA_GRETYPE_CHAR, 97},
@@ -131,43 +148,27 @@ int main()
             {LLAMA_GRETYPE_RULE_REF, 5},
             {LLAMA_GRETYPE_CHAR, 61},
             {LLAMA_GRETYPE_RULE_REF, 7},
-            {LLAMA_GRETYPE_RULE_REF, 3},
-            {LLAMA_GRETYPE_CHAR, 48},
-        },
-        {
-            {LLAMA_GRETYPE_RULE_REF, 5},
-            {LLAMA_GRETYPE_CHAR, 61},
-            {LLAMA_GRETYPE_RULE_REF, 7},
-            {LLAMA_GRETYPE_RULE_REF, 3},
-            {LLAMA_GRETYPE_CHAR, 48},
-        },
-        {
-            {LLAMA_GRETYPE_RULE_REF, 5},
-            {LLAMA_GRETYPE_CHAR, 61},
-            {LLAMA_GRETYPE_RULE_REF, 7},
             {LLAMA_GRETYPE_CHAR, 40},
         },
         {
+            {LLAMA_GRETYPE_RULE_REF, 5},
+            {LLAMA_GRETYPE_CHAR, 61},
+            {LLAMA_GRETYPE_RULE_REF, 7},
+            {LLAMA_GRETYPE_RULE_REF, 3},
+            {LLAMA_GRETYPE_CHAR, 48},
+        },
+        {
+            {LLAMA_GRETYPE_RULE_REF, 5},
+            {LLAMA_GRETYPE_CHAR, 61},
+            {LLAMA_GRETYPE_RULE_REF, 7},
+            {LLAMA_GRETYPE_RULE_REF, 3},
+            {LLAMA_GRETYPE_CHAR, 48},
+        },
+        {
+            {LLAMA_GRETYPE_RULE_REF, 5},
             {LLAMA_GRETYPE_CHAR, 61},
             {LLAMA_GRETYPE_RULE_REF, 7},
             {LLAMA_GRETYPE_CHAR, 97},
-        },
-        {
-            {LLAMA_GRETYPE_CHAR, 61},
-            {LLAMA_GRETYPE_RULE_REF, 7},
-            {LLAMA_GRETYPE_RULE_REF, 3},
-            {LLAMA_GRETYPE_CHAR, 48},
-        },
-        {
-            {LLAMA_GRETYPE_CHAR, 61},
-            {LLAMA_GRETYPE_RULE_REF, 7},
-            {LLAMA_GRETYPE_RULE_REF, 3},
-            {LLAMA_GRETYPE_CHAR, 48},
-        },
-        {
-            {LLAMA_GRETYPE_CHAR, 61},
-            {LLAMA_GRETYPE_RULE_REF, 7},
-            {LLAMA_GRETYPE_CHAR, 40},
         }};
 
     auto index = 0;
@@ -194,14 +195,14 @@ int main()
     }
 
     std::vector<llama_grammar_candidate> next_candidates;
-    next_candidates.resize(24);
+    next_candidates.resize(23);
 
-    for (size_t i = 0; i < 24; ++i)
+    for (size_t i = 0; i < 23; ++i)
     {
         uint32_t *cp = new uint32_t[2]; // dynamically allocate memory for code_point
         cp[0] = 37 + i;
         cp[1] = 0;
-        next_candidates[i] = {i, cp, {}};
+        next_candidates[i] = {i, cp, {}, 0};
     }
 
     std::vector<std::vector<std::pair<uint32_t, uint16_t>>> expected_reject = {
@@ -209,7 +210,6 @@ int main()
             {0, 37},
             {1, 38},
             {2, 39},
-            {3, 40},
             {4, 41},
             {5, 42},
             {6, 43},
@@ -267,6 +267,31 @@ int main()
             {0, 37},
             {1, 38},
             {2, 39},
+            {3, 40},
+            {4, 41},
+            {5, 42},
+            {6, 43},
+            {7, 44},
+            {8, 45},
+            {9, 46},
+            {10, 47},
+            {11, 48},
+            {12, 49},
+            {13, 50},
+            {14, 51},
+            {15, 52},
+            {16, 53},
+            {17, 54},
+            {18, 55},
+            {19, 56},
+            {20, 57},
+            {21, 58},
+            {22, 59},
+        },
+        {
+            {0, 37},
+            {1, 38},
+            {2, 39},
             {4, 41},
             {5, 42},
             {6, 43},
@@ -300,16 +325,6 @@ int main()
             {8, 45},
             {9, 46},
             {10, 47},
-            {11, 48},
-            {12, 49},
-            {13, 50},
-            {14, 51},
-            {15, 52},
-            {16, 53},
-            {17, 54},
-            {18, 55},
-            {19, 56},
-            {20, 57},
             {21, 58},
             {22, 59},
             {23, 60},
@@ -342,21 +357,6 @@ int main()
             {8, 45},
             {9, 46},
             {10, 47},
-            {21, 58},
-            {22, 59},
-            {23, 60},
-        },
-        {
-            {0, 37},
-            {1, 38},
-            {2, 39},
-            {4, 41},
-            {5, 42},
-            {6, 43},
-            {7, 44},
-            {8, 45},
-            {9, 46},
-            {10, 47},
             {11, 48},
             {12, 49},
             {13, 50},
@@ -369,7 +369,6 @@ int main()
             {20, 57},
             {21, 58},
             {22, 59},
-            {23, 60},
         },
     };
 

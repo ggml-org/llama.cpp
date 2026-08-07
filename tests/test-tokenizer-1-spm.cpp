@@ -1,7 +1,8 @@
 #include "llama.h"
 #include "common.h"
-#include "unicode.h"
 #include "console.h"
+
+#include "../src/unicode.h"
 
 #include <cassert>
 #include <codecvt>
@@ -115,8 +116,8 @@ int main(int argc, char ** argv) {
         }
     }
 
-    llama_model_free(model);
     llama_free(ctx);
+    llama_model_free(model);
 
     llama_backend_free();
 

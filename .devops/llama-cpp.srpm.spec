@@ -18,10 +18,10 @@ Version:        %( date "+%%Y%%m%%d" )
 Release:        1%{?dist}
 Summary:        CPU Inference of LLaMA model in pure C/C++ (no CUDA/OpenCL)
 License:        MIT
-Source0:        https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.tar.gz
+Source0:        https://github.com/ggml-org/llama.cpp/archive/refs/heads/master.tar.gz
 BuildRequires:  coreutils make gcc-c++ git libstdc++-devel
 Requires:       libstdc++
-URL:            https://github.com/ggerganov/llama.cpp
+URL:            https://github.com/ggml-org/llama.cpp
 
 %define debug_package %{nil}
 %define source_date_epoch_from_changelog 0
@@ -39,6 +39,7 @@ make -j
 %install
 mkdir -p %{buildroot}%{_bindir}/
 cp -p llama-cli %{buildroot}%{_bindir}/llama-cli
+cp -p llama-completion %{buildroot}%{_bindir}/llama-completion
 cp -p llama-server %{buildroot}%{_bindir}/llama-server
 cp -p llama-simple %{buildroot}%{_bindir}/llama-simple
 
@@ -70,6 +71,7 @@ rm -rf %{_builddir}/*
 
 %files
 %{_bindir}/llama-cli
+%{_bindir}/llama-completion
 %{_bindir}/llama-server
 %{_bindir}/llama-simple
 /usr/lib/systemd/system/llama.service

@@ -8,6 +8,7 @@
  - [DataType Supports](#datatype-supports)
  - [Docker](#docker)
  - [Linux](#linux)
+ - [Environment variable setup](#environment-variable-setup)
  - [TODO](#todo)
 
 
@@ -19,7 +20,7 @@
 
 **Llama.cpp + CANN**
 
-The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the ability of AscendC and ACLNN which are intergrated to CANN Toolkit and kernels to using Ascend NPU directly.
+The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the ability of AscendC and ACLNN which are integrated to CANN Toolkit and kernels to using Ascend NPU directly.
 
 ## News
 
@@ -41,12 +42,22 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 ### Ascend NPU
 
-**Verified devices**
+You can retrieve your Ascend device IDs using the following command:
 
-| Ascend NPU                    | Status  |
-|:-----------------------------:|:-------:|
-| Atlas 300T A2                 | Support |
-| Atlas 300I Duo                | Support |
+```sh
+lspci -n | grep -Eo '19e5:d[0-9a-f]{3}' | cut -d: -f2
+```
+
+**Devices**
+
+| Device Id | Product Series | Product Models | Chip Model | Verified Status |
+|:---------:|----------------|----------------|:----------:|:---------------:|
+|    d803   | Atlas A3 Train |                |    910C    |                 |
+|    d803   | Atlas A3 Infer |                |    910C    |                 |
+|    d802   | Atlas A2 Train |                |    910B    |                 |
+|    d802   | Atlas A2 Infer | Atlas 300I A2  |    910B    |     Support     |
+|    d801   | Atlas Train    |                |     910    |                 |
+|    d500   | Atlas Infer    | Atlas 300I Duo |    310P    |     Support     |
 
 *Notes:*
 
@@ -56,70 +67,105 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 ## Model Supports
 
-| Model Name                  | FP16  | Q8_0 | Q4_0 |
+<details>
+<summary>Text-only</summary>
+
+| Model Name                  | FP16  | Q4_0 | Q8_0 |
 |:----------------------------|:-----:|:----:|:----:|
-| AquilaChat2-7B              |   √   |   √  |   √  |
-| Baichuan-7b                 |   √   |   √  |   √  |
-| Baichuan2-7B-Chat           |   √   |   √  |   √  |
-| bitnet_b1_58-large          |   √   |   √  |   √  |
-| bloom-560m                  |   √   |   x  |   √  |
-| bloomz-alpaca-560m          |   √   |   x  |   √  |
-| c4ai-command-r-35B-v01      |   x   |   x  |   x  |
-| chatglm3-6B                 |   x   |   x  |   x  |
-| chinese-alpaca-2-1.3b       |   √   |   √  |   √  |
-| CodeShell-7B                |   √   |   √  |   √  |
-| deepseek-ai_deepseek-coder-1.3B-base | x |   x  |   x  |
-| deepseek-ai_DeepSeek-V2-Lite | x   |   x  |   x   |
-| deepseek-coder-6.7B-instruct | x   |   x  |   x   |
-| DeepSeek-V2-Lite-64x1.5B    |   x   |   x  |   x  |
-| falcon-7b-instruct          |   √   |   √  |   √  |
-| flan-t5-large               |   √   |   √  |   √  |
-| gemma-2-9b-it               |   √   |   √  |   √  |
-| glm-4-9B                    |   x   |   x  |   x  |
-| gpt2                        |   √   |   √  |   √  |
-| Gpt2-163M                   |   √   |   √  |   √  |
-| granite-3B-code-instruct    |   √   |   √  |   √  |
+| Llama-2                     |   √   |   √  |   √  |
+| Llama-3                     |   √   |   √  |   √  |
+| Mistral-7B                  |   √   |   √  |   √  |
+| Mistral MOE                 |   √   |   √  |   √  |
+| DBRX                        |   -   |   -  |   -  |
+| Falcon                      |   √   |   √  |   √  |
+| Chinese LLaMA/Alpaca        |   √   |   √  |   √  |
+| Vigogne(French)             |   √   |   √  |   √  |
+| BERT                        |   x   |   x  |   x  |
+| Koala                       |   √   |   √  |   √  |
+| Baichuan                    |   √   |   √  |   √  |
+| Aquila 1 & 2                |   √   |   √  |   √  |
+| Starcoder models            |   √   |   √  |   √  |
+| Refact                      |   √   |   √  |   √  |
+| MPT                         |   √   |   √  |   √  |
+| Bloom                       |   √   |   √  |   √  |
+| Yi models                   |   √   |   √  |   √  |
+| stablelm models             |   √   |   √  |   √  |
+| DeepSeek models             |   x   |   x  |   x  |
+| Qwen models                 |   √   |   √  |   √  |
+| PLaMo-13B                   |   √   |   √  |   √  |
+| Phi models                  |   √   |   √  |   √  |
+| PhiMoE                      |   √   |   √  |   √  |
+| GPT-2                       |   √   |   √  |   √  |
+| Orion                       |   √   |   √  |   √  |
+| InternlLM2                  |   √   |   √  |   √  |
+| CodeShell                   |   √   |   √  |   √  |
+| Gemma                       |   √   |   √  |   √  |
+| Mamba                       |   √   |   √  |   √  |
+| Xverse                      |   √   |   √  |   √  |
+| command-r models            |   √   |   √  |   √  |
+| Grok-1                      |   -   |   -  |   -  |
+| SEA-LION                    |   √   |   √  |   √  |
 | GritLM-7B                   |   √   |   √  |   √  |
-| internlm2_5-7b-chat         |   √   |   √  |   √  |
-| koala-7B-HF                 |   √   |   √  |   √  |
-| Llama-2-7b-chat-hf          |   √   |   √  |   √  |
-| Llama-3-Smaug-8B            |   √   |   √  |   √  |
-| Llama2-Chinese-7b-Chat      |   √   |   √  |   √  |
-| Llama3-8B                   |   √   |   √  |   √  |
-| Llama3-8b-chinese           |   √   |   √  |   √  |
-| mamba-130m-hf               |   √   |   √  |   √  |
-| Mistral-7B-Instruct-v0.2    |   √   |   √  |   √  |
-| Mixtral-8x7B-Instruct-v0.1  |   x   |   √  |   √  |
-| mpt-7B                      |   √   |   √  |   √  |
-| OLMo-1B-hf                  |   √   |   √  |   √  |
-| OpenELM-3B-Instruct         |   √   |   √  |   √  |
-| Orion-14b-base              |   √   |   √  |   √  |
-| phi1                        |   x   |   x  |   x  |
-| phi2                        |   x   |   x  |   x  |
-| Phi-3-mini-4k-instruct      |   √   |   √  |   √  |
-| plamo-13b                   |   √   |   √  |   √  |
-| pythia-70M                  |   x   |   x  |   x  |
-| Qwen-7B                     |   √   |   √  |   √  |
-| Qwen2-1.5B-Instruct         |   √   |   x  |   √  |
-| Refact-1_6B-fim             |   √   |   √  |   √  |
-| SmolLM-135M                 |   √   |   √  |   √  |
-| stablelm-zephyr             |   x   |   x  |   x  |
-| stablelm-2-zephyr-1_6b      |   x   |   x  |   x  |
-| starcoderbase-1b            |   √   |   √  |   √  |
-| starcoder2-3b               |   √   |   √  |   √  |
-| vigogne-7b-chat             |   √   |   √  |   √  |
-| xverse-7b-chat              |   √   |   √  |   √  |
-| Yi-6b-Chat                  |   √   |   √  |   √  |
+| OLMo                        |   √   |   √  |   √  |
+| OLMo 2                      |   √   |   √  |   √  |
+| OLMoE                       |   √   |   √  |   √  |
+| Granite models              |   √   |   √  |   √  |
+| GPT-NeoX                    |   √   |   √  |   √  |
+| Pythia                      |   √   |   √  |   √  |
+| Snowflake-Arctic MoE        |   -   |   -  |   -  |
+| Smaug                       |   √   |   √  |   √  |
+| Poro 34B                    |   √   |   √  |   √  |
+| Bitnet b1.58 models         |   √   |   x  |   x  |
+| Flan-T5                     |   √   |   √  |   √  |
+| Open Elm models             |   x   |   √  |   √  |
+| chatGLM3-6B + ChatGLM4-9b +  GLMEdge-1.5b + GLMEdge-4b    |   √   |   √  |   √  |
+| GLM-4-0414                  |   √   |   √  |   √  |
+| SmolLM                      |   √   |   √  |   √  |
+| EXAONE-3.0-7.8B-Instruct    |   √   |   √  |   √  |
+| FalconMamba Models          |   √   |   √  |   √  |
+| Jais Models                 |   -   |   x  |   x  |
+| Bielik-11B-v2.3             |   √   |   √  |   √  |
+| RWKV-6                      |   -   |   √  |   √  |
+| QRWKV-6                     |   √   |   √  |   √  |
+| GigaChat-20B-A3B            |   x   |   x  |   x  |
+| Trillion-7B-preview         |   √   |   √  |   √  |
+| Ling models                 |   √   |   √  |   √  |
+
+</details>
+
+<details>
+<summary>Multimodal</summary>
+
+| Model Name                  | FP16  | Q4_0 | Q8_0 |
+|:----------------------------|:-----:|:----:|:----:|
+| LLaVA 1.5 models, LLaVA 1.6 models      |   x   |   x  |   x  |
+|  BakLLaVA                   |   √   |   √  |   √  |
+|  Obsidian                   |   √   |   -  |   -  |
+|  ShareGPT4V                 |   x   |   -  |   -  |
+|  MobileVLM 1.7B/3B models   |   -   |   -  |   -  |
+|  Yi-VL                      |   -   |   -  |   -  |
+|  Mini CPM                   |   √   |   √  |   √  |
+|  Moondream                  |   √   |   √  |   √  |
+|  Bunny                      |   √   |   -  |   -  |
+|  GLM-EDGE                   |   √   |   √  |   √  |
+|  Qwen2-VL                   |   √   |   √  |   √  |
+
+</details>
 
 
 
 ## DataType Supports
 
-| DataType               | Status  |
-|:----------------------:|:-------:|
-| FP16                   | Support |
-| Q8_0                   | Support |
-| Q4_0                   | Support |
+| DataType               | 910B    | 310P    |
+|:----------------------:|:-------:|:-------:|
+| FP16                   | Support | Support |
+| Q8_0                   | Support | Partial |
+| Q4_0                   | Support | Partial |
+| BF16                   | Support |         |
+
+> **310P note**
+> - `Q8_0`: data transform / buffer path is implemented, and `GET_ROWS` is supported, but quantized `MUL_MAT` / `MUL_MAT_ID` are not supported.
+> - `Q4_0`: data transform / buffer path is implemented, but quantized `MUL_MAT` / `MUL_MAT_ID` are not supported.
 
 ## Docker
 
@@ -137,7 +183,20 @@ npu-smi info
 
 # Select the cards that you want to use, make sure these cards are not used by someone.
 # Following using cards of device0.
-docker run --name llamacpp --device /dev/davinci0  --device /dev/davinci_manager --device /dev/devmm_svm --device /dev/hisi_hdc -v /usr/local/dcmi:/usr/local/dcmi -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info -v /PATH_TO_YOUR_MODELS/:/app/models -it llama-cpp-cann -m /app/models/MODEL_PATH -ngl 32 -p "Building a website can be done in 10 simple steps:"
+docker run --name llamacpp \
+  --device /dev/davinci0 \
+  --device /dev/davinci_manager \
+  --device /dev/devmm_svm \
+  --device /dev/hisi_hdc \
+  -v /usr/local/dcmi:/usr/local/dcmi \
+  -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
+  -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
+  -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
+  -v /PATH_TO_YOUR_MODELS/:/app/models \
+  -it llama-cpp-cann \
+  -m /app/models/MODEL_PATH \
+  -ngl 32 \
+  -p "Building a website can be done in 10 simple steps:"
 ```
 
 *Notes:*
@@ -148,69 +207,57 @@ docker run --name llamacpp --device /dev/davinci0  --device /dev/davinci_manager
 
 ### I. Setup Environment
 
-1. **Install Ascend Driver and firmware**
+1. **Configure Ascend user and group**
 
     ```sh
-    # create driver running user.
-    sudo groupadd -g HwHiAiUser
+    sudo groupadd HwHiAiUser
     sudo useradd -g HwHiAiUser -d /home/HwHiAiUser -m HwHiAiUser -s /bin/bash
     sudo usermod -aG HwHiAiUser $USER
-
-    # download driver from https://www.hiascend.com/hardware/firmware-drivers/community according to your system
-    # and install driver.
-    sudo sh Ascend-hdk-910b-npu-driver_x.x.x_linux-{arch}.run --full --install-for-all
     ```
 
-    Once installed, run `npu-smi info` to check whether driver is installed successfully.
+2. **Install dependencies**
+
+    **Ubuntu/Debian:**
     ```sh
-    +-------------------------------------------------------------------------------------------+
-    | npu-smi 24.1.rc2               Version: 24.1.rc2                                          |
-    +----------------------+---------------+----------------------------------------------------+
-    | NPU   Name           | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
-    | Chip                 | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |
-    +======================+===============+====================================================+
-    | 2     xxx            | OK            | 64.4        51                15   / 15            |
-    | 0                    | 0000:01:00.0  | 0           1873 / 15077      0    / 32768         |
-    +======================+===============+====================================================+
-    | 5     xxx            | OK            | 64.0        52                15   / 15            |
-    | 0                    | 0000:81:00.0  | 0           1874 / 15077      0    / 32768         |
-    +======================+===============+====================================================+
-    | No running processes found in NPU 2                                                       |
-    +======================+===============+====================================================+
-    | No running processes found in NPU 5                                                       |
-    +======================+===============+====================================================+
+    sudo apt-get update
+    sudo apt-get install -y gcc python3 python3-pip linux-headers-$(uname -r)
     ```
 
-2. **Install Ascend Firmware**
+    **RHEL/CentOS:**
     ```sh
-    # download driver from https://www.hiascend.com/hardware/firmware-drivers/community according to your system
-    # and install driver.
-    sudo sh Ascend-hdk-910b-npu-firmware_x.x.x.x.X.run --full
+    sudo yum makecache
+    sudo yum install -y gcc python3 python3-pip kernel-headers-$(uname -r) kernel-devel-$(uname -r)
     ```
-    If the following messaage appers, firmware is installed successfully.
+
+3. **Install CANN (driver + toolkit)**
+
+    > The `Ascend-cann` package includes both the driver and toolkit.
+    > `$ARCH` can be `x86_64` or `aarch64`, `$CHIP` can be `910b` or `310p`.
+
     ```sh
-    Firmware package installed successfully!
+    wget https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%208.5.T63/Ascend-cann_8.5.0_linux-$ARCH.run
+    sudo bash ./Ascend-cann_8.5.0_linux-$ARCH.run --install
+
+    wget https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%208.5.T63/Ascend-cann-$CHIP-ops_8.5.0_linux-$ARCH.run
+    sudo bash ./Ascend-cann-$CHIP-ops_8.5.0_linux-$ARCH.run --install
     ```
 
+4. **Verify installation**
 
-3. **Install CANN toolkit and kernels**
-
-    CANN toolkit and kernels can be obtained from the official [CANN Toolkit](https://www.hiascend.com/zh/developer/download/community/result?module=cann) page.
-
-    Please download the corresponding version that satified your system. The minimum version required is 8.0.RC2.alpha002 and here is the install command.
     ```sh
-    pip3 install attrs numpy decorator sympy cffi pyyaml pathlib2 psutil protobuf scipy requests absl-py wheel typing_extensions
-    sh Ascend-cann-toolkit_8.0.RC2.alpha002_linux-aarch64.run --install
-    sh Ascend-cann-kernels-910b_8.0.RC2.alpha002_linux.run --install
+    npu-smi info
     ```
 
-    Set Ascend Variables:
+    If device information is displayed correctly, the driver is functioning properly.
+
     ```sh
-    echo "source ~/Ascend/ascend-toolkit/set_env.sh" >> ~/.bashrc
-    source ~/.bashrc
+    # Set environment variables (adjust path if needed)
+    source /usr/local/Ascend/cann/set_env.sh
+
+    python3 -c "import acl; print(acl.get_soc_name())"
     ```
 
-Upon a successful installation, CANN is enabled for the available ascend devices.
+    If the command outputs the chip model, the installation was successful.
 
 ### II. Build llama.cpp
 
@@ -223,7 +270,7 @@ cmake --build build --config release
 
 1. **Retrieve and prepare model**
 
-    You can refer to the general [*Prepare and Quantize*](../../README.md#prepare-and-quantize) guide for model prepration.
+    You can refer to the general [*Obtaining and quantizing models*](../../README.md#obtaining-and-quantizing-models) guide for model prepration.
 
     **Notes**:
 
@@ -258,6 +305,53 @@ cmake --build build --config release
 ### **GitHub contribution**:
 Please add the **[CANN]** prefix/tag in issues/PRs titles to help the CANN-team check/address them without delay.
 
+## Updates
+### Basic Flash Attention Support
+The basic FA kernel with aclnnops has been added in aclnn_ops.cpp.
+Currently, the FA only supports the cases with FP16 KV tensors and NO logit softcap.
+Since the aclnn interface for flash attention cannot support the logit softcap, we will only update the quantized version in the future.
 
-## TODO
-- Support more models and data types.
+Authors from Peking University: Bizhao Shi (bshi@pku.edu.cn), Yuxin Yang (yxyang@pku.edu.cn), Ruiyang Ma (ruiyang@stu.pku.edu.cn), and Guojie Luo (gluo@pku.edu.cn).
+
+We would like to thank Tuo Dai, Shanni Li, and all of the project maintainers from Huawei Technologies Co., Ltd for their help during the code development and pull request.
+
+## Environment variable setup
+
+### GGML_CANN_MEM_POOL
+
+Specifies the memory pool management strategy, Default is vmm.
+
+- vmm: Utilizes a virtual memory manager pool. If hardware support for VMM is unavailable, falls back to the legacy (leg) memory pool.
+
+- prio: Employs a priority queue-based memory pool management.
+
+- leg: Uses a fixed-size buffer pool.
+
+### GGML_CANN_DISABLE_BUF_POOL_CLEAN
+
+Controls automatic cleanup of the memory pool. This option is only effective when using the prio or leg memory pool strategies.
+
+### GGML_CANN_WEIGHT_NZ
+
+Converting the matmul weight format from ND to NZ to improve performance. Enabled by default.
+
+### GGML_CANN_ACL_GRAPH
+
+Operators are executed using ACL graph execution, rather than in op-by-op (eager) mode. Enabled by default. This option is only effective if `USE_ACL_GRAPH` was enabled at compilation time. To enable it, recompile using:
+
+```sh
+cmake -B build -DGGML_CANN=on -DCMAKE_BUILD_TYPE=release -DUSE_ACL_GRAPH=ON
+cmake --build build --config release
+```
+
+### GGML_CANN_GRAPH_CACHE_CAPACITY
+
+Maximum number of compiled CANN graphs kept in the LRU cache, default is 12. When the number of cached graphs exceeds this capacity, the least recently used graph will be evicted.
+
+### GGML_CANN_PREFILL_USE_GRAPH
+
+Enable ACL graph execution during the prefill stage, default is false. This option is only effective when FA is enabled.
+
+### GGML_CANN_OPERATOR_FUSION
+
+Enable operator fusion during computation, default is false. This option fuses compatible operators (e.g., ADD + RMS_NORM) to reduce overhead and improve performance.
