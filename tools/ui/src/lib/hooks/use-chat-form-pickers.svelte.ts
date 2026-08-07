@@ -76,10 +76,15 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	);
 
 	/**
-	 * Dispatch a selected slash command: consume the token and open the
-	 * target picker. `args` seeds the target search where applicable.
+	 * Dispatch a slash command picked from the list: consume the token and
+	 * open the target picker. `args` seeds the target search where
+	 * applicable. Runs only on explicit selection (Enter/click), so the
+	 * buffer is never cleared mid-typing.
 	 */
 	function dispatchCommand(command: ChatFormCommand, args: string) {
+		isCommandPickerOpen = false;
+		commandQuery = '';
+
 		switch (command.action) {
 			case ChatFormCommandAction.PROMPT:
 				isWorkingDirectoryPickerOpen = false;
@@ -87,12 +92,20 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				isPromptPickerOpen = true;
 				promptSearchQuery = args.trim();
 				break;
-			case ChatFormCommandAction.CWD:
+			case ChatFormCommandAction.CWD: {
 				// Keep `/cwd <args>` in the input so the search field and the
-				// token stay two-way bound while the picker is open.
-				workingDirectoryQuery = args.trim();
+				// token stay two-way bound while the picker is open. Normalize
+				// a partial token (e.g. `/cw foo`) to the full command name.
+				const trimmed = args.trim();
+				const newValue = `/cwd ${trimmed}`;
+				if (opts.getValue() !== newValue) {
+					opts.setValue(newValue);
+					queueMicrotask(() => opts.setCaretOffset(newValue.length));
+				}
+				workingDirectoryQuery = trimmed;
 				isWorkingDirectoryPickerOpen = true;
 				break;
+			}
 			case ChatFormCommandAction.MODEL:
 				isWorkingDirectoryPickerOpen = false;
 				opts.setValue('');
@@ -118,6 +131,21 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				return;
 			}
 
+			// While the `/cwd` picker is open the token doubles as its search
+			// field: keep the two in sync instead of re-dispatching.
+			if (isWorkingDirectoryPickerOpen) {
+				isCommandPickerOpen = false;
+				commandQuery = '';
+				if (token.name === 'cwd') {
+					workingDirectoryQuery = token.args.trim();
+				} else {
+					// Token edited away from `/cwd`: abandon the picker.
+					isWorkingDirectoryPickerOpen = false;
+					workingDirectoryQuery = '';
+				}
+				return;
+			}
+
 			// Dismissed token stays literal until it changes.
 			const isDismissedSticky =
 				commandDismissedSnapshot !== null &&
@@ -130,21 +158,9 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				return;
 			}
 
-			// Name complete once a space follows; exact match dispatches
-			// instantly, non-match falls through. Disabled never dispatches.
-			const nameComplete = token.args.length > 0 || value.endsWith(' ');
-			if (nameComplete) {
-				const command = availableCommands.find((c) => c.name === token.name);
-				if (command && !command.disabled) {
-					isCommandPickerOpen = false;
-					commandQuery = '';
-					dispatchCommand(command, token.args);
-					return;
-				}
-			}
-
-			// Name incomplete or unmatched: show the picker only when there
-			// is something to pick.
+			// Commands dispatch only on explicit selection (Enter/click),
+			// never mid-typing: `/model is broken` is prose until the user
+			// picks the command from the list.
 			if (availableCommands.length > 0) {
 				isCommandPickerOpen = true;
 				commandQuery = token.name;
@@ -214,10 +230,10 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	}
 
 	function handleCommandSelect(command: ChatFormCommand) {
-		// Complete the command name with a trailing space and let the normal
-		// input flow dispatch it (Enter on `/cw` behaves like typing `/cwd `).
-		opts.setValue(`/${command.name} `);
-		handleInput();
+		// Dispatch on the live token so typed args seed the target picker
+		// (e.g. `/prompt weather` opens the prompt search for `weather`).
+		const token = findCommandToken(opts.getValue());
+		dispatchCommand(command, token?.args ?? '');
 	}
 
 	/**
