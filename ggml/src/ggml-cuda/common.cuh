@@ -55,6 +55,14 @@ static_assert(sizeof(block_q8_1_layout<2 * QK8_1>) == 2 * sizeof(block_q8_1), "U
 static_assert(sizeof(block_q8_1_layout<4 * QK8_1>) == 4 * sizeof(block_q8_1), "Unexpected q8_1 x4 layout size");
 static_assert(sizeof(block_q8_1_layout<8 * QK8_1>) == 8 * sizeof(block_q8_1), "Unexpected q8_1 x8 layout size");
 
+// Experimental RDNA2 Q4_0 DOT8 correction sidecar. The ordinary 36-byte
+// block_q8_1 remains the activation payload; this stores only two sums of
+// signed high nibbles for its two 16-value halves.
+struct block_q8_1_sum_hi {
+    int8_t sum_hi[2];
+};
+static_assert(sizeof(block_q8_1_sum_hi) == 2, "Unexpected q8_1 sum_hi sidecar size");
+
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
