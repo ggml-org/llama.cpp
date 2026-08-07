@@ -34,7 +34,8 @@
 		preprocessLaTeX,
 		getImageErrorFallbackHtml,
 		copyCodeToClipboard,
-		copyToClipboard
+		copyToClipboard,
+		splitGluedClosingCodeFences
 	} from '$lib/utils';
 	import {
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
@@ -342,7 +343,11 @@
 	 * Incomplete code blocks are rendered using SyntaxHighlightedCode to maintain interactivity.
 	 * @param markdown - The raw markdown string to process
 	 */
-	async function processMarkdown(markdown: string) {
+	async function processMarkdown(rawMarkdown: string) {
+		// Text glued to a closing code fence is not a fence to the parser -
+		// the block would swallow it. Split it onto its own line first.
+		const markdown = splitGluedClosingCodeFences(rawMarkdown);
+
 		// Early exit if content unchanged (can happen with rapid coalescing)
 		if (markdown === previousContent) {
 			return;

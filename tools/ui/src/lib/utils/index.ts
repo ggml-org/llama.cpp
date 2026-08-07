@@ -33,6 +33,7 @@ export {
 export {
 	highlightCode,
 	detectIncompleteCodeBlock,
+	splitGluedClosingCodeFences,
 	trimCodePadding,
 	type IncompleteCodeBlock
 } from './code';
@@ -205,9 +206,30 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
-// Mention-chip visual contract shared by the rehype file-badge plugin,
-// plus the `[name](file://...)` link helpers the mention picker splices in
+// Tokenization for the chat-form contenteditable (mention links + code spans <-> chip DOM)
 export {
+	tokenizeContent,
+	containsCodeSpan,
+	isOffsetInCodeBlock,
+	domMatchesTokens,
+	syncCodeBlockHatches,
+	stripBlockBoundaryLineBreaks,
+	serializeContent,
+	buildFragment,
+	rangeToTextOffset,
+	textOffsetToRange,
+	badgeAwareWordJump,
+	leadingBadgeEdgeOffset,
+	type ContentToken
+} from './contenteditable-tokenizer';
+
+// Source-space undo/redo history for the chat-form contenteditable
+export { SourceHistory, type SourceHistoryEntry } from './source-history';
+
+// Mention-badge visual contract (used by the contenteditable / rehype
+// DOM paths that build the same chip without a Svelte mount)
+export {
+	containsFileMentionLink,
 	fileMentionLinkRe,
 	encodeFileLinkPath,
 	decodeFileLinkPath,
@@ -218,8 +240,7 @@ export {
 	MENTION_BADGE_FOLDER_ICON_PATHS,
 	getMentionBadgeIconPaths,
 	getMentionBadgeLabel,
-	buildMentionInsertion,
-	mentionLinkEndingAt
+	buildMentionInsertion
 } from './mention-badge';
 
 // Agentic content utilities (structured section derivation)

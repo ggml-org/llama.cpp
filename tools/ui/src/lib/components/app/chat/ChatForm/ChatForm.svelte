@@ -2,6 +2,7 @@
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
+		ChatFormContenteditable,
 		ChatFormFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
@@ -46,10 +47,12 @@
 	} from '$lib/types';
 	import {
 		buildMentionInsertion,
+		containsCodeSpan,
+		containsFileMentionLink,
 		findCommandToken,
 		findMentionToken,
 		isIMEComposing,
-		mentionLinkEndingAt,
+		isOffsetInCodeBlock,
 		parseClipboardContent,
 		uuid
 	} from '$lib/utils';
@@ -109,12 +112,28 @@
 		onValueChange
 	}: Props = $props();
 
+	// Component References
+	// Shared handle of the two input renderers (textarea + contenteditable).
+	type ChatInputHandle = {
+		focus(): void;
+		resetHeight(): void;
+		getElement(): HTMLElement | undefined;
+		getCaretOffset(): number;
+		setCaretOffset(offset: number): void;
+	};
+
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
-	let inputRef: ChatFormTextarea | undefined = $state(undefined);
+	let inputRef: ChatInputHandle | undefined = $state(undefined);
+
+	// Render-mode gate: the plain textarea by default, the contenteditable
+	// while the buffer carries a `file://` mention link or a complete code
+	// span (badges and code chips need a DOM the textarea cannot provide).
+	// Demotes back once neither remains.
+	let useContenteditable = $state(false);
 
 	// Audio Recording State
 	let isRecording = $state(false);
@@ -201,6 +220,34 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
+	// Caret offset restored after a renderer swap. Callers that mutate
+	// `value` themselves (e.g. the mention picker) pin the target offset
+	// BEFORE the assignment; otherwise the swap effect snapshots the
+	// current caret.
+	let pendingCaretOffset = 0;
+	let caretOffsetPinned = false;
+
+	function queueCaretRestore() {
+		queueMicrotask(() => {
+			inputRef?.focus();
+			inputRef?.setCaretOffset(pendingCaretOffset);
+			caretOffsetPinned = false;
+		});
+	}
+
+	$effect(() => {
+		const wantContenteditable =
+			containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
+		if (useContenteditable === wantContenteditable) return;
+
+		if (!caretOffsetPinned) {
+			pendingCaretOffset = inputRef?.getCaretOffset() ?? (value ?? '').length;
+		}
+
+		useContenteditable = wantContenteditable;
+		queueCaretRestore();
+	});
+
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
@@ -252,24 +299,18 @@
 			return;
 		}
 
-		// Backspace at a mention link's end deletes the whole token at once.
-		if (event.key === KeyboardKey.BACKSPACE && !event.ctrlKey && !event.metaKey && !event.altKey) {
-			const el = inputRef?.getElement();
-			if (el instanceof HTMLTextAreaElement && el.selectionStart === el.selectionEnd) {
-				const link = mentionLinkEndingAt(value, el.selectionStart);
-				if (link) {
-					event.preventDefault();
-					value = value.slice(0, link.start) + value.slice(link.end);
-					onValueChange?.(value);
-					queueMicrotask(() => inputRef?.setCaretOffset(link.start));
-					return;
-				}
-			}
-		}
-
 		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
 			const isModifier = event.ctrlKey || event.metaKey;
 			const sendOnEnter = currentConfig.sendOnEnter !== false;
+
+			// Caret inside a fenced code block (closed, or still open
+			// while being typed): Enter adds a line, never submits. The
+			// contenteditable consumes this case locally; this gate
+			// covers the plain textarea, where skipping submit lets the
+			// native newline through.
+			if (!isModifier && isOffsetInCodeBlock(value ?? '', inputRef?.getCaretOffset() ?? 0)) {
+				return;
+			}
 
 			if (sendOnEnter || isModifier) {
 				event.preventDefault();
@@ -444,14 +485,20 @@
 		const built = buildMentionInsertion(entry, value, token);
 		if (!built) return;
 
+		// Pin the post-insertion caret BEFORE the swap effect runs;
+		// otherwise the effect clobbers it with the textarea's selection
+		// at promotion time (browser-dependent: usually reset to 0).
+		pendingCaretOffset = built.caretOffset;
+		caretOffsetPinned = true;
+
 		value = built.newValue;
 		onValueChange?.(built.newValue);
 
-		// bind:value applies on the next microtask; restore the caret after.
-		queueMicrotask(() => {
-			inputRef?.focus();
-			inputRef?.setCaretOffset(built.caretOffset);
-		});
+		// Already in contenteditable mode: no renderer flip, so the swap
+		// effect's caret restore never runs.
+		if (useContenteditable) {
+			queueCaretRestore();
+		}
 	}
 
 	async function handleMicClick() {
@@ -541,19 +588,35 @@
 		<div
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 		>
-			<ChatFormTextarea
-				class="px-5 py-1.5 md:pt-0"
-				bind:this={inputRef}
-				bind:value
-				onKeydown={handleKeydown}
-				onInput={() => {
-					pickers.handleInput();
-					onValueChange?.(value);
-				}}
-				onPaste={handlePaste}
-				{disabled}
-				{placeholder}
-			/>
+			{#if useContenteditable}
+				<ChatFormContenteditable
+					class="px-5 py-1.5 md:pt-0 mb-0.5"
+					bind:this={inputRef}
+					bind:value
+					onKeydown={handleKeydown}
+					onInput={() => {
+						pickers.handleInput();
+						onValueChange?.(value);
+					}}
+					onPaste={handlePaste}
+					{disabled}
+					{placeholder}
+				/>
+			{:else}
+				<ChatFormTextarea
+					class="px-5 py-1.5 md:pt-0"
+					bind:this={inputRef}
+					bind:value
+					onKeydown={handleKeydown}
+					onInput={() => {
+						pickers.handleInput();
+						onValueChange?.(value);
+					}}
+					onPaste={handlePaste}
+					{disabled}
+					{placeholder}
+				/>
+			{/if}
 
 			{#if mcpHasResourceAttachments()}
 				<ChatFormMcpResourcesList

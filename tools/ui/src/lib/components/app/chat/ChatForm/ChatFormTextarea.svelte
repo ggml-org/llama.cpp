@@ -48,7 +48,8 @@
 		}
 	}
 
-	// Plain-text caret offsets for the picker/paste/mention-splice flows.
+	// Plain-text caret offsets, shared with the contenteditable variant so
+	// the picker/paste flows can address either renderer through one handle.
 	export function getCaretOffset(): number {
 		if (!textareaElement) return 0;
 		return textareaElement.selectionStart ?? textareaElement.value.length;
