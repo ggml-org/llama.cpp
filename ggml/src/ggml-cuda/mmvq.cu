@@ -641,12 +641,30 @@ static int mmvq_select_q8_1_layout_block_size(ggml_type type, int64_t ncols_dst)
         return MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
     }
 
+    int default_block_size;
     switch (type) {
-        case GGML_TYPE_Q4_K: return mmvq_packed_k_layout_block_size_for_type<GGML_TYPE_Q4_K>();
-        case GGML_TYPE_Q5_K: return mmvq_packed_k_layout_block_size_for_type<GGML_TYPE_Q5_K>();
-        case GGML_TYPE_Q6_K: return mmvq_packed_k_layout_block_size_for_type<GGML_TYPE_Q6_K>();
+        case GGML_TYPE_Q4_K: default_block_size = mmvq_packed_k_layout_block_size_for_type<GGML_TYPE_Q4_K>(); break;
+        case GGML_TYPE_Q5_K: default_block_size = mmvq_packed_k_layout_block_size_for_type<GGML_TYPE_Q5_K>(); break;
+        case GGML_TYPE_Q6_K: default_block_size = mmvq_packed_k_layout_block_size_for_type<GGML_TYPE_Q6_K>(); break;
         default: return MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
     }
+
+#if defined(GGML_USE_HIP)
+    // Experimental V620 sweep knob. The PR default remains 128; invalid or
+    // unset values fall back to the type's compiled default.
+    const char * env = std::getenv("GGML_HIP_MMVQ_Q8_1_BLOCK_SIZE");
+    if (env != nullptr) {
+        const int requested = std::atoi(env);
+        if (requested == MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_32 ||
+                requested == MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_64 ||
+                requested == MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_128 ||
+                requested == MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_256) {
+            return requested;
+        }
+    }
+#endif
+
+    return default_block_size;
 }
 
 template <
