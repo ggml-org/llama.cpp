@@ -10,7 +10,7 @@
     (ITEM.get_local_range(IDX) * ITEM.get_group(IDX) + ITEM.get_local_id(IDX))
 
 static void acc_f32(const char * x, const char * y, float * dst, const int64_t ne,
-    const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+    const int64_t ne0, const int64_t ne1, const int64_t ne2,
     const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
     const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
     const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
@@ -84,7 +84,6 @@ static __dpct_inline__ T op_elu(T x) {
 template<typename T>
 static __dpct_inline__ T op_tanh(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
-        constexpr int ver = __INTEL_LLVM_COMPILER;
 #if defined(__INTEL_LLVM_COMPILER) && (__INTEL_LLVM_COMPILER >= 20260000)
             return sycl::ext::oneapi::experimental::tanh(x);
 #else
@@ -462,7 +461,7 @@ static void acc_f32_sycl(const char *x, const char *y, float *dst,
                                            sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                             acc_f32(x, y, dst, n_elements,
-                                ne0, ne1, ne2, ne3,
+                                ne0, ne1, ne2,
                                 nb00, nb01, nb02, nb03,
                                 ne10, ne11, ne12, ne13,
                                 nb10, nb11, nb12, nb13,
