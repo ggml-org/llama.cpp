@@ -71,12 +71,7 @@ static __global__ void mm_ids_helper(
             const int iex_used = expert_used == expert ? iex : -1;
             nex_prev += expert_used < expert;
 
-            // ids can contain more than one occurrence of the same expert id for a single
-            // token (e.g. a degenerate/duplicate routing table). In that case more than one
-            // lane in this token's group of neu_padded lanes can have iex_used != -1, so a
-            // plain "did any lane match" flag is not enough -- we need the actual number of
-            // matches for this token, plus this lane's rank among them, so that every match
-            // gets its own slot in `store` instead of racing on a single shared slot.
+            // A token can use the same expert more than once, so count how many times the threads at this token position have used it:
             int it_compact_add_self = iex_used != -1 ? 1 : 0;
 #pragma unroll
             for (int offset = 1; offset < neu_padded; offset *= 2) {
@@ -85,9 +80,7 @@ static __global__ void mm_ids_helper(
                     it_compact_add_self += tmp;
                 }
             }
-            // it_compact_add_self is now an inclusive prefix sum of matches within this
-            // token's lane group; derive this lane's rank among same-token matches, then
-            // reduce to the total match count for this token (held by the last lane).
+            // The prefix sum gives each use of the expert its own slot, the last thread has the total for this token:
             const int rank_in_token = it_compact_add_self - (iex_used != -1 ? 1 : 0);
             it_compact_add_self = __shfl_sync(0xFFFFFFFF, it_compact_add_self, neu_padded - 1, neu_padded);
 
