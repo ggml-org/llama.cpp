@@ -77,7 +77,7 @@ static bool llama_backend_dev_supports_ssm_scan_rollback(ggml_backend_dev_t dev,
     ggml_tensor * C   = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, d_state, n_group, n_seq_tokens, n_seqs);
     ggml_tensor * ids = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_seqs);
 
-    ggml_tensor * op = ggml_ssm_scan_ext(ctx.get(), s, x, dt, A, B, C, ids, K);
+    ggml_tensor * op = ggml_ssm_scan(ctx.get(), s, x, dt, A, B, C, ids, K);
 
     return ggml_backend_dev_supports_op(dev, op);
 }

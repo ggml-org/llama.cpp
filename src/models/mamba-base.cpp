@@ -120,7 +120,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
             // Custom operator to optimize the parallel associative scan
             // as described in the Annex D of the Mamba paper.
             // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
-            return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
+            return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, /*K=*/1);
         };
 
         ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
@@ -258,9 +258,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
             // TODO: use semistructured matrices to implement state-space duality
             // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
             // K > 1 asks the backend to return rollback snapshots in addition to the final state.
-            return K == 1 ?
-                ggml_ssm_scan    (ctx, ssm, x, dt, A, B, C, ids) :
-                ggml_ssm_scan_ext(ctx, ssm, x, dt, A, B, C, ids, K);
+            return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, K);
         };
 
         ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
