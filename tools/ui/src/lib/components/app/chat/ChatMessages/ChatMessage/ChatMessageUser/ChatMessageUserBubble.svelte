@@ -2,6 +2,7 @@
 	import { Card } from '$lib/components/ui/card';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
 	interface Props {
@@ -24,7 +25,9 @@
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
+
 	const currentConfig = config();
+	const isFullWidth = $derived(Boolean(config()[SETTINGS_KEYS.FULL_WIDTH_CHAT]));
 
 	$effect(() => {
 		if (!messageElement || !content.trim()) return;
@@ -52,14 +55,16 @@
 </script>
 
 {#if attachments && attachments.length > 0}
-	<div class="mb-2 max-w-[80%]">
+	<div class="mb-2 {isFullWidth ? 'w-full' : 'max-w-[80%]'}">
 		<ChatAttachmentsList {attachments} readonly imageHeight="h-40" />
 	</div>
 {/if}
 
 {#if content.trim()}
 	<Card
-		class="chat-message-user-bubble max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-multiline:py-2.5 {cardBgClass}"
+		class="chat-message-user-bubble {isFullWidth
+			? 'w-full border-2 border-border/30 dark:border-border/20'
+			: 'max-w-[80%] border-none'} overflow-y-auto rounded-[1.125rem] bg-primary/5 px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-multiline:py-2.5 {cardBgClass}"
 		data-multiline={isMultiline ? '' : undefined}
 		style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 	>

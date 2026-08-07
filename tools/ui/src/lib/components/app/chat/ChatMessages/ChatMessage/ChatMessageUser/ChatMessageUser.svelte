@@ -5,11 +5,12 @@
 		ChatMessageStatistics,
 		ChatMessageUserBubble
 	} from '$lib/components/app/chat';
+	import { config } from '$lib/stores/settings.svelte';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { MessageRole, ChatMessageStatisticsMode } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -56,6 +57,7 @@
 
 	const currentConfig = $derived(config());
 	const isActivelyProcessing = $derived(isLastUserMessage && isLoading());
+	const isFullWidth = $derived(Boolean(config()[SETTINGS_KEYS.FULL_WIDTH_CHAT]));
 
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {
@@ -131,7 +133,7 @@
 		{/if}
 
 		{#if message.timestamp}
-			<div class="max-w-[80%]">
+			<div class={isFullWidth ? 'w-full' : 'max-w-[80%]'}>
 				<ChatMessageActionIcons
 					actionsPosition="right"
 					{deletionInfo}

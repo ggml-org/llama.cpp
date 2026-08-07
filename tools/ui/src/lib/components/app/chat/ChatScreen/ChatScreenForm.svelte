@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
+	import { config } from '$lib/stores/settings.svelte';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -35,6 +37,8 @@
 	let chatFormRef: ChatForm | undefined = $state(undefined);
 	let formWrapperEl: HTMLDivElement | undefined = $state();
 	let chatId = $derived(page.params.id as string | undefined);
+
+	const isFullWidth = $derived(Boolean(config()[SETTINGS_KEYS.FULL_WIDTH_CHAT]));
 
 	$effect(() => {
 		if (!formWrapperEl) return;
@@ -144,7 +148,7 @@
 
 <div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
 	<ChatForm
-		class="mx-auto max-w-3xl {className}"
+		class="mx-auto {isFullWidth ? '' : 'max-w-3xl'} {className}"
 		bind:this={chatFormRef}
 		bind:value={message}
 		bind:uploadedFiles

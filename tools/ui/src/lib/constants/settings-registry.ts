@@ -244,6 +244,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			},
 			{
+				key: SETTINGS_KEYS.FULL_WIDTH_CHAT,
+				label: 'Use full width for chat',
+				help: 'Expand messages and the input field to use the full available width between the sidebar and the right edge of the window.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY
+			},
+			{
 				key: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
 				label: 'Use full height code blocks',
 				help: 'Always display code blocks at their full natural height, overriding any height limits.',

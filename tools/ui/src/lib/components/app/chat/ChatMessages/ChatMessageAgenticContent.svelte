@@ -46,6 +46,7 @@
 	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
 	const showMessageStats = $derived(Boolean(config().showMessageStats));
 	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
+	const isFullWidth = $derived(Boolean(config().fullWidthChat));
 
 	const hasReasoningError = $derived(
 		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
@@ -204,7 +205,7 @@
 	{/if}
 {/snippet}
 
-<div class="agentic-content gap-2">
+<div class="agentic-content gap-2" class:agentic-content--full-width={isFullWidth}>
 	{#if turnGroups.length > 1}
 		{#each turnGroups as turn, turnIndex (turnIndex)}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
@@ -256,6 +257,10 @@
 		flex-direction: column;
 		width: 100%;
 		max-width: 48rem;
+	}
+
+	.agentic-content-full-width {
+		max-width: none;
 	}
 
 	.agentic-content > :global(*),
