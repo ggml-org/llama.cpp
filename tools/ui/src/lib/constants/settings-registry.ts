@@ -26,7 +26,7 @@ import type {
 import {
 	CLI_FLAGS,
 	DEFAULT_MCP_CONFIG,
-	FILE_GLOB_SEARCH_MAX_SERVER_DEPTH,
+	FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH,
 	FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH
 } from '$lib/constants';
 import { SETTINGS_KEYS } from './settings-keys';
@@ -564,11 +564,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.MENTION_SEARCH_MAX_DEPTH,
 				label: 'Mention search depth',
-				help: `How many directory levels below the working directory the @-mention file search descends. Larger values surface deeply nested files but take longer on large trees. Server cap is ${FILE_GLOB_SEARCH_MAX_SERVER_DEPTH}.`,
+				help: 'How many directory levels below the working directory the @-mention file search descends. Larger values surface deeply nested files but take longer on large trees.',
 				defaultValue: FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
 				placeholder: `${FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH}`,
 				min: 1,
-				max: FILE_GLOB_SEARCH_MAX_SERVER_DEPTH,
+				max: FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				isPositiveInteger: true

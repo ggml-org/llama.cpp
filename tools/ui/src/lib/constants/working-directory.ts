@@ -42,8 +42,8 @@ export const PATH_NAV_MAX_DEPTH = 1;
 export const NATIVE_MAX_DEPTH = 4;
 export const NATIVE_LIMIT = 20;
 
-/** How many directory levels below home the server allows a glob search. */
-export const FILE_GLOB_SEARCH_MAX_SERVER_DEPTH = 32;
+/** Upper bound the mention search depth setting accepts. The server itself imposes no depth cap (0 = unlimited); this is a UI sanity bound. */
+export const FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH = 32;
 
 /** Depth the pickers fall back to when the user setting is invalid. */
 export const FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH = 10;
