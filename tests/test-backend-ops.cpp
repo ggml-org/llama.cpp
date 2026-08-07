@@ -9016,6 +9016,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // row stride of 260 bytes: a multiple of 2*type_size, but not of the vector mul_mat_f indexes with
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 64, 8, 128, {1, 1}, {1, 1}, {0, 1, 2, 3}, 130));
+    }
+
     // sycl backend will limit task global_range < MAX_INT
     // test case for f16-type-convert-to-fp32 kernel with large k under fp32 compute dtype (occurs in stable-diffusion)
     // however this case needs to alloc more memory which may fail in some devices (Intel Arc770, etc.)
