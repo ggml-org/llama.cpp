@@ -2,13 +2,7 @@
 
 bool vk_memory_logger_enabled = false;
 
-bool vk_perf_logger_enabled = false;
-
-bool vk_perf_logger_concurrent = false;
-
 bool vk_enable_sync_logger = false;
-
-uint32_t vk_perf_logger_frequency = 1;
 
 std::string vk_pipeline_stats_filter;
 
