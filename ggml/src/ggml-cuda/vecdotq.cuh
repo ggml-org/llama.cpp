@@ -115,11 +115,10 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
-// Experimental gfx1030 path. The quantizer has already split Q8 values
-// into packed LO/HI words and precomputed the HI correction per 16 values.
+// Experimental gfx1030 path. It preserves the existing Q8_1 bytes and splits
+// each signed Q8 value losslessly as q = (q & 0xf) + 16*(q >> 4).
 template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_dot8_impl(
-    const uint32_t * v, const block_q8_1_dot8 * bq8_1, const int iqs,
-    const float & d4, const half2 & ds8) {
+    const uint32_t * v, const uint32_t * u, const float & d4, const half2 & ds8) {
 
     int sumi = 0;
 
@@ -127,16 +126,22 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_dot
     for (int i = 0; i < vdr; ++i) {
         const uint32_t qw_u = v[i];
         const uint32_t qw_s = qw_u ^ 0x88888888u;
-        const uint32_t qa_lo = bq8_1->lo[iqs + i];
-        const uint32_t qa_hi = bq8_1->hi[iqs + i];
+        const uint32_t qa0  = u[2*i+0];
+        const uint32_t qa1  = u[2*i+1];
 
-        sumi += ggml_hip_udot8_u4(qw_u, qa_lo, 0);
-        sumi += 16 * ggml_hip_sdot8_i4((int) qw_s, (int) qa_hi, 0);
+        // Interleave the two four-byte Q8 words to match the eight nibbles in
+        // the Q4 word: a0[0], a1[0], a0[1], a1[1], ... .
+        const uint32_t qa_lo = (qa0 & 0x0F0F0F0Fu) | ((qa1 & 0x0F0F0F0Fu) << 4);
+        const uint32_t qa_hi = ((qa0 >> 4) & 0x0F0F0F0Fu) | (qa1 & 0xF0F0F0F0u);
+
+        const int dot_lo = ggml_hip_udot8_u4(qw_u, qa_lo, 0);
+        const int dot_hi = ggml_hip_sdot8_i4((int) qw_s, (int) qa_hi, 0);
+        const int sum_hi = ggml_hip_sdot8_i4((int) qa_hi, 0x11111111, 0);
+
+        // Reconstruct sum(qw * qa), where qw is the stored unsigned Q4_0
+        // nibble and qa is the original signed Q8 integer.
+        sumi += dot_lo + 16 * dot_hi + 128 * sum_hi;
     }
-
-    // Each Q4_0 MMVQ invocation covers either values [0, 15] or [16, 31]
-    // of the Q8_1 block, selected by iqs = 0 or 2.
-    sumi += 128 * (int) bq8_1->sum_hi[iqs / VDR_Q4_0_Q8_1_MMVQ];
 
     const float2 ds8f = __half22float2(ds8);
     return d4 * (sumi * ds8f.x - (8*vdr/QI4_0) * ds8f.y);
@@ -999,17 +1004,21 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1_dot8(
-    const void * __restrict__ vbq, const block_q8_1_dot8 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
     const block_q4_0 * bq4_0 = (const block_q4_0 *) vbq + kbx;
+
     uint32_t v[VDR_Q4_0_Q8_1_MMVQ];
+    uint32_t u[2*VDR_Q4_0_Q8_1_MMVQ];
 
 #pragma unroll
     for (int i = 0; i < VDR_Q4_0_Q8_1_MMVQ; ++i) {
-        v[i] = (uint32_t) get_int_b2(bq4_0->qs, iqs + i);
+        v[i]     = (uint32_t) get_int_b2(bq4_0->qs, iqs + i);
+        u[2*i+0] = (uint32_t) get_int_b4(bq8_1->qs, iqs + i);
+        u[2*i+1] = (uint32_t) get_int_b4(bq8_1->qs, iqs + i + QI4_0);
     }
 
-    return vec_dot_q4_0_q8_1_dot8_impl<VDR_Q4_0_Q8_1_MMVQ>(v, bq8_1, iqs, bq4_0->d, bq8_1->ds);
+    return vec_dot_q4_0_q8_1_dot8_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(

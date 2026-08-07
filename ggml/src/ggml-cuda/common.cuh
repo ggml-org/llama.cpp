@@ -55,17 +55,6 @@ static_assert(sizeof(block_q8_1_layout<2 * QK8_1>) == 2 * sizeof(block_q8_1), "U
 static_assert(sizeof(block_q8_1_layout<4 * QK8_1>) == 4 * sizeof(block_q8_1), "Unexpected q8_1 x4 layout size");
 static_assert(sizeof(block_q8_1_layout<8 * QK8_1>) == 8 * sizeof(block_q8_1), "Unexpected q8_1 x8 layout size");
 
-// Experimental RDNA2 Q4_0 DOT8 activation block. Each LO/HI word contains
-// the interleaved eight nibbles consumed by one packed Q4 word. Two int8
-// corrections cover the two 16-value vec-dot portions of a Q8_1 block.
-struct block_q8_1_dot8 {
-    half2    ds;
-    uint32_t lo[4];
-    uint32_t hi[4];
-    int8_t   sum_hi[2];
-};
-static_assert(sizeof(block_q8_1_dot8) == 40, "Unexpected q8_1 dot8 block size");
-
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
