@@ -19,10 +19,7 @@ export const PANEL_CLASSES = `
 export const CHAT_FORM_POPOVER_MAX_HEIGHT = 'max-h-80';
 export const DIALOG_SUBMENU_CONTENT = 'w-60';
 
-/**
- * Selects the visible focused input (textarea or contenteditable) inside
- * the chat form's input area, used to restore focus after model actions.
- */
+/** Selects the focused chat-form input (either renderer) to restore focus after model actions. */
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';
 

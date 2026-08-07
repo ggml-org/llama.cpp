@@ -10,10 +10,7 @@ import {
 	type MentionDismissSnapshot
 } from '$lib/utils';
 
-/**
- * Dependencies injected as getters so the hook stays free of component
- * state and store circular imports.
- */
+/** Dependencies injected as getters so the hook stays free of store circular imports. */
 export interface UseChatFormPickersOptions {
 	getValue: () => string;
 	/** Also fires the form's onChange. */
@@ -51,20 +48,15 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let isWorkingDirectoryPickerOpen = $state(false);
 	let workingDirectoryQuery = $state('');
 
-	/**
-	 * Last dismissed `@`-mention token; while intact, the picker does not
-	 * reopen, so an escaped `@<query>` stays literal until edited.
-	 */
+	// Last dismissed `@`-mention token; while intact, the picker does not
+	// reopen, so an escaped `@<query>` stays literal until edited.
 	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
 
-	/**
-	 * Last dismissed `/`-command token; while intact, the picker neither
-	 * reopens nor instant-dispatches, so an escaped `/name` stays literal.
-	 */
+	// Same dismissal contract for the `/`-command token.
 	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
 
-	// Scope the @-mention search to the picked cwd, falling back to the
-	// server home so the picker still finds matches before a directory is set.
+	// Fall back to the server home so the picker still finds matches
+	// before a cwd is set.
 	const mentionScopePath = $derived(opts.getCwd() ?? opts.getServerHome() ?? null);
 
 	const availableCommands = $derived(
@@ -75,12 +67,10 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		})
 	);
 
-	/**
-	 * Dispatch a slash command picked from the list: consume the token and
-	 * open the target picker. `args` seeds the target search where
-	 * applicable. Runs only on explicit selection (Enter/click), so the
-	 * buffer is never cleared mid-typing.
-	 */
+	// Dispatch a slash command picked from the list: consume the token and
+	// open the target picker, seeding its search with `args`. Runs only on
+	// explicit selection (Enter/click), so the buffer is never cleared
+	// mid-typing.
 	function dispatchCommand(command: ChatFormCommand, args: string) {
 		isCommandPickerOpen = false;
 		commandQuery = '';
@@ -94,8 +84,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				break;
 			case ChatFormCommandAction.CWD: {
 				// Keep `/cwd <args>` in the input so the search field and the
-				// token stay two-way bound while the picker is open. Normalize
-				// a partial token (e.g. `/cw foo`) to the full command name.
+				// token stay two-way bound; normalize partial tokens (`/cw foo`).
 				const trimmed = args.trim();
 				const newValue = `/cwd ${trimmed}`;
 				if (opts.getValue() !== newValue) {
@@ -139,7 +128,6 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				if (token.name === 'cwd') {
 					workingDirectoryQuery = token.args.trim();
 				} else {
-					// Token edited away from `/cwd`: abandon the picker.
 					isWorkingDirectoryPickerOpen = false;
 					workingDirectoryQuery = '';
 				}
@@ -176,7 +164,6 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		if (commandDismissedSnapshot !== null) {
 			commandDismissedSnapshot = null;
 		}
-		// A non-command edit abandons `/cwd`.
 		if (isWorkingDirectoryPickerOpen) {
 			isWorkingDirectoryPickerOpen = false;
 		}
@@ -230,16 +217,13 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	}
 
 	function handleCommandSelect(command: ChatFormCommand) {
-		// Dispatch on the live token so typed args seed the target picker
-		// (e.g. `/prompt weather` opens the prompt search for `weather`).
+		// Dispatch on the live token so typed args seed the target picker.
 		const token = findCommandToken(opts.getValue());
 		dispatchCommand(command, token?.args ?? '');
 	}
 
-	/**
-	 * Command picker dismissed: snapshot the live `(name, args)` token so
-	 * the same token stays literal until deleted or retyped.
-	 */
+	// Picker dismissed: snapshot the live token so it stays literal until
+	// deleted or retyped.
 	function handleCommandPickerClose() {
 		if (isCommandPickerOpen) {
 			commandDismissedSnapshot = takeCommandDismissSnapshot(opts.getValue());
@@ -252,10 +236,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		}
 	}
 
-	/**
-	 * Mention picker dismissed: snapshot the live `(start, query)` token
-	 * so the same token stays literal until deleted or retyped.
-	 */
+	// Same dismissal snapshot for the mention token.
 	function handleMentionPickerClose() {
 		if (isMentionPickerOpen) {
 			const cursor = opts.getCaretOffset() ?? opts.getValue().length;
@@ -284,7 +265,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	}
 
 	// Two-way bind the text after `/cwd ` and the picker search input; the
-	// reverse direction is handled by handleInput -> dispatchCommand.
+	// reverse direction is handled by handleInput.
 	$effect(() => {
 		if (!isWorkingDirectoryPickerOpen) return;
 		const value = opts.getValue();
@@ -297,8 +278,6 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	});
 
 	return {
-		// Reactive picker state, exposed as getter/setter pairs so the chat
-		// form can read them in the template and bind two-way where needed.
 		get isCommandPickerOpen() {
 			return isCommandPickerOpen;
 		},
@@ -354,8 +333,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			return mentionScopePath;
 		},
 		handleInput,
-		// Returns true when the event was consumed by a picker, so the chat
-		// form can skip its own submit handling.
+		// True when a picker consumed the event, so the form skips submit.
 		handleKeydown,
 		dispatchCommand,
 		handleCommandSelect,

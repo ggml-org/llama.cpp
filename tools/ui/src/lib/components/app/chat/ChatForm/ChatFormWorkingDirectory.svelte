@@ -62,8 +62,8 @@
 		onOpen
 	}: Props = $props();
 
-	// File System Access API is opt-in: when available (Chrome / Edge / Opera)
-	// the popover exposes a "Browse" button; otherwise the text input suffices.
+	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
+	// exposes a "Browse" button only when available.
 	const pickerSupported =
 		typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 
@@ -73,8 +73,6 @@
 	let searchError = $state<string | null>(null);
 	let listContainer = $state<HTMLDivElement | null>(null);
 
-	// Highlight + keyboard-nav state. The scroll trigger is bumped only on
-	// keyboard nav, so the list never auto-scrolls on hover or result change.
 	const nav = usePickerNavigation({
 		isOpen: () => isOpen,
 		count: () => queryResults.length,
@@ -82,26 +80,20 @@
 		onSelect: (index) => commit(queryResults[index])
 	});
 
-	// Absolute home on the server, resolved once per session by the tools
-	// store. Anchors both the search scope and the chip's `~` abbreviation.
 	let homeBase = $derived(toolsStore.serverHome);
 
-	// Resolve home eagerly on mount so the chip can abbreviate before the
-	// user opens the picker; resolveServerHome() is cached, so repeats are no-ops.
+	// Resolve home eagerly so the chip can abbreviate before the picker opens.
 	$effect(() => {
 		if (typeof window === 'undefined') return;
 		void toolsStore.resolveServerHome();
 	});
 
-	// Auto-focus the search input when the popover opens; HTML `autofocus`
-	// is unreliable on dynamically shown elements.
+	// HTML `autofocus` is unreliable on dynamically shown elements.
 	$effect(() => {
 		if (!isOpen) return;
 		setTimeout(() => searchInputRef?.focus(), FOCUS_DELAY_MS);
 	});
 
-	// The query is owned by the host (two-way bound to the text after `/cwd `);
-	// run the debounced search whenever the picker is open.
 	$effect(() => {
 		if (!isOpen) return;
 		const q = query.trim();
@@ -117,8 +109,6 @@
 		}
 	});
 
-	// Scroll the highlighted row into view on keyboard nav only, matching
-	// ChatFormPickerList's behavior for its own list.
 	useScrollActiveRow({
 		getTrigger: () => nav.scrollTrigger,
 		getContainer: () => listContainer,
@@ -127,15 +117,10 @@
 		dataIndex: 'result'
 	});
 
-	// Effective directory the current search runs against (shown in the
-	// footer); updated by the search below, including when an exactly-typed
-	// directory is "entered".
 	let searchScope = $state(HOME_TILDE);
 
-	// Debounced, abortable directory search backed by the shared cache; stale
-	// responses are dropped by the hook's isCurrent guard. An exactly-typed
-	// directory is "entered": the shared search lists its children too, so
-	// path navigation does not require a trailing slash.
+	// An exactly-typed directory is "entered": the shared search lists its
+	// children too, so path navigation does not require a trailing slash.
 	const search = useDebouncedSearch({
 		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen,
@@ -151,8 +136,8 @@
 			}
 
 			try {
-				// Generous limit because ranking happens client-side; only the
-				// top MAX_RESULTS_SHOWN are shown.
+				// Generous limit: ranking is client-side, only the top
+				// MAX_RESULTS_SHOWN are shown.
 				const res = await runGlobSearchWithChildren(
 					trimmed,
 					homeBase ?? HOME_TILDE,
@@ -186,8 +171,7 @@
 			}
 		}
 	});
-	// Single funnel for every local close so the host refocus fires
-	// regardless of which commit/dismiss path ended the interaction.
+	// Single funnel for every local close so the host refocus always fires.
 	function closePicker() {
 		onClose?.();
 	}
@@ -259,8 +243,6 @@
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
-			// Commit the highlighted result, falling back to the raw input
-			// only when the query returned no matches.
 			if (nav.hoveredIndex >= 0 && queryResults[nav.hoveredIndex]) {
 				commit(queryResults[nav.hoveredIndex]);
 			} else if (queryResults.length === 0) {
@@ -288,8 +270,6 @@
 		closePicker();
 	}
 
-	// The chip is always visible; the X clears the directory (no-op when
-	// already empty).
 	function handleDismiss(event?: MouseEvent) {
 		event?.stopPropagation();
 		event?.preventDefault();
@@ -309,7 +289,6 @@
 		}
 	}
 
-	// Tooltips only on wider viewports; mirrors the gate used in ActionIcon.
 	let innerWidth = $state(0);
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>

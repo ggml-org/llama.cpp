@@ -1,18 +1,11 @@
 /**
- * Rehype plugin that rewrites `file://` markdown anchors into the
- * inline mention chip. The badge class string is shared with the
- * contenteditable tokenizer via `$lib/constants/mention-badge`, so
- * the chat input and the rendered messages show the same chip.
+ * Rehype plugin that rewrites `file://` markdown anchors into the inline
+ * mention chip, sharing the class string with the contenteditable
+ * tokenizer via `$lib/constants/mention-badge`.
  *
  * The chip is presentational: `file://` navigation is blocked from
- * http(s) pages, so the anchor is rewritten to a plain `<span>` (no
- * link role, no tab stop); the full path stays available on `title`.
- *
- * Why a `rehype` step (not a markdown-it rule): the AST after
- * remark-rehype already represents `[label](file://path)` as a
- * single `<a>` element with a text-child label, which is exactly
- * the structural shape we need to rewrite. Going earlier would
- * require manipulating raw text and re-parsing.
+ * http(s) pages, so the anchor becomes a plain `<span>` (no link role,
+ * no tab stop); the full path stays available on `title`.
  */
 
 import { decodeFileLinkPath, getMentionBadgeIconPaths, getMentionBadgeLabel } from '$lib/utils';
@@ -33,20 +26,11 @@ import { visit } from 'unist-util-visit';
 // Trailing path separators mark a directory and are kept out of the label.
 const TRAILING_SEPARATOR_REGEX = /\/+$/;
 
-/**
- * Derive a friendly label from a `file://` URL, decoding the path so an
- * encoded segment (spaces, parentheses) shows its human-readable name.
- * Strips the `file://` prefix and any trailing separator so `[tools/]`
- * rather than `[tools//]`.
- */
 function decodeHrefPath(href: string): string {
 	const stripped = href.startsWith(FILE_URI_PREFIX) ? href.slice(FILE_URI_PREFIX.length) : href;
 	return decodeFileLinkPath(stripped);
 }
 
-/**
- * Derive the last `/`-separated segment of a decoded path as the badge label.
- */
 function labelFromFileUrl(href: string): string {
 	const decoded = decodeHrefPath(href);
 	const trimmed = decoded.replace(TRAILING_SEPARATOR_REGEX, '');
@@ -54,15 +38,8 @@ function labelFromFileUrl(href: string): string {
 	return slash === -1 ? trimmed : trimmed.slice(slash + 1);
 }
 
-/**
- * Build the inline icon as a hast `<svg>` element tree, mirroring the
- * contenteditable tokenizer's badge icon so both paths produce
- * visually identical output.
- *
- * @param href - The `file://` link target; a trailing `/` marks a
- * directory and selects the folder icon, matching the convention
- * the mention picker uses when it inserts the badge.
- */
+// A trailing `/` in the target marks a directory and selects the folder
+// icon, matching the convention the mention picker inserts with.
 function iconElement(href: string): Element {
 	return {
 		type: 'element',

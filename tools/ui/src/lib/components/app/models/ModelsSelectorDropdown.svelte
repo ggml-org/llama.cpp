@@ -68,8 +68,7 @@
 		});
 	});
 
-	// Flatten grouped options into the visual render order (loaded -> favorites -> available) so
-	// keyboard navigation follows the on-screen order of the rows, not the flat option list order.
+	// Keyboard navigation follows the on-screen row order, not the flat option list order.
 	let visualOrder = $derived.by(() => {
 		const order: string[] = [];
 
@@ -82,10 +81,8 @@
 		return order;
 	});
 
-	// Index of the currently highlighted model within visualOrder, or -1 when none.
 	let highlightedIndex = $derived(highlightedId ? visualOrder.indexOf(highlightedId) : -1);
 
-	// Move highlight to the previous/next row in visual order.
 	function moveHighlight(direction: 1 | -1) {
 		const len = visualOrder.length;
 		if (len === 0) {
@@ -103,9 +100,7 @@
 		highlightedId = visualOrder[index];
 	}
 
-	// Enter selects and loads the model via handleSelect (which also closes
-	// the dropdown and returns focus to the chat form). Alt+Enter only
-	// unloads and keeps the dropdown open.
+	// Alt+Enter only unloads and keeps the dropdown open.
 	async function handleModelKeyAction(modelId: string, unload: boolean) {
 		if (!unload) {
 			void ms.handleSelect(modelId);

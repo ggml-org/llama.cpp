@@ -38,7 +38,6 @@ describe('SourceHistory', () => {
 		expect(undone).toEqual({ value: '', caret: 0 });
 		expect(h.redo({ value: '', caret: 0 })).toEqual({ value: 'abc', caret: 3 });
 
-		// undo again, then edit: the redo branch is abandoned
 		h.undo({ value: 'abc', caret: 3 });
 		h.push({ value: '', caret: 0 }, 5000);
 		expect(h.redo({ value: 'x', caret: 1 })).toBeNull();
@@ -49,7 +48,6 @@ describe('SourceHistory', () => {
 		h.push({ value: '', caret: 0 }, 1000);
 		h.undo({ value: 'abc', caret: 3 });
 
-		// still inside the original window, but an undo boundary breaks grouping
 		h.push({ value: '', caret: 0 }, 1200);
 		expect(h.undo({ value: 'x', caret: 1 })).toEqual({ value: '', caret: 0 });
 	});

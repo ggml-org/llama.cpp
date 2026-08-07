@@ -3,8 +3,6 @@
  * server's `file_glob_search` tool. Queries starting from a root (`/`,
  * `C:\`, `\\host\share`) or `~` navigate the tree (search the parent for
  * the last segment); anything else glob-matches home-relative entries.
- * Paths use `/` separators, which is what the server returns and what
- * Windows accepts.
  */
 
 import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
@@ -43,7 +41,6 @@ function toPosixSeparators(query: string): string {
 	return query.split(WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
 }
 
-/** Length of the root prefix of `path`, or 0 when it has none. */
 export function rootPrefixLength(path: string): number {
 	const unc = path.match(UNC_ROOT_REGEX);
 	if (unc) return unc[0].length;
@@ -79,7 +76,6 @@ export function splitPathQuery(query: string): PathQuery | null {
 	return { parent: parentOf(rest.slice(0, idx)), last: rest.slice(idx + 1) };
 }
 
-/** Build a case-insensitive glob that matches `query` anywhere within a name. */
 export function buildCaseInsensitiveGlob(query: string): string {
 	let out = GLOB_WILDCARD;
 	for (const c of query) {
@@ -94,25 +90,17 @@ export function buildCaseInsensitiveGlob(query: string): string {
 	return out + GLOB_WILDCARD;
 }
 
-/** Params derived from a picker query, fed to `file_glob_search`. */
 export interface GlobSearchArgs {
-	/** Directory to search - the parent for a path-navigation query. */
 	path: string;
-	/** Case-insensitive glob matching the query's last segment. */
 	include: string;
-	/** Recursion depth: PATH_NAV_MAX_DEPTH for path queries, else the search depth. */
 	maxDepth: number;
-	/** Query used to rank/match the returned entries. */
 	rankQuery: string;
-	/**
-	 * Last path segment of a path-navigation query (`~/dir/sub`), or
-	 * undefined for a plain home-relative glob. Lets callers act on the
-	 * exact targeted segment (e.g. the WD picker "entering" a directory).
-	 */
+	/** Last segment of a path-navigation query (`~/dir/sub`), undefined for
+	 * a plain home-relative glob. Lets callers act on the exact targeted
+	 * segment (e.g. the WD picker "entering" a directory). */
 	last?: string;
 }
 
-/** Map any picker query to `file_glob_search` args. */
 export function buildGlobSearchArgs(
 	query: string,
 	scopePath: string,
@@ -129,7 +117,6 @@ export function buildGlobSearchArgs(
 	return { path, include, maxDepth, rankQuery: pathQuery?.last ?? query, last: pathQuery?.last };
 }
 
-/** Exact basename first, then prefix, then substring; lower is better. */
 const RANK_EXACT = 0;
 const RANK_PREFIX = 1;
 const RANK_SUBSTRING = 2;
@@ -144,7 +131,6 @@ function rankScore(path: string, query: string): number {
 	return RANK_OTHER;
 }
 
-/** Sort entries by relevance, then shorter path, then alphabetically. */
 export function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
 	return [...entries].sort(
 		(a, b) =>
@@ -154,13 +140,11 @@ export function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
 	);
 }
 
-/** Join a base path and a relative segment, avoiding duplicate slashes. */
 export function joinPath(base: string, rel: string): string {
 	if (!base) return rel;
 	return base.replace(TRAILING_SLASHES_REGEX, '') + PATH_SEPARATOR + rel;
 }
 
-/** Split `text` into alternating segments at each case-insensitive `query` match. */
 export function highlightMatch(text: string, query: string): { text: string; match: boolean }[] {
 	if (!query) return [{ text, match: false }];
 	const segments: { text: string; match: boolean }[] = [];

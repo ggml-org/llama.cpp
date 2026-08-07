@@ -27,11 +27,8 @@ export function containsFileMentionLink(value: string): boolean {
 	return fileMentionLinkRe().test(value);
 }
 
-/**
- * Escape each path segment for a `[name](file://path)` destination;
- * spaces/parens would otherwise break CommonMark. Keeps the trailing
- * slash that marks a directory.
- */
+// Escape each path segment for a markdown link destination (spaces/parens
+// break CommonMark); keeps the trailing slash that marks a directory.
 export function encodeFileLinkPath(path: string): string {
 	return path
 		.split('/')
@@ -39,10 +36,7 @@ export function encodeFileLinkPath(path: string): string {
 		.join('/');
 }
 
-/**
- * Inverse of `encodeFileLinkPath`; malformed escape sequences fall back
- * to the input unchanged.
- */
+// Malformed escape sequences fall back to the input unchanged.
 export function decodeFileLinkPath(path: string): string {
 	try {
 		return path
@@ -54,16 +48,10 @@ export function decodeFileLinkPath(path: string): string {
 	}
 }
 
-// A trailing `/` in the link target marks a directory; it survives
-// copy/paste, so pick the glyph from the raw path.
 export function getMentionBadgeIconPaths(path: string): readonly string[] {
 	return path.endsWith('/') ? MENTION_BADGE_FOLDER_ICON_PATHS : MENTION_BADGE_FILE_ICON_PATHS;
 }
 
-/**
- * Visible label: `name`, or the decoded full path (trailing `/` stripped)
- * when `showFullPath`; a known `home` abbreviates to `~`.
- */
 export function getMentionBadgeLabel(
 	name: string,
 	path: string,
@@ -78,9 +66,8 @@ export function getMentionBadgeLabel(
 
 /**
  * Build the markdown link that replaces a mention token. Entry `path` is
- * already rooted, so `file://` + `/abs` yields the canonical `file:///`;
- * directories keep a trailing `/`. Cursor lands right after the trailing
- * space so typing can continue. Returns null when no token matches.
+ * already rooted, so `file://` + `/abs` yields the canonical `file:///`.
+ * Null when the token is invalid.
  */
 export function buildMentionInsertion(
 	entry: FileMentionEntry,

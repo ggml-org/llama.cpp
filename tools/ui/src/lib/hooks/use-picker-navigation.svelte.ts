@@ -2,9 +2,7 @@ import { KeyboardKey } from '$lib/enums';
 
 /**
  * Shared keyboard navigation state for the chat-form pickers: a highlighted
- * row, a scroll trigger, and Arrow/Escape/Enter handling. Each picker
- * supplies its list length, an optional movement resolver (the command
- * picker skips disabled commands), and close/select callbacks.
+ * row, a scroll trigger, and Arrow/Escape/Enter handling.
  */
 export interface UsePickerNavigationOptions {
 	/** Gates all key handling. */
@@ -43,12 +41,12 @@ export function usePickerNavigation(opts: UsePickerNavigationOptions) {
 		}
 	}
 
-	/** Reset the highlight without bumping the scroll trigger (open / filter / result changes). */
+	/** Reset the highlight without bumping the scroll trigger. */
 	function reset(index: number) {
 		hoveredIndex = index;
 	}
 
-	/** Bump the scroll trigger without moving the highlight (e.g. scroll a freshly prioritized list to top). */
+	/** Bump the scroll trigger without moving the highlight. */
 	function bumpScroll() {
 		scrollTrigger++;
 	}

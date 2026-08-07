@@ -1,17 +1,15 @@
 /**
  * Maps between the chat-form contenteditable's markdown source and the
  * badge/text token stream the DOM is built from. A badge is one opaque
- * source contribution (`[name](file://path)`); a badge's own subtree is
- * never walked (its label length is not its source length). The caret
- * cannot land inside a badge, so offsets resolve to the nearest badge
- * edge.
+ * source contribution (`[name](file://path)`); its own subtree is never
+ * walked, and the caret cannot land inside it, so offsets resolve to
+ * the nearest badge edge.
  *
  * The tokenizer emits a flat DOM (text nodes + badges), but browsers
- * restructure it on Enter: Chromium appends `<div>` line wrappers,
- * Firefox wraps the whole buffer in them, and Shift+Enter / mobile
- * keyboards / execCommand produce `<br>` shapes. Serialization folds
- * those back into `\n` so the source never diverges from what is on
- * screen, and both offset mappers understand the same shapes.
+ * restructure it on Enter (`<div>` line wrappers, `<br>` shapes).
+ * Serialization folds those back into `\n` so the source never
+ * diverges from what is on screen; both offset mappers understand
+ * the same shapes.
  */
 
 import {
@@ -33,30 +31,19 @@ export type ContentToken =
 	| { kind: 'text'; text: string }
 	| { kind: 'badge'; name: string; path: string };
 
-// Block wrappers browsers insert for newlines (Chromium/Firefox use
-// `<div>`); each one folds back into a single `\n` during serialization.
+// Block wrappers browsers insert for newlines; each folds back into a
+// single `\n` during serialization.
 const BLOCK_TAG_NAMES = new Set(['DIV', 'P']);
 
-// Recognize completed `[name](file://path)` insertions. `file://` is
-// required so plain URLs stay as text; `)` is allowed only when not
-// followed by whitespace or `[` (adjacent badges keep terminating).
+// `file://` is required so plain URLs stay as text; `)` terminates only
+// when not followed by whitespace or `[` (adjacent badges keep working).
 const MENTION_BADGE_RE = fileMentionLinkRe('g');
 
-/**
- * Source-form length of one badge, shared by the offset math so
- * `serializeContent`, `rangeToTextOffset` and `textOffsetToRange` agree.
- */
 function badgeSourceLength(name: string, path: string): number {
 	if (!name || !path) return 0;
 	return `[${name}](file://${path})`.length;
 }
 
-/**
- * Tokenize a markdown source value into the segments the
- * contenteditable will render. Plain text and badges interleave in
- * source order. Any whitespace after a badge stays in a plain
- * text token so the round trip is byte-exact.
- */
 export function tokenizeContent(input: string): ContentToken[] {
 	const tokens: ContentToken[] = [];
 	let cursor = 0;
@@ -83,10 +70,9 @@ export function tokenizeContent(input: string): ContentToken[] {
 }
 
 /**
- * Serialize a contenteditable subtree back to source. A badge is one
- * opaque contribution; `<br>` and block wrappers the browser inserted
- * for newlines fold back into `\n` (a trailing `<br>` is the browser's
- * caret placeholder, not a newline). Any other element is transparent.
+ * Serialize a contenteditable subtree back to source. `<br>` and block
+ * wrappers fold back into `\n` (a trailing `<br>` is the browser's
+ * caret placeholder, not a newline); any other element is transparent.
  */
 export function serializeContent(root: HTMLElement): string {
 	let out = '';
@@ -144,11 +130,9 @@ export function serializeContent(root: HTMLElement): string {
 }
 
 /**
- * Plain-text offset of a `Range` in the root, so the caret can be restored
- * after a DOM rebuild. Null range (selection lost) falls back to buffer
- * length. Badges count their full source length, not their label width.
- * Walked against the live DOM (not a clone) so a `<br>` keeps its
- * trailing/not-trailing context.
+ * Plain-text offset of a `Range` in the root; null range (selection
+ * lost) falls back to buffer length. Walked against the live DOM (not
+ * a clone) so a `<br>` keeps its trailing/not-trailing context.
  */
 export function rangeToTextOffset(root: HTMLElement, range: Range | null): number {
 	if (!range) return serializeContent(root).length;
@@ -238,10 +222,10 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 }
 
 /**
- * Materialize a token stream into a DOM subtree for the contenteditable
- * body: text nodes for text tokens, `<span data-mention-badge="true">`
- * elements for badges. The badge's class string + inline SVG are shared
- * with the rehype plugin via `$lib/constants/mention-badge`.
+ * Materialize a token stream into a DOM subtree: text nodes for text
+ * tokens, `<span data-mention-badge="true">` elements for badges. The
+ * class string + inline SVG are shared with the rehype plugin via
+ * `$lib/constants/mention-badge`.
  */
 export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 	const fragment = document.createDocumentFragment();
@@ -252,10 +236,9 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 			continue;
 		}
 
-		// A leading badge gets an empty text node prepended: without a
-		// real text position at the buffer start, the spot before the
-		// badge is unreachable via keyboard (ArrowLeft/Home). The empty
-		// node serializes to nothing, so the round trip stays byte-exact.
+		// A leading badge gets an empty text node prepended: without a real
+		// text position at the buffer start, the spot before the badge is
+		// unreachable via keyboard (ArrowLeft/Home).
 		if (!fragment.lastChild) {
 			fragment.appendChild(document.createTextNode(''));
 		}
@@ -303,9 +286,9 @@ const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
 
 /**
  * Word-jump target (Option+Arrow / Ctrl+Arrow) in source offsets, or null
- * when the jump crosses no badge and native word movement should handle it.
- * Badge spans are masked to word characters and act as hard word-run
- * boundaries, so a badge counts as exactly one word.
+ * when the jump crosses no badge and native word movement should handle
+ * it. Badge spans are masked to word characters, so a badge counts as
+ * exactly one word.
  */
 export function badgeAwareWordJump(
 	source: string,
@@ -331,9 +314,7 @@ export function badgeAwareWordJump(
 	let i = offset;
 
 	if (direction === 'forward') {
-		// Skip non-word run when starting outside a word, then skip the
-		// word run itself. Entering a badge completes the word phase at
-		// the badge's end edge.
+		// Entering a badge completes the word phase at the badge's end edge.
 		if (!(i < n && isWord(i))) {
 			while (i < n && !isWord(i)) i++;
 		}
@@ -367,10 +348,9 @@ export function badgeAwareWordJump(
 }
 
 /**
- * Returns 0 when `caret` sits exactly at a leading badge's end edge, null
- * otherwise. Plain ArrowLeft there has no native previous position (the
- * buffer starts with a non-editable element), so the host snaps the caret
- * to the buffer start manually.
+ * 0 when `caret` sits exactly at a leading badge's end edge, null
+ * otherwise. Plain ArrowLeft there has no native previous position, so
+ * the host snaps the caret to the buffer start manually.
  */
 export function leadingBadgeEdgeOffset(source: string, caret: number): number | null {
 	const [first] = tokenizeContent(source);
@@ -379,11 +359,11 @@ export function leadingBadgeEdgeOffset(source: string, caret: number): number | 
 }
 
 /**
- * Translate a plain-text offset into a degenerate `Range` at that position
- * in the DOM; out-of-range offsets clamp to buffer end. The caret cannot
- * land inside a badge, so zero offset lands BEFORE the badge and any
- * positive source offset lands AFTER it. Understands the same browser
- * block/`<br>` newline shapes as `serializeContent`.
+ * Translate a plain-text offset into a degenerate `Range` at that
+ * position in the DOM; out-of-range offsets clamp to buffer end. Zero
+ * offset lands BEFORE a badge, any positive source offset lands AFTER
+ * it. Understands the same block/`<br>` newline shapes as
+ * `serializeContent`.
  */
 export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 	const range = document.createRange();

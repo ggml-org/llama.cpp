@@ -1,10 +1,9 @@
 import { untrack } from 'svelte';
 
 /**
- * Scrolls the highlighted row of a picker list into view when a scroll
+ * Scrolls the highlighted row of a picker list into view when the scroll
  * trigger is bumped, without scrolling on mouse hover or result
- * replacement. Shared by `ChatFormPickerList` and the working-directory
- * picker so the keyboard-nav scroll behavior stays identical.
+ * replacement.
  */
 export interface UseScrollActiveRowOptions {
 	/** Counter bumped by keyboard nav; `undefined` disables the effect. */

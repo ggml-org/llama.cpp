@@ -1,13 +1,9 @@
 /**
- * Source-space undo/redo history for the chat-form contenteditable. The
- * component rebuilds its DOM imperatively (replaceChildren), which
- * destroys the browser's native undo stack, so history is kept as
- * (value, caret) snapshots instead.
- *
- * Entries record the state BEFORE an edit. Edits within `groupWindowMs`
- * extend the open group instead of starting a new one, so a typing burst
- * undoes as a unit; structural edits (paste, mention insert, clear) pass
- * `newGroup` to always start one.
+ * Source-space undo/redo history for the chat-form contenteditable, whose
+ * imperative DOM rebuilds destroy the browser's native undo stack.
+ * Entries record the state BEFORE an edit; edits within `groupWindowMs`
+ * extend the open group so a typing burst undoes as a unit, while
+ * structural edits (paste, mention insert, clear) pass `newGroup`.
  */
 
 export interface SourceHistoryEntry {
@@ -34,7 +30,6 @@ export class SourceHistory {
 		this.redoStack = [];
 	}
 
-	/** Move from `current` to the previous state; null when there is nothing to undo. */
 	undo(current: SourceHistoryEntry): SourceHistoryEntry | null {
 		const entry = this.undoStack.pop();
 		if (!entry) return null;
@@ -43,7 +38,6 @@ export class SourceHistory {
 		return entry;
 	}
 
-	/** Move from `current` to the next state; null when there is nothing to redo. */
 	redo(current: SourceHistoryEntry): SourceHistoryEntry | null {
 		const entry = this.redoStack.pop();
 		if (!entry) return null;

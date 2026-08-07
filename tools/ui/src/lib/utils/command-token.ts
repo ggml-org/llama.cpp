@@ -1,6 +1,5 @@
 /**
- * Slash-command token detection for the chat form. Valid only at offset
- * 0; the name is the non-whitespace run after `/`, args the rest.
+ * Slash-command token detection for the chat form. Valid only at offset 0.
  */
 export function findCommandToken(
 	value: string

@@ -38,33 +38,18 @@
 	let isComposing = $state(false);
 
 	// Undo/redo in source space: the imperative token rebuilds destroy the
-	// browser's native undo stack, so Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y are
-	// intercepted and replayed from (value, caret) snapshots.
+	// browser's native undo stack.
 	const history = new SourceHistory();
 
-	/**
-	 * Drive the placeholder via `data-empty`. Browsers disagree on what
-	 * an empty contenteditable contains (a placeholder `<br>`, a
-	 * `<div><br></div>`, or nothing at all), so emptiness is decided by
-	 * the serialized source, not the DOM shape.
-	 */
+	// Browsers disagree on what an empty contenteditable contains (`<br>`,
+	// `<div><br></div>`, or nothing), so emptiness is decided by the
+	// serialized source, not the DOM shape.
 	function syncEmptyState(serialized?: string) {
 		if (!rootElement) return;
 		const source = serialized ?? serializeContent(rootElement);
 		rootElement.dataset.empty = source.length === 0 ? 'true' : 'false';
 	}
 
-	/**
-	 * Render `tokens` into the contenteditable root. Captures the
-	 * caret position before clearing so the cursor lands at the
-	 * same logical character after the rebuild.
-	 *
-	 * Used both for the initial mount and for any external value
-	 * change (system prompt insertion, paste handlers replacing
-	 * the buffer, two-way sync from the @-mention picker, ...).
-	 *
-	 * @param tokens - Token stream produced by `tokenizeContent`.
-	 */
 	function renderTokens(tokens: ContentToken[]) {
 		if (!rootElement) return;
 
@@ -78,12 +63,6 @@
 		syncEmptyState();
 	}
 
-	/**
-	 * Pull a `Range` from the live selection. Returns `null` when
-	 * nothing is selected, when selection collapsed to a node
-	 * outside the editable root, or when the document lost focus -
-	 * callers fall back to the buffer end.
-	 */
 	function safeRange(): Range | null {
 		if (!rootElement) return null;
 
@@ -120,27 +99,12 @@
 		selection.addRange(target);
 	}
 
-	/**
-	 * Auto-grow the editable area to fit its content, capped via the
-	 * shared `--max-message-height` CSS variable. Mirrors the
-	 * dimensions of the legacy `<textarea>` so the surrounding flex
-	 * layout (padding, scroll behaviour) keeps its current shape.
-	 */
 	function resizeHeight() {
 		if (!rootElement) return;
-		// content-height drives the auto-grow; max-height is enforced by CSS
 		rootElement.style.height = 'auto';
 		rootElement.style.height = `${rootElement.scrollHeight}px`;
 	}
 
-	/**
-	 * Re-emit the current markdown source value to the parent.
-	 * Bails out when the DOM diff is below the threshold reported by
-	 * the browser (browser coalesces rapid IME keystrokes) - the
-	 * native event already fired, so let the parent react when
-	 * `compositionend` finishes.
-	 */
-	// Snapshot the outgoing state so undo can return to it.
 	function recordHistory(newGroup: boolean) {
 		if (!rootElement) return;
 		history.push(
@@ -157,8 +121,8 @@
 		syncEmptyState(serialized);
 		if (serialized === lastEmittedValue) return;
 
-		// Plain typing/deletes coalesce into one undo group per time window;
-		// anything structural (paste, newline, cut, autocorrect) starts one.
+		// Plain typing/deletes coalesce per time window; structural edits
+		// (paste, newline, cut, autocorrect) start a new undo group.
 		const inputType = event instanceof InputEvent ? event.inputType : undefined;
 		recordHistory(inputType !== 'insertText' && !inputType?.startsWith('deleteContent'));
 
@@ -184,21 +148,11 @@
 	}
 
 	/**
-	 * Native caret-keys that have to be forwarded by us: Enter and
-	 * Escape are consumed by `handleKeydown` to trigger submit /
-	 * picker-dismiss in `ChatForm`. We do not consume them here -
-	 * just expose the event to the parent.
-	 *
-	 * Undo/redo (Ctrl/Cmd+Z, Ctrl+Shift+Z, Ctrl+Y) is intercepted and
-	 * replayed from source snapshots because the token rebuilds destroy
-	 * the browser's native undo stack.
-	 *
-	 * ArrowLeft/ArrowRight around mention badges are repaired locally
-	 * because the badge is a non-editable island: plain ArrowLeft
-	 * exactly after a leading badge has no native previous position,
-	 * and word jumps (macOS Option+Arrow, Windows/Linux Ctrl+Arrow)
-	 * overshoot the badge by a word. Targets are computed in source
-	 * offsets where each badge counts as exactly one word.
+	 * Undo/redo is replayed from source snapshots (the token rebuilds
+	 * destroy the native undo stack). Arrow keys around badges are
+	 * repaired locally: a badge is a non-editable island, so plain
+	 * ArrowLeft after a leading badge has no native previous position
+	 * and word jumps overshoot it by a word.
 	 */
 	function handleKeydown(event: KeyboardEvent) {
 		const mod = event.ctrlKey || event.metaKey;
@@ -242,9 +196,8 @@
 		onKeydown?.(event);
 	}
 
-	// Apply an undo/redo entry: rebuild the DOM, then re-emit so the
-	// parent and the pickers re-evaluate. lastEmittedValue is set before
-	// `value` so the sync effect treats the change as our own.
+	// lastEmittedValue is set before `value` so the sync effect treats the
+	// change as our own and does not re-render.
 	function applyHistoryEntry(entry: SourceHistoryEntry) {
 		if (!rootElement) return;
 		renderTokens(tokenizeContent(entry.value));
@@ -255,27 +208,19 @@
 	}
 
 	/**
-	 * Plain-text paste (the parent's `handlePaste` already short-
-	 * circuits file/clipboard-quote cases) - feed the inserted
-	 * string through the tokenizer so newly pasted `[name](file://...)`
-	 * segments immediately render as inline badges.
-	 *
-	 * Passing through event.preventDefault() + manual insertText
-	 * guarantees the browser does not produce stray HTML elements
-	 * mid-paste (keeping Chromium's sanitize-on-paste path from
-	 * introducing `<div>` wrappers that would otherwise appear at
-	 * every line break).
+	 * Plain-text paste. preventDefault + manual insertText keeps the
+	 * browser from producing stray `<div>` wrappers mid-paste, and the
+	 * result is fed through the tokenizer so pasted `[name](file://...)`
+	 * segments render as badges right away.
 	 */
 	function handlePasteEvent(event: ClipboardEvent) {
 		const pasted = event.clipboardData?.getData('text/plain');
 		if (pasted && pasted.length > 0) {
 			event.preventDefault();
 
-			// Snap a collapsed caret through the offset mapping so the
-			// insertion point is a real text position: at element-
-			// boundary carets (e.g. right before a badge) Chromium's
-			// insertText can drop the preceding text node's trailing
-			// whitespace.
+			// Snap a collapsed caret through the offset mapping first: at
+			// element-boundary carets (e.g. right before a badge) Chromium's
+			// insertText can drop the preceding text node's trailing whitespace.
 			const range = safeRange();
 			if (rootElement && range && range.collapsed) {
 				restoreCaret(rangeToTextOffset(rootElement, range));
@@ -283,22 +228,16 @@
 
 			document.execCommand('insertText', false, pasted);
 
-			// insertText fires `input` synchronously, so the new source
-			// is already emitted. Rebuild when the pasted text contains
-			// mention links so they render as badges right away.
+			// insertText fires `input` synchronously, so the source is already
+			// emitted; rebuild only to badge-ify pasted mention links.
 			if (rootElement && tokenizeContent(pasted).some((token) => token.kind === 'badge')) {
 				renderTokens(tokenizeContent(serializeContent(rootElement)));
 			}
 		}
 	}
 
-	/**
-	 * Triggers above (parent paste handler: long text -> file,
-	 * quoted clipboard prompt, MCP file attach, ...) bubble here
-	 * before we run the local sanitize path. The parent handler
-	 * calls preventDefault itself when it intends to do something.
-	 * If the parent did not consume the event, fall back to handlePasteEvent.
-	 */
+	// The parent's paste handler runs first and preventDefaults when it
+	// consumes the event (files, quoted prompts, long text).
 	function handlePaste(event: ClipboardEvent) {
 		onPaste?.(event);
 		if (!event.defaultPrevented) {
@@ -306,14 +245,10 @@
 		}
 	}
 
-	/**
-	 * Copy/cut expose the markdown SOURCE of the selection: offsets
-	 * are measured in the serialized source where each badge
-	 * contributes its full `[name](file://...)` link, so the
-	 * clipboard carries raw markdown and pasting back re-renders the
-	 * badges via the paste path above. Returns null for collapsed or
-	 * outside selections - native clipboard behavior is fine there.
-	 */
+	// The selection as markdown SOURCE (each badge contributes its full
+	// `[name](file://...)` link), so copy/cut carry raw markdown and
+	// pasting back re-renders the badges. Null for collapsed/outside
+	// selections - native clipboard behavior is fine there.
 	function selectionSourceSlice(): { text: string; range: Range } | null {
 		if (!rootElement) return null;
 
@@ -346,15 +281,14 @@
 		event.preventDefault();
 
 		// preventDefault suppresses the native deletion, so remove the
-		// selection manually and re-emit the resulting source.
+		// selection manually and re-emit.
 		slice.range.deleteContents();
 		handleInput();
 	}
 
 	onMount(() => {
-		// Initial mount: render whatever value the parent handed us.
-		// untrack so the effect doesn't re-fire on every keystroke
-		// (we manage the DOM manually from input events).
+		// untrack: the DOM is managed manually from input events, so the
+		// initial render must not subscribe to the value.
 		renderTokens(tokenizeContent(untrack(() => value)));
 		lastEmittedValue = untrack(() => value ?? '');
 		resizeHeight();
@@ -364,10 +298,9 @@
 		}
 	});
 
-	// External `value` updates (system-prompt insertion, two-way sync from
-	// the mention picker, imperative clears, ...). We compare against
-	// `lastEmittedValue`: when equal, the dispatch came from our own input,
-	// so leave the DOM alone (the browser already owns the right shape).
+	// External `value` updates. When incoming === lastEmittedValue the
+	// change came from our own input, so leave the DOM alone - the
+	// browser already owns the right shape.
 	$effect(() => {
 		const incoming = value ?? '';
 		if (incoming === lastEmittedValue) return;
@@ -381,28 +314,12 @@
 		return rootElement;
 	}
 
-	/**
-	 * Plain-text position of the current caret. Falls back to the
-	 * buffer end when no selection lives inside the root (e.g. the
-	 * component just lost focus to a picker or system dialog).
-	 */
 	export function getCaretOffset(): number {
 		if (!rootElement) return 0;
 		return rangeToTextOffset(rootElement, safeRange());
 	}
 
-	/**
-	 * Place the caret at a plain-text position inside the buffer.
-	 * Used by the mention picker round-trip and the post-splice
-	 * caret restoration in `ChatForm`.
-	 *
-	 * `selection.addRange` requires the editable to have focus on
-	 * some browsers, so we focus first when called from outside the
-	 * component (the parent does it too as belt-and-braces).
-	 *
-	 * @param offset - The position to land on, expressed as the
-	 * length of the serialized source string up to that caret.
-	 */
+	// Focus first: `selection.addRange` requires it on some browsers.
 	export function setCaretOffset(offset: number) {
 		if (rootElement && rootElement !== document.activeElement) {
 			rootElement.focus({ preventScroll: true });

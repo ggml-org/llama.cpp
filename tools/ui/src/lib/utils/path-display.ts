@@ -9,21 +9,14 @@ import {
 	HOME_TILDE_PREFIX
 } from '$lib/constants';
 
-/**
- * Last non-empty slash-delimited segment of `path`, trailing slashes
- * stripped; returns the input unchanged when no `/` is present.
- */
 export function lastPathSegment(p: string): string {
 	const trimmed = p.replace(TRAILING_SLASHES_REGEX, '');
 	const idx = trimmed.lastIndexOf(PATH_SEPARATOR);
 	return idx === -1 ? trimmed : trimmed.slice(idx + 1);
 }
 
-/**
- * Abbreviate `path` to `~/...` under `home`, or to `~` when it equals
- * `home`; falls back to `lastPathSegment(path)` when home is unknown or
- * the path is outside it.
- */
+// `~/...` under `home`; falls back to the basename when home is unknown
+// or the path is outside it.
 export function abbreviateWorkingDir(
 	path: string | null | undefined,
 	home: string | null | undefined
@@ -36,11 +29,8 @@ export function abbreviateWorkingDir(
 	return lastPathSegment(path);
 }
 
-/**
- * Replace a leading `home` prefix in `path` with `~`. Unlike
- * abbreviateWorkingDir, paths outside `home` (or an unknown home) are
- * returned unchanged - used where the full path matters.
- */
+// Unlike abbreviateWorkingDir, paths outside `home` are returned
+// unchanged - used where the full path matters.
 export function abbreviateHome(path: string, home: string | null | undefined): string {
 	if (!home) return path;
 	if (path === home) return HOME_TILDE;
@@ -71,8 +61,7 @@ export function formatCwdMessage(cwd: string, home: string | null): string {
 /**
  * Parse a synthetic cwd message back into its parts. The caller must
  * already know the message is synthetic (via the persisted `isSynthetic`
- * flag); this only extracts the path. Returns null when `content` is not
- * a cwd message.
+ * flag); this only extracts the path.
  */
 export function parseCwdMessage(content: string): CwdMessageInfo | null {
 	const trimmed = content.trim();

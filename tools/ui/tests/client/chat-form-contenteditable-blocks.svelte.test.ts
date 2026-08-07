@@ -1,10 +1,7 @@
-// Guards the newline contract of the chat-form contenteditable: the
-// tokenizer emits a flat DOM, but browsers restructure it on Enter
-// (Chromium appends <div> line wrappers, Firefox wraps the whole buffer
-// in them, Shift+Enter / mobile keyboards / execCommand produce <br>
-// shapes). Serialization must fold those back into `\n` so the emitted
-// value never diverges from what is on screen, and the caret mappers
-// must understand the same shapes.
+// Guards the newline contract of the chat-form contenteditable: browsers
+// restructure the flat DOM on Enter (`<div>` wrappers, `<br>` shapes) and
+// serialization must fold those back into `\n` so the emitted value never
+// diverges from what is on screen.
 
 import { describe, it, expect } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -125,8 +122,8 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 		const screen = render(ChatFormContenteditableHarness, { value: 'abc\ndef' });
 		await tick();
 
-		// Rebuild the flat render into the Chromium block shape; the source
-		// is unchanged, so no re-render fires.
+		// Rebuild into the Chromium block shape; the source is unchanged,
+		// so no re-render fires.
 		const root = editableIn(screen.container);
 		const div = document.createElement('div');
 		div.textContent = 'def';

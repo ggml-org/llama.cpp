@@ -111,9 +111,7 @@
 	}: Props = $props();
 
 	// Component References
-	// Component handle shared by both the simple textarea and the
-	// contenteditable variant - both expose the same surface (focus,
-	// resetHeight, getElement, getCaretOffset, setCaretOffset).
+	// Shared handle of the two input renderers (textarea + contenteditable).
 	type ChatInputHandle = {
 		focus(): void;
 		resetHeight(): void;
@@ -138,18 +136,12 @@
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
 
-	// Invisible anchor for the mention picker: sits at the top edge of the
-	// chat form so the popover floats above the box (matches the working-
-	// directory picker's `customAnchor` pattern). One anchor per popover we
-	// want to anchor above the form.
+	// Invisible anchor at the form's top edge so the mention/WD popovers
+	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
 	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
 
-	// Picker orchestration: open/query state for the command, prompt,
-	// mention and working-directory pickers is owned by the hook; the chat
-	// form only supplies the component-owned dependencies (input value,
-	// caret, model selector) the pickers need.
 	const pickers = useChatFormPickers({
 		getValue: () => value,
 		setValue: (v) => {
@@ -169,9 +161,8 @@
 	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
-		// Committing a directory consumes the `/cwd` token (the command is
-		// dispatched, not sent as a message). Only clear when the picker was
-		// opened via `/cwd` - the chip's clear-X path has no token to consume.
+		// Committing a directory consumes the `/cwd` token; the chip's
+		// clear-X path has no token to consume.
 		const token = findCommandToken(value);
 		if (token && token.name === 'cwd') {
 			value = '';
@@ -226,15 +217,13 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
-	// Caret offset restored after a renderer swap. Callers that mutate `value`
-	// themselves (e.g. the mention picker splicing in `[name](file://path)`)
-	// pin the target offset BEFORE the value assignment; otherwise the swap
-	// effect snapshots the current caret.
+	// Caret offset restored after a renderer swap. Callers that mutate
+	// `value` themselves (e.g. the mention picker) pin the target offset
+	// BEFORE the assignment; otherwise the swap effect snapshots the
+	// current caret.
 	let pendingCaretOffset = 0;
 	let caretOffsetPinned = false;
 
-	// Runs after the renderer swap settles so the caret lands in the
-	// newly-mounted input.
 	function queueCaretRestore() {
 		queueMicrotask(() => {
 			inputRef?.focus();
@@ -243,15 +232,10 @@
 		});
 	}
 
-	// Render-mode selector: promote to the contenteditable when the
-	// value carries a `file://`-mention link, demote to the plain
-	// textarea when it doesn't any longer.
 	$effect(() => {
 		const wantContenteditable = containsFileMentionLink(value ?? '');
 		if (useContenteditable === wantContenteditable) return;
 
-		// Pin (set by the mention picker) wins; otherwise snapshot the
-		// current caret from whatever renderer is mounted.
 		if (!caretOffsetPinned) {
 			pendingCaretOffset = inputRef?.getCaretOffset() ?? (value ?? '').length;
 		}
@@ -305,9 +289,8 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		// Let the pickers consume navigation/escape keys first (Esc closes a
-		// picker, arrow keys move its selection). When consumed, skip the
-		// enter-to-submit logic below.
+		// Pickers consume navigation/escape keys first; when consumed, skip
+		// the enter-to-submit logic below.
 		if (pickers.handleKeydown(event)) {
 			return;
 		}
@@ -473,19 +456,14 @@
 		onUploadedFilesChange?.(uploadedFiles);
 	}
 
-	// Refocus the chat input after a picker closes. Deferred so the
-	// closing popover's focus scope tears down first - bits-ui yanks a
-	// synchronous focus() back into the still-mounted popover.
+	// Deferred so the closing popover's focus scope tears down first -
+	// bits-ui yanks a synchronous focus() back into the still-mounted popover.
 	function refocusInput() {
 		queueMicrotask(() => inputRef?.focus());
 	}
 
-	/**
-	 * Selection from the mention picker: splice a `[name](file://<abs>)`
-	 * link in place of the `@<query>` token (see buildMentionInsertion).
-	 * Uses the live cursor, not the stale snapshot, because the token may
-	 * have been edited since it was first seen.
-	 */
+	// Splice the mention link in place of the `@<query>` token. Uses the
+	// live cursor, not a stale snapshot - the token may have been edited.
 	function handleMentionSelect(entry: FileMentionEntry) {
 		const cursor = inputRef?.getCaretOffset() ?? value.length;
 		const token = findMentionToken(value, cursor);
@@ -494,18 +472,17 @@
 		const built = buildMentionInsertion(entry, value, token);
 		if (!built) return;
 
-		// Pin the post-insertion caret offset BEFORE the swap effect
-		// runs; otherwise the effect would clobber it with whatever
-		// the textarea's selection was at promotion time (browser-
-		// dependent: usually reset to 0).
+		// Pin the post-insertion caret BEFORE the swap effect runs;
+		// otherwise the effect clobbers it with the textarea's selection
+		// at promotion time (browser-dependent: usually reset to 0).
 		pendingCaretOffset = built.caretOffset;
 		caretOffsetPinned = true;
 
 		value = built.newValue;
 		onValueChange?.(built.newValue);
 
-		// Already in contenteditable mode: this insert does not flip the
-		// renderer, so the swap effect's caret restore never runs.
+		// Already in contenteditable mode: no renderer flip, so the swap
+		// effect's caret restore never runs.
 		if (useContenteditable) {
 			queueCaretRestore();
 		}

@@ -11,10 +11,7 @@
 	} from '$lib/components/app/chat';
 
 	/**
-	 * Slash-command picker. Opens when the user types `/` at the start of
-	 * the chat input; `query` (what the user typed after `/`) filters the
-	 * available commands by name/description. Selecting a command hands it
-	 * to the parent via `onSelect` to dispatch the corresponding picker.
+	 * Slash-command picker; `query` (typed after `/`) filters the commands.
 	 * The parent owns the "dismissed token, don't act until it changes"
 	 * snapshot, so this picker just renders and reports selection.
 	 */
@@ -48,12 +45,10 @@
 			: commands
 	);
 
-	// First enabled command in the filtered list, or -1 when all are disabled.
 	function firstEnabledIndex(): number {
 		return filteredCommands.findIndex((c) => !c.disabled);
 	}
 
-	// Step to the next/prev enabled command, wrapping around the list.
 	function stepEnabled(from: number, dir: number): number {
 		const n = filteredCommands.length;
 		if (n === 0) return -1;
@@ -67,7 +62,6 @@
 	const nav = usePickerNavigation({
 		isOpen: () => isOpen,
 		count: () => filteredCommands.length,
-		// Skip disabled commands; from a cleared highlight, land on the first.
 		step: (from, dir) => (from < 0 ? firstEnabledIndex() : stepEnabled(from, dir)),
 		onClose: () => onClose(),
 		onSelect: (index) => handleSelect(filteredCommands[index])
@@ -79,7 +73,6 @@
 		}
 	});
 
-	// Keep the highlight on an enabled command as the filtered list changes.
 	$effect(() => {
 		if (nav.hoveredIndex < 0 || nav.hoveredIndex >= filteredCommands.length) {
 			nav.reset(firstEnabledIndex());

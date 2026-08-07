@@ -45,9 +45,8 @@
 	let promptArgs = $state<Record<string, string>>({});
 	let selectedIndex = $state(0);
 	let internalSearchQuery = $state('');
-	// Bump on ArrowUp/ArrowDown only; the list's ChatFormPickerList
-	// uses this to scroll the picked row into view without scrolling
-	// on changes that aren't from keyboard nav.
+	// Bumped on ArrowUp/ArrowDown only, so the list scrolls on keyboard
+	// nav but not on hover or result changes.
 	let scrollTrigger = $state(0);
 	let promptError = $state<string | null>(null);
 	let selectedIndexBeforeArgumentForm = $state<number | null>(null);

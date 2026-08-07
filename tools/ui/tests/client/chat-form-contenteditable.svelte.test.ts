@@ -1,10 +1,7 @@
 // Guards the clipboard contract of the chat-form contenteditable:
-// copy/cut expose the markdown SOURCE of the selection (each mention
-// badge contributes its full `[name](file://...)` link) and pasting
-// such markdown re-renders the badges. The browser dispatches the
-// same copy/cut/paste events for keyboard shortcuts, the Edit menu
-// and the mouse context menu, so covering the event handlers covers
-// all three entry points.
+// copy/cut expose the markdown SOURCE of the selection (each badge
+// contributes its full `[name](file://...)` link) and pasting such
+// markdown re-renders the badges.
 
 import { describe, it, expect } from 'vitest';
 import { render } from 'vitest-browser-svelte';

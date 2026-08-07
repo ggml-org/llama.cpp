@@ -178,10 +178,9 @@ export interface FileMentionEntry {
 }
 
 /**
- * A slash command surfaced by the `/` command picker. `name` is the command
- * without the leading `/`; `disabled` marks a command whose backing
- * capability is currently unavailable (e.g. `/prompt` when no MCP server
- * exposes prompts) - it stays visible but is greyed out and not selectable.
+ * A slash command surfaced by the `/` command picker. `disabled` marks a
+ * command whose backing capability is unavailable (e.g. `/prompt` when no
+ * MCP server exposes prompts): visible but greyed out and not selectable.
  */
 export interface ChatFormCommand {
 	name: string;

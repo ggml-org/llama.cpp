@@ -3,11 +3,11 @@ import { ChatFormCommandAction } from '$lib/enums';
 import type { ChatFormCommand } from '$lib/types';
 
 interface ChatCommandsOptions {
-	/** Whether the model selector is rendered in the chat form actions. */
+	/** Gates `/model`. */
 	showModelSelector: boolean;
-	/** Whether MCP prompts are reachable (gates `/prompt`). */
+	/** Gates `/prompt`. */
 	hasPrompts: () => boolean;
-	/** Whether built-in tools are present (gates `/cwd`). */
+	/** Gates `/cwd`. */
 	hasBuiltinTools: () => boolean;
 }
 

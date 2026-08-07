@@ -1,8 +1,7 @@
 /**
  * Shared `file_glob_search` runners with a short-lived result cache, so a
  * repeated query for the same (type, path, glob, depth) reuses the last
- * result instead of re-walking the tree. Entries are fresh only within a
- * short TTL; anything older re-fetches.
+ * result instead of re-walking the tree.
  */
 
 import { BuiltInTool, GlobSearchType } from '$lib/enums';
@@ -38,10 +37,6 @@ export interface GlobSearchResult {
 	error?: string;
 }
 
-/**
- * Run (or serve from cache) one `file_glob_search` call. Returns the raw
- * server entries; callers map them to their own shape and rank locally.
- */
 export async function runGlobSearch(
 	args: GlobSearchArgs,
 	type: GlobSearchType,
@@ -68,7 +63,6 @@ export async function runGlobSearch(
 	return { base, entries };
 }
 
-/** A glob hit with its absolute path and basename, ready for a picker. */
 export interface GlobEntryResult {
 	path: string;
 	name: string;
@@ -76,14 +70,10 @@ export interface GlobEntryResult {
 }
 
 export interface GlobSearchChildOptions {
-	/** Search type for the outer search and the child walk. */
 	type?: GlobSearchType;
-	/**
-	 * Descend only when the query ends with a path separator (mention
-	 * picker). Off for the WD picker, which descends on any exact match.
-	 */
+	/** Descend only on a trailing path separator (mention picker); off for
+	 * the WD picker, which descends on any exact match. */
 	descendOnTrailingSeparator?: boolean;
-	/** Max recursion depth when walking the matched directory's children. */
 	childMaxDepth?: number;
 }
 
@@ -104,8 +94,7 @@ function toEntryResult(e: GlobEntry, base: string): GlobEntryResult {
 /**
  * One ranked glob search that may also list the matched directory's
  * children, shared by the WD picker (descend on exact match) and the
- * mention picker (descend on a trailing `/` or `\`). Absolute paths keep
- * children from a different base addressable alongside outer results.
+ * mention picker (descend on a trailing `/` or `\`).
  */
 export async function runGlobSearchWithChildren(
 	query: string,

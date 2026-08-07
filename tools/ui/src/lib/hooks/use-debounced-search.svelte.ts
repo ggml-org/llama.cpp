@@ -1,12 +1,9 @@
 import { debounce } from '$lib/utils/debounce';
 
 /**
- * Shared debounced async-search machinery for the chat-form pickers: an
- * AbortController plus a sequence counter to discard stale responses, a
- * debounce, and a live `isSearching` flag. The caller supplies a fetcher
- * that performs the network call and commits its own results; it receives
- * an `isCurrent` callback that returns false once a newer search has
- * started, so stale work never lands.
+ * Shared debounced async-search machinery for the chat-form pickers:
+ * AbortController + sequence counter to discard stale responses, a
+ * debounce, and a live `isSearching` flag.
  */
 
 export interface UseDebouncedSearchOptions {
@@ -15,10 +12,7 @@ export interface UseDebouncedSearchOptions {
 	canRun: () => boolean;
 	/** Live query, used to drop a scheduled call whose query changed. */
 	getQuery: () => string;
-	/**
-	 * Perform the search and commit results. Return early when `isCurrent()`
-	 * is false, so stale work never lands.
-	 */
+	/** Perform the search and commit results; bail out when `isCurrent()` is false. */
 	run: (query: string, signal: AbortSignal, isCurrent: () => boolean) => void | Promise<void>;
 }
 

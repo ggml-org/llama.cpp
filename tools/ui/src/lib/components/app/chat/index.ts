@@ -267,21 +267,16 @@ export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileIn
 export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResourcesList.svelte';
 
 /**
- * Auto-resizing contenteditable input with IME composition support and inline
- * mention badges. Renders `[name](file://...)` markdown links produced by the
- * `@`-picker as inline chips inside the editable area while keeping the
- * underlying value as the markdown source string. ChatForm swaps in this
- * component lazily, only after a `file://` markdown link has been
- * introduced into the buffer. Exposes focus(), resetHeight(),
- * getCaretOffset() and setCaretOffset() methods.
+ * Auto-resizing contenteditable input that renders `[name](file://...)`
+ * mention links as inline chips while keeping the value as the markdown
+ * source string. ChatForm swaps it in once a mention link lands in the
+ * buffer. Shares the focus()/resetHeight()/caret handle with the textarea.
  */
 export { default as ChatFormContenteditable } from './ChatForm/ChatFormContenteditable.svelte';
 
 /**
- * Plain auto-resizing textarea. Default input renderer inside ChatForm;
- * the component swaps in `ChatFormContenteditable` once a file mention
- * lands. Exposes focus(), resetHeight(), getCaretOffset() and
- * setCaretOffset() so the two renderers share one handle type.
+ * Plain auto-resizing textarea with IME composition support. Default input
+ * renderer inside ChatForm until a file mention lands.
  */
 export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
 
@@ -389,51 +384,23 @@ export { default as ChatFormPickerItemHeader } from './ChatForm/ChatFormPickers/
 export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerListItemSkeleton.svelte';
 
 /**
- * **ChatFormMentionPicker** - `@`-triggered file/folder mention picker
- *
- * Floating picker that resolves `@<query>` in the chat textarea to a
- * filesystem file or folder. Source data is the server's
- * `file_glob_search` built-in tool (POST /tools) with `type: 'all'`,
- * scoped to the conversation cwd (or server home when unset), so both
- * files and folders appear in the same list.
- *
- * Selection produces a markdown link `[name](file:///<abs path>)` plus
- * a trailing space, spliced into the textarea so the cursor lands at
- * the end of the inserted link (ready for the user to keep typing).
- *
- * **Features:**
- * - Debounced substring search across files and folders
- * - Substring highlighting of the user's query inside each result path
- * - Keyboard navigation (ArrowUp/ArrowDown to navigate, Enter to select, Esc to close)
- * - Additive to file uploads: this picker inserts an inline reference;
- *   it does not replace the file-upload handling in ChatForm
- * - Hidden files included by default (server is source of truth)
- *
- * **Exported API:**
- * - `handleKeydown(event): boolean` - Process keyboard events, returns true if handled
+ * `@`-triggered file/folder mention picker. Resolves `@<query>` in the chat
+ * input to a filesystem match via the server's `file_glob_search` built-in
+ * tool, scoped to the conversation cwd (or server home when unset).
+ * Selection splices a `[name](file:///<abs path>)` link into the input.
  */
 export { default as ChatFormMentionPicker } from './ChatForm/ChatFormPickers/ChatFormMentionPicker.svelte';
 
 /**
- * **ChatFormCommandPicker** - `/`-triggered slash-command picker
- *
- * Floating picker that lists the available slash commands (e.g. `/prompt`,
- * `/cwd`, `/model`) when the user types `/` at the start of the chat input.
- * The chat input is the search surface: the typed query filters commands by
- * name/description. Selection hands the command to the parent so it can
- * dispatch the corresponding picker / selector.
- *
- * **Exported API:**
- * - `handleKeydown(event): boolean` - Process keyboard events, returns true if handled
+ * `/`-triggered slash-command picker. Lists the available slash commands
+ * (`/prompt`, `/cwd`, `/model`) filtered by the typed query; selection
+ * hands the command to the parent for dispatch.
  */
 export { default as ChatFormCommandPicker } from './ChatForm/ChatFormPickers/ChatFormCommandPicker.svelte';
 
 /**
- * **ChatFormPickers** - Chat input picker container
- *
- * Container component that hosts both MCP prompt and MCP resource pickers.
- * Manages shared state, keyboard navigation, and coordination between the two
- * picker interfaces. Used within ChatForm for `@`-triggered pickers.
+ * Hosts the chat-form pickers (slash-command, MCP prompt, file mention)
+ * and delegates keyboard events to the active one.
  */
 export { default as ChatFormPickers } from './ChatForm/ChatFormPickers/ChatFormPickers.svelte';
 

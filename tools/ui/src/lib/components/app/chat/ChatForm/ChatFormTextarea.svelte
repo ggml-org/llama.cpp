@@ -48,11 +48,8 @@
 		}
 	}
 
-	/**
-	 * Plain-text caret offsets, used uniformly across both textarea and
-	 * contenteditable variants so the picker / paste / mention-search
-	 * round-trip flows can address either one through the same handle.
-	 */
+	// Plain-text caret offsets, shared with the contenteditable variant so
+	// the picker/paste flows can address either renderer through one handle.
 	export function getCaretOffset(): number {
 		if (!textareaElement) return 0;
 		return textareaElement.selectionStart ?? textareaElement.value.length;

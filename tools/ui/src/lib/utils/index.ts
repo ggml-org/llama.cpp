@@ -205,9 +205,7 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
-// Tokenization for the chat-form contenteditable (renders `@`-picked
-// `[name](file://...)` links as inline badges inside the input while
-// keeping the markdown source unchanged).
+// Tokenization for the chat-form contenteditable (mention links <-> badge DOM)
 export {
 	tokenizeContent,
 	serializeContent,

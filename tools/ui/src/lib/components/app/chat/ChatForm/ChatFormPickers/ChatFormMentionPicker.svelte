@@ -19,16 +19,10 @@
 	} from '$lib/constants';
 
 	/**
-	 * Floating file/folder mention picker. Opens when the user types
-	 * `@<query>` at a token boundary; returns the picked `FileMentionEntry`
-	 * via `onSelect` so the parent can splice a `[name](file:///<abs>)<space>`
-	 * link into the textarea at the cursor.
-	 *
-	 * The chat textarea is the search surface: `query` (what the user typed
-	 * after `@`) drives a `file_glob_search` tool call scoped to `scopePath`
-	 * (the conversation cwd, or the server home when unset). Closes via
-	 * Escape, outside-click, or selection. The parent owns the "dismissed
-	 * token, don't re-open until it changes" snapshot.
+	 * Floating file/folder mention picker. The chat input is the search
+	 * surface: `query` (typed after `@`) drives a `file_glob_search` tool
+	 * call scoped to `scopePath`. The parent owns the "dismissed token,
+	 * don't re-open until it changes" snapshot.
 	 */
 	interface Props {
 		class?: string;
@@ -38,12 +32,7 @@
 		scopePath?: string | null;
 		onClose: () => void;
 		onSelect: (entry: FileMentionEntry) => void;
-		/**
-		 * Fired when `isOpen` becomes true. The chat textarea is the picker's
-		 * "search input", so the host focuses it here to keep the chain
-		 * `typed @ -> picker open -> still typing` continuous even if focus
-		 * drifted (e.g. closed via outside-click on the chip trigger).
-		 */
+		/** Fired when `isOpen` becomes true, so the host can keep focus on the chat input. */
 		onOpened?: () => void;
 	}
 
@@ -65,10 +54,9 @@
 		onSelect: (index) => handleSelect(displayedItems[index])
 	});
 
-	// The mention search is backed by the file_glob_search builtin tool.
-	// When the server does not expose it (started without --tools) or the
-	// user disabled it, the picker still opens but explains why instead of
-	// firing searches that would only fail.
+	// When the server does not expose file_glob_search (started without
+	// --tools) or the user disabled it, the picker still opens but explains
+	// why instead of firing searches that would only fail.
 	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
 	const fileSearchEnabled = $derived(
 		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
@@ -77,22 +65,18 @@
 	let searchResults = $state<FileMentionEntry[]>([]);
 	let searchError = $state<string | null>(null);
 
-	// Coerce the depth setting to a positive integer; an empty/non-numeric
-	// value would otherwise reach the server as max_depth 0 = unlimited.
+	// Coerce the depth setting to a positive integer; an invalid value
+	// would otherwise reach the server as max_depth 0 = unlimited.
 	const searchDepth = $derived.by(() => {
 		const n = Number(config().mentionSearchMaxDepth);
 		return Number.isInteger(n) && n > 0 ? n : FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH;
 	});
 
-	// Absolute home on the server, resolved once per session by the tools
-	// store. Anchors the search scope fallback and the `~` abbreviation.
 	const home = $derived(toolsStore.serverHome);
 
 	// A smaller window than the WD picker suffices: entries are ranked client-side.
 	const MENTION_SEARCH_LIMIT = 50;
 
-	// Debounced, abortable glob search; the fetcher maps each hit to a
-	// FileMentionEntry and the hook's isCurrent guard drops stale responses.
 	const search = useDebouncedSearch({
 		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen && fileSearchEnabled,
@@ -130,7 +114,6 @@
 		}
 	});
 
-	// A bare `@` with no query is a no-op (the host does not even open the picker).
 	const trimmedQuery = $derived((query ?? '').trim());
 	const displayedItems = $derived(searchResults);
 
@@ -144,7 +127,6 @@
 		return searchError ? `Search failed - ${searchError}` : 'No matching files or folders';
 	});
 
-	// Tooltips only on wider viewports; same gate used elsewhere (ActionIcon, WD chip).
 	const showTooltip = $derived(!isMobile.current);
 
 	$effect(() => {
@@ -158,12 +140,10 @@
 		}
 	});
 
-	// Keep focus on the chat textarea so typing after `@` flows naturally.
 	$effect(() => {
 		if (isOpen) onOpened?.();
 	});
 
-	// `query` (what the user typed after `@`) drives the debounced fetch.
 	$effect(() => {
 		const q = (query ?? '').trim();
 		if (!isOpen || !q || !fileSearchEnabled) {

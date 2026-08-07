@@ -17,9 +17,8 @@ const TOKEN_BOUNDARY_CHARS = new Set([
 ]);
 
 /**
- * Find the most-recent `@`-mention token whose extent includes `cursor`.
- * The token spans from its boundary `@` to the next boundary character,
- * so the query covers the whole `@...` token regardless of caret.
+ * Find the most-recent `@`-mention token whose extent includes `cursor`;
+ * the query covers the whole `@...` token regardless of caret position.
  */
 export function findMentionToken(
 	value: string,

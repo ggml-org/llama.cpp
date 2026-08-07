@@ -46,9 +46,7 @@ export { default as SearchInput } from './SearchInput.svelte';
 /**
  * **HighlightedMatch** - Substring-match text highlight
  *
- * Splits `text` into alternating segments at each case-insensitive
- * occurrence of `query` and renders the matched spans inside `<mark>`.
- * Used by picker rows to highlight the user's search term inside longer
- * path or label strings.
+ * Renders `text` with each case-insensitive occurrence of `query` wrapped
+ * in `<mark>`.
  */
 export { default as HighlightedMatch } from './HighlightedMatch.svelte';

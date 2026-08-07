@@ -1,11 +1,7 @@
 // Guards the editing-key contract of the chat-form contenteditable:
-//
-// - Undo/redo is replayed from source snapshots because the imperative
-//   token rebuilds (replaceChildren) destroy the browser's native undo
-//   stack once a badge exists. Ctrl/Cmd+Z undoes, Ctrl+Shift+Z and
-//   Ctrl+Y redo.
-// - Tab is NOT intercepted: focus must be able to leave the editable
-//   (WCAG 2.1.2 no keyboard trap), matching the plain textarea.
+// undo/redo is replayed from source snapshots (the token rebuilds destroy
+// the native undo stack), and Tab is NOT intercepted (WCAG 2.1.2 no
+// keyboard trap), matching the plain textarea.
 
 import { describe, it, expect } from 'vitest';
 import { render } from 'vitest-browser-svelte';

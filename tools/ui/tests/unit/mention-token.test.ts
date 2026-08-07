@@ -31,7 +31,6 @@ describe('findMentionToken', () => {
 	});
 
 	it('does not treat an identifier character as a boundary', () => {
-		// `user@` - the @ preceded by an identifier char does not start a token.
 		expect(findMentionToken('user@abc', 8)).toBeNull();
 	});
 
