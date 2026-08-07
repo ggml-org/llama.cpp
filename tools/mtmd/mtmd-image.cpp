@@ -68,6 +68,9 @@ struct img_tool {
                 case RESIZE_ALGO_BICUBIC_PILLOW:
                     resize_bicubic_pillow(src, dst, target_resolution.width, target_resolution.height);
                     break;
+                case RESIZE_ALGO_LANCZOS:
+                    resize_lanczos_pillow(src, dst, target_resolution.width, target_resolution.height);
+                    break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
             }
@@ -96,6 +99,9 @@ struct img_tool {
                     break;
                 case RESIZE_ALGO_BICUBIC_PILLOW:
                     resize_bicubic_pillow(src, resized_image, new_width, new_height);
+                    break;
+                case RESIZE_ALGO_LANCZOS:
+                    resize_lanczos_pillow(src, resized_image, new_width, new_height);
                     break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
@@ -133,50 +139,46 @@ struct img_tool {
         }
     }
 
-    // calculate the size of the **resized** image, while preserving the aspect ratio
-    // the calculated size will be aligned to the nearest multiple of align_size
-    // if H or W size is larger than longest_edge, it will be resized to longest_edge
-    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const int align_size, const int longest_edge) {
-        GGML_ASSERT(align_size > 0);
-        if (inp_size.width <= 0 || inp_size.height <= 0 || longest_edge <= 0) {
+    struct calc_size_opt {
+        int align_size = 1;
+        int min_pixels = 0;   // 0 = disabled
+        int max_pixels = 0;   // 0 = disabled
+        // applied before min/max_pixels, so min_pixels can push an edge back above longest_edge
+        int longest_edge = 0; // 0 = disabled
+    };
+
+    // calculate the size of the **resized** image, while preserving the aspect ratio and
+    // aligning to the nearest multiple of align_size ("smart_resize" in transformers code)
+    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const calc_size_opt & opts) {
+        GGML_ASSERT(opts.align_size > 0);
+        const int width  = inp_size.width;
+        const int height = inp_size.height;
+        if (width <= 0 || height <= 0) {
             return {0, 0};
         }
 
-        float scale = std::min(static_cast<float>(longest_edge) / inp_size.width,
-                               static_cast<float>(longest_edge) / inp_size.height);
+        auto round_by_factor = [f = opts.align_size](float x) { return static_cast<int>(std::round(x / static_cast<float>(f))) * f; };
+        auto ceil_by_factor  = [f = opts.align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
+        auto floor_by_factor = [f = opts.align_size](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
 
-        float target_width_f  = static_cast<float>(inp_size.width)  * scale;
-        float target_height_f = static_cast<float>(inp_size.height) * scale;
+        int w_bar, h_bar;
+        if (opts.longest_edge > 0) {
+            const float scale = std::min(static_cast<float>(opts.longest_edge) / width,
+                                          static_cast<float>(opts.longest_edge) / height);
+            w_bar = ceil_by_factor(width  * scale);
+            h_bar = ceil_by_factor(height * scale);
+        } else {
+            // always align up first
+            w_bar = std::max(opts.align_size, round_by_factor(width));
+            h_bar = std::max(opts.align_size, round_by_factor(height));
+        }
 
-        auto ceil_by_factor = [f = align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
-        int aligned_width  = ceil_by_factor(target_width_f);
-        int aligned_height = ceil_by_factor(target_height_f);
-
-        return {aligned_width, aligned_height};
-    }
-
-    // calculate the size of the **resized** image, while preserving the aspect ratio
-    // the calculated size will have min_pixels <= W*H <= max_pixels
-    // this is referred as "smart_resize" in transformers code
-    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const int align_size, const int min_pixels, const int max_pixels) {
-        GGML_ASSERT(align_size > 0);
-        const int width  = inp_size.width;
-        const int height = inp_size.height;
-
-        auto round_by_factor = [f = align_size](float x) { return static_cast<int>(std::round(x / static_cast<float>(f))) * f; };
-        auto ceil_by_factor  = [f = align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
-        auto floor_by_factor = [f = align_size](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
-
-        // always align up first
-        int h_bar = std::max(align_size, round_by_factor(height));
-        int w_bar = std::max(align_size, round_by_factor(width));
-
-        if (h_bar * w_bar > max_pixels) {
-            const auto beta = std::sqrt(static_cast<float>(height * width) / max_pixels);
-            h_bar = std::max(align_size, floor_by_factor(height / beta));
-            w_bar = std::max(align_size, floor_by_factor(width  / beta));
-        } else if (h_bar * w_bar < min_pixels) {
-            const auto beta = std::sqrt(static_cast<float>(min_pixels) / (height * width));
+        if (opts.max_pixels > 0 && h_bar * w_bar > opts.max_pixels) {
+            const auto beta = std::sqrt(static_cast<float>(height) * width / opts.max_pixels);
+            h_bar = std::max(opts.align_size, floor_by_factor(height / beta));
+            w_bar = std::max(opts.align_size, floor_by_factor(width  / beta));
+        } else if (opts.min_pixels > 0 && h_bar * w_bar < opts.min_pixels) {
+            const auto beta = std::sqrt(static_cast<float>(opts.min_pixels) / (static_cast<float>(height) * width));
             h_bar = ceil_by_factor(height * beta);
             w_bar = ceil_by_factor(width * beta);
         }
@@ -337,22 +339,50 @@ private:
         }
     }
 
-    // Bicubic resize function using Pillow's ImagingResample algorithm
+    // Pillow-compatible separable resampling (Bicubic and Lanczos)
     // Adapted from https://github.com/python-pillow/Pillow/blob/main/src/libImaging/Resample.c
     //
-    // Key Difference with resize_bicubic:
-    // 1. Uses separable filtering: horizontal pass followed by vertical pass
+    // Key properties:
+    // 1. Separable filtering: horizontal pass followed by vertical pass
     // 2. Pre-computes normalized filter coefficients for each output pixel
-    // 3. Applies convolution using fixed-point integer arithmetic for performance
+    // 3. Fixed-point integer arithmetic (22 fractional bits) for speed and determinism
     static bool resize_bicubic_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
+        return resize_pillow(img, dst, target_width, target_height, /*use_lanczos=*/false);
+    }
+
+    // Lanczos-3 (support radius 3), matches Pillow's Image.LANCZOS
+    static bool resize_lanczos_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
+        return resize_pillow(img, dst, target_width, target_height, /*use_lanczos=*/true);
+    }
+
+    static bool resize_pillow(
+            const clip_image_u8 & img,
+            clip_image_u8 & dst,
+            int target_width,
+            int target_height,
+            bool use_lanczos) {
         // Fixed-point precision: 22 bits = 32 (int32_t) - 8 (uint8_t pixels) - 2 (headroom for accumulation)
         // This allows encoding fractional weights as integers: weight * 2^22
         const int PRECISION_BITS = 32 - 8 - 2;
 
-        // Bicubic filter function with a = -0.5 (Note that GGML/PyTorch takes a = -0.75)
+        // Resample filter: Lanczos-3 (support [-3, 3]) or bicubic with a = -0.5 (support [-2, 2])
+        // Note: GGML/PyTorch bicubic uses a = -0.75, Pillow uses a = -0.5
         // Returns filter weight for distance x from pixel center
-        // Support: [-2, 2], meaning the filter influences pixels within 2 units of distance
-        auto bicubic_filter = [](double x) -> double {
+        auto resample_filter = [use_lanczos](double x) -> double {
+            if (use_lanczos) {
+                if (-3.0 <= x && x < 3.0) {
+                    auto sinc = [](double v) {
+                        if (v == 0.0) {
+                            return 1.0;
+                        }
+                        const double pi_v = v * 3.141592653589793238462643383279502884;
+                        return std::sin(pi_v) / pi_v;
+                    };
+                    return sinc(x) * sinc(x / 3.0);
+                }
+                return 0.0;
+            }
+
             constexpr double a = -0.5;
             if (x < 0.0) {
                 x = -x;
@@ -366,8 +396,8 @@ private:
             return 0.0;  // Zero outside [-2, 2]
         };
 
-        // Filter support radius: bicubic extends 2 pixels in each direction
-        constexpr double filter_support = 2.0;
+        // Filter support radius: 2 for bicubic, 3 for lanczos
+        const double filter_support = use_lanczos ? 3.0 : 2.0;
 
         // Clipping function for 8-bit values
         auto clip8 = [](int val) -> uint8_t {
@@ -434,7 +464,7 @@ private:
                 // Compute filter weights for each contributing input pixel
                 for (x = 0; x < xmax; x++) {
                     // Distance from input pixel center to output pixel center in input space
-                    double w = bicubic_filter((x + xmin - center + 0.5) * ss);
+                    double w = resample_filter((x + xmin - center + 0.5) * ss);
                     pre_weights[xx * ksize + x] = w;
                     ww += w;  // Accumulate for normalization
                 }
@@ -463,6 +493,12 @@ private:
             const double fxp_scale = std::ldexp(1.0, PRECISION_BITS); // 1.0 * 2^PRECISION_BITS
 
             for (int i = 0; i < outSize * ksize; i++) {
+                if (use_lanczos) {
+                    // Pillow adds +/- 0.5 then truncates toward zero; std::round would round twice
+                    const double rounded = pre_weights[i] * fxp_scale + (pre_weights[i] < 0 ? -0.5 : 0.5);
+                    weights[i] = static_cast<int32_t>(rounded);
+                    continue;
+                }
                 double tmp_val = pre_weights[i] * fxp_scale;
                 if (pre_weights[i] < 0) {
                     tmp_val -= 0.5;
@@ -897,9 +933,12 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
     const int cur_merge = hparams.n_merge;
     const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
         original_size,
-        hparams.patch_size * cur_merge,
-        hparams.image_min_pixels,
-        hparams.image_max_pixels);
+        {
+            /* align_size   */ hparams.patch_size * cur_merge,
+            /* min_pixels   */ hparams.image_min_pixels,
+            /* max_pixels   */ hparams.image_max_pixels,
+            /* longest_edge */ 0,
+        });
     img_tool::resize(img, resized_image, target_size,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
@@ -921,8 +960,12 @@ mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const cl
     const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
     const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
         original_size,
-        hparams.patch_size * cur_merge,
-        hparams.image_longest_edge);
+        {
+            /* align_size   */ hparams.patch_size * cur_merge,
+            /* min_pixels   */ std::max(0, hparams.image_min_pixels),
+            /* max_pixels   */ std::max(0, hparams.image_max_pixels),
+            /* longest_edge */ hparams.image_longest_edge,
+        });
     img_tool::resize(img, resized_image, target_size,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
@@ -933,6 +976,26 @@ mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const cl
 }
 
 //
+// mtmd_image_preprocessor_minicpmv
+//
+
+mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_minicpmv::get_slice_instructions(const clip_image_size & original_size) {
+    if (hparams.n_merge == 2) {
+        const int   slice_size = hparams.image_size;
+        const float ratio      = (float)original_size.width * original_size.height / (slice_size * slice_size);
+        if (ratio <= 1.0f) {
+            mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
+            const int patch_size = hparams.patch_size * hparams.n_merge;
+            inst.overview_size = get_best_resize(original_size, slice_size, patch_size, true);
+            inst.refined_size  = clip_image_size{0, 0};
+            inst.grid_size     = clip_image_size{0, 0};
+            return inst;
+        }
+    }
+    return mtmd_image_preprocessor_llava_uhd::get_slice_instructions(original_size);
+}
+
+//
 // mtmd_image_preprocessor_lfm2
 //
 
@@ -940,8 +1003,8 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lf
     mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
     const int align_size = hparams.patch_size * hparams.n_merge;
     inst.overview_size = img_tool::calc_size_preserved_ratio(
-                            original_size, align_size,
-                            hparams.image_min_pixels, hparams.image_max_pixels);
+                            original_size,
+                            { align_size, hparams.image_min_pixels, hparams.image_max_pixels, 0 });
     // tile if either dimension exceeds tile_size with tolerance
     const bool needs_tiling = original_size.width > tile_size * max_pixels_tolerance || original_size.height > tile_size * max_pixels_tolerance;
 
@@ -1049,7 +1112,8 @@ mtmd_image_preproc_out mtmd_image_preprocessor_idefics3::preprocess(const clip_i
     // CITE: https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics3/image_processing_idefics3.py#L737
     const clip_image_size original_size = img.get_size();
     const clip_image_size refined_size = img_tool::calc_size_preserved_ratio(
-        original_size, hparams.image_size, hparams.image_longest_edge);
+        original_size,
+        { hparams.image_size, std::max(0, hparams.image_min_pixels), std::max(0, hparams.image_max_pixels), hparams.image_longest_edge });
     // LOG_INF("%s: original size: %d x %d, refined size: %d x %d\n",
     //         __func__, original_size.width, original_size.height,
     //         refined_size.width, refined_size.height);

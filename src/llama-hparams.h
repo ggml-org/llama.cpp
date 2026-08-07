@@ -47,6 +47,7 @@ struct llama_hparams {
     bool use_par_res;
     bool swin_norm;
     bool norm_before_residual = false;
+    bool norm_before_fc       = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
@@ -226,6 +227,13 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    // MSA
+    uint32_t indexer_block_size  = 0;
+    uint32_t indexer_local_blocks = 0;
+
+    // Indexer is "full" (1) or "shared" (0)
+    // Shared indexers reuse top-k from previous full layer
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
@@ -301,6 +309,8 @@ struct llama_hparams {
     bool is_swa_any() const;
 
     bool is_swa(uint32_t il) const;
+
+    bool is_indexer_full(uint32_t il) const;
 
     void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
 
