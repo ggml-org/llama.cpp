@@ -4,6 +4,7 @@
 #include "llama-ext.h"
 #include "llama-quant.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cinttypes>
 #include <csignal>
@@ -703,7 +704,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         float min_bpw = 0.0;
         float max_bpw = 0.0;
         size_t n_elements = 0;
-        bool important = false;
+        float boost = 1.0f;
     };
 
     // Quantization types
@@ -736,9 +737,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     constexpr double EPSILON = 1e-12;
     constexpr double INFINITE = std::numeric_limits<double>::infinity();
-    constexpr uint64_t STATE_MAGIC = 0x4250572d5631; // "BPW-V1"
+    constexpr uint64_t STATE_MAGIC = 0x4250572d5632; // "BPW-V2"
     constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
-    constexpr float boost = 2.5f;
+    constexpr float ffn_down_boost = 6.0f;
+    constexpr float output_boost = 3.0f;
+    constexpr float tied_embd_boost = 2.5f;
+    constexpr float attn_v_boost = 1.25f;
+    constexpr float boost_taper = 2.2f; // boost starves other tensors below 2.2 bpw
     const char * func = __func__;
 
     // Tensor size in bytes for a given type
@@ -1001,11 +1006,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto is_inner_product_sensitive = [](const std::string & name) -> bool {
         // Query/Key and variants (fused, latent, and enc/dec)
         if (name.find("attn_q") != std::string::npos || name.find("attn_k") != std::string::npos) { return true; }
-
         // Attention Output and variants (standard, enc/dec, cross-attn)
         if (name.find("attn_o") != std::string::npos) { return true; }
-
-        if (name.find("ffn_down.weight") != std::string::npos) { return true; }
+        // Value and variants
+        if (name.find("attn_v") != std::string::npos) { return true; }
 
         return false;
     };
@@ -1345,6 +1349,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             const std::string name = remap_imatrix(ggml_get_name(tensor), mapped);
             auto it = statistics_data->find(name);
             if (it == statistics_data->end() || it->second.size() <= (size_t) L2_DIST) { continue; }
+
+            // Heads have no previous-layer counterpart so they stay outside the pool at cnif = 1.0
+            if (tensor_name_match_token_embd(ggml_get_name(tensor)) || tensor_name_match_output_weight(ggml_get_name(tensor))) { continue; }
 
             const auto & ts = it->second;
             const float h_norm = std::isfinite(ts[H_NORM]) ? std::clamp(ts[H_NORM], 0.0f, 100.0f) : 100.0f;
@@ -1978,10 +1985,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
         }
 
+        float kappa_raw = std::numeric_limits<float>::quiet_NaN();
         float kappa_factor = 1.0f;
         if (statistics_data && !statistics_data->empty()) {
-            const float kappa = randomized_svd_condition_number(f32_sample, n_per_row, (int64_t)total_rows_sampled);
-            kappa_factor = squash_kappa(kappa);
+            kappa_raw = randomized_svd_condition_number(f32_sample, n_per_row, (int64_t)total_rows_sampled);
+            kappa_factor = squash_kappa(kappa_raw);
         }
 
         // Build candidates
@@ -2011,9 +2019,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             dq_buf.reserve(n_per_row);
         }
 
-        float scaling_factor = 1.0f;
-        if (auto it = cnif_scores.find(remapped_name); it != cnif_scores.end()) { scaling_factor = it->second; }
-        scaling_factor *= kappa_factor;
+        float cnif_score = 1.0f;
+        if (auto it = cnif_scores.find(remapped_name); it != cnif_scores.end()) { cnif_score = it->second; }
+        const float scaling_factor = cnif_score * kappa_factor;
+        const bool ip_sensitive = is_inner_product_sensitive(remapped_name);
+
+        std::vector<double> raw_errors;
+        raw_errors.reserve(valid_types.size());
 
         for (ggml_type vt : valid_types) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
@@ -2037,8 +2049,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             );
 
             double error = qe.error;
-            // Error adjustment for inner-product sensitive tensors at low bpw
-            if (is_inner_product_sensitive(remapped_name)) { error *= 1.0f + std::pow(2.0f, 3.0f - bpw); }
+            if (ip_sensitive) { error *= 1.0f + 0.5f * std::pow(2.0f, 3.0f - bpw); } // error adjustment for inner-product sensitive tensors at low bpw
 
             type_scores candidate;
             candidate.type = vt;
@@ -2048,6 +2059,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             candidate.mse = qe.mse;
             candidate.wce = qe.wce;
             evaluations.push_back(candidate);
+            raw_errors.push_back(qe.error);
         }
 
         type_choice ch;
@@ -2279,7 +2291,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 LLAMA_LOG_INFO("\t%s: %45s %s\t%8s, \t%1.4f bpw,\terror: %.4f%s\n",
                     func,
                     name.c_str(),
-                    tp.important ? "⬆︎" : "-",
+                    tp.boost > 1.0f ? "⬆︎" : "-",
                     ggml_type_name(choice.type),
                     choice.bpw,
                     choice.error,
@@ -2301,15 +2313,27 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return build_mix();
     }
 
-    // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
-    auto is_important = [&](const std::string & tensor_name) -> bool {
-        if (tensor_name == "output.weight") { return true; }
-
-        return false;
-    };
-
-    // Determine tensor importance
-    for (auto & tn : all_tensors) { tn.important = is_important(ggml_get_name(tn.w->tensor)); }
+    // Certain tensors have a higher impact on model quality, so they get a boost
+    size_t total_elements = 0;
+    for (const auto & tn : all_tensors) { total_elements += tn.n_elements; }
+    const double global_bpw = 8.0 * (double)budget_bytes / (double)total_elements;
+    for (auto & tn : all_tensors) {
+        const std::string tensor_name = ggml_get_name(tn.w->tensor);
+        if (tensor_name.find("ffn_down.weight") != std::string::npos) {
+            if (global_bpw < boost_taper) {
+                for (auto & candidate : tn.candidates) { candidate.error *= 1.0 + std::pow(2.0, 3.0 - candidate.bpw); }
+            } else {
+                tn.boost = ffn_down_boost;
+            }
+        } else if (tensor_name == "output.weight") {
+            tn.boost = output_boost;
+        } else if (tensor_name.find("attn_v") != std::string::npos) {
+            tn.boost = attn_v_boost;
+        } else if (qs.has_tied_embeddings && tensor_name == "token_embd.weight" && global_bpw >= boost_taper) {
+            const double embd_share = (double)tn.n_elements / (double)total_elements;
+            tn.boost = embd_share <= 0.10 ? tied_embd_boost : (float)std::max(1.25, (double)tied_embd_boost * (1.0 - 3.0 * (embd_share - 0.10)));
+        }
+    }
 
     // Minimize error subject to a size target constraint
     auto lagrangian_relaxation = [&](const double mu, std::vector<int> & choices, size_t & bytes, double & cost) {
@@ -2318,8 +2342,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         cost = 0.0;
         for (size_t i = 0; i < all_tensors.size(); ++i) {
             const auto & tn = all_tensors[i];
-            const double eff_mu = tn.important ? mu / boost : mu; // important tensors get a lower penalty
-
+            const double eff_mu = mu / tn.boost; // boosted tensors get a lower penalty
             int best = 0;
             for(int j = 1; j < (int)tn.candidates.size(); ++j) {
                 double lr = (tn.candidates[j].error - tn.candidates[best].error) + eff_mu * ((double)tn.candidates[j].bytes - (double)tn.candidates[best].bytes) * 8.0;
@@ -2334,113 +2357,318 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     };
 
-    // Binary search for mu
-    double mu_lo = 0.0;
-    double mu_hi = 1.0;
-    std::vector<int> ch_lo;
-    std::vector<int> ch_hi;
-    std::vector<int> ch_under;
-    std::vector<int> ch_over;
-    size_t bt_lo;
-    size_t bt_hi;
-    size_t bt_mid;
-    double dummy;
+    // Binary search for mu then a single-pass greedy upgrade of any leftover budget
+    auto run_auction = [&](const size_t budget) {
+        size_t min_bytes = 0;
+        size_t max_bytes = 0;
+        for (const auto & tn : all_tensors) {
+            min_bytes += tn.candidates.front().bytes;
+            max_bytes += tn.candidates.back().bytes;
+        }
 
-    lagrangian_relaxation(mu_lo, ch_lo, bt_lo, dummy);
-    int safety = 0;
+        if (budget <= min_bytes) {
+            for (auto & tn : all_tensors) { tn.choice = 0; }
+            return;
+        }
 
-    do {
-        lagrangian_relaxation(mu_hi, ch_hi, bt_hi, dummy);
-        if (bt_hi <= budget_bytes || bt_hi == std::numeric_limits<size_t>::max()) { break; }
-        mu_hi *= 2.0;
-    } while(++safety < 60);
+        if (budget >= max_bytes) {
+            for (auto & tn : all_tensors) { tn.choice = (int)tn.candidates.size() - 1; }
+            return;
+        }
 
-    double gap_under = INFINITE;
-    double gap_over = INFINITE;
+        // Binary search for mu
+        double mu_lo = 0.0;
+        double mu_hi = 1.0;
+        std::vector<int> ch_lo;
+        std::vector<int> ch_hi;
+        std::vector<int> ch_under;
+        std::vector<int> ch_over;
+        size_t bt_lo;
+        size_t bt_hi;
+        size_t bt_mid;
+        double dummy;
 
-    for(int i = 0; i < 40; ++i) {
-        double mu = 0.5 * (mu_lo + mu_hi);
-        std::vector<int> ch_mid;
-        double cost_mid = 0.0;
-        lagrangian_relaxation(mu, ch_mid, bt_mid, cost_mid);
+        lagrangian_relaxation(mu_lo, ch_lo, bt_lo, dummy);
+        int safety = 0;
 
-        double gap = std::abs((double)bt_mid - (double)budget_bytes);
-        if (bt_mid > budget_bytes) {
-            mu_lo = mu;
-            if (gap < gap_over) {
-                gap_over = gap;
-                ch_over = ch_mid;
+        do {
+            lagrangian_relaxation(mu_hi, ch_hi, bt_hi, dummy);
+            if (bt_hi <= budget || bt_hi == std::numeric_limits<size_t>::max()) { break; }
+            mu_hi *= 2.0;
+        } while(++safety < 60);
+
+        double gap_under = INFINITE;
+        double gap_over = INFINITE;
+
+        for(int i = 0; i < 40; ++i) {
+            double mu = 0.5 * (mu_lo + mu_hi);
+            std::vector<int> ch_mid;
+            double cost_mid = 0.0;
+            lagrangian_relaxation(mu, ch_mid, bt_mid, cost_mid);
+
+            double gap = std::abs((double)bt_mid - (double)budget);
+            if (bt_mid > budget) {
+                mu_lo = mu;
+                if (gap < gap_over) {
+                    gap_over = gap;
+                    ch_over = ch_mid;
+                }
+            } else {
+                mu_hi = mu;
+                if (gap < gap_under) {
+                    gap_under = gap;
+                    ch_under = ch_mid;
+                }
             }
-        } else {
-            mu_hi = mu;
-            if (gap < gap_under) {
-                gap_under = gap;
-                ch_under = ch_mid;
+        }
+
+        if (!ch_under.empty()) {
+            for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_under[i]; }
+        }
+        else if (!ch_over.empty()) {
+            for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_over[i]; }
+        }
+        else if (bt_hi <= budget && !ch_hi.empty()) {
+            for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_hi[i]; }
+        }
+        else {
+            for(auto& tn : all_tensors) { tn.choice = 0; }
+        }
+
+        // Single pass greedy upgrade in case there is budget left
+        auto current_bytes = [&] {
+            size_t cb = 0;
+            for(const auto & tn : all_tensors) { cb += tn.candidates[tn.choice].bytes; }
+            return cb;
+        };
+        size_t cb = current_bytes();
+
+        struct tensor_upgrade {
+            int index;
+            int next_choice;
+            double score;
+            bool operator<(const tensor_upgrade & other) const {
+                return score < other.score;
+            }
+        };
+
+        std::priority_queue<tensor_upgrade> queue;
+
+        auto push_next = [&](const int i) {
+            const auto & tn = all_tensors[i];
+            int next = tn.choice + 1;
+            if (next < (int)tn.candidates.size()) {
+                const double err = std::max(0.0, tn.candidates[tn.choice].error - tn.candidates[next].error);
+                auto bytes = (double)(tn.candidates[next].bytes - tn.candidates[tn.choice].bytes);
+                if (bytes > EPSILON) {
+                    double ratio = err / bytes;
+                    ratio *= tn.boost; // boosted tensors get a higher priority
+                    queue.push({i, next, ratio});
+                }
+            }
+        };
+
+        for (size_t i = 0; i < all_tensors.size(); ++i) { push_next((int)i); }
+
+        while (!queue.empty()) {
+            auto top = queue.top();
+            queue.pop();
+
+            int i = top.index;
+            int next = top.next_choice;
+            if (all_tensors[i].choice >= next) { continue; }
+
+            size_t delta_bt = all_tensors[i].candidates[next].bytes - all_tensors[i].candidates[all_tensors[i].choice].bytes;
+            if (cb + delta_bt <= budget) {
+                cb += delta_bt;
+                all_tensors[i].choice = next;
+                push_next(i);
+            }
+        }
+    };
+
+    run_auction(budget_bytes);
+
+    // Dense ffn_down cap
+    if (global_bpw >= boost_taper) {
+        const std::regex dense_ffn_down("blk\\.[0-9]+\\.ffn_down\\.weight");
+        std::vector<size_t> role;
+        for (size_t i = 0; i < all_tensors.size(); ++i) {
+            if (std::regex_match(std::string(ggml_get_name(all_tensors[i].w->tensor)), dense_ffn_down)) {
+                role.push_back(i);
+            }
+        }
+
+        if (role.size() >= 8) {
+            std::vector<double> role_bpw;
+            role_bpw.reserve(role.size());
+            for (const size_t i : role) { role_bpw.push_back(all_tensors[i].candidates[all_tensors[i].choice].bpw); }
+            std::sort(role_bpw.begin(), role_bpw.end());
+            const size_t mid = role_bpw.size() / 2;
+            const double median_bpw = role_bpw.size() % 2 ? role_bpw[mid] : 0.5 * (role_bpw[mid - 1] + role_bpw[mid]);
+
+            std::vector<size_t> outlier;
+            for (const size_t i : role) {
+                if (median_bpw - (double)all_tensors[i].candidates[all_tensors[i].choice].bpw > 2.0) { outlier.push_back(i); }
+            }
+
+            if (!outlier.empty()) {
+                // nominal-bpw tie break: K-quants first, then IQ, then legacy
+                auto family_rank = [&](const ggml_type gt) {
+                    switch (gt) {
+                        case GGML_TYPE_Q2_K:
+                        case GGML_TYPE_Q3_K:
+                        case GGML_TYPE_Q4_K:
+                        case GGML_TYPE_Q5_K:
+                        case GGML_TYPE_Q6_K:
+                            return 0;
+                        default:
+                            return is_iq(gt) ? 1 : 2;
+                    }
+                };
+
+                ggml_type fill = GGML_TYPE_Q8_0;
+                double fill_bpw = INFINITE;
+                int fill_rank = 3;
+                for (const ggml_type t : quant_types) {
+                    if (!ggml_is_quantized(t)) { continue; }
+                    const double nominal = (double)ggml_type_size(t) * 8.0 / (double)ggml_blck_size(t);
+                    if (nominal < median_bpw) { continue; }
+                    const int rank = family_rank(t);
+                    if (nominal < fill_bpw || (nominal == fill_bpw && rank < fill_rank)) {
+                        fill = t;
+                        fill_bpw = nominal;
+                        fill_rank = rank;
+                    }
+                }
+
+                size_t locked_bytes = 0;
+                std::vector<type_choice> remaining;
+                remaining.reserve(all_tensors.size());
+                for (size_t i = 0; i < all_tensors.size(); ++i) {
+                    auto & tn = all_tensors[i];
+                    if (!std::binary_search(outlier.begin(), outlier.end(), i)) {
+                        remaining.push_back(std::move(tn));
+                        continue;
+                    }
+
+                    const ggml_tensor * tensor = tn.w->tensor;
+                    const ggml_type mc = make_compatible(tensor, fill);
+                    int idx = -1;
+                    for (int j = 0; j < (int)tn.candidates.size(); ++j) {
+                        if (tn.candidates[j].type == mc) { idx = j; break; }
+                    }
+
+                    if (idx == -1) {
+                        type_scores ts;
+                        ts.type = mc;
+                        ts.bpw = (float)tensor_bpw(tensor, mc);
+                        ts.bytes = tensor_bytes(tensor, mc);
+                        ts.error = std::numeric_limits<float>::quiet_NaN();
+                        tn.candidates.push_back(ts);
+                        idx = (int)tn.candidates.size() - 1;
+                    }
+
+                    tn.choice = idx;
+                    locked_bytes += tn.candidates[idx].bytes;
+                    pinned_tensors.push_back(std::move(tn));
+                }
+
+                all_tensors = std::move(remaining);
+                run_auction(budget_bytes > locked_bytes ? budget_bytes - locked_bytes : 0);
             }
         }
     }
 
-    if (!ch_under.empty()) {
-        for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_under[i]; }
-    }
-    else if (!ch_over.empty()) {
-        for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_over[i]; }
-    }
-    else if (bt_hi <= budget_bytes && !ch_hi.empty()) {
-        for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_hi[i]; }
-    }
-    else {
-        for(auto& tn : all_tensors) { tn.choice = 0; }
-    }
+    // Expert down-projection cap
+    if (global_bpw < boost_taper) {
+        const std::regex expert_ffn_down("blk\\.[0-9]+\\.ffn_down_exps\\.weight");
+        const std::regex expert_ffn_gate("blk\\.[0-9]+\\.ffn_gate_exps\\.weight");
+        const std::regex expert_ffn_up  ("blk\\.[0-9]+\\.ffn_up_exps\\.weight");
 
-    // Single pass greedy upgrade in case there is budget left
-    auto current_bytes = [&] {
-        size_t cb = 0;
-        for(const auto & tn : all_tensors) { cb += tn.candidates[tn.choice].bytes; }
-        return cb;
-    };
-    size_t cb = current_bytes();
-
-    struct tensor_upgrade {
-        int index;
-        int next_choice;
-        double score;
-        bool operator<(const tensor_upgrade & other) const {
-            return score < other.score;
-        }
-    };
-
-    std::priority_queue<tensor_upgrade> queue;
-
-    auto push_next = [&](const int i) {
-        const auto & tn = all_tensors[i];
-        int next = tn.choice + 1;
-        if (next < (int)tn.candidates.size()) {
-            const double err = std::max(0.0, tn.candidates[tn.choice].error - tn.candidates[next].error);
-            auto bytes = (double)(tn.candidates[next].bytes - tn.candidates[tn.choice].bytes);
-            if (bytes > EPSILON) {
-                double ratio = err / bytes;
-                if (tn.important) { ratio *= boost; } // important tensors get a higher priority
-                queue.push({i, next, ratio});
+        // Element-weighted mean of the chosen bpw
+        auto mean_bpw = [&](const std::regex & re, std::vector<size_t> * members) -> double {
+            double num = 0.0;
+            double den = 0.0;
+            for (size_t i = 0; i < all_tensors.size(); ++i) {
+                const auto & tn = all_tensors[i];
+                if (!std::regex_match(std::string(ggml_get_name(tn.w->tensor)), re)) { continue; }
+                num += (double)tn.n_elements * (double)tn.candidates[tn.choice].bpw;
+                den += (double)tn.n_elements;
+                if (members) { members->push_back(i); }
             }
-        }
-    };
 
-    for (size_t i = 0; i < all_tensors.size(); ++i) { push_next((int)i); }
+            return den > 0.0 ? num / den : -1.0;
+        };
 
-    while (!queue.empty()) {
-        auto top = queue.top();
-        queue.pop();
+        std::vector<size_t> role;
+        std::vector<size_t> siblings;
+        const double down_bpw = mean_bpw(expert_ffn_down, &role);
+        const double gate_bpw = mean_bpw(expert_ffn_gate, &siblings);
+        const double up_bpw = mean_bpw(expert_ffn_up,   &siblings);
+        const double sibling_bpw = std::max(gate_bpw, up_bpw);
+        std::sort(siblings.begin(), siblings.end());
+        if (!role.empty() && sibling_bpw > 0.0 && down_bpw > sibling_bpw) {
+            std::vector<size_t> outliers;
+            for (const size_t i : role) {
+                if ((double)all_tensors[i].candidates[all_tensors[i].choice].bpw > sibling_bpw) { outliers.push_back(i); }
+            }
 
-        int i = top.index;
-        int next = top.next_choice;
-        if (all_tensors[i].choice >= next) { continue; }
+            if (!outliers.empty()) {
+                size_t locked_bytes = 0;
+                std::vector<type_choice> remaining;
+                remaining.reserve(all_tensors.size());
+                for (size_t i = 0; i < all_tensors.size(); ++i) {
+                    auto & tn = all_tensors[i];
+                    if (!std::binary_search(outliers.begin(), outliers.end(), i)) {
+                        if (std::binary_search(siblings.begin(), siblings.end(), i)) {
+                            locked_bytes += tn.candidates[tn.choice].bytes;
+                            pinned_tensors.push_back(std::move(tn));
+                            continue;
+                        }
 
-        size_t delta_bt = all_tensors[i].candidates[next].bytes - all_tensors[i].candidates[all_tensors[i].choice].bytes;
-        if (cb + delta_bt <= budget_bytes) {
-            cb += delta_bt;
-            all_tensors[i].choice = next;
-            push_next(i);
+                        if (std::binary_search(role.begin(), role.end(), i)) {
+                            const ggml_type chosen = tn.candidates[tn.choice].type;
+                            std::vector<type_scores> kept;
+                            kept.reserve(tn.candidates.size());
+                            for (const auto & c : tn.candidates) {
+                                if ((double)c.bpw <= sibling_bpw) { kept.push_back(c); }
+                            }
+
+                            int new_choice = -1;
+                            for (int j = 0; j < (int)kept.size(); ++j) {
+                                if (kept[j].type == chosen) { new_choice = j; break; }
+                            }
+
+                            if (new_choice >= 0) {
+                                tn.candidates = std::move(kept);
+                                tn.choice     = new_choice;
+                            }
+                        }
+
+                        remaining.push_back(std::move(tn));
+                        continue;
+                    }
+
+                    int idx = -1;
+                    for (int j = 0; j < (int)tn.candidates.size(); ++j) {
+                        if ((double)tn.candidates[j].bpw > sibling_bpw) { continue; }
+                        if (idx == -1 || tn.candidates[j].bpw > tn.candidates[idx].bpw) { idx = j; }
+                    }
+
+                    if (idx == -1) {
+                        remaining.push_back(std::move(tn));
+                        continue;
+                    }
+
+                    tn.choice = idx;
+                    locked_bytes += tn.candidates[idx].bytes;
+                    pinned_tensors.push_back(std::move(tn));
+                }
+
+                all_tensors = std::move(remaining);
+                run_auction(budget_bytes > locked_bytes ? budget_bytes - locked_bytes : 0);
+            }
         }
     }
 
