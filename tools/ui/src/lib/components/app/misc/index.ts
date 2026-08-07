@@ -59,3 +59,11 @@ export { default as CodeBlockActions } from './CodeBlockActions.svelte';
  * `class` and `style` props and inherits color via `currentColor`.
  */
 export { default as Logo } from './Logo.svelte';
+
+/**
+ * **Breadcrumb** - Navigation breadcrumb component
+ *
+ * Displays a hierarchical navigation path with clickable items.
+ * Last item is non-clickable (current page). Uses ChevronRight icons as separators.
+ */
+export { default as Breadcrumb } from './Breadcrumb.svelte';

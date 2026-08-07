@@ -79,6 +79,7 @@ export type {
 	ModelModalities,
 	ModelOption,
 	ModelLoadProgress,
+	ModelDownloadProgress,
 	ModalityCapabilities
 } from './models';
 
@@ -180,3 +181,15 @@ export type { ReasoningEffortLevel } from './reasoning';
 
 // Splash
 export type { SplashDimensions } from './splash';
+
+// HuggingFace types
+export type {
+	HfModelSearchParams,
+	HfModelSort,
+	HfModelInfo,
+	HfModelCardData,
+	HfModelDetails,
+	HfModelDetailInfo,
+	HfModelApiResponse,
+	HfTaskCategory
+} from './huggingface';

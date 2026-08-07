@@ -1,6 +1,6 @@
 export const NEW_CHAT_PARAM = 'new_chat';
 
-/** Settings section slugs — used for routes and navigation. */
+/** Settings section slugs - used for routes and navigation. */
 export const SETTINGS_SECTION_SLUGS = {
 	GENERAL: 'general',
 	DISPLAY: 'display',
@@ -13,16 +13,20 @@ export const SETTINGS_SECTION_SLUGS = {
 } as const;
 
 export const ROUTES = {
-	/** Root — start of the app. */
+	/** Root - start of the app. */
 	START: '#/',
-	/** New chat — root with new chat query param. */
+	/** New chat - root with new chat query param. */
 	NEW_CHAT: `?${NEW_CHAT_PARAM}=true#/`,
-	/** Chat base — for dynamic chat URLs use RouterService. */
+	/** Chat base - for dynamic chat URLs use RouterService. */
 	CHAT: '#/chat',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
-	/** Settings base — for dynamic settings URLs use RouterService. */
+	/** Settings base - for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings',
-	/** Search — mobile-only full-page conversation search. */
-	SEARCH: '#/search'
+	/** Search - mobile-only full-page conversation search. */
+	SEARCH: '#/search',
+	/** Model management - browse HuggingFace GGUF models. */
+	MANAGE_MODELS: '#/model-hub',
+	/** Model detail - for dynamic model URLs use RouterService. */
+	MANAGE_MODEL: '#/model-hub/[modelId]'
 } as const;

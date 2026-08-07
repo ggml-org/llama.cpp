@@ -137,6 +137,7 @@ export { DatabaseService } from './database.service';
  * @see modelsStore in stores/models.svelte.ts — primary consumer for reactive model state
  */
 export { ModelsService } from './models.service';
+export type { GgufVariantTagInput } from './models.service';
 
 /**
  * **PropsService** - Server properties and capabilities retrieval
@@ -331,3 +332,37 @@ export { RouterService } from './router.service';
  * @see migration.service.ts — full implementation (non-destructive)
  */
 export { MigrationService } from './migration.service';
+
+/**
+ * **HuggingFaceService** - HuggingFace Hub model browsing and searching
+ *
+ * Provides access to the HuggingFace Hub API for discovering, browsing, and
+ * fetching details of GGUF models. Supports searching by query, filtering by
+ * pipeline task, and retrieving model file trees.
+ *
+ * **Architecture & Relationships:**
+ * - **HuggingFaceService** (this class): Stateless HTTP communication with HF API
+ *   - Searches and browses GGUF models on HuggingFace Hub
+ *   - Fetches model details, metadata, and file listings
+ *   - Provides utility formatting (downloads, likes, file sizes, relative time)
+ *
+ * - **manage-models page**: Primary consumer for model browsing UI
+ *   - Uses HuggingFaceService to fetch trending and recommended models
+ *   - Displays model cards with details dialog
+ *
+ * **Key Responsibilities:**
+ * - Search GGUF models with filters (query, task, author, sort, etc.)
+ * - Browse trending, popular, most-liked, and newest GGUF models
+ * - Fetch detailed model information including GGUF specs
+ * - List available GGUF quantization variants from model repositories
+ * - Format downloads, likes, file sizes, and timestamps for display
+ *
+ * **API Endpoints:**
+ * - `GET https://huggingface.co/api/models` — Model search/browsing
+ * - `GET https://huggingface.co/api/models/{modelId}` — Model details
+ * - `GET https://huggingface.co/api/models/{modelId}/tree/main` — Repository file tree
+ *
+ * @see manage-models page in routes/manage-models/+page.svelte — consumer UI
+ */
+export { HuggingFaceService } from './huggingface.service';
+export type { GgufVariantForm } from './huggingface.service';

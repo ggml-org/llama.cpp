@@ -57,6 +57,7 @@ import type {
 	ModelModalities,
 	ModelOption,
 	ModelLoadProgress,
+	ModelDownloadProgress,
 	// Settings types
 	SettingsChatServiceOptions,
 	SettingsConfigValue,
@@ -130,6 +131,7 @@ declare global {
 		ModelModalities,
 		ModelOption,
 		ModelLoadProgress,
+		ModelDownloadProgress,
 		// Settings types
 		SettingsChatServiceOptions,
 		SettingsConfigValue,

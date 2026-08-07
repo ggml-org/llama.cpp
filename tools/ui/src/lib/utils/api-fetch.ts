@@ -161,6 +161,25 @@ export async function apiPost<T, B = unknown>(
 }
 
 /**
+ * Send a DELETE request to an API endpoint, optionally with query parameters.
+ *
+ * @param path - API path (query string is appended if `params` is provided)
+ * @param params - Optional record of query parameters
+ * @param options - Additional fetch options
+ * @returns Parsed JSON response
+ */
+export async function apiDelete<T>(
+	path: string,
+	params?: Record<string, string>,
+	options: ApiFetchOptions = {}
+): Promise<T> {
+	if (params && Object.keys(params).length > 0) {
+		return apiFetchWithParams<T>(path, params, { ...options, method: 'DELETE' });
+	}
+	return apiFetch<T>(path, { ...options, method: 'DELETE' });
+}
+
+/**
  * Parse error message from a failed response.
  * Tries to extract error message from JSON body, falls back to status text.
  */

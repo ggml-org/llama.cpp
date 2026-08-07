@@ -31,5 +31,7 @@ export enum ServerModelsSseEventType {
 	STATUS_UPDATE = 'status_update',
 	MODELS_RELOAD = 'models_reload',
 	MODEL_REMOVE = 'model_remove',
-	DOWNLOAD_PROGRESS = 'download_progress'
+	DOWNLOAD_PROGRESS = 'download_progress',
+	DOWNLOAD_FINISHED = 'download_finished',
+	DOWNLOAD_FAILED = 'download_failed'
 }
