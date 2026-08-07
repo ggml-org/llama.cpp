@@ -2466,9 +2466,9 @@ kernel void kernel_ssm_scan_f32(
     s_buff[i] = s;
 }
 
-// MMA fast path for the common Mamba-2 layout (head_dim=64). One threadgroup owns a complete
-// (head, sequence) pair so the channel-independent C*B^T matrix is computed once per chunk and
-// reused for all eight 8-channel output tiles.
+// Chunked SSD SSM scan via Metal simdgroup MMatrix Multiply-Accumulate (simdgroup_float8x8) fast path. 
+// One threadgroup per (head, sequence) and tokens are processed in chunks.
+// C*B^T computed in each chunk one time and reused across the head_dim channel tiles.
 kernel void kernel_ssm_scan_ssd_mma_f32(
         constant ggml_metal_kargs_ssm_scan & args,
         device const void * src0,
