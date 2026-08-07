@@ -11328,8 +11328,8 @@ kernel void kernel_lightning_indexer(
     const int i_kv_0   = tgpig.x*NK;            // first key of this threadgroup
     const int i_kv     = i_kv_0 + sgitg*NKPSG;  // first key of this simdgroup
 
-    threadgroup half4x4   sk4x4[NK*DK16];
-    threadgroup half    * sk = (threadgroup half *) sk4x4;
+    threadgroup half sk[NK * DK16 * 16];
+    threadgroup half4x4 * sk4x4 = (threadgroup half4x4 *) sk;
 
     for (short i = tiitg; i < NK*DK16; i += NTG) {
         const short ik  = i/DK16;
