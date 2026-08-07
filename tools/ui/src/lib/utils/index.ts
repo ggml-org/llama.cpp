@@ -198,6 +198,13 @@ export {
 	type MentionDismissSnapshot
 } from './mention-token';
 
+// Slash-command token detection (for the `/`-triggered command picker)
+export {
+	findCommandToken,
+	takeCommandDismissSnapshot,
+	type CommandDismissSnapshot
+} from './command-token';
+
 // Mention-chip visual contract shared by the rehype file-badge plugin,
 // plus the `[name](file://...)` link helpers the mention picker splices in
 export {

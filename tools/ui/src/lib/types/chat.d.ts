@@ -1,4 +1,4 @@
-import type { ErrorDialogType, FileMentionEntryType } from '$lib/enums';
+import type { ChatFormCommandAction, ErrorDialogType, FileMentionEntryType } from '$lib/enums';
 import type { ApiChatCompletionToolCall } from './api';
 import type { DatabaseMessage, DatabaseMessageExtra } from './database';
 
@@ -175,4 +175,18 @@ export interface FileMentionEntry {
 	path: string;
 	name: string;
 	type: FileMentionEntryType;
+}
+
+/**
+ * A slash command surfaced by the `/` command picker. `disabled` marks a
+ * command whose backing capability is unavailable (e.g. `/prompt` when no
+ * MCP server exposes prompts): visible but greyed out and not selectable.
+ */
+export interface ChatFormCommand {
+	name: string;
+	description: string;
+	/** Extra search terms that should match this command in the picker. */
+	keywords?: string[];
+	action: ChatFormCommandAction;
+	disabled: boolean;
 }
