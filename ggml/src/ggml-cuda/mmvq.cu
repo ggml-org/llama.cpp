@@ -564,6 +564,29 @@ struct mmvq_layout_policy {
     }
 };
 
+#ifndef GGML_HIP_Q4_0_DOT8_MMVQ_ROWS
+#define GGML_HIP_Q4_0_DOT8_MMVQ_ROWS 4
+#endif
+
+template <ggml_type type, int q8_1_layout_block_size, bool use_q4_0_dot8>
+struct mmvq_selected_layout_policy : mmvq_layout_policy<type, q8_1_layout_block_size> {};
+
+template <>
+struct mmvq_selected_layout_policy<GGML_TYPE_Q4_0, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, true>
+        : mmvq_layout_policy<GGML_TYPE_Q4_0, MMVQ_Q8_1_BLOCK_SIZE_STANDARD> {
+    using base = mmvq_layout_policy<GGML_TYPE_Q4_0, MMVQ_Q8_1_BLOCK_SIZE_STANDARD>;
+
+    static constexpr __host__ __device__ int rows_per_block(
+            int ncols_dst, mmvq_parameter_table_id table_id, bool small_k = false, int nwarps = 1) {
+#if defined(GGML_USE_HIP)
+        if (table_id == MMVQ_PARAMETERS_RDNA2 && ncols_dst == 1) {
+            return GGML_HIP_Q4_0_DOT8_MMVQ_ROWS;
+        }
+#endif
+        return base::rows_per_block(ncols_dst, table_id, small_k, nwarps);
+    }
+};
+
 template <ggml_type type, int q8_1_layout_block_size>
 struct mmvq_q8_1_packed_k_layout_policy {
     static_assert(type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K);
@@ -687,7 +710,7 @@ static __global__ void mul_mat_vec_q(
 
     static_assert(mmvq_q8_1_layout_block_size_is_valid<q8_1_layout_block_size>());
 
-    using layout_policy = mmvq_layout_policy<type, q8_1_layout_block_size>;
+    using layout_policy = mmvq_selected_layout_policy<type, q8_1_layout_block_size, use_q4_0_dot8>;
 
     constexpr bool use_q8_1_layout = layout_policy::uses_layout;
 
@@ -1004,11 +1027,11 @@ static __global__ void mul_mat_vec_q_moe(
     }
 }
 
-template<ggml_type type, int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD>
+template<ggml_type type, int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false>
 static std::pair<dim3, dim3> calc_launch_params(
         const int ncols_dst, const int nrows_x, const int nchannels_dst, const int nsamples_or_ntokens,
         const int warp_size, const mmvq_parameter_table_id table_id, const bool small_k = false) {
-    using layout_policy = mmvq_layout_policy<type, q8_1_layout_block_size>;
+    using layout_policy = mmvq_selected_layout_policy<type, q8_1_layout_block_size, use_q4_0_dot8>;
 
     constexpr bool use_q8_1_layout = layout_policy::uses_layout;
 
@@ -1093,7 +1116,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
     GGML_ASSERT(ncols_x % ggml_blck_size(type) == 0);
     GGML_ASSERT(ncols_dst <= MMVQ_MAX_BATCH_SIZE);
     static_assert(mmvq_q8_1_layout_block_size_is_valid<q8_1_layout_block_size>());
-    using layout_policy = mmvq_layout_policy<type, q8_1_layout_block_size>;
+    using layout_policy = mmvq_selected_layout_policy<type, q8_1_layout_block_size, use_q4_0_dot8>;
 
     constexpr bool use_q8_1_layout = layout_policy::uses_layout;
     if constexpr (use_q8_1_layout) {
@@ -1171,7 +1194,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
             bool use_small_k = !use_q8_1_layout && should_use_small_k(c_ncols_dst);
 
             if (use_small_k) {
-                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size>(c_ncols_dst, nrows_x, nchannels_dst,
+                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size, use_q4_0_dot8>(c_ncols_dst, nrows_x, nchannels_dst,
                                                                         nsamples_dst, warp_size, table_id, true);
                 mul_mat_vec_q_switch_fusion<type, c_ncols_dst, true, q8_1_layout_block_size, use_q4_0_dot8>(
                     vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
@@ -1179,7 +1202,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
                     stride_sample_x, stride_sample_y, stride_sample_dst, dims.first, dims.second, 0, ids_stride,
                     stream);
             } else {
-                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size>(c_ncols_dst, nrows_x, nchannels_dst,
+                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size, use_q4_0_dot8>(c_ncols_dst, nrows_x, nchannels_dst,
                                                                         nsamples_dst, warp_size, table_id);
                 mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, q8_1_layout_block_size, use_q4_0_dot8>(
                     vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
