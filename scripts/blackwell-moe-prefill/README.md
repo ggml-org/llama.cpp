@@ -1,19 +1,30 @@
-# SM120 CUTLASS MoE prefill
+# SM120/SM121 CUTLASS 4-bit path
 
-This branch adds an optional CUTLASS path for W4A4 expert GEMMs on Blackwell.
-The path is disabled in normal builds and is selected only for the supported
-MoE graphs. Other devices, tensor layouts, and small token counts continue to
-use the existing CUDA backend.
+This branch adds an optional CUTLASS path for 4-bit weights on Blackwell. It
+uses MXFP8 activations with MXFP4 weights and NVFP4 activations with NVFP4
+weights. It is disabled in normal builds. Other devices, tensor layouts, and
+small token counts continue to use the existing CUDA backend.
 
 The current path covers:
 
 - GPT-OSS MXFP4 prefill with fused W13 weights, top-4 routing, and OAI SwiGLU.
 - Qwen3.6-35B-A3B NVFP4 prefill with separate gate/up weights, top-8 routing,
   output scales, and standard SwiGLU.
+- Dense MXFP4 and NVFP4 matrix multiplication, including a fused parallel
+  gate/up, SwiGLU, and down-projection path for models such as Qwen3.6-27B.
 
-The implementation repacks expert weights once, builds one expert-sorted route
-plan per layer, quantizes activations to the CUTLASS input layout, runs grouped
-W13 and W2, and finishes the two stages with CUDA epilogues.
+Weights are converted from the normal GGUF blocks to CUTLASS value and scale
+layouts on first use. The default keeps the original tensors for fallback and
+therefore uses additional device memory. MoE layers also share one route plan
+and input quantization across W13 and W2.
+
+GPT-OSS-120B does not fit on a 96 GiB GPU with both copies resident. For this
+model, `GGML_CUDA_MOE_MMQ_CUTLASS_INPLACE_WEIGHTS=1` stores the CUTLASS value
+plane in the original W13/W2 tensor allocation and keeps only the scale plane
+in the backend cache. MMVQ reads that layout for MXFP4 batches up to 8; batches
+from 9 through 255 continue through the CUTLASS MoE path. This mode is limited to
+the fused GPT-OSS graph and should not be used when the same tensor is consumed
+by another graph path.
 
 ## Build
 
@@ -23,13 +34,14 @@ CUTLASS is not downloaded by CMake. Point the build at revision
 ```bash
 cmake -S . -B build-cutlass \
   -DGGML_CUDA=ON \
-  -DGGML_CUDA_CUTLASS_MOE=ON \
+  -DGGML_CUDA_CUTLASS=ON \
   -DGGML_CUDA_CUTLASS_PATH=/path/to/cutlass
 cmake --build build-cutlass -j
 ```
 
 The option requires CUDA 12.9 or newer and builds the CUTLASS translation unit
-for `sm_120f`. The rest of the CUDA backend keeps its normal architecture list.
+for `sm_120f` and `sm_121f`. The rest of the CUDA backend keeps its normal
+architecture list.
 
 ## GPT-OSS conversion
 
@@ -48,9 +60,9 @@ the normal backend.
 
 ## Runtime selection
 
-Building with `GGML_CUDA_CUTLASS_MOE=ON` enables the supported prefill path.
-Set `GGML_CUDA_MOE_MMQ_DISABLE=1` to force the existing CUDA implementation for
-an A/B run.
+Building with `GGML_CUDA_CUTLASS=ON` enables the supported prefill path.
+Set `GGML_CUDA_CUTLASS_DISABLE=1` to force the existing CUDA implementation for
+an A/B run. `GGML_CUDA_MOE_MMQ_DISABLE=1` remains available for MoE-only runs.
 
 The following variables are retained for kernel sweeps:
 
@@ -60,21 +72,27 @@ The following variables are retained for kernel sweeps:
 - `GGML_CUDA_MOE_MMQ_CUTLASS_W2_SWAP_AB=0|1`
 - `GGML_CUDA_MOE_MMQ_CUTLASS_PDL=0|1`
 - `GGML_CUDA_MOE_MMQ_CUTLASS_VALIDATE_SUPPORT=0|1`
+- `GGML_CUDA_MOE_MMQ_CUTLASS_INPLACE_WEIGHTS=0|1`
 
 ## Backend tests
 
 The CUTLASS graph tests are opt-in because their tensors are large:
 
 ```bash
-GGML_CUDA_CUTLASS_MOE_TEST=1 \
+GGML_CUDA_CUTLASS_TEST=1 \
   build-cutlass/bin/test-backend-ops test -b CUDA0 -o MOE_MXFP4_BLOCK
 
-GGML_CUDA_CUTLASS_MOE_TEST=1 \
+GGML_CUDA_CUTLASS_TEST=1 \
   build-cutlass/bin/test-backend-ops test -b CUDA0 -o MOE_NVFP4_BLOCK
+
+GGML_CUDA_CUTLASS_TEST=1 \
+  build-cutlass/bin/test-backend-ops test -b CUDA0 -o CUTLASS_FFN_BLOCK
 ```
 
 They cover contiguous and strided expert IDs, the two observed view orders,
-skewed routing, and an output consumed by a shared-expert add. The performance
-suite includes 512, 2048, and 8192 token cases.
+skewed routing, and an output consumed by a shared-expert add. The dense test
+also runs a one-token multiplication after prefill to verify that the cached
+CUTLASS layout does not replace the GGUF tensor. The performance suite includes
+512, 2048, and 8192 token cases.
 
 Measured results and Nsys summaries are in [RESULTS.md](RESULTS.md).

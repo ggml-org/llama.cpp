@@ -19,6 +19,22 @@ struct ggml_cuda_moe_mmq_args {
     ggml_tensor *       dst;
 };
 
+struct ggml_cuda_moe_cutlass_nvfp4_args {
+    const ggml_tensor * gate;
+    const ggml_tensor * up;
+    const ggml_tensor * down;
+    const ggml_tensor * input;
+    const ggml_tensor * ids;
+    const ggml_tensor * gate_scale;
+    const ggml_tensor * up_scale;
+    const ggml_tensor * down_scale;
+    const ggml_tensor * weights;
+    ggml_tensor *       dst;
+};
+
 bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_args & args);
+
+bool ggml_cuda_moe_cutlass_nvfp4(ggml_backend_cuda_context &              ctx,
+                                 const ggml_cuda_moe_cutlass_nvfp4_args & args);
 
 bool ggml_cuda_moe_cutlass_prefill_requested();

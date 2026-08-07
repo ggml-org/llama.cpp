@@ -1,5 +1,6 @@
 #include "mmid.cuh"
-#include "moe-mmq-cutlass.cuh"
+#include "mmq-cutlass.cuh"
+#include "mmvq.cuh"
 #include "moe-mmq.cuh"
 
 #include <algorithm>
@@ -20,8 +21,8 @@ struct moe_cutlass_config {
     bool cta_quant;
     bool cta_activation;
     bool validate_support;
+    bool inplace_weights;
     int  activation_rows;
-    int  repack_cache_entries;
     moe_cutlass_stage_config w13;
     moe_cutlass_stage_config w2;
 };
@@ -71,8 +72,8 @@ static const moe_cutlass_config & moe_cutlass_get_config() {
         !moe_cutlass_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_CTA_QUANT_DISABLE"),
         !moe_cutlass_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_CTA_ACTIVATION_DISABLE"),
         moe_cutlass_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_VALIDATE_SUPPORT"),
+        moe_cutlass_env_flag("GGML_CUDA_MOE_MMQ_CUTLASS_INPLACE_WEIGHTS"),
         moe_cutlass_env_activation_rows(),
-        moe_cutlass_env_int("GGML_CUDA_MOE_MMQ_REPACK_CACHE_ENTRIES", 2, 2, 16),
         {
             moe_cutlass_env_tile_n("GGML_CUDA_MOE_MMQ_CUTLASS_W13_TILE_N"),
             moe_cutlass_env_int("GGML_CUDA_MOE_MMQ_CUTLASS_W13_SWAP_AB", 1, 0, 1) != 0,
@@ -85,7 +86,7 @@ static const moe_cutlass_config & moe_cutlass_get_config() {
     return config;
 }
 
-static ggml_cuda_moe_cutlass_config moe_cutlass_gemm_config(
+static ggml_cuda_cutlass_config moe_cutlass_gemm_config(
         const moe_cutlass_stage_config & config,
         int64_t                          n_rows,
         int64_t                          n_cols,
@@ -195,8 +196,8 @@ static bool moe_cutlass_run(
         ggml_backend_cuda_context &      ctx,
         const ggml_cuda_moe_mmq_args &   args,
         const moe_cutlass_config &        config,
-        const ggml_cuda_moe_weight_view & w13_weight,
-        const ggml_cuda_moe_weight_view & w2_weight,
+        const ggml_cuda_cutlass_weight & w13_weight,
+        const ggml_cuda_cutlass_weight & w2_weight,
         int32_t *                         ids_src1,
         int32_t *                         ids_dst,
         int32_t *                         row_expert,
@@ -209,13 +210,13 @@ static bool moe_cutlass_run(
     const int64_t n_rows        = n_tokens * n_expert_used;
     const int64_t n_embd        = args.input->ne[0];
     const int64_t n_ff          = args.activation->ne[0];
-    const int64_t w13_k         = w13_weight.ncols;
-    const int64_t w2_k          = w2_weight.ncols;
+    const int64_t w13_k         = w13_weight.k;
+    const int64_t w2_k          = w2_weight.k;
     cudaStream_t stream         = ctx.stream();
 
-    const ggml_cuda_moe_cutlass_config w13_config =
+    const ggml_cuda_cutlass_config w13_config =
         moe_cutlass_gemm_config(config.w13, n_rows, 2 * n_ff, n_experts, config.pdl);
-    const ggml_cuda_moe_cutlass_config w2_config =
+    const ggml_cuda_cutlass_config w2_config =
         moe_cutlass_gemm_config(config.w2, n_rows, n_embd, n_experts, config.pdl);
 
     GGML_ASSERT(w13_k >= n_embd && w13_k % 128 == 0);
@@ -225,10 +226,10 @@ static bool moe_cutlass_run(
     ggml_cuda_pool_alloc<uint8_t> w13_scales(ctx.pool());
     ggml_cuda_pool_alloc<uint8_t> w2_input(ctx.pool());
     ggml_cuda_pool_alloc<uint8_t> w2_scales(ctx.pool());
-    uint8_t * w13_input_data = w13_input.alloc(ggml_cuda_moe_cutlass_activation_size(n_rows, w13_k));
+    uint8_t * w13_input_data = w13_input.alloc(ggml_cuda_cutlass_activation_size(GGML_TYPE_MXFP4, n_rows, w13_k));
     uint8_t * w13_scale_data =
         w13_scales.alloc(ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w13_k, false));
-    uint8_t * w2_input_data = w2_input.alloc(ggml_cuda_moe_cutlass_activation_size(n_rows, w2_k));
+    uint8_t * w2_input_data = w2_input.alloc(ggml_cuda_cutlass_activation_size(GGML_TYPE_MXFP4, n_rows, w2_k));
     uint8_t * w2_scale_data =
         w2_scales.alloc(ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w2_k, false));
 
@@ -245,7 +246,7 @@ static bool moe_cutlass_run(
     if (config.validate_support && cta_quant) {
         ggml_cuda_pool_alloc<uint8_t> reference_input(ctx.pool());
         ggml_cuda_pool_alloc<uint8_t> reference_scales(ctx.pool());
-        const size_t input_size = ggml_cuda_moe_cutlass_activation_size(n_rows, w13_k);
+        const size_t input_size = ggml_cuda_cutlass_activation_size(GGML_TYPE_MXFP4, n_rows, w13_k);
         const size_t scale_size = ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w13_k, false);
         uint8_t * reference_input_data = reference_input.alloc(input_size);
         uint8_t * reference_scale_data = reference_scales.alloc(scale_size);
@@ -257,13 +258,12 @@ static bool moe_cutlass_run(
         moe_cutlass_validate_equal(ctx, w13_scale_data, reference_scale_data, scale_size, "input scales");
     }
 
-    ggml_cuda_moe_weight_wait_ready(w13_weight, stream);
-    if (!ggml_cuda_moe_cutlass_gemm(
+    ggml_cuda_cutlass_weight_wait_ready(w13_weight, stream);
+    if (!ggml_cuda_cutlass_grouped_gemm(
             ctx, w13_weight, w13_input_data, w13_scale_data, expert_bounds, row_expert, args.gate_up_dst->data,
             n_experts, n_rows, 2 * n_ff, w13_k, sm_count, w13_config, stream, true)) {
         GGML_ABORT("required CUTLASS W13 launch failed");
     }
-    ggml_cuda_moe_weight_mark_used(w13_weight, stream);
 
     const bool cta_activation = config.cta_activation && ggml_cuda_moe_cutlass_w13_epilogue_cta(
         args.gate_up_dst->data, (const float *) args.gate_up_bias->data, (const int32_t *) args.ids->data, ids_dst,
@@ -278,7 +278,7 @@ static bool moe_cutlass_run(
     if (config.validate_support && cta_activation) {
         ggml_cuda_pool_alloc<uint8_t> reference_input(ctx.pool());
         ggml_cuda_pool_alloc<uint8_t> reference_scales(ctx.pool());
-        const size_t input_size = ggml_cuda_moe_cutlass_activation_size(n_rows, w2_k);
+        const size_t input_size = ggml_cuda_cutlass_activation_size(GGML_TYPE_MXFP4, n_rows, w2_k);
         const size_t scale_size = ggml_cuda_moe_cutlass_scale_size(n_rows, n_experts, w2_k, false);
         uint8_t * reference_input_data = reference_input.alloc(input_size);
         uint8_t * reference_scale_data = reference_scales.alloc(scale_size);
@@ -290,13 +290,12 @@ static bool moe_cutlass_run(
         moe_cutlass_validate_equal(ctx, w2_scale_data, reference_scale_data, scale_size, "W13 activation scales");
     }
 
-    ggml_cuda_moe_weight_wait_ready(w2_weight, stream);
-    if (!ggml_cuda_moe_cutlass_gemm(
+    ggml_cuda_cutlass_weight_wait_ready(w2_weight, stream);
+    if (!ggml_cuda_cutlass_grouped_gemm(
             ctx, w2_weight, w2_input_data, w2_scale_data, expert_bounds, row_expert, args.down_dst->data,
             n_experts, n_rows, n_embd, w2_k, sm_count, w2_config, stream, true)) {
         GGML_ABORT("required CUTLASS W2 launch failed");
     }
-    ggml_cuda_moe_weight_mark_used(w2_weight, stream);
 
     ggml_cuda_moe_cutlass_w2_finalize(
         args.down_dst->data, (const float *) args.down_bias->data, (const float *) args.weights->data,
@@ -306,7 +305,8 @@ static bool moe_cutlass_run(
 }
 
 bool ggml_cuda_moe_cutlass_prefill_requested() {
-    return ggml_cuda_moe_cutlass_compiled() && !moe_cutlass_get_config().disabled;
+    return ggml_cuda_cutlass_compiled() && !moe_cutlass_env_flag("GGML_CUDA_CUTLASS_DISABLE") &&
+        !moe_cutlass_get_config().disabled;
 }
 
 bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_args & args) {
@@ -314,8 +314,15 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
     const auto & device_info = ggml_cuda_info().devices[ctx.device];
     const int64_t n_tokens = args.ids->ne[1];
 
-    if (config.disabled || !ggml_cuda_moe_cutlass_compiled() || !blackwell_mma_available(device_info.cc) ||
-        n_tokens < 256 || n_tokens >= (1 << 22) ||
+    ggml_cuda_cutlass_weight cached_w13;
+    ggml_cuda_cutlass_weight cached_w2;
+    const bool inplace_weights =
+        ggml_cuda_cutlass_get_inplace_weight(ctx, args.gate_up, cached_w13) &&
+        ggml_cuda_cutlass_get_inplace_weight(ctx, args.down, cached_w2);
+    const int mmvq_max_batch = get_mmvq_mmid_max_batch(args.gate_up->type, device_info.cc);
+
+    if (!ggml_cuda_moe_cutlass_prefill_requested() || !blackwell_mma_available(device_info.cc) ||
+        n_tokens <= mmvq_max_batch || (n_tokens < 256 && !inplace_weights) || n_tokens >= (1 << 22) ||
         (size_t) n_tokens > device_info.smpbo / sizeof(uint32_t)) {
         return false;
     }
@@ -325,6 +332,9 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
     }
 #ifdef USE_CUDA_GRAPH
     if (ctx.any_cuda_graph_enabled()) {
+        if (inplace_weights) {
+            GGML_ABORT("in-place CUTLASS MoE weights cannot fall back while CUDA Graphs are enabled");
+        }
         return false;
     }
 #endif
@@ -338,28 +348,33 @@ bool ggml_cuda_moe_mmq(ggml_backend_cuda_context & ctx, const ggml_cuda_moe_mmq_
         static bool logged = false;
         if (!logged) {
             GGML_LOG_INFO(
-                "CUTLASS MoE: prefix=%d cta-quant=%d cta-activation=%d pdl=%d activation-rows=%d "
+                "CUTLASS MoE: prefix=%d cta-quant=%d cta-activation=%d pdl=%d inplace-weights=%d activation-rows=%d "
                 "w13-tile-n=%d w13-swap=%d w2-tile-n=%d w2-swap=%d\n",
                 config.prefix_schedule, config.cta_quant, config.cta_activation, config.pdl,
-                config.activation_rows, config.w13.tile_n, config.w13.swap_ab, config.w2.tile_n,
+                config.inplace_weights, config.activation_rows, config.w13.tile_n, config.w13.swap_ab, config.w2.tile_n,
                 config.w2.swap_ab);
             logged = true;
         }
     }
 
-    if (ctx.moe_weight_stream == nullptr) {
-        CUDA_CHECK(cudaStreamCreateWithFlags(&ctx.moe_weight_stream, cudaStreamNonBlocking));
+    if (ctx.cutlass_weight_stream == nullptr) {
+        CUDA_CHECK(cudaStreamCreateWithFlags(&ctx.cutlass_weight_stream, cudaStreamNonBlocking));
     }
 
-    ggml_cuda_moe_weight_view w13_weight;
-    ggml_cuda_moe_weight_view w2_weight;
-    if (!ggml_cuda_moe_repack_weight(
-            ctx, args.gate_up, ggml_cuda_moe_weight_layout::cutlass, w13_weight, ctx.moe_weight_stream,
-            config.repack_cache_entries, false, false) ||
-        !ggml_cuda_moe_repack_weight(
-            ctx, args.down, ggml_cuda_moe_weight_layout::cutlass, w2_weight, ctx.moe_weight_stream,
-            config.repack_cache_entries, false, false)) {
-        return false;
+    ggml_cuda_cutlass_weight w13_weight = cached_w13;
+    ggml_cuda_cutlass_weight w2_weight  = cached_w2;
+    if (!inplace_weights) {
+        if (!ggml_cuda_cutlass_repack_weight(
+                ctx, args.gate_up, w13_weight, ctx.cutlass_weight_stream, false, !config.inplace_weights)) {
+            return false;
+        }
+        if (!ggml_cuda_cutlass_repack_weight(
+                ctx, args.down, w2_weight, ctx.cutlass_weight_stream, false, !config.inplace_weights)) {
+            if (config.inplace_weights) {
+                GGML_ABORT("failed to prepare W2 after replacing the W13 weight layout");
+            }
+            return false;
+        }
     }
 
     ggml_cuda_pool_alloc<int32_t> ids_src1(ctx.pool(), n_rows);

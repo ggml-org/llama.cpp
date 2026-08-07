@@ -1413,29 +1413,23 @@ struct ggml_cuda_stream_context {
 
 uint64_t ggml_cuda_buffer_get_generation(ggml_backend_buffer_t buffer);
 
-struct ggml_cuda_moe_weight_cache_entry {
-    const ggml_tensor * source = nullptr;
-    const void * source_data = nullptr;
-    ggml_backend_buffer_t source_buffer = nullptr;
-    uint64_t source_buffer_generation = 0;
-    const ggml_tensor * source_secondary = nullptr;
-    const void * source_secondary_data = nullptr;
-    ggml_backend_buffer_t source_secondary_buffer = nullptr;
-    uint64_t source_secondary_buffer_generation = 0;
-    int layout = 0;
-    bool preserves_source = false;
-    int64_t ne[3] = {};
-    void * data = nullptr;
-    bool owns_data = false;
-    void * scales_data = nullptr;
-    bool owns_scales = false;
-    int64_t ncols = 0;
-    int64_t stride_row = 0;
-    int64_t stride_channel = 0;
-    int scale_stride = 0;
-    cudaEvent_t ready = nullptr;
-    cudaEvent_t last_use = nullptr;
-    int rows_padded = 0;
+struct ggml_cuda_cutlass_weight_cache_entry {
+    const ggml_tensor *   source                             = nullptr;
+    const void *          source_data                        = nullptr;
+    ggml_backend_buffer_t source_buffer                      = nullptr;
+    uint64_t              source_buffer_generation           = 0;
+    const ggml_tensor *   source_secondary                   = nullptr;
+    const void *          source_secondary_data              = nullptr;
+    ggml_backend_buffer_t source_secondary_buffer            = nullptr;
+    uint64_t              source_secondary_buffer_generation = 0;
+    int64_t               ne[3]                              = {};
+    void *                data                               = nullptr;
+    void *                scales_data                        = nullptr;
+    bool                  owns_data                          = true;
+    bool                  preserves_source                   = true;
+    int64_t               k                                  = 0;
+    int                   scale_stride                       = 0;
+    cudaEvent_t           ready                              = nullptr;
 };
 
 struct ggml_backend_cuda_context {
@@ -1507,8 +1501,8 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_stream_context concurrent_stream_context;
 
-    std::vector<ggml_cuda_moe_weight_cache_entry> moe_weight_cache;
-    cudaStream_t moe_weight_stream = nullptr;
+    std::vector<ggml_cuda_cutlass_weight_cache_entry> cutlass_weight_cache;
+    cudaStream_t cutlass_weight_stream = nullptr;
 
     ~ggml_backend_cuda_context();
 

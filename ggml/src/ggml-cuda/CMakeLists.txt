@@ -103,7 +103,7 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
-    set(GGML_CUDA_CUTLASS_MOE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/moe-mmq-cutlass.cu")
+    set(GGML_CUDA_CUTLASS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mmq-cutlass.cu")
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
@@ -125,17 +125,17 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-bf16-bf16.cu)
     endif()
 
-    if (GGML_CUDA_CUTLASS_MOE)
+    if (GGML_CUDA_CUTLASS)
         if (CUDAToolkit_VERSION VERSION_LESS "12.9")
-            message(FATAL_ERROR "GGML_CUDA_CUTLASS_MOE requires CUDA 12.9 or newer")
+            message(FATAL_ERROR "GGML_CUDA_CUTLASS requires CUDA 12.9 or newer")
         endif()
         if (NOT EXISTS "${GGML_CUDA_CUTLASS_PATH}/include/cutlass/cutlass.h")
             message(FATAL_ERROR
-                "GGML_CUDA_CUTLASS_MOE requires GGML_CUDA_CUTLASS_PATH to point to a CUTLASS source tree")
+                "GGML_CUDA_CUTLASS requires GGML_CUDA_CUTLASS_PATH to point to a CUTLASS source tree")
         endif()
         find_package(Git QUIET)
         if (NOT GIT_FOUND)
-            message(FATAL_ERROR "GGML_CUDA_CUTLASS_MOE requires Git to verify the CUTLASS revision")
+            message(FATAL_ERROR "GGML_CUDA_CUTLASS requires Git to verify the CUTLASS revision")
         endif()
         execute_process(
             COMMAND "${GIT_EXECUTABLE}" -C "${GGML_CUDA_CUTLASS_PATH}" rev-parse HEAD
@@ -148,7 +148,7 @@ if (CUDAToolkit_FOUND)
                 "GGML_CUDA_CUTLASS_PATH must be checked out at ${GGML_CUDA_CUTLASS_REVISION}; found ${GGML_CUDA_CUTLASS_REVISION_FOUND}")
         endif()
 
-        list(REMOVE_ITEM GGML_SOURCES_CUDA "${GGML_CUDA_CUTLASS_MOE_SOURCE}")
+        list(REMOVE_ITEM GGML_SOURCES_CUDA "${GGML_CUDA_CUTLASS_SOURCE}")
     endif()
 
     ggml_add_backend_library(ggml-cuda
@@ -209,26 +209,27 @@ if (CUDAToolkit_FOUND)
         target_link_libraries(ggml-cuda PRIVATE CUDA::cuda_driver)
     endif()
 
-    if (GGML_CUDA_CUTLASS_MOE)
-        add_library(ggml-cuda-cutlass-moe OBJECT "${GGML_CUDA_CUTLASS_MOE_SOURCE}")
-        set_target_properties(ggml-cuda-cutlass-moe PROPERTIES
+    if (GGML_CUDA_CUTLASS)
+        add_library(ggml-cuda-cutlass OBJECT "${GGML_CUDA_CUTLASS_SOURCE}")
+        set_target_properties(ggml-cuda-cutlass PROPERTIES
             CUDA_ARCHITECTURES OFF
             POSITION_INDEPENDENT_CODE ON)
-        target_link_libraries(ggml-cuda-cutlass-moe PRIVATE ggml-base)
-        target_include_directories(ggml-cuda-cutlass-moe PRIVATE
+        target_link_libraries(ggml-cuda-cutlass PRIVATE ggml-base)
+        target_include_directories(ggml-cuda-cutlass PRIVATE
             ..
             "${GGML_CUDA_CUTLASS_PATH}/include"
             "${GGML_CUDA_CUTLASS_PATH}/tools/util/include")
-        target_compile_definitions(ggml-cuda-cutlass-moe PRIVATE GGML_CUDA_CUTLASS_MOE)
-        target_compile_options(ggml-cuda-cutlass-moe PRIVATE
+        target_compile_definitions(ggml-cuda-cutlass PRIVATE GGML_CUDA_CUTLASS)
+        target_compile_options(ggml-cuda-cutlass PRIVATE
             "$<$<COMPILE_LANGUAGE:CUDA>:--generate-code=arch=compute_120f,code=sm_120f>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:--generate-code=arch=compute_121f,code=sm_121f>"
             "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
         if (BUILD_SHARED_LIBS)
-            target_compile_definitions(ggml-cuda-cutlass-moe PRIVATE GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
+            target_compile_definitions(ggml-cuda-cutlass PRIVATE GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
         endif()
-        target_sources(ggml-cuda PRIVATE $<TARGET_OBJECTS:ggml-cuda-cutlass-moe>)
+        target_sources(ggml-cuda PRIVATE $<TARGET_OBJECTS:ggml-cuda-cutlass>)
 
-        target_compile_definitions(ggml-cuda PRIVATE GGML_CUDA_CUTLASS_MOE)
+        target_compile_definitions(ggml-cuda PRIVATE GGML_CUDA_CUTLASS)
         target_include_directories(ggml-cuda PRIVATE
             "${GGML_CUDA_CUTLASS_PATH}/include"
             "${GGML_CUDA_CUTLASS_PATH}/tools/util/include")
@@ -316,8 +317,8 @@ if (CUDAToolkit_FOUND)
     endif()
 
     set(GGML_CUDA_COMPILE_TARGETS ggml-cuda)
-    if (TARGET ggml-cuda-cutlass-moe)
-        list(APPEND GGML_CUDA_COMPILE_TARGETS ggml-cuda-cutlass-moe)
+    if (TARGET ggml-cuda-cutlass)
+        list(APPEND GGML_CUDA_COMPILE_TARGETS ggml-cuda-cutlass)
     endif()
     foreach(GGML_CUDA_COMPILE_TARGET IN LISTS GGML_CUDA_COMPILE_TARGETS)
         target_compile_options(${GGML_CUDA_COMPILE_TARGET} PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")

@@ -4659,6 +4659,101 @@ struct test_moe_nvfp4_block : public test_case {
     }
 };
 
+struct test_cutlass_ffn_block : public test_case {
+    const ggml_type type;
+    const int64_t n_token;
+
+    test_cutlass_ffn_block(ggml_type type, int64_t n_token) : type(type), n_token(n_token) {
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CUTLASS_FFN_BLOCK";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, n_token);
+    }
+
+    double max_nmse_err() override {
+        return 1.0;
+    }
+
+    double err(const float * reference, const float * actual, size_t n) override {
+        GGML_ASSERT(n % 2 == 0);
+        const size_t half = n / 2;
+        const double tolerance = type == GGML_TYPE_NVFP4 ? 4e-2 : 2e-2;
+        return std::max({
+            nmse(reference, actual, half) / tolerance,
+            nmse(reference + half, actual + half, half) / tolerance,
+            nmse(actual, actual + half, half) / tolerance,
+        });
+    }
+
+    bool run_whole_graph() override {
+        return true;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        constexpr uint64_t n_embd = 256;
+        constexpr uint64_t n_ff = 256;
+        return 2ULL * n_token * n_embd * (2 * n_ff + n_ff);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        constexpr int64_t n_embd = 256;
+        constexpr int64_t n_ff = 256;
+
+        ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_token);
+        ggml_set_name(input, "input");
+        ggml_tensor * decode_input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, 1);
+        ggml_set_name(decode_input, "decode_input");
+        ggml_tensor * gate = ggml_new_tensor_2d(ctx, type, n_embd, n_ff);
+        ggml_set_name(gate, "gate");
+        ggml_tensor * up = ggml_new_tensor_2d(ctx, type, n_embd, n_ff);
+        ggml_set_name(up, "up");
+        ggml_tensor * down = ggml_new_tensor_2d(ctx, type, n_ff, n_embd);
+        ggml_set_name(down, "down");
+        ggml_tensor * gate_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        ggml_set_name(gate_scale, "gate_scale");
+        ggml_tensor * up_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        ggml_set_name(up_scale, "up_scale");
+        ggml_tensor * down_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        ggml_set_name(down_scale, "down_scale");
+
+        auto build_ffn = [&](bool allow_fusion) {
+            ggml_tensor * up_out = ggml_mul(ctx, ggml_mul_mat(ctx, up, input), up_scale);
+            if (!allow_fusion) {
+                up_out = ggml_cont(ctx, up_out);
+            }
+            ggml_tensor * gate_out = ggml_mul(ctx, ggml_mul_mat(ctx, gate, input), gate_scale);
+            ggml_tensor * hidden = ggml_swiglu_split(ctx, gate_out, up_out);
+            return ggml_mul(ctx, ggml_mul_mat(ctx, down, hidden), down_scale);
+        };
+
+        ggml_tensor * baseline = build_ffn(false);
+        ggml_tensor * candidate = build_ffn(true);
+        ggml_tensor * decode = ggml_mul_mat(ctx, gate, decode_input);
+        ggml_tensor * decode_zero = ggml_scale(ctx, ggml_sum(ctx, decode), 0.0f);
+        candidate = ggml_add(ctx, candidate, decode_zero);
+        ggml_tensor * result = ggml_concat(ctx, candidate, baseline, 1);
+        ggml_set_name(result, "out");
+        return result;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strstr(t->name, "_scale") == nullptr) {
+                init_tensor_uniform(t);
+            } else {
+                const float scale = 0.25f;
+                ggml_backend_tensor_set(t, &scale, 0, sizeof(scale));
+            }
+        }
+    }
+};
+
 struct test_moe_mxfp4_block : public test_case {
     const int64_t n_token;
     const bool compare_baseline;
@@ -10026,7 +10121,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    if (getenv("GGML_CUDA_CUTLASS_MOE_TEST") != nullptr) {
+    if (getenv("GGML_CUDA_CUTLASS_TEST") != nullptr) {
+        test_cases.emplace_back(
+            new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 512, 256, 256, {1, 1}, {1, 1}));
+        test_cases.emplace_back(
+            new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 512, 256, 256, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_cutlass_ffn_block(GGML_TYPE_MXFP4, 256));
+        test_cases.emplace_back(new test_cutlass_ffn_block(GGML_TYPE_NVFP4, 256));
+
         test_cases.emplace_back(new test_moe_mxfp4_block(512));
         test_cases.emplace_back(new test_moe_mxfp4_block(512, true));
         test_cases.emplace_back(new test_moe_mxfp4_block(512, true, true));
@@ -10050,7 +10152,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
 
-    if (getenv("GGML_CUDA_CUTLASS_MOE_TEST") != nullptr) {
+    if (getenv("GGML_CUDA_CUTLASS_TEST") != nullptr) {
+        for (ggml_type type : {GGML_TYPE_MXFP4, GGML_TYPE_NVFP4}) {
+            for (int64_t n_token : {512, 2048, 8192}) {
+                test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 1024, n_token, 2048,
+                                                         {1, 1}, {1, 1}));
+            }
+        }
         for (int64_t n_token : {512, 2048, 8192}) {
             test_cases.emplace_back(new test_moe_mxfp4_block(n_token));
             test_cases.emplace_back(new test_moe_nvfp4_block(n_token));

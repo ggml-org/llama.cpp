@@ -1,8 +1,9 @@
-# SM120 CUTLASS MoE results
+# SM120 CUTLASS 4-bit results
 
-This branch adds an optional CUTLASS W4A4 prefill path for GPT-OSS MXFP4 and
-Qwen3.6-35B-A3B NVFP4. Measurements were taken on one RTX PRO 6000 Blackwell
-Server Edition. They are direct prefill measurements, not serving throughput.
+This branch adds an optional CUTLASS block-scaled prefill path for GPT-OSS
+MXFP4 and Qwen3.6-35B-A3B NVFP4. Measurements were taken on one RTX PRO 6000
+Blackwell Server Edition. They are direct prefill measurements, not serving
+throughput.
 
 ## Test setup
 
@@ -99,19 +100,24 @@ and epilogue work. Single-token decode therefore remains on MMVQ.
 
 ## Retained implementation
 
-The branch now contains only the optional CUTLASS prefill path and its direct
+The branch contains the optional CUTLASS prefill path and its direct
 dependencies:
 
 - SM120 MXFP4 and NVFP4 grouped W13/W2 kernels
-- Expert-weight repacking and cache lifetime management
+- MXFP4 and NVFP4 weight repacking and cache lifetime management
 - Shared expert scheduling, activation quantization, and CUDA epilogues
 - GPT-OSS fused W13 conversion and loading
 - GPT-OSS MXFP4 and Qwen NVFP4 graph matching
+- Dense MXFP4 and NVFP4 GEMMs and a fused parallel SwiGLU FFN path
 - Focused conversion and backend tests
 
-The path is gated by `GGML_CUDA_CUTLASS_MOE`. Unsupported devices, shapes,
+The path is gated by `GGML_CUDA_CUTLASS`. Unsupported devices, shapes,
 token counts, and graph layouts fall back to the existing CUDA implementation.
 Single-token decode is not intercepted.
+
+The dense path was added after the measurements above. Qwen3.6-27B NVFP4
+correctness and performance still need to be measured on SM120; no dense result
+is inferred from the MoE numbers.
 
 ## Remaining gap
 

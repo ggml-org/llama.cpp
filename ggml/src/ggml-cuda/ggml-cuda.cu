@@ -30,7 +30,7 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/moe-mmq.cuh"
-#include "ggml-cuda/moe-mmq-cutlass.cuh"
+#include "ggml-cuda/mmq-cutlass.cuh"
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
@@ -705,19 +705,21 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
 
-    if (moe_weight_stream != nullptr || !moe_weight_cache.empty()) {
+    if (cutlass_weight_stream != nullptr || !cutlass_weight_cache.empty()) {
         ggml_cuda_set_device(device);
     }
-    for (const auto & entry : moe_weight_cache) {
-        if (entry.ready != nullptr) {
-            CUDA_CHECK(cudaEventSynchronize(entry.ready));
+    if (!cutlass_weight_cache.empty()) {
+        for (int stream_id = 0; stream_id < GGML_CUDA_MAX_STREAMS; ++stream_id) {
+            if (streams[device][stream_id] != nullptr) {
+                CUDA_CHECK(cudaStreamSynchronize(streams[device][stream_id]));
+            }
         }
-        if (entry.last_use != nullptr) {
-            CUDA_CHECK(cudaEventSynchronize(entry.last_use));
+        if (cutlass_weight_stream != nullptr) {
+            CUDA_CHECK(cudaStreamSynchronize(cutlass_weight_stream));
         }
     }
 #ifdef USE_CUDA_GRAPH
-    if (!moe_weight_cache.empty()) {
+    if (!cutlass_weight_cache.empty()) {
         cuda_graphs.clear();
     }
 #endif
@@ -736,22 +738,18 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
         }
     }
 
-    if (moe_weight_stream != nullptr) {
-        CUDA_CHECK(cudaStreamSynchronize(moe_weight_stream));
-        CUDA_CHECK(cudaStreamDestroy(moe_weight_stream));
+    if (cutlass_weight_stream != nullptr) {
+        CUDA_CHECK(cudaStreamDestroy(cutlass_weight_stream));
     }
-    if (!moe_weight_cache.empty()) {
-        for (const auto & entry : moe_weight_cache) {
+    if (!cutlass_weight_cache.empty()) {
+        for (const auto & entry : cutlass_weight_cache) {
             if (entry.ready != nullptr) {
                 CUDA_CHECK(cudaEventDestroy(entry.ready));
             }
-            if (entry.last_use != nullptr) {
-                CUDA_CHECK(cudaEventDestroy(entry.last_use));
-            }
-            if (entry.data != nullptr && entry.owns_data) {
+            if (entry.owns_data && entry.data != nullptr) {
                 CUDA_CHECK(cudaFree(entry.data));
             }
-            if (entry.scales_data != nullptr && entry.owns_scales) {
+            if (entry.scales_data != nullptr) {
                 CUDA_CHECK(cudaFree(entry.scales_data));
             }
         }
@@ -1882,6 +1880,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
+    if (ggml_cuda_cutlass_mul_mat(ctx, src0, src1, dst)) {
+        return;
+    }
+
     if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
@@ -2577,7 +2579,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
         if (node->op == GGML_OP_MUL_MAT_ID) {
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-            if (ggml_cuda_moe_cutlass_compiled() && blackwell_mma_available(cc) &&
+            if (ggml_cuda_cutlass_compiled() && blackwell_mma_available(cc) &&
                 ggml_cuda_moe_cutlass_prefill_requested()) {
                 ggml_cuda_moe_cutlass_nvfp4_args args;
                 const int fused_skip = ggml_cuda_moe_cutlass_nvfp4_match(cgraph, i, args);
@@ -3240,28 +3242,34 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 static const ggml_tensor * ggml_cuda_moe_scale_source(
-        const ggml_tensor * scaled, const ggml_tensor * product, const ggml_tensor * ids, int64_t n_tokens) {
+        const ggml_tensor * scaled,
+        const ggml_tensor * product,
+        const ggml_tensor * ids,
+        int64_t             n_tokens,
+        int64_t             n_experts,
+        int64_t             n_expert_used) {
     if (scaled == nullptr || scaled->op != GGML_OP_MUL || scaled->src[0] != product) {
         return nullptr;
     }
     const ggml_tensor * selected = scaled->src[1];
     if (selected == nullptr || selected->op != GGML_OP_GET_ROWS || selected->src[1] != ids ||
-        selected->type != GGML_TYPE_F32 || selected->ne[0] != 1 || selected->ne[1] != 8 ||
+        selected->type != GGML_TYPE_F32 || selected->ne[0] != 1 || selected->ne[1] != n_expert_used ||
         selected->ne[2] != n_tokens || selected->ne[3] != 1) {
         return nullptr;
     }
     const ggml_tensor * repeated = selected->src[0];
     if (repeated == nullptr || repeated->op != GGML_OP_REPEAT ||
-        repeated->ne[0] != 1 || repeated->ne[1] != 256 || repeated->ne[2] != n_tokens || repeated->ne[3] != 1) {
+        repeated->ne[0] != 1 || repeated->ne[1] != n_experts || repeated->ne[2] != n_tokens ||
+        repeated->ne[3] != 1) {
         return nullptr;
     }
     const ggml_tensor * reshaped = repeated->src[0];
     if (reshaped == nullptr || reshaped->op != GGML_OP_RESHAPE ||
-        reshaped->ne[0] != 1 || reshaped->ne[1] != 256 || reshaped->ne[2] != 1 || reshaped->ne[3] != 1) {
+        reshaped->ne[0] != 1 || reshaped->ne[1] != n_experts || reshaped->ne[2] != 1 || reshaped->ne[3] != 1) {
         return nullptr;
     }
     const ggml_tensor * scale = reshaped->src[0];
-    if (scale == nullptr || scale->type != GGML_TYPE_F32 || scale->ne[0] != 256 ||
+    if (scale == nullptr || scale->type != GGML_TYPE_F32 || scale->ne[0] != n_experts ||
         scale->ne[1] != 1 || scale->ne[2] != 1 || scale->ne[3] != 1) {
         return nullptr;
     }
@@ -3356,11 +3364,16 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
     if (!prefill) {
         return 0;
     }
-    if (first->src[0]->type != GGML_TYPE_NVFP4 ||
-        first->src[0]->ne[0] != 2048 || first->src[0]->ne[1] != 512 || first->src[0]->ne[2] != 256 ||
-        first->src[1]->type != GGML_TYPE_F32 || first->src[1]->ne[0] != 2048 || first->src[1]->ne[1] != 1 ||
+    const int64_t n_embd         = first->src[0]->ne[0];
+    const int64_t n_ff           = first->src[0]->ne[1];
+    const int64_t n_experts      = first->src[0]->ne[2];
+    const int64_t n_expert_used  = first->src[2]->ne[0];
+    if (first->src[0]->type != GGML_TYPE_NVFP4 || n_embd <= 0 || n_ff <= 0 || n_experts <= 0 ||
+        n_experts > 256 || (n_expert_used != 4 && n_expert_used != 8) || n_expert_used > n_experts ||
+        first->src[0]->ne[3] != 1 || first->src[1]->type != GGML_TYPE_F32 ||
+        first->src[1]->ne[0] != n_embd || first->src[1]->ne[1] != 1 ||
         first->src[1]->ne[2] != n_tokens || first->src[1]->ne[3] != 1 ||
-        first->src[2]->type != GGML_TYPE_I32 || first->src[2]->ne[0] != 8 ||
+        first->src[2]->type != GGML_TYPE_I32 ||
         first->src[2]->ne[1] != n_tokens || first->src[2]->ne[2] != 1 || first->src[2]->ne[3] != 1) {
         return 0;
     }
@@ -3382,7 +3395,8 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
 
     const int second_idx = find_node(node_idx + 1, node_idx + 12, [&](const ggml_tensor * node) {
         return node->op == GGML_OP_MUL_MAT_ID && node->src[0]->type == GGML_TYPE_NVFP4 &&
-            node->src[0]->ne[0] == 2048 && node->src[0]->ne[1] == 512 && node->src[0]->ne[2] == 256 &&
+            node->src[0]->ne[0] == n_embd && node->src[0]->ne[1] == n_ff &&
+            node->src[0]->ne[2] == n_experts && node->src[0]->ne[3] == 1 &&
             node->src[1] == first->src[1] && node->src[2] == first->src[2];
     });
     if (second_idx < 0) {
@@ -3412,15 +3426,18 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
     ggml_tensor * up_mm      = gate_mm == first ? second : first;
     ggml_tensor * gate_scaled = activation->src[0];
     ggml_tensor * up_scaled   = activation->src[1];
-    const ggml_tensor * gate_scale = ggml_cuda_moe_scale_source(gate_scaled, gate_mm, first->src[2], n_tokens);
-    const ggml_tensor * up_scale   = ggml_cuda_moe_scale_source(up_scaled, up_mm, first->src[2], n_tokens);
+    const ggml_tensor * gate_scale = ggml_cuda_moe_scale_source(
+        gate_scaled, gate_mm, first->src[2], n_tokens, n_experts, n_expert_used);
+    const ggml_tensor * up_scale = ggml_cuda_moe_scale_source(
+        up_scaled, up_mm, first->src[2], n_tokens, n_experts, n_expert_used);
     if (gate_scale == nullptr || up_scale == nullptr) {
         return 0;
     }
 
     const int down_idx = find_node(activation_idx + 1, activation_idx + 4, [&](const ggml_tensor * node) {
         return node->op == GGML_OP_MUL_MAT_ID && node->src[0]->type == GGML_TYPE_NVFP4 &&
-            node->src[0]->ne[0] == 512 && node->src[0]->ne[1] == 2048 && node->src[0]->ne[2] == 256 &&
+            node->src[0]->ne[0] == n_ff && node->src[0]->ne[1] == n_embd &&
+            node->src[0]->ne[2] == n_experts && node->src[0]->ne[3] == 1 &&
             node->src[1] == activation && node->src[2] == first->src[2];
     });
     if (down_idx < 0) {
@@ -3432,7 +3449,8 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
         return 0;
     }
     ggml_tensor * down_scaled = cgraph->nodes[down_scaled_idx];
-    const ggml_tensor * down_scale = ggml_cuda_moe_scale_source(down_scaled, down, first->src[2], n_tokens);
+    const ggml_tensor * down_scale = ggml_cuda_moe_scale_source(
+        down_scaled, down, first->src[2], n_tokens, n_experts, n_expert_used);
     if (down_scale == nullptr) {
         return 0;
     }
@@ -3443,25 +3461,25 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
     }
     ggml_tensor * weighted = cgraph->nodes[weighted_idx];
     const ggml_tensor * weights = weighted->src[0] == down_scaled ? weighted->src[1] : weighted->src[0];
-    if (weights == nullptr || weights->type != GGML_TYPE_F32 || weights->ne[0] != 1 || weights->ne[1] != 8 ||
+    if (weights == nullptr || weights->type != GGML_TYPE_F32 || weights->ne[0] != 1 ||
+        weights->ne[1] != n_expert_used ||
         weights->ne[2] != n_tokens || weights->ne[3] != 1 || !ggml_are_same_shape(weighted, down_scaled)) {
         return 0;
     }
 
-    constexpr int n_expert_used = 8;
-    const int end_idx = weighted_idx + 2 * n_expert_used - 1;
+    const int end_idx = weighted_idx + 2 * (int) n_expert_used - 1;
     if (end_idx >= cgraph->n_nodes) {
         return 0;
     }
-    std::array<ggml_tensor *, n_expert_used> routes;
+    std::vector<ggml_tensor *> routes(n_expert_used);
     auto is_route_view = [&](const ggml_tensor * view, int route) {
         return view->op == GGML_OP_VIEW && view->src[0] == weighted &&
             view->view_offs == (size_t) route * weighted->nb[1] &&
-            view->ne[0] == 2048 && view->ne[1] == n_tokens && view->ne[2] == 1 && view->ne[3] == 1;
+            view->ne[0] == n_embd && view->ne[1] == n_tokens && view->ne[2] == 1 && view->ne[3] == 1;
     };
     auto match_reduction = [&](bool views_first) {
         ggml_tensor * reduced = nullptr;
-        for (int route = 0; route < n_expert_used; ++route) {
+        for (int route = 0; route < (int) n_expert_used; ++route) {
             const int view_idx = views_first ? weighted_idx + 1 + route :
                 weighted_idx + (route == 0 ? 1 : 2 * route);
             ggml_tensor * view = cgraph->nodes[view_idx];
@@ -3473,7 +3491,7 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
                 continue;
             }
 
-            const int add_idx = views_first ? weighted_idx + n_expert_used + route : view_idx + 1;
+            const int add_idx = views_first ? weighted_idx + (int) n_expert_used + route : view_idx + 1;
             ggml_tensor * add = cgraph->nodes[add_idx];
             const ggml_tensor * lhs = route == 1 ? routes[0] : reduced;
             if (add->op != GGML_OP_ADD ||
@@ -3511,6 +3529,129 @@ static int ggml_cuda_moe_cutlass_nvfp4_match(
         gate_scale, up_scale, down_scale, weights, reduced,
     };
     return end_idx - node_idx;
+}
+
+static int ggml_cuda_cutlass_ffn_match(
+        const ggml_cgraph * cgraph, int node_idx, ggml_cuda_cutlass_ffn_args & args) {
+    if (!ggml_cuda_cutlass_compiled() || node_idx + 3 >= cgraph->n_nodes) {
+        return 0;
+    }
+
+    const ggml_tensor * first = cgraph->nodes[node_idx];
+    if (first->src[0] == nullptr || first->src[1] == nullptr ||
+        (first->src[0]->type != GGML_TYPE_MXFP4 && first->src[0]->type != GGML_TYPE_NVFP4) ||
+        first->src[1]->ne[0] <= 0 || ggml_nelements(first->src[1]) / first->src[1]->ne[0] < 256) {
+        return 0;
+    }
+
+    auto scalar_scale = [](const ggml_tensor * mul, const ggml_tensor * mm) -> const ggml_tensor * {
+        if (mul->op != GGML_OP_MUL || mul->type != GGML_TYPE_F32 || !ggml_are_same_shape(mul, mm)) {
+            return nullptr;
+        }
+        const ggml_tensor * scale = mul->src[0] == mm ? mul->src[1] : mul->src[1] == mm ? mul->src[0] : nullptr;
+        if (scale == nullptr || scale->type != GGML_TYPE_F32 || ggml_nelements(scale) != 1 ||
+            !ggml_is_contiguous(scale)) {
+            return nullptr;
+        }
+        return scale;
+    };
+
+    for (const bool with_scales : { true, false }) {
+        const int first_idx = node_idx;
+        const int first_scale_idx = with_scales ? first_idx + 1 : -1;
+        const int second_idx = with_scales ? first_idx + 2 : first_idx + 1;
+        const int second_scale_idx = with_scales ? second_idx + 1 : -1;
+        const int glu_idx = with_scales ? second_idx + 2 : second_idx + 1;
+        const int down_idx = glu_idx + 1;
+        const int down_scale_idx = with_scales ? down_idx + 1 : -1;
+        const int end_idx = with_scales ? down_scale_idx : down_idx;
+        if (end_idx >= cgraph->n_nodes) {
+            continue;
+        }
+
+        ggml_op ops[7];
+        int n_ops = 0;
+        ops[n_ops++] = GGML_OP_MUL_MAT;
+        if (with_scales) {
+            ops[n_ops++] = GGML_OP_MUL;
+        }
+        ops[n_ops++] = GGML_OP_MUL_MAT;
+        if (with_scales) {
+            ops[n_ops++] = GGML_OP_MUL;
+        }
+        ops[n_ops++] = GGML_OP_GLU;
+        ops[n_ops++] = GGML_OP_MUL_MAT;
+        if (with_scales) {
+            ops[n_ops++] = GGML_OP_MUL;
+        }
+        const int out_nodes[] = { end_idx };
+        if (!ggml_can_fuse_subgraph(cgraph, node_idx, n_ops, ops, out_nodes, 1)) {
+            continue;
+        }
+
+        ggml_tensor * first_mm = cgraph->nodes[first_idx];
+        ggml_tensor * second_mm = cgraph->nodes[second_idx];
+        ggml_tensor * glu = cgraph->nodes[glu_idx];
+        ggml_tensor * down = cgraph->nodes[down_idx];
+        if (first_mm->src[0] == nullptr || first_mm->src[1] == nullptr || second_mm->src[0] == nullptr ||
+            second_mm->src[1] == nullptr || down->src[0] == nullptr || down->src[1] != glu ||
+            (first_mm->src[0]->type != GGML_TYPE_MXFP4 && first_mm->src[0]->type != GGML_TYPE_NVFP4) ||
+            second_mm->src[0]->type != first_mm->src[0]->type || down->src[0]->type != first_mm->src[0]->type ||
+            first_mm->src[1] != second_mm->src[1] || !ggml_are_same_shape(first_mm->src[0], second_mm->src[0]) ||
+            glu->op != GGML_OP_GLU || ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU ||
+            ggml_get_op_params_i32(glu, 1) != 0) {
+            continue;
+        }
+
+        const ggml_tensor * first_out = with_scales ? cgraph->nodes[first_scale_idx] : first_mm;
+        const ggml_tensor * second_out = with_scales ? cgraph->nodes[second_scale_idx] : second_mm;
+        const ggml_tensor * gate = nullptr;
+        const ggml_tensor * up = nullptr;
+        const ggml_tensor * gate_scale = nullptr;
+        const ggml_tensor * up_scale = nullptr;
+        if (glu->src[0] == first_out && glu->src[1] == second_out) {
+            gate = first_mm->src[0];
+            up = second_mm->src[0];
+            if (with_scales) {
+                gate_scale = scalar_scale(first_out, first_mm);
+                up_scale = scalar_scale(second_out, second_mm);
+            }
+        } else if (glu->src[0] == second_out && glu->src[1] == first_out) {
+            gate = second_mm->src[0];
+            up = first_mm->src[0];
+            if (with_scales) {
+                gate_scale = scalar_scale(second_out, second_mm);
+                up_scale = scalar_scale(first_out, first_mm);
+            }
+        } else {
+            continue;
+        }
+
+        const ggml_tensor * down_scale = with_scales ? scalar_scale(cgraph->nodes[down_scale_idx], down) : nullptr;
+        if (with_scales && (gate_scale == nullptr || up_scale == nullptr || down_scale == nullptr)) {
+            continue;
+        }
+        if (down->src[0]->ne[0] != gate->ne[1] || down->src[0]->ne[1] != cgraph->nodes[end_idx]->ne[0]) {
+            continue;
+        }
+        if (!ggml_cuda_check_fusion_memory_ranges(
+                cgraph, node_idx, n_ops, out_nodes, 1, false, first_mm->src[1])) {
+            continue;
+        }
+
+        args = {
+            gate,
+            up,
+            down->src[0],
+            first_mm->src[1],
+            gate_scale,
+            up_scale,
+            down_scale,
+            cgraph->nodes[end_idx],
+        };
+        return n_ops - 1;
+    }
+    return 0;
 }
 
 static bool ggml_cuda_moe_mmq_fusion(
@@ -3664,6 +3805,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    if (node->op == GGML_OP_MUL_MAT) {
+        ggml_cuda_cutlass_ffn_args args;
+        const int fused_skip = ggml_cuda_cutlass_ffn_match(cgraph, i, args);
+        if (fused_skip > 0 && ggml_cuda_cutlass_ffn(*cuda_ctx, args)) {
+            return fused_skip;
+        }
+    }
 
     if (node->op == GGML_OP_MUL_MAT_ID) {
         ggml_cuda_moe_cutlass_nvfp4_args fused_args;
