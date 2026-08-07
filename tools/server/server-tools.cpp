@@ -466,6 +466,23 @@ static bool path_glob_match(const std::string & pattern, const std::string & rel
     return glob_match("**/" + pattern, rel_path);
 }
 
+static std::string url_encode(const std::string& value) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string escaped;
+    escaped.reserve(value.size()); // Optimization to prevent multiple reallocations
+
+    for (unsigned char c : value) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped += c;
+        } else {
+            escaped += '%';
+            escaped += hex[c >> 4];   // High nibble
+            escaped += hex[c & 0x0F]; // Low nibble
+        }
+    }
+    return escaped;
+}
+
 //
 // read_file: read a file with optional line range and line-number prefix
 //
@@ -1474,6 +1491,87 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 }
 
 //
+// web_search: search the web using DuckDuckGo via HTML interface
+//
+struct server_tool_web_search : server_tool {
+    server_tool_web_search() {
+        name = "web_search";
+        display_name = "Web Search";
+        permission_write = false;
+    }
+
+    json get_definition() const override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Search the web using DuckDuckGo. Returns a list of results containing titles, URLs, and snippets."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"query", {{"type", "string"}, {"description", "The search query"}}},
+                    }},
+                    {"required", json::array({"query"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(json params, server_tool::stream *) const override {
+        std::string query = params.at("query").get<std::string>();
+        auto io = make_tools_io(params);
+
+        // 1. Encode query to prevent URL breakage
+        std::string encoded_query = url_encode(query);
+
+        // 2. Download HTML using wget2 (outputting directly to stdout)
+        // We use -qO- to avoid creating temporary files and to pipe directly to our C++ string
+        std::vector<std::string> args = {"wget2", "-qO-", "https://ddg.gg/html/?q=" + encoded_query};
+        auto res = io->run(args, 512 * 1024, 20); // 512KB limit, 20s timeout
+
+        if (res.exit_code != 0) {
+            return {{"error", "download failed: " + res.output}};
+        }
+        if (res.timed_out) {
+            return {{"error", "search request timed out"}};
+        }
+
+        // 3. Parse the HTML using regex
+        // We look for the specific pattern used by DuckDuckGo's HTML interface.
+        // Based on the provided xq query, we look for title, url, and snippet.
+        json results = json::array();
+        
+        // This regex looks for the common DDG HTML result block structure:
+        // 1. The title link: <a class="result__a" href="URL">TITLE</a>
+        // 2. The snippet: <div class="result__snippet">SNIPPET</div>
+        // Note: We use a non-greedy match (.*?) to handle multiple results in one string.
+        std::regex result_regex(
+            R"(<a class="result__a" href="([^"]+)"[^>]*>([^<]+)</a>.*?<div class="result__snippet">([^<]+)</div>)",
+            std::regex::extended
+        );
+
+        auto words_begin = std::sregex_iterator(res.output.begin(), res.output.end(), result_regex);
+        auto words_end = std::sregex_iterator();
+
+        for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+            std::smatch match = *i;
+            results.push_back({
+                {"url",     match[1].str()},
+                {"title",   match[2].str()},
+                {"snippet", match[3].str()}
+            });
+        }
+
+        if (results.empty()) {
+            // If regex failed but download succeeded, it might be a different HTML structure or no results
+            return {{"results", json::array()}, {"info", "No results found or parsing error. Raw output length: " + std::to_string(res.output.size())}};
+        }
+
+        return {{"results", results}};
+    }
+};
+
+//
 // public API
 //
 
@@ -1487,6 +1585,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
     tools.push_back(std::make_unique<server_tool_get_info>());
+    tools.push_back(std::make_unique<server_tool_web_search>());
     return tools;
 }
 
