@@ -43,7 +43,7 @@ static void mkl_fa_pack_q_fp16(
     dpct::queue_ptr stream,
     sycl::half * __restrict dst,
     const float * __restrict q_src,
-    int n_queries, int n_query_rows, int DKQ,
+    int n_queries, int DKQ,
     int gqa_ratio, int kvh_base_head,
     float q_scale, int64_t q_row_stride, int64_t q_head_stride,
     int64_t wg_size) {
