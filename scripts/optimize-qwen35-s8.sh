@@ -5,7 +5,7 @@ set -Eeuo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  optimize-qwen35-s8.sh --input PATH --bf16 PATH --out-root PATH --stock-q4-0 PATH \
+  optimize-qwen35-s8.sh --input PATH --bf16 PATH --out-root PATH \
     --code-kld-base PATH --wiki-kld-base PATH [options]
 
 The input BF16 GGUF must already exist. Candidates are built from that source;
@@ -16,6 +16,7 @@ Options:
   --build-dir PATH         build directory
   --python PATH            Python interpreter
   --stages LIST            comma-separated: stock,fixed,native (default: all)
+  --stock-q4-0 PATH        optional historical stock map; omit for BF16-derived base
   --imatrix PATH           optional imatrix for every candidate
   --threads N              quantizer threads (default: physical core count)
   --objective NAME         mtp|decode|prompt|balanced (default: balanced)
@@ -76,18 +77,18 @@ while (($#)); do
     esac
 done
 
-[[ -n "$INPUT" && -n "$BF16" && -n "$OUT_ROOT" && -n "$STOCK_Q40" ]] || { usage >&2; die "--input, --bf16, --out-root, and --stock-q4-0 are required"; }
+[[ -n "$INPUT" && -n "$BF16" && -n "$OUT_ROOT" ]] || { usage >&2; die "--input, --bf16, and --out-root are required"; }
 [[ "$OBJECTIVE" == mtp || "$OBJECTIVE" == decode || "$OBJECTIVE" == prompt || "$OBJECTIVE" == balanced ]] || die "invalid objective: $OBJECTIVE"
 [[ "$QUALITY_TOLERANCE" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid quality tolerance: $QUALITY_TOLERANCE"
 INPUT=$(readlink -f -- "$INPUT")
 BF16=$(readlink -f -- "$BF16")
 OUT_ROOT=$(readlink -m -- "$OUT_ROOT")
-STOCK_Q40=$(readlink -f -- "$STOCK_Q40")
+if [[ -n "$STOCK_Q40" ]]; then STOCK_Q40=$(readlink -f -- "$STOCK_Q40"); fi
 REPO=$(readlink -f -- "$REPO")
 BUILD_DIR=$(readlink -f -- "$BUILD_DIR")
 [[ -e "$INPUT" ]] || die "input does not exist: $INPUT"
 [[ -f "$BF16" ]] || die "BF16 source does not exist: $BF16"
-[[ -f "$STOCK_Q40" ]] || die "stock Q4_0 map does not exist: $STOCK_Q40"
+[[ -z "$STOCK_Q40" || -f "$STOCK_Q40" ]] || die "stock Q4_0 map does not exist: $STOCK_Q40"
 [[ -f "$CODE_KLD" ]] || { [[ "$SKIP_KLD" -eq 1 ]] || die "code KLD base does not exist: $CODE_KLD"; }
 [[ -f "$WIKI_KLD" ]] || { [[ "$SKIP_KLD" -eq 1 ]] || die "wiki KLD base does not exist: $WIKI_KLD"; }
 BUILDER="$REPO/scripts/build-qwen35-q4-0-s8.sh"
@@ -131,8 +132,8 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
     for stage in "${STAGE_LIST[@]}"; do
         out="$OUT_ROOT/$stage"
         args=(--python "$PYTHON" --input "$INPUT" --bf16 "$BF16" --out-dir "$out"
-              --stock-q4-0 "$STOCK_Q40" --stage "$stage" --skip-convert --skip-mmproj
-              --threads "$THREADS")
+              --stage "$stage" --skip-convert --skip-mmproj --threads "$THREADS")
+        [[ -n "$STOCK_Q40" ]] && args+=(--stock-q4-0 "$STOCK_Q40")
         [[ -n "$IMATRIX" ]] && args+=(--imatrix "$IMATRIX")
         [[ "$FORCE" -eq 1 ]] && args+=(--force)
         echo "[build] $stage"
