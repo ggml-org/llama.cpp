@@ -174,12 +174,22 @@ export {
 export {
 	splitPathQuery,
 	buildCaseInsensitiveGlob,
+	buildGlobSearchArgs,
 	rankEntries,
 	joinPath,
 	highlightMatch,
 	type GlobEntry,
+	type GlobSearchArgs,
 	type PathQuery
 } from './working-directory';
+
+// Shared `file_glob_search` runner with a short-lived result cache
+export {
+	runGlobSearch,
+	runGlobSearchWithChildren,
+	type GlobEntryResult,
+	type GlobSearchResult
+} from './glob-search';
 
 // Agentic content utilities (structured section derivation)
 export {
