@@ -100,6 +100,70 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, sum);
 }
 
+__launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
+static __global__ void quantize_q8_1_dot8(
+        const float * x_ptr, void * vy_ptr,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
+    ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT x  = x_ptr;
+    block_q8_1_dot8 * GGML_CUDA_RESTRICT y = (block_q8_1_dot8 *) vy_ptr;
+    const int64_t i0 = (int64_t) blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i0 >= ne0) {
+        return;
+    }
+
+    const int64_t i3 = fastdiv(blockIdx.z, ne2);
+    const int64_t i2 = blockIdx.z - i3*ne2.z;
+    const int64_t i1 = blockIdx.y;
+    const int64_t i_cont = ((i3*ne2.z + i2) * ne1 + i1) * ne0 + i0;
+    const int64_t ib = i_cont / QK8_1;
+    const int iqs = i_cont % QK8_1;
+    const int lane = threadIdx.x % WARP_SIZE;
+
+    ggml_cuda_pdl_sync();
+    const float xi = i0 < ne00 ? x[i3*s03 + i2*s02 + i1*s01 + i0] : 0.0f;
+    float amax = fabsf(xi);
+    float sum = xi;
+    amax = warp_reduce_max<QK8_1>(amax);
+    sum  = warp_reduce_sum<QK8_1>(sum);
+
+    const float d = amax / 127.0f;
+    const int q = amax == 0.0f ? 0 : (int) roundf(xi / d);
+
+    // All lanes execute the shuffles; only four owner lanes write the
+    // resulting words. The duplicated groups in lanes 16..31 keep the
+    // shuffle operation out of divergent control flow.
+    const int group = (lane / 4) & 3;
+    uint32_t lo = 0;
+    uint32_t hi = 0;
+    int sum_hi_group = 0;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        const int q0 = __shfl(q, group*4 + j, WARP_SIZE);
+        const int q1 = __shfl(q, 16 + group*4 + j, WARP_SIZE);
+        lo |= ((uint32_t) (q0 & 0x0F)) << (4*(2*j + 0));
+        lo |= ((uint32_t) (q1 & 0x0F)) << (4*(2*j + 1));
+        hi |= ((uint32_t) ((q0 >> 4) & 0x0F)) << (4*(2*j + 0));
+        hi |= ((uint32_t) ((q1 >> 4) & 0x0F)) << (4*(2*j + 1));
+        sum_hi_group += (q0 >> 4) + (q1 >> 4);
+    }
+    const int sum_hi_pair = sum_hi_group + __shfl(sum_hi_group, (group + 1)*4, WARP_SIZE);
+
+    if (lane < 16 && (lane % 4) == 0) {
+        y[ib].lo[group] = lo;
+        y[ib].hi[group] = hi;
+        if ((group & 1) == 0) {
+            y[ib].sum_hi[group/2] = (int8_t) sum_hi_pair;
+        }
+    }
+
+    if (lane == 0) {
+        y[ib].ds = make_half2(d, sum);
+    }
+}
+
 static __device__ __forceinline__ int32_t pack_q8_1_i8x4(
         const int8_t q0, const int8_t q1, const int8_t q2, const int8_t q3) {
     return
@@ -620,6 +684,22 @@ static __global__ void quantize_mmq_q8_1(
         }
     }
     GGML_UNUSED(n_expert_used);
+}
+
+void quantize_row_q8_1_dot8_cuda(
+        const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(!ids);
+    GGML_ASSERT(ne0 % QK8_1 == 0);
+
+    const uint3 ne2_fastdiv = init_fastdiv_values(ne2);
+    const int64_t block_num_x = (ne0 + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
+    ggml_cuda_kernel_launch(quantize_q8_1_dot8, launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    GGML_UNUSED(type_src0);
 }
 
 void quantize_row_q8_1_cuda(
