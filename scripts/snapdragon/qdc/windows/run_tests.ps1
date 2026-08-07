@@ -1,0 +1,123 @@
+#requires -Version 5
+$ErrorActionPreference = 'Continue'
+
+# Resolve script directory so this works regardless of where it runs from.
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location -LiteralPath $ScriptDir
+
+# QDC only collects files under C:\Temp\QDC_Logs for POWERSHELL jobs.
+$QdcLogs = 'C:\Temp\QDC_Logs'
+if (-not (Test-Path -LiteralPath $QdcLogs)) {
+    New-Item -ItemType Directory -Path $QdcLogs -Force | Out-Null
+}
+
+# Mirror everything we Write-Host into QDC_Logs so we can debug failures.
+Start-Transcript -Path (Join-Path $QdcLogs 'run_tests.transcript.log') -Force | Out-Null
+
+Write-Host '=== [run_tests.ps1] importing HTP signing cert ==='
+$Cert = Join-Path $ScriptDir 'ggml-htp-v1.cer'
+if (Test-Path -LiteralPath $Cert) {
+    & certutil.exe -addstore -f Root $Cert | Out-String | Write-Host
+    & certutil.exe -addstore -f TrustedPublisher $Cert | Out-String | Write-Host
+} else {
+    Write-Host "WARNING: $Cert not found; HTP will fail to load signed .cat"
+}
+
+Write-Host '=== [run_tests.ps1] environment ==='
+Write-Host ("date: {0:yyyy-MM-ddTHH:mm:ssZ}" -f (Get-Date).ToUniversalTime())
+Write-Host "hostname: $env:COMPUTERNAME"
+Write-Host "whoami: $env:USERNAME"
+Write-Host "SCRIPT_DIR: $ScriptDir"
+
+Write-Host '=== [run_tests.ps1] workspace layout ==='
+Get-ChildItem -Force | Format-Table -AutoSize | Out-String | Write-Host
+foreach ($d in 'tests', 'llama_cpp_bundle', 'llama_cpp_bundle\bin', 'llama_cpp_bundle\lib') {
+    if (Test-Path -LiteralPath $d) {
+        Write-Host "--- $d ---"
+        Get-ChildItem -LiteralPath $d -Force | Format-Table -AutoSize | Out-String | Write-Host
+    } else {
+        Write-Host "$d NOT FOUND"
+    }
+}
+
+Write-Host '=== [run_tests.ps1] checking python ==='
+$PythonExe = $null
+foreach ($candidate in @('python', 'python3', 'py')) {
+    $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($cmd) { $PythonExe = $cmd.Source; break }
+}
+if (-not $PythonExe) {
+    Write-Host "python not in PATH; searching common install locations ..."
+    $found = Get-ChildItem -Path 'C:\','C:\Program Files','C:\Program Files (x86)',"$env:LOCALAPPDATA\Programs\Python" `
+                -Filter 'python.exe' -Recurse -ErrorAction SilentlyContinue -Depth 4 |
+             Select-Object -First 5
+    Write-Host ("found python.exe candidates:`n" + ($found | ForEach-Object { $_.FullName } | Out-String))
+    if ($found) { $PythonExe = $found[0].FullName }
+}
+if (-not $PythonExe) {
+    Write-Host "no python on disk; unpacking bundled embeddable arm64 distribution ..."
+    $EmbedDir = 'C:\Temp\python-embed'
+    if (Test-Path -LiteralPath $EmbedDir) { Remove-Item -LiteralPath $EmbedDir -Recurse -Force }
+    Expand-Archive -LiteralPath (Join-Path $ScriptDir 'python-embed-arm64.zip') -DestinationPath $EmbedDir -Force
+    $Pth = Join-Path $EmbedDir 'python311._pth'
+    if (Test-Path -LiteralPath $Pth) {
+        $content = (Get-Content -LiteralPath $Pth -Raw) -replace '#\s*import site', 'import site'
+        Set-Content -LiteralPath $Pth -Value $content -Encoding ascii
+    }
+    $PythonExe = Join-Path $EmbedDir 'python.exe'
+    Write-Host "installing pip via bundled get-pip.py ..."
+    & $PythonExe (Join-Path $ScriptDir 'get-pip.py') --no-warn-script-location 2>&1 | Out-String | Write-Host
+}
+if (-not $PythonExe -or -not (Test-Path -LiteralPath $PythonExe)) {
+    Write-Host 'FATAL: could not locate or install python'
+    Stop-Transcript | Out-Null
+    New-Item -ItemType File -Path 'C:\Temp\QDCTestDone.txt' -Force | Out-Null
+    exit 1
+}
+Write-Host "python: $PythonExe"
+& $PythonExe --version
+
+Write-Host '=== [run_tests.ps1] bootstrapping pip ==='
+& $PythonExe -m pip --version *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'pip not found, installing via get-pip.py ...'
+    $getPip = Join-Path $env:TEMP 'get-pip.py'
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip
+    & $PythonExe $getPip
+    Remove-Item -LiteralPath $getPip -Force
+}
+& $PythonExe -m pip --version
+
+Write-Host '=== [run_tests.ps1] installing requirements ==='
+if (Test-Path -LiteralPath 'requirements.txt') {
+    & $PythonExe -m pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0) {
+        & $PythonExe -m pip install pytest
+    }
+} else {
+    & $PythonExe -m pip install pytest
+}
+
+if (-not (Test-Path -LiteralPath 'tests')) {
+    Write-Host 'FATAL: tests\ directory not found'
+    Get-ChildItem -Force | Format-Table -AutoSize | Out-String | Write-Host
+    exit 1
+}
+
+Write-Host '=== [run_tests.ps1] running pytest ==='
+& $PythonExe -m pytest tests\ -v -s --junitxml=results.xml
+$ExitCode = $LASTEXITCODE
+Write-Host "=== [run_tests.ps1] pytest exit code: $ExitCode ==="
+
+if (Test-Path -LiteralPath 'results.xml') {
+    Copy-Item -LiteralPath 'results.xml' -Destination (Join-Path $QdcLogs 'results.xml') -Force
+} else {
+    Write-Host 'WARNING: results.xml not generated by pytest'
+}
+
+Stop-Transcript | Out-Null
+
+# Signal QDC that the test is complete.
+New-Item -ItemType File -Path 'C:\Temp\QDCTestDone.txt' -Force | Out-Null
+
+exit $ExitCode
