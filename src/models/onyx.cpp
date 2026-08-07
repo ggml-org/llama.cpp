@@ -7,6 +7,11 @@ void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
     ml.get_key(LLM_KV_ATTENTION_POST_NORM_RMS_EPS, hparams.f_post_norm_rms_eps);
 
+    // SWA layers share the model rope theta; they are also the only layers that use rope
+    // here (global layers are NoPE), so the 10000.0 default would apply to all of them.
+    hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
+    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+
     // SWA + NoPE: [SW, SW, SW, Full], NoPE used on Full layers.
     if (hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
