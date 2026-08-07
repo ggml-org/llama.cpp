@@ -106,10 +106,12 @@ struct server_model_meta {
 };
 
 struct server_models_routes;
-struct server_subproc; // defined in server-models.cpp
+struct server_subproc;   // defined in server-models.cpp
+struct server_lru_sched; // defined in server-models.cpp
 
 struct server_models {
     friend struct server_models_routes;
+    friend struct server_lru_sched;
 
 private:
     struct instance_t {
@@ -195,6 +197,12 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
+    // queue of requests waiting for a models_max slot
+    std::unique_ptr<server_lru_sched> sched;
+
+    // if true, add some delay to simulate works (useful for testing)
+    bool debug_fake_timing = false;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
@@ -211,6 +219,7 @@ public:
     conv_model_tracker conv_models;
 
     server_models(const common_params & params, int argc, char ** argv);
+    ~server_models();
 
     server_response sse; // for real-time updates via SSE endpoint
 
@@ -267,7 +276,9 @@ public:
     // ensure the model is in ready state (thread-safe)
     // return false if model is ready
     // otherwise, load the model and blocking wait until it's ready, then return true (meta may need to be refreshed)
-    bool ensure_model_ready(const std::string & name);
+    // if models_max is reached, the request waits in a queue until a slot frees up
+    // throws if the load fails, or if should_stop fires while waiting
+    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr);
 
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false);

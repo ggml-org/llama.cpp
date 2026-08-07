@@ -132,7 +132,10 @@ class ServerProcess:
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
     def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
-        env = {**os.environ}
+        env = {
+            **os.environ,
+            "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
+        }
         if "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
