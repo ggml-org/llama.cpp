@@ -2485,8 +2485,8 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
         ushort  sgitg[[simdgroup_index_in_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]]) {
     constexpr short CS  = OP_SSM_SCAN_SSD_CS;
-    constexpr short TC  = 8;
-    constexpr short HD  = 64;
+    constexpr short TC  = 8; // Tile Count of each edge in a simdgroup 8x8 tile
+    constexpr short HD  = 64; // Head Dim chosen for Mamba-2 
     constexpr short NSG = OP_SSM_SCAN_SSD_NSG;
 
     // acs/exp(acs)/state-decay vectors, dtX[CS][HD], four private SAM row tiles [8][CS],
@@ -2501,8 +2501,8 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
     threadgroup float * tile0       = shared_tile + sgitg*2*TC*TC;
     threadgroup float * tile1       = tile0 + TC*TC;
 
-    const int32_t ir = tgpig.y;
-    const int32_t i3 = tgpig.z;
+    const int32_t ir = tgpig.y; // current head
+    const int32_t i3 = tgpig.z; // current seq
 
     const int32_t nc  = args.d_state;
     const int32_t nr  = args.d_inner;
