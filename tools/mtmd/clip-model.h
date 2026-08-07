@@ -170,6 +170,17 @@ struct clip_hparams {
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
     }
 
+    // used by longest_edge preprocessor (no model-specific value for min/max tokens)
+    void set_limit_image_tokens() {
+        const int patch_area = patch_size * patch_size * n_merge * n_merge;
+        if (custom_image_min_tokens > 0) {
+            image_min_pixels = custom_image_min_tokens * patch_area;
+        }
+        if (custom_image_max_tokens > 0) {
+            image_max_pixels = custom_image_max_tokens * patch_area;
+        }
+    }
+
     void set_warmup_n_tokens(int n_tokens) {
         int n_tok_per_side = static_cast<int>(std::sqrt(n_tokens));
         GGML_ASSERT(n_tok_per_side * n_tok_per_side == n_tokens && "n_tokens must be n*n");
