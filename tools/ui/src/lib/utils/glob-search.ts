@@ -43,7 +43,7 @@ export async function runGlobSearch(
 	limit: number,
 	signal: AbortSignal
 ): Promise<GlobSearchResult> {
-	const key = `${type}\u0000${args.path}\u0000${args.include}\u0000${args.maxDepth}`;
+	const key = `${type}\u0000${args.path}\u0000${args.include}\u0000${args.maxDepth}\u0000${limit}`;
 	const cached = searchCache.get(key);
 	if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
 		return { base: cached.base, entries: cached.results };
@@ -59,7 +59,12 @@ export async function runGlobSearch(
 
 	const base = typeof res.base === 'string' ? res.base : '';
 	const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-	searchCache.set(key, { results: entries, base, at: Date.now() });
+	const now = Date.now();
+	// prune stale entries so the short-lived cache cannot grow unbounded
+	for (const [k, v] of searchCache) {
+		if (now - v.at >= SEARCH_CACHE_TTL_MS) searchCache.delete(k);
+	}
+	searchCache.set(key, { results: entries, base, at: now });
 	return { base, entries };
 }
 
