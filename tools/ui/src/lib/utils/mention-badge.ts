@@ -48,6 +48,40 @@ export function decodeFileLinkPath(path: string): string {
 	}
 }
 
+export interface MentionTextSegment {
+	text: string;
+	mention: { name: string; path: string } | null;
+}
+
+/**
+ * Split raw text into plain runs and `[name](file://path)` mentions.
+ * The raw-text renderers walk these segments to draw badges without
+ * handing the message to the markdown parser, so a `#` stays a `#`.
+ */
+export function splitMentionSegments(value: string): MentionTextSegment[] {
+	const linkRe = fileMentionLinkRe('g');
+	const segments: MentionTextSegment[] = [];
+	let cursor = 0;
+	let match: RegExpExecArray | null;
+
+	while ((match = linkRe.exec(value)) !== null) {
+		if (match.index > cursor) {
+			segments.push({ text: value.slice(cursor, match.index), mention: null });
+		}
+
+		segments.push({
+			text: match[0],
+			mention: { name: match[1], path: decodeFileLinkPath(match[2]) }
+		});
+
+		cursor = match.index + match[0].length;
+	}
+
+	if (cursor < value.length) segments.push({ text: value.slice(cursor), mention: null });
+
+	return segments;
+}
+
 export function getMentionBadgeIconPaths(path: string): readonly string[] {
 	return path.endsWith('/') ? MENTION_BADGE_FOLDER_ICON_PATHS : MENTION_BADGE_FILE_ICON_PATHS;
 }
