@@ -14,7 +14,7 @@
  *   Stage 1a: SigLIP vision tower (N layers, post-norm)
  *   Stage 1b: WindowQFormer blocks (deepstack + spatial)
  *   Stage 1c: Concatenate and pack outputs
- *   Stage 1d: Append newline tokens if add_newline is set
+ *   Stage 1d: Assemble the anyres tiles into one token sequence
  */
 
 // ---------------------------------------------------------------------------
@@ -307,15 +307,6 @@ ggml_tensor * clip_graph_granite4_vision::build_anyres_assembly(ggml_tensor * cu
     return ggml_concat(ctx0, base, tiles, 1);
 }
 
-// Append a single newline row at the end of the tile output.
-ggml_tensor * clip_graph_granite4_vision::append_rowwise_newlines(ggml_context * ctx0, ggml_tensor * tile_output) {
-    // For the single-tile case, append one newline row at the end.
-    // For the multi-tile rowwise case, this will be called per-tile
-    // (though currently only the single-tile path uses it).
-    ggml_tensor * nl_row = build_newline_row(ctx0);
-    return ggml_concat(ctx0, tile_output, nl_row, 1);
-}
-
 ggml_cgraph * clip_graph_granite4_vision::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
@@ -397,9 +388,6 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
         const int out_side = tile_side / hparams.downsample_window_side * hparams.downsample_query_side;
         mmproj = build_anyres_assembly(mmproj, out_side);
         ggml_set_name(mmproj, "g4v_mmproj_out_anyres");
-    } else if (add_newline) {
-        mmproj = append_rowwise_newlines(ctx0, mmproj);
-        ggml_set_name(mmproj, "g4v_mmproj_out_nl");
     } else {
         ggml_set_name(mmproj, "g4v_mmproj_out");
     }

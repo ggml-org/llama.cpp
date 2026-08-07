@@ -346,7 +346,6 @@ struct clip_graph_exaone4_5 : clip_graph {
 struct clip_graph_granite4_vision : clip_graph {
     clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img)
         : clip_graph(ctx, img),
-          add_newline(img.add_newline),
           anyres(img.anyres),
           n_tiles(img.ny() / img.nx()),
           tile_side(img.nx() / patch_size) {}
@@ -354,9 +353,6 @@ struct clip_graph_granite4_vision : clip_graph {
     ggml_cgraph * build() override;
 
 private:
-    // set only for a single-tile image, appends one newline at the end
-    const bool add_newline;
-
     // the input image is a stack of tiles on the Y axis: [overview, tile(0,0), tile(0,1), ...]
     const clip_image_f32::anyres_info anyres;
     const int n_tiles;
@@ -370,6 +366,5 @@ private:
                               int query_side, float qformer_eps);
 
     ggml_tensor * build_newline_row(ggml_context * ctx0);
-    ggml_tensor * append_rowwise_newlines(ggml_context * ctx0, ggml_tensor * tile_output);
     ggml_tensor * build_anyres_assembly(ggml_tensor * cur, int out_side);
 };

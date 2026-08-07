@@ -603,7 +603,8 @@ struct mtmd_serialization; // forward declaration
 struct clip_image_f32 {
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
-    // whether a learned newline (or EOI) token should be appended after the image (eg Granite4 Vision)
+    // appends a learned newline (or EOI) token after the image
+    // no model uses it now (Granite4 Vision moved to anyres), kept for future models
     bool add_newline = false;
 
     // llava-next "anyres" tiling, used by Granite4 Vision

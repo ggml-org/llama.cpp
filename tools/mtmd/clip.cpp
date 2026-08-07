@@ -4049,9 +4049,6 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                     clip_anyres_unpad(img->anyres.grid_x * out_side, img->anyres.grid_y * out_side,
                                       img->anyres.orig_nx, img->anyres.orig_ny, off_x, off_y, w, h);
                     n_patches += h * (w + 1);
-                } else if (img->add_newline) {
-                    // single tile: append 1 newline row
-                    n_patches += 1;
                 }
             } break;
         default:
