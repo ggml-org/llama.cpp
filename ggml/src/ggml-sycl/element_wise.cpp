@@ -450,7 +450,7 @@ static void unary_gated_op_generic_kernel(
 namespace ggml_sycl_detail {
 static void acc_f32_sycl(const char *x, const char *y, float *dst,
                          const int64_t n_elements,
-                         const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+                         const int64_t ne0, const int64_t ne1, const int64_t ne2,
                          const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
                          const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
                          const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
@@ -965,7 +965,7 @@ static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor
     const int64_t offset = (int64_t) ((const int32_t *) dst->op_params)[3] / (int64_t) sizeof(float);
 
     ggml_sycl_detail::acc_f32_sycl(src0_d, src1_d, dst_d, ggml_nelements(dst),
-        dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+        dst->ne[0], dst->ne[1], dst->ne[2],
         src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
         src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
         src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
