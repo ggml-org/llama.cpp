@@ -395,6 +395,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    AMD_RDNA4,
     INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
@@ -443,6 +444,10 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // RDNA
             if (shader_core_props_amd.wavefrontsPerSimd == 20) {
                 return vk_device_architecture::AMD_RDNA1;
+            }
+            // RDNA4 (gfx1201, e.g. RX 9070 XT) detection
+            if (props2.properties.deviceID == 0x1201) {
+                return vk_device_architecture::AMD_RDNA4;
             }
             if (integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
                 return vk_device_architecture::AMD_RDNA3;
@@ -4085,6 +4090,15 @@ static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
         vk_device_architecture::AMD_RDNA2,
         {
             rdna2_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::AMD_RDNA4,
+        {
+            // RDNA4 (gfx1201) has KHR_coopmat support similar to RDNA3.
+            // Use default subgroup size (32) which is the hardware-native wave width.
+            // Per-pipeline overrides can be added here as needed.
         },
         RDNA_DEFAULT_SUBGROUP_SIZE
     },
@@ -18793,8 +18807,10 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
             (arch == vk_device_architecture::INTEL_XE1 && props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu && driver_props.driverID == vk::DriverId::eIntelProprietaryWindows);
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
-            // Workaround for AMD proprietary driver reporting support on all GPUs
-            return arch == vk_device_architecture::AMD_RDNA3;
+            // Workaround for AMD proprietary driver reporting support on all GPUs.
+            // Include RDNA4 (gfx1201) alongside RDNA3 — both have functional KHR_coopmat
+            // support on RDNA, while older architectures (GCN/RDNA1/RDNA2) do not.
+            return arch == vk_device_architecture::AMD_RDNA3 || arch == vk_device_architecture::AMD_RDNA4;
         }
         return true;
     default:
