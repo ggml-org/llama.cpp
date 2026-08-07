@@ -472,21 +472,21 @@ private:
     }
 };
 
-// timeout for auxiliary sandbox calls (stat/mkdir/ls/cp helpers); exec_shell_command uses its own
+// timeout for auxiliary isolate calls (stat/mkdir/ls/cp helpers); exec_shell_command uses its own
 // caller-controlled timeout instead, enforced separately in run()
-static constexpr int SERVER_TOOL_SANDBOX_EXEC_TIMEOUT = 15; // seconds
-static constexpr size_t SERVER_TOOL_SANDBOX_READ_FILE_MAX_SIZE = 64 * 1024 * 1024; // 64 MB
+static constexpr int SERVER_TOOL_ISOLATE_EXEC_TIMEOUT = 15; // seconds
+static constexpr size_t SERVER_TOOL_ISOLATE_READ_FILE_MAX_SIZE = 64 * 1024 * 1024; // 64 MB
 
-// runs every tools_io operation as a command inside a sandbox: a container, a remote host, ...
-// the sandbox is created, mounted, and torn down externally by the caller
+// runs every tools_io operation as a command inside an isolate: a container, a remote host, ...
+// the isolate is created, mounted, and torn down externally by the caller
 // it must provide a POSIX environment: sh, cat, wc, mkdir, dirname, find, timeout
-class tools_io_sandbox : public tools_io {
+class tools_io_isolate : public tools_io {
 public:
     // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
-    explicit tools_io_sandbox(std::string cwd = "") : cwd(std::move(cwd)) {}
+    explicit tools_io_isolate(std::string cwd = "") : cwd(std::move(cwd)) {}
 
     // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged.
-    // sandbox paths are always POSIX-style ('/'), regardless of host OS.
+    // isolate paths are always POSIX-style ('/'), regardless of host OS.
     std::string resolve(const std::string & path) const override {
         if (cwd.empty() || (!path.empty() && path[0] == '/')) {
             return path;
@@ -516,7 +516,7 @@ public:
 
     bool read_file(const std::string & path, std::string & out) const override {
         // combine_stderr=false: stderr must not be spliced into raw file bytes
-        auto res = exec({"cat", "--", resolve(path)}, SERVER_TOOL_SANDBOX_READ_FILE_MAX_SIZE, false);
+        auto res = exec({"cat", "--", resolve(path)}, SERVER_TOOL_ISOLATE_READ_FILE_MAX_SIZE, false);
         if (res.exit_code != 0 || res.timed_out) return false;
         out = res.output;
         return true;
@@ -531,7 +531,7 @@ public:
 
         static std::atomic<uint64_t> tmp_counter{0};
         fs::path tmp = tmp_dir / string_format(
-            "llama-tools-io-sandbox-%zu-%llu.tmp",
+            "llama-tools-io-isolate-%zu-%llu.tmp",
             std::hash<std::thread::id>{}(std::this_thread::get_id()),
             (unsigned long long) tmp_counter.fetch_add(1));
 
@@ -590,8 +590,8 @@ public:
         return out;
     }
 
-    // wraps the command with an in-sandbox `timeout`, since killing the host-side client
-    // does not kill the process tree running inside the sandbox
+    // wraps the command with an in-isolate `timeout`, since killing the host-side client
+    // does not kill the process tree running inside the isolate
     exec_result run(
             const std::vector<std::string> & args,
             size_t max_output,
@@ -599,7 +599,7 @@ public:
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
         std::vector<std::string> inner = {"timeout", std::to_string(timeout_secs) + "s"};
         inner.insert(inner.end(), args.begin(), args.end());
-        // small buffer over timeout_secs so the in-sandbox `timeout` has a chance to exit cleanly
+        // small buffer over timeout_secs so the in-isolate `timeout` has a chance to exit cleanly
         // before the host-side supervisory timeout forcibly kills the client
         return run_subprocess(
             build_argv(with_cwd(inner), /*needs_stdin=*/true),
@@ -607,12 +607,12 @@ public:
     }
 
 protected:
-    // wrap `inner` (a complete POSIX argv) into the host-side argv that runs it in the sandbox
+    // wrap `inner` (a complete POSIX argv) into the host-side argv that runs it in the isolate
     // a transport that re-parses its args in a remote shell (ssh) must join `inner` with shell_quote_join()
     virtual std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const = 0;
 
-    // copy a host file into the sandbox, `sandbox_path` is absolute and its parent already exists
-    virtual bool upload(const std::string & host_path, const std::string & sandbox_path) const = 0;
+    // copy a host file into the isolate, `isolate_path` is absolute and its parent already exists
+    virtual bool upload(const std::string & host_path, const std::string & isolate_path) const = 0;
 
     // quote `argv` into a single string that a POSIX shell re-parses into exactly `argv`
     static std::string shell_quote_join(const std::vector<std::string> & argv) {
@@ -648,7 +648,7 @@ private:
     exec_result exec(const std::vector<std::string> & inner, size_t max_output, bool combine_stderr) const {
         return run_subprocess(
             build_argv(inner, /*needs_stdin=*/false),
-            max_output, SERVER_TOOL_SANDBOX_EXEC_TIMEOUT, nullptr, combine_stderr);
+            max_output, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, combine_stderr);
     }
 
     bool shell_run(const std::vector<std::string> & inner) const {
@@ -674,7 +674,7 @@ private:
         return result;
     }
 
-    // one `find` pass in the sandbox. junk directories stay selectable but are never descended into,
+    // one `find` pass in the isolate. junk directories stay selectable but are never descended into,
     // and -mindepth/-maxdepth keep a busybox image working as well as a GNU one
     std::vector<std::string> find_entries(const std::string & abs_base, int max_depth, bool dirs, bool & truncated) const {
         std::string prune_expr;
@@ -697,10 +697,10 @@ private:
 };
 
 // an already-running docker container, driven through `docker exec` and `docker cp`
-class tools_io_docker : public tools_io_sandbox {
+class tools_io_docker : public tools_io_isolate {
 public:
     tools_io_docker(std::string container_id, std::string cwd = "")
-        : tools_io_sandbox(std::move(cwd)), container_id(std::move(container_id)) {}
+        : tools_io_isolate(std::move(cwd)), container_id(std::move(container_id)) {}
 
 protected:
     std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
@@ -713,10 +713,10 @@ protected:
         return argv;
     }
 
-    bool upload(const std::string & host_path, const std::string & sandbox_path) const override {
+    bool upload(const std::string & host_path, const std::string & isolate_path) const override {
         auto res = run_subprocess(
-            {"docker", "cp", host_path, container_id + ":" + sandbox_path},
-            4096, SERVER_TOOL_SANDBOX_EXEC_TIMEOUT, nullptr, true);
+            {"docker", "cp", host_path, container_id + ":" + isolate_path},
+            4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true);
         return res.exit_code == 0 && !res.timed_out;
     }
 
