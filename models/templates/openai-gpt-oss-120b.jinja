@@ -296,7 +296,11 @@
             {{- "<|start|>assistant to=" }}
             {{- "functions." + tool_call.name + "<|channel|>commentary " }}
             {{- (tool_call.content_type if tool_call.content_type is defined else "json") + "<|message|>" }}
-            {{- tool_call.arguments|tojson }}
+            {%- if tool_call.arguments is string -%}
+                {{- tool_call.arguments }}
+            {%- else -%}
+                {{- tool_call.arguments | tojson }}
+            {%- endif -%}
             {{- "<|call|>" }}
             {%- set last_tool_call.name = tool_call.name %}
         {%- elif loop.last and not add_generation_prompt %}
@@ -319,7 +323,7 @@
             {{- raise_exception("Message has tool role, but there was no previous assistant message with a tool call!") }}
         {%- endif %}
         {{- "<|start|>functions." + last_tool_call.name }}
-        {{- " to=assistant<|channel|>commentary<|message|>" + message.content|tojson + "<|end|>" }}
+        {{- " to=assistant<|channel|>commentary<|message|>" + message.content + "<|end|>" }}
     {%- elif message.role == 'user' -%}
         {{- "<|start|>user<|message|>" + message.content + "<|end|>" }}
     {%- endif -%}
