@@ -1515,6 +1515,7 @@ void ggml_cuda_mul_mat_vec_q(
     const int q8_1_layout_block_size = mmvq_select_q8_1_layout_block_size(src0->type, ncols_dst);
     const bool use_q8_1_layout = q8_1_layout_block_size != MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
     const bool use_q4_0_dot8 = mmvq_use_q4_0_dot8(src0->type, ncols_dst);
+    GGML_ASSERT(!use_q4_0_dot8 || !use_q8_1_layout);
     const int64_t nblocks_src1_q8_1 = ne13*ne12 * ne11*ne10_padded / QK8_1;
     const size_t nbytes_src1_q8_1 = nblocks_src1_q8_1 * sizeof(block_q8_1);
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
@@ -1534,8 +1535,6 @@ void ggml_cuda_mul_mat_vec_q(
             quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type,
                     ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream,
                     use_q4_0_dot8 ? src1_sum_hi.get() : nullptr);
-        }
-        if (use_q4_0_dot8) {
         }
     }
 
