@@ -21,7 +21,8 @@ Options:
   --bf16 PATH                  BF16 intermediate path
   --output PATH                final Q4_0-S8 GGUF path
   --mmproj-output PATH         Q8_0 vision projector path
-  --imatrix PATH               optional llama.cpp imatrix for the final pass
+  --imatrix PATH               imatrix path (default: auto-detect $HOME/models/qwen35-imatrix/...)
+  --no-imatrix                 disable imatrix use and force plain RTN
   --threads N                  quantizer threads (default: physical core count)
   --keep-bf16                  retain the BF16 intermediate (default: retain)
   --remove-bf16                remove BF16 only after successful quantization
@@ -52,7 +53,8 @@ OUT_DIR=
 BF16=
 FINAL=
 MMPROJ=
-IMATRIX=
+IMATRIX="${S8_IMATRIX_PATH:-${HOME}/models/qwen35-imatrix/imatrix_unsloth.gguf_file}"
+USE_IMATRIX=1
 THREADS=
 KEEP_BF16=1
 REMOVE_BF16=0
@@ -72,7 +74,8 @@ while (($#)); do
         --bf16)           [[ $# -ge 2 ]] || die "--bf16 needs a path"; BF16=$2; shift 2 ;;
         --output)         [[ $# -ge 2 ]] || die "--output needs a path"; FINAL=$2; shift 2 ;;
         --mmproj-output)  [[ $# -ge 2 ]] || die "--mmproj-output needs a path"; MMPROJ=$2; shift 2 ;;
-        --imatrix)       [[ $# -ge 2 ]] || die "--imatrix needs a path"; IMATRIX=$2; shift 2 ;;
+        --imatrix)       [[ $# -ge 2 ]] || die "--imatrix needs a path"; IMATRIX=$2; USE_IMATRIX=1; shift 2 ;;
+        --no-imatrix)    IMATRIX=; USE_IMATRIX=0; shift ;;
         --threads)        [[ $# -ge 2 ]] || die "--threads needs a number"; THREADS=$2; shift 2 ;;
         --keep-bf16)      KEEP_BF16=1; REMOVE_BF16=0; shift ;;
         --remove-bf16)    KEEP_BF16=0; REMOVE_BF16=1; shift ;;
@@ -109,9 +112,14 @@ mkdir -p -- "$OUT_DIR"
 BF16=$(readlink -m -- "$BF16")
 FINAL=$(readlink -m -- "$FINAL")
 MMPROJ=$(readlink -m -- "$MMPROJ")
-if [[ -n "$IMATRIX" ]]; then
-    IMATRIX=$(readlink -f -- "$IMATRIX")
-    [[ -f "$IMATRIX" ]] || die "imatrix does not exist: $IMATRIX"
+if [[ "$USE_IMATRIX" -eq 1 && -n "$IMATRIX" ]]; then
+    IMATRIX=$(readlink -m -- "$IMATRIX")
+    if [[ -f "$IMATRIX" ]]; then
+        IMATRIX=$(readlink -f -- "$IMATRIX")
+    else
+        warn "imatrix not found; continuing with plain RTN: $IMATRIX"
+        IMATRIX=
+    fi
 fi
 WORK="$OUT_DIR/q4_0-s8-plan"
 PLAN_LOG="$WORK/q4_k_m-dry-run.log"

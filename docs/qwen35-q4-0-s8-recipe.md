@@ -28,7 +28,7 @@ scripts/build-qwen35-q4-0-s8.sh \
 
 Use `--plan-only` to inspect the plan before quantizing. The script refuses already-quantized input and retains the BF16 intermediate by default; use `--remove-bf16` only after validation.
 
-The optional `--imatrix PATH` is passed only to the final quantization pass. Omitting it preserves the original plain-RTN behavior. Q8_0 ignores the imatrix; Q4_0 uses it for weighted quantization.
+The downloaded imatrix is auto-detected at `$HOME/models/qwen35-imatrix/imatrix_unsloth.gguf_file` and passed only to the final quantization pass. Use `--no-imatrix` to force the original plain-RTN behavior, or `--imatrix PATH` to select another file. Q8_0 ignores the imatrix; Q4_0 uses it for weighted quantization.
 
 The script aborts by default if Q8_0 exceeds half of planned quantized bytes. This is a guard against an unexpectedly broad sensitivity policy; `--allow-large-q8` explicitly overrides it after inspecting `q4_0-s8-plan/summary.txt` and `tensor-plan.tsv`.
 
