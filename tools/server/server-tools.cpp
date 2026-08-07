@@ -1510,6 +1510,9 @@ struct server_tool_web_search : server_tool {
                     {"type", "object"},
                     {"properties", {
                         {"query", {{"type", "string"}, {"description", "The search query"}}},
+                        {"engine", {{"type", "string"}, {"description", "The search engine (default: https://ddg.gg/html/?q=)"}}},
+                        {"timeout",         {{"type", "integer"}, {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}}},
+                        {"max_output_size", {{"type", "integer"}, {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}}},
                     }},
                     {"required", json::array({"query"})},
                 }},
@@ -1519,6 +1522,12 @@ struct server_tool_web_search : server_tool {
 
     json invoke(json params, server_tool::stream *) const override {
         std::string query = params.at("query").get<std::string>();
+        std::string engine= params.at("engine").get<std::string>();
+        int    timeout        = json_value(params, "timeout",         10);
+        size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
+
+        timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
+        max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
         auto io = make_tools_io(params);
 
         // 1. Encode query to prevent URL breakage
@@ -1526,8 +1535,8 @@ struct server_tool_web_search : server_tool {
 
         // 2. Download HTML using wget2 (outputting directly to stdout)
         // We use -qO- to avoid creating temporary files and to pipe directly to our C++ string
-        std::vector<std::string> args = {"wget2", "-qO-", "https://ddg.gg/html/?q=" + encoded_query};
-        auto res = io->run(args, 512 * 1024, 20); // 512KB limit, 20s timeout
+        std::vector<std::string> args = {"wget2", "-qO-", engine + encoded_query};
+        auto res = io->run(args, max_output, timeout);
 
         if (res.exit_code != 0) {
             return {{"error", "download failed: " + res.output}};
@@ -1537,17 +1546,11 @@ struct server_tool_web_search : server_tool {
         }
 
         // 3. Parse the HTML using regex
-        // We look for the specific pattern used by DuckDuckGo's HTML interface.
-        // Based on the provided xq query, we look for title, url, and snippet.
         json results = json::array();
         
         // This regex looks for the common DDG HTML result block structure:
-        // 1. The title link: <a class="result__a" href="URL">TITLE</a>
-        // 2. The snippet: <div class="result__snippet">SNIPPET</div>
-        // Note: We use a non-greedy match (.*?) to handle multiple results in one string.
         std::regex result_regex(
-            R"(<a class="result__a" href="([^"]+)"[^>]*>([^<]+)</a>.*?<div class="result__snippet">([^<]+)</div>)",
-            std::regex::extended
+            "<a class=\"result__a\" href=\"([^\"]+)\"[^>]*>([^<]+)</a>.*?<div class=\"result__snippet\">([^<]+)</div>"
         );
 
         auto words_begin = std::sregex_iterator(res.output.begin(), res.output.end(), result_regex);
