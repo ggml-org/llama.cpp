@@ -7,10 +7,11 @@
 		leadingBadgeEdgeOffset,
 		rangeToTextOffset,
 		serializeContent,
+		SourceHistory,
 		tokenizeContent,
 		textOffsetToRange
 	} from '$lib/utils';
-	import type { ContentToken } from '$lib/utils';
+	import type { ContentToken, SourceHistoryEntry } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -35,6 +36,11 @@
 	let rootElement: HTMLDivElement | undefined = $state();
 	let lastEmittedValue = '';
 	let isComposing = $state(false);
+
+	// Undo/redo in source space: the imperative token rebuilds destroy the
+	// browser's native undo stack, so Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y are
+	// intercepted and replayed from (value, caret) snapshots.
+	const history = new SourceHistory();
 
 	/**
 	 * Drive the placeholder via `data-empty`. Browsers disagree on what
@@ -134,12 +140,27 @@
 	 * native event already fired, so let the parent react when
 	 * `compositionend` finishes.
 	 */
-	function handleInput() {
+	// Snapshot the outgoing state so undo can return to it.
+	function recordHistory(newGroup: boolean) {
+		if (!rootElement) return;
+		history.push(
+			{ value: lastEmittedValue, caret: rangeToTextOffset(rootElement, safeRange()) },
+			Date.now(),
+			newGroup
+		);
+	}
+
+	function handleInput(event?: Event) {
 		if (isComposing || !rootElement) return;
 
 		const serialized = serializeContent(rootElement);
 		syncEmptyState(serialized);
 		if (serialized === lastEmittedValue) return;
+
+		// Plain typing/deletes coalesce into one undo group per time window;
+		// anything structural (paste, newline, cut, autocorrect) starts one.
+		const inputType = event instanceof InputEvent ? event.inputType : undefined;
+		recordHistory(inputType !== 'insertText' && !inputType?.startsWith('deleteContent'));
 
 		lastEmittedValue = serialized;
 		value = serialized;
@@ -156,6 +177,7 @@
 		const serialized = serializeContent(rootElement);
 		syncEmptyState(serialized);
 		if (serialized === lastEmittedValue) return;
+		recordHistory(true); // an IME commit is its own undo step
 		lastEmittedValue = serialized;
 		value = serialized;
 		onInput?.();
@@ -167,8 +189,9 @@
 	 * picker-dismiss in `ChatForm`. We do not consume them here -
 	 * just expose the event to the parent.
 	 *
-	 * Tab is intercepted locally so focus order is predictable
-	 * without escaping the form area.
+	 * Undo/redo (Ctrl/Cmd+Z, Ctrl+Shift+Z, Ctrl+Y) is intercepted and
+	 * replayed from source snapshots because the token rebuilds destroy
+	 * the browser's native undo stack.
 	 *
 	 * ArrowLeft/ArrowRight around mention badges are repaired locally
 	 * because the badge is a non-editable island: plain ArrowLeft
@@ -178,9 +201,22 @@
 	 * offsets where each badge counts as exactly one word.
 	 */
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Tab') {
-			event.preventDefault();
-			return;
+		const mod = event.ctrlKey || event.metaKey;
+		if (mod && !event.altKey && !isComposing && rootElement) {
+			const key = event.key.toLowerCase();
+			const isUndo = key === 'z' && !event.shiftKey;
+			const isRedo = key === 'y' || (key === 'z' && event.shiftKey);
+
+			if (isUndo || isRedo) {
+				event.preventDefault();
+				const current = {
+					value: lastEmittedValue,
+					caret: rangeToTextOffset(rootElement, safeRange())
+				};
+				const entry = isUndo ? history.undo(current) : history.redo(current);
+				if (entry) applyHistoryEntry(entry);
+				return;
+			}
 		}
 
 		if (rootElement && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -204,6 +240,18 @@
 		}
 
 		onKeydown?.(event);
+	}
+
+	// Apply an undo/redo entry: rebuild the DOM, then re-emit so the
+	// parent and the pickers re-evaluate. lastEmittedValue is set before
+	// `value` so the sync effect treats the change as our own.
+	function applyHistoryEntry(entry: SourceHistoryEntry) {
+		if (!rootElement) return;
+		renderTokens(tokenizeContent(entry.value));
+		lastEmittedValue = entry.value;
+		value = entry.value;
+		onInput?.();
+		restoreCaret(entry.caret);
 	}
 
 	/**
@@ -324,6 +372,7 @@
 		const incoming = value ?? '';
 		if (incoming === lastEmittedValue) return;
 
+		recordHistory(true); // external edit (mention insert, clear, ...): own undo step
 		renderTokens(tokenizeContent(incoming));
 		lastEmittedValue = incoming;
 	});
