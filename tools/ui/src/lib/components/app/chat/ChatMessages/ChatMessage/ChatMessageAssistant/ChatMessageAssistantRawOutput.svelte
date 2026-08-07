@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { config } from '$lib/stores/settings.svelte';
 	import { deriveAgenticSections, buildAssistantRawOutput } from '$lib/utils';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -12,9 +14,11 @@
 		const sections = deriveAgenticSections(message, toolMessages, [], false);
 		return buildAssistantRawOutput(sections);
 	});
+
+	const isFullWidth = $derived(Boolean(config()[SETTINGS_KEYS.FULL_WIDTH_CHAT]));
 </script>
 
-<pre class="raw-output">{rawOutputContent || ''}</pre>
+<pre class="raw-output" class:raw-output-full-width={isFullWidth}>{rawOutputContent || ''}</pre>
 
 <style>
 	.raw-output {
@@ -29,5 +33,9 @@
 		line-height: 1.6;
 		white-space: pre-wrap;
 		word-break: break-word;
+	}
+
+	.raw-output-full-width {
+		max-width: none;
 	}
 </style>

@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { ActionIcon, ChatMessageEditForm, ChatMessageUserBubble } from '$lib/components/app';
 	import { ArrowUp, Edit, Trash2 } from '@lucide/svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { useMessageEditContext } from '$lib/hooks/use-message-edit-context.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -26,6 +28,7 @@
 		getExtras: () => extras,
 		onSave: (content, extras) => onEdit(content, extras)
 	});
+	const isFullWidth = $derived(Boolean(config()[SETTINGS_KEYS.FULL_WIDTH_CHAT]));
 </script>
 
 <div
@@ -44,7 +47,7 @@
 			maxHeightStyle="overflow-wrap: anywhere; word-break: break-word;"
 		/>
 
-		<div class="max-w-[80%]">
+		<div class={isFullWidth ? 'w-full' : 'max-w-[80%]'}>
 			<div class="relative flex h-6 items-center justify-between">
 				<div class="right-0 flex items-center gap-2 opacity-100 transition-opacity">
 					<div

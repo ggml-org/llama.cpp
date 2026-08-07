@@ -23,6 +23,7 @@
 		formatMessageForClipboard,
 		hasAgenticContent
 	} from '$lib/utils';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	interface Props {
 		messages?: DatabaseMessage[];
@@ -35,6 +36,7 @@
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 
 	const currentConfig = config();
+	const isFullWidth = $derived(Boolean(config()[SETTINGS_KEYS.FULL_WIDTH_CHAT]));
 
 	setChatActionsContext({
 		copy: async (message: DatabaseMessage) => {
@@ -237,7 +239,7 @@
 <div>
 	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, isLastUserMessage, nextAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto mt-12 w-full max-w-3xl"
+			class="mx-auto mt-12 w-full {isFullWidth ? '' : 'max-w-3xl'}"
 			{message}
 			{toolMessages}
 			{isLastAssistantMessage}
@@ -253,7 +255,7 @@
 
 		{#if pendingContent}
 			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
+				class="mx-auto mt-12 w-full {isFullWidth ? '' : 'max-w-[48rem]'}"
 				content={pendingContent}
 				extras={agenticPendingSteeringMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
@@ -267,7 +269,7 @@
 
 		{#if pendingContent}
 			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
+				class="mx-auto mt-12 w-full {isFullWidth ? '' : 'max-w-[48rem]'}"
 				content={pendingContent}
 				extras={chatPendingMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
