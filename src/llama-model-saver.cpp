@@ -213,7 +213,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
     add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
-    add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_chexp);
+    add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
     add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp);
     add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,                hparams.swiglu_clamp_shexp);
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
@@ -228,6 +228,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
     add_kv(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
     add_kv(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
+    add_kv(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size);
     add_kv(LLM_KV_MOE_EVERY_N_LAYERS,                hparams.moe_every_n_layers);
     add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.n_layer_nextn);
     add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers);
