@@ -7,12 +7,12 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
-	import { APP_NAME, NEW_CHAT_PARAM } from '$lib/constants';
+	import { APP_NAME, URL_PARAMS } from '$lib/constants';
 
-	let qParam = $derived(page.url.searchParams.get('q'));
-	let modelParam = $derived(page.url.searchParams.get('model'));
-	let newChatParam = $derived(page.url.searchParams.get(NEW_CHAT_PARAM));
-	let loadParam = $derived(page.url.searchParams.get('load'));
+	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
+	let modelParam = $derived(page.url.searchParams.get(URL_PARAMS.MODEL));
+	let newChatParam = $derived(page.url.searchParams.get(URL_PARAMS.NEW_CHAT));
+	let loadParam = $derived(page.url.searchParams.get(URL_PARAMS.LOAD));
 
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
@@ -25,10 +25,10 @@
 	function clearUrlParams() {
 		const url = new URL(page.url);
 
-		url.searchParams.delete('q');
-		url.searchParams.delete('model');
-		url.searchParams.delete('load');
-		url.searchParams.delete(NEW_CHAT_PARAM);
+		url.searchParams.delete(URL_PARAMS.QUERY);
+		url.searchParams.delete(URL_PARAMS.MODEL);
+		url.searchParams.delete(URL_PARAMS.LOAD);
+		url.searchParams.delete(URL_PARAMS.NEW_CHAT);
 
 		replaceState(url.toString(), {});
 	}
