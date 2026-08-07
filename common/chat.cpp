@@ -1204,9 +1204,11 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
 
                     auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param_name)) + ">\n");
 
+                    auto arg_json = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) +
+                                    arg_close;
                     auto arg_value = schema_info.resolves_to_string(param_schema) ?
-                        arg_string :
-                        p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) + arg_close;
+                        p.choice({ arg_json, arg_string }) :
+                        arg_json;
 
                     auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
 

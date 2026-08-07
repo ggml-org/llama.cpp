@@ -6,7 +6,9 @@
 #include "testing.h"
 #include "peg-parser/simple-tokenize.h"
 
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <numeric>
 #include <regex>
 #include <string>
@@ -18,6 +20,7 @@ using json = nlohmann::ordered_json;
 static json create_tools();
 static void test_example_native(testing & t);
 static void test_example_qwen3_coder(testing & t);
+static void test_qwen3_coder_anyof_object_template_parser(testing & t);
 static void test_example_qwen3_non_coder(testing & t);
 static void test_command7_parser_compare(testing & t);
 static void test_prefix_tool_names(testing & t);
@@ -37,6 +40,7 @@ int main(int argc, char * argv[]) {
 
     t.test("native", test_example_native);
     t.test("qwen3 coder", test_example_qwen3_coder);
+    t.test("qwen3 coder anyof object", test_qwen3_coder_anyof_object_template_parser);
     t.test("qwen3 non-coder", test_example_qwen3_non_coder);
     t.test("comparison", test_command7_parser_compare);
     t.test("prefix tool names", test_prefix_tool_names);
@@ -44,6 +48,14 @@ int main(int argc, char * argv[]) {
     t.test("permute", test_permute);
 
     return t.summary();
+}
+
+static std::string read_file(const std::string & path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("failed to open " + path);
+    }
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
 static json create_tools() {
@@ -500,6 +512,93 @@ static void test_example_qwen3_coder(testing & t) {
 
             prev = msg;
         }
+    });
+}
+
+static void test_qwen3_coder_anyof_object_template_parser(testing & t) {
+    common_chat_tool tool{
+        /* .name = */ "set_location",
+        /* .description = */ "Set a location",
+        /* .parameters = */ R"({
+            "type": "object",
+            "properties": {
+                "location": {
+                    "anyOf": [
+                        { "type": "string" },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "city": { "type": "string" },
+                                "country": { "type": "string" }
+                            },
+                            "required": ["city", "country"]
+                        }
+                    ]
+                }
+            },
+            "required": ["location"]
+        })",
+    };
+
+    common_chat_msg user;
+    user.role    = "user";
+    user.content = "Set the location to Paris, France.";
+
+    common_chat_templates_inputs inputs;
+    inputs.messages    = { user };
+    inputs.tools       = { tool };
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    auto tmpls  = common_chat_templates_init(nullptr, read_file("models/templates/Qwen3-Coder.jinja"));
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+    t.assert_equal("format", std::string("peg-native"), std::string(common_chat_format_name(params.format)));
+
+    common_peg_arena arena;
+    arena.load(params.parser);
+
+    auto parse = [&](const std::string & completion) {
+        common_chat_parser_params parser_params(params);
+        return common_chat_peg_parse(arena, completion, /* is_partial = */ false, parser_params);
+    };
+
+    t.test("structured branch stays object", [&](testing & t) {
+        common_chat_msg msg = parse(
+            "<tool_call>\n"
+            "<function=set_location>\n"
+            "<parameter=location>\n"
+            "{\"city\": \"Paris\", \"country\": \"France\"}\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>");
+
+        if (!t.assert_equal("tool call count", 1u, msg.tool_calls.size())) {
+            return;
+        }
+
+        json args = json::parse(msg.tool_calls[0].arguments);
+        t.assert_true("location is object", args["location"].is_object());
+        t.assert_equal("city", std::string("Paris"), args["location"]["city"].get<std::string>());
+        t.assert_equal("country", std::string("France"), args["location"]["country"].get<std::string>());
+    });
+
+    t.test("raw branch stays string", [&](testing & t) {
+        common_chat_msg msg = parse(
+            "<tool_call>\n"
+            "<function=set_location>\n"
+            "<parameter=location>\n"
+            "Paris, France\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>");
+
+        if (!t.assert_equal("tool call count", 1u, msg.tool_calls.size())) {
+            return;
+        }
+
+        json args = json::parse(msg.tool_calls[0].arguments);
+        t.assert_true("location is string", args["location"].is_string());
+        t.assert_equal("location", std::string("Paris, France"), args["location"].get<std::string>());
     });
 }
 
