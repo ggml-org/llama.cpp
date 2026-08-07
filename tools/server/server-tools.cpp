@@ -130,9 +130,8 @@ static int entry_depth(const std::string & rel) {
     return 1 + (int) std::count(rel.begin(), rel.end(), '/');
 }
 
-// directories a listing still reports but never descends into: they can be enormous.
-// shared by the local walker and the `find` expression built for the container.
-// lowercase only: the local walker case-folds a name before looking it up
+// directories that a listing reports but never descends into: they can be enormous
+// lowercase only, the local walker case-folds a name before the lookup
 static const char * const SERVER_TOOL_JUNK_DIR_NAMES[] = {
     ".git", ".svn", ".hg", "node_modules", "__pycache__",
     ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
@@ -473,21 +472,21 @@ private:
     }
 };
 
-// timeout for auxiliary docker exec calls (stat/mkdir/ls/cp helpers); exec_shell_command uses its own
+// timeout for auxiliary sandbox calls (stat/mkdir/ls/cp helpers); exec_shell_command uses its own
 // caller-controlled timeout instead, enforced separately in run()
-static constexpr int SERVER_TOOL_DOCKER_EXEC_TIMEOUT = 15; // seconds
-static constexpr size_t SERVER_TOOL_DOCKER_READ_FILE_MAX_SIZE = 64 * 1024 * 1024; // 64 MB
+static constexpr int SERVER_TOOL_SANDBOX_EXEC_TIMEOUT = 15; // seconds
+static constexpr size_t SERVER_TOOL_SANDBOX_READ_FILE_MAX_SIZE = 64 * 1024 * 1024; // 64 MB
 
-// runs every tools_io operation inside an already-running docker container via `docker exec`/`docker cp`.
-// the container itself is started, mounted, and torn down externally by the caller.
-class tools_io_docker : public tools_io {
+// runs every tools_io operation as a command inside a sandbox: a container, a remote host, ...
+// the sandbox is created, mounted, and torn down externally by the caller
+// it must provide a POSIX environment: sh, cat, wc, mkdir, dirname, find, timeout
+class tools_io_sandbox : public tools_io {
 public:
     // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
-    tools_io_docker(std::string container_id, std::string cwd = "")
-        : container_id(std::move(container_id)), cwd(std::move(cwd)) {}
+    explicit tools_io_sandbox(std::string cwd = "") : cwd(std::move(cwd)) {}
 
     // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged.
-    // container paths are always POSIX-style ('/'), regardless of host OS.
+    // sandbox paths are always POSIX-style ('/'), regardless of host OS.
     std::string resolve(const std::string & path) const override {
         if (cwd.empty() || (!path.empty() && path[0] == '/')) {
             return path;
@@ -517,7 +516,7 @@ public:
 
     bool read_file(const std::string & path, std::string & out) const override {
         // combine_stderr=false: stderr must not be spliced into raw file bytes
-        auto res = exec({"cat", "--", resolve(path)}, SERVER_TOOL_DOCKER_READ_FILE_MAX_SIZE, false);
+        auto res = exec({"cat", "--", resolve(path)}, SERVER_TOOL_SANDBOX_READ_FILE_MAX_SIZE, false);
         if (res.exit_code != 0 || res.timed_out) return false;
         out = res.output;
         return true;
@@ -532,7 +531,7 @@ public:
 
         static std::atomic<uint64_t> tmp_counter{0};
         fs::path tmp = tmp_dir / string_format(
-            "llama-tools-io-docker-%zu-%llu.tmp",
+            "llama-tools-io-sandbox-%zu-%llu.tmp",
             std::hash<std::thread::id>{}(std::this_thread::get_id()),
             (unsigned long long) tmp_counter.fetch_add(1));
 
@@ -545,10 +544,7 @@ public:
 
         bool ok = shell_run({"sh", "-c", "mkdir -p \"$(dirname \"$1\")\"", "_", abs_path});
         if (ok) {
-            auto res = run_subprocess(
-                {"docker", "cp", tmp.string(), container_id + ":" + abs_path},
-                4096, SERVER_TOOL_DOCKER_EXEC_TIMEOUT, nullptr, true);
-            ok = res.exit_code == 0 && !res.timed_out;
+            ok = upload(tmp.string(), abs_path);
         }
 
         std::error_code rm_ec;
@@ -594,35 +590,65 @@ public:
         return out;
     }
 
-    // wraps the command with an in-container `timeout`, since killing the local `docker exec` client
-    // does not kill the process tree running inside the container
+    // wraps the command with an in-sandbox `timeout`, since killing the host-side client
+    // does not kill the process tree running inside the sandbox
     exec_result run(
             const std::vector<std::string> & args,
             size_t max_output,
             int timeout_secs,
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
-        std::vector<std::string> docker_args = {"docker", "exec", "-i"};
-        if (!cwd.empty()) {
-            docker_args.push_back("-w");
-            docker_args.push_back(cwd);
+        std::vector<std::string> inner = {"timeout", std::to_string(timeout_secs) + "s"};
+        inner.insert(inner.end(), args.begin(), args.end());
+        // small buffer over timeout_secs so the in-sandbox `timeout` has a chance to exit cleanly
+        // before the host-side supervisory timeout forcibly kills the client
+        return run_subprocess(
+            build_argv(with_cwd(inner), /*needs_stdin=*/true),
+            max_output, timeout_secs + 5, on_chunk, true);
+    }
+
+protected:
+    // wrap `inner` (a complete POSIX argv) into the host-side argv that runs it in the sandbox
+    // a transport that re-parses its args in a remote shell (ssh) must join `inner` with shell_quote_join()
+    virtual std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const = 0;
+
+    // copy a host file into the sandbox, `sandbox_path` is absolute and its parent already exists
+    virtual bool upload(const std::string & host_path, const std::string & sandbox_path) const = 0;
+
+    // quote `argv` into a single string that a POSIX shell re-parses into exactly `argv`
+    static std::string shell_quote_join(const std::vector<std::string> & argv) {
+        std::string out;
+        for (const auto & arg : argv) {
+            if (!out.empty()) out += ' ';
+            out += '\'';
+            for (const char c : arg) {
+                // a single quote cannot be escaped inside single quotes: close, escape, reopen
+                if (c == '\'') out += "'\\''";
+                else           out += c;
+            }
+            out += '\'';
         }
-        docker_args.push_back(container_id);
-        docker_args.push_back("timeout");
-        docker_args.push_back(std::to_string(timeout_secs) + "s");
-        docker_args.insert(docker_args.end(), args.begin(), args.end());
-        // small buffer over timeout_secs so the in-container `timeout` has a chance to exit cleanly
-        // before the host-side supervisory timeout forcibly kills the docker exec client
-        return run_subprocess(docker_args, max_output, timeout_secs + 5, on_chunk, true);
+        return out;
     }
 
 private:
-    std::string container_id;
     std::string cwd;
 
+    // set the working directory in the command itself, docker's `-w` has no equivalent on every transport
+    // auxiliary calls do not need this, they use the absolute paths from resolve()
+    std::vector<std::string> with_cwd(const std::vector<std::string> & inner) const {
+        if (cwd.empty()) {
+            return inner;
+        }
+        // 127 is what a shell reports for a command it could not run
+        std::vector<std::string> out = {"sh", "-c", "cd \"$1\" || exit 127; shift; exec \"$@\"", "_", cwd};
+        out.insert(out.end(), inner.begin(), inner.end());
+        return out;
+    }
+
     exec_result exec(const std::vector<std::string> & inner, size_t max_output, bool combine_stderr) const {
-        std::vector<std::string> args = {"docker", "exec", container_id};
-        args.insert(args.end(), inner.begin(), inner.end());
-        return run_subprocess(args, max_output, SERVER_TOOL_DOCKER_EXEC_TIMEOUT, nullptr, combine_stderr);
+        return run_subprocess(
+            build_argv(inner, /*needs_stdin=*/false),
+            max_output, SERVER_TOOL_SANDBOX_EXEC_TIMEOUT, nullptr, combine_stderr);
     }
 
     bool shell_run(const std::vector<std::string> & inner) const {
@@ -648,7 +674,7 @@ private:
         return result;
     }
 
-    // one `find` pass in the container. junk directories stay selectable but are never descended into,
+    // one `find` pass in the sandbox. junk directories stay selectable but are never descended into,
     // and -mindepth/-maxdepth keep a busybox image working as well as a GNU one
     std::vector<std::string> find_entries(const std::string & abs_base, int max_depth, bool dirs, bool & truncated) const {
         std::string prune_expr;
@@ -668,6 +694,34 @@ private:
         truncated = truncated || res.timed_out;
         return split_lines(res.output, /*strip_dot_slash=*/true);
     }
+};
+
+// an already-running docker container, driven through `docker exec` and `docker cp`
+class tools_io_docker : public tools_io_sandbox {
+public:
+    tools_io_docker(std::string container_id, std::string cwd = "")
+        : tools_io_sandbox(std::move(cwd)), container_id(std::move(container_id)) {}
+
+protected:
+    std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
+        std::vector<std::string> argv = {"docker", "exec"};
+        if (needs_stdin) {
+            argv.push_back("-i");
+        }
+        argv.push_back(container_id);
+        argv.insert(argv.end(), inner.begin(), inner.end());
+        return argv;
+    }
+
+    bool upload(const std::string & host_path, const std::string & sandbox_path) const override {
+        auto res = run_subprocess(
+            {"docker", "cp", host_path, container_id + ":" + sandbox_path},
+            4096, SERVER_TOOL_SANDBOX_EXEC_TIMEOUT, nullptr, true);
+        return res.exit_code == 0 && !res.timed_out;
+    }
+
+private:
+    std::string container_id;
 };
 
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
