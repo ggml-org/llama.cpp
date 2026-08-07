@@ -1,0 +1,47 @@
+Fix building against glibc older than 2.29, which has no
+posix_spawn_file_actions_addchdir_np (the symbol is genuinely absent from
+libc.so, so no feature-test macro helps). Affects manylinux2014 (glibc 2.17)
+and manylinux_2_28, and was reported on RHEL 8.1. A requested process_cwd now
+fails with ENOSYS there instead of failing the build.
+
+Upstream PR: https://github.com/sheredom/subprocess.h/pull/104
+Applied locally by scripts/sync_vendor.py until it is merged upstream.
+
+(the README.md and test/ changes from the PR are omitted, we only vendor
+subprocess.h; rebased on top of patch-bsd.patch, so apply it after that one)
+
+diff --git a/subprocess.h b/subprocess.h
+index 1ef424a..c363393 100644
+--- a/subprocess.h
++++ b/subprocess.h
+@@ -274,6 +274,21 @@ subprocess_weak int subprocess_alive(struct subprocess_s *const process);
+ #include <unistd.h>
+ #endif
+ 
++/* Whether subprocess_create_ex can honour process_cwd. glibc only gained
++   posix_spawn_file_actions_addchdir_np in 2.29. Define this yourself to
++   override the detection, for instance on musl older than 1.1.24. */
++#if !defined(SUBPROCESS_HAVE_CWD)
++#if defined(__GLIBC__)
++#if __GLIBC_PREREQ(2, 29)
++#define SUBPROCESS_HAVE_CWD 1
++#else
++#define SUBPROCESS_HAVE_CWD 0
++#endif
++#else
++#define SUBPROCESS_HAVE_CWD 1
++#endif
++#endif
++
+ #if defined(_WIN32)
+ 
+ #include <wchar.h>
+@@ -1219,6 +1234,8 @@ cleanup:
+   if (process_cwd) {
+ #if defined(__NetBSD__) || (defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED >= 260000)
+     posix_error = posix_spawn_file_actions_addchdir(&actions, process_cwd);
++#elif !SUBPROCESS_HAVE_CWD
++    posix_error = ENOSYS;
+ #else
+ #if defined(__APPLE__) && defined(__clang__)
+ #pragma clang diagnostic push

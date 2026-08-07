@@ -41,8 +41,8 @@
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
 	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
+	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
 	const showMessageStats = $derived(Boolean(config().showMessageStats));
 	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
 
@@ -98,19 +98,6 @@
 		isStreaming ? agenticExecutingToolCallId(message.convId) : null
 	);
 
-	// Skip sections the user manually collapsed - we never override an explicit false.
-	let lastSeenExecutingToolCallId: string | null = null;
-	$effect(() => {
-		const current = currentlyExecutingToolCallId;
-		const previous = lastSeenExecutingToolCallId;
-		lastSeenExecutingToolCallId = current;
-		if (!current || current === previous) return;
-		const idx = sections.findIndex((s) => s.toolCallId === current);
-		if (idx >= 0 && expandedStates[idx] === undefined) {
-			expandedStates[idx] = true;
-		}
-	});
-
 	type TurnGroup = {
 		sections: AgenticSection[];
 		flatIndices: number[];
@@ -149,10 +136,11 @@
 
 	function getDefaultExpanded(section: AgenticSection): boolean {
 		if (
+			section.type === AgenticSectionType.TOOL_CALL ||
 			section.type === AgenticSectionType.TOOL_CALL_PENDING ||
 			section.type === AgenticSectionType.TOOL_CALL_STREAMING
 		) {
-			return false;
+			return alwaysShowToolCallContent;
 		}
 
 		if (section.type === AgenticSectionType.REASONING_PENDING) {
@@ -197,7 +185,6 @@
 			{section}
 			open={isExpanded(index, section)}
 			{isStreaming}
-			{renderThinkingAsMarkdown}
 			{hasReasoningError}
 			attachments={message?.extra}
 			onToggle={() => toggleExpanded(index, section)}

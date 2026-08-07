@@ -106,7 +106,7 @@ struct dma_queue_s {
     bool                alias;     // When set, dma_queue_delete will not free the ring
 };
 
-void        dma_queue_flush(dma_queue_t q);
+
 
 size_t      dma_queue_sizeof(size_t capacity);
 size_t      dma_queue_alignof(void);
@@ -154,7 +154,6 @@ static inline bool dma_is_vtcm(const dma_queue * q, const void * ptr) {
 static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t size) {
     dma_ring * r = q->ring;
     if (((r->push_idx + 1) & r->idx_mask) == r->pop_idx) {
-        FARF(HIGH, "dma-push: queue full\n");
         return false;
     }
 
@@ -165,6 +164,8 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
 
     r->dptr[r->push_idx] = dptr;
 
+    htp_trace_event_start(r->trace, HTP_TRACE_EVT_DMA, r->push_idx);
+
     if (size) {
         desc->next       = NULL;
         desc->desc_size  = 0; // 1D mode
@@ -173,7 +174,6 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
         desc->order      = 0;
         desc->done       = 0;
 
-        htp_trace_event_start(r->trace, HTP_TRACE_EVT_DMA, r->push_idx);
         dmlink(r->tail, desc);
         r->tail = (dma_descriptor_2d *) desc;
     } else {
@@ -188,7 +188,6 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
 static inline bool dma_queue_push_single_2d(dma_queue * q, dma_ptr dptr, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
     dma_ring * r = q->ring;
     if (((r->push_idx + 1) & r->idx_mask) == r->pop_idx) {
-        FARF(HIGH, "dma-push: queue full\n");
         return false;
     }
 
@@ -224,8 +223,9 @@ static inline bool dma_queue_push_single_2d(dma_queue * q, dma_ptr dptr, size_t 
 
     r->dptr[r->push_idx] = dptr;
 
+    htp_trace_event_start(r->trace, HTP_TRACE_EVT_DMA, r->push_idx);
+
     if (nrows) {
-        htp_trace_event_start(r->trace, HTP_TRACE_EVT_DMA, r->push_idx);
         dmlink(r->tail, desc);
         r->tail = desc;
     } else {
@@ -252,9 +252,10 @@ static inline dma_ptr dma_queue_pop(dma_queue * q) {
             dmpoll();
         }
     }
-    htp_trace_event_stop(r->trace, HTP_TRACE_EVT_DMA, r->pop_idx);
 
     dptr = r->dptr[r->pop_idx];
+
+    htp_trace_event_stop(r->trace, HTP_TRACE_EVT_DMA, r->pop_idx);
 
     r->pop_idx = (r->pop_idx + 1) & r->idx_mask;
     return dptr;
@@ -270,12 +271,18 @@ static inline dma_ptr dma_queue_pop_nowait(dma_queue * q) {
 
     dptr = r->dptr[r->pop_idx];
 
+    htp_trace_event_stop(r->trace, HTP_TRACE_EVT_DMA, r->pop_idx);
+
     r->pop_idx = (r->pop_idx + 1) & r->idx_mask;
     return dptr;
 }
 
 static inline bool dma_queue_empty(dma_queue * q) {
     return q->ring->push_idx == q->ring->pop_idx;
+}
+
+static inline void dma_queue_flush(dma_queue * q) {
+    while (dma_queue_pop(q).dst != NULL) ;
 }
 
 static inline uint32_t dma_queue_depth(dma_queue * q) {
@@ -314,14 +321,18 @@ static inline bool dma_queue_push(dma_queue *q, dma_ptr dptr, size_t dst_stride,
     {
         const uint8_t *src = (const uint8_t *) dptr.src;
         uint8_t       *dst = (uint8_t *)       dptr.dst;
-        for (size_t r = 0; r < nrows; ++r) {
+        size_t r = 0;
+        while (r + 1 < nrows) {
             dma_ptr p = dma_make_ptr(dst + r * dst_stride, src + r * src_stride);
-            if (!dma_queue_push_single_1d(q, p, row_size))
-                return false;
-            if (r + 1 < nrows)
-                dma_queue_pop(q);
+            if (!dma_queue_push_single_1d(q, p, row_size)) {
+                dma_queue_flush(q);
+            } else {
+                r++;
+            }
         }
-        return true;
+        dma_queue_flush(q);
+        dma_ptr p = dma_make_ptr(dst + r * dst_stride, src + r * src_stride);
+        return dma_queue_push_single_1d(q, p, row_size);
     }
 }
 

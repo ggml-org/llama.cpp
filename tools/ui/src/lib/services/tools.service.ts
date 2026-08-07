@@ -2,7 +2,7 @@ import { base } from '$app/paths';
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 import { apiFetch } from '$lib/utils';
-import { API_TOOLS } from '$lib/constants';
+import { API_TOOLS, X_TOOL_CWD_HEADER } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
 import type { ToolExecutionResult, ServerBuiltinToolInfo } from '$lib/types';
 
@@ -18,15 +18,21 @@ export class ToolsService {
 
 	/**
 	 * Execute a built-in tool on the server.
+	 *
+	 * @param cwd - Working directory for the tool call, sent as the
+	 * x-tool-cwd request header. The server resolves relative paths
+	 * against it; the model cannot override it.
 	 */
 	static async executeTool(
 		toolName: string,
 		params: Record<string, unknown>,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		cwd?: string
 	): Promise<ToolExecutionResult> {
 		const result = await apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
 			method: 'POST',
 			body: JSON.stringify({ tool: toolName, params }),
+			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
 			signal
 		});
 
@@ -39,6 +45,25 @@ export class ToolsService {
 		}
 
 		return { content: JSON.stringify(result), isError: false };
+	}
+
+	/**
+	 * Execute a built-in tool and return the raw JSON response. Unlike
+	 * executeTool, this preserves structured fields (e.g. file_glob_search's
+	 * `entries` and `base`) that the flattened ToolExecutionResult drops.
+	 */
+	static async executeToolRaw(
+		toolName: string,
+		params: Record<string, unknown>,
+		signal?: AbortSignal,
+		cwd?: string
+	): Promise<Record<string, unknown>> {
+		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
+			method: 'POST',
+			body: JSON.stringify({ tool: toolName, params }),
+			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
+			signal
+		});
 	}
 
 	/**
@@ -59,9 +84,11 @@ export class ToolsService {
 	static async *streamTool(
 		toolName: string,
 		params: Record<string, unknown>,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		cwd?: string
 	): AsyncGenerator<ToolStreamEvent> {
 		const headers = getJsonHeaders();
+		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
 		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
 			method: 'POST',
 			headers,

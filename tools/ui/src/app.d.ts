@@ -142,5 +142,12 @@ declare global {
 	interface Window {
 		idxThemeStyle?: number;
 		idxCodeBlock?: number;
+
+		// File System Access API - not in the DOM lib and unavailable in some browsers
+		showDirectoryPicker?: (options?: {
+			id?: string;
+			mode?: 'read' | 'readwrite';
+			startIn?: FileSystemHandle | string;
+		}) => Promise<FileSystemDirectoryHandle>;
 	}
 }

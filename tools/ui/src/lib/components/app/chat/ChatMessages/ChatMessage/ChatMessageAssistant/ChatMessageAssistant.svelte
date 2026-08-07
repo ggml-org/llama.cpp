@@ -10,7 +10,7 @@
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
+	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { modelLoadProgressText } from '$lib/utils';
 	import { MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
@@ -82,8 +82,11 @@
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
-	// during a router auto-load the message has no model yet, so target the selected one
-	let loadTargetModel = $derived(message.model ?? modelsStore.selectedModelName);
+	// during a router auto-load the message has no model yet: target the model frozen in the
+	// persisted stream state (survives a reload), then fall back to the dropdown selection
+	let loadTargetModel = $derived(
+		message.model ?? chatStore.getResumeModel(message.convId) ?? modelsStore.selectedModelName
+	);
 	let modelLoadProgress = $derived(
 		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
 	);
@@ -180,8 +183,8 @@
 		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="bottom" />
 	{/if}
 
-	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel}
+	{#if displayedModel}
+		<div class="info my-6 grid gap-4 tabular-nums">
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
@@ -197,8 +200,8 @@
 					showMessageStats={currentConfig.showMessageStats}
 				/>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 
 	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActionIcons
