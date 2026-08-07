@@ -449,6 +449,8 @@ Or
 use 1 SYCL GPUs: [0] with Max compute units:512
 ```
 
+User can use the device management in [docs/multi-gpu.md](https://github.com/ggml-org/llama.cpp/blob/master/docs/multi-gpu.md), like parameter `--device SYCL0,SYCL1` to assign one or more devices.
+
 ## Windows
 
 ### Install GPU driver
@@ -763,6 +765,7 @@ Or
 use 1 SYCL GPUs: [0] with Max compute units:512
 ```
 
+User can use the device management in [docs/multi-gpu.md](https://github.com/ggml-org/llama.cpp/blob/master/docs/multi-gpu.md), like parameter `--device SYCL0,SYCL1` to assign one or more devices.
 
 ## Environment Variable
 
@@ -894,6 +897,45 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
     export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
     set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
   ```
+
+- When I set `SYCL_CACHE_PERSISTENT=1` in running time, I meet crash.
+
+  `SYCL_CACHE_PERSISTENT=1` is not recommended by llama.cpp SYCL backend.
+  When cache is enabled, SYCL runtime will try to cache and reuse JIT-compiled binaries.
+
+  We find some AI will tell user this cmd to speed up SYCL backend. It only speeds up the startup to skip the JIT process, instead of running speed.
+
+  It will bring negative impact when the SYCL binary file is changed frequently in your running environment. The new & old codes mix will lead to crash.
+
+  Compare to the benefit, it has brought more failed cases.
+  If you are not familiar with the SYCL compiler principle of JIT and AOT, please don't use it.
+
+  To restore, you need to remove the local cache: `~/.cache/libsycl_cache/` and execute `unset SYCL_CACHE_PERSISTENT` in running time.
+
+- How to use iGPU and dGPU in same time?
+
+  1. Detect the devices in your running time.
+  ```
+  source /opt/intel/oneapi/setvars.sh
+  ./build/bin/llama-server --list-devices
+
+  or
+  ./build/bin/llama-cli --list-devices
+  ./build/bin/llama-bench --list-devices
+  ./build/bin/llama-completion --list-devices
+
+  Available devices:
+    SYCL0: Intel(R) Arc(TM) A770 Graphics (15473 MiB, 15473 MiB free)
+    SYCL1: Intel(R) UHD Graphics 770 (59675 MiB, 44986 MiB free)
+  ```
+
+  The dGPU will be in the head of this list and iGPU will be the end.
+  If not all GPUs are listed, please check the env var: ONEAPI_DEVICE_SELECTOR and unset it.
+
+  2. Set the iGPU and dGPU
+
+  Set the iGPU and dGPU by `./build/bin/llama-server --device SYCL0,SYCL1,SYCLxxx`.
+
 
 ### **GitHub contribution**:
 Please add the `[SYCL]` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
