@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { highlightCode, trimCodePadding } from '$lib/utils/code';
+import { highlightCode, splitGluedClosingCodeFences, trimCodePadding } from '$lib/utils/code';
 
 describe('trimCodePadding', () => {
 	it('removes a single leading newline', () => {
@@ -99,5 +99,40 @@ describe('highlightCode', () => {
 	it('escapes html metacharacters when falling back to plain text', () => {
 		const html = highlightCode('<script>a && b</script>', 'not-a-language', false);
 		expect(html).toBe('&lt;script&gt;a &amp;&amp; b&lt;/script&gt;');
+	});
+});
+
+describe('splitGluedClosingCodeFences', () => {
+	it('splits text glued to a closing fence onto its own line', () => {
+		const input = "```ts\nlet foo = 'bar';\n```create this file on [Desktop](file:///a/b/)";
+		expect(splitGluedClosingCodeFences(input)).toBe(
+			"```ts\nlet foo = 'bar';\n```\ncreate this file on [Desktop](file:///a/b/)"
+		);
+	});
+
+	it('leaves a well-formed code block untouched', () => {
+		const input = "```ts\nlet foo = 'bar';\n```\ncreate this file on [Desktop](file:///a/b/)";
+		expect(splitGluedClosingCodeFences(input)).toBe(input);
+	});
+
+	it('leaves content without fences untouched', () => {
+		expect(splitGluedClosingCodeFences('hello world')).toBe('hello world');
+	});
+
+	it('keeps nested markdown fences inside a block intact', () => {
+		const input = '```md\n# Example\n```python\nprint(1)\n```\n```';
+		expect(splitGluedClosingCodeFences(input)).toBe(input);
+	});
+
+	it('splits every glued closing fence when several blocks are present', () => {
+		const input = '```ts\na\n```first words\n\n```js\nb\n```second words';
+		expect(splitGluedClosingCodeFences(input)).toBe(
+			'```ts\na\n```\nfirst words\n\n```js\nb\n```\nsecond words'
+		);
+	});
+
+	it('leaves a still-open fence untouched', () => {
+		const input = '```ts\nlet foo = 1;';
+		expect(splitGluedClosingCodeFences(input)).toBe(input);
 	});
 });

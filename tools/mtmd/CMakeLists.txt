@@ -18,6 +18,8 @@ add_library(mtmd
             mtmd-image.cpp
             mtmd.h
             mtmd-helper.cpp
+            mtmd-helper-gen.cpp
+            mtmd-helper-common.h
             mtmd-helper.h
             clip.cpp
             clip.h
@@ -52,6 +54,8 @@ add_library(mtmd
             models/mimovl.cpp
             models/qwen3a.cpp
             models/mimo-audio.cpp
+            models/qwen3tts-spkenc.cpp
+            models/qwen3tts-gen.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
