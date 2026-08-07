@@ -141,9 +141,9 @@ struct img_tool {
 
     struct calc_size_opt {
         int align_size = 1;
-        int min_pixels = 0;
-        int max_pixels = 0;
-        // if longest_edge > 0, both longest_edge and min/max_pixels will be respected
+        int min_pixels = 0;   // 0 = disabled
+        int max_pixels = 0;   // 0 = disabled
+        // applied before min/max_pixels, so min_pixels can push an edge back above longest_edge
         int longest_edge = 0; // 0 = disabled
     };
 

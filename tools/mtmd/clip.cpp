@@ -1596,7 +1596,7 @@ struct clip_model_loader {
                         if (hparams.image_longest_edge == 0) {
                             hparams.image_longest_edge = 3024;
                         }
-                        hparams.set_limit_image_tokens();
+                        // note: the step3vl preprocessor slices based on a fixed window grid, so it does not support custom min/max image tokens
                         hparams.warmup_image_size = hparams.image_size;
                     } break;
                 case PROJECTOR_TYPE_YOUTUVL:
