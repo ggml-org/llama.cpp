@@ -17,7 +17,7 @@ Date: 2026-08-07
 ## Final experimental branch
 
 ```text
-exp/rdna2-q4k-mmid-batch6-pr24546-rdna2
+exp/rdna2-q4k-mmid-batch6-pr23685
 ```
 
 Current HEAD:
@@ -40,6 +40,8 @@ Lineage:
 4cb5e6774  ported PR #24546 routed-MoE MMQ picker
 52ad29fd0  enabled the picker by default on RDNA2
 8f21e1113  fixed the picker integration to use ncols_picker
+6fb861a46  ported PR #23685 packed Q8_1 MMVQ path
+b6d36b91e  added runtime 32/64/128/256 sweep selector
 ```
 
 `master` remains at `457b30a43`; the experimental branch has not been merged into master.
@@ -149,6 +151,23 @@ n_max=6: 45 recurring events
 - Q6_K routed MMQ picker A/B: 0 mismatches over 262,144 values
 - Qwen/Qwen3.5/DeepSeek automatic RDNA2 MMQ configuration tests: PASS
 - Production and debug `llama-server` builds: PASS
+
+## PR #23685 packed-MMVQ experiment
+
+PR #23685 was ported carefully on top of the existing six-row MMVQ and RDNA2 MMQ-picker branch. The port touched `common.cuh`, `mmvq.cu`, `quantize.cu`, `quantize.cuh`, and `vecdotq.cuh`; the local MMVQ batch-limit helper and model flags were preserved.
+
+The packed path is restricted to Q4_K/Q5_K/Q6_K with `ncols_dst == 1`, so it targets raw decode rather than multi-token MTP verification or prompt MMQ.
+
+The old four-GPU Qwen3.6 raw-TG baseline was approximately 78.21 tok/s. PR default block size 128 measured 78.68 tok/s on the V620 (+0.6%, within noise). The temporary block-size sweep measured:
+
+| Q8_1 layout | Qwen3.6 raw TG | Validation |
+|---:|---:|---|
+| 32 | 78.39 | rejected: direct Q4_K A/B had 1143/4096 mismatches, max abs 0.168
+| 64 | 78.79 | Q4_K/Q6_K direct A/B passed exactly
+| 128 | 78.76 | Q4_K/Q6_K direct A/B passed exactly; PR default
+| 256 | 76.31 | Q4_K exact; Q6_K within test tolerance but not bit-identical
+
+The V620 result does not reproduce the W7800 gain. Block 64/128 are effectively neutral; block 256 regresses. The runtime selector is retained on this experimental branch for further testing but block 128 remains the default.
 
 ## Interpretation and remaining work
 
