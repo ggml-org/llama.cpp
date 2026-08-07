@@ -380,7 +380,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_threads            */ { common_cpu_get_num_math() },
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
-    /* poll                 */ { 50 },
+    /* poll                 */ { 0 },
     /* n_gpu_layers         */ { -1 },
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
