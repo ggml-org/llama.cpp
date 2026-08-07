@@ -23,12 +23,12 @@ import type {
 	SettingsSectionEntry,
 	SettingsSection
 } from '$lib/types';
+import { CLI_FLAGS } from './cli-flags';
+import { DEFAULT_MCP_CONFIG } from './mcp';
 import {
-	CLI_FLAGS,
-	DEFAULT_MCP_CONFIG,
 	FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH,
 	FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH
-} from '$lib/constants';
+} from './working-directory';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
