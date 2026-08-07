@@ -23,6 +23,10 @@ export function fileMentionLinkRe(flags = ''): RegExp {
 	return new RegExp(FILE_MENTION_LINK_SOURCE, flags);
 }
 
+export function containsFileMentionLink(value: string): boolean {
+	return fileMentionLinkRe().test(value);
+}
+
 // Escape each path segment for a markdown link destination (spaces/parens
 // break CommonMark); keeps the trailing slash that marks a directory.
 export function encodeFileLinkPath(path: string): string {
@@ -58,25 +62,6 @@ export function getMentionBadgeLabel(
 	const decoded = decodeFileLinkPath(path.replace(/\/+$/, ''));
 	if (!decoded) return name;
 	return abbreviateHome(decoded, home);
-}
-
-/**
- * Extent of the mention link ending exactly at `caret`, so Backspace there
- * deletes the whole `[name](file://...)` token in one keystroke instead of
- * unraveling it character by character. Null when no link ends at `caret`.
- */
-export function mentionLinkEndingAt(
-	value: string,
-	caret: number
-): { start: number; end: number } | null {
-	const re = fileMentionLinkRe('g');
-	let match: RegExpExecArray | null;
-	while ((match = re.exec(value)) !== null) {
-		const end = match.index + match[0].length;
-		if (end === caret) return { start: match.index, end };
-		if (end > caret) break;
-	}
-	return null;
 }
 
 /**

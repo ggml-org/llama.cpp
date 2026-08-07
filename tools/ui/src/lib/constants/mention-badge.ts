@@ -1,8 +1,9 @@
 /**
- * Visual contract for message @-mention badges. Svelte cannot be mounted
- * from a hast tree, so the rehype file-badge plugin emits the shared class
- * string below; keeping it here as a literal lets Tailwind's source
- * scanner generate the utility classes.
+ * Shared visual contract between the two DOM-only badge paths (the
+ * contenteditable tokenizer + the rehype plugin). Svelte cannot be
+ * mounted at the per-keystroke tokenizer hot path nor from a hast tree,
+ * so both emit the badge with the same class string literal; Tailwind's
+ * scanner picks it up in both sources.
  */
 export const MENTION_BADGE_CLASSNAME =
 	'inline-flex w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border/50 bg-foreground/5 px-1.5 py-0.5 text-xs font-mono text-foreground hover:bg-foreground/10 dark:bg-foreground/10 dark:text-secondary-foreground';
@@ -10,8 +11,10 @@ export const MENTION_BADGE_CLASSNAME =
 export const MENTION_BADGE_ICON_CLASSNAME = 'h-3 w-3 shrink-0';
 
 /**
- * SVG attributes shared by the hast-built badge icons; the rehype plugin
- * spreads them onto the `<svg>` `properties`.
+ * SVG attributes shared by the DOM-built and hast-built badge icons.
+ * The tokenizer applies them via `setAttribute`, the rehype plugin
+ * spreads them onto the hast `<svg>` `properties`; string values are
+ * valid for both.
  */
 export const MENTION_BADGE_SVG_ATTRIBUTES: Readonly<Record<string, string>> = {
 	xmlns: 'http://www.w3.org/2000/svg',

@@ -2,7 +2,7 @@
 	import { File, Folder } from '@lucide/svelte';
 	import { abbreviateHome, runGlobSearchWithChildren, type GlobEntryResult } from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { BuiltInTool, FileMentionEntryType, GlobSearchType } from '$lib/enums';
+	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import * as Popover from '$lib/components/ui/popover';
@@ -162,6 +162,17 @@
 	}
 
 	export function handleKeydown(event: KeyboardEvent): boolean {
+		// Always consume Enter while the picker is open - even with no
+		// result yet (skeletons) or no matches - so the chat form's
+		// Enter-to-submit never fires mid-search.
+		if (isOpen && event.key === KeyboardKey.ENTER) {
+			event.preventDefault();
+			if (nav.hoveredIndex >= 0 && displayedItems[nav.hoveredIndex]) {
+				handleSelect(displayedItems[nav.hoveredIndex]);
+			}
+			return true;
+		}
+
 		return nav.handleKeydown(event);
 	}
 </script>

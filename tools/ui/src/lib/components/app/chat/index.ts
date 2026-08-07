@@ -120,7 +120,8 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * Used by ChatScreenForm and ChatMessageEditForm for both new conversations and message editing.
  *
  * **Architecture:**
- * - Composes ChatFormTextarea, ChatFormActions, and ChatFormPickerMcpPrompts
+ * - Composes ChatFormTextarea (or ChatFormContenteditable for messages with
+ *   file mention links), ChatFormActions, and ChatFormPickerMcpPrompts
  * - Manages file upload state via `uploadedFiles` bindable prop
  * - Integrates with ModelsSelectorDropdown for model selection in router mode
  * - Communicates with parent via callbacks (onSubmit, onFilesAdd, onStop, etc.)
@@ -266,9 +267,16 @@ export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileIn
 export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResourcesList.svelte';
 
 /**
- * Auto-resizing textarea with IME composition support. Mention links stay
- * plain markdown text in the input; the chip rendering happens in the
- * message view via the rehype file-badge plugin.
+ * Auto-resizing contenteditable input that renders `[name](file://...)`
+ * mention links as inline chips while keeping the value as the markdown
+ * source string. ChatForm swaps it in once a mention link lands in the
+ * buffer. Shares the focus()/resetHeight()/caret handle with the textarea.
+ */
+export { default as ChatFormContenteditable } from './ChatForm/ChatFormContenteditable.svelte';
+
+/**
+ * Plain auto-resizing textarea with IME composition support. Default input
+ * renderer inside ChatForm until a file mention lands.
  */
 export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
 

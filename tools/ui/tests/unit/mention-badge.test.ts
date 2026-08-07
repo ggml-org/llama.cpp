@@ -3,12 +3,12 @@ import {
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS,
 	buildMentionInsertion,
+	containsFileMentionLink,
 	decodeFileLinkPath,
 	encodeFileLinkPath,
 	fileMentionLinkRe,
 	getMentionBadgeIconPaths,
-	getMentionBadgeLabel,
-	mentionLinkEndingAt
+	getMentionBadgeLabel
 } from '$lib/utils';
 import { FileMentionEntryType } from '$lib/enums';
 
@@ -35,6 +35,7 @@ describe('encodeFileLinkPath', () => {
 describe('fileMentionLinkRe', () => {
 	it('matches a standard mention link', () => {
 		expect(fileMentionLinkRe().test('[docs](file:///a/b)')).toBe(true);
+		expect(containsFileMentionLink('[docs](file:///a/b)')).toBe(true);
 	});
 
 	it('does not match non-file links', () => {
@@ -169,34 +170,5 @@ describe('buildMentionInsertion', () => {
 	it('returns null for an out-of-range token', () => {
 		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { start: 0, end: 5 })).toBeNull();
 		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { start: 2, end: 1 })).toBeNull();
-	});
-});
-
-describe('mentionLinkEndingAt', () => {
-	const LINK = '[docs](file:///a/b)';
-
-	it('returns the extent when the caret is exactly at the link end', () => {
-		expect(mentionLinkEndingAt(`see ${LINK} here`, 4 + LINK.length)).toEqual({
-			start: 4,
-			end: 4 + LINK.length
-		});
-	});
-
-	it('returns null when the caret is inside or past the link', () => {
-		expect(mentionLinkEndingAt(LINK, LINK.length - 1)).toBeNull();
-		expect(mentionLinkEndingAt(`${LINK} `, LINK.length + 1)).toBeNull();
-	});
-
-	it('returns null for non-file links and plain text', () => {
-		expect(mentionLinkEndingAt('[foo](https://example.com)', 26)).toBeNull();
-		expect(mentionLinkEndingAt('plain', 5)).toBeNull();
-	});
-
-	it('picks the link that ends at the caret when several exist', () => {
-		const value = `${LINK} and ${LINK}`;
-		expect(mentionLinkEndingAt(value, value.length)).toEqual({
-			start: value.length - LINK.length,
-			end: value.length
-		});
 	});
 });

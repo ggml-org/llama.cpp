@@ -1,7 +1,7 @@
 /**
  * Rehype plugin that rewrites `file://` markdown anchors into the inline
- * @-mention chip, reusing the visual contract from
- * `$lib/constants/mention-badge`.
+ * mention chip, sharing the class string with the contenteditable
+ * tokenizer via `$lib/constants/mention-badge`.
  *
  * The chip is presentational: `file://` navigation is blocked from
  * http(s) pages, so the anchor becomes a plain `<span>` (no link role,
