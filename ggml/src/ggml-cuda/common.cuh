@@ -724,6 +724,39 @@ static __device__ __forceinline__ uint32_t __hgt2_mask(const half2 a, const half
 }
 #endif // (defined(CUDART_VERSION) && CUDART_VERSION < CUDART_HMASK) || defined(GGML_USE_HIP) || (defined(MUSART_VERSION) && MUSART_VERSION < MUSART_HMASK)
 
+
+// RDNA2 packed four-bit dot helpers. The fallback keeps this header usable in
+// non-HIP builds and makes the arithmetic contract explicit for validation.
+static __device__ __forceinline__ int ggml_hip_sdot8_i4(const int a, const int b, int c) {
+#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(__gfx1030__))
+    return __builtin_amdgcn_sdot8(a, b, c, false);
+#else
+    const uint32_t ua = (uint32_t) a;
+    const uint32_t ub = (uint32_t) b;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        int va = (ua >> (4*i)) & 0x0F;
+        int vb = (ub >> (4*i)) & 0x0F;
+        va = (va & 0x08) ? va - 16 : va;
+        vb = (vb & 0x08) ? vb - 16 : vb;
+        c += va * vb;
+    }
+    return c;
+#endif
+}
+
+static __device__ __forceinline__ int ggml_hip_udot8_u4(const uint32_t a, const uint32_t b, int c) {
+#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(__gfx1030__))
+    return (int) __builtin_amdgcn_udot8(a, b, (uint32_t) c, false);
+#else
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        c += (int) ((a >> (4*i)) & 0x0F) * (int) ((b >> (4*i)) & 0x0F);
+    }
+    return c;
+#endif
+}
+
 static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, int c) {
 #if defined(GGML_USE_HIP)
 #if defined(CDNA) || defined(RDNA2) || defined(__gfx906__)
