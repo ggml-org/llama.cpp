@@ -1,3 +1,4 @@
+# Used to cross-compile ggml-cuda for Windows ARM64 on an x64 Windows host.
 set( CMAKE_SYSTEM_NAME Windows )
 set( CMAKE_SYSTEM_PROCESSOR arm64 )
 
