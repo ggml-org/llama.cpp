@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build a Qwen3.6-35B-A3B mixed Q4_0/Q8_0 GGUF without introducing a new GGML type.
-# The Q4_K_M dry-run is used as a live sensitivity oracle. The final pass uses
-# stock --pure Q4_0 plus exact Q8_0/F16 tensor overrides, so the resulting GGUF
-# remains loadable by an unmodified llama.cpp.
+# Build a Qwen3.6-35B-A3B S8 recipe from the exact tensor map of the
+# existing stock Q4_0 model.  The fixed stage adds only the Q4_0 -> Q8_0
+# promotions selected by the Q4_K_M dry-run.  The native stage additionally
+# maps the stock Q5_0/Q4_1/Q6_K tensors to Q8_0 for V620-friendly inference.
 set -Eeuo pipefail
 
 usage() {
@@ -19,8 +19,12 @@ Options:
   --python PATH                Python interpreter (default: python3)
   --out-dir PATH               output directory (default: input parent)
   --bf16 PATH                  BF16 intermediate path
-  --output PATH                final Q4_0-S8 GGUF path
+  --output PATH                final GGUF path
   --mmproj-output PATH         Q8_0 vision projector path
+  --stock-q4-0 PATH            existing stock Q4_0 GGUF type map
+                               (default: $HOME/models/Qwen_Qwen3.6-35B-A3B-Q4_0.gguf)
+  --stage fixed|native         fixed=stock map + 29 Q8 upgrades (default: fixed)
+                               native=also maps Q5_0/Q4_1/Q6_K to Q8_0
   --imatrix PATH               imatrix path (default: auto-detect $HOME/models/qwen35-imatrix/...)
   --no-imatrix                 disable imatrix use and force plain RTN
   --threads N                  quantizer threads (default: physical core count)
@@ -30,6 +34,7 @@ Options:
   --skip-convert               raw input must already have --bf16 present
   --plan-only                  convert/inspect/print the plan, do not quantize
   --allow-large-q8             continue when Q8_0 exceeds 50% of planned quantized bytes
+                               (native may require this after inspection)
   --force                      allow replacing existing output/plan files
   -h, --help                   show this help
 
@@ -53,6 +58,8 @@ OUT_DIR=
 BF16=
 FINAL=
 MMPROJ=
+STOCK_Q40="${S8_STOCK_Q4_0:-${HOME}/models/Qwen_Qwen3.6-35B-A3B-Q4_0.gguf}"
+STAGE=fixed
 IMATRIX="${S8_IMATRIX_PATH:-${HOME}/models/qwen35-imatrix/imatrix_unsloth.gguf_file}"
 USE_IMATRIX=1
 THREADS=
@@ -74,6 +81,8 @@ while (($#)); do
         --bf16)           [[ $# -ge 2 ]] || die "--bf16 needs a path"; BF16=$2; shift 2 ;;
         --output)         [[ $# -ge 2 ]] || die "--output needs a path"; FINAL=$2; shift 2 ;;
         --mmproj-output)  [[ $# -ge 2 ]] || die "--mmproj-output needs a path"; MMPROJ=$2; shift 2 ;;
+        --stock-q4-0)     [[ $# -ge 2 ]] || die "--stock-q4-0 needs a path"; STOCK_Q40=$2; shift 2 ;;
+        --stage)          [[ $# -ge 2 ]] || die "--stage needs fixed or native"; STAGE=$2; shift 2 ;;
         --imatrix)       [[ $# -ge 2 ]] || die "--imatrix needs a path"; IMATRIX=$2; USE_IMATRIX=1; shift 2 ;;
         --no-imatrix)    IMATRIX=; USE_IMATRIX=0; shift ;;
         --threads)        [[ $# -ge 2 ]] || die "--threads needs a number"; THREADS=$2; shift 2 ;;
@@ -94,6 +103,9 @@ INPUT=$(readlink -f -- "$INPUT")
 [[ -e "$INPUT" ]] || die "input does not exist: $INPUT"
 REPO=$(readlink -f -- "$REPO")
 BUILD_DIR=$(readlink -f -- "$BUILD_DIR")
+STOCK_Q40=$(readlink -m -- "$STOCK_Q40")
+[[ "$STAGE" == fixed || "$STAGE" == native ]] || die "invalid stage: $STAGE (use fixed or native)"
+[[ -f "$STOCK_Q40" ]] || die "missing stock Q4_0 type-map GGUF: $STOCK_Q40 (use --stock-q4-0)"
 "$PYTHON" -V >/dev/null 2>&1 || die "cannot run Python interpreter: $PYTHON"
 QUANT="$BUILD_DIR/bin/llama-quantize"
 [[ -x "$QUANT" ]] || die "missing executable: $QUANT (build llama-quantize first)"
@@ -107,7 +119,9 @@ OUT_DIR=$(readlink -m -- "$OUT_DIR")
 mkdir -p -- "$OUT_DIR"
 
 [[ -n "$BF16" ]] || BF16="$OUT_DIR/Qwen3.6-35B-A3B-MTP-BF16.gguf"
-[[ -n "$FINAL" ]] || FINAL="$OUT_DIR/Qwen3.6-35B-A3B-MTP-Q4_0-S8.gguf"
+if [[ -z "$FINAL" ]]; then
+    FINAL="$OUT_DIR/Qwen3.6-35B-A3B-MTP-Q4_0-S8-$STAGE.gguf"
+fi
 [[ -n "$MMPROJ" ]] || MMPROJ="$OUT_DIR/mmproj-Qwen3.6-35B-A3B-Q8_0.gguf"
 BF16=$(readlink -m -- "$BF16")
 FINAL=$(readlink -m -- "$FINAL")
@@ -121,7 +135,7 @@ if [[ "$USE_IMATRIX" -eq 1 && -n "$IMATRIX" ]]; then
         IMATRIX=
     fi
 fi
-WORK="$OUT_DIR/q4_0-s8-plan"
+WORK="$OUT_DIR/q4_0-s8-$STAGE-plan"
 PLAN_LOG="$WORK/q4_k_m-dry-run.log"
 PLAN_TSV="$WORK/tensor-plan.tsv"
 OVERRIDES="$WORK/tensor-overrides.txt"
@@ -170,15 +184,20 @@ fi
 echo "[3/5] deriving the Q4_K_M sensitivity plan"
 "$QUANT" --dry-run "$BF16" Q4_K_M >"$PLAN_LOG" 2>&1
 
-"$PYTHON" - "$PLAN_LOG" "$PLAN_TSV" "$OVERRIDES" "$SUMMARY" "$ALLOW_LARGE_Q8" <<'PY'
+PYTHONPATH="$REPO/gguf-py${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" - "$PLAN_LOG" "$PLAN_TSV" "$OVERRIDES" "$SUMMARY" "$ALLOW_LARGE_Q8" "$STOCK_Q40" "$STAGE" <<'PY'
 import math
 import re
 import sys
 from collections import Counter
 from pathlib import Path
 
+from gguf import GGUFReader
+from gguf.constants import GGMLQuantizationType
+
 log_path, plan_path, overrides_path, summary_path = map(Path, sys.argv[1:5])
 allow_large_q8 = sys.argv[5] == "1"
+stock_path = Path(sys.argv[6])
+stage = sys.argv[7]
 line_re = re.compile(
     r"^\[\s*\d+\s*/\s*\d+\]\s+(\S+)\s+-\s+\[([^\]]+)\],\s+"
     r"type\s*=\s*(\S+),\s+size\s*=\s*([0-9.]+)\s+MiB"
@@ -186,18 +205,31 @@ line_re = re.compile(
 )
 quant_ref = {"q4_k", "q5_k", "q6_k", "q8_0", "q5_0", "q4_0"}
 protected = {"q5_k", "q6_k", "q8_0"}
-block_bytes = {"q4_0": 18, "q8_0": 34}
+stock_allowed = {"f32", "f16", "bf16", "q4_0", "q4_1", "q5_0", "q6_k", "q8_0"}
+fixed_allowed = {"f32", "f16", "bf16", "q4_0", "q4_1", "q5_0", "q6_k", "q8_0"}
+native_allowed = {"f32", "q4_0", "q8_0"}
+block_bytes = {"q4_0": 18, "q4_1": 20, "q5_0": 22, "q6_k": 210, "q8_0": 34}
 float_bytes = {"f16": 2, "bf16": 2, "f32": 4}
+
+def type_name(value):
+    return GGMLQuantizationType(int(value)).name.lower()
+
+stock_reader = GGUFReader(str(stock_path))
+stock_types = {tensor.name: type_name(tensor.tensor_type) for tensor in stock_reader.tensors}
+if not stock_types:
+    raise SystemExit(f"stock Q4_0 map is empty: {stock_path}")
 
 rows = []
 overrides = []
 ref_counts = Counter()
+stock_counts = Counter()
 final_counts = Counter()
 component_counts = Counter()
 bytes_by_final = Counter()
 q8_bytes = 0
 quant_bytes = 0
 mtp_seen = set()
+promotions = 0
 
 for raw in log_path.read_text(errors="replace").splitlines():
     m = line_re.match(raw)
@@ -210,6 +242,11 @@ for raw in log_path.read_text(errors="replace").splitlines():
             f"input appears already quantized ({source_type} at {name}); "
             "provide the raw HF directory or a BF16 GGUF, never requantize for S8"
         )
+    stock_type = stock_types.get(name)
+    if stock_type is None:
+        raise SystemExit(f"stock Q4_0 map is missing tensor: {name}")
+    if stock_type not in stock_allowed:
+        raise SystemExit(f"unsupported stock tensor type {stock_type} at {name}")
     ref_type = ref_type.lower() if ref_type else "preserve"
     dims = [int(x) for x in re.findall(r"\d+", shape_text)]
     if not dims:
@@ -219,58 +256,71 @@ for raw in log_path.read_text(errors="replace").splitlines():
     component = "MTP" if is_mtp else "language"
     component_counts[component] += 1
     ref_counts[ref_type] += 1
+    stock_counts[stock_type] += 1
 
-    if ref_type == "preserve":
-        final_type = source_type
-        reason = "non-quantizable"
-    elif ref_type not in quant_ref:
-        raise SystemExit(f"unhandled Q4_K_M reference target {ref_type!r} for {name}")
-    elif is_mtp:
-        final_type = "q4_0"
-        reason = "MTP-force-Q4"
-        mtp_seen.add(name)
-    elif ref_type in protected:
+    # Start from the exact stock Q4_0 recipe. The Q4_K_M oracle is used only
+    # to identify the 29 stock Q4_0 tensors worth promoting to Q8_0.
+    final_type = stock_type
+    reason = "stock-map"
+    if stock_type == "q4_0" and ref_type in protected:
         final_type = "q8_0"
-        reason = f"sensitive-{ref_type.upper()}"
-    else:
-        final_type = "q4_0"
-        reason = "normal"
+        reason = f"stock-Q4_0-to-Q8_{ref_type.upper()}"
+        promotions += 1
+    if stage == "native":
+        if stock_type in {"q5_0", "q4_1", "q6_k"}:
+            final_type = "q8_0"
+            reason = f"V620-{stock_type.upper()}-to-Q8_0"
+        elif stock_type == "bf16":
+            final_type = "f32"
+            reason = "V620-BF16-to-F32"
+    elif stage != "fixed":
+        raise SystemExit(f"unsupported stage: {stage}")
 
-    if final_type in block_bytes and ncols % 32 != 0:
-        final_type = "f16"
-        reason = "shape-fallback"
-
-    if final_type in ("q8_0", "f16"):
+    if final_type not in (fixed_allowed if stage == "fixed" else native_allowed):
+        raise SystemExit(f"stage {stage} cannot emit {final_type} at {name}")
+    if final_type != "q4_0":
         overrides.append(f"^{re.escape(name)}$={final_type.upper()}")
+    if is_mtp and final_type in block_bytes:
+        mtp_seen.add(name)
 
     ne = math.prod(dims)
     if final_type in block_bytes:
-        if ncols % 32:
-            raise SystemExit(f"unhandled incompatible final shape for {name}: {shape_text}")
-        estimate = (ne // ncols) * (ncols // 32) * block_bytes[final_type]
+        if ncols % (256 if final_type == "q6_k" else 32):
+            raise SystemExit(f"incompatible {final_type} shape for {name}: {shape_text}")
+        block = 256 if final_type == "q6_k" else 32
+        estimate = (ne // ncols) * (ncols // block) * block_bytes[final_type]
         quant_bytes += estimate
         if final_type == "q8_0":
             q8_bytes += estimate
     elif final_type in float_bytes:
         estimate = ne * float_bytes[final_type]
     else:
-        estimate = float(source_mib) * 1024 * 1024
+        raise SystemExit(f"cannot estimate final type {final_type} at {name}")
     bytes_by_final[final_type] += estimate
     final_counts[final_type] += 1
-    rows.append((name, "x".join(map(str, dims)), component, source_type, ref_type, final_type, reason, str(int(estimate))))
+    rows.append((name, "x".join(map(str, dims)), component, source_type, stock_type, ref_type, final_type, reason, str(int(estimate))))
 
 if not rows:
     raise SystemExit("the Q4_K_M dry-run produced no tensor records")
+if promotions != 29:
+    raise SystemExit(f"expected exactly 29 stock Q4_0 -> Q8_0 promotions, found {promotions}")
 if not mtp_seen:
     raise SystemExit("no quantizable .nextn. MTP tensors were found; refusing to build")
-plan_path.write_text("name\tshape\tcomponent\tsource\tq4_k_m_reference\ts8_target\treason\testimated_bytes\n" +
-                    "\n".join("\t".join(r) for r in rows) + "\n")
+plan_path.write_text(
+    "name\tshape\tcomponent\tsource\tstock_q4_0\tq4_k_m_reference\ts8_target\treason\testimated_bytes\n"
+    + "\n".join("\t".join(r) for r in rows) + "\n"
+)
 overrides_path.write_text("\n".join(overrides) + ("\n" if overrides else ""))
 
 with summary_path.open("w") as f:
-    f.write("Q4_K_M reference counts:\n")
+    f.write(f"Stage: {stage}\n")
+    f.write(f"Stock Q4_0 map: {stock_path}\n")
+    f.write("Stock tensor counts:\n")
+    for k, v in sorted(stock_counts.items()): f.write(f"  {k}: {v}\n")
+    f.write(f"\nQ4_K_M reference counts:\n")
     for k, v in sorted(ref_counts.items()): f.write(f"  {k}: {v}\n")
-    f.write("\nS8 planned final counts:\n")
+    f.write(f"\nStock Q4_0 -> Q8_0 promotions: {promotions}\n")
+    f.write("\nPlanned final counts:\n")
     for k, v in sorted(final_counts.items()): f.write(f"  {k}: {v}\n")
     f.write("\nComponents:\n")
     for k, v in sorted(component_counts.items()): f.write(f"  {k}: {v}\n")
@@ -303,7 +353,7 @@ if [[ -e "$FINAL" && "$FORCE" -ne 1 ]]; then
     die "final output already exists: $FINAL (use --force)"
 fi
 
-echo "[4/5] quantizing pure Q4_0 with Q8_0/F16 overrides using $THREADS threads"
+echo "[4/5] quantizing $STAGE recipe from the stock Q4_0 map using $THREADS threads"
 QUANT_ARGS=(--pure --tensor-type-file "$OVERRIDES")
 if [[ -n "$IMATRIX" ]]; then
     echo "using imatrix: $IMATRIX"
@@ -320,7 +370,7 @@ if [[ -x "$BUILD_DIR/bin/llama-gguf" ]]; then
     fi
 fi
 
-if PYTHONPATH="$REPO/gguf-py${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" - "$FINAL" <<'PY'
+if PYTHONPATH="$REPO/gguf-py${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" - "$FINAL" "$STAGE" <<'PY'
 from collections import Counter
 import sys
 try:
@@ -329,13 +379,16 @@ except Exception as exc:
     print(f"type validation skipped: {exc}")
     raise SystemExit(0)
 reader = GGUFReader(sys.argv[1])
+stage = sys.argv[2]
 counts = Counter(t.tensor_type.name.lower() for t in reader.tensors)
 print("Final tensor type counts:")
 for key in sorted(counts):
     print(f"  {key}: {counts[key]}")
-for forbidden in ("q4_k", "q5_k", "q6_k"):
-    if counts.get(forbidden, 0):
-        raise SystemExit(f"unexpected final tensor type {forbidden}: {counts[forbidden]}")
+allowed = ({"f32", "q4_0", "q8_0"} if stage == "native" else
+           {"f32", "bf16", "q4_0", "q4_1", "q5_0", "q6_k", "q8_0"})
+unexpected = {key: value for key, value in counts.items() if key not in allowed}
+if unexpected:
+    raise SystemExit(f"unexpected {stage} tensor types: {unexpected}")
 PY
 then :; else die "final tensor type validation failed"; fi
 
