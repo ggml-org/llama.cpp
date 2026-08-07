@@ -63,9 +63,9 @@
 		data-multiline={isMultiline ? '' : undefined}
 		style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 	>
-		{#if renderMarkdown && currentConfig.renderUserContentAsMarkdown}
+		{#if renderMarkdown && !currentConfig.renderContentAsRawText}
 			<div bind:this={messageElement}>
-				<MarkdownContent class="markdown-user-content -my-4" {content} />
+				<MarkdownContent class="markdown-user-content" {content} />
 			</div>
 		{:else}
 			<span bind:this={messageElement} class="text-md whitespace-pre-wrap">

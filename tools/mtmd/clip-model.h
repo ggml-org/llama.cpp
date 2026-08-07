@@ -33,7 +33,7 @@ enum resize_algo {
     RESIZE_ALGO_BILINEAR, // stretch to target resolution
     RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
     RESIZE_ALGO_BICUBIC_PILLOW,
-    // RESIZE_ALGO_LANCZOS, // TODO
+    RESIZE_ALGO_LANCZOS,
 };
 
 // Padding style for img_tool::resize
@@ -54,6 +54,8 @@ struct clip_hparams {
     int32_t projection_dim = 0;
     int32_t n_head = 0;
     int32_t n_head_kv = 0;
+    // 0 = derive from n_embd; set when qkv width != n_embd
+    int32_t n_embd_head = 0;
     int32_t n_layer = 0;
     int32_t n_merge = 1; // number of patch merges **per-side**
 
@@ -110,6 +112,8 @@ struct clip_hparams {
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
+    int32_t subsampling_factor = 0; // parakeet
+
     int32_t audio_chunk_size           = 0;
     int32_t audio_conv_kernel_size     = 0;
     int32_t audio_max_pos_emb          = 0;
@@ -123,6 +127,31 @@ struct clip_hparams {
     int32_t audio_n_fft       = -1;
     int32_t audio_window_len  = -1;
     int32_t audio_hop_len     = -1;
+
+    // parakeet
+    std::vector<float> mel_filters;
+    std::vector<float> window;
+
+    // mimo-audio-tokenizer: residual vector quantizer
+    int32_t rvq_num_quantizers = 0;
+    std::vector<int32_t> rvq_codebook_size; // per-quantizer bin count (ragged, e.g. 1024/1024/256/128x17)
+
+    // qwen3tts code2wav
+    int32_t wav_tfm_n_layer      = 0;
+    int32_t wav_tfm_n_embd       = 0;
+    int32_t wav_tfm_n_ff         = 0;
+    int32_t wav_tfm_n_head       = 0;
+    int32_t wav_tfm_n_head_kv    = 0;
+    float   wav_tfm_eps          = 1e-5f;
+    float   wav_tfm_rope_theta   = 10000.0f;
+    int32_t wav_upsample_n_block = 0;
+    int32_t wav_dac_n_block      = 0;
+    int32_t wav_dac_n_res        = 0;
+    int32_t wav_tfm_swa          = 0; // pre_transformer's KV cache size, in frames
+
+    // mimo-v2.5: LLM-side connector (input_local_transformer)
+    int32_t audio_local_n_layer = 0;
+    int32_t audio_local_group_size = 0;
 
     // legacy
     bool has_llava_projector = false;
@@ -139,6 +168,17 @@ struct clip_hparams {
         image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
         image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
+    }
+
+    // used by longest_edge preprocessor (no model-specific value for min/max tokens)
+    void set_limit_image_tokens() {
+        const int patch_area = patch_size * patch_size * n_merge * n_merge;
+        if (custom_image_min_tokens > 0) {
+            image_min_pixels = custom_image_min_tokens * patch_area;
+        }
+        if (custom_image_max_tokens > 0) {
+            image_max_pixels = custom_image_max_tokens * patch_area;
+        }
     }
 
     void set_warmup_n_tokens(int n_tokens) {
@@ -237,14 +277,16 @@ struct clip_layer {
     ggml_tensor * norm_conv_b   = nullptr;
     ggml_tensor * linear_pos_w  = nullptr;
 
-    ggml_tensor * conv_norm_w   = nullptr;
-    ggml_tensor * conv_norm_b   = nullptr;
-    ggml_tensor * conv_dw_w     = nullptr;
-    ggml_tensor * conv_dw_b     = nullptr;
-    ggml_tensor * conv_pw1_w    = nullptr;
-    ggml_tensor * conv_pw1_b    = nullptr;
-    ggml_tensor * conv_pw2_w    = nullptr;
-    ggml_tensor * conv_pw2_b    = nullptr;
+    ggml_tensor * conv_norm_w    = nullptr;
+    ggml_tensor * conv_norm_b    = nullptr;
+    ggml_tensor * conv_norm_mean = nullptr;  // parakeet
+    ggml_tensor * conv_norm_var  = nullptr;  // parakeet
+    ggml_tensor * conv_dw_w      = nullptr;
+    ggml_tensor * conv_dw_b      = nullptr;
+    ggml_tensor * conv_pw1_w     = nullptr;
+    ggml_tensor * conv_pw1_b     = nullptr;
+    ggml_tensor * conv_pw2_w     = nullptr;
+    ggml_tensor * conv_pw2_b     = nullptr;
 
     // gemma4 audio conformer per-layer
     ggml_tensor * attn_pre_norm_w   = nullptr;
@@ -267,6 +309,14 @@ struct clip_layer {
     ggml_tensor * cross_attn_o_b    = nullptr;
     ggml_tensor * cross_attn_norm_w = nullptr;
     ggml_tensor * cross_attn_norm_b = nullptr;
+
+    // qwen3tts speaker encoder: SE-Res2Net block, tdnn1/tdnn2 reuse conv_pw1_w/b and conv_pw2_w/b above
+    ggml_tensor * se_conv1_w = nullptr;
+    ggml_tensor * se_conv1_b = nullptr;
+    ggml_tensor * se_conv2_w = nullptr;
+    ggml_tensor * se_conv2_b = nullptr;
+    std::vector<ggml_tensor *> res2_conv_w; // Res2Net hierarchical branches
+    std::vector<ggml_tensor *> res2_conv_b;
 
     bool has_deepstack() const {
         return deepstack_fc1_w != nullptr;
@@ -347,6 +397,73 @@ struct qf_block {
     std::vector<clip_layer> qf_proj_layers;
 };
 
+// qwen3tts code2wav: RVQ codes -> raw PCM
+struct clip_code2wav {
+    // "upsample" stage: one ConvNeXt block plus the causal ConvTranspose1d before it
+    struct upsample_block {
+        ggml_tensor * conv_w   = nullptr; // causal ConvTranspose1d, 2x
+        ggml_tensor * conv_b   = nullptr;
+        ggml_tensor * dwconv_w = nullptr; // depthwise causal conv, k=7
+        ggml_tensor * dwconv_b = nullptr;
+        ggml_tensor * norm_w   = nullptr; // LayerNorm
+        ggml_tensor * norm_b   = nullptr;
+        ggml_tensor * pw1_w    = nullptr; // pointwise expand
+        ggml_tensor * pw1_b    = nullptr;
+        ggml_tensor * pw2_w    = nullptr; // pointwise project
+        ggml_tensor * pw2_b    = nullptr;
+        ggml_tensor * gamma    = nullptr; // layer scale
+    };
+
+    // one DAC residual unit: SnakeBeta -> dilated causal conv -> SnakeBeta -> pointwise causal conv
+    struct dac_res {
+        ggml_tensor * act1_alpha = nullptr;
+        ggml_tensor * act1_beta  = nullptr;
+        ggml_tensor * conv1_w    = nullptr;
+        ggml_tensor * conv1_b    = nullptr;
+        ggml_tensor * act2_alpha = nullptr;
+        ggml_tensor * act2_beta  = nullptr;
+        ggml_tensor * conv2_w    = nullptr;
+        ggml_tensor * conv2_b    = nullptr;
+    };
+
+    // one DAC upsample block (SnakeBeta -> causal ConvTranspose1d -> 3 residual units)
+    struct dac_block {
+        ggml_tensor * snake_alpha = nullptr;
+        ggml_tensor * snake_beta  = nullptr;
+        ggml_tensor * conv_w      = nullptr; // causal ConvTranspose1d
+        ggml_tensor * conv_b      = nullptr;
+        std::vector<dac_res> res;
+    };
+
+    // quantizer: RVQ codebook decode
+    ggml_tensor * quant_first_in_w  = nullptr; // semantic RVQ, in_proj (1x1 conv, loaded as 2D)
+    ggml_tensor * quant_first_out_w = nullptr;
+    ggml_tensor * quant_first_cb_w  = nullptr; // codebook (1 layer)
+    ggml_tensor * quant_rest_in_w   = nullptr; // acoustic RVQ
+    ggml_tensor * quant_rest_out_w  = nullptr;
+    ggml_tensor * quant_rest_cb_w   = nullptr; // codebooks, merged 3D [15, vocab, dim]
+
+    ggml_tensor * pre_conv_w = nullptr;
+    ggml_tensor * pre_conv_b = nullptr;
+
+    ggml_tensor * tfm_in_proj_w     = nullptr;
+    ggml_tensor * tfm_in_proj_b     = nullptr;
+    ggml_tensor * tfm_out_proj_w    = nullptr;
+    ggml_tensor * tfm_out_proj_b    = nullptr;
+    ggml_tensor * tfm_output_norm_w = nullptr;
+    std::vector<clip_layer> tfm_layers; // reuses the generic block fields (ln_1/attn/ln_2/ffn/ls_1/ls_2)
+
+    std::vector<upsample_block> upsample;
+
+    ggml_tensor * dac_entry_w = nullptr;
+    ggml_tensor * dac_entry_b = nullptr;
+    std::vector<dac_block> dac;
+    ggml_tensor * dac_post_snake_alpha = nullptr;
+    ggml_tensor * dac_post_snake_beta  = nullptr;
+    ggml_tensor * dac_post_conv_w      = nullptr;
+    ggml_tensor * dac_post_conv_b      = nullptr;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -397,6 +514,10 @@ struct clip_model {
     ggml_tensor * mm_0_b = nullptr;
     ggml_tensor * mm_2_w = nullptr;
     ggml_tensor * mm_2_b = nullptr;
+    ggml_tensor * mm_merger_fc1_w = nullptr;   // minimax-m3
+    ggml_tensor * mm_merger_fc1_b = nullptr;
+    ggml_tensor * mm_merger_fc2_w = nullptr;
+    ggml_tensor * mm_merger_fc2_b = nullptr;
 
     ggml_tensor * image_newline = nullptr;
     ggml_tensor * view_seperator = nullptr;
@@ -533,6 +654,20 @@ struct clip_model {
     ggml_tensor * mm_norm_pre_b = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
 
+    // mimo-audio-tokenizer: post-transformer downsample + RVQ codebook
+    ggml_tensor * downsample_conv_w = nullptr; // no bias
+    ggml_tensor * downsample_norm_w = nullptr;
+    ggml_tensor * downsample_norm_b = nullptr;
+    ggml_tensor * rvq_codebook = nullptr; // merged 3D [n_q, max_bins, dim]
+
+    // mimo-v2.5: text-side RVQ code embedding ("text codebook")
+    ggml_tensor * mm_a_code_embd = nullptr; // merged 3D [n_channels, vocab, dim]
+
+    // mimo-v2.5: LLM-side connector (input_local_transformer, separate from the
+    // audio_tokenizer's own encoder `layers`)
+    std::vector<clip_layer> mm_a_local_layers;
+    ggml_tensor * mm_a_local_norm_w = nullptr;
+
     // qwen3a
     ggml_tensor * conv2d_1_w = nullptr;
     ggml_tensor * conv2d_1_b = nullptr;
@@ -540,6 +675,24 @@ struct clip_model {
     ggml_tensor * conv2d_2_b = nullptr;
     ggml_tensor * conv2d_3_w = nullptr;
     ggml_tensor * conv2d_3_b = nullptr;
+
+    // qwen3tts speaker encoder (ECAPA-TDNN)
+    // reused tensors: stem conv is conv1d_1_w/b, feature aggregation is conv_out_w/b, output proj is mm_fc_w/b
+    ggml_tensor * spk_asp_attn_w = nullptr;
+    ggml_tensor * spk_asp_attn_b = nullptr;
+    ggml_tensor * spk_asp_tdnn_w = nullptr;
+    ggml_tensor * spk_asp_tdnn_b = nullptr;
+
+    // qwen3tts code_predictor
+    ggml_tensor * gen_code_proj_in_w  = nullptr; // small_to_mtp_projection
+    ggml_tensor * gen_code_proj_in_b  = nullptr;
+    ggml_tensor * gen_code_embd_w     = nullptr; // per-codebook embedding, merged 3D
+    ggml_tensor * gen_code_head_w     = nullptr; // per-codebook output head, merged 3D
+    ggml_tensor * gen_code_out_embd_w = nullptr; // codebook-0 embedding, fed back into the talker
+    ggml_tensor * gen_code_norm_w     = nullptr; // final norm
+
+    // qwen3tts code2wav: RVQ codes -> raw PCM
+    clip_code2wav c2w;
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;

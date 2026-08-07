@@ -27,8 +27,13 @@ export interface SettingsEntry {
 	type: SettingsFieldType;
 	section?: string;
 	options?: Array<{ value: string; label: string; icon: Component }>;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
 	dependsOn?: string;
 	sync?: {
 		serverKey: string;
@@ -50,9 +55,14 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
 	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 }
 
 /** Re-exported for backward compatibility. */

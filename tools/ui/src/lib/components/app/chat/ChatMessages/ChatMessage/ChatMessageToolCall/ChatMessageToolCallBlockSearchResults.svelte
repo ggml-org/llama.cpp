@@ -27,7 +27,7 @@
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
 
-	const results: SearchResult[] = $derived(extractSearchResults(section.toolResult));
+	const results = $derived(extractSearchResults(section.toolResult));
 	const query = $derived(extractSearchQuery(section.toolArgs));
 
 	// Same icon-resolution chain as ChatMessageToolCallBlockDefault so

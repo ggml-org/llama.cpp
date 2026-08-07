@@ -1,8 +1,31 @@
 import {
+	CODE_BLOCK_PLACEHOLDER_REGEXP,
 	CODE_BLOCK_REGEXP,
+	LATEX_BACKSLASH,
+	LATEX_BLOCKQUOTE_PREFIX_REGEXP,
+	LATEX_CURRENCY_DOLLAR_REGEXP,
+	LATEX_CURRENCY_ESCAPE,
+	LATEX_DIGIT_REGEXP,
+	LATEX_DISPLAY_BLOCK_REGEXP,
+	LATEX_DISPLAY_CLOSE,
+	LATEX_DISPLAY_CONVERT_REGEXP,
+	LATEX_DISPLAY_DELIMITER,
+	LATEX_DISPLAY_OPEN,
+	LATEX_INLINE_CLOSE,
+	LATEX_INLINE_CONVERT_REGEXP,
+	LATEX_INLINE_DELIMITER,
+	LATEX_INLINE_OPEN,
 	LATEX_MATH_AND_CODE_PATTERN,
+	LATEX_MHCHEM_CE,
+	LATEX_MHCHEM_PU,
 	LATEX_LINEBREAK_REGEXP,
-	MHCHEM_PATTERN_MAP
+	LATEX_NEIGHBOR_CHAR_REGEXP,
+	LATEX_NON_WHITESPACE_REGEXP,
+	LATEX_PLACEHOLDER_REGEXP,
+	LATEX_PROTECT_REGEXP,
+	LATEX_TRIGGER_REGEXP,
+	MHCHEM_PATTERN_MAP,
+	NEWLINE
 } from '$lib/constants';
 
 /**
@@ -19,13 +42,13 @@ import {
  * @returns The processed string with LaTeX replaced by placeholders.
  */
 export function maskInlineLaTeX(content: string, latexExpressions: string[]): string {
-	if (!content.includes('$')) {
+	if (!content.includes(LATEX_INLINE_DELIMITER)) {
 		return content;
 	}
 	return content
-		.split('\n')
+		.split(NEWLINE)
 		.map((line) => {
-			if (line.indexOf('$') == -1) {
+			if (line.indexOf(LATEX_INLINE_DELIMITER) == -1) {
 				return line;
 			}
 
@@ -33,7 +56,7 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 			let currentPosition = 0;
 
 			while (currentPosition < line.length) {
-				const openDollarIndex = line.indexOf('$', currentPosition);
+				const openDollarIndex = line.indexOf(LATEX_INLINE_DELIMITER, currentPosition);
 
 				if (openDollarIndex == -1) {
 					processedLine += line.slice(currentPosition);
@@ -41,7 +64,7 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 				}
 
 				// Is there a next $-sign?
-				const closeDollarIndex = line.indexOf('$', openDollarIndex + 1);
+				const closeDollarIndex = line.indexOf(LATEX_INLINE_DELIMITER, openDollarIndex + 1);
 
 				if (closeDollarIndex == -1) {
 					processedLine += line.slice(currentPosition);
@@ -61,14 +84,14 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 					shouldSkipAsNonLatex = true;
 				}
 
-				if (/[A-Za-z0-9_$-]/.test(charBeforeOpen)) {
+				if (LATEX_NEIGHBOR_CHAR_REGEXP.test(charBeforeOpen)) {
 					// Character, digit, $, _ or - before first '$', no TeX.
 					shouldSkipAsNonLatex = true;
 				}
 
 				if (
-					/[0-9]/.test(charAfterOpen) &&
-					(/[A-Za-z0-9_$-]/.test(charAfterClose) || ' ' == charBeforeClose)
+					LATEX_DIGIT_REGEXP.test(charAfterOpen) &&
+					(LATEX_NEIGHBOR_CHAR_REGEXP.test(charAfterClose) || ' ' == charBeforeClose)
 				) {
 					// First $ seems to belong to an amount.
 					shouldSkipAsNonLatex = true;
@@ -91,7 +114,7 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 
 			return processedLine;
 		})
-		.join('\n');
+		.join(NEWLINE);
 }
 
 function escapeBrackets(text: string): string {
@@ -106,9 +129,9 @@ function escapeBrackets(text: string): string {
 			if (codeBlock != null) {
 				return codeBlock;
 			} else if (squareBracket != null) {
-				return `$$${squareBracket}$$`;
+				return `${LATEX_DISPLAY_DELIMITER}${squareBracket}${LATEX_DISPLAY_DELIMITER}`;
 			} else if (roundBracket != null) {
-				return `$${roundBracket}$`;
+				return `${LATEX_INLINE_DELIMITER}${roundBracket}${LATEX_INLINE_DELIMITER}`;
 			}
 
 			return match;
@@ -144,23 +167,49 @@ const doEscapeMhchem = false;
  * preprocessLaTeX("Price: $10. The equation is \\(x^2\\).")
  * // → "Price: $10. The equation is $x^2$."
  */
+/** Bounded cache for preprocessLaTeX results. */
+const LATEX_CACHE_MAX_SIZE = 64;
+const latexCache = new Map<string, string>();
+
 export function preprocessLaTeX(content: string): string {
 	// See also:
 	// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
 
+	// Memoize on the input string. During streaming the prefix before an
+	// incomplete code block stays the same across multiple tokens, so the
+	// full protect/restore pipeline would re-run unnecessarily.
+	const cached = latexCache.get(content);
+	if (cached !== undefined) return cached;
+
+	// Save original before the function mutates `content` through steps 0-8
+	const originalContent = content;
+
+	// Every step below keys off a `$` or a backslash escape (\[ \] \( \) \ce{ \pu{).
+	// With neither present the protect/restore passes round-trip the input
+	// unchanged, so skip them: the step 2 scan is O(n^2) in line length and costs
+	// ~90ms on a 26KB single-line message that contains no math at all. This
+	// matters during streaming, where the whole message is reprocessed per frame.
+	if (!LATEX_TRIGGER_REGEXP.test(content)) {
+		if (latexCache.size >= LATEX_CACHE_MAX_SIZE) {
+			latexCache.delete(latexCache.keys().next().value!);
+		}
+		latexCache.set(originalContent, content);
+		return content;
+	}
+
 	// Step 0: Temporarily remove blockquote markers (>) to process LaTeX correctly
 	// Store the structure so we can restore it later
 	const blockquoteMarkers: Map<number, string> = new Map();
-	const lines = content.split('\n');
+	const lines = content.split(NEWLINE);
 	const processedLines = lines.map((line, index) => {
-		const match = line.match(/^(>\s*)/);
+		const match = line.match(LATEX_BLOCKQUOTE_PREFIX_REGEXP);
 		if (match) {
 			blockquoteMarkers.set(index, match[1]);
 			return line.slice(match[1].length);
 		}
 		return line;
 	});
-	content = processedLines.join('\n');
+	content = processedLines.join(NEWLINE);
 
 	// Step 1: Protect code blocks
 	const codeBlocks: string[] = [];
@@ -175,53 +224,54 @@ export function preprocessLaTeX(content: string): string {
 	const latexExpressions: string[] = [];
 
 	// Match \S...\[...\] and protect them and insert a line-break.
-	content = content.replace(/([\S].*?)\\\[([\s\S]*?)\\\](.*)/g, (match, group1, group2, group3) => {
-		// Check if there are characters following the formula (display-formula in a table-cell?)
-		if (group1.endsWith('\\')) {
-			return match; // Backslash before \[, do nothing.
-		}
-		const hasSuffix = /\S/.test(group3);
-		let optBreak;
+	// Guarded: with no `\[` present this pattern still probes every start offset,
+	// expanding `.*?` to the end of each line before failing - O(n^2) for nothing.
+	if (content.includes(LATEX_DISPLAY_OPEN)) {
+		content = content.replace(LATEX_DISPLAY_BLOCK_REGEXP, (match, group1, group2, group3) => {
+			// Check if there are characters following the formula (display-formula in a table-cell?)
+			if (group1.endsWith(LATEX_BACKSLASH)) {
+				return match; // Backslash before \[, do nothing.
+			}
+			const hasSuffix = LATEX_NON_WHITESPACE_REGEXP.test(group3);
+			let optBreak;
 
-		if (hasSuffix) {
-			latexExpressions.push(`\\(${group2.trim()}\\)`); // Convert into inline.
-			optBreak = '';
-		} else {
-			latexExpressions.push(`\\[${group2}\\]`);
-			optBreak = '\n';
-		}
+			if (hasSuffix) {
+				latexExpressions.push(`${LATEX_INLINE_OPEN}${group2.trim()}${LATEX_INLINE_CLOSE}`); // Convert into inline.
+				optBreak = '';
+			} else {
+				latexExpressions.push(`${LATEX_DISPLAY_OPEN}${group2}${LATEX_DISPLAY_CLOSE}`);
+				optBreak = NEWLINE;
+			}
 
-		return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
-	});
+			return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
+		});
+	}
 
 	// Match \(...\), \[...\], $$...$$ and protect them
-	content = content.replace(
-		/(\$\$[\s\S]*?\$\$|(?<!\\)\\\[[\s\S]*?\\\]|(?<!\\)\\\(.*?\\\))/g,
-		(match) => {
-			latexExpressions.push(match);
+	content = content.replace(LATEX_PROTECT_REGEXP, (match) => {
+		latexExpressions.push(match);
 
-			return `<<LATEX_${latexExpressions.length - 1}>>`;
-		}
-	);
+		return `<<LATEX_${latexExpressions.length - 1}>>`;
+	});
 
 	// Protect inline $...$ but NOT if it looks like money (e.g., $10, $3.99)
 	content = maskInlineLaTeX(content, latexExpressions);
 
 	// Step 3: Escape standalone $ before digits (currency like $5 → \$5)
 	// (Now that inline math is protected, this will only escape dollars not already protected)
-	content = content.replace(/\$(?=\d)/g, '\\$');
+	content = content.replace(LATEX_CURRENCY_DOLLAR_REGEXP, LATEX_CURRENCY_ESCAPE);
 
 	// Step 4: Restore protected LaTeX expressions (they are valid)
-	content = content.replace(/<<LATEX_(\d+)>>/g, (_, index) => {
+	content = content.replace(LATEX_PLACEHOLDER_REGEXP, (_, index) => {
 		let expr = latexExpressions[parseInt(index)];
 		const match = expr.match(LATEX_LINEBREAK_REGEXP);
 		if (match) {
 			// Katex: The $$-delimiters should be in their own line
 			// if there are \\-line-breaks.
 			const formula = match[1];
-			const prefix = formula.startsWith('\n') ? '' : '\n';
-			const suffix = formula.endsWith('\n') ? '' : '\n';
-			expr = '$$' + prefix + formula + suffix + '$$';
+			const prefix = formula.startsWith(NEWLINE) ? '' : NEWLINE;
+			const suffix = formula.endsWith(NEWLINE) ? '' : NEWLINE;
+			expr = LATEX_DISPLAY_DELIMITER + prefix + formula + suffix + LATEX_DISPLAY_DELIMITER;
 		}
 		return expr;
 	});
@@ -230,7 +280,7 @@ export function preprocessLaTeX(content: string): string {
 	// This must happen BEFORE restoring code blocks to avoid affecting code content
 	content = escapeBrackets(content);
 
-	if (doEscapeMhchem && (content.includes('\\ce{') || content.includes('\\pu{'))) {
+	if (doEscapeMhchem && (content.includes(LATEX_MHCHEM_CE) || content.includes(LATEX_MHCHEM_PU))) {
 		content = escapeMhchem(content);
 	}
 
@@ -240,31 +290,38 @@ export function preprocessLaTeX(content: string): string {
 		// Using the look‑behind pattern `(?<!\\)` we skip matches
 		// that are preceded by a backslash, e.g.
 		// `Definitions\\(also called macros)` (title of chapter 20 in The TeXbook).
-		.replace(/(?<!\\)\\\((.+?)\\\)/g, '$$$1$') // inline
+		.replace(LATEX_INLINE_CONVERT_REGEXP, (_, formula: string) => {
+			return `${LATEX_INLINE_DELIMITER}${formula}${LATEX_INLINE_DELIMITER}`;
+		}) // inline
 		.replace(
 			// Using the look‑behind pattern `(?<!\\)` we skip matches
 			// that are preceded by a backslash, e.g. `\\[4pt]`.
-			/(?<!\\)\\\[([\s\S]*?)\\\]/g, // display, see also PR #16599
-			(_, content: string) => {
-				return `$$${content}$$`;
+			LATEX_DISPLAY_CONVERT_REGEXP, // display, see also PR #16599
+			(_, formula: string) => {
+				return `${LATEX_DISPLAY_DELIMITER}${formula}${LATEX_DISPLAY_DELIMITER}`;
 			}
 		);
 
 	// Step 7: Restore code blocks
 	// This happens AFTER all LaTeX conversions to preserve code content
-	content = content.replace(/<<CODE_BLOCK_(\d+)>>/g, (_, index) => {
+	content = content.replace(CODE_BLOCK_PLACEHOLDER_REGEXP, (_, index) => {
 		return codeBlocks[parseInt(index)];
 	});
 
 	// Step 8: Restore blockquote markers
 	if (blockquoteMarkers.size > 0) {
-		const finalLines = content.split('\n');
+		const finalLines = content.split(NEWLINE);
 		const restoredLines = finalLines.map((line, index) => {
 			const marker = blockquoteMarkers.get(index);
 			return marker ? marker + line : line;
 		});
-		content = restoredLines.join('\n');
+		content = restoredLines.join(NEWLINE);
 	}
+
+	if (latexCache.size >= LATEX_CACHE_MAX_SIZE) {
+		latexCache.delete(latexCache.keys().next().value!);
+	}
+	latexCache.set(originalContent, content);
 
 	return content;
 }

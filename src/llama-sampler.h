@@ -34,7 +34,6 @@ struct llama_sampler_chain {
 };
 
 struct llama_sampler * llama_sampler_init_dry_testing(
-        int32_t context_size,
         float   dry_multiplier,
         float   dry_base,
         int32_t dry_allowed_length,

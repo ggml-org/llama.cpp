@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { ParameterSyncService } from './parameter-sync.service';
-import { ColorMode } from '$lib/enums';
 
 describe('ParameterSyncService', () => {
 	describe('roundFloatingPoint', () => {
@@ -31,7 +30,7 @@ describe('ParameterSyncService', () => {
 				dry_multiplier: 0.0,
 				dry_base: 1.75,
 				dry_allowed_length: 2,
-				dry_penalty_last_n: -1,
+				dry_penalty_last_n: 64,
 				mirostat: 0,
 				mirostat_tau: 5.0,
 				mirostat_eta: 0.1,
@@ -97,7 +96,7 @@ describe('ParameterSyncService', () => {
 				dry_multiplier: 0.0,
 				dry_base: 1.75,
 				dry_allowed_length: 2,
-				dry_penalty_last_n: -1,
+				dry_penalty_last_n: 64,
 				mirostat: 0,
 				mirostat_tau: 5.0,
 				mirostat_eta: 0.1,
@@ -132,18 +131,13 @@ describe('ParameterSyncService', () => {
 			expect(result.temperature).toBe(0.7);
 		});
 
-		it('should merge ui settings from props when provided', () => {
-			const result = ParameterSyncService.extractServerDefaults(null, {
-				pasteLongTextToFileLen: 0,
-				pdfAsImage: true,
-				renderUserContentAsMarkdown: false,
-				theme: ColorMode.DARK
-			});
+		it('extracts sampling twins only, never ui settings', () => {
+			const result = ParameterSyncService.extractServerDefaults(null);
 
-			expect(result.pasteLongTextToFileLen).toBe(0);
-			expect(result.pdfAsImage).toBe(true);
-			expect(result.renderUserContentAsMarkdown).toBe(false);
-			expect(result.theme).toBeUndefined();
+			expect(result).toEqual({});
+			expect(ParameterSyncService.canSyncParameter('theme')).toBe(false);
+			expect(ParameterSyncService.canSyncParameter('pdfAsImage')).toBe(false);
+			expect(ParameterSyncService.canSyncParameter('temperature')).toBe(true);
 		});
 	});
 });

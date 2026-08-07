@@ -101,6 +101,7 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
 			name: (entry as { name?: string })?.name,
+			displayName: (entry as { displayName?: string })?.displayName,
 			headers: headers || undefined,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;

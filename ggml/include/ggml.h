@@ -2788,6 +2788,12 @@ extern "C" {
             struct ggml_cgraph * cgraph,
             struct ggml_tensor * tensor);
 
+    // add the tensor and its parents to the graph without marking them for compute
+    // the flag is set later, when the tensor is reached from a node that computes
+    GGML_API void ggml_build_forward_order(
+            struct ggml_cgraph * cgraph,
+            struct ggml_tensor * tensor);
+
     GGML_API void ggml_build_backward_expand(
         struct ggml_context *  ctx,        // context for gradient computation
         struct ggml_cgraph  *  cgraph,

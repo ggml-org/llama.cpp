@@ -15,6 +15,7 @@ import {
 	FilePlus,
 	FileSearch,
 	FileText,
+	Info,
 	SearchCode,
 	Terminal
 } from '@lucide/svelte';
@@ -41,6 +42,7 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 		source: ToolSource.BUILTIN
 	},
 	[BuiltInTool.GET_DATETIME]: { icon: Clock, label: 'Current time', source: ToolSource.BUILTIN },
+	[BuiltInTool.GET_INFO]: { icon: Info, label: 'Runtime info', source: ToolSource.BUILTIN },
 	[BuiltInTool.EXEC_SHELL_COMMAND]: {
 		icon: Terminal,
 		label: 'Run command',
