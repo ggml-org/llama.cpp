@@ -23,19 +23,22 @@ Options:
   --mmproj-output PATH         Q8_0 vision projector path
   --stock-q4-0 PATH            optional existing stock Q4_0 GGUF type map;
                                omit to derive the base map from a BF16 Q4_0 dry-run
-  --stage stock|fixed|native  stock=base map only (default: fixed)
+  --stage stock|fixed|native|auto
+                               stock=base map only (default: fixed)
                                fixed=base map + Q4_K_M-selected Q8 upgrades
                                native=also maps Q5_0/Q4_1/Q6_K to Q8_0
+                               auto=BF16/imatrix-ranked Q4_0 -> Q8_0 upgrades
   --imatrix PATH               imatrix path (default: auto-detect $HOME/models/qwen35-imatrix/...)
   --no-imatrix                 disable imatrix use and force plain RTN
   --threads N                  quantizer threads (default: physical core count)
+  --auto-q8-fraction PCT      auto-stage maximum final Q8_0 byte fraction (default: 25)
   --keep-bf16                  retain the BF16 intermediate (default: retain)
   --remove-bf16                remove BF16 only after successful quantization
   --skip-mmproj                do not create the vision projector
   --skip-convert               raw input must already have --bf16 present
   --plan-only                  convert/inspect/print the plan, do not quantize
   --allow-large-q8             continue when Q8_0 exceeds 50% of planned quantized bytes
-                               (native may require this after inspection)
+                               (native/auto may require this after inspection)
   --force                      allow replacing existing output/plan files
   -h, --help                   show this help
 
@@ -61,6 +64,7 @@ FINAL=
 MMPROJ=
 STOCK_Q40="${S8_STOCK_Q4_0:-}"
 STAGE=fixed
+AUTO_Q8_FRACTION=25
 IMATRIX="${S8_IMATRIX_PATH:-${HOME}/models/qwen35-imatrix/imatrix_unsloth.gguf_file}"
 USE_IMATRIX=1
 THREADS=
@@ -83,10 +87,11 @@ while (($#)); do
         --output)         [[ $# -ge 2 ]] || die "--output needs a path"; FINAL=$2; shift 2 ;;
         --mmproj-output)  [[ $# -ge 2 ]] || die "--mmproj-output needs a path"; MMPROJ=$2; shift 2 ;;
         --stock-q4-0)     [[ $# -ge 2 ]] || die "--stock-q4-0 needs a path"; STOCK_Q40=$2; shift 2 ;;
-        --stage)          [[ $# -ge 2 ]] || die "--stage needs stock, fixed, or native"; STAGE=$2; shift 2 ;;
+        --stage)          [[ $# -ge 2 ]] || die "--stage needs stock, fixed, native, or auto"; STAGE=$2; shift 2 ;;
         --imatrix)       [[ $# -ge 2 ]] || die "--imatrix needs a path"; IMATRIX=$2; USE_IMATRIX=1; shift 2 ;;
         --no-imatrix)    IMATRIX=; USE_IMATRIX=0; shift ;;
         --threads)        [[ $# -ge 2 ]] || die "--threads needs a number"; THREADS=$2; shift 2 ;;
+        --auto-q8-fraction) [[ $# -ge 2 ]] || die "--auto-q8-fraction needs a percentage"; AUTO_Q8_FRACTION=$2; shift 2 ;;
         --keep-bf16)      KEEP_BF16=1; REMOVE_BF16=0; shift ;;
         --remove-bf16)    KEEP_BF16=0; REMOVE_BF16=1; shift ;;
         --skip-mmproj)    SKIP_MMPROJ=1; shift ;;
@@ -108,12 +113,18 @@ if [[ -n "$STOCK_Q40" ]]; then
     STOCK_Q40=$(readlink -f -- "$STOCK_Q40")
     [[ -f "$STOCK_Q40" ]] || die "missing stock Q4_0 type-map GGUF: $STOCK_Q40"
 fi
-[[ "$STAGE" == stock || "$STAGE" == fixed || "$STAGE" == native ]] || die "invalid stage: $STAGE (use stock, fixed, or native)"
+[[ "$STAGE" == stock || "$STAGE" == fixed || "$STAGE" == native || "$STAGE" == auto ]] || die "invalid stage: $STAGE (use stock, fixed, native, or auto)"
+[[ "$AUTO_Q8_FRACTION" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid auto Q8 fraction: $AUTO_Q8_FRACTION"
+awk "BEGIN { exit !($AUTO_Q8_FRACTION <= 100) }" || die "auto Q8 fraction must be <= 100"
 "$PYTHON" -V >/dev/null 2>&1 || die "cannot run Python interpreter: $PYTHON"
 QUANT="$BUILD_DIR/bin/llama-quantize"
 [[ -x "$QUANT" ]] || die "missing executable: $QUANT (build llama-quantize first)"
 CONVERTER="$REPO/convert_hf_to_gguf.py"
 [[ -f "$CONVERTER" ]] || die "missing converter: $CONVERTER"
+RANKER="$REPO/scripts/rank-q4-0-q8-promotions.py"
+if [[ "$STAGE" == auto ]]; then
+    [[ -f "$RANKER" ]] || die "missing auto ranker: $RANKER"
+fi
 
 if [[ -z "$OUT_DIR" ]]; then
     OUT_DIR=$(dirname -- "$INPUT")
@@ -140,6 +151,8 @@ if [[ "$USE_IMATRIX" -eq 1 && -n "$IMATRIX" ]]; then
 fi
 WORK="$OUT_DIR/q4_0-s8-$STAGE-plan"
 BASE_LOG="$WORK/q4_0-base-dry-run.log"
+AUTO_LOG="$WORK/auto-q8-ranking.log"
+AUTO_PLAN="$WORK/auto-q8-promotions.txt"
 PLAN_LOG="$WORK/q4_k_m-dry-run.log"
 PLAN_TSV="$WORK/tensor-plan.tsv"
 OVERRIDES="$WORK/tensor-overrides.txt"
@@ -147,7 +160,7 @@ SUMMARY="$WORK/summary.txt"
 VALIDATION="$WORK/final-types.txt"
 mkdir -p -- "$WORK"
 
-for path in "$FINAL" "$BASE_LOG" "$PLAN_LOG" "$PLAN_TSV" "$OVERRIDES" "$SUMMARY"; do
+for path in "$FINAL" "$BASE_LOG" "$AUTO_LOG" "$AUTO_PLAN" "$PLAN_LOG" "$PLAN_TSV" "$OVERRIDES" "$SUMMARY"; do
     if [[ -e "$path" && "$FORCE" -ne 1 ]]; then
         die "output already exists: $path (use --force to replace)"
     fi
@@ -198,8 +211,25 @@ fi
 
 echo "[4/6] deriving the Q4_K_M sensitivity plan"
 "$QUANT" --dry-run "$BF16" Q4_K_M >"$PLAN_LOG" 2>&1
+if [[ "$STAGE" == auto ]]; then
+    echo "[4/6] ranking BF16 Q4_0 -> Q8_0 promotions"
+    rank_args=(--bf16 "$BF16" --q8-fraction "$AUTO_Q8_FRACTION" --output "$AUTO_PLAN")
+    if [[ -n "$STOCK_Q40" ]]; then
+        rank_args+=(--base-map "$STOCK_Q40")
+    else
+        rank_args+=(--base-log "$BASE_LOG")
+    fi
+    if [[ "$USE_IMATRIX" -eq 1 && -n "$IMATRIX" ]]; then
+        rank_args+=(--imatrix "$IMATRIX")
+    fi
+    PYTHONPATH="$REPO/gguf-py${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" "$RANKER" "${rank_args[@]}" >"$AUTO_LOG" 2>&1 || {
+        cat "$AUTO_LOG" >&2
+        die "automatic Q8 ranking failed"
+    }
+    cat "$AUTO_LOG"
+fi
 
-PYTHONPATH="$REPO/gguf-py${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" - "$PLAN_LOG" "$PLAN_TSV" "$OVERRIDES" "$SUMMARY" "$ALLOW_LARGE_Q8" "$STOCK_Q40" "$STAGE" "$BASE_LOG" <<'PY'
+PYTHONPATH="$REPO/gguf-py${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" - "$PLAN_LOG" "$PLAN_TSV" "$OVERRIDES" "$SUMMARY" "$ALLOW_LARGE_Q8" "$STOCK_Q40" "$STAGE" "$BASE_LOG" "$AUTO_PLAN" <<'PY'
 import math
 import re
 import sys
@@ -214,6 +244,7 @@ allow_large_q8 = sys.argv[5] == "1"
 stock_path = Path(sys.argv[6]) if sys.argv[6] else None
 stage = sys.argv[7]
 base_log_path = Path(sys.argv[8])
+auto_plan_path = Path(sys.argv[9])
 line_re = re.compile(
     r"^\[\s*\d+\s*/\s*\d+\]\s+(\S+)\s+-\s+\[([^\]]+)\],\s+"
     r"type\s*=\s*(\S+),\s+size\s*=\s*([0-9.]+)\s+MiB"
@@ -245,6 +276,16 @@ else:
     base_description = f"derived from {base_log_path}"
 if not stock_types:
     raise SystemExit(f"base Q4_0 map is empty: {base_description}")
+auto_promotions = set()
+if stage == "auto" and auto_plan_path.exists():
+    for raw in auto_plan_path.read_text(errors="replace").splitlines():
+        if not raw or raw.startswith("#"):
+            continue
+        pattern = raw.split("\t", 1)[0]
+        if pattern.startswith("^") and pattern.endswith("$=Q8_0"):
+            auto_promotions.add(pattern[1:-len("$=Q8_0")])
+        elif "=Q8_0" in pattern:
+            auto_promotions.add(pattern.split("=", 1)[0])
 
 rows = []
 overrides = []
@@ -271,7 +312,9 @@ for raw in log_path.read_text(errors="replace").splitlines():
         )
     stock_type = stock_types.get(name)
     if stock_type is None:
-        raise SystemExit(f"stock Q4_0 map is missing tensor: {name}")
+        raise SystemExit(f"base Q4_0 map is missing tensor: {name}")
+    if stock_path is None and stock_type == "q4_0" and re.search(r"\.ssm_(?:alpha|beta)\.weight$", name):
+        stock_type = "f32"
     if stock_type not in stock_allowed:
         raise SystemExit(f"unsupported stock tensor type {stock_type} at {name}")
     ref_type = ref_type.lower() if ref_type else "preserve"
@@ -291,7 +334,11 @@ for raw in log_path.read_text(errors="replace").splitlines():
     reason = "stock-map"
     if stage in {"fixed", "native"} and stock_type == "q4_0" and ref_type in protected:
         final_type = "q8_0"
-        reason = f"stock-Q4_0-to-Q8_{ref_type.upper()}"
+        reason = f"base-Q4_0-to-Q8_{ref_type.upper()}"
+        promotions += 1
+    if stage == "auto" and stock_type == "q4_0" and name in auto_promotions:
+        final_type = "q8_0"
+        reason = "BF16-error-ranked-Q4_0-to-Q8_0"
         promotions += 1
     if stock_type == "bf16":
         # llama-quantize emits these stock MTP entries as F32 from the BF16
@@ -302,7 +349,7 @@ for raw in log_path.read_text(errors="replace").splitlines():
         if stock_type in {"q5_0", "q4_1", "q6_k"}:
             final_type = "q8_0"
             reason = f"V620-{stock_type.upper()}-to-Q8_0"
-    elif stage not in {"stock", "fixed"}:
+    elif stage not in {"stock", "fixed", "auto"}:
         raise SystemExit(f"unsupported stage: {stage}")
 
     if final_type not in (native_allowed if stage == "native" else fixed_allowed):
@@ -331,10 +378,10 @@ for raw in log_path.read_text(errors="replace").splitlines():
 
 if not rows:
     raise SystemExit("the Q4_K_M dry-run produced no tensor records")
-if stock_path is not None:
-    expected_promotions = 29 if stage in {"fixed", "native"} else 0
+if stock_path is not None and stage in {"fixed", "native"}:
+    expected_promotions = 29
     if promotions != expected_promotions:
-        raise SystemExit(f"expected exactly {expected_promotions} stock Q4_0 -> Q8_0 promotions, found {promotions}")
+        raise SystemExit(f"expected exactly {expected_promotions} base Q4_0 -> Q8_0 promotions, found {promotions}")
 elif stage == "stock" and promotions != 0:
     raise SystemExit(f"stock stage unexpectedly promoted {promotions} tensors")
 if not mtp_seen:

@@ -15,12 +15,13 @@ Options:
   --repo PATH              llama.cpp source tree
   --build-dir PATH         build directory
   --python PATH            Python interpreter
-  --stages LIST            comma-separated: stock,fixed,native (default: all)
+  --stages LIST            comma-separated: stock,fixed,native,auto (default: all)
   --stock-q4-0 PATH        optional historical stock map; omit for BF16-derived base
   --imatrix PATH           optional imatrix for every candidate
   --threads N              quantizer threads (default: physical core count)
   --objective NAME         mtp|decode|prompt|balanced (default: balanced)
   --quality-tolerance PCT  allowed KLD increase over stock (default: 0)
+  --auto-q8-fraction PCT  auto-stage final Q8 byte fraction (default: 25)
   --skip-build             evaluate existing candidate files only
   --skip-kld               skip KLD evaluation
   --skip-bench             skip V620 benchmarking
@@ -47,6 +48,7 @@ STAGES=stock,fixed,native
 THREADS=
 OBJECTIVE=balanced
 QUALITY_TOLERANCE=0
+AUTO_Q8_FRACTION=25
 SKIP_BUILD=0
 SKIP_KLD=0
 SKIP_BENCH=0
@@ -68,6 +70,7 @@ while (($#)); do
         --threads)           [[ $# -ge 2 ]] || die "--threads needs a number"; THREADS=$2; shift 2 ;;
         --objective)         [[ $# -ge 2 ]] || die "--objective needs a name"; OBJECTIVE=$2; shift 2 ;;
         --quality-tolerance) [[ $# -ge 2 ]] || die "--quality-tolerance needs a percentage"; QUALITY_TOLERANCE=$2; shift 2 ;;
+        --auto-q8-fraction) [[ $# -ge 2 ]] || die "--auto-q8-fraction needs a percentage"; AUTO_Q8_FRACTION=$2; shift 2 ;;
         --skip-build)        SKIP_BUILD=1; shift ;;
         --skip-kld)          SKIP_KLD=1; shift ;;
         --skip-bench)        SKIP_BENCH=1; shift ;;
@@ -80,6 +83,7 @@ done
 [[ -n "$INPUT" && -n "$BF16" && -n "$OUT_ROOT" ]] || { usage >&2; die "--input, --bf16, and --out-root are required"; }
 [[ "$OBJECTIVE" == mtp || "$OBJECTIVE" == decode || "$OBJECTIVE" == prompt || "$OBJECTIVE" == balanced ]] || die "invalid objective: $OBJECTIVE"
 [[ "$QUALITY_TOLERANCE" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid quality tolerance: $QUALITY_TOLERANCE"
+[[ "$AUTO_Q8_FRACTION" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid auto Q8 fraction: $AUTO_Q8_FRACTION"
 INPUT=$(readlink -f -- "$INPUT")
 BF16=$(readlink -f -- "$BF16")
 OUT_ROOT=$(readlink -m -- "$OUT_ROOT")
@@ -109,7 +113,7 @@ mkdir -p -- "$OUT_ROOT"
 
 IFS=, read -r -a STAGE_LIST <<< "$STAGES"
 for stage in "${STAGE_LIST[@]}"; do
-    [[ "$stage" == stock || "$stage" == fixed || "$stage" == native ]] || die "invalid stage in list: $stage"
+    [[ "$stage" == stock || "$stage" == fixed || "$stage" == native || "$stage" == auto ]] || die "invalid stage in list: $stage"
 done
 
 export HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-10.3.0}"
@@ -135,6 +139,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
               --stage "$stage" --skip-convert --skip-mmproj --threads "$THREADS")
         [[ -n "$STOCK_Q40" ]] && args+=(--stock-q4-0 "$STOCK_Q40")
         [[ -n "$IMATRIX" ]] && args+=(--imatrix "$IMATRIX")
+        [[ "$stage" == auto ]] && args+=(--auto-q8-fraction "$AUTO_Q8_FRACTION")
         [[ "$FORCE" -eq 1 ]] && args+=(--force)
         echo "[build] $stage"
         "$BUILDER" "${args[@]}" >"$OUT_ROOT/$stage-build.log" 2>&1 || {
