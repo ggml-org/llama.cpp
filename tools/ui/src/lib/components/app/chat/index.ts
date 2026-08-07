@@ -266,9 +266,9 @@ export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileIn
 export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResourcesList.svelte';
 
 /**
- * Auto-resizing textarea with IME composition support. Automatically adjusts
- * height based on content. Handles IME input correctly (waits for composition
- * end before processing Enter key). Exposes focus() and resetHeight() methods.
+ * Auto-resizing textarea with IME composition support. Mention links stay
+ * plain markdown text in the input; the chip rendering happens in the
+ * message view via the rehype file-badge plugin.
  */
 export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
 
@@ -384,11 +384,15 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
 export { default as ChatFormMentionPicker } from './ChatForm/ChatFormPickers/ChatFormMentionPicker.svelte';
 
 /**
- * **ChatFormPickers** - Chat input picker container
- *
- * Container component that hosts the MCP prompt and file mention pickers.
- * Manages shared state, keyboard navigation, and coordination between the two
- * picker interfaces. Used within ChatForm.
+ * `/`-triggered slash-command picker. Lists the available slash commands
+ * (`/prompt`, `/cwd`, `/model`) filtered by the typed query; selection
+ * hands the command to the parent for dispatch.
+ */
+export { default as ChatFormCommandPicker } from './ChatForm/ChatFormPickers/ChatFormCommandPicker.svelte';
+
+/**
+ * Hosts the chat-form pickers (slash-command, MCP prompt, file mention)
+ * and delegates keyboard events to the active one.
  */
 export { default as ChatFormPickers } from './ChatForm/ChatFormPickers/ChatFormPickers.svelte';
 
