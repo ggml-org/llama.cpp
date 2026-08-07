@@ -205,6 +205,23 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
+// Tokenization for the chat-form contenteditable (mention links + code spans <-> chip DOM)
+export {
+	tokenizeContent,
+	containsCodeSpan,
+	isOffsetInCodeBlock,
+	domMatchesTokens,
+	syncCodeBlockHatches,
+	stripBlockBoundaryLineBreaks,
+	serializeContent,
+	buildFragment,
+	rangeToTextOffset,
+	textOffsetToRange,
+	badgeAwareWordJump,
+	leadingBadgeEdgeOffset,
+	type ContentToken
+} from './contenteditable-tokenizer';
+
 // Mention-chip visual contract shared by the rehype file-badge plugin,
 // plus the `[name](file://...)` link helpers the mention picker splices in
 export {
