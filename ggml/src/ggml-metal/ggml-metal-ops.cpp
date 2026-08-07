@@ -1750,7 +1750,7 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
 
     constexpr int64_t CHUNK = OP_SSM_SCAN_SSD_CS;
 
-    const int64_t mma_tokens = n_seq_tokens / CHUNK * CHUNK;
+    const int64_t mma_tokens = (n_seq_tokens / CHUNK) * CHUNK; // largest multiple of CHUNK <= n_seq_tokens
     const bool use_mma =
         mma_tokens > 0 &&
         ne30 == 1 &&
