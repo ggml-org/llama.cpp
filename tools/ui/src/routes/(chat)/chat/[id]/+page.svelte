@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
 	import { DialogModelNotAvailable } from '$lib/components/app';
-	import { APP_NAME, ROUTES } from '$lib/constants';
+	import { APP_NAME, ROUTES, URL_PARAMS } from '$lib/constants';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
@@ -12,8 +12,8 @@
 	let currentChatId: string | undefined = undefined;
 
 	// URL parameters for prompt and model selection
-	let qParam = $derived(page.url.searchParams.get('q'));
-	let modelParam = $derived(page.url.searchParams.get('model'));
+	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
+	let modelParam = $derived(page.url.searchParams.get(URL_PARAMS.MODEL));
 
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
@@ -28,8 +28,8 @@
 	 */
 	function clearUrlParams() {
 		const url = new URL(page.url);
-		url.searchParams.delete('q');
-		url.searchParams.delete('model');
+		url.searchParams.delete(URL_PARAMS.QUERY);
+		url.searchParams.delete(URL_PARAMS.MODEL);
 		replaceState(url.toString(), {});
 	}
 
