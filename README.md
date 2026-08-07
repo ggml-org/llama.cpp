@@ -6,6 +6,8 @@
 
 **階層メモリ実行基盤・GGUF分割対応・CUDA向けローカル推論**
 
+**日本語** · [English](README.en.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
+
 [![Platform](https://img.shields.io/badge/platform-Linux-111827?logo=linux&logoColor=white)](#必要環境)
 [![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76B900?logo=nvidia&logoColor=white)](#必要環境)
 [![Language](https://img.shields.io/badge/language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](#手動ビルド)

@@ -245,6 +245,13 @@ if (CUDAToolkit_FOUND)
 
         message(STATUS "CUDA host compiler is ${CUDA_CCID} ${CUDA_CCVER}")
 
+        # GCC 11 misdiagnoses std::vector::insert(initializer_list) in ggml_cuda_try_fuse as a buffer overflow.
+        # Keep the workaround source-local so real string-overflow diagnostics remain enabled elsewhere.
+        if (CUDA_CCID STREQUAL "GNU" AND CUDA_CCVER VERSION_GREATER_EQUAL "11" AND CUDA_CCVER VERSION_LESS "12")
+            set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ggml-cuda.cu" APPEND PROPERTY COMPILE_OPTIONS
+                "-Xcompiler=-Wno-stringop-overflow")
+        endif()
+
         ggml_get_flags(${CUDA_CCID} ${CUDA_CCVER})
         list(APPEND CUDA_CXX_FLAGS ${CXX_FLAGS} ${GF_CXX_FLAGS})  # This is passed to -Xcompiler later
     endif()
