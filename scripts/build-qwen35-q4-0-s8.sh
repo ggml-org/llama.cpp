@@ -23,7 +23,8 @@ Options:
   --mmproj-output PATH         Q8_0 vision projector path
   --stock-q4-0 PATH            existing stock Q4_0 GGUF type map
                                (default: $HOME/models/Qwen_Qwen3.6-35B-A3B-Q4_0.gguf)
-  --stage fixed|native         fixed=stock map + 29 Q8 upgrades (default: fixed)
+  --stage stock|fixed|native  stock=stock map only (default: fixed)
+                               fixed=stock map + 29 Q8 upgrades
                                native=also maps Q5_0/Q4_1/Q6_K to Q8_0
   --imatrix PATH               imatrix path (default: auto-detect $HOME/models/qwen35-imatrix/...)
   --no-imatrix                 disable imatrix use and force plain RTN
@@ -104,7 +105,7 @@ INPUT=$(readlink -f -- "$INPUT")
 REPO=$(readlink -f -- "$REPO")
 BUILD_DIR=$(readlink -f -- "$BUILD_DIR")
 STOCK_Q40=$(readlink -m -- "$STOCK_Q40")
-[[ "$STAGE" == fixed || "$STAGE" == native ]] || die "invalid stage: $STAGE (use fixed or native)"
+[[ "$STAGE" == stock || "$STAGE" == fixed || "$STAGE" == native ]] || die "invalid stage: $STAGE (use stock, fixed, or native)"
 [[ -f "$STOCK_Q40" ]] || die "missing stock Q4_0 type-map GGUF: $STOCK_Q40 (use --stock-q4-0)"
 "$PYTHON" -V >/dev/null 2>&1 || die "cannot run Python interpreter: $PYTHON"
 QUANT="$BUILD_DIR/bin/llama-quantize"
@@ -262,7 +263,7 @@ for raw in log_path.read_text(errors="replace").splitlines():
     # to identify the 29 stock Q4_0 tensors worth promoting to Q8_0.
     final_type = stock_type
     reason = "stock-map"
-    if stock_type == "q4_0" and ref_type in protected:
+    if stage in {"fixed", "native"} and stock_type == "q4_0" and ref_type in protected:
         final_type = "q8_0"
         reason = f"stock-Q4_0-to-Q8_{ref_type.upper()}"
         promotions += 1
@@ -275,7 +276,7 @@ for raw in log_path.read_text(errors="replace").splitlines():
         if stock_type in {"q5_0", "q4_1", "q6_k"}:
             final_type = "q8_0"
             reason = f"V620-{stock_type.upper()}-to-Q8_0"
-    elif stage != "fixed":
+    elif stage not in {"stock", "fixed"}:
         raise SystemExit(f"unsupported stage: {stage}")
 
     if final_type not in (fixed_allowed if stage == "fixed" else native_allowed):
@@ -304,8 +305,9 @@ for raw in log_path.read_text(errors="replace").splitlines():
 
 if not rows:
     raise SystemExit("the Q4_K_M dry-run produced no tensor records")
-if promotions != 29:
-    raise SystemExit(f"expected exactly 29 stock Q4_0 -> Q8_0 promotions, found {promotions}")
+expected_promotions = 29 if stage in {"fixed", "native"} else 0
+if promotions != expected_promotions:
+    raise SystemExit(f"expected exactly {expected_promotions} stock Q4_0 -> Q8_0 promotions, found {promotions}")
 if not mtp_seen:
     raise SystemExit("no quantizable .nextn. MTP tensors were found; refusing to build")
 plan_path.write_text(

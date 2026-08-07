@@ -45,6 +45,24 @@ scripts/build-qwen35-q4-0-s8.sh \
 
 Use `--stage native` for the V620-native build after validating the fixed stage. Use `--stock-q4-0 PATH` to select another stock-map GGUF. Use `--plan-only` to inspect the map before quantizing.
 
+## Automatic candidate sweep
+
+`scripts/optimize-qwen35-s8.sh` builds and evaluates the `stock`, `fixed`, and `native` candidates using the same BF16 source. It measures code/Wikitext KLD, PP4096, TG512, and direct `llama-server` MTP TG512, then recommends the best candidate subject to a KLD floor:
+
+```bash
+scripts/optimize-qwen35-s8.sh \
+  --input /home/edwin/models/Qwen3.6-35B-A3B-raw \
+  --bf16 /home/edwin/models/qwen35-q4-0-s8/Qwen3.6-35B-A3B-MTP-BF16.gguf \
+  --out-root /home/edwin/models/qwen35-sweep \
+  --stock-q4-0 /home/edwin/models/Qwen_Qwen3.6-35B-A3B-Q4_0.gguf \
+  --code-kld-base /home/edwin/models/qwen35-kld-code20.kld \
+  --wiki-kld-base /home/edwin/models/qwen35-kld-wiki20.kld \
+  --objective balanced \
+  --threads 24
+```
+
+Use `--objective mtp`, `decode`, or `prompt` to change the speed priority. `--quality-tolerance PCT` permits a controlled KLD increase over the stock candidate.
+
 The imatrix is auto-detected at `$HOME/models/qwen35-imatrix/imatrix_unsloth.gguf_file`; use `--no-imatrix` to disable it. It changes quantization values but not tensor-type selection.
 
 The script refuses already-quantized input, retains BF16 by default, and validates the final stage-specific tensor set. Use `--remove-bf16` only after validation.
