@@ -50,17 +50,34 @@
 
 // TODO: consider moving to llama-impl.h if needed in more places
 #if defined(_WIN32)
-static std::string llama_format_win_err(DWORD err) {
+static std::string llama_format_win_err_impl(DWORD err) {
     LPSTR buf;
     size_t size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                                  NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&buf, 0, NULL);
     if (!size) {
-        return "FormatMessageA failed";
+        return "";
     }
     std::string ret(buf, size);
     LocalFree(buf);
     return ret;
 }
+
+static std::string llama_format_win_err(DWORD err) {
+    std::string ret = llama_format_win_err_impl(err);
+    if (ret.empty()) {
+        return "FormatMessageA failed";
+    }
+    return ret;
+}
+
+static std::string llama_format_win_err_message(DWORD error_code) {
+    std::string ret = llama_format_win_err_impl(error_code);
+    if (ret.empty()) {
+        return format("Win32 error code: %lx", error_code);
+    }
+    return ret;
+}
+
 #endif
 
 // llama_file
@@ -68,20 +85,6 @@ static std::string llama_format_win_err(DWORD err) {
 struct llama_file::impl {
 #if defined(_WIN32)
     HANDLE fp_win32;
-    std::string GetErrorMessageWin32(DWORD error_code) const {
-        std::string ret;
-        LPSTR lpMsgBuf = NULL;
-        DWORD bufLen = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                                    NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&lpMsgBuf, 0, NULL);
-        if (!bufLen) {
-            ret = format("Win32 error code: %lx", error_code);
-        } else {
-            ret = lpMsgBuf;
-            LocalFree(lpMsgBuf);
-        }
-
-        return ret;
-    }
 
     impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
         fp = ggml_fopen(fname, mode);
@@ -107,7 +110,7 @@ struct llama_file::impl {
         li.QuadPart = 0;
         BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw std::runtime_error(format("read error: %s", llama_format_win_err_message(GetLastError()).c_str()));
         }
 
         return li.QuadPart;
@@ -122,7 +125,7 @@ struct llama_file::impl {
         li.QuadPart = offset;
         BOOL ret = SetFilePointerEx(fp_win32, li, NULL, whence);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw std::runtime_error(format("read error: %s", llama_format_win_err_message(GetLastError()).c_str()));
         }
     }
 
@@ -133,7 +136,7 @@ struct llama_file::impl {
             DWORD chunk_read = 0;
             BOOL result = ReadFile(fp_win32, reinterpret_cast<char*>(ptr) + bytes_read, chunk_size, &chunk_read, NULL);
             if (!result) {
-                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                throw std::runtime_error(format("read error: %s", llama_format_win_err_message(GetLastError()).c_str()));
             }
             if (chunk_read < chunk_size || chunk_read == 0) {
                 throw std::runtime_error("unexpectedly reached end of file");
@@ -156,7 +159,7 @@ struct llama_file::impl {
             DWORD chunk_written = 0;
             BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, NULL);
             if (!result) {
-                throw std::runtime_error(format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                throw std::runtime_error(format("write error: %s", llama_format_win_err_message(GetLastError()).c_str()));
             }
             if (chunk_written < chunk_size || chunk_written == 0) {
                 throw std::runtime_error("unexpectedly failed to write bytes");
