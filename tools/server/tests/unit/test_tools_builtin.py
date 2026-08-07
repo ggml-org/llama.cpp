@@ -180,11 +180,11 @@ def docker_container():
         subprocess.run(["docker", "rm", "-f", container_id], capture_output=True)
 
 
-def test_tools_builtin_docker_header(docker_container: str):
+def test_tools_builtin_runtime_header(docker_container: str):
     global server
     server.start()
 
-    headers = {"x-tool-docker": docker_container, "x-tool-cwd": "/tmp"}
+    headers = {"x-tool-runtime": f"docker-container:{docker_container}", "x-tool-cwd": "/tmp"}
 
     write_res = call_tool("write_file", {"path": "test.log", "content": "hello docker\n"}, headers=headers)
     assert write_res["result"] == "file written successfully"
@@ -194,6 +194,18 @@ def test_tools_builtin_docker_header(docker_container: str):
 
     exec_res = call_tool("exec_shell_command", {"command": "cat test.log"}, headers=headers)
     assert "hello docker" in exec_res["plain_text_response"]
+
+
+def test_tools_builtin_runtime_header_unknown_scheme():
+    global server
+    server.start()
+
+    # an unknown runtime must fail, never silently fall back to running on the host
+    res = server.make_request("POST", "/tools",
+                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                              headers={"x-tool-runtime": "ssh:example.com"})
+    assert res.status_code == 500, res.body
+    assert "unknown tool runtime" in str(res.body)
 
 
 def test_tools_builtin_docker_runtime_cleans_up_spawned_container():

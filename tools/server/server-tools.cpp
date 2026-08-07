@@ -724,12 +724,22 @@ private:
     std::string container_id;
 };
 
+// runtime spec used by --tools-runtime and the x-tool-runtime header
+// this is the only scheme for now, ssh: and podman: can be added next to it
+static const std::string SERVER_TOOL_RUNTIME_DOCKER_CONTAINER = "docker-container:";
+
+// an empty runtime runs the tools on the host
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
-    std::string cwd = json_value(params, "cwd", std::string());
-    if (params.contains("docker_container_id")) {
-        return std::make_unique<tools_io_docker>(params.at("docker_container_id").get<std::string>(), cwd);
+    std::string cwd     = json_value(params, "cwd", std::string());
+    std::string runtime = json_value(params, "runtime", std::string());
+    if (runtime.empty()) {
+        return std::make_unique<tools_io_basic>(cwd);
     }
-    return std::make_unique<tools_io_basic>(cwd);
+    if (runtime.rfind(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER, 0) == 0) {
+        return std::make_unique<tools_io_docker>(runtime.substr(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER.size()), cwd);
+    }
+    // do not fall back to the host, the caller asked for an isolate
+    throw std::runtime_error("unknown tool runtime: " + runtime);
 }
 
 // no '/' in pattern -> match basename at any depth; else match full relative path
@@ -1138,9 +1148,9 @@ struct server_tool_exec_shell_command : server_tool {
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
 
-        // docker containers are Linux-based regardless of host OS, so a docker target always gets `sh -c`
+        // an isolate is always POSIX regardless of host OS, so it always gets `sh -c`
 #ifdef _WIN32
-        std::vector<std::string> args = params.contains("docker_container_id")
+        std::vector<std::string> args = !json_value(params, "runtime", std::string()).empty()
             ? std::vector<std::string>{"sh", "-c", command}
             : std::vector<std::string>{"cmd", "/c", command};
 #else
@@ -1635,9 +1645,9 @@ struct server_tool_get_info : server_tool {
     json invoke(json params, server_tool::stream *) const override {
         auto io = make_tools_io(params);
 
-        // inside docker, we always use the linux command
+        // inside an isolate, we always use the linux command
 #ifdef _WIN32
-        std::vector<std::string> args = params.contains("docker_container_id")
+        std::vector<std::string> args = !json_value(params, "runtime", std::string()).empty()
             ? std::vector<std::string>{"uname", "-a"}
             : std::vector<std::string>{"cmd", "/c", "ver"};
 #else
@@ -1753,8 +1763,7 @@ struct server_tools_docker_runtime {
     server_tools_docker_runtime(const server_tools_docker_runtime &) = delete;
 
     explicit server_tools_docker_runtime(const std::string & spec) {
-        static const std::string docker_prefix           = "docker:";
-        static const std::string docker_container_prefix = "docker-container:";
+        static const std::string docker_prefix = "docker:";
         if (spec.rfind(docker_prefix, 0) == 0) {
             spawned = true;
             image   = spec.substr(docker_prefix.size());
@@ -1762,9 +1771,9 @@ struct server_tools_docker_runtime {
                 throw std::runtime_error("--tools-runtime docker:<image> requires an image name");
             }
             spawn();
-        } else if (spec.rfind(docker_container_prefix, 0) == 0) {
+        } else if (spec.rfind(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER, 0) == 0) {
             spawned      = false;
-            container_id = spec.substr(docker_container_prefix.size());
+            container_id = spec.substr(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER.size());
             if (container_id.empty()) {
                 throw std::runtime_error("--tools-runtime docker-container:<id> requires a container id");
             }
@@ -1989,16 +1998,16 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 params["cwd"] = cwd;
             }
 
-            // accept x-tool-docker header to route tool I/O through a running docker container;
-            // falls back to the --tools-runtime container, if configured
-            if (params.contains("docker_container_id")) {
-                params.erase("docker_container_id");
+            // accept x-tool-runtime header to route tool I/O through an isolate, e.g. "docker-container:<id>";
+            // falls back to the --tools-runtime isolate, if configured
+            if (params.contains("runtime")) {
+                params.erase("runtime");
             }
-            auto docker_container_id = get_header(req.headers, "x-tool-docker");
-            if (!docker_container_id.empty()) {
-                params["docker_container_id"] = docker_container_id;
+            auto runtime = get_header(req.headers, "x-tool-runtime");
+            if (!runtime.empty()) {
+                params["runtime"] = runtime;
             } else if (docker_runtime) {
-                params["docker_container_id"] = docker_runtime->get_container_id();
+                params["runtime"] = SERVER_TOOL_RUNTIME_DOCKER_CONTAINER + docker_runtime->get_container_id();
             }
 
             server_tool & tool = find_tool(tools, tool_name, stream);
