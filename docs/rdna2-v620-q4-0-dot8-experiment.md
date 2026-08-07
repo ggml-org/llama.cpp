@@ -2,7 +2,7 @@
 
 Branch: `exp/rdna2-q4-0-dot8-v620`\
 Parent: `exp/rdna2-q4k-mmid-batch6-pr23685`\
-Implementation commits: `b4afc40ce`, `ed3565903`
+Implementation commits: `b4afc40ce`, `ed3565903`, `c760f124b`
 
 ## Scope
 
@@ -14,7 +14,7 @@ GGML_HIP_Q4_0_DOT8=1
 
 Unset or zero keeps the stock path. The selector is compiled as an A/B kernel specialization so the stock path retains compile-time function selection and inlining.
 
-The prototype reconstructs the existing integer accumulation using existing Q8 bytes and three DOT8 operations per eight Q4 values: UDOT8 for low digits, SDOT8 for high digits, and SDOT8 against ones for the high-digit correction. It intentionally does not yet add a split-Q8 activation buffer or correction sidecar.
+The first prototype reconstructed the existing integer accumulation from existing Q8 bytes using three DOT8 operations per eight Q4 values. The follow-up metadata variant quantizes directly into an internal 40-byte block containing `ds`, four packed LO words, four packed HI words, and two `int8_t` 16-value `sum_hi` corrections. It uses only UDOT8 plus SDOT8 in the weight loop; the stock Q8 scale and original floating-point sum remain unchanged.
 
 ## Reproducibility
 
@@ -59,6 +59,21 @@ Qwen3.6 raw TG, three repetitions per row:
 | 256 | 91.600 | 91.559 | -0.05% |
 | 512 | 91.819 | 91.687 | -0.14% |
 
-## Conclusion
+## Activation-side metadata follow-up
 
-The exact packed-Q4/lossless-split-Q8 arithmetic works and gfx1030 emits the intended DOT8 instructions. This first prototype is performance-neutral on the V620; it is not an end-to-end win. The likely next optimization, only if continued, is activation-side correction metadata to remove the third DOT8 from the hot loop. No automatic/default enablement is recommended yet.
+The metadata variant was validated with the same A/B harness:
+
+- Q4_0 K=4096/N=512/batch=1: **0/512 mismatches**.
+- Q4_0 K=8192/N=1024/batch=1: **0/1024 mismatches**.
+- Q4_K routed MMID with the selector unset: **0/4096 mismatches**, confirming the default non-Q4_0 path is unchanged.
+- Final gfx1030 assembly contains `12` `v_dot8_u32_u4` and `12` `v_dot8_i32_i4` occurrences in the generated MMVQ device source, with no `SDOT8` ones operation in the hot path.
+
+The final metadata microbenchmark measured 23.20 us stock versus 22.60 us DOT8 for K=4096/N=512/batch=1, but the end-to-end model result was negative:
+
+| Generation | Stock | 2-DOT8 metadata | Change |
+|---:|---:|---:|---:|
+| 128 | 90.846 | 90.633 | -0.23% |
+| 256 | 91.751 | 91.229 | -0.57% |
+| 512 | 91.746 | 91.324 | -0.46% |
+
+The activation-side metadata successfully removes the third DOT8 and preserves exact output, but the additional activation layout/quantization and 40-byte block cost outweigh the arithmetic savings on this V620/Qwen workload. The experimental path remains opt-in; no default enablement, repacking, W4A4, or Q4_K expansion is recommended.
