@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <algorithm>
+#include <iterator>
 #include <unordered_set>
 #include <tuple>
 #include <functional>
@@ -128,6 +129,14 @@ static std::string expand_home(const std::string & path) {
 static int entry_depth(const std::string & rel) {
     return 1 + (int) std::count(rel.begin(), rel.end(), '/');
 }
+
+// directories a listing still reports but never descends into: they can be enormous.
+// shared by the local walker and the `find` expression built for the container.
+// lowercase only: the local walker case-folds a name before looking it up
+static const char * const SERVER_TOOL_JUNK_DIR_NAMES[] = {
+    ".git", ".svn", ".hg", "node_modules", "__pycache__",
+    ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
+};
 
 class tools_io {
 public:
@@ -400,10 +409,8 @@ private:
     }
 
     static const std::unordered_set<std::string> & junk_dir_names() {
-        static const std::unordered_set<std::string> names = {
-            ".git", ".svn", ".hg", "node_modules", "__pycache__",
-            ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
-        };
+        static const std::unordered_set<std::string> names(
+            std::begin(SERVER_TOOL_JUNK_DIR_NAMES), std::end(SERVER_TOOL_JUNK_DIR_NAMES));
         return names;
     }
 
@@ -478,6 +485,15 @@ public:
     // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
     tools_io_docker(std::string container_id, std::string cwd = "")
         : container_id(std::move(container_id)), cwd(std::move(cwd)) {}
+
+    // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged.
+    // container paths are always POSIX-style ('/'), regardless of host OS.
+    std::string resolve(const std::string & path) const override {
+        if (cwd.empty() || (!path.empty() && path[0] == '/')) {
+            return path;
+        }
+        return cwd + "/" + path;
+    }
 
     bool is_directory(const std::string & path) const override {
         return shell_test("-d", resolve(path));
@@ -603,15 +619,6 @@ private:
     std::string container_id;
     std::string cwd;
 
-    // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged.
-    // container paths are always POSIX-style ('/'), regardless of host OS.
-    std::string resolve(const std::string & path) const {
-        if (cwd.empty() || (!path.empty() && path[0] == '/')) {
-            return path;
-        }
-        return cwd + "/" + path;
-    }
-
     exec_result exec(const std::vector<std::string> & inner, size_t max_output, bool combine_stderr) const {
         std::vector<std::string> args = {"docker", "exec", container_id};
         args.insert(args.end(), inner.begin(), inner.end());
@@ -644,13 +651,8 @@ private:
     // one `find` pass in the container. junk directories stay selectable but are never descended into,
     // and -mindepth/-maxdepth keep a busybox image working as well as a GNU one
     std::vector<std::string> find_entries(const std::string & abs_base, int max_depth, bool dirs, bool & truncated) const {
-        static const char * junk_names[] = {
-            ".git", ".svn", ".hg", "node_modules", "__pycache__",
-            ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
-        };
-
         std::string prune_expr;
-        for (const char * n : junk_names) {
+        for (const char * n : SERVER_TOOL_JUNK_DIR_NAMES) {
             if (!prune_expr.empty()) prune_expr += " -o ";
             prune_expr += std::string("-name ") + n;
         }
@@ -1589,6 +1591,8 @@ struct server_tool_get_info : server_tool {
 #endif
 
         auto res = io->run(args, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
+        // "ver" prints a blank line before the version, so the output is stripped on both ends;
+        // a failed spawn or a timeout leaves a diagnostic in res.output, which is not an OS name
         std::string os_info = res.exit_code == 0 && !res.timed_out ? string_strip(res.output) : "unknown";
 
         std::string cwd = json_value(params, "cwd", std::string());
