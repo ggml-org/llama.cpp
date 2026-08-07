@@ -1,7 +1,12 @@
 import { base } from '$app/paths';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-import { ServerModelStatus, ServerModelsSseEventType, ModelModality } from '$lib/enums';
+import {
+	ServerModelStatus,
+	ServerModelsSseEventType,
+	ModelModality,
+	FileTypeCategory
+} from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
 import { serverStore, isRouterMode } from '$lib/stores/server.svelte';
@@ -1010,9 +1015,9 @@ class ModelsStore {
 		const inputs = architecture.input_modalities;
 
 		return {
-			vision: inputs.includes('image'),
-			audio: inputs.includes('audio'),
-			video: inputs.includes('video')
+			vision: inputs.includes(FileTypeCategory.IMAGE),
+			audio: inputs.includes(FileTypeCategory.AUDIO),
+			video: inputs.includes(FileTypeCategory.VIDEO)
 		};
 	}
 
