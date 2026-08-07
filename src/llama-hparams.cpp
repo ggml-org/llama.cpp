@@ -233,6 +233,14 @@ uint32_t llama_hparams::n_pos_per_embd() const {
     return rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
 }
 
+uint32_t llama_hparams::n_ngram() const {
+    return n_ngram_neighbor > 1 ? n_ngram_split*(n_ngram_neighbor - 1) : 0;
+}
+
+uint32_t llama_hparams::n_ngram_stride() const {
+    return *std::max_element(ngram_vocab_sizes.begin(), ngram_vocab_sizes.begin() + n_ngram());
+}
+
 bool llama_hparams::is_swa(uint32_t il) const {
     if (il < n_layer_all) {
         return is_swa_impl[il];

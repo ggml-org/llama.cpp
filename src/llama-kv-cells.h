@@ -15,6 +15,10 @@ struct llama_kv_cell_ext {
     llama_pos x = 0;
     llama_pos y = 0;
 
+    // the token that produced this cell, used by n-gram input embeddings to recover the
+    // preceding tokens of a sequence. -1 when the cell was not filled from a token id
+    llama_token tok = -1;
+
     // return true if the current 2D spatial position is greater than other
     bool is_2d_gt(llama_pos ox, llama_pos oy) const {
         return (y > oy) || (y == oy && x > ox);
@@ -23,7 +27,7 @@ struct llama_kv_cell_ext {
     void reset() {
         static_assert(std::is_trivially_copyable_v<llama_kv_cell_ext>);
 
-        memset(this, 0, sizeof(*this));
+        *this = llama_kv_cell_ext{};
     }
 };
 
@@ -303,6 +307,29 @@ public:
         assert(seq_id >= 0);
 
         return seq[i].test(seq_id);
+    }
+
+    // gather the token ids stored in the cells that belong to one of `seqs` and whose position
+    // lies in [p0, p1). the callback receives (seq_id, pos, token) for every such (cell, seq) pair
+    // note: used by n-gram input embeddings to recover the tokens preceding a ubatch
+    template<typename F>
+    void for_each_token_in(const std::bitset<LLAMA_MAX_SEQ> & seqs, llama_pos p0, llama_pos p1, F && f) const {
+        for (const auto & i : used) {
+            if (pos[i] < p0 || pos[i] >= p1) {
+                continue;
+            }
+
+            const auto m = seq[i] & seqs;
+            if (m.none()) {
+                continue;
+            }
+
+            for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
+                if (m.test(s)) {
+                    f(s, pos[i], ext[i].tok);
+                }
+            }
+        }
     }
 
     // note: call only if the cell is not empty and the seq_id is not in the cell

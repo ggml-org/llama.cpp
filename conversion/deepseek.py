@@ -456,6 +456,162 @@ class DeepseekV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("LongcatFlashForCausalLM")
+class LongcatFlashModel(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.LONGCAT_FLASH
+    merge_expert = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 2 attention+dense-ffn sub-blocks per HF layer -> 2 llama.cpp blocks per HF layer
+        self.block_count = self.hparams["num_layers"] * 2
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        # compat with the DeepseekV2Model hparam names this class reads from
+        self.hparams["num_hidden_layers"]     = self.block_count
+        self.hparams["intermediate_size"]     = self.hparams["ffn_hidden_size"]
+        self.hparams["moe_intermediate_size"] = self.hparams["expert_ffn_hidden_size"]
+        self.hparams["num_experts_per_tok"]   = self.hparams["moe_topk"]
+        # modify_tensors() needs this to split kv_b_proj; set_gguf_parameters() later
+        # overwrites it to 1 for the GGUF MLA metadata.
+        self.hparams["num_key_value_heads"]   = self.hparams["num_attention_heads"]
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        # MTP speculative decoding head, not supported yet
+        if name.startswith("model.mtp."):
+            return None
+        return super().filter_tensors(item)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        zero_expert_num  = self.hparams["zero_expert_num"]
+        zero_expert_type = self.hparams["zero_expert_type"]
+        assert zero_expert_type == "identity", "cpp implementation only supports the 'identity' zero expert type"
+        self.gguf_writer.add_n_zero_experts(zero_expert_num)
+
+        # fixed MLA lora-rank scale factors, applied at inference time.
+        # Not folded into the weights: the multiplier is large enough to hurt quantization.
+        if self.hparams.get("mla_scale_q_lora"):
+            self.gguf_writer.add_q_lora_scale((self.hparams["hidden_size"] / self.hparams["q_lora_rank"]) ** 0.5)
+        if self.hparams.get("mla_scale_kv_lora"):
+            self.gguf_writer.add_kv_lora_scale((self.hparams["hidden_size"] / self.hparams["kv_lora_rank"]) ** 0.5)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if bid is not None:
+            # doubled sub-components, e.g. model.layers.{L}.self_attn.{0,1}.q_a_proj.weight
+            match = re.match(r"model\.layers\.\d+\.(mlps|self_attn|input_layernorm|post_attention_layernorm)\.(\d+)\.(.*)", name)
+            if match:
+                sub_idx = int(match.group(2))
+                new_bid = bid * 2 + sub_idx
+                mid = "mlp" if match.group(1) == "mlps" else match.group(1)
+                new_name = f"model.layers.{new_bid}.{mid}.{match.group(3)}"
+                yield from super().modify_tensors(data_torch, new_name, new_bid)
+                return
+
+            # shared MoE (mlp.router.*, mlp.experts.*), no sub-index, attaches to the even block
+            new_bid = bid * 2
+            new_name = name.replace(f"model.layers.{bid}.", f"model.layers.{new_bid}.", 1)
+            for out_name, out_tensor in super().modify_tensors(data_torch, new_name, new_bid):
+                if out_name.endswith("_exps.weight"):
+                    # append a dummy all-zero expert, zero-computation experts route to it
+                    out_tensor = torch.cat([out_tensor, torch.zeros_like(out_tensor[:1])], dim=0)
+                yield out_name, out_tensor
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("LongcatFlashNgramForCausalLM")
+class LongcatNgramModel(LongcatFlashModel):
+    model_arch = gguf.MODEL_ARCH.LONGCAT_NGRAM
+
+    # the reference builds k*(n-1) independent hash tables, each with its own vocab size and its
+    # own [emb_dim -> hidden_size] projection, then sums all the projected lookups into the token
+    # embedding. Instead of emitting 2*k*(n-1) tiny tensors we merge them into two:
+    #
+    #   ngram_embd: all tables padded to the largest vocab size and stacked into one lookup table,
+    #               so the whole n-gram lookup is a single get_rows() over a flat row index
+    #   ngram_proj: sum_i P_i @ e_i == [P_0 | ... | P_{m-1}] @ concat(e_0, ..., e_{m-1}), so the
+    #               per-table projections concatenate into one [emb_dim*m, hidden_size] matmul
+    #
+    # see build_inp_ngram_embd() on the C++ side
+    _ngram_embedders: dict[int, Tensor]
+    _ngram_projs: dict[int, Tensor]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self._ngram_embedders = {}
+        self._ngram_projs = {}
+
+        n = self.hparams["emb_neighbor_num"]
+        k = self.hparams["emb_split_num"]
+        self.ngram_n = n
+        self.ngram_k = k
+        self.ngram_count = k * (n - 1)
+
+        # int(ngram_vocab_size_ratio * vocab_size + 2*i + 1), matching NgramEmbedding
+        m = self.hparams["ngram_vocab_size_ratio"] * self.hparams["vocab_size"]
+        self.ngram_vocab_sizes = [int(m + i * 2 + 1) for i in range(self.ngram_count)]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_ngram_neighbor_count(self.ngram_n)
+        self.gguf_writer.add_ngram_split_count(self.ngram_k)
+        self.gguf_writer.add_ngram_vocab_sizes(self.ngram_vocab_sizes)
+
+        # the n-gram context is reset at every EOS, see _shift_right_ignore_eos
+        eos_token_id = self.hparams["eos_token_id"]
+        assert isinstance(eos_token_id, int), "n-gram segmentation needs a single EOS token id"
+        self.gguf_writer.add_ngram_eos_token_id(eos_token_id)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # note: bid is bogus for these, it picks up the embedder index
+        if (match := re.match(r"model\.ngram_embeddings\.(embedders|post_projs)\.(\d+)\.weight", name)):
+            idx = int(match.group(2))
+            assert idx < self.ngram_count, f"unexpected n-gram index {idx} in {name}"
+
+            if match.group(1) == "embedders":
+                assert data_torch.shape[0] == self.ngram_vocab_sizes[idx], \
+                    f"{name}: expected {self.ngram_vocab_sizes[idx]} rows, got {data_torch.shape[0]}"
+                self._ngram_embedders[idx] = data_torch
+            else:
+                self._ngram_projs[idx] = data_torch
+
+            if len(self._ngram_embedders) == self.ngram_count and len(self._ngram_projs) == self.ngram_count:
+                yield from self._merge_ngram_tensors()
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def _merge_ngram_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        embedders = [self._ngram_embedders.pop(i) for i in range(self.ngram_count)]
+        projs = [self._ngram_projs.pop(i) for i in range(self.ngram_count)]
+
+        emb_dim = embedders[0].shape[1]
+        assert all(e.shape[1] == emb_dim for e in embedders)
+        assert all(p.shape == (self.hparams["hidden_size"], emb_dim) for p in projs)
+
+        # pad every table to the largest one so the C++ side can index with a constant stride
+        stride = max(self.ngram_vocab_sizes)
+        padded = [
+            torch.cat([e, e.new_zeros(stride - e.shape[0], emb_dim)]) if e.shape[0] < stride else e
+            for e in embedders
+        ]
+
+        yield self.format_tensor_name(gguf.MODEL_TENSOR.NGRAM_EMBD), torch.cat(padded, dim=0)
+        yield self.format_tensor_name(gguf.MODEL_TENSOR.NGRAM_PROJ), torch.cat(projs, dim=1)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._ngram_embedders or self._ngram_projs:
+            raise ValueError(f"Unprocessed n-gram tensors: {sorted(self._ngram_embedders)} {sorted(self._ngram_projs)}")
+
+
 @ModelBase.register("DeepseekV32ForCausalLM")
 class DeepseekV32Model(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK32

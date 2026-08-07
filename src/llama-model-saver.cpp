@@ -276,6 +276,17 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_TEMPERATURE_SCALE,       hparams.f_attn_temp_scale);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,          hparams.n_embd_head_k_mla_impl);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,        hparams.n_embd_head_v_mla_impl);
+    add_kv(LLM_KV_N_ZERO_EXPERTS,                    hparams.n_zero_experts);
+
+    if (hparams.n_ngram() > 0) {
+        add_kv(LLM_KV_NGRAM_NEIGHBOR_COUNT, hparams.n_ngram_neighbor);
+        add_kv(LLM_KV_NGRAM_SPLIT_COUNT,    hparams.n_ngram_split);
+        add_kv(LLM_KV_NGRAM_EOS_TOKEN_ID,   uint32_t(hparams.ngram_eos_id));
+        add_kv(LLM_KV_NGRAM_VOCAB_SIZES,    std::vector<uint32_t>(
+                    hparams.ngram_vocab_sizes.begin(),
+                    hparams.ngram_vocab_sizes.begin() + hparams.n_ngram()));
+    }
+
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,          hparams.n_embd_head_k_swa);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,        hparams.n_embd_head_v_swa);
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
@@ -391,6 +402,8 @@ void llama_model_saver::add_tensors_from_model() {
             std::string(model->output->name) != std::string(model->tok_embd->name)) {
         add_tensor(model->tok_embd); // some models use the same tensor for tok_embd and output
     }
+    add_tensor(model->ngram_embd);
+    add_tensor(model->ngram_proj);
     add_tensor(model->type_embd);
     add_tensor(model->pos_embd);
     add_tensor(model->tok_norm);

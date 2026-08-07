@@ -561,6 +561,8 @@ struct llama_model {
     std::vector<std::string> classifier_labels;
 
     struct ggml_tensor * tok_embd   = nullptr;
+    struct ggml_tensor * ngram_embd = nullptr;
+    struct ggml_tensor * ngram_proj = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;
     struct ggml_tensor * tok_norm   = nullptr;
