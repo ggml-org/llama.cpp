@@ -114,6 +114,8 @@ struct tiered_buffer_context {
     const ggml_tensor * ids_cache_tensor = nullptr;
     uint64_t ids_cache_run = 0;
     std::vector<int32_t> ids_cache_values;
+    std::vector<int32_t> host_ids_scratch;
+    std::vector<uint8_t> held_slots_scratch;
     // Identity ids for the packed layout. Decode always stages the same number
     // of experts in router order, so [0, 1, ... k-1] never changes and is
     // uploaded once.
@@ -307,35 +309,62 @@ static void copy_host_to_device(tiered_buffer_context * ctx, void * dst, const v
         throw std::runtime_error("host-to-device copy range overflow");
     }
 
-    std::vector<uintptr_t> cuts = { begin, end };
-    for (const auto & registration : ctx->registrations) {
-        if (registration.end <= begin) {
-            continue;
+    const cudaStream_t stream = ensure_copy_stream(ctx);
+    const auto enqueue = [&](uintptr_t copy_begin, uintptr_t copy_end) {
+        if (copy_begin >= copy_end) {
+            return;
         }
-        if (registration.begin >= end) {
-            break;
+        const size_t offset = copy_begin - begin;
+        TIERED_CUDA_CHECK(cudaMemcpyAsync(
+                static_cast<char *>(dst) + offset,
+                reinterpret_cast<const void *>(copy_begin),
+                copy_end - copy_begin,
+                cudaMemcpyHostToDevice,
+                stream));
+    };
+
+    // Registrations are sorted and non-overlapping. Most expert slab copies are
+    // wholly inside one page-locked tensor range, so find that range directly
+    // instead of allocating/sorting cut points and scanning every registration.
+    auto it = std::upper_bound(
+            ctx->registrations.begin(), ctx->registrations.end(), begin,
+            [](uintptr_t value, const host_registration & registration) {
+                return value < registration.begin;
+            });
+    if (it != ctx->registrations.begin()) {
+        auto previous = it - 1;
+        if (previous->begin <= begin && previous->end >= end) {
+            enqueue(begin, end);
+            return;
         }
-        if (registration.begin > begin && registration.begin < end) {
-            cuts.push_back(registration.begin);
-        }
-        if (registration.end > begin && registration.end < end) {
-            cuts.push_back(registration.end);
+        if (previous->end > begin) {
+            it = previous;
         }
     }
 
-    std::sort(cuts.begin(), cuts.end());
-    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
-    const cudaStream_t stream = ensure_copy_stream(ctx);
-    for (size_t i = 1; i < cuts.size(); ++i) {
-        const size_t offset = cuts[i - 1] - begin;
-        const size_t copy_size = cuts[i] - cuts[i - 1];
-        TIERED_CUDA_CHECK(cudaMemcpyAsync(
-                static_cast<char *>(dst) + offset,
-                reinterpret_cast<const void *>(cuts[i - 1]),
-                copy_size,
-                cudaMemcpyHostToDevice,
-                stream));
+    if (it == ctx->registrations.end() || it->begin >= end) {
+        enqueue(begin, end);
+        return;
     }
+
+    uintptr_t cursor = begin;
+    for (; it != ctx->registrations.end() && it->begin < end; ++it) {
+        if (it->end <= cursor) {
+            continue;
+        }
+        if (it->begin > cursor) {
+            const uintptr_t gap_end = std::min(it->begin, end);
+            enqueue(cursor, gap_end);
+            cursor = gap_end;
+        }
+        if (cursor >= end) {
+            break;
+        }
+        const uintptr_t registered_end = std::min(it->end, end);
+        enqueue(cursor, registered_end);
+        cursor = registered_end;
+    }
+    enqueue(cursor, end);
 }
 
 static size_t vmm_granularity(int device) {
@@ -634,8 +663,6 @@ static const int32_t * upload_slot_ids(tiered_buffer_context * ctx, const std::v
     }
     TIERED_CUDA_CHECK(cudaMemcpyAsync(ctx->slot_ids, slots.data(), bytes,
             cudaMemcpyHostToDevice, ensure_copy_stream(ctx)));
-    // The kernel reads these immediately, so they must have landed.
-    TIERED_CUDA_CHECK(cudaStreamSynchronize(ensure_copy_stream(ctx)));
     return static_cast<const int32_t *>(ctx->slot_ids);
 }
 
@@ -680,7 +707,8 @@ static bool stage_cached_experts(
     // captured CUDA graph be replayed; only the ids contents vary, exactly as
     // they do for the router output this replaces.
     ctx->slot_ids_host.assign(ranked_ids.size(), -1);
-    std::vector<uint8_t> held(cache->slots.size(), 0);
+    ctx->held_slots_scratch.assign(cache->slots.size(), 0);
+    std::vector<uint8_t> & held = ctx->held_slots_scratch;
     const cudaStream_t stream = ensure_copy_stream(ctx);
 
     for (size_t rank = 0; rank < ranked_ids.size(); ++rank) {
@@ -752,8 +780,10 @@ static bool stage_cached_experts(
         ctx->cache_h2d_bytes += copy_size;
     }
 
-    TIERED_CUDA_CHECK(cudaStreamSynchronize(stream));
+    // Slot ids share the same copy stream as expert admissions, so enqueue both
+    // and pay for a single synchronization before the compute stream consumes them.
     out_direct_ids = upload_slot_ids(ctx, ctx->slot_ids_host);
+    TIERED_CUDA_CHECK(cudaStreamSynchronize(stream));
     out_direct_stride = cache->slot_size;
     ++ctx->cache_direct_nodes;
     return true;
@@ -813,7 +843,8 @@ static void * stage_tiered_experts(
         }
     }
 
-    std::vector<int32_t> host_ids = ranked_ids;
+    ctx->host_ids_scratch.assign(ranked_ids.begin(), ranked_ids.end());
+    std::vector<int32_t> & host_ids = ctx->host_ids_scratch;
     std::sort(host_ids.begin(), host_ids.end());
     host_ids.erase(std::unique(host_ids.begin(), host_ids.end()), host_ids.end());
 
