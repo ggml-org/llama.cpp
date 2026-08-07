@@ -279,7 +279,7 @@ for raw in log_path.read_text(errors="replace").splitlines():
     elif stage not in {"stock", "fixed"}:
         raise SystemExit(f"unsupported stage: {stage}")
 
-    if final_type not in (fixed_allowed if stage == "fixed" else native_allowed):
+    if final_type not in (native_allowed if stage == "native" else fixed_allowed):
         raise SystemExit(f"stage {stage} cannot emit {final_type} at {name}")
     if final_type != "q4_0":
         overrides.append(f"^{re.escape(name)}$={final_type.upper()}")
