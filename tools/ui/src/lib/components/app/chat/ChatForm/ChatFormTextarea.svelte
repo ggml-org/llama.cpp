@@ -48,6 +48,16 @@
 			textareaElement.style.height = '1rem';
 		}
 	}
+
+	// Plain-text caret offsets for the mention-splice flow.
+	export function getCaretOffset(): number {
+		if (!textareaElement) return 0;
+		return textareaElement.selectionStart ?? textareaElement.value.length;
+	}
+
+	export function setCaretOffset(offset: number) {
+		textareaElement?.setSelectionRange(offset, offset);
+	}
 </script>
 
 <div class="flex-1 {className}">
