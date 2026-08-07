@@ -164,7 +164,7 @@
 								? `max-height: ${MAX_HEIGHT}px;`
 								: 'max-height: none;'}
 						>
-							{#if !currentConfig.renderContentAsRawText}
+							{#if currentConfig.renderUserContentAsMarkdown}
 								<div bind:this={messageElement} class={isExpanded ? 'cursor-text' : ''}>
 									<MarkdownContent class="markdown-system-content" content={message.content} />
 								</div>
