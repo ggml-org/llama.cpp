@@ -2716,6 +2716,8 @@ inline void ggml_sycl_op_mul_mat_sycl(
 
         {
 #if GGML_SYCL_DNNL
+            const int64_t gemm_flops = (int64_t)row_diff * src1_ncols * ne10;
+            const bool use_mkl_direct = gemm_flops < 256 * 256 * 256;
             if (g_ggml_sycl_enable_dnn && !use_mkl_direct) {
                 DnnlGemmWrapper::row_gemm(ctx, row_diff, src1_ncols, ne10, src0_ddf_i,
                                           DnnlGemmWrapper::to_dt<float>(), src1_ddf1_i, DnnlGemmWrapper::to_dt<float>(),
@@ -3452,6 +3454,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     float *            dst_ddf  = static_cast<float *>(dst->data);
 
     const sycl::half * src1_f16       = static_cast<const sycl::half *>(src1->data);
+#if GGML_SYCL_DNNL
+    const size_t       type_size_src0 = ggml_type_size(src0->type);
+#endif
     const size_t       type_size_src1 = ggml_type_size(src1->type);
 
     bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
