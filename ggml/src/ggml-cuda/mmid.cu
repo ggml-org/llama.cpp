@@ -71,8 +71,18 @@ static __global__ void mm_ids_helper(
             const int iex_used = expert_used == expert ? iex : -1;
             nex_prev += expert_used < expert;
 
-            // Whether the threads at this token position have used the expert:
-            const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
+            // A token can use the same expert more than once, so count how many times the threads at this token position have used it:
+            int it_compact_add_self = iex_used != -1 ? 1 : 0;
+#pragma unroll
+            for (int offset = 1; offset < neu_padded; offset *= 2) {
+                const int tmp = __shfl_up_sync(0xFFFFFFFF, it_compact_add_self, offset, neu_padded);
+                if ((threadIdx.x % neu_padded) >= static_cast<unsigned int>(offset)) {
+                    it_compact_add_self += tmp;
+                }
+            }
+            // The prefix sum gives each use of the expert its own slot, the last thread has the total for this token:
+            const int rank_in_token = it_compact_add_self - (iex_used != -1 ? 1 : 0);
+            it_compact_add_self = __shfl_sync(0xFFFFFFFF, it_compact_add_self, neu_padded - 1, neu_padded);
 
             // Do a scan over threads at lower token positions in warp to get the correct index for writing data:
             int it_compact_add_lower = 0;
@@ -85,7 +95,7 @@ static __global__ void mm_ids_helper(
             }
 
             if (iex_used != -1) {
-                store[it_compact + it_compact_add_lower] = mm_ids_helper_store(it, iex_used);
+                store[it_compact + it_compact_add_lower + rank_in_token] = mm_ids_helper_store(it, iex_used);
             }
 
             // The thread with the highest index in the warp always has the sum over the whole warp, use it to increment all threads:
