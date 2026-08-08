@@ -116,7 +116,7 @@ class Mamba2Model(TextModel):
         self.d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
         self.expand = self.find_hparam(["mamba_expand", "expand"], optional=True) or 2
         self.d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or self.expand * self.d_model
-        self.n_group = self.find_hparam(["n_groups"], optional=True) or 1
+        self.n_group = self.find_hparam(["n_groups", "mamba_ngroups"], optional=True) or 1
 
     def set_vocab(self):
         vocab_size = self.hparams["vocab_size"]
