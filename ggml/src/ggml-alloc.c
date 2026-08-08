@@ -1123,6 +1123,20 @@ static void free_buffers(ggml_backend_buffer_t ** buffers, const size_t * n_buff
     free(*buffers);
 }
 
+static bool alloc_ctx_tensors_finalize_views(struct ggml_context * ctx) {
+    for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->view_src != NULL && t->buffer == NULL) {
+            enum ggml_status status = ggml_backend_view_init(t);
+            if (status != GGML_STATUS_SUCCESS) {
+                GGML_LOG_ERROR("%s: failed to initialize view tensor %s\n", __func__, t->name);
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 static bool alloc_tensor_range(struct ggml_context * ctx,
         struct ggml_tensor * first, struct ggml_tensor * last,
         ggml_backend_buffer_type_t buft, size_t size,
@@ -1141,23 +1155,13 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
     struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);
 
     for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
-        enum ggml_status status = GGML_STATUS_SUCCESS;
-        if (t->data == NULL) {
-            if (t->view_src == NULL) {
-                status = ggml_tallocr_alloc(&tallocr, t);
-            } else if (t->buffer == NULL) {
-                status = ggml_backend_view_init(t);
+        if (t->view_src == NULL && t->data == NULL) {
+            enum ggml_status status = ggml_tallocr_alloc(&tallocr, t);
+            if (status != GGML_STATUS_SUCCESS) {
+                GGML_LOG_ERROR("%s: failed to allocate tensor %s\n", __func__, t->name);
+                free_buffers(buffers, n_buffers);
+                return false;
             }
-        } else {
-            if (t->view_src != NULL && t->buffer == NULL) {
-                // view of a pre-allocated tensor
-                status = ggml_backend_view_init(t);
-            }
-        }
-        if (status != GGML_STATUS_SUCCESS) {
-            GGML_LOG_ERROR("%s: failed to initialize tensor %s\n", __func__, t->name);
-            free_buffers(buffers, n_buffers);
-            return false;
         }
     }
 
@@ -1213,6 +1217,11 @@ static ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft_impl(
         GGML_LOG_DEBUG("%s: all tensors in the context are already allocated\n", __func__);
 #endif
         GGML_ASSERT(!buffers);
+        return NULL;
+    }
+
+    if (!alloc_ctx_tensors_finalize_views(ctx)) {
+        free_buffers(&buffers, &n_buffers);
         return NULL;
     }
 
