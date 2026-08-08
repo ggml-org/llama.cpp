@@ -527,6 +527,110 @@ function gg_sum_qwen3_0_6b {
     gg_printf '- save-load-state: \n```\n%s\n```\n' "$(cat $OUT/${ci}-save-load-state.log)"
 }
 
+# mtp-greedy
+#
+# Speculative (MTP) decoding is lossless: at temperature 0 its output must be
+# byte-identical to the non-speculative baseline. On RDNA3.5 (gfx1151) the HIP
+# -funsafe-math-optimizations flag reassociates FP reductions and flips greedy
+# argmax, breaking that identity (AIESW-40114). This asserts identity so a future
+# change that re-enables fast math (or otherwise perturbs the numerics) fails CI.
+# Uses a model with the NextN/MTP head built in: baseline ignores it, draft-mtp
+# uses it. Driven via llama-server (the only tool that takes --spec-type on a
+# single model), matching the downstream regression harness.
+
+function gg_run_mtp_greedy {
+    cd ${SRC}
+
+    gg_wget models-mnt/qwen3.5-4b-mtp/ https://huggingface.co/unsloth/Qwen3.5-4B-MTP-GGUF/resolve/main/Qwen3.5-4B-Q4_0.gguf
+
+    local model="../models-mnt/qwen3.5-4b-mtp/Qwen3.5-4B-Q4_0.gguf"
+
+    cd build-ci-release
+
+    set -e
+
+    local port=18899
+    local server_pid=""
+
+    # $1=label, $2..=extra server args
+    function mtp_start_server {
+        local label=$1; shift
+        ./bin/llama-server --model ${model} --port ${port} --host 127.0.0.1 \
+            -ngl 99 -c 4096 -fa on --poll 50 "$@" > $OUT/${ci}-srv-${label}.log 2>&1 &
+        server_pid=$!
+        local i=0
+        while [ $i -lt 180 ]; do
+            if curl -s http://127.0.0.1:${port}/health 2>/dev/null | grep -q '"status":"ok"'; then
+                return 0
+            fi
+            if ! kill -0 ${server_pid} 2>/dev/null; then
+                echo "server (${label}) died during startup"; tail -20 $OUT/${ci}-srv-${label}.log; return 1
+            fi
+            i=$((i+1)); sleep 1
+        done
+        echo "server (${label}) failed to become ready"; return 1
+    }
+
+    function mtp_stop_server {
+        [ -n "${server_pid}" ] && kill ${server_pid} 2>/dev/null
+        wait ${server_pid} 2>/dev/null
+        server_pid=""
+    }
+
+    # $1=prompt -> assistant content on stdout
+    function mtp_ask {
+        curl -s http://127.0.0.1:${port}/v1/chat/completions \
+            -H 'Content-Type: application/json' \
+            -d "{\"messages\":[{\"role\":\"user\",\"content\":$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}],\"stream\":false,\"temperature\":0,\"max_tokens\":200,\"cache_prompt\":false,\"chat_template_kwargs\":{\"enable_thinking\":false}}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["choices"][0]["message"]["content"])'
+    }
+
+    # $1=name $2=baseline output $3=mtp output; nonzero on divergence so that
+    # (with set -e + pipefail from gg_run) the first failure aborts and CI fails.
+    function mtp_check {
+        local name=$1 base=$2 mtp=$3
+        if [ -n "${base}" ] && [ "${base}" = "${mtp}" ]; then
+            printf '  - %s: IDENTICAL OK\n' "${name}"; return 0
+        fi
+        printf '  - %s: DIVERGED (FAIL: MTP greedy output != baseline)\n' "${name}"; return 20
+    }
+
+    local prompt_prose="Write a short paragraph explaining what speculative decoding is."
+    local prompt_code="Write a Python function that returns the nth Fibonacci number using memoization. Include a short docstring."
+
+    mtp_start_server baseline --spec-type none
+    local b_prose; b_prose=$(mtp_ask "${prompt_prose}")
+    local b_code;  b_code=$(mtp_ask  "${prompt_code}")
+    mtp_stop_server
+
+    mtp_start_server mtp --spec-type draft-mtp --spec-draft-n-max 3
+    local m_prose; m_prose=$(mtp_ask "${prompt_prose}")
+    local m_code;  m_code=$(mtp_ask  "${prompt_code}")
+    mtp_stop_server
+
+    {
+        echo "### baseline prose"; echo "${b_prose}"
+        echo "### mtp prose";      echo "${m_prose}"
+        echo "### baseline code";  echo "${b_code}"
+        echo "### mtp code";       echo "${m_code}"
+    } > $OUT/${ci}-outputs.log
+
+    # under set -e + pipefail: a DIVERGED check returns 20, aborting the function
+    mtp_check prose "${b_prose}" "${m_prose}" | tee -a $OUT/${ci}-identity.log
+    mtp_check code  "${b_code}"  "${m_code}"  | tee -a $OUT/${ci}-identity.log
+
+    set +e
+}
+
+function gg_sum_mtp_greedy {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'MTP greedy determinism (baseline vs draft-mtp, temp 0):\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '- identity:\n%s\n' "$(cat $OUT/${ci}-identity.log)"
+    gg_printf '- outputs:\n```\n%s\n```\n' "$(cat $OUT/${ci}-outputs.log)"
+}
+
 # bge-small
 
 function gg_run_embd_bge_small {
@@ -756,6 +860,12 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     fi
 
     test $ret -eq 0 && gg_run qwen3_0_6b
+
+    # MTP greedy determinism check: HIP-only (needs a GPU + the RDNA3.5 fast-math
+    # regression it guards against). Runs on the gpu-rocm self-hosted job.
+    if [ ! -z ${GG_BUILD_ROCM} ]; then
+        test $ret -eq 0 && gg_run mtp_greedy
+    fi
 
     test $ret -eq 0 && gg_run ctest_with_model_debug
     test $ret -eq 0 && gg_run ctest_with_model_release
