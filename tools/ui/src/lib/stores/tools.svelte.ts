@@ -27,6 +27,9 @@ class ToolsStore {
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
+	// builtin tools that resolve their paths against the working directory,
+	// as declared by the server in its `/tools` listing
+	private _cwdAwareTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
 	private _serverHome = $state<string | null | undefined>(undefined);
 
@@ -476,6 +479,21 @@ class ToolsStore {
 		return this.getEnabledToolsForLLM().length > 0;
 	}
 
+	/**
+	 * Check if a working directory is worth setting: at least one builtin tool
+	 * that reads it is both served and left enabled by the user.
+	 */
+	get hasEnabledCwdTools(): boolean {
+		return this._builtinTools.some((def) => {
+			const name = def.function.name;
+
+			return (
+				this._cwdAwareTools.has(name) &&
+				!this._disabledTools.has(this.toolKey(ToolSource.BUILTIN, name))
+			);
+		});
+	}
+
 	async fetchBuiltinTools(): Promise<void> {
 		if (this._loading) return;
 
@@ -486,6 +504,9 @@ class ToolsStore {
 		try {
 			const toolInfos = await ToolsService.list();
 			this._builtinTools = toolInfos.map((info) => info.definition);
+			this._cwdAwareTools = new SvelteSet(
+				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
+			);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			this._error = errorMessage;

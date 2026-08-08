@@ -156,7 +156,7 @@
 		focusInput: refocusInput,
 		getShowModelSelector: () => showModelSelector,
 		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
-		hasBuiltinTools: () => toolsStore.builtinTools.length > 0,
+		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
 		getCwd: () => cwd,
 		getServerHome: () => toolsStore.serverHome ?? null,
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
@@ -651,7 +651,7 @@
 
 	<ContextGaugePopup />
 
-	{#if toolsStore.builtinTools.length > 0}
+	{#if toolsStore.hasEnabledCwdTools}
 		<ChatFormWorkingDirectory
 			directory={cwd}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}

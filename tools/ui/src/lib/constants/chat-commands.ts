@@ -8,7 +8,7 @@ interface ChatCommandsOptions {
 	/** Gates `/prompt`. */
 	hasPrompts: () => boolean;
 	/** Gates `/cwd`. */
-	hasBuiltinTools: () => boolean;
+	hasCwdTools: () => boolean;
 }
 
 /**
@@ -32,7 +32,7 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 			description: SET_WORKING_DIRECTORY_LABEL,
 			keywords: ['current working directory'],
 			action: ChatFormCommandAction.CWD,
-			disabled: !options.hasBuiltinTools()
+			disabled: !options.hasCwdTools()
 		},
 		{
 			name: 'model',

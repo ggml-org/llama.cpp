@@ -74,6 +74,7 @@ json server_tool::to_json() const {
         {"permissions", json{
             {"write", permission_write}
         }},
+        {"uses_cwd", uses_cwd},
         {"definition", get_definition()},
     };
 }
@@ -763,6 +764,7 @@ struct server_tool_read_file : server_tool {
     server_tool_read_file() {
         name = "read_file";
         display_name = "Read file";
+        uses_cwd = true;
         permission_write = false;
     }
 
@@ -851,6 +853,7 @@ struct server_tool_file_glob_search : server_tool {
     server_tool_file_glob_search() {
         name = "file_glob_search";
         display_name = "File search";
+        uses_cwd = true;
         permission_write = false;
     }
 
@@ -965,6 +968,7 @@ struct server_tool_grep_search : server_tool {
     server_tool_grep_search() {
         name = "grep_search";
         display_name = "Grep search";
+        uses_cwd = true;
         permission_write = false;
     }
 
@@ -1117,6 +1121,7 @@ struct server_tool_exec_shell_command : server_tool {
     server_tool_exec_shell_command() {
         name = "exec_shell_command";
         display_name = "Execute shell command";
+        uses_cwd = true;
         permission_write = true;
         support_stream = true;
     }
@@ -1195,6 +1200,7 @@ struct server_tool_write_file : server_tool {
     server_tool_write_file() {
         name = "write_file";
         display_name = "Write file";
+        uses_cwd = true;
         permission_write = true;
     }
 
@@ -1237,6 +1243,7 @@ struct server_tool_edit_file : server_tool {
     server_tool_edit_file() {
         name = "edit_file";
         display_name = "Edit file";
+        uses_cwd = true;
         permission_write = true;
     }
 
@@ -1625,6 +1632,7 @@ struct server_tool_get_info : server_tool {
     server_tool_get_info() {
         name = "get_info";
         display_name = "Get Runtime Info";
+        uses_cwd = true;
         permission_write = false;
     }
 
