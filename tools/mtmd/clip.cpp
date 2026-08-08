@@ -1408,6 +1408,13 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
                         get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles, false);
+                        // bound the untrusted GGUF value: set_internvl_dhr_res_candidates() grows a vector by ~O(n log n) in it (real configs use a handful of tiles, default 12)
+                        constexpr int32_t PREPROC_MAX_TILES_LIMIT = 1024;
+                        if (hparams.preproc_max_tiles > PREPROC_MAX_TILES_LIMIT) {
+                            throw std::runtime_error(string_format(
+                                "%s: clip.vision.preproc_max_tiles (%d) exceeds the maximum supported value (%d)\n",
+                                __func__, hparams.preproc_max_tiles, PREPROC_MAX_TILES_LIMIT));
+                        }
                         GGML_ASSERT(hparams.preproc_min_tiles <= hparams.preproc_max_tiles && hparams.preproc_max_tiles < INT32_MAX);
                         set_internvl_dhr_res_candidates(model);
                     } break;
