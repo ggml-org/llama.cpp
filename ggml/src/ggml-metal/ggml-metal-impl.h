@@ -155,6 +155,9 @@
 #define OP_SUM_ROWS_NUM_SUM_ROWS 10
 #define OP_SUM_ROWS_NUM_MEAN     11
 
+#define OP_SSM_SCAN_SSD_CS 64 // Metal-specific; Chunk Size; 64 is largest multiple of 8 (simdgroup tile) fitting into 32 KiB Metal threadgroup mem limit (~26.75 KiB, see ggml-metal.metal line 2492)
+#define OP_SSM_SCAN_SSD_NSG 4 // Metal-specific; Number of SimdGroups per threadgroup;  4 × 32 = 128 threads, 4 gives 128 threads total per threadgroup to match dispatch
+
 // kernel argument structs
 //
 // - element counters (e.g. ne00) typically use int32_t to reduce register usage
@@ -876,6 +879,8 @@ typedef struct {
     int64_t  n_head;
     int64_t  n_group;
     int64_t  n_seq_tokens;
+    int64_t  n_seq_tokens_total;
+    int64_t  token_offset;
     int64_t  n_seqs;
     uint64_t s_off;
     uint64_t nb00;
