@@ -15,6 +15,7 @@ The following sections describe how to build with different backends and options
 
 * [CPU Build](#cpu-build)
 * [BLAS Build](#blas-build)
+* [Clang Build](#clang-build)
 * [Metal Build](#metal-build)
 * [SYCL](#sycl)
 * [CUDA](#cuda)
@@ -129,6 +130,15 @@ Check [Optimizing and Running LLaMA2 on Intel® CPU](https://builders.intel.com/
 ### Other BLAS libraries
 
 Any other BLAS library can be used by setting the `GGML_BLAS_VENDOR` option. See the [CMake documentation](https://cmake.org/cmake/help/latest/module/FindBLAS.html#blas-lapack-vendors) for a list of supported vendors.
+
+## Clang Build
+
+If you prefer Clang over GCC, you can force Clang using `CMake` on Linux:
+
+```bash
+cmake -B build -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/clang.cmake"
+cmake --build build --config Release
+```
 
 ## Metal Build
 
