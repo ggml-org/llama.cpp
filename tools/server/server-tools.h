@@ -31,7 +31,7 @@ struct server_tool {
     json to_json() const;
 };
 
-struct server_tools_docker_runtime; // impl detail, defined in server-tools.cpp
+struct server_tools_container_runtime; // impl detail, defined in server-tools.cpp
 
 struct server_tools {
     std::vector<std::unique_ptr<server_tool>> tools;
@@ -40,8 +40,8 @@ struct server_tools {
     server_response queue_res;
     std::atomic<int> res_id{0};
 
-    // set when --tools-runtime is configured; owns the docker container used to run tools, if any
-    std::unique_ptr<server_tools_docker_runtime> docker_runtime;
+    // set when --tools-runtime names a container engine; owns the container used to run tools, if any
+    std::unique_ptr<server_tools_container_runtime> container_runtime;
 
     // set when --tools-runtime names an isolate that already exists and needs no lifecycle
     std::string runtime_spec;

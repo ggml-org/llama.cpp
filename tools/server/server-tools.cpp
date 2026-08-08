@@ -177,7 +177,7 @@ public:
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const = 0;
 };
 
-// shared subprocess execution helper, used by both the local and the docker-backed tools_io implementations.
+// shared subprocess execution helper, used by both the local and the isolate-backed tools_io implementations.
 // combine_stderr=false when the raw stdout bytes must not be tainted by stderr, e.g. reading file contents.
 static tools_io::exec_result run_subprocess(
         const std::vector<std::string> & args,
@@ -635,7 +635,7 @@ protected:
 private:
     std::string cwd;
 
-    // set the working directory in the command itself, docker's `-w` has no equivalent on every transport
+    // set the working directory in the command itself, the `-w` of a container engine has no equivalent on every transport
     // auxiliary calls do not need this, they use the absolute paths from resolve()
     std::vector<std::string> with_cwd(const std::vector<std::string> & inner) const {
         if (cwd.empty()) {
@@ -698,15 +698,16 @@ private:
     }
 };
 
-// an already-running docker container, driven through `docker exec` and `docker cp`
-class tools_io_docker : public tools_io_isolate {
+// an already-running container, driven through `<engine> exec` and `<engine> cp`. docker and
+// podman expose the same verbs and the same argument order, so one implementation drives both
+class tools_io_container : public tools_io_isolate {
 public:
-    tools_io_docker(std::string container_id, std::string cwd = "")
-        : tools_io_isolate(std::move(cwd)), container_id(std::move(container_id)) {}
+    tools_io_container(std::string bin, std::string container_id, std::string cwd = "")
+        : tools_io_isolate(std::move(cwd)), bin(std::move(bin)), container_id(std::move(container_id)) {}
 
 protected:
     std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
-        std::vector<std::string> argv = {"docker", "exec"};
+        std::vector<std::string> argv = {bin, "exec"};
         if (needs_stdin) {
             argv.push_back("-i");
         }
@@ -717,12 +718,13 @@ protected:
 
     bool upload(const std::string & host_path, const std::string & isolate_path) const override {
         auto res = run_subprocess(
-            {"docker", "cp", host_path, container_id + ":" + isolate_path},
+            {bin, "cp", host_path, container_id + ":" + isolate_path},
             4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true);
         return res.exit_code == 0 && !res.timed_out;
     }
 
 private:
+    std::string bin;
     std::string container_id;
 };
 
@@ -783,9 +785,33 @@ static bool is_valid_ssh_target(const std::string & target) {
 }
 
 // runtime specs used by --tools-runtime and the x-tool-runtime header
-// podman: can be added next to them, it only swaps the client binary
-static const std::string SERVER_TOOL_RUNTIME_DOCKER_CONTAINER = "docker-container:";
-static const std::string SERVER_TOOL_RUNTIME_SSH              = "ssh:";
+static const std::string SERVER_TOOL_RUNTIME_SSH = "ssh:";
+
+// container engines sharing the run/exec/cp/inspect verbs, hence a single implementation
+static const char * SERVER_TOOL_CONTAINER_ENGINES[] = {"docker", "podman"};
+
+// "<engine>:<image>" spawns a container and owns it, "<engine>-container:<id>" attaches to one
+struct container_runtime_spec {
+    std::string bin;
+    std::string arg; // image name when spawning, container id when attaching
+    bool attach = false;
+};
+
+static bool parse_container_runtime(const std::string & spec, container_runtime_spec & out) {
+    for (const char * bin : SERVER_TOOL_CONTAINER_ENGINES) {
+        const std::string attach_prefix = std::string(bin) + "-container:";
+        if (spec.rfind(attach_prefix, 0) == 0) {
+            out = {bin, spec.substr(attach_prefix.size()), true};
+            return true;
+        }
+        const std::string spawn_prefix = std::string(bin) + ":";
+        if (spec.rfind(spawn_prefix, 0) == 0) {
+            out = {bin, spec.substr(spawn_prefix.size()), false};
+            return true;
+        }
+    }
+    return false;
+}
 
 // an empty runtime runs the tools on the host
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
@@ -794,8 +820,13 @@ static std::unique_ptr<tools_io> make_tools_io(const json & params) {
     if (runtime.empty()) {
         return std::make_unique<tools_io_basic>(cwd);
     }
-    if (runtime.rfind(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER, 0) == 0) {
-        return std::make_unique<tools_io_docker>(runtime.substr(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER.size()), cwd);
+    container_runtime_spec container;
+    if (parse_container_runtime(runtime, container)) {
+        // spawning belongs to the runtime that owns the container, a tool call only attaches
+        if (!container.attach || container.arg.empty()) {
+            throw std::runtime_error("tool runtime must name a running container: " + runtime);
+        }
+        return std::make_unique<tools_io_container>(container.bin, container.arg, cwd);
     }
     if (runtime.rfind(SERVER_TOOL_RUNTIME_SSH, 0) == 0) {
         std::string target = runtime.substr(SERVER_TOOL_RUNTIME_SSH.size());
@@ -1834,33 +1865,36 @@ struct server_mcp_tool : server_tool {
     }
 };
 
-// owns the docker container used as the sandboxed runtime for tool invocations, as configured by
+// owns the container used as the sandboxed runtime for tool invocations, as configured by
 // --tools-runtime. "spawned" mode starts and stops the container itself; "existing" mode just reuses
 // a container id the user already has running and never stops it.
-struct server_tools_docker_runtime {
-    server_tools_docker_runtime(const server_tools_docker_runtime &) = delete;
+struct server_tools_container_runtime {
+    server_tools_container_runtime(const server_tools_container_runtime &) = delete;
 
-    explicit server_tools_docker_runtime(const std::string & spec) {
-        static const std::string docker_prefix = "docker:";
-        if (spec.rfind(docker_prefix, 0) == 0) {
-            spawned = true;
-            image   = spec.substr(docker_prefix.size());
+    explicit server_tools_container_runtime(const std::string & spec) {
+        container_runtime_spec parsed;
+        if (!parse_container_runtime(spec, parsed)) {
+            throw std::runtime_error("unknown --tools-runtime option: " + spec);
+        }
+
+        bin     = parsed.bin;
+        spawned = !parsed.attach;
+
+        if (spawned) {
+            image = parsed.arg;
             if (image.empty()) {
-                throw std::runtime_error("--tools-runtime docker:<image> requires an image name");
+                throw std::runtime_error("--tools-runtime " + bin + ":<image> requires an image name");
             }
             spawn();
-        } else if (spec.rfind(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER, 0) == 0) {
-            spawned      = false;
-            container_id = spec.substr(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER.size());
-            if (container_id.empty()) {
-                throw std::runtime_error("--tools-runtime docker-container:<id> requires a container id");
-            }
         } else {
-            throw std::runtime_error("unknown --tools-runtime option: " + spec);
+            container_id = parsed.arg;
+            if (container_id.empty()) {
+                throw std::runtime_error("--tools-runtime " + bin + "-container:<id> requires a container id");
+            }
         }
     }
 
-    ~server_tools_docker_runtime() {
+    ~server_tools_container_runtime() {
         if (spawned && !container_id.empty()) {
             // closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
             proc.close_stdin();
@@ -1875,27 +1909,33 @@ struct server_tools_docker_runtime {
         if (!spawned) {
             if (!is_running(container_id)) {
                 throw std::runtime_error(string_format(
-                    "docker container \"%s\" is no longer running, restart it to keep using tools",
-                    container_id.c_str()));
+                    "%s container \"%s\" is no longer running, restart it to keep using tools",
+                    bin.c_str(), container_id.c_str()));
             }
             return container_id;
         }
 
         if (!proc.alive()) {
-            SRV_WRN("docker tools runtime container \"%s\" died, respawning\n", container_id.c_str());
+            SRV_WRN("%s tools runtime container \"%s\" died, respawning\n", bin.c_str(), container_id.c_str());
             spawn();
         }
         return container_id;
     }
 
+    // spec that make_tools_io() resolves back to this container
+    std::string attach_spec() {
+        return bin + "-container:" + get_container_id();
+    }
+
 private:
+    std::string bin;
     bool spawned = false;
     std::string image; // spawned mode only
     std::string container_id;
-    common_subproc proc; // spawned mode only: `docker run` client that keeps the container alive
+    common_subproc proc; // spawned mode only: `<engine> run` client that keeps the container alive
     std::mutex mutex;
 
-    // spawns "docker run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
+    // spawns "<engine> run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
     // so the container stays alive until we close it (see destructor) or it is killed from the outside
     void spawn() {
         std::error_code ec;
@@ -1903,12 +1943,12 @@ private:
             "llama-tools-runtime-cid-%zu.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
         fs::remove(cidfile, ec);
 
-        std::vector<std::string> args = {"docker", "run", "--rm", "-i", "--cidfile", cidfile.string(), image, "sh"};
+        std::vector<std::string> args = {bin, "run", "--rm", "-i", "--cidfile", cidfile.string(), image, "sh"};
         int options = subprocess_option_no_window
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
         if (!proc.create(args, options)) {
-            throw std::runtime_error("failed to spawn docker container for tools runtime (image: " + image + ")");
+            throw std::runtime_error("failed to spawn " + bin + " container for tools runtime (image: " + image + ")");
         }
 
         std::string cid;
@@ -1920,13 +1960,13 @@ private:
         fs::remove(cidfile, ec);
         if (cid.empty()) {
             proc.terminate();
-            throw std::runtime_error("timed out waiting for docker container to start (image: " + image + ")");
+            throw std::runtime_error("timed out waiting for " + bin + " container to start (image: " + image + ")");
         }
         container_id = cid;
     }
 
-    static bool is_running(const std::string & id) {
-        auto res = run_subprocess({"docker", "inspect", "-f", "{{.State.Running}}", id}, 16, 5, nullptr, true);
+    bool is_running(const std::string & id) const {
+        auto res = run_subprocess({bin, "inspect", "-f", "{{.State.Running}}", id}, 16, 5, nullptr, true);
         return res.exit_code == 0 && !res.timed_out && res.output.rfind("true", 0) == 0;
     }
 };
@@ -1988,7 +2028,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             make_tools_io({{"runtime", tools_runtime}}); // rejects a bad spec at startup
             runtime_spec = tools_runtime;
         } else {
-            docker_runtime = std::make_unique<server_tools_docker_runtime>(tools_runtime);
+            container_runtime = std::make_unique<server_tools_container_runtime>(tools_runtime);
         }
     }
 
@@ -2090,8 +2130,8 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             auto runtime = get_header(req.headers, "x-tool-runtime");
             if (!runtime.empty()) {
                 params["runtime"] = runtime;
-            } else if (docker_runtime) {
-                params["runtime"] = SERVER_TOOL_RUNTIME_DOCKER_CONTAINER + docker_runtime->get_container_id();
+            } else if (container_runtime) {
+                params["runtime"] = container_runtime->attach_spec();
             } else if (!runtime_spec.empty()) {
                 params["runtime"] = runtime_spec;
             }
