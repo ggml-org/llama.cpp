@@ -27,6 +27,15 @@ This starts from the same derived or supplied base map and maps the remaining Q5
 
 The native stage may require `--allow-large-q8`; inspect the generated summary first.
 
+### MTP projection policy
+
+For Qwen3.6, `blk.40.nextn.eh_proj.weight` is a draft-only MTP projection. The
+recipe emits it as Q4_0 while retaining the MTP normalization tensors as F32.
+A direct five-prompt comparison against Q8_0 showed effectively identical mean
+acceptance and a negligible mean throughput difference; Q4_0 saves about 4 MiB.
+This policy is applied after stage selection so it is consistent across stock,
+fixed, native, and auto maps.
+
 ## Usage
 
 Build `llama-quantize` first. By default the base map is derived from the BF16 source:

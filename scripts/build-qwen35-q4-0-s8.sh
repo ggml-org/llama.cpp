@@ -357,6 +357,14 @@ for raw in log_path.read_text(errors="replace").splitlines():
     elif stage not in {"stock", "fixed", "auto"}:
         raise SystemExit(f"unsupported stage: {stage}")
 
+    # The Qwen3.6 MTP projection is draft-only and is not used by the normal
+    # target logits path.  A direct five-prompt comparison found no acceptance
+    # loss and essentially neutral throughput when this tensor is Q4_0 rather
+    # than Q8_0, while saving 4 MiB. Keep this as the default MTP policy.
+    if name == "blk.40.nextn.eh_proj.weight":
+        final_type = "q4_0"
+        reason = "MTP-Q4_0-speed-tested"
+
     if final_type not in (native_allowed if stage == "native" else fixed_allowed):
         raise SystemExit(f"stage {stage} cannot emit {final_type} at {name}")
     if final_type != "q4_0":
