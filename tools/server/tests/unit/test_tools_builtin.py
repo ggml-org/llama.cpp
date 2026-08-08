@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 
 import pytest
 from utils import *
@@ -144,6 +146,95 @@ def test_tools_builtin_cwd_header():
     finally:
         if os.path.exists(marker_path):
             os.remove(marker_path)
+
+
+def _docker_unavailable_reason() -> str | None:
+    """None if docker can be used to run a container, otherwise the reason it can't."""
+    docker_bin = shutil.which("docker")
+    if docker_bin is None:
+        return "docker is not installed"
+    try:
+        subprocess.run([docker_bin, "info"], capture_output=True, timeout=5, check=True)
+    except Exception as e:
+        return f"docker daemon is not usable: {e}"
+    return None
+
+
+@pytest.fixture
+def docker_container():
+    reason = _docker_unavailable_reason()
+    if reason is not None:
+        pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+
+    proc = subprocess.run(
+        ["docker", "run", "-d", "--rm", "busybox", "sleep", "300"],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"failed to start docker container: {proc.stderr.strip()}")  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+
+    container_id = proc.stdout.strip()
+    try:
+        yield container_id
+    finally:
+        subprocess.run(["docker", "rm", "-f", container_id], capture_output=True)
+
+
+def test_tools_builtin_runtime_header(docker_container: str):
+    global server
+    server.start()
+
+    headers = {"x-tool-runtime": f"docker-container:{docker_container}", "x-tool-cwd": "/tmp"}
+
+    write_res = call_tool("write_file", {"path": "test.log", "content": "hello docker\n"}, headers=headers)
+    assert write_res["result"] == "file written successfully"
+
+    read_res = call_tool("read_file", {"path": "test.log"}, headers=headers)
+    assert read_res["plain_text_response"] == "hello docker\n"
+
+    exec_res = call_tool("exec_shell_command", {"command": "cat test.log"}, headers=headers)
+    assert "hello docker" in exec_res["plain_text_response"]
+
+
+def test_tools_builtin_runtime_header_unknown_scheme():
+    global server
+    server.start()
+
+    # an unknown runtime must fail, never silently fall back to running on the host
+    res = server.make_request("POST", "/tools",
+                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                              headers={"x-tool-runtime": "ssh:example.com"})
+    assert res.status_code == 500, res.body
+    assert "unknown tool runtime" in str(res.body)
+
+
+def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
+    reason = _docker_unavailable_reason()
+    if reason is not None:
+        pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+
+    global server
+    server.server_tools_runtime = "docker:busybox"
+    server.start()
+
+    # exec_shell_command runs inside the container spawned for --tools-runtime; docker sets
+    # the container's hostname to its own short id, so this also tells us which one to check
+    res = call_tool("exec_shell_command", {"command": "hostname"})
+    container_id = res["plain_text_response"].splitlines()[0].strip()
+    assert len(container_id) >= 8, res
+
+    running = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_id],
+        capture_output=True, text=True,
+    )
+    assert running.returncode == 0 and running.stdout.strip() == "true", running.stderr
+
+    server.stop()
+
+    # a clean server shutdown must stop and remove the container it spawned (it runs with --rm),
+    # not leave it behind as an abandoned child
+    leftover = subprocess.run(["docker", "inspect", container_id], capture_output=True, text=True)
+    assert leftover.returncode != 0, f"container {container_id} was not cleaned up after server exit"
 
 
 def test_tools_builtin_edit_file_rejects_overlapping_edits():
