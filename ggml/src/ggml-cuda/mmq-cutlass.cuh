@@ -1,6 +1,6 @@
 #pragma once
 
-#include "repack-cutlass-w4a4.cuh"
+#include "repack-cutlass-blockscaled.cuh"
 
 bool ggml_cuda_cutlass_compiled();
 bool ggml_cuda_cutlass_enabled();

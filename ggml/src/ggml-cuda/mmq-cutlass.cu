@@ -58,11 +58,7 @@ bool ggml_cuda_cutlass_mul_mat_id_supported(
 }
 
 bool ggml_cuda_cutlass_enabled() {
-    static const bool disabled = []() {
-        const char * value = std::getenv("GGML_CUDA_CUTLASS_DISABLE");
-        return value != nullptr && std::atoi(value) != 0;
-    }();
-    return ggml_cuda_cutlass_compiled() && !disabled;
+    return ggml_cuda_cutlass_compiled();
 }
 
 #ifdef GGML_CUDA_CUTLASS
@@ -768,7 +764,7 @@ struct cutlass_kernel_access<GemmKernel, CollectiveMainloop, true> {
 };
 
 template <typename Format, int TileN, bool Grouped, bool SwapAB, typename OutputType>
-struct w4a4_kernel_traits {
+struct blockscaled_kernel_traits {
     static constexpr bool swap_ab         = SwapAB;
     static constexpr int  tile_n          = TileN;
     static constexpr int  activation_bits = Format::activation_bits;
@@ -841,16 +837,16 @@ struct w4a4_kernel_traits {
 };
 
 template <int TileN, bool SwapAB>
-using mxfp_kernel_traits = w4a4_kernel_traits<mxfp_format_traits, TileN, true, SwapAB, DefaultOutput>;
+using mxfp_kernel_traits = blockscaled_kernel_traits<mxfp_format_traits, TileN, true, SwapAB, DefaultOutput>;
 
 template <int TileN, bool SwapAB, typename OutputType = DefaultOutput>
-using nvfp4_kernel_traits = w4a4_kernel_traits<nvfp4_format_traits, TileN, true, SwapAB, OutputType>;
+using nvfp4_kernel_traits = blockscaled_kernel_traits<nvfp4_format_traits, TileN, true, SwapAB, OutputType>;
 
 template <int TileN, typename OutputType>
-using dense_mxfp_kernel_traits = w4a4_kernel_traits<mxfp_format_traits, TileN, false, false, OutputType>;
+using dense_mxfp_kernel_traits = blockscaled_kernel_traits<mxfp_format_traits, TileN, false, false, OutputType>;
 
 template <int TileN, typename OutputType>
-using dense_nvfp4_kernel_traits = w4a4_kernel_traits<nvfp4_format_traits, TileN, false, false, OutputType>;
+using dense_nvfp4_kernel_traits = blockscaled_kernel_traits<nvfp4_format_traits, TileN, false, false, OutputType>;
 
 template <typename Traits>
 static bool run_dense_gemm(ggml_backend_cuda_context &      ctx,

@@ -1,5 +1,5 @@
 #include "mmvq.cuh"
-#include "repack-cutlass-w4a4.cuh"
+#include "repack-cutlass-blockscaled.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"

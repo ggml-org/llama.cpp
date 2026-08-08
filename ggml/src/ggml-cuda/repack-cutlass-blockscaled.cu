@@ -1,4 +1,4 @@
-#include "repack-cutlass-w4a4.cuh"
+#include "repack-cutlass-blockscaled.cuh"
 
 #include <climits>
 #include <cstring>
