@@ -219,6 +219,7 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             {
                 res += ggml_metal_op_mul_mat_id_extra_tpe(tensor);
                 res += ggml_metal_op_mul_mat_id_extra_ids(tensor);
+                res += ggml_metal_op_mul_mat_id_extra_amax(tensor);
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {

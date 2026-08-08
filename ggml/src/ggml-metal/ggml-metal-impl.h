@@ -14,6 +14,8 @@
 #define N_MM_SIMD_GROUP_X 2
 #define N_MM_SIMD_GROUP_Y 2
 
+#define N_MM_NPART_AMAX 256
+
 // kernel parameters for mat-vec threadgroups
 //
 // N_R0: number of src0 rows to process per simdgroup
@@ -513,6 +515,14 @@ typedef struct {
     int32_t  ne20;  // n_expert_used
     uint64_t nb21;
 } ggml_metal_kargs_mul_mm_id_map0;
+
+typedef struct {
+    int32_t  ne00;
+    int32_t  ne01;
+    int32_t  ne02;
+    uint64_t nb01;
+    uint64_t nb02;
+} ggml_metal_kargs_mul_mm_id_amax;
 
 typedef struct {
     int32_t  ne00;

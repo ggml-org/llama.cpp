@@ -10436,6 +10436,85 @@ kernel void kernel_mul_mm_id_map0(
     tpe_u32[ide] = n_all;
 }
 
+kernel void kernel_mul_mm_id_amax_part_f32(
+        constant ggml_metal_kargs_mul_mm_id_amax & args,
+        device   const char * src1,
+        device         char * dst,
+        threadgroup    char * shmem [[threadgroup(0)]],
+        uint  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort   ntg[[threads_per_threadgroup]]) {
+    const int nrow = args.ne01*args.ne02;
+
+    float lmax = 0.0f;
+
+    for (int ir = tgpig; ir < nrow; ir += N_MM_NPART_AMAX) {
+        const int i01 = ir % args.ne01;
+        const int i02 = ir / args.ne01;
+
+        device const float * row = (device const float *) (src1 + i02*args.nb02 + i01*args.nb01);
+
+        for (int i00 = tiitg; i00 < args.ne00; i00 += ntg) {
+            lmax = max(lmax, fabs(row[i00]));
+        }
+    }
+
+    float amax = simd_max(lmax);
+
+    threadgroup float * shared_amax = (threadgroup float *) shmem;
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            shared_amax[tiisg] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            shared_amax[sgitg] = amax;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        amax = shared_amax[tiisg];
+        amax = simd_max(amax);
+    }
+
+    if (tiitg == 0) {
+        ((device float *) (dst + 8))[tgpig] = amax;
+    }
+}
+
+kernel void kernel_mul_mm_id_amax_f32(
+        device char * dst,
+        ushort tiitg[[thread_index_in_threadgroup]]) {
+    device const float * part = (device const float *) (dst + 8);
+
+    float amax = 0.0f;
+
+    for (int i = tiitg; i < N_MM_NPART_AMAX; i += N_SIMDWIDTH) {
+        amax = max(amax, part[i]);
+    }
+
+    amax = simd_max(amax);
+
+    if (tiitg == 0) {
+        // leave a comfortable margin below the f16 max of 65504
+        float scale = 1.0f;
+
+        // isfinite: src1 already inf/nan is not ours to fix - keep the
+        // scale at 1.0 instead of turning it into a different failure
+        if (isfinite(amax) && amax > 32768.0f) {
+            scale = exp2(ceil(log2(amax)) - 15.0f);
+        }
+
+        device float * d = (device float *) dst;
+
+        d[0] = 1.0f/scale; // exact: scale is a power of two
+        d[1] = scale;
+    }
+}
+
 typedef decltype(kernel_mul_mm_id_map0<1>) kernel_mul_mm_id_map0_t;
 
 template [[host_name("kernel_mul_mm_id_map0_ne20_1" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<1>;
@@ -10456,6 +10535,7 @@ kernel void kernel_mul_mm_id(
         device const char * htpe,
         device const char * hids,
         device       char * dst,
+        device const char * amax,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
@@ -10522,6 +10602,10 @@ kernel void kernel_mul_mm_id(
 #ifndef GGML_METAL_HAS_TENSOR
     S0_8x8 ma[4];
     S1_8x8 mb[2];
+
+    // power-of-two rescaling
+    const float s1_inv   = ((device const float *) amax)[0];
+    const float s1_scale = ((device const float *) amax)[1];
 
     simdgroup_float8x8 mc[8];
 
@@ -10595,7 +10679,7 @@ kernel void kernel_mul_mm_id(
 
                 const short ib = 4*sx + sy;
 
-                *(sb + 64*ib + 8*ly + lx) = loop_k + iy + i < args.ne00 ? (S1) *((device T1 *) y + i) : 0;
+                *(sb + 64*ib + 8*ly + lx) = loop_k + iy + i < args.ne00 ? (S1) (*((device T1 *) y + i) * (T1) s1_inv) : 0;
             }
         } else {
             const short sx = (tiitg%NL1);
@@ -10608,7 +10692,7 @@ kernel void kernel_mul_mm_id(
 
             const short ib = 4*sx + sy;
 
-            *(threadgroup S1_2x4 *)(sb + 64*ib + 8*ly) = (S1_2x4)(*((device T1_2x4 *) y));
+            *(threadgroup S1_2x4 *)(sb + 64*ib + 8*ly) = (S1_2x4)((*((device T1_2x4 *) y)) * (T1) s1_inv);
         }
 #else
         // load data and store to threadgroup memory
@@ -10656,7 +10740,7 @@ kernel void kernel_mul_mm_id(
                 //const short lx = (tiitg/NL1)%8;
                 //const short ly = i;
 
-                *(sb + NK*(8*sy + ly) + 8*sx + lx) = loop_k + iy + i < args.ne00 ? (S1) *((device T1 *) y + i) : 0;
+                *(sb + NK*(8*sy + ly) + 8*sx + lx) = loop_k + iy + i < args.ne00 ? (S1) (*((device T1 *) y + i) * (T1) s1_inv) : 0;
             }
         } else {
             const short sx = (tiitg%NL1);
@@ -10667,7 +10751,7 @@ kernel void kernel_mul_mm_id(
             //const short lx = (tiitg/NL1)%8;
             //const short ly = i;
 
-            *(threadgroup S1_2x4 *)(sb + NK*(8*sy + ly) + 8*sx) = (S1_2x4)(*((device T1_2x4 *) y));
+            *(threadgroup S1_2x4 *)(sb + NK*(8*sy + ly) + 8*sx) = (S1_2x4)((*((device T1_2x4 *) y)) * (T1) s1_inv);
         }
 #endif
 
@@ -10743,12 +10827,12 @@ kernel void kernel_mul_mm_id(
 
         int i = tiisg;
         for (; i < nr0/4; i += 32) {
-            *(D4 + i) = *(C4 + i);
+            *(D4 + i) = *(C4 + i) * s1_scale;
         }
 
         i = (4*(nr0/4)) + tiisg;
         for (; i < nr0; i += 32) {
-            *(D + i) = *(C + i);
+            *(D + i) = *(C + i) * s1_scale;
         }
     }
 }
