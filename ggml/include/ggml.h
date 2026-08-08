@@ -435,8 +435,9 @@ extern "C" {
 
     // precision
     enum ggml_prec {
-        GGML_PREC_DEFAULT =  0, // stored as ggml_tensor.op_params, 0 by default
-        GGML_PREC_F32     = 10,
+        GGML_PREC_DEFAULT      =  0, // stored as ggml_tensor.op_params, 0 by default
+        GGML_PREC_F32          = 10,
+        GGML_PREC_F32_PEDANTIC = 11,
     };
 
     // op hint
@@ -558,6 +559,7 @@ extern "C" {
         GGML_OP_FILL,
 
         GGML_OP_FLASH_ATTN_EXT,
+        GGML_OP_FLASH_ATTN_EXT_BANDED,
         GGML_OP_FLASH_ATTN_BACK,
         GGML_OP_SSM_CONV,
         GGML_OP_SSM_SCAN,
@@ -1432,6 +1434,7 @@ extern "C" {
 
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)
+    // or GGML_PREC_F32_PEDANTIC to require true F32 arithmetic
     GGML_API void ggml_mul_mat_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
@@ -2425,6 +2428,19 @@ extern "C" {
             float                 scale,
             float                 max_bias,
             float                 logit_softcap);
+
+    // flash attention with an additive banded relative-position bias, applied after scale, no dense bias tensor:
+    //   rel_logits: [rel_extent, n_head, n_batch, ne3]; rel_dist = q_idx + (n_kv - n_batch) - kv_idx
+    //   score += rel_logits[rel_dist, head, q_idx, batch] iff 0 <= rel_dist < rel_extent
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_banded(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * rel_logits,
+            float                 scale,
+            int64_t               rel_extent);
 
     GGML_API void ggml_flash_attn_ext_set_prec(
             struct ggml_tensor * a,

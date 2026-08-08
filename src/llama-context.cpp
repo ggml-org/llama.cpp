@@ -3562,6 +3562,13 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    // quantized V forces the dense path, which transposes V - invalid for a block-quantized tensor
+    if (model->arch == LLM_ARCH_INKLING && ggml_is_quantized(params.type_v)) {
+        LLAMA_LOG_ERROR("%s: model does not support a quantized V cache (%s)\n",
+            __func__, ggml_type_name(params.type_v));
+        return nullptr;
+    }
+
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
         if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
             LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for quantized V cache\n", __func__);
