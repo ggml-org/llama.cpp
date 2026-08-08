@@ -50,6 +50,11 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 #include <set>
 #include <unordered_set>
 
+#ifdef __linux__
+#include <dirent.h>
+#include <sched.h>
+#endif
+
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -5440,6 +5445,208 @@ namespace /* anonymous */ {
 extern struct ggml_backend_device_i ggml_backend_opencl_device_i;
 }
 
+// Keep the queue's producer and consumer off a big.LITTLE CPU's slow cluster.
+//
+// A decode graph is a long stream of small dispatches, so the GPU only stays busy if the
+// host can enqueue, and the driver can submit, faster than the GPU drains the queue. The
+// process is GPU-bound, so its CPU utilisation looks low, and the scheduler parks it on the
+// little cores -- which cannot keep up, so the GPU idles, which keeps utilisation low. On an
+// Adreno 642L (4x A55 + 4x A78) this cost half of decode: the driver stalled ~1.4 ms after
+// every eighth dispatch and the GPU sat idle 48% of the time. A part with no little cores has
+// nothing to gain here, so it is left alone -- see ggml_cl_fast_cores.
+//
+// It is a two-stage pipeline and either stage throttles it, so both have to move: pinning
+// only the enqueueing thread, or only the driver's threads, recovers barely a third of it.
+// Prefill is unaffected -- its dispatches are few and large, so submission latency hides.
+//
+// Opt out with GGML_OPENCL_PIN_DRIVER_CORES=0.
+#ifdef __linux__
+
+// Every core that is not a little core, judged by the scheduler's own capacity metric.
+//
+// Clock alone cannot answer this: an Adreno 642L's A55s run at 75% of its A78s' clock and are
+// still less than half the core, while an Adreno 840's slower cluster is the SAME core at 79%
+// of the clock and is not little at all. cpu_capacity encodes the microarchitecture, so the
+// two separate cleanly -- little clusters land at 0.26-0.39 of the maximum (642L 397/1024,
+// Adreno 740 266/1024) and merely-slower-clocked ones at 0.57-0.74 (Adreno 850 586/1024,
+// Adreno 840 762/1024). Anything at or above half the maximum is left in.
+//
+// Pinning a part that has no little cores only takes cores away: keying this on the clock tier
+// instead cost the Adreno 840 2.6% of decode for nothing.
+//
+// False if the CPU is homogeneous, has no little cores, or does not publish capacities (a
+// desktop x86 kernel typically does not) -- in which case affinity is left alone.
+//
+// Read once: capacities are fixed at boot, and this sits on the very dispatch path the pinning
+// exists to shorten.
+static bool ggml_cl_fast_cores(cpu_set_t * set) {
+    struct fast_cores {
+        cpu_set_t set;
+        bool      ok;
+    };
+
+    static const fast_cores cached = [] {
+        fast_cores res;
+        CPU_ZERO(&res.set);
+
+        long cap[CPU_SETSIZE] = {};
+        int  n       = 0;
+        long biggest = 0;
+
+        for (int i = 0; i < CPU_SETSIZE; i++) {
+            char path[128];
+            snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpu_capacity", i);
+
+            std::ifstream f(path);
+            long v = 0;
+            if (!f || !(f >> v) || v <= 0) {
+                break;
+            }
+
+            cap[n++] = v;
+            biggest  = MAX(biggest, v);
+        }
+
+        for (int i = 0; i < n; i++) {
+            if (2*cap[i] >= biggest) {
+                CPU_SET(i, &res.set);
+            }
+        }
+
+        // Nothing to gain unless some core was actually left out.
+        res.ok = CPU_COUNT(&res.set) > 0 && CPU_COUNT(&res.set) < n;
+        return res;
+    }();
+
+    if (!cached.ok) {
+        return false;
+    }
+
+    *set = cached.set;
+    return true;
+}
+
+static bool ggml_cl_pin_cores_enabled() {
+    const char * env = getenv("GGML_OPENCL_PIN_DRIVER_CORES");
+    return !env || atoi(env) != 0;
+}
+
+static std::set<pid_t> ggml_cl_thread_ids() {
+    std::set<pid_t> tids;
+
+    DIR * d = opendir("/proc/self/task");
+    if (!d) {
+        return tids;
+    }
+    while (const dirent * e = readdir(d)) {
+        const pid_t tid = atoi(e->d_name);
+        if (tid > 0) {
+            tids.insert(tid);
+        }
+    }
+    closedir(d);
+
+    return tids;
+}
+
+// The affinity the process was launched with, sampled before anything in llama.cpp can narrow
+// it. That is the mask a user actually chose (a taskset, a cpuset cgroup); the one the CPU
+// backend's threadpool later imposes on this thread is a CPU-compute heuristic and says
+// nothing about where an OpenCL dispatch should run, so it is not what we intersect against.
+static const cpu_set_t & ggml_cl_launch_affinity() {
+    static cpu_set_t launch = [] {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        if (sched_getaffinity(0, sizeof(set), &set) != 0) {
+            CPU_ZERO(&set);
+            for (int i = 0; i < CPU_SETSIZE; i++) {
+                CPU_SET(i, &set);
+            }
+        }
+        return set;
+    }();
+    return launch;
+}
+
+// Drop the slow cores from one thread's affinity, keeping it inside the launch mask.
+// Reports the thread's previous mask so a scoped pin can put it back.
+static bool ggml_cl_pin_tid(pid_t tid, cpu_set_t * prev_out) {
+    cpu_set_t fast;
+    cpu_set_t prev;
+    if (!ggml_cl_pin_cores_enabled() || !ggml_cl_fast_cores(&fast) ||
+        sched_getaffinity(tid, sizeof(prev), &prev) != 0) {
+        return false;
+    }
+
+    const cpu_set_t & launch = ggml_cl_launch_affinity();
+
+    cpu_set_t target;
+    CPU_ZERO(&target);
+    for (int i = 0; i < CPU_SETSIZE; i++) {
+        if (CPU_ISSET(i, &fast) && CPU_ISSET(i, &launch)) {
+            CPU_SET(i, &target);
+        }
+    }
+
+    // Nothing left to run on, or the thread is already confined to exactly these cores.
+    if (CPU_COUNT(&target) == 0 || CPU_EQUAL(&target, &prev)) {
+        return false;
+    }
+
+    if (sched_setaffinity(tid, sizeof(target), &target) != 0) {
+        return false;
+    }
+
+    if (prev_out) {
+        *prev_out = prev;
+    }
+    return true;
+}
+
+// Pin the threads the OpenCL driver spawned, identified as those that did not exist before
+// the context was created. Taking the difference rather than matching a thread name keeps
+// this vendor-neutral, and keeps it from ever touching a thread of ggml's own.
+static void ggml_cl_pin_driver_threads(const std::set<pid_t> & before) {
+    int n = 0;
+    for (const pid_t tid : ggml_cl_thread_ids()) {
+        if (!before.count(tid) && ggml_cl_pin_tid(tid, nullptr)) {
+            n++;
+        }
+    }
+
+    if (n > 0) {
+        GGML_LOG_INFO("ggml_opencl: pinned %d driver thread(s) off the slow CPU cluster\n", n);
+    }
+}
+
+// Narrows the calling thread for a scope, then puts its mask back: the CPU backend runs on
+// this thread too and must keep every core.
+struct ggml_cl_pin_self {
+    cpu_set_t prev;
+    bool      pinned = false;
+
+    ggml_cl_pin_self() { pinned = ggml_cl_pin_tid(0, &prev); }
+
+    ~ggml_cl_pin_self() {
+        if (pinned) {
+            sched_setaffinity(0, sizeof(prev), &prev);
+        }
+    }
+};
+
+#else
+
+// The constructor is not decoration: an empty struct is trivial, which makes the scoped local at
+// the call site a plain unused variable and trips -Wunused-variable -- an error under
+// GGML_FATAL_WARNINGS.
+struct ggml_cl_pin_self {
+    ggml_cl_pin_self() {}
+};
+static std::set<int> ggml_cl_thread_ids() { return {}; }
+static void ggml_cl_pin_driver_threads(const std::set<int> &) {}
+
+#endif // __linux__
+
 // Look for available and suitable devices.
 static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_reg * reg) {
     std::vector<ggml_backend_device> found_devices;
@@ -5623,8 +5830,12 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
     cl_context            shared_context;
     cl_context_properties properties[] = { (intptr_t) CL_CONTEXT_PLATFORM, (intptr_t) default_device->platform->id, 0 };
 
+    const auto tids_before_context = ggml_cl_thread_ids();
+
     CL_CHECK(
         (shared_context = clCreateContext(properties, device_ids.size(), device_ids.data(), NULL, NULL, &err), err));
+
+    ggml_cl_pin_driver_threads(tids_before_context);
 
     for (auto dev = candidate_devices, dev_end = candidate_devices + n_candidate_devices; dev != dev_end; dev++) {
         GGML_LOG_INFO("\nggml_opencl: device: '%s (%s)'\n", dev->name, dev->version);
@@ -6941,6 +7152,9 @@ static void ggml_opencl_op_group_norm_fused(ggml_backend_t backend, ggml_tensor 
 
 static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    // Feed the queue from a fast core; the driver's own threads were pinned at init.
+    ggml_cl_pin_self pin;
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
