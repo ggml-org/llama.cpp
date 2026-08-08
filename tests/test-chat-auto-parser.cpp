@@ -90,6 +90,10 @@ static void test_normalize_quotes_with_embedded_quotes(testing & t);
 // TAG_WITH_TAGGED argument parsing tests
 static void test_tagged_args_with_embedded_quotes(testing & t);
 
+// Tool-call marker whitespace tolerance tests
+static void test_marker_whitespace_tolerance(testing & t);
+static void test_trim_trailing_whitespace(testing & t);
+
 static void test_role_markers_all_templates(testing & t);
 
 int main(int argc, char * argv[]) {
@@ -117,6 +121,8 @@ int main(int argc, char * argv[]) {
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
+    t.test("trim_trailing_whitespace", test_trim_trailing_whitespace);
+    t.test("marker_whitespace_tolerance", test_marker_whitespace_tolerance);
     t.test("role_markers_all_templates", test_role_markers_all_templates);
 
     return t.summary();
@@ -1304,7 +1310,7 @@ static common_chat_template load_template(testing & t, const std::string & templ
     }
     std::string template_source = buf.str();
     common_chat_template tmpl(template_source, "", "");
-    t.assert_true("Nemotron template loaded successfully", template_source.length() > 0);
+    t.assert_true("template loaded successfully: " + template_path, template_source.length() > 0);
     return tmpl;
 }
 
@@ -1978,6 +1984,7 @@ static void test_role_markers_all_templates(testing & t) {
         { "Bielik-11B-v3.0-Instruct.jinja",                  "<|im_start|>user",       "<|im_start|>assistant"      },
         { "HuggingFaceTB-SmolLM3-3B.jinja",                  "<|im_start|>user",       "<|im_start|>assistant"      },
         { "MiMo-VL.jinja",                                   "<|im_start|>user",       "<|im_start|>assistant"      },
+        { "Nanbeige4.2-3B.jinja",                            "<|im_start|>user",       "<|im_start|>assistant"      },
         { "NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja", "<|im_start|>user",   "<|im_start|>assistant"      },
         { "NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja",   "<|im_start|>user",   "<|im_start|>assistant"      },
         { "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja",       "<|im_start|>user",       "<|im_start|>assistant"      },
@@ -2073,6 +2080,140 @@ static void test_role_markers_all_templates(testing & t) {
             t.assert_equal("assistant_start", c.expected_assistant_start, ap.assistant_start);
         });
     }
+}
+
+// ============================================================================
+// Tool-call marker whitespace tolerance
+//
+// Models vary the whitespace after a marker ("<tool_call> \n" vs "<tool_call>\n"). If any
+// use of the marker demands the exact bytes, the call is silently parsed as content.
+// ============================================================================
+static json marker_test_tools() {
+    return json::parse(R"([
+      {"type": "function", "function": {
+        "name": "read_file",
+        "description": "Read a file from disk",
+        "parameters": {"type": "object",
+                       "properties": {"path": {"type": "string"}},
+                       "required": ["path"]}}}
+    ])");
+}
+
+static common_chat_params marker_test_params(testing & t, const std::string & template_path) {
+    common_chat_template          tmpl = load_template(t, template_path);
+    autoparser::generation_params inputs;
+    inputs.messages              = json::parse(R"([{"role": "user", "content": "Read /etc/hostname."}])");
+    inputs.tools                 = marker_test_tools();
+    inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    inputs.parallel_tool_calls   = true;
+    inputs.reasoning_format      = COMMON_REASONING_FORMAT_AUTO;
+    inputs.add_generation_prompt = true;
+    inputs.enable_thinking       = true;
+    return autoparser::peg_generator::generate_parser(tmpl, inputs);
+}
+
+static void test_marker_whitespace_tolerance(testing & t) {
+    struct tmpl_case {
+        const char * path;
+        const char * before_call;  // model output preceding the first marker
+    };
+
+    // Both render "<tool_call>\n<function=NAME>...", so both derive a marker with a
+    // trailing newline. Nanbeige pre-opens <think>, so its output starts in reasoning.
+    const std::vector<tmpl_case> cases = {
+        { "models/templates/Nanbeige4.2-3B.jinja", "thinking\n</think>\n\n" },
+        { "models/templates/Qwen3-Coder.jinja",    ""                      },
+    };
+
+    // Whitespace runs a model may emit between the marker and "<function=".
+    const std::vector<std::pair<std::string, std::string>> whitespace = {
+        { "newline (canonical)", "\n"   },
+        { "space then newline",  " \n"  },
+        { "single space",        " "    },
+        { "two spaces",          "  "   },
+        { "two newlines",        "\n\n" },
+        { "tab then newline",    "\t\n" },
+        { "newline then spaces", "\n  " },
+    };
+
+    const std::string call_body =
+        "<function=read_file>\n"
+        "<parameter=path>\n/etc/hostname\n</parameter>\n"
+        "</function>\n</tool_call>";
+
+    for (const auto & tc : cases) {
+        t.test(tc.path, [&](testing & t) {
+            auto params = marker_test_params(t, tc.path);
+
+            t.assert_true("lazy grammar is used", params.grammar_lazy);
+            t.assert_true("a grammar trigger was produced", !params.grammar_triggers.empty());
+            for (const auto & trigger : params.grammar_triggers) {
+                // Whitespace in the trigger is sampled before the grammar can fire.
+                t.assert_equal("trigger carries no trailing whitespace",
+                               trim_trailing_whitespace(trigger.value), trigger.value);
+            }
+
+            common_chat_parser_params pp(params);
+            pp.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            pp.parser.load(params.parser);
+
+            for (const auto & ws : whitespace) {
+                const std::string & label = ws.first;
+                const std::string   input =
+                    std::string(tc.before_call) + "<tool_call>" + ws.second + call_body;
+                const auto msg = common_chat_parse(input, /* is_partial = */ false, pp);
+
+                t.assert_equal("one tool call parsed after " + label, (size_t) 1, msg.tool_calls.size());
+                if (msg.tool_calls.size() == 1) {
+                    t.assert_equal("tool name after " + label,
+                                   std::string("read_file"), msg.tool_calls[0].name);
+                    t.assert_equal("tool arguments after " + label,
+                                   std::string("{\"path\":\"/etc/hostname\"}"), msg.tool_calls[0].arguments);
+                }
+                // The regression signature: the call surviving as plain content.
+                t.assert_true("marker did not leak into content after " + label,
+                              msg.content.find("<tool_call>") == std::string::npos);
+            }
+
+            // Exercises the until() needle: prose kept, call still parsed.
+            {
+                const std::string input = std::string(tc.before_call) +
+                                          "Let me read it.\n\n<tool_call> \n" + call_body;
+                const auto        msg   = common_chat_parse(input, /* is_partial = */ false, pp);
+                t.assert_equal("call after prose parses", (size_t) 1, msg.tool_calls.size());
+                t.assert_true("prose retained as content",
+                              msg.content.find("Let me read it.") != std::string::npos);
+                t.assert_true("marker did not leak into content after prose",
+                              msg.content.find("<tool_call>") == std::string::npos);
+            }
+
+            // Parallel calls where every marker is malformed.
+            {
+                const std::string input = std::string(tc.before_call) +
+                                          "<tool_call>  " + call_body + "\n<tool_call> \n" + call_body;
+                const auto        msg   = common_chat_parse(input, /* is_partial = */ false, pp);
+                t.assert_equal("both malformed parallel calls parse", (size_t) 2, msg.tool_calls.size());
+                t.assert_true("marker did not leak into content for parallel calls",
+                              msg.content.find("<tool_call>") == std::string::npos);
+            }
+        });
+    }
+}
+
+static void test_trim_trailing_whitespace(testing & t) {
+    t.assert_equal("trailing newline removed",
+                   std::string("<tool_call>"), trim_trailing_whitespace("<tool_call>\n"));
+    t.assert_equal("mixed trailing run removed",
+                   std::string("<tool_call>"), trim_trailing_whitespace("<tool_call> \n\t "));
+    t.assert_equal("nothing to remove",
+                   std::string("<tool_call>"), trim_trailing_whitespace("<tool_call>"));
+    t.assert_equal("interior whitespace preserved",
+                   std::string("a b"), trim_trailing_whitespace("a b  "));
+    t.assert_equal("leading whitespace preserved",
+                   std::string("\n<tool_call>"), trim_trailing_whitespace("\n<tool_call>\n"));
+    t.assert_equal("all whitespace collapses to empty",
+                   std::string(""), trim_trailing_whitespace("  \n"));
+    t.assert_equal("empty stays empty", std::string(""), trim_trailing_whitespace(""));
 }
 
 // Test that reproduces the Seed-OSS template issue with embedded quotes
