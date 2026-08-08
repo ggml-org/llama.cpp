@@ -909,6 +909,8 @@ public:
     std::map<llama_seq_id, ggml_tensor *> t_sampled;
     std::map<llama_seq_id, ggml_tensor *> t_sampled_probs;
 
+    std::vector<std::pair<int, ggml_tensor *>> moe_sel_experts;
+
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
 

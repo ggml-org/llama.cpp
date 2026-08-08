@@ -29,6 +29,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     list (APPEND GGML_CPU_SOURCES
         ggml-cpu/ggml-cpu.c
         ggml-cpu/ggml-cpu.cpp
+        ggml-cpu/ggml-cpu-mul-mat-id-cold.c
+        ggml-cpu/ggml-cpu-mul-mat-id-cold.h
         ggml-cpu/repack.cpp
         ggml-cpu/repack.h
         ggml-cpu/hbm.cpp

@@ -1,5 +1,6 @@
 #include "llama-graph.h"
 
+#include "llama-expert-tier.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-batch.h"
@@ -1311,6 +1312,7 @@ void llm_graph_result::reset() {
 
     inputs.clear();
     fused_nodes.clear();
+    moe_sel_experts.clear();
 
     buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
 
@@ -1519,6 +1521,14 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
           ggml_tensor * w_s) const {
+    // expert tier hook: if `w` has a registered GPU hot store, build the
+    // dual-path (hot GPU slots + cold CPU experts) result and return it.
+    // Skip when loras are active so build_lora_mm_id's lora loop still runs.
+    if (loras->empty()) {
+        if (auto * r = llama_expert_tier_build(ctx0, w, cur, ids, w_s)) {
+            return r;
+        }
+    }
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
     if (w_s) {
@@ -2029,8 +2039,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     if (selected_experts == nullptr) {
         selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
         cb(selected_experts->src[0], "ffn_moe_argsort", il);
+        ggml_set_output(selected_experts);
     }
     cb(selected_experts, "ffn_moe_topk", il);
+
+    res->moe_sel_experts.emplace_back(il, selected_experts);
 
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented

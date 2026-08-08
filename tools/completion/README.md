@@ -147,6 +147,12 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `-ot, --override-tensor <tensor name pattern>=<buffer type>,...` | override tensor buffer type<br/>(env: LLAMA_ARG_OVERRIDE_TENSOR) |
 | `-cmoe, --cpu-moe` | keep all Mixture of Experts (MoE) weights in the CPU<br/>(env: LLAMA_ARG_CPU_MOE) |
 | `-ncmoe, --n-cpu-moe N` | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU<br/>(env: LLAMA_ARG_N_CPU_MOE) |
+| `-ehs, --expert-hot-s N` | number of hot experts cached on the GPU (-1 = autofit, 0 = disabled)<br/>(env: LLAMA_ARG_EXPERT_HOT_S) |
+| `--ecf, --expert-cache-force` | enable the expert cache on non-CUDA backends (testing/emergency only) |
+| `--expert-heat-decay N` | expert heatmap decay rate per update (default: 0.999)<br/>(env: LLAMA_ARG_EXPERT_HEAT_DECAY) |
+| `--expert-heat-log-period N` | expert heatmap log interval in updates (default: 0, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD) |
+| `--expert-hyst N` | expert hot store hysteresis ratio (default: 1.3, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_HYST) |
+| `--expert-dwell N` | expert hot store minimum dwell updates before swap (default: 0, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_DWELL) |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
 | `-sm, --split-mode {none,layer,row,tensor}` | how to split the model across multiple GPUs, one of:<br/>- none: use one GPU only<br/>- layer (default): split layers and KV across GPUs (pipelined)<br/>- row: split weight across GPUs by rows (parallelized)<br/>- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)<br/>(env: LLAMA_ARG_SPLIT_MODE) |
 | `-ts, --tensor-split N0,N1,N2,...` | fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1<br/>(env: LLAMA_ARG_TENSOR_SPLIT) |

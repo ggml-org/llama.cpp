@@ -5,6 +5,7 @@
 #include "ggml-backend.h"
 #include "traits.h"
 #include "ggml-cpu-impl.h"
+#include "ggml-cpu-mul-mat-id-cold.h"
 #include "ggml-impl.h"
 #include "quants.h"
 #include "ggml-threading.h"
@@ -1453,14 +1454,7 @@ UseGgmlGemm2:;
 
 // ggml_compute_forward_mul_mat_id
 
-#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ids->ne[0]*ids->ne[1] + (i1)]
-
-struct mmid_row_mapping {
-    int32_t i1;
-    int32_t i2;
-};
-
-static void ggml_compute_forward_mul_mat_id_one_chunk(
+void ggml_compute_forward_mul_mat_id_one_chunk(
     struct ggml_tensor * dst,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
@@ -1523,7 +1517,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
     }
 }
 
-static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
+void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
 
     void * ptr = *p;
     ptr = (void *) GGML_PAD((uintptr_t) ptr, align);
@@ -1840,6 +1834,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_MUL_MAT_ID:
             {
                 ggml_compute_forward_mul_mat_id(params, tensor);
+            } break;
+        case GGML_OP_MUL_MAT_ID_COLD:
+            {
+                ggml_compute_forward_mul_mat_id_cold(params, tensor);
             } break;
         case GGML_OP_OUT_PROD:
             {
@@ -2217,6 +2215,7 @@ static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
 static void clear_numa_thread_affinity(void) {}
 #endif
 
+
 static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
     int n_tasks = 0;
 
@@ -2329,6 +2328,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CONCAT:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
+        case GGML_OP_MUL_MAT_ID_COLD:
         case GGML_OP_OUT_PROD:
             {
                 n_tasks = n_threads;
@@ -2854,6 +2854,7 @@ struct ggml_cplan ggml_graph_plan(
                         }
                     } break;
                 case GGML_OP_MUL_MAT_ID:
+                case GGML_OP_MUL_MAT_ID_COLD:
                     {
                         cur = 0;
                         const struct ggml_tensor * src0 = node->src[0];

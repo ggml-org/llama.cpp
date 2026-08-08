@@ -35,6 +35,7 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <cstring>
 #include <thread> // for hardware_concurrency
 #include <vector>
 
@@ -882,6 +883,22 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     if ((!params.server_tools.empty() || mcp_enabled) && !params.cors_origins_explicit) {
         LOG_WRN("server tools or MCP servers are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
         params.cors_origins = "localhost";
+    }
+
+    // manual hot store slots need all MoE weights in the CPU (host pointers);
+    // auto-activate -cmoe unless the user already did (or wants autofit slots)
+    if (params.expert_hot_s > 0) {
+        bool has_cmoe = false;
+        for (const auto & o : params.tensor_buft_overrides) {
+            if (o.pattern != nullptr && strcmp(o.pattern, LLM_FFN_EXPS_REGEX) == 0) {
+                has_cmoe = true;
+                break;
+            }
+        }
+        if (!has_cmoe) {
+            params.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
+            LOG_WRN("manually selecting --expert-hot-s slots activates --cmoe (all MoE weights kept in the CPU)\n");
+        }
     }
 
     // pad tensor_buft_overrides for llama_params_fit:
@@ -2679,6 +2696,49 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"--expert-heat-decay"}, "F",
+        "expert heatmap decay rate per update (default: 0.999)",
+        [](common_params & params, const std::string & value) {
+            params.expert_heat_decay = std::stof(value);
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HEAT_DECAY"));
+    add_opt(common_arg(
+        {"--expert-heat-log-period"}, "N",
+        "expert heatmap log interval in updates (default: 0, 0 = off)",
+        [](common_params & params, int value) {
+            params.expert_heat_log_period = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD"));
+    add_opt(common_arg(
+        {"--expert-hyst"}, "F",
+        "expert hot store hysteresis ratio (default: 1.3, 0 = off)",
+        [](common_params & params, const std::string & value) {
+            params.expert_hyst = std::stof(value);
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HYST"));
+    add_opt(common_arg(
+        {"--expert-dwell"}, "N",
+        "expert hot store minimum dwell updates before swap (default: 0 = off)",
+        [](common_params & params, int value) {
+            params.expert_dwell = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_DWELL"));
+    add_opt(common_arg(
+        {"-ehs", "--expert-hot-s"}, "N",
+        "-1 = autofit slots from free VRAM, 0 = disabled, N = manual top-N slots",
+        [](common_params & params, int value) {
+            params.expert_hot_s = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HOT_S"));
+    add_opt(common_arg(
+        {"--ecf", "--expert-cache-force"},
+        {},
+        "enable the expert cache (hot store) on non-CUDA backends (testing/emergency only)",
+        [](common_params & params, bool value) {
+            params.expert_cache_force = value;
+        }
+    ));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

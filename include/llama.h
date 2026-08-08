@@ -403,6 +403,13 @@ extern "C" {
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
 
+        float expert_heat_decay;      // expert heatmap decay per update
+        int   expert_heat_log_period; // expert heatmap log interval
+        int   expert_hot_s;           // number of top-S expert slots for GPU hot store
+        float expert_hyst;            // hysteresis ratio for slot swaps
+        int   expert_dwell;           // min updates a resident slot keeps before swap
+        bool  expert_cache_force;      // bypass the CUDA-only hot store guard
+
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;

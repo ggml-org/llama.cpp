@@ -24,7 +24,8 @@ common_params_fit_status common_fit_params(
    llama_model_tensor_buft_override * tensor_buft_overrides, // writable buffer for overrides, needs at least llama_max_tensor_buft_overrides elements
                              size_t * margins,               // margins of memory to leave per device in bytes
                            uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
-                     ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
+                     ggml_log_level   log_level,             // minimum log level to print during fitting, lower levels go to debug log
+                              int * n_expert_hot_s = nullptr);// out: fitted expert hot store slots, untouched if not applicable
 
 // print estimated memory to stdout
 void common_fit_print(

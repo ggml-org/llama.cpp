@@ -7,6 +7,8 @@
 #include "llama-adapter.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
+#include "llama-expert-heatmap.h"
+#include "llama-expert-hotstore.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -366,6 +368,9 @@ private:
 
     llm_graph_result_ptr gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
+
+    std::unique_ptr<llama_expert_heatmap> expert_heatmap;
+    std::unique_ptr<llama_expert_hotstore> expert_hotstore;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

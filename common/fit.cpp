@@ -178,7 +178,7 @@ common_device_memory_data_vec common_get_device_memory_data(
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level, int * n_expert_hot_s) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -228,6 +228,8 @@ static void common_params_fit_impl(
     int64_t sum_projected_free  = 0;
     int64_t sum_projected_used  = 0;
     int64_t sum_projected_model = 0;
+    int64_t total_moe_bytes     = 0; // MoE expert tensor bytes (for slot autofit)
+    int64_t dense_model_gpu     = 0; // dense-only model bytes on GPU (for slot autofit)
     std::vector<int64_t> projected_free_per_device;
     projected_free_per_device.reserve(nd);
 
@@ -541,6 +543,8 @@ static void common_params_fit_impl(
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
             global_surplus_cpu_moe -= int64_t(dmds_cpu_moe[id].mb.total()) + margins[id];
+            total_moe_bytes        += int64_t(dmds_full[id].mb.model) - int64_t(dmds_cpu_moe[id].mb.model);
+            dense_model_gpu        += int64_t(dmds_cpu_moe[id].mb.model);
         }
 
         if (global_surplus_cpu_moe > 0) {
@@ -641,6 +645,10 @@ static void common_params_fit_impl(
     }
     if (hp_nex == 0 || global_surplus_cpu_moe <= 0) {
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
+        if (n_expert_hot_s) {
+            // all MoE stays on CPU (no surplus), so no GPU hot slots fit
+            *n_expert_hot_s = 0;
+        }
         return;
     }
 
@@ -786,6 +794,20 @@ static void common_params_fit_impl(
     }
 
     set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
+
+    // autofit the expert hot store slots: the fit already chose how many MoE
+    // tensors go back on GPU; S = experts-per-layer that fit leaves on GPU.
+    if (n_expert_hot_s && total_moe_bytes > 0) {
+        const dmds_t dmds_final = common_get_device_memory_data_impl(
+            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+        int64_t final_gpu_model = 0;
+        for (size_t id = 0; id < nd; id++) {
+            final_gpu_model += dmds_final[id].mb.model;
+        }
+        const int64_t moe_on_gpu = final_gpu_model - dense_model_gpu;
+        const int64_t s = moe_on_gpu > 0 ? int64_t(hp_nex) * moe_on_gpu / total_moe_bytes : 0;
+        *n_expert_hot_s = s > 1 ? (int) (s - 1) : 0;
+    }
 }
 
 enum common_params_fit_status common_fit_params(
@@ -796,11 +818,12 @@ enum common_params_fit_status common_fit_params(
         llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins,
         uint32_t n_ctx_min,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        int * n_expert_hot_s) {
     const int64_t t0_us = llama_time_us();
     common_params_fit_status status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
+        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level, n_expert_hot_s);
         LOG_TRC("%s: successfully fit params to free device memory\n", __func__);
     } catch (const common_params_fit_exception & e) {
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
