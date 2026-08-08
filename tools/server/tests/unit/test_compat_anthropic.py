@@ -703,6 +703,32 @@ def test_anthropic_top_k():
     assert res.body["type"] == "message"
 
 
+def test_anthropic_id_slot():
+    """Test id_slot parameter (llama.cpp specific)"""
+    server.n_slots = 2
+    server.server_slots = True
+    server.start()
+
+    # on an idle server, automatic selection picks the last slot,
+    # so requesting slot 0 shows whether id_slot was honored
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 8,
+        "id_slot": 0,
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+
+    assert res.status_code == 200
+    assert res.body["type"] == "message"
+
+    res = server.make_request("GET", "/slots")
+    assert res.status_code == 200
+    assert res.body[0]["n_prompt_tokens"] > 0
+    assert "n_prompt_tokens" not in res.body[1]
+
+
 # Error handling tests
 
 def test_anthropic_missing_messages():
