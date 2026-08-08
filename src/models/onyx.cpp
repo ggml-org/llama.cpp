@@ -17,7 +17,10 @@ void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
     }
 
-    type = LLM_TYPE_30B;
+    switch (hparams.n_layer()) {
+        case 52: type = LLM_TYPE_30B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
 }
 
 void llama_model_onyx::load_arch_tensors(llama_model_loader &) {
