@@ -57,67 +57,67 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  # gpu-cuda:
-  #   runs-on: [self-hosted, Linux, NVIDIA]
+  gpu-cuda:
+    runs-on: [self-hosted, Linux, NVIDIA]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         nvidia-smi
-  #         GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          nvidia-smi
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # gpu-rocm:
-  #   runs-on: [self-hosted, Linux, AMD]
+  gpu-rocm:
+    runs-on: [self-hosted, Linux, AMD]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       # HIP_LAUNCH_BLOCKING=1: workaround for an async-execution correctness
-  #       # issue on integrated RDNA3.5 (gfx1151) where batched inference returns
-  #       # incorrect output (perplexity ~88 vs ~9.4). Serializing kernel launches
-  #       # restores correctness. Remove once the underlying ROCm/HIP issue is fixed.
-  #       env:
-  #         HIP_LAUNCH_BLOCKING: "1"
-  #       run: |
-  #         rocminfo
-  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        # HIP_LAUNCH_BLOCKING=1: workaround for an async-execution correctness
+        # issue on integrated RDNA3.5 (gfx1151) where batched inference returns
+        # incorrect output (perplexity ~88 vs ~9.4). Serializing kernel launches
+        # restores correctness. Remove once the underlying ROCm/HIP issue is fixed.
+        env:
+          HIP_LAUNCH_BLOCKING: "1"
+        run: |
+          rocminfo
+          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # gpu-vulkan-nvidia-cm:
-  #   runs-on: [self-hosted, Linux, NVIDIA]
+  gpu-vulkan-nvidia-cm:
+    runs-on: [self-hosted, Linux, NVIDIA]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # gpu-vulkan-nvidia-cm2:
-  #   runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
+  gpu-vulkan-nvidia-cm2:
+    runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   gpu-webgpu-nvidia:
     runs-on: [self-hosted, Linux, NVIDIA, X64]
@@ -192,18 +192,18 @@ jobs:
   #         amd-smi static
   #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # gpu-metal:
-  #   runs-on: [self-hosted, macOS, ARM64]
+  gpu-metal:
+    runs-on: [self-hosted, macOS, ARM64]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   gpu-webgpu-apple:
     runs-on: [self-hosted, macOS, ARM64]
@@ -232,178 +232,178 @@ jobs:
           GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
             bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # gpu-vulkan-apple:
-  #   runs-on: [self-hosted, macOS, ARM64]
+  gpu-vulkan-apple:
+    runs-on: [self-hosted, macOS, ARM64]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # gpu-vulkan-intel-linux:
-  #   runs-on: [self-hosted, Linux, Intel]
+  gpu-vulkan-intel-linux:
+    runs-on: [self-hosted, Linux, Intel]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
-  #       with:
-  #         persist-credentials: false
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # gpu-vulkan-intel-windows:
-  #   runs-on: [self-hosted, Windows, X64, Intel]
+  gpu-vulkan-intel-windows:
+    runs-on: [self-hosted, Windows, X64, Intel]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       shell: C:\msys64\usr\bin\bash.exe --noprofile --norc -eo pipefail "{0}"
-  #       env:
-  #         MSYSTEM: UCRT64
-  #         CHERE_INVOKING: 1
-  #         PATH: C:\msys64\ucrt64\bin;C:\msys64\usr\bin;C:\Windows\System32;${{ env.PATH }}
-  #       run: |
-  #         vulkaninfo --summary
-  #         # Skip python related tests with GG_BUILD_LOW_PERF=1 since Windows MSYS2 UCRT64 currently fails to create
-  #         # a valid python environment for testing
-  #         LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        shell: C:\msys64\usr\bin\bash.exe --noprofile --norc -eo pipefail "{0}"
+        env:
+          MSYSTEM: UCRT64
+          CHERE_INVOKING: 1
+          PATH: C:\msys64\ucrt64\bin;C:\msys64\usr\bin;C:\Windows\System32;${{ env.PATH }}
+        run: |
+          vulkaninfo --summary
+          # Skip python related tests with GG_BUILD_LOW_PERF=1 since Windows MSYS2 UCRT64 currently fails to create
+          # a valid python environment for testing
+          LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
 
-  # gpu-openvino-low-perf:
-  #   runs-on: [self-hosted, Linux, Intel, OpenVINO]
+  gpu-openvino-low-perf:
+    runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
-  #   env:
-  #     # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-  #     OPENVINO_VERSION_MAJOR: "2026.2.1"
-  #     OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+    env:
+      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.2.1"
+      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Setup OpenVINO Toolkit
-  #       uses: ./.github/actions/linux-setup-openvino
-  #       with:
-  #         path: ./openvino_toolkit
-  #         version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
-  #         version_full: ${{ env.OPENVINO_VERSION_FULL }}
+      - name: Setup OpenVINO Toolkit
+        uses: ./.github/actions/linux-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
-  #     - name: Install OpenVINO dependencies
-  #       run: |
-  #         cd ./openvino_toolkit
-  #         chmod +x ./install_dependencies/install_openvino_dependencies.sh
-  #         echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
+      - name: Install OpenVINO dependencies
+        run: |
+          cd ./openvino_toolkit
+          chmod +x ./install_dependencies/install_openvino_dependencies.sh
+          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         source ./openvino_toolkit/setupvars.sh
-  #         GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          source ./openvino_toolkit/setupvars.sh
+          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # cpu-x64-high-perf:
-  #   runs-on: [self-hosted, Linux, X64]
+  cpu-x64-high-perf:
+    runs-on: [self-hosted, Linux, X64]
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # cpu-arm64-high-perf-graviton4:
-  #   runs-on: ah-ubuntu_22_04-c8g_8x
+  cpu-arm64-high-perf-graviton4:
+    runs-on: ah-ubuntu_22_04-c8g_8x
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Dependencies
-  #       id: depends
-  #       run: |
-  #         set -euxo pipefail
-  #         sudo apt-get update
-  #         sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-  #         apt-get install -y \
-  #         build-essential \
-  #         python3-venv \
-  #         gpg \
-  #         wget \
-  #         time \
-  #         git-lfs
+      - name: Dependencies
+        id: depends
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+          apt-get install -y \
+          build-essential \
+          python3-venv \
+          gpg \
+          wget \
+          time \
+          git-lfs
 
-  #         git lfs install
+          git lfs install
 
-  #         # install the latest cmake
-  #         sudo install -d /usr/share/keyrings
-  #         wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
-  #           | gpg --dearmor \
-  #           | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-  #         echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
-  #           | sudo tee /etc/apt/sources.list.d/kitware.list
-  #         sudo apt-get update
-  #         sudo apt-get install -y cmake
+          # install the latest cmake
+          sudo install -d /usr/share/keyrings
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+            | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get update
+          sudo apt-get install -y cmake
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # cpu-arm64-graviton4-kleidiai:
-  #   runs-on: ah-ubuntu_22_04-c8g_8x
+  cpu-arm64-graviton4-kleidiai:
+    runs-on: ah-ubuntu_22_04-c8g_8x
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Dependencies
-  #       id: depends
-  #       run: |
-  #         set -euxo pipefail
-  #         sudo apt-get update
-  #         sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-  #         apt-get install -y \
-  #         build-essential \
-  #         python3-venv \
-  #         gpg \
-  #         wget \
-  #         time \
-  #         git-lfs
+      - name: Dependencies
+        id: depends
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+          apt-get install -y \
+          build-essential \
+          python3-venv \
+          gpg \
+          wget \
+          time \
+          git-lfs
 
-  #         git lfs install
+          git lfs install
 
-  #         # install the latest cmake
-  #         sudo install -d /usr/share/keyrings
-  #         wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
-  #           | gpg --dearmor \
-  #           | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-  #         echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
-  #           | sudo tee /etc/apt/sources.list.d/kitware.list
-  #         sudo apt-get update
-  #         sudo apt-get install -y cmake
+          # install the latest cmake
+          sudo install -d /usr/share/keyrings
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+            | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get update
+          sudo apt-get install -y cmake
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         GG_BUILD_KLEIDIAI=1 \
-  #         GG_BUILD_EXTRA_TESTS_0=1 \
-  #         bash ./ci/run.sh ./tmp/results ./tmp/mnt
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_KLEIDIAI=1 \
+          GG_BUILD_EXTRA_TESTS_0=1 \
+          bash ./ci/run.sh ./tmp/results ./tmp/mnt
