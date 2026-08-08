@@ -98,9 +98,10 @@
 		showSpinner || (toolUi?.icon ?? null) || !mcpServerFavicon ? null : mcpServerFavicon
 	);
 
+	// No subtitle while the call is in flight - the spinner already
+	// signals activity; only terminal states get a pill.
 	function subtitleFor(errorMessage?: string): string | undefined {
-		if (extraLiveStreaming) return 'streaming...';
-		if (showSpinner) return 'executing...';
+		if (showSpinner) return undefined;
 		if (errorMessage) return 'failed';
 		if (isStreamingCall && !isStreaming) return 'incomplete';
 		return undefined;

@@ -132,7 +132,10 @@ class ServerProcess:
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
     def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
-        env = {**os.environ}
+        env = {
+            **os.environ,
+            "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
+        }
         if "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
@@ -303,6 +306,7 @@ class ServerProcess:
 
         # wait for server to start
         start_time = time.time()
+        last_print_time = start_time
         while time.time() - start_time < timeout_seconds:
             try:
                 response = self.make_request("GET", "/health", headers={
@@ -317,8 +321,10 @@ class ServerProcess:
             if self.process.poll() is not None:
                 raise RuntimeError(f"Server process died with return code {self.process.returncode}")
 
-            print(f"Waiting for server to start...")
-            time.sleep(0.5)
+            if time.time() - last_print_time >= 1.0:
+                print(f"Waiting for server to start...")
+                last_print_time = time.time()
+            time.sleep(0.01)
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
 
     def stop(self) -> None:

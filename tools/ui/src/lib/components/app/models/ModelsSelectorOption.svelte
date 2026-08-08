@@ -62,9 +62,10 @@
 <div
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
-		'cursor-pointer hover:bg-muted focus:bg-muted',
-		(isSelected || isHighlighted) && 'bg-accent text-accent-foreground',
-		!(isSelected || isHighlighted) && 'hover:bg-accent hover:text-accent-foreground',
+		'cursor-pointer',
+		isSelected && 'bg-accent/50 text-accent-foreground',
+		isHighlighted && 'bg-accent',
+		!isSelected && !isHighlighted && 'hover:bg-muted',
 		isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 	]}
 	role="option"
