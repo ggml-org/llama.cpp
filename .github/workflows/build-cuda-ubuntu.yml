@@ -50,7 +50,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt update
-          apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev
+          apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev python3
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -58,6 +58,9 @@ jobs:
           key: cuda-ubuntu-24.04-cuda
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Apply tiered CUDA transforms
+        run: python3 scripts/apply-tiered-hotpath-optimizations.py
 
       - name: Build with CMake
         # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project

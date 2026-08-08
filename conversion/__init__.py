@@ -70,6 +70,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Exaone4ForCausalLM": "exaone",
     "ExaoneForCausalLM": "exaone",
     "ExaoneMoEForCausalLM": "exaone",
+    "ExaoneMoeForCausalLM": "exaone",
     "FalconForCausalLM": "falcon",
     "FalconH1ForCausalLM": "falcon_h1",
     "FalconMambaForCausalLM": "mamba",

@@ -35,6 +35,7 @@ else()
     add_subdirectory(training)
     add_subdirectory(diffusion)
     add_subdirectory(tiered-memory)
+    add_subdirectory(tiered-server)
     if (NOT GGML_BACKEND_DL)
         add_subdirectory(convert-llama2c-to-ggml)
         # these examples use the backends directly and cannot be built with dynamic loading

@@ -1,5 +1,7 @@
 #include "llama-tiered.h"
 
+#include "llama-impl.h"
+
 #include "ggml-backend.h"
 #include "ggml-cuda.h"
 #include "ggml.h"
@@ -398,6 +400,50 @@ extern "C" llama_tiered_model * llama_tiered_model_load_from_file(
 
         std::unique_ptr<llama_tiered_model> owner(new llama_tiered_model);
         assign_tiers(metadata, vram_budget, tiered_params.dram_budget_bytes, owner->stats);
+
+        // Every weight fits in VRAM, so there is nothing to stage. Load through
+        // the plain CUDA device instead: the tiered buffer type would allocate
+        // each weight separately and route compute through an extra wrapper for
+        // no benefit.
+        if (owner->stats.dram_bytes == 0 && owner->stats.ssd_bytes == 0) {
+            ggml_backend_reg_t cuda_reg = ggml_backend_reg_by_name("CUDA");
+            if (!cuda_reg) {
+                throw std::runtime_error("CUDA backend is unavailable");
+            }
+            if (static_cast<size_t>(tiered_params.main_gpu) >= ggml_backend_reg_dev_count(cuda_reg)) {
+                throw std::out_of_range("main_gpu is outside the CUDA device range");
+            }
+
+            LLAMA_LOG_INFO("%s: all %.2f MiB of weights fit in VRAM; using the CUDA backend\n",
+                    __func__, owner->stats.vram_bytes / 1024.0 / 1024.0);
+
+            owner->devices = { ggml_backend_reg_dev_get(cuda_reg, static_cast<size_t>(tiered_params.main_gpu)), nullptr };
+            copy_user_overrides(model_params.tensor_buft_overrides, owner->overrides);
+            owner->overrides.push_back({ nullptr, nullptr });
+
+            model_params.devices = owner->devices.data();
+            model_params.tensor_buft_overrides = owner->overrides.data();
+            model_params.n_gpu_layers = -1;
+            model_params.main_gpu = 0;
+            model_params.split_mode = LLAMA_SPLIT_MODE_NONE;
+            model_params.tensor_split = nullptr;
+
+            if (paths.size() == 1) {
+                owner->model = llama_model_load_from_file(paths[0].c_str(), model_params);
+            } else {
+                std::vector<const char *> path_ptrs;
+                path_ptrs.reserve(paths.size());
+                for (const std::string & path : paths) {
+                    path_ptrs.push_back(path.c_str());
+                }
+                owner->model = llama_model_load_from_splits(
+                        path_ptrs.data(), path_ptrs.size(), model_params);
+            }
+            if (!owner->model) {
+                throw std::runtime_error("llama_model loading failed");
+            }
+            return owner.release();
+        }
 
         std::vector<ggml_cuda_tiered_tensor_plan> entries;
         entries.reserve(metadata.tensors.size());
