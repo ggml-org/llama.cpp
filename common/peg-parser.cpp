@@ -570,23 +570,34 @@ struct parser_executor {
     }
 
     static common_peg_parse_result handle_escape_sequence(common_peg_parse_context & ctx, size_t start, size_t & pos, const char delimiter) {
+        auto save = pos;
+
         ++pos; // consume '\'
         if (pos >= ctx.input.size()) {
             if (!ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
+            pos = save; // suppress unmatched '\'
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
         }
 
         char c = ctx.input[pos];
+
         if (c == delimiter || c == '\\' || c == '/' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't') {
             ++pos;
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start, pos);
-        } else if (c == 'u') {
-            return handle_unicode_escape(ctx, start, pos);
-        } else {
-            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
         }
+
+        if (c == 'u') {
+            auto result = handle_unicode_escape(ctx, start, pos);
+            if (result.need_more_input()) {
+                pos = save; // suppress incomplete sequence
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+            }
+            return result;
+        }
+
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
     }
 
     static common_peg_parse_result handle_unicode_escape(common_peg_parse_context & ctx, size_t start, size_t & pos) {
