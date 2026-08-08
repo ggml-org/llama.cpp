@@ -805,6 +805,67 @@ class Gemma4AssistantModel(Gemma4Model):
         self.gguf_writer.add_nextn_predict_layers(self.block_count)
 
 
+@ModelBase.register("Gemma4DSparkModel")
+class Gemma4DSparkModel(Gemma4Model):
+    # DSpark draft with a Gemma4 backbone
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def set_vocab(self):
+        if self.target_model_dir is None:
+            raise ValueError("Gemma4 DSpark requires --target-model-dir with the target tokenizer")
+
+        original_dir = self.dir_model
+        try:
+            self.dir_model = self.target_model_dir
+            super().set_vocab()
+        finally:
+            self.dir_model = original_dir
+
+        mask_token_id = self.hparams.get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+    def set_gguf_parameters(self):
+        # inject Gemma3Model's pattern == 1 sentinel so the sliding_window inherited from the target config is not written
+        if all(lt == "full_attention" for lt in self.hparams["layer_types"]):
+            self.hparams["sliding_window_pattern"] = 1
+
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_block_size(self.hparams.get("block_size", 7))
+
+        # flat DeepSpec schema; mirror DFlash's +1 extract-layer convention
+        target_layer_ids = self.hparams.get("target_layer_ids", [])
+        if target_layer_ids:
+            extract_layer_ids = [i + 1 for i in target_layer_ids]
+            self.gguf_writer.add_target_layers(extract_layer_ids)
+
+        # Gemma4TextScaledWordEmbedding scales the shared token embeddings by sqrt(hidden_size)
+        self.gguf_writer.add_embedding_scale(self.hparams["hidden_size"] ** 0.5)
+        # Gemma4DSparkAttention uses scaling = 1.0
+        self.gguf_writer.add_attention_scale(1.0)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        # embed_tokens / lm_head are byte-identical to the target and shared at runtime -- drop them
+        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            return None
+        if not name.startswith("model."):
+            name = "model." + name
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # the shared DFlash tensor map resolves these norm names Qwen-style -- remap them to their Gemma4 meaning
+        if name.endswith(".post_attention_layernorm.weight"):
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_POST_NORM, bid), data_torch)
+            return
+        if name.endswith(".pre_feedforward_layernorm.weight"):
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid), data_torch)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Gemma4ForConditionalGeneration")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True

@@ -1298,11 +1298,49 @@ struct llama_model_dflash : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    template <bool is_enc>
-    struct graph : public llm_graph_context {
-        graph(const llama_model & model, const llm_graph_params & params);
+    struct graph_enc : public llm_graph_context {
+        graph_enc(const llama_model & model, const llm_graph_params & params);
 
         ggml_tensor * build_inp_embd_enc() const;
+    };
+
+    // shared dual-mode decoder skeleton; backbones implement the two per-layer hooks
+    struct graph_dec : public llm_graph_context {
+        graph_dec(const llm_graph_params & params) : llm_graph_context(params) {}
+
+        void build(const llama_model & model);
+
+        // embd batch: project the fused target features into this layer's K/V for cache injection
+        virtual void inject_kv(
+                const llama_model & model,
+                ggml_tensor * inp_g,
+                ggml_tensor * inp_pos,
+                ggml_tensor ** k,
+                ggml_tensor ** v,
+                int il) = 0;
+
+        // token batch: one backbone layer over the noise block
+        virtual ggml_tensor * forward_layer(
+                const llama_model & model,
+                ggml_tensor * inpL,
+                ggml_tensor * inp_pos,
+                llm_graph_input_attn_kv * inp_attn,
+                llm_graph_input_attn_kv_iswa * inp_attn_iswa,
+                int il) = 0;
+    };
+
+    struct graph_qwen3 : public graph_dec {
+        graph_qwen3(const llama_model & model, const llm_graph_params & params);
+
+        void inject_kv(const llama_model & model, ggml_tensor * inp_g, ggml_tensor * inp_pos, ggml_tensor ** k, ggml_tensor ** v, int il) override;
+        ggml_tensor * forward_layer(const llama_model & model, ggml_tensor * inpL, ggml_tensor * inp_pos, llm_graph_input_attn_kv * inp_attn, llm_graph_input_attn_kv_iswa * inp_attn_iswa, int il) override;
+    };
+
+    struct graph_gemma4 : public graph_dec {
+        graph_gemma4(const llama_model & model, const llm_graph_params & params);
+
+        void inject_kv(const llama_model & model, ggml_tensor * inp_g, ggml_tensor * inp_pos, ggml_tensor ** k, ggml_tensor ** v, int il) override;
+        ggml_tensor * forward_layer(const llama_model & model, ggml_tensor * inpL, ggml_tensor * inp_pos, llm_graph_input_attn_kv * inp_attn, llm_graph_input_attn_kv_iswa * inp_attn_iswa, int il) override;
     };
 
     struct graph_dsv4 : public llama_model_deepseek4::graph {
