@@ -191,6 +191,7 @@ class TensorNameMap:
             "h.{bid}.input_layernorm",                              # bloom
             "transformer.h.{bid}.ln_mlp",                           # falcon40b
             "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe granite-hybrid
+            "model.layers.{bid}.input_layernorm.norm",              # axk2
             "layers.{bid}.attention_norm",                          # llama-pth
             "model.layers.{bid}.ln1",                               # yi
             "h.{bid}.ln_1",                                         # gpt2
@@ -216,6 +217,15 @@ class TensorNameMap:
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
+        ),
+
+        # Low-rank gate wrapping the attention norm
+        MODEL_TENSOR.ATTN_NORM_GATE_A: (
+            "model.layers.{bid}.input_layernorm.W_down",  # axk2
+        ),
+
+        MODEL_TENSOR.ATTN_NORM_GATE_B: (
+            "model.layers.{bid}.input_layernorm.W_up",    # axk2
         ),
 
         # Attention norm 2
@@ -394,6 +404,7 @@ class TensorNameMap:
             "h.{bid}.post_attention_layernorm",                              # bloom
             "transformer.blocks.{bid}.norm_2",                               # mpt
             "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron olmoe phimoe
+            "model.layers.{bid}.post_attention_layernorm.norm",               # axk2
             "layers.{bid}.ffn_norm",                                         # llama-pth
             "model.layers.{bid}.ln2",                                        # yi
             "h.{bid}.ln_2",                                                  # gpt2
@@ -415,6 +426,15 @@ class TensorNameMap:
         ),
 
         # Pre feed-forward norm
+        # Low-rank gate wrapping the FFN norm
+        MODEL_TENSOR.FFN_NORM_GATE_A: (
+            "model.layers.{bid}.post_attention_layernorm.W_down",  # axk2
+        ),
+
+        MODEL_TENSOR.FFN_NORM_GATE_B: (
+            "model.layers.{bid}.post_attention_layernorm.W_up",    # axk2
+        ),
+
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
             "layers.{bid}.pre_feedforward_layernorm",       # embeddinggemma

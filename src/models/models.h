@@ -2227,3 +2227,19 @@ struct llama_model_step35 : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
+
+struct llama_model_axk2 : public llama_model_base {
+    llama_model_axk2(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // y = RMSNorm(x); return y * sigmoid(W_b @ silu(W_a @ y))
+        ggml_tensor * build_gated_norm(ggml_tensor * cur, ggml_tensor * norm, ggml_tensor * gate_a, ggml_tensor * gate_b, int il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};

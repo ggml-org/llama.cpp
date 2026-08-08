@@ -223,6 +223,9 @@ struct llama_hparams {
     std::array<float, LLAMA_MAX_LAYERS> xielu_beta;
     std::array<float, LLAMA_MAX_LAYERS> xielu_eps;
 
+    // bottleneck rank of the low-rank gate wrapping the norms (axk2)
+    uint32_t gated_norm_rank = 0;
+
     // DSA (deepseek sparse attention)
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;

@@ -142,6 +142,7 @@ enum llm_type {
     LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_397B_A17B, // Qwen3.5
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
+    LLM_TYPE_688B_A33B, // A.X-K2
     LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
@@ -240,6 +241,8 @@ struct llama_layer {
     struct ggml_tensor * attn_sub_norm   = nullptr;
     struct ggml_tensor * attn_post_norm  = nullptr;
     struct ggml_tensor * ffn_sub_norm    = nullptr;
+    struct ggml_tensor * attn_norm_gate_a = nullptr; // axk2
+    struct ggml_tensor * attn_norm_gate_b = nullptr; // axk2
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
     struct ggml_tensor * ssm_norm        = nullptr;
@@ -281,6 +284,8 @@ struct llama_layer {
     // normalization
     struct ggml_tensor * ffn_norm         = nullptr;
     struct ggml_tensor * ffn_norm_b       = nullptr;
+    struct ggml_tensor * ffn_norm_gate_a  = nullptr; // axk2
+    struct ggml_tensor * ffn_norm_gate_b  = nullptr; // axk2
     struct ggml_tensor * ffn_post_norm    = nullptr;
     struct ggml_tensor * ffn_post_norm_1  = nullptr; // gemma4
     struct ggml_tensor * ffn_post_norm_2  = nullptr; // gemma4
