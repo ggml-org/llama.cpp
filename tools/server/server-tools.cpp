@@ -10,6 +10,7 @@
 #include <ctime>
 #include <atomic>
 #include <cstring>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <algorithm>
@@ -725,9 +726,66 @@ private:
     std::string container_id;
 };
 
-// runtime spec used by --tools-runtime and the x-tool-runtime header
-// this is the only scheme for now, ssh: and podman: can be added next to it
+// a remote host reached over ssh. this is remoting, not isolation: the tools can do whatever
+// the target account can do, so the isolation is whatever the far side runs them in
+class tools_io_ssh : public tools_io_isolate {
+public:
+    tools_io_ssh(std::string target, std::string cwd = "")
+        : tools_io_isolate(std::move(cwd)), target(std::move(target)) {}
+
+protected:
+    std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
+        // the remote shell re-parses the command line, so `inner` travels as one quoted word
+        std::vector<std::string> argv = ssh_argv("ssh");
+        if (!needs_stdin) {
+            argv.push_back("-n");
+        }
+        argv.push_back(target);
+        argv.push_back(shell_quote_join(inner));
+        return argv;
+    }
+
+    bool upload(const std::string & host_path, const std::string & isolate_path) const override {
+        // scp expands the remote path in a shell too, hence the same quoting
+        std::vector<std::string> argv = ssh_argv("scp");
+        argv.push_back(host_path);
+        argv.push_back(target + ":" + shell_quote_join({isolate_path}));
+
+        auto res = run_subprocess(argv, 4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true);
+        return res.exit_code == 0 && !res.timed_out;
+    }
+
+private:
+    std::string target;
+
+    // the tools run without a console, so any prompt would hang them: authentication is
+    // key-based only and the host key must already be trusted, which is the admin's job
+    static std::vector<std::string> ssh_argv(const char * bin) {
+        return {
+            bin,
+            "-o", "BatchMode=yes",
+            "-o", "PasswordAuthentication=no",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "StrictHostKeyChecking=yes",
+        };
+    }
+};
+
+// the spec reaches us from a client header, and ssh reads options from its argv: a target
+// starting with '-' would become one, e.g. -o ProxyCommand=<anything> runs on the host
+static bool is_valid_ssh_target(const std::string & target) {
+    if (target.empty() || target[0] == '-') {
+        return false;
+    }
+    return std::all_of(target.begin(), target.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '.' || c == '-' || c == '_' || c == '@';
+    });
+}
+
+// runtime specs used by --tools-runtime and the x-tool-runtime header
+// podman: can be added next to them, it only swaps the client binary
 static const std::string SERVER_TOOL_RUNTIME_DOCKER_CONTAINER = "docker-container:";
+static const std::string SERVER_TOOL_RUNTIME_SSH              = "ssh:";
 
 // an empty runtime runs the tools on the host
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
@@ -738,6 +796,13 @@ static std::unique_ptr<tools_io> make_tools_io(const json & params) {
     }
     if (runtime.rfind(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER, 0) == 0) {
         return std::make_unique<tools_io_docker>(runtime.substr(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER.size()), cwd);
+    }
+    if (runtime.rfind(SERVER_TOOL_RUNTIME_SSH, 0) == 0) {
+        std::string target = runtime.substr(SERVER_TOOL_RUNTIME_SSH.size());
+        if (!is_valid_ssh_target(target)) {
+            throw std::runtime_error("invalid ssh target: " + target);
+        }
+        return std::make_unique<tools_io_ssh>(target, cwd);
     }
     // do not fall back to the host, the caller asked for an isolate
     throw std::runtime_error("unknown tool runtime: " + runtime);
@@ -1918,7 +1983,13 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                          server_mcp & mcp_mgr,
                          const std::string & tools_runtime) {
     if (!tools_runtime.empty()) {
-        docker_runtime = std::make_unique<server_tools_docker_runtime>(tools_runtime);
+        if (tools_runtime.rfind(SERVER_TOOL_RUNTIME_SSH, 0) == 0) {
+            // nothing to create and nothing to reclaim, the target is already there
+            make_tools_io({{"runtime", tools_runtime}}); // rejects a bad spec at startup
+            runtime_spec = tools_runtime;
+        } else {
+            docker_runtime = std::make_unique<server_tools_docker_runtime>(tools_runtime);
+        }
     }
 
     if (!enabled_tools.empty()) {
@@ -2021,6 +2092,8 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 params["runtime"] = runtime;
             } else if (docker_runtime) {
                 params["runtime"] = SERVER_TOOL_RUNTIME_DOCKER_CONTAINER + docker_runtime->get_container_id();
+            } else if (!runtime_spec.empty()) {
+                params["runtime"] = runtime_spec;
             }
 
             server_tool & tool = find_tool(tools, tool_name, stream);

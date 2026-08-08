@@ -3313,7 +3313,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "experimental: run tools in a separate runtime environment (default: none, use host environment)\n"
         "available options:\n"
         "  'docker:<image>': spin up a new Docker container and reuse it for all invocations, clean up on server exit\n"
-        "  'docker-container:<id>': use an existing Docker container by ID, won't stop on server exit\n",
+        "  'docker-container:<id>': use an existing Docker container by ID, won't stop on server exit\n"
+        "  'ssh:<target>': run tools on a remote host over SSH, key-based auth and a trusted host key are required\n",
         [](common_params & params, const std::string & value) {
             params.server_tools_runtime = value;
         }

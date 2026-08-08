@@ -43,6 +43,9 @@ struct server_tools {
     // set when --tools-runtime is configured; owns the docker container used to run tools, if any
     std::unique_ptr<server_tools_docker_runtime> docker_runtime;
 
+    // set when --tools-runtime names an isolate that already exists and needs no lifecycle
+    std::string runtime_spec;
+
     void setup(const std::vector<std::string> & enabled_tools,
                server_mcp & mcp_mgr,
                const std::string & tools_runtime);
