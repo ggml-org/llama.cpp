@@ -626,6 +626,7 @@ enum shader_reduction_mode {
 static constexpr uint32_t num_argsort_pipelines = 11;
 static constexpr uint32_t num_topk_moe_pipelines = 10;
 static constexpr uint32_t num_topk_pipelines = 11;
+static constexpr uint32_t max_topk_passes = 100;
 
 static constexpr std::initializer_list<ggml_op> topk_moe_early_softmax_norm{ GGML_OP_SOFT_MAX, GGML_OP_RESHAPE,  GGML_OP_ARGSORT,
                                                                              GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE,
@@ -18291,8 +18292,17 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     !device->pipeline_topk_f32[min_pipeline]) {
                     return false;
                 }
+
+                uint32_t pipeline_idx = num_topk_pipelines - 1;
+                while (!device->pipeline_topk_f32[pipeline_idx]) {
+                    pipeline_idx--;
+                }
+
+                const uint32_t k = op->ne[0];
+                const uint32_t workgroup_size = device->pipeline_topk_f32[pipeline_idx]->wg_denoms[0];
+                // Avoid shapes that need many reduction passes, which are very slow and may time out.
+                return std::pow((double) k / workgroup_size, max_topk_passes) * op->src[0]->ne[0] <= k;
             }
-            return true;
         case GGML_OP_UPSCALE:
             if (op->op_params[0] & GGML_SCALE_FLAG_ANTIALIAS) {
                 if ((op->op_params[0] & 0xFF) != GGML_SCALE_MODE_BILINEAR) {
