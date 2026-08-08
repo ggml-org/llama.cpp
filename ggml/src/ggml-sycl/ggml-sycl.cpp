@@ -5691,6 +5691,8 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 return false;
             }
         case GGML_OP_CONV_2D:
+            // kernel and dst must be contiguous; the input can be permuted
+            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op);
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_2D:
             return true;

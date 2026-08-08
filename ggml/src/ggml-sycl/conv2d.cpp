@@ -11,6 +11,9 @@ struct conv2d_params {
     const int64_t IC, OC;
     const int64_t B;
     const int64_t TOTAL;
+    // input element strides (input->nb / sizeof(float)). the input can be permuted;
+    // for a contiguous input these are 1, IW, IW*IH, IC*IW*IH
+    const int64_t IS_X, IS_Y, IS_C, IS_N;
 };
 
 struct conv2d_kernel_bounds {
@@ -41,9 +44,18 @@ static inline int calculate_input_coord(int64_t out_coord, int64_t kern_coord, i
 }
 
 // whcn layout helpers (matching ggml tensor memory order)
-static inline int64_t whcn_input_index(int64_t n, int64_t c, int64_t y, int64_t x, const conv2d_params & P) {
-    return n * (P.IC * P.IW * P.IH) + c * P.IW * P.IH + y * P.IW + x;
-}
+// the input has two forms: packed whcn, and any layout via its strides
+struct whcn_input_packed {
+    static inline int64_t index(int64_t n, int64_t c, int64_t y, int64_t x, const conv2d_params & P) {
+        return n * (P.IC * P.IW * P.IH) + c * P.IW * P.IH + y * P.IW + x;
+    }
+};
+
+struct whcn_input_strided {
+    static inline int64_t index(int64_t n, int64_t c, int64_t y, int64_t x, const conv2d_params & P) {
+        return n * P.IS_N + c * P.IS_C + y * P.IS_Y + x * P.IS_X;
+    }
+};
 
 static inline int64_t whcn_kernel_index(int64_t c_out, int64_t c_in, int64_t ky, int64_t kx, const conv2d_params & P) {
     return c_out * (P.IC * P.KH * P.KW) + c_in * (P.KH * P.KW) + ky * P.KW + kx;
@@ -53,7 +65,7 @@ static inline int64_t whcn_output_index(int64_t n, int64_t c, int64_t y, int64_t
     return n * (P.OC * P.OW * P.OH) + c * P.OW * P.OH + y * P.OW + x;
 }
 
-template <typename T>
+template <typename T, typename layout>
 static void conv2d_kernel(const float * input, const T * kernel, float * output,
                           const conv2d_params P, const sycl::nd_item<3> & item_ct1) {
     const int64_t global_idx = item_ct1.get_local_id(2) +
@@ -77,7 +89,7 @@ static void conv2d_kernel(const float * input, const T * kernel, float * output,
             const int64_t in_y = calculate_input_coord(out_y, ky, P.ST_Y, P.DL_Y, P.PD_Y);
             for (int64_t kx = bounds.x_min; kx < bounds.x_max; ++kx) {
                 const int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
-                const float input_val  = input[whcn_input_index(n, c_in, in_y, in_x, P)];
+                const float input_val  = input[layout::index(n, c_in, in_y, in_x, P)];
                 const T     kernel_val = kernel[whcn_kernel_index(c_out, c_in, ky, kx, P)];
                 acc += input_val * ggml_sycl_cast<float>(kernel_val);
             }
@@ -87,7 +99,7 @@ static void conv2d_kernel(const float * input, const T * kernel, float * output,
     output[whcn_output_index(n, c_out, out_y, out_x, P)] = acc;
 }
 
-template <typename T>
+template <typename T, typename layout>
 static void conv2d_sycl(const float * X_D, const T * K_D, float * Y_D,
                         const conv2d_params P, const queue_ptr & stream) {
     const int num_blocks = (P.TOTAL + SYCL_CONV2D_BLOCK_SIZE - 1) / SYCL_CONV2D_BLOCK_SIZE;
@@ -95,7 +107,7 @@ static void conv2d_sycl(const float * X_D, const T * K_D, float * Y_D,
     const sycl::range<3> block_nums(1, 1, num_blocks);
     stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) {
-            conv2d_kernel<T>(X_D, K_D, Y_D, P, item_ct1);
+            conv2d_kernel<T, layout>(X_D, K_D, Y_D, P, item_ct1);
         });
 }
 
@@ -109,6 +121,7 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     float *             Y_D    = (float *) dst->data;
 
     GGML_ASSERT(ggml_is_contiguous(kernel));
+    GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);
     GGML_ASSERT(input->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -139,12 +152,30 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int OC = kernel->ne[3];
     const int B  = input->ne[3];
 
-    const int64_t     total  = (int64_t) B * OC * OH * OW;
-    const conv2d_params params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total };
+    const int64_t IS_X = input->nb[0] / sizeof(float);
+    const int64_t IS_Y = input->nb[1] / sizeof(float);
+    const int64_t IS_C = input->nb[2] / sizeof(float);
+    const int64_t IS_N = input->nb[3] / sizeof(float);
+
+    const int64_t total = (int64_t) B * OC * OH * OW;
+    const conv2d_params params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y,
+                                   IC, OC, B, total, IS_X, IS_Y, IS_C, IS_N };
+
+    // a packed input is the common case, so keep it on the plain whcn index math
+    const bool packed = ggml_is_contiguous(input);
 
     if (kernel->type == GGML_TYPE_F16) {
-        conv2d_sycl<sycl::half>(X_D, (const sycl::half *) K_D, Y_D, params, stream);
+        const sycl::half * K = (const sycl::half *) K_D;
+        if (packed) {
+            conv2d_sycl<sycl::half, whcn_input_packed>(X_D, K, Y_D, params, stream);
+        } else {
+            conv2d_sycl<sycl::half, whcn_input_strided>(X_D, K, Y_D, params, stream);
+        }
     } else {
-        conv2d_sycl<float>(X_D, K_D, Y_D, params, stream);
+        if (packed) {
+            conv2d_sycl<float, whcn_input_packed>(X_D, K_D, Y_D, params, stream);
+        } else {
+            conv2d_sycl<float, whcn_input_strided>(X_D, K_D, Y_D, params, stream);
+        }
     }
 }
