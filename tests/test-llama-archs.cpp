@@ -101,9 +101,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head = 1;
         n_ff   = 96;
         n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
+    } else if (arch == LLM_ARCH_DEEPSEEK4) {
+        n_embd  = 128;
+        n_head  = 1;
+        n_ff    = 192;
+        n_layer = 3; // uncompressed + csa + hca, one layer of each ratio kind
     } else if (arch == LLM_ARCH_DEEPSEEK2
             || arch == LLM_ARCH_DEEPSEEK32
-            || arch == LLM_ARCH_DEEPSEEK4
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_MISTRAL4) {
@@ -221,7 +225,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             1e-6f);
         ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                     uint32_t(0));
-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            std::vector<uint32_t>(n_layer, 4));
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            std::vector<uint32_t>({0, 4, 128}));
     }
 
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(1));
