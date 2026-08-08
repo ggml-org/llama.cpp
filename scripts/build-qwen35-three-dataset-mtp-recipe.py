@@ -300,7 +300,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=20260808)
     ap.add_argument("--holdout-fraction", type=float, default=0.10)
     ap.add_argument("--candidate-records", type=int, default=4000)
-    ap.add_argument("--max-record-chars", type=int, default=24000)
+    ap.add_argument("--max-record-chars", type=int, default=0,
+                    help="record clip length; 0 chooses an automatic diversity cap")
+    ap.add_argument("--min-records-per-dataset", type=int, default=64)
     ap.add_argument("--prepare-only", action="store_true")
     ap.add_argument("--no-imatrix", action="store_true")
     ap.add_argument("--no-quantize", action="store_true")
@@ -309,6 +311,11 @@ def main() -> int:
     has_hf = bool(args.dataset_ids)
     args.batch_size = args.batch_size or 512
     args.iterations = args.iterations or (1000 if has_hf else 100)
+    if args.max_record_chars <= 0:
+        # Keep each dataset represented by at least this many records, while
+        # still allowing naturally short records to remain unmodified.
+        total_chars = args.iterations * args.context_size * 4
+        args.max_record_chars = max(4096, math.ceil(total_chars / (len(args.dataset_ids) or 1) / args.min_records_per_dataset))
     if not 0 < args.holdout_fraction < 1:
         ap.error("--holdout-fraction must be between 0 and 1")
     if not has_hf:
@@ -331,6 +338,8 @@ def main() -> int:
         "context_size": args.context_size, "seed": args.seed, "holdout_fraction": args.holdout_fraction,
         "revision_requested": args.revision, "revisions_file": args.revisions_file,
         "cache_root": args.cache_root, "model": args.model, "run_root": str(root),
+        "effective_max_record_chars": args.max_record_chars,
+        "min_records_per_dataset": args.min_records_per_dataset,
     }
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 

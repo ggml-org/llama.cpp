@@ -24,8 +24,7 @@ $PY "$SCRIPT" \
   --seed 20260808 \
   --holdout-fraction 0.10 \
   --download-workers 3 \
-  --candidate-records 4000 \
-  --max-record-chars 24000
+  --candidate-records 4000
 ```
 
 The 1000 chunks are split equally across the three IDs. Math is split equally
@@ -50,6 +49,11 @@ $PY "$SCRIPT" \
   --run-id qwen35-mtp-wikitext-fallback-i100-b512-s20260808 \
   --batch-size 512 --context-size 512 --iterations 100
 ```
+
+Record clipping is automatic by default: the pipeline chooses a cap from the
+iteration budget and keeps at least 64 candidate records per dataset. Naturally
+short records are unchanged. Override it only when deliberately testing a
+specific cap.
 
 The run directory contains the manifest, pinned revisions, selected-record
 manifests, calibration/held-out text, per-source imatrices, merged imatrix,
