@@ -1254,6 +1254,11 @@ typedef struct {
 } ggml_metal_kargs_count_equal;
 
 typedef struct {
+    int64_t ne00;
+    int64_t nrows;
+} ggml_metal_kargs_cross_entropy_loss;
+
+typedef struct {
     int32_t  k0;
     int32_t  k1;
     int32_t  s0;

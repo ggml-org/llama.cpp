@@ -11601,3 +11601,87 @@ kernel void kernel_dsv4_hc_post_f32(
         *(device float *) (dst + i0*args.nb_d0 + idst*args.nb_d1 + it*args.nb_d2) = result[idst];
     }
 }
+
+kernel void kernel_cross_entropy_loss_f32(
+        constant ggml_metal_kargs_cross_entropy_loss & args,
+        device const float * src0,
+        device const float * src1,
+        device       float * dst,
+        threadgroup  float * shmem_f32 [[threadgroup(0)]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const short nsg = (ntg.x + 31)/32;
+
+    float sum_loss = 0.0f;
+
+    for (int64_t i1 = 0; i1 < args.nrows; ++i1) {
+        device const float * logits = src0 + i1*args.ne00;
+        device const float * labels = src1 + i1*args.ne00;
+
+        // max of the row, used to avoid overflow in exp
+        float vmax = -INFINITY;
+        for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+            vmax = max(vmax, logits[i0]);
+        }
+        vmax = simd_max(vmax);
+
+        if (tiisg == 0) {
+            shmem_f32[sgitg] = vmax;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        vmax = shmem_f32[0];
+        for (short s = 1; s < nsg; ++s) {
+            vmax = max(vmax, shmem_f32[s]);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // log(sum(exp(logits - vmax)))
+        float vsum = 0.0f;
+        for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+            vsum += exp(logits[i0] - vmax);
+        }
+        vsum = simd_sum(vsum);
+
+        if (tiisg == 0) {
+            shmem_f32[sgitg] = vsum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        vsum = 0.0f;
+        for (short s = 0; s < nsg; ++s) {
+            vsum += shmem_f32[s];
+        }
+
+        const float lse = log(vsum);
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        float vloss = 0.0f;
+        for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+            vloss += (logits[i0] - vmax - lse)*labels[i0];
+        }
+        vloss = simd_sum(vloss);
+
+        if (tiisg == 0) {
+            shmem_f32[sgitg] = vloss;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (short s = 0; s < nsg; ++s) {
+            sum_loss += shmem_f32[s];
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tpitg.x == 0) {
+        dst[0] = -sum_loss/(float) args.nrows;
+    }
+}
