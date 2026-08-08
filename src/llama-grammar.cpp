@@ -11,6 +11,11 @@
 #include <stdexcept>
 
 #define MAX_REPETITION_THRESHOLD 2000
+// max nesting of (...) groups and rule-ref chain depth accepted by the grammar
+// parser/validator - guards against stack exhaustion (SIGSEGV) from
+// pathological grammars (e.g. via llama-server /completion "grammar" param)
+#define LLAMA_GRAMMAR_MAX_NESTING 1000
+#define LLAMA_GRAMMAR_MAX_RULE_DEPTH 1000
 //
 // helpers
 //
@@ -590,11 +595,15 @@ const char * llama_grammar_parser::parse_sequence(
             n_prev_rules = 1;
             rule.push_back({LLAMA_GRETYPE_RULE_REF, ref_rule_id});
         } else if (*pos == '(') { // grouping
+            if (++parse_depth > LLAMA_GRAMMAR_MAX_NESTING) {
+                throw std::runtime_error("grammar nesting too deep");
+            }
             // parse nested alternates into synthesized rule
             pos = parse_space(pos + 1, true);
             uint32_t n_rules_before = symbol_ids.size();
             uint32_t sub_rule_id = generate_symbol_id(rule_name);
             pos = parse_alternates(pos, rule_name, sub_rule_id, true);
+            parse_depth--;
             n_prev_rules = std::max(1u, (uint32_t)symbol_ids.size() - n_rules_before);
             last_sym_start = rule.size();
             // output reference to synthesized rule
@@ -959,7 +968,12 @@ static bool llama_grammar_detect_left_recursion(
         size_t rule_index,
         std::vector<bool> * rules_visited,
         std::vector<bool> * rules_in_progress,
-        std::vector<bool> * rules_may_be_empty) {
+        std::vector<bool> * rules_may_be_empty,
+        size_t depth = 0) {
+    if (depth > LLAMA_GRAMMAR_MAX_RULE_DEPTH) {
+        LLAMA_LOG_ERROR("%s: grammar rule chain too deep (> %d), rejecting\n", __func__, (int)LLAMA_GRAMMAR_MAX_RULE_DEPTH);
+        return true;
+    }
     if ((*rules_in_progress)[rule_index]) {
         return true;
     }
@@ -988,7 +1002,7 @@ static bool llama_grammar_detect_left_recursion(
     bool recurse_into_nonterminal = true;
     for (size_t i = 0; i < rule.size(); i++) {
         if (rule[i].type == LLAMA_GRETYPE_RULE_REF && recurse_into_nonterminal) {
-            if (llama_grammar_detect_left_recursion(rules, (size_t)rule[i].value, rules_visited, rules_in_progress, rules_may_be_empty)) {
+            if (llama_grammar_detect_left_recursion(rules, (size_t)rule[i].value, rules_visited, rules_in_progress, rules_may_be_empty, depth + 1)) {
                 return true;
             }
             if (!((*rules_may_be_empty)[(size_t)rule[i].value])) {
