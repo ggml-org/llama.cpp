@@ -101,6 +101,9 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         llama_batch_free(batch);
 
         ok = ok && llama_memory_seq_rm(llama_get_memory(ctx_roll), (llama_seq_id) s, p0, -1);
+
+        // a second partial removal while one is pending must be refused
+        ok = ok && !llama_memory_seq_rm(llama_get_memory(ctx_roll), (llama_seq_id) s, p0 - 1, -1);
     }
     if (!ok) {
         fprintf(stderr, "%s : multi-seq prefill/rollback failed\n", __func__);
@@ -124,10 +127,8 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         return false;
     }
 
-    // both contexts decode the same replay batch with identical ubatch shapes
-    // from states that are bit-exact copies, so a correct implementation
-    // produces identical logits; the epsilon only allows backend scheduling
-    // noise, far below any real state divergence
+    // identical ubatch shapes from bit-exact states: a correct implementation
+    // matches bitwise, so eps only allows backend scheduling noise
     constexpr float eps = 1e-7f;
 
     float    diff_max  = 0.0f;
