@@ -942,6 +942,12 @@ class GGUFWriter:
     def add_kv_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.KV_LORA_RANK.format(arch=self.arch), length)
 
+    def add_q_lora_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.Q_LORA_SCALE.format(arch=self.arch), value)
+
+    def add_kv_lora_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.KV_LORA_SCALE.format(arch=self.arch), value)
+
     def add_decay_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.DECAY_LORA_RANK.format(arch=self.arch), length)
 
@@ -1198,6 +1204,9 @@ class GGUFWriter:
 
     def add_classifier_output_labels(self, labels: Sequence[str]) -> None:
         self.add_array(Keys.Classifier.OUTPUT_LABELS.format(arch=self.arch), labels)
+
+    def add_n_zero_experts(self, n: int) -> None:
+        self.add_uint32(Keys.LLM.N_ZERO_EXPERTS.format(arch=self.arch), n)
 
     # for vision models
 

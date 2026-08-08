@@ -95,6 +95,10 @@ struct llama_hparams {
     uint32_t n_expert_groups    = 0;
     uint32_t n_group_used       = 0;
     uint32_t n_group_experts    = 0;
+    uint32_t n_zero_experts     = 0; // longcat-flash
+
+    float    f_attn_q_lora_scale  = 0.0f; // longcat-flash
+    float    f_attn_kv_lora_scale = 0.0f; // longcat-flash
 
     float    expert_group_scale   = 0.05f;
     float    expert_weights_scale = 0.0f;
