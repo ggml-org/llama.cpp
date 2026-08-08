@@ -652,22 +652,16 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
             const int64_t scratch_off = (int64_t) state_rows*(1 + n_rs_seq);
             for (uint32_t d = 1; d <= n_rs_seq; ++d) {
                 const int64_t dst_plane = (int64_t) d*state_rows;
+                const uint32_t prefix = d <= n_seq_tokens ? n_seq_tokens - d : 0;
 
                 for (uint32_t r = 0; r < state_size; ++r) {
-                    int32_t src;
-                    if (d <= n_seq_tokens) {
-                        const uint32_t prefix = n_seq_tokens - d;
-                        src = (int32_t) (stream_off + r);
+                    int32_t src = (int32_t) (stream_off + r);
 
-                        for (uint32_t j = 0; j < prefix; ++j) {
-                            const uint32_t i_tok = token_idxs[j];
-                            if (ubatch.pos[i_tok] >= 0 && (uint32_t) (ubatch.pos[i_tok]%state_size) == r) {
-                                src = (int32_t) (scratch_off + i_tok);
-                            }
+                    for (uint32_t j = 0; j < prefix; ++j) {
+                        const uint32_t i_tok = token_idxs[j];
+                        if (ubatch.pos[i_tok] >= 0 && (uint32_t) (ubatch.pos[i_tok]%state_size) == r) {
+                            src = (int32_t) (scratch_off + i_tok);
                         }
-                    } else {
-                        const int64_t src_plane = (int64_t) (d - n_seq_tokens)*state_rows;
-                        src = (int32_t) (src_plane + stream_off + r);
                     }
 
                     plan.state_snapshot_src_idxs.push_back(src);
@@ -683,10 +677,16 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     }();
 
     if (debug) {
-        LLAMA_LOG_INFO("%s: ratio=%u, n_tokens=%u, state_persist_dst=%s, state_write_pos=%s\n",
-                __func__, ratio, ubatch.n_tokens,
+        LLAMA_LOG_DEBUG("%s: ratio=%u, n_tokens=%u, n_seqs_unq=%u, state_persist_dst=%s, state_write_pos=%s\n",
+                __func__, ratio, ubatch.n_tokens, ubatch.n_seqs_unq,
                 dsv4_plan_positions(plan.state_persist_dst_idxs).c_str(),
                 dsv4_plan_positions(plan.state_write_pos).c_str());
+        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+            const llama_seq_id seq_id = ubatch.seq_id_unq[s];
+            const uint32_t rollback = seq_id >= 0 && (uint32_t) seq_id < rs_idx.size() ? rs_idx[seq_id] : 0;
+            LLAMA_LOG_DEBUG("%s:   seq %d pos [%d, %d] rollback=%u\n", __func__, seq_id,
+                    ubatch.pos[0], ubatch.pos[ubatch.n_tokens - 1], rollback);
+        }
     }
 
     return plan;
@@ -704,8 +704,18 @@ static std::vector<llama_kv_cache_dsv4_context::comp_plan> dsv4_build_comp_plans
     std::vector<llama_kv_cache_dsv4_context::comp_plan> plans;
     plans.reserve(ubatches.size());
 
+    // the rollback restore is consumed by the first ubatch that touches the seq,
+    // matching the recurrent path's consume-once s_copy() semantics
+    std::vector<uint32_t> rs(rs_idx);
     for (const llama_ubatch & ubatch : ubatches) {
-        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream, n_rs_seq, rs_idx));
+        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream, n_rs_seq, rs));
+
+        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+            const llama_seq_id seq_id = ubatch.seq_id_unq[s];
+            if (seq_id >= 0 && (size_t) seq_id < rs.size()) {
+                rs[seq_id] = 0;
+            }
+        }
     }
 
     return plans;
@@ -1356,7 +1366,9 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_batch(
             if (has_coupled) {
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                ubatch = balloc.split_equal(n_ubatch, raw_per_seq || comp_per_seq, 0);
+                // [TAG_RECURRENT_ROLLBACK_SPLITS]
+                // the trailing (1 + n_rs_seq) tokens of each seq must stay in the same ubatch
+                ubatch = balloc.split_equal(n_ubatch, raw_per_seq || comp_per_seq, n_rs_seq > 0 ? n_rs_seq + 1 : 0);
             }
 
             if (ubatch.n_tokens == 0) {
