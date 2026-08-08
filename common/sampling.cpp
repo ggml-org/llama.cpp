@@ -307,18 +307,40 @@ struct common_sampler * common_sampler_init(
         }
     }
 
-    // reasoning budget sampler (skip when budget is unlimited unless a lazy grammar is active, which needs rbudget for thinking-block suppression)
-    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0 || params.reasoning_control)) {
+    // reasoning budget sampler. The master switch (reasoning_budget_enabled) gates the
+    // budget/soft/intro/grace mechanism and the manual reasoning_control endpoint - both are
+    // "thought control" features. It does not gate grammar_lazy's own need for this sampler,
+    // which is an unrelated grammar/tool-calling concern (suppressing grammar constraints while
+    // inside a thinking block), not part of the budget-forcing mechanism itself.
+    const bool reasoning_budget_active = params.reasoning_budget_enabled && (params.reasoning_budget_tokens >= 0 || params.reasoning_control);
+    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || reasoning_budget_active)) {
         rbudget = common_reasoning_budget_init(
             vocab,
             {params.reasoning_budget_start},
             params.reasoning_budget_end,
             params.reasoning_budget_forced,
-            params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens);
+            params.reasoning_budget_soft_forced,
+            params.reasoning_budget_intro_forced,
+            params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens,
+            params.reasoning_budget_soft_ratio,
+            params.reasoning_budget_grace_tokens);
 
         for (const auto & token : prefill_tokens) {
             llama_sampler_accept(rbudget, token);
             LOG_DBG("%s: reasoning-budget accepted prefill token (%d)\n", __func__, token);
+
+            // Some chat templates bake the start tag (and trailing text, e.g. a
+            // newline right after "<think>") directly into the prefill. If that
+            // activates a forcing state here, any further prefill tokens are
+            // already-fixed prompt text, not live model output - feeding them
+            // in would be misread as the model having already emitted the start
+            // of the forced sequence, silently skipping ahead in it.
+            const auto state = common_reasoning_budget_get_state(rbudget);
+            if (state == REASONING_BUDGET_INTRO_FORCING ||
+                state == REASONING_BUDGET_SOFT_FORCING ||
+                state == REASONING_BUDGET_FORCING) {
+                break;
+            }
         }
     }
 
