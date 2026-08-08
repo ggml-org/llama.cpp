@@ -3325,6 +3325,8 @@ void ggml_mul_mat_set_hint(
     in b, n_expert_used can be broadcasted to match the n_expert_used of ids
 
     c ~= as[:,:,i] @ b[:,i%r,t], i = ids[e,t] for all e,t in ids
+
+    an id of -1 skips the slot: no matrix is selected, c[:,e,t] is set to zero
 */
 struct ggml_tensor * ggml_mul_mat_id(
         struct ggml_context * ctx,

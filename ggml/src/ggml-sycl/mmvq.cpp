@@ -2479,7 +2479,6 @@ static void mul_mat_vec_q_moe(
     const int expert_idx = item_ct1.get_group(1);
     const int i02        = ids_dev[expert_idx];
 
-    const char * vx = (const char *) vx_base + (size_t) i02 * expert_weight_stride;
     const char * vy = (const char *) vy_base + (size_t) expert_idx * src1_row_stride;
     float *      dst = (float *) ((char *) dst_base + (size_t) expert_idx * dst_row_stride);
 
@@ -2488,6 +2487,15 @@ static void mul_mat_vec_q_moe(
     if (row >= nrows) {
         return;
     }
+
+    if (i02 == -1) { // skipped slot
+        if (item_ct1.get_local_id(2) == 0) {
+            dst[row] = 0.0f;
+        }
+        return;
+    }
+
+    const char * vx = (const char *) vx_base + (size_t) i02 * expert_weight_stride;
 
     const int     blocks_per_row  = ncols / qk;
     constexpr int blocks_per_warp = (vdr * WARP_SIZE + qi - 1) / qi;
@@ -2639,7 +2647,6 @@ static void mul_mat_vec_q_moe_reorder(
     const int expert_idx = item_ct1.get_group(1);
     const int i02        = ids_dev[expert_idx];
 
-    const char * vx  = (const char *) vx_base + (size_t) i02 * expert_weight_stride;
     const char * vy  = (const char *) vy_base + (size_t) expert_idx * src1_row_stride;
     float *      dst = (float *) ((char *) dst_base + (size_t) expert_idx * dst_row_stride);
 
@@ -2649,6 +2656,15 @@ static void mul_mat_vec_q_moe_reorder(
     }
 
     const auto sg = item_ct1.get_sub_group();
+
+    if (i02 == -1) { // skipped slot
+        if (sg.leader()) {
+            dst[row] = 0.0f;
+        }
+        return;
+    }
+
+    const char * vx = (const char *) vx_base + (size_t) i02 * expert_weight_stride;
 
     const int     blocks_per_row              = ncols / block_traits::qk;
     constexpr int blocks_per_subgroup         = ceil_div(block_traits::vdr_mmvq * WARP_SIZE, block_traits::qi);

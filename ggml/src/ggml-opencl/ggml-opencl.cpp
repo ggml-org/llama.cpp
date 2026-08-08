@@ -891,6 +891,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a = nullptr;    // dp4a (int8) q4_0 MoE prefill GEMM
     cl_kernel kernel_moe_reorder_b;
     cl_kernel kernel_moe_histogram, kernel_moe_scan, kernel_moe_fill, kernel_moe_scatter;
+    cl_kernel kernel_moe_zero_dst;
     cl_kernel kernel_moe_combine_f32 = nullptr;   // fused router-weight mul + cross-expert sum
     cl_kernel kernel_mul_mv_id_q4_0_f32_8x_flat;
     cl_kernel kernel_mul_mv_id_q8_0_f32, kernel_mul_mv_id_q8_0_f32_flat;
@@ -4438,6 +4439,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), CL_moe_compile_opts);
 
         CL_CHECK((backend_ctx->kernel_moe_histogram = clCreateKernel(prog, "kernel_moe_histogram", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_zero_dst = clCreateKernel(prog, "kernel_moe_zero_dst", &err), err));
         CL_CHECK((backend_ctx->kernel_moe_scan = clCreateKernel(prog, "kernel_moe_scan", &err), err));
         CL_CHECK((backend_ctx->kernel_moe_fill = clCreateKernel(prog, "kernel_moe_fill", &err), err));
         CL_CHECK((backend_ctx->kernel_moe_scatter = clCreateKernel(prog, "kernel_moe_scatter", &err), err));
@@ -20813,6 +20815,39 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     const int dst_rows = ne20*ne21; // ne20 = n_used_experts, ne21 = n_rows
 
     GGML_ASSERT(ne00 == ne10);
+
+    // the matmul kernels only write the rows an expert owns, so zero the skipped rows here
+    {
+        cl_int err;
+
+        cl_buffer_region region;
+        region.origin = offset2;
+        region.size   = nb21 * ne21;
+        cl_mem buf_ids = clCreateSubBuffer(extra2->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+        CL_CHECK(err);
+
+        region.origin = offsetd;
+        region.size   = (size_t) ne0 * ne1 * ne2 * sizeof(float);
+        cl_mem buf_dst = clCreateSubBuffer(extrad->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+        CL_CHECK(err);
+
+        const cl_uint ids_stride = nb21 / sizeof(int);
+
+        cl_kernel kernel_zero = backend_ctx->kernel_moe_zero_dst;
+        CL_CHECK(clSetKernelArg(kernel_zero, 0, sizeof(cl_mem),  &buf_ids));
+        CL_CHECK(clSetKernelArg(kernel_zero, 1, sizeof(cl_mem),  &buf_dst));
+        CL_CHECK(clSetKernelArg(kernel_zero, 2, sizeof(cl_uint), &ne21));
+        CL_CHECK(clSetKernelArg(kernel_zero, 3, sizeof(cl_uint), &ne20));
+        CL_CHECK(clSetKernelArg(kernel_zero, 4, sizeof(cl_uint), &ids_stride));
+        CL_CHECK(clSetKernelArg(kernel_zero, 5, sizeof(cl_uint), &ne0));
+
+        size_t zero_local[3]  = {1, 1, 64};
+        size_t zero_global[3] = {(size_t) ne21, (size_t) ne20, 64};
+        backend_ctx->enqueue_ndrange_kernel(kernel_zero, 3, zero_global, zero_local, dst);
+
+        CL_CHECK(clReleaseMemObject(buf_ids));
+        CL_CHECK(clReleaseMemObject(buf_dst));
+    }
 
     int sgs   = 32; // subgroup size
     int nsg   = 1;  // number of subgroups

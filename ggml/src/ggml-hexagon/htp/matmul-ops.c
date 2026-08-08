@@ -1273,10 +1273,10 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
 
     for (uint32_t ie1 = 0; ie1 < n_aids; ++ie1) {  // for each expert
         const int32_t eid = *(const int32_t *) ((const uint8_t *) src2->data + ie1 * src2->nb[0]);
-        if (eid < 0) {
+        if (eid == -1) {
             continue;
         }
-        assert(eid < (int32_t) n_ids);
+        assert(eid >= 0 && eid < (int32_t) n_ids);
 
         const uint8_t * restrict src0_row = (const uint8_t *) src0->data + eid * nb02;
         const uint8_t * restrict src1_col = (const uint8_t *) src1_data;
@@ -3549,15 +3549,37 @@ static inline void scan_expert_ids_n(
         const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
         for (uint32_t id = 0; id < n_ids; ++id) {
             const int32_t i02 = row_ptr[id];
-            if (i02 < 0) {
+            if (i02 == -1) {
                 continue;
             }
-            assert(i02 < n_as);
+            assert(i02 >= 0 && i02 < n_as);
 
             if (matrix_rows) {
                 matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
             }
             counts[i02] += 1;
+        }
+    }
+}
+
+// the matmuls only write the rows that an expert owns, so the rows of the skipped slots are zeroed here
+static inline void zero_skipped_dst_rows(
+    const struct htp_tensor * ids,
+    uint32_t n_ids,
+    const struct htp_tensor * dst,
+    uint32_t ne0,
+    size_t nb1,
+    size_t nb2
+) {
+    const uint8_t * ids_data = (const uint8_t *) ids->data;
+
+    for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+        for (uint32_t id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) (ids_data + iid1 * ids->nb[1] + id * ids->nb[0]);
+            if (i02 != -1) {
+                continue;
+            }
+            memset((uint8_t *) (dst->data + id * nb1 + iid1 * nb2), 0, ne0 * sizeof(float));
         }
     }
 }
@@ -3587,10 +3609,10 @@ static inline void scan_expert_ids(
             const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
             for (uint32_t id = 0; id < n_ids; ++id) {
                 const int32_t i02 = *(const int32_t *) ((const uint8_t *) row_ptr + id * ids_nb0);
-                if (i02 < 0) {
+                if (i02 == -1) {
                     continue;
                 }
-                assert(i02 < n_as);
+                assert(i02 >= 0 && i02 < n_as);
 
                 if (matrix_rows) {
                     matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
@@ -3663,6 +3685,8 @@ int op_matmul_id(struct htp_ops_context * octx) {
         memset(matrix_row_counts, 0, n_as * sizeof(uint32_t));
         scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, matrix_rows, mapping_stride);
     }
+
+    zero_skipped_dst_rows(ids, n_ids, dst, ne0, nb1, nb2);
 
     mmctx->matrix_row_counts    = matrix_row_counts;
     mmctx->matrix_rows          = matrix_rows;

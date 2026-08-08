@@ -698,9 +698,15 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
 
             const int32_t idx = *(int32_t *)((char *)src2->data + r_i01 * src2->nb[0] + i02 * src2->nb[1]);
 
-            uint8_t * r_src1 = (uint8_t *)src1->data + idx * nb11;
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
             uint8_t * r_dst  = d_spad + r * bctx->dst_row_size_aligned;
+
+            if (idx == -1) { // skipped slot, add nothing
+                memcpy(r_dst, r_src0, ne00 * sizeof(float));
+                continue;
+            }
+
+            uint8_t * r_src1 = (uint8_t *)src1->data + idx * nb11;
 
             hvx_add_f32_aau(r_dst, r_src0, r_src1, ne00);
         }

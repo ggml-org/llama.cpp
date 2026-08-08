@@ -44,12 +44,23 @@ static __global__ void mul_mat_vec_f(
 
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
 
-    x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
-    y   += int64_t(sample_y)  *stride_sample_y   + channel_y  *stride_channel_y;
     dst += int64_t(sample_dst)*stride_sample_dst + channel_dst*stride_channel_dst;
     if constexpr (is_multi_token_id) {
-        y   += token_idx*stride_col_y2*2;
         dst += token_idx*stride_col_dst;
+    }
+
+    // channel_x is uniform in the block, so the whole block leaves on a skipped slot
+    if (ids && channel_x == -1) {
+        if (tid < ncols_dst) {
+            dst[tid*stride_col_dst + row] = 0.0f;
+        }
+        return;
+    }
+
+    x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
+    y   += int64_t(sample_y)  *stride_sample_y   + channel_y  *stride_channel_y;
+    if constexpr (is_multi_token_id) {
+        y   += token_idx*stride_col_y2*2;
     }
 
     bool use_gate = false;

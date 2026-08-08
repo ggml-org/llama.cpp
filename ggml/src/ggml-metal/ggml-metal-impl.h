@@ -515,6 +515,13 @@ typedef struct {
 } ggml_metal_kargs_mul_mm_id_map0;
 
 typedef struct {
+    int32_t  ne0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb21;
+} ggml_metal_kargs_mul_mm_id_zero;
+
+typedef struct {
     int32_t  ne00;
     int32_t  ne02;
     uint64_t nb01;

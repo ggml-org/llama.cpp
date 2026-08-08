@@ -517,6 +517,23 @@ static __global__ void mul_mat_vec_q(
     channel_y  = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
     sample_dst = blockIdx.z;
 
+    // the selected expert is uniform in the block, so the whole block leaves on a skipped slot
+    if (ncols_dst == 1 && ids && ids[channel_dst] == -1) {
+        dst += sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0;
+        if (threadIdx.y == 0) {
+#pragma unroll
+            for (int j = 0; j < ncols_dst; ++j) {
+#pragma unroll
+                for (int i = 0; i < rows_per_cuda_block; ++i) {
+                    if (threadIdx.x == i && (rows_per_cuda_block == 1 || uint32_t(row0 + i) < stride_col_dst)) {
+                        dst[j*stride_col_dst + i] = 0.0f;
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     const uint32_t sample_x    = fastdiv(sample_dst, sample_ratio);
     const uint32_t sample_y    = sample_dst;
 
@@ -737,7 +754,17 @@ static __global__ void mul_mat_vec_q_moe(
     }
 
     ggml_cuda_pdl_sync();
-    const uint32_t channel_x = ids[channel_dst + token_idx * ids_stride];
+    const int32_t expert = ids[channel_dst + token_idx * ids_stride];
+
+    // each warp owns one token, so the whole warp leaves on a skipped slot
+    if (expert == -1) {
+        if (threadIdx.x < c_rows_per_block && (c_rows_per_block == 1 || uint32_t(row0 + threadIdx.x) < nrows_x)) {
+            dst[channel_dst*stride_channel_dst + token_idx*stride_col_dst + row0 + threadIdx.x] = 0.0f;
+        }
+        return;
+    }
+
+    const uint32_t channel_x = expert;
     const uint32_t channel_y = fastmodulo(channel_dst, nchannels_y);
 
     const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
