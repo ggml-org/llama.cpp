@@ -94,6 +94,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include "ggml-backend-impl.h"
 
 #include "ggml-vulkan-shaders.hpp"
+#include "ggml-vulkan-fa-gqa.h"
 
 // remove this once it's more widely available in the SDK
 #if !defined(VK_KHR_shader_bfloat16)
@@ -10783,8 +10784,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k->type, v->type, f32acc);
     const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
 
-    if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
-        qk_ratio * nek2 == neq2 && nek2 == nev2 && nem2 <= 1) {
+    // GQA packing (N := gqa_ratio) is only valid for single-token decode
+    if (ggml_vk_fa_should_pack_gqa(neq1, N, qk_ratio, max_gqa, nek2, neq2, nev2, nem2)) {
         // grouped query attention - make the N dimension equal to gqa_ratio, reduce
         // workgroups proportionally in y dimension. The shader will detect gqa_ratio > 1
         // and change addressing calculations to index Q's dimension 2.
