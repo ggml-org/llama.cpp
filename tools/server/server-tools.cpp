@@ -1669,8 +1669,15 @@ struct server_tool_get_info : server_tool {
 
         std::string cwd = json_value(params, "cwd", std::string());
         if (cwd.empty()) {
-            std::error_code ec;
-            cwd = path_to_utf8(fs::current_path(ec));
+            if (json_value(params, "runtime", std::string()).empty()) {
+                std::error_code ec;
+                cwd = path_to_utf8(fs::current_path(ec));
+            } else {
+                // an isolate starts in a directory of its own, which the server's has nothing to
+                // do with, so reporting the latter would name a path no tool ever runs in
+                auto pwd = io->run({"pwd"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
+                cwd = pwd.exit_code == 0 && !pwd.timed_out ? string_strip(pwd.output) : "unknown";
+            }
         }
 
         return {
