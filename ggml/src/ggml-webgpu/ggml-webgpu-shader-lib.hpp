@@ -915,7 +915,6 @@ inline uint32_t ggml_webgpu_flash_attn_max_kv_tile(size_t   limit_bytes,
         return 0;
     }
     const size_t max_kv_tile = (limit_bytes - base_q_bytes) / bytes_per_kv;
-
     return (uint32_t) ((max_kv_tile / kv_granularity) * kv_granularity);
 }
 
