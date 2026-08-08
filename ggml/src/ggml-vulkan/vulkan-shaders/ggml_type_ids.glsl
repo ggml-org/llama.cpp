@@ -1,0 +1,27 @@
+// ggml_type enum values — must match ggml.h
+#define GGML_TYPE_F32      0u
+#define GGML_TYPE_F16      1u
+#define GGML_TYPE_Q4_0     2u
+#define GGML_TYPE_Q4_1     3u
+#define GGML_TYPE_Q5_0     6u
+#define GGML_TYPE_Q5_1     7u
+#define GGML_TYPE_Q8_0     8u
+#define GGML_TYPE_Q2_K    10u
+#define GGML_TYPE_Q3_K    11u
+#define GGML_TYPE_Q4_K    12u
+#define GGML_TYPE_Q5_K    13u
+#define GGML_TYPE_Q6_K    14u
+#define GGML_TYPE_IQ2_XXS 16u
+#define GGML_TYPE_IQ2_XS  17u
+#define GGML_TYPE_IQ3_XXS 18u
+#define GGML_TYPE_IQ1_S   19u
+#define GGML_TYPE_IQ4_NL  20u
+#define GGML_TYPE_IQ3_S   21u
+#define GGML_TYPE_IQ2_S   22u
+#define GGML_TYPE_IQ4_XS  23u
+#define GGML_TYPE_IQ1_M   29u
+#define GGML_TYPE_BF16    30u
+#define GGML_TYPE_Q1_0    41u
+#define GGML_TYPE_Q2_0    42u
+#define GGML_TYPE_MXFP4   39u
+#define GGML_TYPE_NVFP4   40u
