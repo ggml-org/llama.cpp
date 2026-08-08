@@ -15,7 +15,8 @@
 		type ToolResultLine
 	} from '$lib/utils';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import type { DatabaseMessageExtra } from '$lib/types';
+	import type { DatabaseMessageExtra, DatabaseMessageExtraAudioFile } from '$lib/types';
+	import { createBase64DataUrl } from '$lib/utils/data-url';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
@@ -106,9 +107,10 @@
 							</div>
 							{#if line.media}
 								{#if line.media.type === 'AUDIO'}
+									{@const audioSrc = createBase64DataUrl(line.media.mimeType ?? 'audio/mpeg', (line.media as DatabaseMessageExtraAudioFile).base64Data)}
 									<div class="mt-2 mb-2">
 										<audio controls class="w-full rounded-lg">
-											<source src={line.media.base64Url} type={line.media.mimeType ?? 'audio/mpeg'} />
+											<source src={audioSrc} type={line.media.mimeType ?? 'audio/mpeg'} />
 											Your browser does not support the audio element.
 										</audio>
 									</div>

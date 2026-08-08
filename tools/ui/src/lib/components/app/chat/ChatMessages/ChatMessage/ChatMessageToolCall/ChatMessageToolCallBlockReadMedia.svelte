@@ -4,6 +4,7 @@
 	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
 	import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile, DatabaseMessageExtraAudioFile } from '$lib/types';
 	import { type AgenticSection } from '$lib/utils';
+	import { createBase64DataUrl } from '$lib/utils/data-url';
 	import { parseReadMediaMeta } from './parsers/read-media';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 
@@ -48,9 +49,13 @@
 		{#if section.toolResult}
 			{#if mediaAttachment}
 				{#if isAudio}
+					{@const audioSrc = createBase64DataUrl(
+						readMediaMeta?.mimeType ?? 'audio/mpeg',
+						(mediaAttachment as DatabaseMessageExtraAudioFile).base64Data
+					)}
 					<div class="mt-2">
 						<audio controls class="w-full rounded-lg">
-							<source src={mediaAttachment.base64Url} type={readMediaMeta?.mimeType ?? 'audio/mpeg'} />
+							<source src={audioSrc} type={readMediaMeta?.mimeType ?? 'audio/mpeg'} />
 							Your browser does not support the audio element.
 						</audio>
 					</div>

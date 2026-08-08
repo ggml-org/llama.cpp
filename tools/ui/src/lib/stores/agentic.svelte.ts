@@ -31,7 +31,7 @@ import { BuiltInTool, ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
-import { isAbortError } from '$lib/utils';
+import { isAbortError, getAudioInputFormat } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
@@ -79,7 +79,8 @@ import type {
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
-	DatabaseMessageExtraImageFile
+	DatabaseMessageExtraImageFile,
+	DatabaseMessageExtraAudioFile
 } from '$lib/types/database';
 
 function createDefaultSession(): AgenticSession {
@@ -930,7 +931,15 @@ class AgenticStore {
 					{ type: ContentPartType.TEXT, text: cleanedResult }
 				];
 				for (const attachment of attachments) {
-					if (attachment.type === AttachmentType.IMAGE) {
+					if (attachment.type === AttachmentType.AUDIO) {
+						contentParts.push({
+							type: ContentPartType.INPUT_AUDIO,
+							input_audio: {
+								data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
+								format: getAudioInputFormat((attachment as DatabaseMessageExtraAudioFile).mimeType)
+							}
+						});
+					} else if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
 								type: ContentPartType.IMAGE_URL,
@@ -1027,6 +1036,7 @@ class AgenticStore {
 				return line;
 			}
 
+			// Audio extras require raw base64 in base64Data (not full data URI).
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
@@ -1041,7 +1051,7 @@ class AgenticStore {
 					type: AttachmentType.AUDIO,
 					name,
 					mimeType,
-					base64Url: trimmedLine
+					base64Data: base64Data
 				});
 
 				return `[Attachment saved: ${name}]`;

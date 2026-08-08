@@ -324,3 +324,6 @@ export { uuid } from './uuid';
 
 // CSS utilities
 export { remToPx } from './css';
+
+// Audio format helper (used by agentic store and chat service)
+export { getAudioInputFormat } from './audio-format';
