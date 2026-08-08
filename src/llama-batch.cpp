@@ -558,7 +558,7 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
     }
 
     // the current batch index of each sequence set
-    std::vector<int32_t> cur_idx(n_seqs, 0);
+    int32_t cur_idx[LLAMA_MAX_SEQ] = {0};
 
     for (uint32_t s = 0; s < n_seqs; ++s) {
         while (used[seq_set_map[cur_seq_set[s]][cur_idx[s]]]) {

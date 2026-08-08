@@ -1728,7 +1728,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // TODO: avoid this workaround in the future
     if (has_samplers && batch_inp.logits) {
-        std::vector<int32_t> seq_output_count(n_seq_max, 0);
+        int32_t seq_output_count[LLAMA_MAX_SEQ] = {0};
 
         for (int32_t i = 0; i < batch_inp.n_tokens; ++i) {
             if (batch_inp.logits[i] == 0) {

@@ -244,7 +244,7 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
         float * data = (float *) mean->data;
         memset(mean->data, 0, n_tokens*n_seqs_unq*ggml_element_size(mean));
 
-        std::vector<uint64_t> sums(n_seqs_unq, 0);
+        uint64_t sums[LLAMA_MAX_SEQ] = {0};
         for (int i = 0; i < n_tokens; i += n_seq_tokens) {
             for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id  = ubatch->seq_id[i][s];
@@ -254,7 +254,7 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
             }
         }
 
-        std::vector<float> div(n_seqs_unq, 0.0f);
+        float div[LLAMA_MAX_SEQ] = {0.0f};
         for (int s = 0; s < n_seqs_unq; ++s) {
             const uint64_t sum = sums[s];
             if (sum > 0) {
@@ -290,8 +290,10 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
         uint32_t * data = (uint32_t *) cls->data;
         memset(cls->data, 0, n_seqs_unq*ggml_element_size(cls));
 
-        std::vector<int> target_pos(n_seqs_unq, -1);
-        std::vector<int> target_row(n_seqs_unq, -1);
+        int target_pos[LLAMA_MAX_SEQ];
+        std::fill_n(target_pos, n_seqs_unq, -1);
+        int target_row[LLAMA_MAX_SEQ];
+        std::fill_n(target_row, n_seqs_unq, -1);
 
         const bool last = (
              cparams.pooling_type == LLAMA_POOLING_TYPE_LAST ||
