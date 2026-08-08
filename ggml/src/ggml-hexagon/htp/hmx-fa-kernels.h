@@ -495,12 +495,140 @@ static inline void hmx_fa_q_prep_fp16(
 }
 
 
+// Head-dim-padded Q-prep (f32). Used when DK is not a multiple of 64.
+static inline void hmx_fa_q_prep_fp32_pad(__fp16 *                      vtcm_q_tiles,
+                                          const uint8_t *               temp_q_vtcm,
+                                          size_t                        start,
+                                          size_t                        end,
+                                          size_t                        g_rows_end,
+                                          size_t                        dk_in,
+                                          size_t                        dk_out,
+                                          size_t                        G,
+                                          size_t                        n_rows_q,
+                                          const struct fastdiv_values * div_G,
+                                          bool                          q_transposed) {
+    const uint32_t n_out_tiles = (uint32_t) (dk_out / 32);
+    for (size_t r = start; r < end; r += 2) {
+        size_t   r0       = r / HMX_FP16_TILE_N_ROWS;
+        size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
+        __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * dk_out;
+
+        if (r >= g_rows_end) {
+            for (uint32_t d = 0; d < n_out_tiles; ++d) {
+                ((HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS))[r1 / 2] = Q6_V_vzero();
+            }
+            continue;
+        }
+
+        const size_t q_idx0 = fastdiv(r + 0, div_G);
+        const size_t h_idx0 = fastmodulo(r + 0, G, div_G);
+        const size_t q_idx1 = fastdiv(r + 1, div_G);
+        const size_t h_idx1 = fastmodulo(r + 1, G, div_G);
+
+        const size_t offset0 = q_transposed ? (h_idx0 * n_rows_q + q_idx0) : (q_idx0 * G + h_idx0);
+        const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
+
+        const HVX_UVector * pv_in0 = (const HVX_UVector *) (temp_q_vtcm + offset0 * dk_in * sizeof(float));
+        const HVX_UVector * pv_in1 = (r + 1 < g_rows_end) ? (const HVX_UVector *) (temp_q_vtcm + offset1 * dk_in * sizeof(float)) : NULL;
+
+        for (uint32_t d = 0; d < n_out_tiles; ++d) {
+            HVX_Vector * out_tile   = (HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS);
+            const size_t base_lane  = (size_t) d * 32;
+            const size_t real_lanes = (base_lane < dk_in) ? hex_smin(32, dk_in - base_lane) : 0;
+
+            if (real_lanes == 0) {
+                out_tile[r1 / 2] = Q6_V_vzero();
+                continue;
+            }
+
+            HVX_Vector v0 = pv_in0[d];
+            HVX_Vector v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
+            if (real_lanes < 32) {
+                // Straddle tile: keep the first real_lanes floats, zero the padded tail so
+                // the packed f16 lanes beyond DK are zero.
+                const HVX_VectorPred keep = Q6_Q_vsetq_R((uint32_t) (real_lanes * sizeof(float)));
+                v0                        = Q6_V_vmux_QVV(keep, v0, Q6_V_vzero());
+                v1                        = Q6_V_vmux_QVV(keep, v1, Q6_V_vzero());
+            }
+            out_tile[r1 / 2] = hvx_vec_f32_to_f16_shuff(v0, v1);
+        }
+    }
+}
+
+// Head-dim-padded Q-prep (f16). Used when DK is not a multiple of 64.
+static inline void hmx_fa_q_prep_fp16_pad(__fp16 *                      vtcm_q_tiles,
+                                          const uint8_t *               temp_q_vtcm,
+                                          size_t                        start,
+                                          size_t                        end,
+                                          size_t                        g_rows_end,
+                                          size_t                        dk_in,
+                                          size_t                        dk_out,
+                                          size_t                        G,
+                                          size_t                        n_rows_q,
+                                          const struct fastdiv_values * div_G,
+                                          bool                          q_transposed) {
+    const uint32_t n_out_pairs = (uint32_t) (dk_out / 64);
+    for (size_t r = start; r < end; r += 2) {
+        size_t   r0       = r / HMX_FP16_TILE_N_ROWS;
+        size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
+        __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * dk_out;
+
+        if (r >= g_rows_end) {
+            for (uint32_t d = 0; d < n_out_pairs; ++d) {
+                __fp16 *     out_dtile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
+                HVX_Vector * pv_out0   = ((HVX_Vector *) out_dtile) + r1 / 2;
+                HVX_Vector * pv_out1   = pv_out0 + 16;
+                *pv_out0               = Q6_V_vzero();
+                *pv_out1               = Q6_V_vzero();
+            }
+            continue;
+        }
+
+        const size_t q_idx0 = fastdiv(r + 0, div_G);
+        const size_t h_idx0 = fastmodulo(r + 0, G, div_G);
+        const size_t q_idx1 = fastdiv(r + 1, div_G);
+        const size_t h_idx1 = fastmodulo(r + 1, G, div_G);
+
+        const size_t offset0 = q_transposed ? (h_idx0 * n_rows_q + q_idx0) : (q_idx0 * G + h_idx0);
+        const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
+
+        const HVX_UVector * pv_in0 = (const HVX_UVector *) (temp_q_vtcm + offset0 * dk_in * sizeof(__fp16));
+        const HVX_UVector * pv_in1 = (r + 1 < g_rows_end) ? (const HVX_UVector *) (temp_q_vtcm + offset1 * dk_in * sizeof(__fp16)) : NULL;
+
+        for (uint32_t d = 0; d < n_out_pairs; ++d) {
+            __fp16 *     out_dtile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
+            HVX_Vector * pv_out0   = ((HVX_Vector *) out_dtile) + r1 / 2;
+            HVX_Vector * pv_out1   = pv_out0 + 16;
+
+            const size_t base_lane  = (size_t) d * 64;
+            const size_t real_lanes = (base_lane < dk_in) ? hex_smin(64, dk_in - base_lane) : 0;
+
+            if (real_lanes == 0) {
+                *pv_out0 = Q6_V_vzero();
+                *pv_out1 = Q6_V_vzero();
+                continue;
+            }
+
+            HVX_Vector v0 = pv_in0[d];
+            HVX_Vector v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
+            if (real_lanes < 64) {
+                const HVX_VectorPred keep = Q6_Q_vsetq_R((uint32_t) (real_lanes * sizeof(__fp16)));
+                v0                        = Q6_V_vmux_QVV(keep, v0, Q6_V_vzero());
+                v1                        = Q6_V_vmux_QVV(keep, v1, Q6_V_vzero());
+            }
+            HVX_VectorPair vp = Q6_W_vshuff_VVR(v1, v0, -2);
+            *pv_out0          = Q6_V_lo_W(vp);
+            *pv_out1          = Q6_V_hi_W(vp);
+        }
+    }
+}
+
 static inline void hmx_fa_q_prep_fallback(
     __fp16 * vtcm_q_tiles, uintptr_t q_data,
     size_t q_nb1, size_t q_nb2, size_t q_nb3,
     uint32_t q_start, uint32_t kv_head, uint32_t ib3,
     size_t start, size_t end, size_t n_rows_g,
-    size_t G, size_t DK, bool is_q_fp32,
+    size_t G, size_t dk_in, size_t dk_out, bool is_q_fp32,
     const struct fastdiv_values * div_G
 ) {
     for (size_t r = start; r < end; r += 2) {
@@ -518,33 +646,55 @@ static inline void hmx_fa_q_prep_fallback(
 
         size_t   r0       = r / HMX_FP16_TILE_N_ROWS;
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
-        __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
+        __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * dk_out;
 
         if (is_q_fp32) {
             const HVX_UVector * pv_in0 = q_ptr0 ? (const HVX_UVector *) q_ptr0 : NULL;
             const HVX_UVector * pv_in1 = q_ptr1 ? (const HVX_UVector *) q_ptr1 : NULL;
 
-            for (uint32_t d = 0; d < DK / 32; ++d) {
-                HVX_Vector v0   = pv_in0 ? pv_in0[d] : Q6_V_vzero();
-                HVX_Vector v1   = pv_in1 ? pv_in1[d] : Q6_V_vzero();
-                HVX_Vector v_hf = hvx_vec_f32_to_f16_shuff(v0, v1);
+            for (uint32_t d = 0; d < dk_out / 32; ++d) {
+                HVX_Vector * out_tile   = (HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS);
+                const size_t base_lane  = (size_t) d * 32;
+                const size_t real_lanes = (base_lane < dk_in) ? hex_smin(32, dk_in - base_lane) : 0;
 
-                HVX_Vector * out_tile = (HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS);
-                out_tile[r1 / 2]      = v_hf;
+                if (real_lanes == 0) {
+                    out_tile[r1 / 2] = Q6_V_vzero();
+                    continue;
+                }
+                HVX_Vector v0 = pv_in0 ? pv_in0[d] : Q6_V_vzero();
+                HVX_Vector v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
+                if (real_lanes < 32) {
+                    const HVX_VectorPred keep = Q6_Q_vsetq_R((uint32_t) (real_lanes * sizeof(float)));
+                    v0 = Q6_V_vmux_QVV(keep, v0, Q6_V_vzero());
+                    v1 = Q6_V_vmux_QVV(keep, v1, Q6_V_vzero());
+                }
+                out_tile[r1 / 2] = hvx_vec_f32_to_f16_shuff(v0, v1);
             }
         } else {
             const HVX_UVector * pv_in0 = q_ptr0 ? (const HVX_UVector *) q_ptr0 : NULL;
             const HVX_UVector * pv_in1 = q_ptr1 ? (const HVX_UVector *) q_ptr1 : NULL;
 
-            for (uint32_t d = 0; d < DK / 64; ++d) {
-                HVX_Vector     v0 = pv_in0 ? pv_in0[d] : Q6_V_vzero();
-                HVX_Vector     v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
-                HVX_VectorPair vp = Q6_W_vshuff_VVR(v1, v0, -2);
-
+            for (uint32_t d = 0; d < dk_out / 64; ++d) {
                 __fp16 *     out_dtile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
                 HVX_Vector * pv_out0   = ((HVX_Vector *) out_dtile) + r1 / 2;
                 HVX_Vector * pv_out1   = pv_out0 + 16;
 
+                const size_t base_lane  = (size_t) d * 64;
+                const size_t real_lanes = (base_lane < dk_in) ? hex_smin(64, dk_in - base_lane) : 0;
+
+                if (real_lanes == 0) {
+                    *pv_out0 = Q6_V_vzero();
+                    *pv_out1 = Q6_V_vzero();
+                    continue;
+                }
+                HVX_Vector v0 = pv_in0 ? pv_in0[d] : Q6_V_vzero();
+                HVX_Vector v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
+                if (real_lanes < 64) {
+                    const HVX_VectorPred keep = Q6_Q_vsetq_R((uint32_t) (real_lanes * sizeof(__fp16)));
+                    v0 = Q6_V_vmux_QVV(keep, v0, Q6_V_vzero());
+                    v1 = Q6_V_vmux_QVV(keep, v1, Q6_V_vzero());
+                }
+                HVX_VectorPair vp = Q6_W_vshuff_VVR(v1, v0, -2);
                 *pv_out0 = Q6_V_lo_W(vp);
                 *pv_out1 = Q6_V_hi_W(vp);
             }
