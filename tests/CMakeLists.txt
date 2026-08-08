@@ -292,6 +292,11 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-quantize-perf.cpp)
     llama_build_and_test(test-rope.cpp)
     llama_build_and_test(test-col2im-1d.cpp)
+
+    # uses POSIX sockets to run a proxy between the RPC client and server
+    if (GGML_RPC AND NOT WIN32)
+        llama_build_and_test(test-rpc.cpp)
+    endif()
 endif()
 
 # libmtmd
