@@ -185,7 +185,8 @@ static tools_io::exec_result run_subprocess(
         int timeout_secs,
         const std::function<bool(const std::string &)> & on_chunk,
         bool combine_stderr,
-        const std::string & cwd = "") {
+        const std::string & cwd = "",
+        const std::string * stdin_data = nullptr) {
     tools_io::exec_result res;
 
     common_subproc proc;
@@ -200,6 +201,20 @@ static tools_io::exec_result run_subprocess(
     if (!proc.create(args, options, {}, cwd.empty() ? nullptr : cwd.c_str())) {
         res.output = "failed to spawn process";
         return res;
+    }
+
+    // feed the child before reading it back: this relies on the child draining stdin as it goes,
+    // which `cat` does, and closing stdin is what tells it the input is over
+    if (stdin_data != nullptr) {
+        if (FILE * in = proc.stdin_file()) {
+            // a child that died early leaves nothing reading the pipe, so a short write is not
+            // an error in itself; the exit code below is what decides
+            if (!stdin_data->empty()) {
+                fwrite(stdin_data->data(), 1, stdin_data->size(), in);
+            }
+            fflush(in);
+        }
+        proc.close_stdin();
     }
 
     std::atomic<bool> done{false};
@@ -525,33 +540,13 @@ public:
     }
 
     bool write_file(const std::string & path, const std::string & content) const override {
-        std::string abs_path = resolve(path);
-
-        std::error_code ec;
-        fs::path tmp_dir = fs::temp_directory_path(ec);
-        if (ec) return false;
-
-        static std::atomic<uint64_t> tmp_counter{0};
-        fs::path tmp = tmp_dir / string_format(
-            "llama-tools-io-isolate-%zu-%llu.tmp",
-            std::hash<std::thread::id>{}(std::this_thread::get_id()),
-            (unsigned long long) tmp_counter.fetch_add(1));
-
-        {
-            std::ofstream f(tmp, std::ios::binary);
-            if (!f) return false;
-            f << content;
-            if (!f) return false;
-        }
-
-        bool ok = shell_run({"sh", "-c", "mkdir -p \"$(dirname \"$1\")\"", "_", abs_path});
-        if (ok) {
-            ok = upload(tmp.string(), abs_path);
-        }
-
-        std::error_code rm_ec;
-        fs::remove(tmp, rm_ec);
-        return ok;
+        // one round trip: the parent directory is created and the content is taken from stdin, so
+        // it never goes through an argv the far side would re-parse, and never lands on the host
+        auto res = run_subprocess(
+            build_argv({"sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", "_", resolve(path)},
+                       /*needs_stdin=*/true),
+            4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true, "", &content);
+        return res.exit_code == 0 && !res.timed_out;
     }
 
     list_result list_entries(const std::string & base, int max_depth, list_kind kind) const override {
@@ -612,9 +607,6 @@ protected:
     // wrap `inner` (a complete POSIX argv) into the host-side argv that runs it in the isolate
     // a transport that re-parses its args in a remote shell (ssh) must join `inner` with shell_quote_join()
     virtual std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const = 0;
-
-    // copy a host file into the isolate, `isolate_path` is absolute and its parent already exists
-    virtual bool upload(const std::string & host_path, const std::string & isolate_path) const = 0;
 
     // quote `argv` into a single string that a POSIX shell re-parses into exactly `argv`
     static std::string shell_quote_join(const std::vector<std::string> & argv) {
@@ -698,8 +690,8 @@ private:
     }
 };
 
-// an already-running container, driven through `<engine> exec` and `<engine> cp`. docker and
-// podman expose the same verbs and the same argument order, so one implementation drives both
+// an already-running container, driven through `<engine> exec`. docker and podman expose the
+// same verbs and the same argument order, so one implementation drives both
 class tools_io_container : public tools_io_isolate {
 public:
     tools_io_container(std::string bin, std::string container_id, std::string cwd = "")
@@ -714,13 +706,6 @@ protected:
         argv.push_back(container_id);
         argv.insert(argv.end(), inner.begin(), inner.end());
         return argv;
-    }
-
-    bool upload(const std::string & host_path, const std::string & isolate_path) const override {
-        auto res = run_subprocess(
-            {bin, "cp", host_path, container_id + ":" + isolate_path},
-            4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true);
-        return res.exit_code == 0 && !res.timed_out;
     }
 
 private:
@@ -738,7 +723,7 @@ public:
 protected:
     std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
         // the remote shell re-parses the command line, so `inner` travels as one quoted word
-        std::vector<std::string> argv = ssh_argv("ssh");
+        std::vector<std::string> argv = ssh_argv();
         if (!needs_stdin) {
             argv.push_back("-n");
         }
@@ -747,24 +732,14 @@ protected:
         return argv;
     }
 
-    bool upload(const std::string & host_path, const std::string & isolate_path) const override {
-        // scp expands the remote path in a shell too, hence the same quoting
-        std::vector<std::string> argv = ssh_argv("scp");
-        argv.push_back(host_path);
-        argv.push_back(target + ":" + shell_quote_join({isolate_path}));
-
-        auto res = run_subprocess(argv, 4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true);
-        return res.exit_code == 0 && !res.timed_out;
-    }
-
 private:
     std::string target;
 
     // the tools run without a console, so any prompt would hang them: authentication is
     // key-based only and the host key must already be trusted, which is the admin's job
-    static std::vector<std::string> ssh_argv(const char * bin) {
+    static std::vector<std::string> ssh_argv() {
         return {
-            bin,
+            "ssh",
             "-o", "BatchMode=yes",
             "-o", "PasswordAuthentication=no",
             "-o", "KbdInteractiveAuthentication=no",
@@ -1865,10 +1840,28 @@ struct server_mcp_tool : server_tool {
     }
 };
 
+// resolves --tools-runtime into the isolate that every tool call runs through. spec() returns the
+// runtime string make_tools_io() understands, refreshed per call so a lifecycle-managed backend can
+// re-check or respawn its target first
+struct server_tools_runtime {
+    virtual ~server_tools_runtime() = default;
+    virtual std::string spec() = 0;
+};
+
+// a target that already exists and needs no lifecycle: the spec is passed straight through, and was
+// validated once at startup
+struct server_tools_static_runtime : server_tools_runtime {
+    explicit server_tools_static_runtime(std::string spec) : runtime_spec(std::move(spec)) {}
+    std::string spec() override { return runtime_spec; }
+
+private:
+    std::string runtime_spec;
+};
+
 // owns the container used as the sandboxed runtime for tool invocations, as configured by
 // --tools-runtime. "spawned" mode starts and stops the container itself; "existing" mode just reuses
 // a container id the user already has running and never stops it.
-struct server_tools_container_runtime {
+struct server_tools_container_runtime : server_tools_runtime {
     server_tools_container_runtime(const server_tools_container_runtime &) = delete;
 
     explicit server_tools_container_runtime(const std::string & spec) {
@@ -1894,7 +1887,7 @@ struct server_tools_container_runtime {
         }
     }
 
-    ~server_tools_container_runtime() {
+    ~server_tools_container_runtime() override {
         if (spawned && !container_id.empty()) {
             // closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
             proc.close_stdin();
@@ -1902,9 +1895,23 @@ struct server_tools_container_runtime {
         }
     }
 
+    // re-checks the target and respawns a spawned container that died on its own, so the returned
+    // spec always names a container that was running a moment ago
+    std::string spec() override {
+        return bin + "-container:" + live_container_id();
+    }
+
+private:
+    std::string bin;
+    bool spawned = false;
+    std::string image; // spawned mode only
+    std::string container_id;
+    common_subproc proc; // spawned mode only: `<engine> run` client that keeps the container alive
+    std::mutex mutex;
+
     // container id to use for the next tool call; respawns a spawned container that died on its own,
     // or throws if an externally-managed one is no longer reachable
-    std::string get_container_id() {
+    std::string live_container_id() {
         std::lock_guard<std::mutex> lock(mutex);
         if (!spawned) {
             if (!is_running(container_id)) {
@@ -1921,19 +1928,6 @@ struct server_tools_container_runtime {
         }
         return container_id;
     }
-
-    // spec that make_tools_io() resolves back to this container
-    std::string attach_spec() {
-        return bin + "-container:" + get_container_id();
-    }
-
-private:
-    std::string bin;
-    bool spawned = false;
-    std::string image; // spawned mode only
-    std::string container_id;
-    common_subproc proc; // spawned mode only: `<engine> run` client that keeps the container alive
-    std::mutex mutex;
 
     // spawns "<engine> run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
     // so the container stays alive until we close it (see destructor) or it is killed from the outside
@@ -2019,17 +2013,22 @@ static std::string get_header(const std::map<std::string, std::string> & headers
 server_tools::server_tools() = default;
 server_tools::~server_tools() = default;
 
+// builds the runtime backing --tools-runtime: a container engine owns a lifecycle, anything else is
+// a static target that only needs its spec validated once, here at startup
+static std::unique_ptr<server_tools_runtime> make_tools_runtime(const std::string & spec) {
+    container_runtime_spec parsed;
+    if (parse_container_runtime(spec, parsed)) {
+        return std::make_unique<server_tools_container_runtime>(spec);
+    }
+    make_tools_io({{"runtime", spec}}); // nothing to own, just reject a bad spec now
+    return std::make_unique<server_tools_static_runtime>(spec);
+}
+
 void server_tools::setup(const std::vector<std::string> & enabled_tools,
                          server_mcp & mcp_mgr,
                          const std::string & tools_runtime) {
     if (!tools_runtime.empty()) {
-        if (tools_runtime.rfind(SERVER_TOOL_RUNTIME_SSH, 0) == 0) {
-            // nothing to create and nothing to reclaim, the target is already there
-            make_tools_io({{"runtime", tools_runtime}}); // rejects a bad spec at startup
-            runtime_spec = tools_runtime;
-        } else {
-            container_runtime = std::make_unique<server_tools_container_runtime>(tools_runtime);
-        }
+        runtime = make_tools_runtime(tools_runtime);
     }
 
     if (!enabled_tools.empty()) {
@@ -2127,13 +2126,11 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             if (params.contains("runtime")) {
                 params.erase("runtime");
             }
-            auto runtime = get_header(req.headers, "x-tool-runtime");
-            if (!runtime.empty()) {
-                params["runtime"] = runtime;
-            } else if (container_runtime) {
-                params["runtime"] = container_runtime->attach_spec();
-            } else if (!runtime_spec.empty()) {
-                params["runtime"] = runtime_spec;
+            auto runtime_header = get_header(req.headers, "x-tool-runtime");
+            if (!runtime_header.empty()) {
+                params["runtime"] = runtime_header;
+            } else if (runtime) {
+                params["runtime"] = runtime->spec();
             }
 
             server_tool & tool = find_tool(tools, tool_name, stream);
