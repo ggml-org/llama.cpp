@@ -53,12 +53,7 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.n_embd_out_impl = hparams.dsv4_hc_mult * hparams.n_embd;
 
-    uint32_t n_compress_ratios = 0;
-    ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_compress_ratios);
-    if (n_compress_ratios < hparams.n_layer_all) {
-        throw std::runtime_error("DeepSeek-V4 compress_ratios is shorter than block_count");
-    }
-    ml.get_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS, hparams.dsv4_compress_ratios);
+    ml.get_key_or_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS, hparams.dsv4_compress_ratios, hparams.n_layer_all);
 
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func);
     if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
