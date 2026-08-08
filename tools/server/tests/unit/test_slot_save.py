@@ -33,6 +33,9 @@ def test_slot_save_restore():
     })
     assert res.status_code == 200
     assert res.body["n_saved"] == 84
+    # This model has no checkpoints, so the file carries no appendix
+    slot_file = os.path.join(server.slot_save_path, "slot1.bin")
+    assert res.body["n_written"] == os.path.getsize(slot_file)
 
     # Since we have cache, this should only process the last tokens
     res = server.make_request("POST", "/completion", data={
@@ -50,6 +53,7 @@ def test_slot_save_restore():
     })
     assert res.status_code == 200
     assert res.body["n_restored"] == 84
+    assert res.body["n_read"] == os.path.getsize(slot_file)
 
     # Since we have cache, slot 0 should only process the last tokens
     res = server.make_request("POST", "/completion", data={
@@ -159,10 +163,8 @@ def test_slot_save_restore_text_only_on_multimodal(mmproj_server):
     assert res.status_code == 200
     assert res.body["n_restored"] == n_saved
 
-    # The restored slot is usable for a follow-up completion. We do NOT assert
-    # prefix reuse here: tinygemma3 is a SWA model, which forces full prompt
-    # re-processing after a restore (a model property, not the save/restore gate
-    # under test).
+    # The restored slot is usable for a follow-up completion, prefix reuse is not
+    # asserted here - see test_slot_restore_preserves_context_checkpoints below
     res = server.make_request("POST", "/completion", data={
         "prompt": "The quick brown fox jumps over the lazy dog.",
         "id_slot": 0,
@@ -222,3 +224,86 @@ def test_slot_erase_text_only_on_multimodal(mmproj_server):
     })
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == prompt_n  # all tokens are processed again
+
+
+@pytest.fixture
+def swa_server():
+    # tinygemma3 is a SWA model - its partial cache reuse relies on checkpoints.
+    swa = ServerPreset.tinygemma3()
+    swa.slot_save_path = "./tmp"
+    swa.temperature = 0.0
+    # The host prompt cache would rescue the overwritten slot and hide the path under test
+    swa.cache_ram = 0
+    # Checkpoints are placed at (end - 4 - n_ubatch) and (end - 4), keep n_ubatch small
+    # so the first one lands before the divergence point of the re-prompts below
+    swa.n_ubatch = 32
+    return swa
+
+
+def test_slot_restore_preserves_context_checkpoints(swa_server):
+    server = swa_server
+    server.start()
+
+    base = "The quick brown fox jumps over the lazy dog. " * 20
+
+    # On a live slot, a divergent re-prompt rolls back to a mid-prompt checkpoint
+    # and only re-processes from there
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_full = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    n_live = res.body["timings"]["prompt_n"]
+    assert n_live < n_full  # partial reuse via checkpoint rollback
+
+    # Now the same divergent re-prompt, but after save -> overwrite -> restore
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "The first ending of this story is a happy one.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "ckpt_slot1.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_saved"] > 0
+    # This save file carries a checkpoint appendix, which the byte count must cover
+    ckpt_file = os.path.join(server.slot_save_path, "ckpt_slot1.bin")
+    assert res.body["n_written"] == os.path.getsize(ckpt_file)
+
+    # Overwrite the slot with an unrelated prompt
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Unrelated text with no common prefix occupies the slot now.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "ckpt_slot1.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_read"] == os.path.getsize(ckpt_file)
+
+    # The restored slot must roll back to a checkpoint, like the live slot did
+    res = server.make_request("POST", "/completion", data={
+        "prompt": base + "But the second ending was different and sad.",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["prompt_n"] == n_live
