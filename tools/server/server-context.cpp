@@ -5184,6 +5184,20 @@ json server_routes::get_model_info() const {
     };
 }
 
+// The textual `fs_validate_filename()` check does not resolve symlinks, so a symlink
+// placed inside the configured root can still redirect the operation outside of it.
+// Compare the *resolved* path against the resolved root before touching the file.
+static bool fs_path_is_within(const std::filesystem::path & root, const std::filesystem::path & path) {
+    auto root_it = root.begin();
+    auto path_it = path.begin();
+    for (; root_it != root.end() && path_it != path.end(); ++root_it, ++path_it) {
+        if (*root_it != *path_it) {
+            return false;
+        }
+    }
+    return root_it == root.end();
+}
+
 std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
@@ -5192,7 +5206,14 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-    std::string filepath = params.slot_save_path + filename;
+    const auto slot_root     = std::filesystem::weakly_canonical(std::filesystem::path(params.slot_save_path));
+    const auto resolved_path = std::filesystem::weakly_canonical(slot_root / filename);
+    if (!fs_path_is_within(slot_root, resolved_path)) {
+        res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    std::string filepath = resolved_path.string();
 
     auto & rd = res->rd;
     {
@@ -5228,7 +5249,14 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const 
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-    std::string filepath = params.slot_save_path + filename;
+    const auto slot_root     = std::filesystem::weakly_canonical(std::filesystem::path(params.slot_save_path));
+    const auto resolved_path = std::filesystem::weakly_canonical(slot_root / filename);
+    if (!fs_path_is_within(slot_root, resolved_path)) {
+        res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    std::string filepath = resolved_path.string();
 
     auto & rd = res->rd;
     {
