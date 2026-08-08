@@ -47,7 +47,7 @@ jobs:
           mv dist.tar.gz dist.tar.gz.sha256 tools/ui/dist/
 
       - name: Install Hugging Face Hub CLI
-        run: pip install -U huggingface_hub
+        run: pip install -r requirements/requirements-ui-publish.txt
 
       - name: Authenticate with Hugging Face
         run: hf auth login --token ${{ secrets.hf_token }}
