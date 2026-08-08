@@ -107,7 +107,7 @@ export function useContextGauge(): UseContextGaugeReturn {
 	});
 
 	const isActiveModelLoaded = $derived(
-		activeModelId !== null && modelsStore.isModelLoaded(activeModelId)
+		activeModelId !== null && (!isRouterMode() || modelsStore.isModelLoaded(activeModelId))
 	);
 
 	const isActiveModelLoading = $derived(
