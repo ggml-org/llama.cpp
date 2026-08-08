@@ -10,18 +10,61 @@
 #include <ctime>
 #include <atomic>
 #include <cstring>
+#include <cstdint>
 #include <cstdlib>
 #include <algorithm>
+#include <iterator>
 #include <unordered_set>
 #include <tuple>
 #include <functional>
 #include <memory>
+#include <mutex>
+
+#if defined(_WIN32)
+#   ifndef NOMINMAX
+#       define NOMINMAX
+#   endif
+#   include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
 //
 // internal helpers
 //
+
+// a child process writes in the OEM code page, so accented output would reach
+// the JSON layer as invalid bytes. run() spawns without a console, so the
+// console code page never applies
+static std::string console_output_to_utf8(const std::string & text) {
+#if defined(_WIN32)
+    // a chunk can end mid sequence, so the incomplete tail is dropped first
+    if (text.empty() || is_valid_utf8(text.substr(0, validate_utf8(text)))) {
+        // never decode twice a child that already emits UTF-8
+        return text;
+    }
+
+    const UINT cp = GetOEMCP();
+
+    // fail rather than emit replacement characters when the code page is wrong
+    const int wide_len = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, text.data(), (int) text.size(), nullptr, 0);
+    if (wide_len <= 0) {
+        return text;
+    }
+    std::wstring wide(wide_len, L'\0');
+    MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, text.data(), (int) text.size(), wide.data(), wide_len);
+
+    const int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), wide_len, nullptr, 0, nullptr, nullptr);
+    if (utf8_len <= 0) {
+        return text;
+    }
+    std::string utf8(utf8_len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), wide_len, utf8.data(), utf8_len, nullptr, nullptr);
+    return utf8;
+#else
+    return text;
+#endif
+}
 
 json server_tool::to_json() const {
     return {
@@ -31,6 +74,7 @@ json server_tool::to_json() const {
         {"permissions", json{
             {"write", permission_write}
         }},
+        {"uses_cwd", uses_cwd},
         {"definition", get_definition()},
     };
 }
@@ -46,14 +90,30 @@ enum class list_kind {
     all,   // both
 };
 
+// a narrow path uses the active code page on Windows, so every crossing between
+// a std::string (always UTF-8 here) and fs::path is converted explicitly
+static fs::path path_from_utf8(const std::string & s) {
+    return fs::u8path(s);
+}
+
+// '/' separators on every platform: Windows accepts them, the web UI needs them
+static std::string path_to_utf8(const fs::path & p) {
+    const auto s = p.generic_u8string();
+    return std::string(s.begin(), s.end());
+}
+
 // home directory, read once at first use (getenv is not thread safe against setenv)
 static const std::string & home_dir() {
     static const std::string home = [] {
-        const char * h = getenv("HOME");
 #ifdef _WIN32
-        if (h == nullptr) h = getenv("USERPROFILE");
-#endif
+        // the narrow getenv would return the profile path in the active code page
+        const wchar_t * w = _wgetenv(L"HOME");
+        if (w == nullptr) w = _wgetenv(L"USERPROFILE");
+        return w ? path_to_utf8(fs::path(w)) : std::string();
+#else
+        const char * h = getenv("HOME");
         return h ? std::string(h) : std::string();
+#endif
     }();
     return home;
 }
@@ -70,6 +130,13 @@ static std::string expand_home(const std::string & path) {
 static int entry_depth(const std::string & rel) {
     return 1 + (int) std::count(rel.begin(), rel.end(), '/');
 }
+
+// directories that a listing reports but never descends into: they can be enormous
+// lowercase only, the local walker case-folds a name before the lookup
+static const char * const SERVER_TOOL_JUNK_DIR_NAMES[] = {
+    ".git", ".svn", ".hg", "node_modules", "__pycache__",
+    ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
+};
 
 class tools_io {
 public:
@@ -92,11 +159,14 @@ public:
         std::string rel; // '/'-separated, relative to `base`
         bool is_dir = false;
     };
-    // entries relative to `base`; sets `err` if `base` isn't a directory
+    struct list_result {
+        std::vector<list_entry> entries;
+        std::string err;        // set when `base` is not a directory
+        bool truncated = false; // set when the walk could not see everything
+    };
+    // entries relative to `base`, which must already be resolved (absolute)
     // max_depth == 0 means unlimited, 1 means direct children of `base` only
-    // `base` must already be resolved (absolute); `caller_path` is the path the
-    // caller passed, used only for error messages
-    virtual std::vector<list_entry> list_entries(const std::string & base, const std::string & caller_path, int max_depth, list_kind kind, std::string & err, bool & truncated) const = 0;
+    virtual list_result list_entries(const std::string & base, int max_depth, list_kind kind) const = 0;
     // on_chunk, if set, is called with each chunk of output as it is read (before truncation cuts in);
     // returning false terminates the process early (e.g. the client disconnected)
     virtual exec_result run(
@@ -106,6 +176,85 @@ public:
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const = 0;
 };
 
+// shared subprocess execution helper, used by both the local and the docker-backed tools_io implementations.
+// combine_stderr=false when the raw stdout bytes must not be tainted by stderr, e.g. reading file contents.
+static tools_io::exec_result run_subprocess(
+        const std::vector<std::string> & args,
+        size_t max_output,
+        int timeout_secs,
+        const std::function<bool(const std::string &)> & on_chunk,
+        bool combine_stderr,
+        const std::string & cwd = "") {
+    tools_io::exec_result res;
+
+    common_subproc proc;
+
+    int options = subprocess_option_no_window
+                | subprocess_option_inherit_environment
+                | subprocess_option_search_user_path;
+    if (combine_stderr) {
+        options |= subprocess_option_combined_stdout_stderr;
+    }
+
+    if (!proc.create(args, options, {}, cwd.empty() ? nullptr : cwd.c_str())) {
+        res.output = "failed to spawn process";
+        return res;
+    }
+
+    std::atomic<bool> done{false};
+    std::atomic<bool> timed_out{false};
+
+    std::thread timeout_thread([&]() {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
+        while (!done.load()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                timed_out.store(true);
+                proc.terminate();
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    });
+
+    FILE * f = proc.stdout_file();
+    std::string output;
+    bool truncated = false;
+    if (f) {
+        char buf[4096];
+        while (fgets(buf, sizeof(buf), f) != nullptr) {
+            if (!truncated) {
+                size_t len = strlen(buf);
+                if (output.size() + len <= max_output) {
+                    output.append(buf, len);
+                    if (on_chunk && !on_chunk(console_output_to_utf8(std::string(buf, len)))) {
+                        proc.terminate();
+                        break;
+                    }
+                } else {
+                    size_t remaining = max_output - output.size();
+                    output.append(buf, remaining);
+                    if (on_chunk && remaining > 0) on_chunk(console_output_to_utf8(std::string(buf, remaining)));
+                    truncated = true;
+                }
+            }
+        }
+    }
+
+    done.store(true);
+    if (timeout_thread.joinable()) {
+        timeout_thread.join();
+    }
+
+    res.exit_code = proc.join();
+
+    res.output    = console_output_to_utf8(output);
+    res.timed_out = timed_out.load();
+    if (truncated) {
+        res.output += "\n[output truncated]";
+    }
+    return res;
+}
+
 class tools_io_basic : public tools_io {
 public:
     // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
@@ -114,37 +263,47 @@ public:
     // expands a leading `~`, then resolves `path` against `cwd` (or the server
     // working directory when `cwd` is unset); the result is always absolute
     std::string resolve(const std::string & path) const override {
-        std::string p = expand_home(path);
-        if (fs::path(p).is_absolute()) {
-            return p;
+        const std::string p = expand_home(path);
+
+        fs::path full = path_from_utf8(p);
+        if (!full.is_absolute()) {
+            if (cwd.empty()) {
+                std::error_code ec;
+                const fs::path cur = fs::current_path(ec);
+                if (ec) return p;
+                full = cur / full;
+            } else {
+                full = path_from_utf8(cwd) / full;
+            }
         }
-        if (cwd.empty()) {
-            std::error_code ec;
-            fs::path cur = fs::current_path(ec);
-            if (ec) return p;
-            return (cur / p).string();
+
+        // drop "." and ".." so they never reach git or the client
+        full = full.lexically_normal();
+        // a trailing ".." normalizes to a path that ends with a separator
+        if (!full.has_filename() && full != full.root_path()) {
+            full = full.parent_path();
         }
-        return (fs::path(cwd) / p).string();
+        return path_to_utf8(full);
     }
 
     bool is_directory(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_directory(resolve(path), ec) && !ec;
+        return fs::is_directory(path_from_utf8(resolve(path)), ec) && !ec;
     }
 
     bool is_regular_file(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_regular_file(resolve(path), ec) && !ec;
+        return fs::is_regular_file(path_from_utf8(resolve(path)), ec) && !ec;
     }
 
     bool file_size(const std::string & path, uintmax_t & out_size) const override {
         std::error_code ec;
-        out_size = fs::file_size(resolve(path), ec);
+        out_size = fs::file_size(path_from_utf8(resolve(path)), ec);
         return !ec;
     }
 
     bool read_file(const std::string & path, std::string & out) const override {
-        std::ifstream f(resolve(path), std::ios::binary);
+        std::ifstream f(path_from_utf8(resolve(path)), std::ios::binary);
         if (!f) return false;
         std::ostringstream ss;
         ss << f.rdbuf();
@@ -154,7 +313,7 @@ public:
 
     bool write_file(const std::string & path, const std::string & content) const override {
         std::error_code ec;
-        fs::path fpath(resolve(path));
+        fs::path fpath = path_from_utf8(resolve(path));
         if (fpath.has_parent_path()) {
             fs::create_directories(fpath.parent_path(), ec);
             if (ec) return false;
@@ -165,13 +324,13 @@ public:
         return (bool) f;
     }
 
-    std::vector<list_entry> list_entries(const std::string & base, const std::string & caller_path, int max_depth, list_kind kind, std::string & err, bool & truncated) const override {
-        err.clear();
-        truncated = false;
+    list_result list_entries(const std::string & base, int max_depth, list_kind kind) const override {
+        list_result out;
+
         std::error_code ec;
         if (!fs::is_directory(base, ec) || ec) {
-            err = "path does not exist or is not a directory: " + caller_path;
-            return {};
+            out.err = "path does not exist or is not a directory";
+            return out;
         }
 
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(SERVER_TOOL_LIST_ENTRIES_TIMEOUT);
@@ -183,7 +342,6 @@ public:
                 SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, SERVER_TOOL_LIST_ENTRIES_TIMEOUT);
 
             if (res.exit_code == 0 && !res.timed_out) {
-                std::vector<list_entry> result;
                 std::istringstream iss(res.output);
                 std::string line;
                 while (std::getline(iss, line)) {
@@ -191,15 +349,16 @@ public:
                     if (line.empty()) continue;
                     std::replace(line.begin(), line.end(), '\\', '/');
                     if (max_depth > 0 && entry_depth(line) > max_depth) continue;
-                    if (is_regular_file((fs::path(base) / line).string())) {
-                        result.push_back({line, false});
+                    if (is_regular_file(path_to_utf8(path_from_utf8(base) / path_from_utf8(line)))) {
+                        out.entries.push_back({line, false});
                     }
                 }
-                return result;
+                return out;
             }
         }
 
-        return list_entries_fallback(base, max_depth, kind, deadline, truncated);
+        out.entries = list_entries_fallback(base, max_depth, kind, deadline, out.truncated);
+        return out;
     }
 
     exec_result run(
@@ -207,128 +366,104 @@ public:
             size_t max_output,
             int timeout_secs,
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
-        exec_result res;
-
-        common_subproc proc;
-
-        int options = subprocess_option_no_window
-                    | subprocess_option_combined_stdout_stderr
-                    | subprocess_option_inherit_environment
-                    | subprocess_option_search_user_path;
-
-        if (!proc.create(args, options, {}, cwd.empty() ? nullptr : cwd.c_str())) {
-            res.output = "failed to spawn process";
-            return res;
-        }
-
-        std::atomic<bool> done{false};
-        std::atomic<bool> timed_out{false};
-
-        std::thread timeout_thread([&]() {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
-            while (!done.load()) {
-                if (std::chrono::steady_clock::now() >= deadline) {
-                    timed_out.store(true);
-                    proc.terminate();
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-        });
-
-        FILE * f = proc.stdout_file();
-        std::string output;
-        bool truncated = false;
-        if (f) {
-            char buf[4096];
-            while (fgets(buf, sizeof(buf), f) != nullptr) {
-                if (!truncated) {
-                    size_t len = strlen(buf);
-                    if (output.size() + len <= max_output) {
-                        output.append(buf, len);
-                        if (on_chunk && !on_chunk(std::string(buf, len))) {
-                            proc.terminate();
-                            break;
-                        }
-                    } else {
-                        size_t remaining = max_output - output.size();
-                        output.append(buf, remaining);
-                        if (on_chunk && remaining > 0) on_chunk(std::string(buf, remaining));
-                        truncated = true;
-                    }
-                }
-            }
-        }
-
-        done.store(true);
-        if (timeout_thread.joinable()) {
-            timeout_thread.join();
-        }
-
-        res.exit_code = proc.join();
-
-        res.output    = output;
-        res.timed_out = timed_out.load();
-        if (truncated) {
-            res.output += "\n[output truncated]";
-        }
-        return res;
+        return run_subprocess(args, max_output, timeout_secs, on_chunk, /*combine_stderr=*/true, cwd);
     }
 
 private:
     std::string cwd;
 
+    // a link can point back to an ancestor and loop forever, so it is never walked
+    static bool is_link(const fs::directory_entry & entry) {
+        std::error_code ec;
+        if (entry.is_symlink(ec) || ec) {
+            return true;
+        }
+#if defined(_WIN32)
+        // a junction looks like a plain directory to std::filesystem, so read the reparse tag
+        WIN32_FIND_DATAW data;
+        const HANDLE h = FindFirstFileW(entry.path().c_str(), &data);
+        if (h == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        FindClose(h);
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+            return false;
+        }
+        // other reparse points (cloud placeholder, dedup stub) are real directories
+        return data.dwReserved0 == IO_REPARSE_TAG_SYMLINK || data.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT;
+#else
+        return false;
+#endif
+    }
+
+    // NTFS is case insensitive, so Build and build are the same directory
+    static std::string get_effective_name(const std::string & fname) {
+#if defined(_WIN32)
+        std::string lowered = fname;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return (char) std::tolower(c); });
+        return lowered;
+#else
+        return fname;
+#endif
+    }
+
     static const std::unordered_set<std::string> & junk_dir_names() {
-        static const std::unordered_set<std::string> names = {
-            ".git", ".svn", ".hg", "node_modules", "__pycache__",
-            ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
-        };
+        static const std::unordered_set<std::string> names(
+            std::begin(SERVER_TOOL_JUNK_DIR_NAMES), std::end(SERVER_TOOL_JUNK_DIR_NAMES));
         return names;
     }
 
     std::vector<list_entry> list_entries_fallback(const std::string & base, int max_depth, list_kind kind,
                                                   std::chrono::steady_clock::time_point deadline, bool & truncated) const {
         std::vector<list_entry> result;
-        std::error_code ec;
 
         std::vector<std::tuple<fs::path, fs::path, int>> stack;
-        stack.emplace_back(fs::path(base), fs::path(), 0);
+        stack.emplace_back(path_from_utf8(base), fs::path(), 0);
 
         while (!stack.empty()) {
-            auto [dir, rel_dir, depth] = stack.back();
+            if (std::chrono::steady_clock::now() >= deadline) {
+                truncated = true;
+                return result;
+            }
+
+            auto [dir, rel_dir, depth] = std::move(stack.back());
             stack.pop_back();
 
-            // the throwing increment would escape the tool on a directory that
-            // goes away mid walk, so step the iterator explicitly
+            std::error_code ec;
+            // step the iterator by hand: the throwing increment escapes on a directory that goes away
             fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+            // permission errors are skipped above, so this is a subtree the caller never sees
+            if (ec) {
+                truncated = true;
+                continue;
+            }
             for (const fs::directory_iterator end; it != end; it.increment(ec)) {
-                if (ec) break;
+                if (ec) {
+                    truncated = true;
+                    break;
+                }
                 if (std::chrono::steady_clock::now() >= deadline) {
                     truncated = true;
                     return result;
                 }
                 const fs::directory_entry & entry = *it;
-                std::string fname = entry.path().filename().string();
+                const fs::path fname = entry.path().filename();
                 std::error_code tec;
-                if (entry.is_directory(tec)) {
-                    std::string rel = (rel_dir / fname).string();
-                    std::replace(rel.begin(), rel.end(), '\\', '/');
+                const bool is_dir = entry.is_directory(tec);
+                if (tec) continue;
+                if (is_dir) {
                     if (kind == list_kind::dirs || kind == list_kind::all) {
-                        result.push_back({rel, true});
+                        result.push_back({path_to_utf8(rel_dir / fname), true});
                     }
-                    // junk directories stay selectable but are never walked: they
-                    // hold nothing worth searching and can be enormous
-                    if (junk_dir_names().count(fname) > 0) continue;
-                    // do not descend into symlinks: a link can point back to an
-                    // ancestor and loop forever
-                    if (!entry.is_symlink(tec) && (max_depth == 0 || depth + 1 < max_depth)) {
+                    // junk directories stay selectable but are never walked: they can be enormous
+                    if (junk_dir_names().count(get_effective_name(path_to_utf8(fname))) > 0) continue;
+                    if (!is_link(entry) && (max_depth == 0 || depth + 1 < max_depth)) {
                         stack.emplace_back(entry.path(), rel_dir / fname, depth + 1);
                     }
                 } else if (entry.is_regular_file(tec)) {
-                    std::string rel = (rel_dir / fname).string();
-                    std::replace(rel.begin(), rel.end(), '\\', '/');
                     if (kind == list_kind::files || kind == list_kind::all) {
-                        result.push_back({rel, false});
+                        result.push_back({path_to_utf8(rel_dir / fname), false});
                     }
                 }
             }
@@ -338,15 +473,280 @@ private:
     }
 };
 
+// timeout for auxiliary isolate calls (stat/mkdir/ls/cp helpers); exec_shell_command uses its own
+// caller-controlled timeout instead, enforced separately in run()
+static constexpr int SERVER_TOOL_ISOLATE_EXEC_TIMEOUT = 15; // seconds
+static constexpr size_t SERVER_TOOL_ISOLATE_READ_FILE_MAX_SIZE = 64 * 1024 * 1024; // 64 MB
+
+// runs every tools_io operation as a command inside an isolate: a container, a remote host, ...
+// the isolate is created, mounted, and torn down externally by the caller
+// it must provide a POSIX environment: sh, cat, wc, mkdir, dirname, find, timeout
+class tools_io_isolate : public tools_io {
+public:
+    // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
+    explicit tools_io_isolate(std::string cwd = "") : cwd(std::move(cwd)) {}
+
+    // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged.
+    // isolate paths are always POSIX-style ('/'), regardless of host OS.
+    std::string resolve(const std::string & path) const override {
+        if (cwd.empty() || (!path.empty() && path[0] == '/')) {
+            return path;
+        }
+        return cwd + "/" + path;
+    }
+
+    bool is_directory(const std::string & path) const override {
+        return shell_test("-d", resolve(path));
+    }
+
+    bool is_regular_file(const std::string & path) const override {
+        return shell_test("-f", resolve(path));
+    }
+
+    bool file_size(const std::string & path, uintmax_t & out_size) const override {
+        auto res = exec({"sh", "-c", "wc -c < \"$1\"", "_", resolve(path)}, 64, true);
+        if (res.exit_code != 0 || res.timed_out) return false;
+        try {
+            size_t pos;
+            out_size = (uintmax_t) std::stoull(res.output, &pos);
+        } catch (...) {
+            return false;
+        }
+        return true;
+    }
+
+    bool read_file(const std::string & path, std::string & out) const override {
+        // combine_stderr=false: stderr must not be spliced into raw file bytes
+        auto res = exec({"cat", "--", resolve(path)}, SERVER_TOOL_ISOLATE_READ_FILE_MAX_SIZE, false);
+        if (res.exit_code != 0 || res.timed_out) return false;
+        out = res.output;
+        return true;
+    }
+
+    bool write_file(const std::string & path, const std::string & content) const override {
+        std::string abs_path = resolve(path);
+
+        std::error_code ec;
+        fs::path tmp_dir = fs::temp_directory_path(ec);
+        if (ec) return false;
+
+        static std::atomic<uint64_t> tmp_counter{0};
+        fs::path tmp = tmp_dir / string_format(
+            "llama-tools-io-isolate-%zu-%llu.tmp",
+            std::hash<std::thread::id>{}(std::this_thread::get_id()),
+            (unsigned long long) tmp_counter.fetch_add(1));
+
+        {
+            std::ofstream f(tmp, std::ios::binary);
+            if (!f) return false;
+            f << content;
+            if (!f) return false;
+        }
+
+        bool ok = shell_run({"sh", "-c", "mkdir -p \"$(dirname \"$1\")\"", "_", abs_path});
+        if (ok) {
+            ok = upload(tmp.string(), abs_path);
+        }
+
+        std::error_code rm_ec;
+        fs::remove(tmp, rm_ec);
+        return ok;
+    }
+
+    list_result list_entries(const std::string & base, int max_depth, list_kind kind) const override {
+        list_result out;
+
+        const std::string abs_base = resolve(base);
+        if (!is_directory(base)) {
+            out.err = "path does not exist or is not a directory";
+            return out;
+        }
+
+        // git ls-files cannot list directories; use the walker when they are requested
+        if (kind == list_kind::files) {
+            auto res = exec(
+                {"sh", "-c", "cd \"$1\" && git ls-files --cached --others --exclude-standard", "_", abs_base},
+                SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, true);
+
+            if (res.exit_code == 0 && !res.timed_out) {
+                for (const auto & rel : split_lines(res.output, /*strip_dot_slash=*/false)) {
+                    if (max_depth > 0 && entry_depth(rel) > max_depth) continue;
+                    out.entries.push_back({rel, false});
+                }
+                return out;
+            }
+        }
+
+        if (kind == list_kind::dirs || kind == list_kind::all) {
+            for (auto & rel : find_entries(abs_base, max_depth, /*dirs=*/true, out.truncated)) {
+                out.entries.push_back({std::move(rel), true});
+            }
+        }
+        if (kind == list_kind::files || kind == list_kind::all) {
+            for (auto & rel : find_entries(abs_base, max_depth, /*dirs=*/false, out.truncated)) {
+                out.entries.push_back({std::move(rel), false});
+            }
+        }
+
+        return out;
+    }
+
+    // wraps the command with an in-isolate `timeout`, since killing the host-side client
+    // does not kill the process tree running inside the isolate
+    exec_result run(
+            const std::vector<std::string> & args,
+            size_t max_output,
+            int timeout_secs,
+            const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
+        std::vector<std::string> inner = {"timeout", std::to_string(timeout_secs) + "s"};
+        inner.insert(inner.end(), args.begin(), args.end());
+        // small buffer over timeout_secs so the in-isolate `timeout` has a chance to exit cleanly
+        // before the host-side supervisory timeout forcibly kills the client
+        return run_subprocess(
+            build_argv(with_cwd(inner), /*needs_stdin=*/true),
+            max_output, timeout_secs + 5, on_chunk, true);
+    }
+
+protected:
+    // wrap `inner` (a complete POSIX argv) into the host-side argv that runs it in the isolate
+    // a transport that re-parses its args in a remote shell (ssh) must join `inner` with shell_quote_join()
+    virtual std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const = 0;
+
+    // copy a host file into the isolate, `isolate_path` is absolute and its parent already exists
+    virtual bool upload(const std::string & host_path, const std::string & isolate_path) const = 0;
+
+    // quote `argv` into a single string that a POSIX shell re-parses into exactly `argv`
+    static std::string shell_quote_join(const std::vector<std::string> & argv) {
+        std::string out;
+        for (const auto & arg : argv) {
+            if (!out.empty()) out += ' ';
+            out += '\'';
+            for (const char c : arg) {
+                // a single quote cannot be escaped inside single quotes: close, escape, reopen
+                if (c == '\'') out += "'\\''";
+                else           out += c;
+            }
+            out += '\'';
+        }
+        return out;
+    }
+
+private:
+    std::string cwd;
+
+    // set the working directory in the command itself, docker's `-w` has no equivalent on every transport
+    // auxiliary calls do not need this, they use the absolute paths from resolve()
+    std::vector<std::string> with_cwd(const std::vector<std::string> & inner) const {
+        if (cwd.empty()) {
+            return inner;
+        }
+        // 127 is what a shell reports for a command it could not run
+        std::vector<std::string> out = {"sh", "-c", "cd \"$1\" || exit 127; shift; exec \"$@\"", "_", cwd};
+        out.insert(out.end(), inner.begin(), inner.end());
+        return out;
+    }
+
+    exec_result exec(const std::vector<std::string> & inner, size_t max_output, bool combine_stderr) const {
+        return run_subprocess(
+            build_argv(inner, /*needs_stdin=*/false),
+            max_output, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, combine_stderr);
+    }
+
+    bool shell_run(const std::vector<std::string> & inner) const {
+        auto res = exec(inner, 4096, true);
+        return res.exit_code == 0 && !res.timed_out;
+    }
+
+    bool shell_test(const char * flag, const std::string & path) const {
+        return shell_run({"sh", "-c", std::string("[ ") + flag + " \"$1\" ]", "_", path});
+    }
+
+    static std::vector<std::string> split_lines(const std::string & text, bool strip_dot_slash) {
+        std::vector<std::string> result;
+        std::istringstream iss(text);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            if (strip_dot_slash && line.rfind("./", 0) == 0) line = line.substr(2);
+            std::replace(line.begin(), line.end(), '\\', '/');
+            result.push_back(line);
+        }
+        return result;
+    }
+
+    // one `find` pass in the isolate. junk directories stay selectable but are never descended into,
+    // and -mindepth/-maxdepth keep a busybox image working as well as a GNU one
+    std::vector<std::string> find_entries(const std::string & abs_base, int max_depth, bool dirs, bool & truncated) const {
+        std::string prune_expr;
+        for (const char * n : SERVER_TOOL_JUNK_DIR_NAMES) {
+            if (!prune_expr.empty()) prune_expr += " -o ";
+            prune_expr += std::string("-name ") + n;
+        }
+
+        std::string cmd = "cd \"$1\" && find . -mindepth 1";
+        if (max_depth > 0) {
+            cmd += " -maxdepth " + std::to_string(max_depth);
+        }
+        cmd += " \\( " + prune_expr + " \\) -prune";
+        cmd += dirs ? " -print -o -type d -print" : " -o -type f -print";
+
+        auto res = exec({"sh", "-c", cmd, "_", abs_base}, SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, true);
+        truncated = truncated || res.timed_out;
+        return split_lines(res.output, /*strip_dot_slash=*/true);
+    }
+};
+
+// an already-running docker container, driven through `docker exec` and `docker cp`
+class tools_io_docker : public tools_io_isolate {
+public:
+    tools_io_docker(std::string container_id, std::string cwd = "")
+        : tools_io_isolate(std::move(cwd)), container_id(std::move(container_id)) {}
+
+protected:
+    std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
+        std::vector<std::string> argv = {"docker", "exec"};
+        if (needs_stdin) {
+            argv.push_back("-i");
+        }
+        argv.push_back(container_id);
+        argv.insert(argv.end(), inner.begin(), inner.end());
+        return argv;
+    }
+
+    bool upload(const std::string & host_path, const std::string & isolate_path) const override {
+        auto res = run_subprocess(
+            {"docker", "cp", host_path, container_id + ":" + isolate_path},
+            4096, SERVER_TOOL_ISOLATE_EXEC_TIMEOUT, nullptr, true);
+        return res.exit_code == 0 && !res.timed_out;
+    }
+
+private:
+    std::string container_id;
+};
+
+// runtime spec used by --tools-runtime and the x-tool-runtime header
+// this is the only scheme for now, ssh: and podman: can be added next to it
+static const std::string SERVER_TOOL_RUNTIME_DOCKER_CONTAINER = "docker-container:";
+
+// an empty runtime runs the tools on the host
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
-    std::string cwd = json_value(params, "cwd", std::string());
-    return std::make_unique<tools_io_basic>(cwd);
+    std::string cwd     = json_value(params, "cwd", std::string());
+    std::string runtime = json_value(params, "runtime", std::string());
+    if (runtime.empty()) {
+        return std::make_unique<tools_io_basic>(cwd);
+    }
+    if (runtime.rfind(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER, 0) == 0) {
+        return std::make_unique<tools_io_docker>(runtime.substr(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER.size()), cwd);
+    }
+    // do not fall back to the host, the caller asked for an isolate
+    throw std::runtime_error("unknown tool runtime: " + runtime);
 }
 
 // no '/' in pattern -> match basename at any depth; else match full relative path
 static bool path_glob_match(const std::string & pattern, const std::string & rel_path) {
     if (pattern.find('/') == std::string::npos) {
-        return glob_match(pattern, fs::path(rel_path).filename().string());
+        return glob_match(pattern, path_to_utf8(path_from_utf8(rel_path).filename()));
     }
     if (pattern == "**" || pattern.rfind("**/", 0) == 0 || pattern.rfind('/', 0) == 0) {
         return glob_match(pattern, rel_path);
@@ -364,6 +764,7 @@ struct server_tool_read_file : server_tool {
     server_tool_read_file() {
         name = "read_file";
         display_name = "Read file";
+        uses_cwd = true;
         permission_write = false;
     }
 
@@ -443,7 +844,7 @@ struct server_tool_read_file : server_tool {
 // file_glob_search: find files matching a glob pattern under a base directory
 //
 
-static constexpr size_t SERVER_TOOL_FILE_SEARCH_MAX_RESULTS = 100;
+static constexpr int SERVER_TOOL_FILE_SEARCH_MAX_RESULTS = 100;
 static constexpr const char * SERVER_TOOL_FILE_SEARCH_TYPE_FILE = "file";
 static constexpr const char * SERVER_TOOL_FILE_SEARCH_TYPE_DIR  = "dir";
 static constexpr const char * SERVER_TOOL_FILE_SEARCH_TYPE_ALL  = "all";
@@ -452,6 +853,7 @@ struct server_tool_file_glob_search : server_tool {
     server_tool_file_glob_search() {
         name = "file_glob_search";
         display_name = "File search";
+        uses_cwd = true;
         permission_write = false;
     }
 
@@ -477,7 +879,7 @@ struct server_tool_file_glob_search : server_tool {
                         {"exclude",   {{"type", "string"},  {"description", "Glob pattern for files to exclude"}}},
                         {"type",      {{"type", "string"},  {"description", "Entry type to return: \"file\" (default), \"dir\" or \"all\""}}},
                         {"max_depth", {{"type", "integer"}, {"description", "Maximum depth to descend into subdirectories (default: 0 = unlimited; 1 = direct children only)"}}},
-                        {"limit",     {{"type", "integer"}, {"description", string_format("Maximum number of results to return (default %zu; values below 1 fall back to the default)", SERVER_TOOL_FILE_SEARCH_MAX_RESULTS)}}},
+                        {"limit",     {{"type", "integer"}, {"description", string_format("Maximum number of results to return, capped at %d (default %d)", SERVER_TOOL_FILE_SEARCH_MAX_RESULTS, SERVER_TOOL_FILE_SEARCH_MAX_RESULTS)}}},
                     }},
                     {"required", json::array({"path"})},
                 }},
@@ -488,17 +890,18 @@ struct server_tool_file_glob_search : server_tool {
     json invoke(json params, server_tool::stream *) const override {
         auto io = make_tools_io(params);
 
-        std::string base      = io->resolve(params.at("path").get<std::string>());
-        // normalize to forward slashes so the web UI (which assumes '/') can
-        // join the relative entries into absolute paths on Windows too
-        std::replace(base.begin(), base.end(), '\\', '/');
+        const std::string path = params.at("path").get<std::string>();
+
+        std::string base      = io->resolve(path);
         std::string include   = json_value(params, "include", std::string("**"));
         std::string exclude   = json_value(params, "exclude", std::string(""));
         std::string type      = json_value(params, "type",    std::string("file"));
         int         max_depth = std::max(0, json_value(params, "max_depth", 0));
-        int         limit     = json_value(params, "limit", (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
-        if (limit < 1) limit = SERVER_TOOL_FILE_SEARCH_MAX_RESULTS;
-        limit = std::min(limit, (int) SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
+        const int   limit_req = json_value(params, "limit", SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
+        if (limit_req < 1) {
+            return {{"error", "invalid limit: " + std::to_string(limit_req) + " (expected 1 or more)"}};
+        }
+        const int   limit     = std::min(limit_req, SERVER_TOOL_FILE_SEARCH_MAX_RESULTS);
 
         list_kind kind;
         if (type == SERVER_TOOL_FILE_SEARCH_TYPE_FILE) {
@@ -511,15 +914,13 @@ struct server_tool_file_glob_search : server_tool {
             return {{"error", "invalid type: " + type + " (expected \"file\", \"dir\" or \"all\")"}};
         }
 
-        std::string err;
-        bool truncated = false;
-        auto entries = io->list_entries(base, params.at("path").get<std::string>(), max_depth, kind, err, truncated);
-        if (!err.empty()) {
-            return {{"error", err}};
+        const auto listing = io->list_entries(base, max_depth, kind);
+        if (!listing.err.empty()) {
+            return {{"error", listing.err + ": " + path}};
         }
 
         std::vector<tools_io::list_entry> matches;
-        for (const auto & entry : entries) {
+        for (const auto & entry : listing.entries) {
             if (!path_glob_match(include, entry.rel)) continue;
             if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
             matches.push_back(entry);
@@ -544,8 +945,8 @@ struct server_tool_file_glob_search : server_tool {
                 "[%zu results limit reached (%zu total matches). Refine the glob pattern to narrow the search.]\n",
                 shown, total);
         }
-        if (truncated) {
-            output_text << "[search timed out, results truncated]\n";
+        if (listing.truncated) {
+            output_text << "[results truncated: time budget or unreadable directory]\n";
         }
 
         // `base` is always absolute (resolve falls back to the server cwd), so
@@ -567,6 +968,7 @@ struct server_tool_grep_search : server_tool {
     server_tool_grep_search() {
         name = "grep_search";
         display_name = "Grep search";
+        uses_cwd = true;
         permission_write = false;
     }
 
@@ -640,16 +1042,14 @@ struct server_tool_grep_search : server_tool {
         if (io->is_regular_file(abs_path)) {
             files.emplace_back(abs_path, path);
         } else if (io->is_directory(abs_path)) {
-            std::string err;
-            bool truncated = false;
-            auto candidates = io->list_entries(abs_path, path, 0, list_kind::files, err, truncated);
-            if (!err.empty()) {
-                return {{"error", err}};
+            const auto listing = io->list_entries(abs_path, 0, list_kind::files);
+            if (!listing.err.empty()) {
+                return {{"error", listing.err + ": " + path}};
             }
-            for (const auto & entry : candidates) {
+            for (const auto & entry : listing.entries) {
                 if (!path_glob_match(include, entry.rel)) continue;
                 if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
-                files.emplace_back((fs::path(abs_path) / entry.rel).string(), entry.rel);
+                files.emplace_back(path_to_utf8(path_from_utf8(abs_path) / path_from_utf8(entry.rel)), entry.rel);
             }
         } else {
             return {{"error", "path does not exist: " + path}};
@@ -721,6 +1121,7 @@ struct server_tool_exec_shell_command : server_tool {
     server_tool_exec_shell_command() {
         name = "exec_shell_command";
         display_name = "Execute shell command";
+        uses_cwd = true;
         permission_write = true;
         support_stream = true;
     }
@@ -752,8 +1153,11 @@ struct server_tool_exec_shell_command : server_tool {
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
 
+        // an isolate is always POSIX regardless of host OS, so it always gets `sh -c`
 #ifdef _WIN32
-        std::vector<std::string> args = {"cmd", "/c", command};
+        std::vector<std::string> args = !json_value(params, "runtime", std::string()).empty()
+            ? std::vector<std::string>{"sh", "-c", command}
+            : std::vector<std::string>{"cmd", "/c", command};
 #else
         std::vector<std::string> args = {"sh", "-c", command};
 #endif
@@ -796,6 +1200,7 @@ struct server_tool_write_file : server_tool {
     server_tool_write_file() {
         name = "write_file";
         display_name = "Write file";
+        uses_cwd = true;
         permission_write = true;
     }
 
@@ -838,6 +1243,7 @@ struct server_tool_edit_file : server_tool {
     server_tool_edit_file() {
         name = "edit_file";
         display_name = "Edit file";
+        uses_cwd = true;
         permission_write = true;
     }
 
@@ -1226,6 +1632,7 @@ struct server_tool_get_info : server_tool {
     server_tool_get_info() {
         name = "get_info";
         display_name = "Get Runtime Info";
+        uses_cwd = true;
         permission_write = false;
     }
 
@@ -1246,11 +1653,16 @@ struct server_tool_get_info : server_tool {
     json invoke(json params, server_tool::stream *) const override {
         auto io = make_tools_io(params);
 
+        // inside an isolate, we always use the linux command
 #ifdef _WIN32
-        auto res = io->run({"cmd", "/c", "ver"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
+        std::vector<std::string> args = !json_value(params, "runtime", std::string()).empty()
+            ? std::vector<std::string>{"uname", "-a"}
+            : std::vector<std::string>{"cmd", "/c", "ver"};
 #else
-        auto res = io->run({"uname", "-a"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
+        std::vector<std::string> args = {"uname", "-a"};
 #endif
+
+        auto res = io->run(args, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
         // "ver" prints a blank line before the version, so the output is stripped on both ends;
         // a failed spawn or a timeout leaves a diagnostic in res.output, which is not an OS name
         std::string os_info = res.exit_code == 0 && !res.timed_out ? string_strip(res.output) : "unknown";
@@ -1258,7 +1670,7 @@ struct server_tool_get_info : server_tool {
         std::string cwd = json_value(params, "cwd", std::string());
         if (cwd.empty()) {
             std::error_code ec;
-            cwd = fs::current_path(ec).string();
+            cwd = path_to_utf8(fs::current_path(ec));
         }
 
         return {
@@ -1352,6 +1764,103 @@ struct server_mcp_tool : server_tool {
     }
 };
 
+// owns the docker container used as the sandboxed runtime for tool invocations, as configured by
+// --tools-runtime. "spawned" mode starts and stops the container itself; "existing" mode just reuses
+// a container id the user already has running and never stops it.
+struct server_tools_docker_runtime {
+    server_tools_docker_runtime(const server_tools_docker_runtime &) = delete;
+
+    explicit server_tools_docker_runtime(const std::string & spec) {
+        static const std::string docker_prefix = "docker:";
+        if (spec.rfind(docker_prefix, 0) == 0) {
+            spawned = true;
+            image   = spec.substr(docker_prefix.size());
+            if (image.empty()) {
+                throw std::runtime_error("--tools-runtime docker:<image> requires an image name");
+            }
+            spawn();
+        } else if (spec.rfind(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER, 0) == 0) {
+            spawned      = false;
+            container_id = spec.substr(SERVER_TOOL_RUNTIME_DOCKER_CONTAINER.size());
+            if (container_id.empty()) {
+                throw std::runtime_error("--tools-runtime docker-container:<id> requires a container id");
+            }
+        } else {
+            throw std::runtime_error("unknown --tools-runtime option: " + spec);
+        }
+    }
+
+    ~server_tools_docker_runtime() {
+        if (spawned && !container_id.empty()) {
+            // closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
+            proc.close_stdin();
+            proc.join();
+        }
+    }
+
+    // container id to use for the next tool call; respawns a spawned container that died on its own,
+    // or throws if an externally-managed one is no longer reachable
+    std::string get_container_id() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!spawned) {
+            if (!is_running(container_id)) {
+                throw std::runtime_error(string_format(
+                    "docker container \"%s\" is no longer running, restart it to keep using tools",
+                    container_id.c_str()));
+            }
+            return container_id;
+        }
+
+        if (!proc.alive()) {
+            SRV_WRN("docker tools runtime container \"%s\" died, respawning\n", container_id.c_str());
+            spawn();
+        }
+        return container_id;
+    }
+
+private:
+    bool spawned = false;
+    std::string image; // spawned mode only
+    std::string container_id;
+    common_subproc proc; // spawned mode only: `docker run` client that keeps the container alive
+    std::mutex mutex;
+
+    // spawns "docker run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
+    // so the container stays alive until we close it (see destructor) or it is killed from the outside
+    void spawn() {
+        std::error_code ec;
+        fs::path cidfile = fs::temp_directory_path(ec) / string_format(
+            "llama-tools-runtime-cid-%zu.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+        fs::remove(cidfile, ec);
+
+        std::vector<std::string> args = {"docker", "run", "--rm", "-i", "--cidfile", cidfile.string(), image, "sh"};
+        int options = subprocess_option_no_window
+                    | subprocess_option_inherit_environment
+                    | subprocess_option_search_user_path;
+        if (!proc.create(args, options)) {
+            throw std::runtime_error("failed to spawn docker container for tools runtime (image: " + image + ")");
+        }
+
+        std::string cid;
+        for (int i = 0; i < 100 && cid.empty(); i++) {
+            std::ifstream f(cidfile);
+            if (f) std::getline(f, cid);
+            if (cid.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        fs::remove(cidfile, ec);
+        if (cid.empty()) {
+            proc.terminate();
+            throw std::runtime_error("timed out waiting for docker container to start (image: " + image + ")");
+        }
+        container_id = cid;
+    }
+
+    static bool is_running(const std::string & id) {
+        auto res = run_subprocess({"docker", "inspect", "-f", "{{.State.Running}}", id}, 16, 5, nullptr, true);
+        return res.exit_code == 0 && !res.timed_out && res.output.rfind("true", 0) == 0;
+    }
+};
+
 static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools, const std::string & name, bool require_stream) {
     for (auto & t : tools) {
         if (t->name == name) {
@@ -1397,8 +1906,16 @@ static std::string get_header(const std::map<std::string, std::string> & headers
     return default_value;
 }
 
+server_tools::server_tools() = default;
+server_tools::~server_tools() = default;
+
 void server_tools::setup(const std::vector<std::string> & enabled_tools,
-                         server_mcp & mcp_mgr) {
+                         server_mcp & mcp_mgr,
+                         const std::string & tools_runtime) {
+    if (!tools_runtime.empty()) {
+        docker_runtime = std::make_unique<server_tools_docker_runtime>(tools_runtime);
+    }
+
     if (!enabled_tools.empty()) {
         if (!common_subproc::is_supported()) {
             throw std::runtime_error("subprocess is not enabled on this build");
@@ -1481,9 +1998,24 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             bool stream = body.value("stream", false);
 
             // accept x-tool-cwd header to override of the process
+            if (params.contains("cwd")) {
+                params.erase("cwd");
+            }
             auto cwd = get_header(req.headers, "x-tool-cwd");
             if (!cwd.empty()) {
                 params["cwd"] = cwd;
+            }
+
+            // accept x-tool-runtime header to route tool I/O through an isolate, e.g. "docker-container:<id>";
+            // falls back to the --tools-runtime isolate, if configured
+            if (params.contains("runtime")) {
+                params.erase("runtime");
+            }
+            auto runtime = get_header(req.headers, "x-tool-runtime");
+            if (!runtime.empty()) {
+                params["runtime"] = runtime;
+            } else if (docker_runtime) {
+                params["runtime"] = SERVER_TOOL_RUNTIME_DOCKER_CONTAINER + docker_runtime->get_container_id();
             }
 
             server_tool & tool = find_tool(tools, tool_name, stream);

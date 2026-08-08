@@ -1,16 +1,30 @@
 <script lang="ts">
+	import ChatFormCommandPicker from './ChatFormCommandPicker.svelte';
+	import ChatFormMentionPicker from './ChatFormMentionPicker.svelte';
 	import ChatFormPickerMcpPrompts from './ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
-	import ChatFormPickerMcpResources from './ChatFormPickerMcpResources.svelte';
-	import type { GetPromptResult, MCPPromptInfo } from '$lib/types';
+	import type {
+		ChatFormCommand,
+		FileMentionEntry,
+		GetPromptResult,
+		MCPPromptInfo
+	} from '$lib/types';
 
 	interface Props {
+		isCommandPickerOpen?: boolean;
+		commandQuery?: string;
+		commands?: ChatFormCommand[];
 		isPromptPickerOpen?: boolean;
 		promptSearchQuery?: string;
-		isInlineResourcePickerOpen?: boolean;
-		resourceSearchQuery?: string;
+		isMentionPickerOpen?: boolean;
+		mentionQuery?: string;
+		mentionAnchor?: HTMLElement | null;
+		scopePath?: string | null;
+		onCommandPickerClose?: () => void;
+		onCommandSelect?: (command: ChatFormCommand) => void;
 		onPromptPickerClose?: () => void;
-		onInlineResourcePickerClose?: () => void;
-		onInlineResourceSelect?: () => void;
+		onMentionPickerClose?: () => void;
+		onMentionOpened?: () => void;
+		onMentionSelect?: (entry: FileMentionEntry) => void;
 		onPromptLoadStart?: (
 			placeholderId: string,
 			promptInfo: MCPPromptInfo,
@@ -18,42 +32,59 @@
 		) => void;
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
-		onInlineResourceBrowse?: () => void;
 	}
 
 	let {
+		isCommandPickerOpen,
+		commandQuery,
+		commands = [],
+		onCommandPickerClose,
+		onCommandSelect,
 		isPromptPickerOpen,
 		promptSearchQuery,
-		isInlineResourcePickerOpen,
-		resourceSearchQuery,
+		isMentionPickerOpen,
+		mentionQuery,
+		mentionAnchor,
+		scopePath,
 		onPromptPickerClose,
-		onInlineResourcePickerClose,
-		onInlineResourceSelect,
+		onMentionPickerClose,
+		onMentionOpened,
+		onMentionSelect,
 		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError,
-		onInlineResourceBrowse
+		onPromptLoadError
 	}: Props = $props();
 
+	let commandPickerRef: ChatFormCommandPicker | undefined = $state(undefined);
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
-	let resourcePickerRef: ChatFormPickerMcpResources | undefined = $state(undefined);
+	let mentionPickerRef: ChatFormMentionPicker | undefined = $state(undefined);
 
-	/**
-	 * Delegates keyboard events to the active picker child.
-	 * Returns true if the event was handled.
-	 */
+	/** Delegate keyboard events to the active picker child; true if handled. */
 	export function handleKeydown(event: KeyboardEvent): boolean {
+		if (isCommandPickerOpen && commandPickerRef?.handleKeydown(event)) {
+			return true;
+		}
+
 		if (isPromptPickerOpen && promptPickerRef?.handleKeydown(event)) {
 			return true;
 		}
 
-		if (isInlineResourcePickerOpen && resourcePickerRef?.handleKeydown(event)) {
+		if (isMentionPickerOpen && mentionPickerRef?.handleKeydown(event)) {
 			return true;
 		}
 
 		return false;
 	}
 </script>
+
+<ChatFormCommandPicker
+	bind:this={commandPickerRef}
+	isOpen={isCommandPickerOpen ?? false}
+	query={commandQuery ?? ''}
+	{commands}
+	onClose={onCommandPickerClose ?? (() => {})}
+	onSelect={onCommandSelect ?? (() => {})}
+/>
 
 <ChatFormPickerMcpPrompts
 	bind:this={promptPickerRef}
@@ -65,11 +96,13 @@
 	{onPromptLoadError}
 />
 
-<ChatFormPickerMcpResources
-	bind:this={resourcePickerRef}
-	isOpen={isInlineResourcePickerOpen}
-	searchQuery={resourceSearchQuery}
-	onClose={onInlineResourcePickerClose}
-	onResourceSelect={onInlineResourceSelect}
-	onBrowse={onInlineResourceBrowse}
+<ChatFormMentionPicker
+	bind:this={mentionPickerRef}
+	isOpen={isMentionPickerOpen ?? false}
+	query={mentionQuery ?? ''}
+	customAnchor={mentionAnchor}
+	scopePath={scopePath ?? null}
+	onClose={onMentionPickerClose ?? (() => {})}
+	onOpened={onMentionOpened}
+	onSelect={onMentionSelect ?? (() => {})}
 />
