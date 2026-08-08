@@ -23,7 +23,7 @@ void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }
 
-    type = LLM_TYPE_UNKNOWN;
+    type = LLM_TYPE_30B;
 }
 
 void llama_model_onyx::load_arch_tensors(llama_model_loader &) {
