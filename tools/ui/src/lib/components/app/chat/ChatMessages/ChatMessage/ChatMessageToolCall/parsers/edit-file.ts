@@ -4,8 +4,8 @@
 // `error` fields.
 
 import { BuiltInTool } from '$lib/enums';
-import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 import { tryParseToolResultObject, type AgenticSection } from '$lib/utils';
+import { truncatedArgKey } from '$lib/utils/parse-partial-json-args';
 import { parseToolArgs } from './_shared';
 
 export type EditFileEdit = {
@@ -14,7 +14,6 @@ export type EditFileEdit = {
 };
 
 export type EditFileMeta = {
-	fileName: string;
 	filePath: string;
 	edits: EditFileEdit[];
 	resultMessage?: string;
@@ -26,14 +25,24 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 	const args = parseToolArgs(BuiltInTool.EDIT_FILE, section, { partial: true });
 	if (!args) return null;
 
-	const rawPath = args.path ?? args.file_path ?? args.filePath;
+	const pathKey =
+		args.path != null ? 'path' : args.file_path != null ? 'file_path' : ('filePath' as const);
+	const rawPath = args[pathKey];
 	if (typeof rawPath !== 'string' || !rawPath) return null;
-
-	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
 
 	// Filter the streamed edits array strictly: each entry must be an
 	// object with a non-empty `old_text`. Edits without an old_text
 	// would diff against empty and render as a full re-write.
+	//
+	// The same applies in reverse, and it is the common case while streaming:
+	// `old_text` arrives in full before `new_text` begins, so an edit rendered in
+	// that window diffs a complete old value against an empty new one and shows
+	// every line as deleted, then snaps once the replacement lands. Hold the edit
+	// back until `new_text` has actual content. An empty `new_text` mid-stream is
+	// ambiguous - it reads the same whether the replacement is a genuine deletion
+	// or simply has not arrived - so resolve it by waiting: once the args close, a
+	// real deletion (`new_text: ""`) renders normally.
+	const argsComplete = truncatedArgKey(section.toolArgs ?? '') === null;
 	const rawEdits = Array.isArray(args.edits) ? args.edits : [];
 	const edits: EditFileEdit[] = [];
 	for (const e of rawEdits) {
@@ -41,7 +50,9 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 		const obj = e as Record<string, unknown>;
 		const oldText = typeof obj.old_text === 'string' ? obj.old_text : '';
 		if (!oldText) continue;
-		const newText = typeof obj.new_text === 'string' ? obj.new_text : '';
+		const streamedNewText = typeof obj.new_text === 'string' ? obj.new_text : '';
+		if (!argsComplete && streamedNewText.length === 0) continue;
+		const newText = streamedNewText;
 		edits.push({ oldText, newText });
 	}
 
@@ -61,7 +72,6 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 	}
 
 	return {
-		fileName,
 		filePath: rawPath,
 		edits,
 		resultMessage,

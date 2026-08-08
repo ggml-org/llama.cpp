@@ -92,6 +92,8 @@
 		id: string;
 		html: string;
 		contentHash?: string;
+		/** Source offset where this block ends, used to commit a settled prefix. */
+		endOffset?: number;
 	}
 
 	let { content, attachments, class: className = '', disableMath = false }: Props = $props();
@@ -144,10 +146,45 @@
 	let pendingMarkdown: string | null = null;
 	let isProcessing = false;
 
+	// A blank line: the only separator appended text can never reach back across.
+	const BLOCK_BOUNDARY = '\n\n';
+
 	// Per-instance transform cache, avoids re-transforming stable blocks during streaming
 	// Garbage collected when component is destroyed (on conversation change)
 	const transformCache = new SvelteMap<string, string>();
 	let previousContent = '';
+
+	// Blocks whose source can no longer change, and the offset where they end.
+	// Everything before `committedEndOffset` is skipped by the parser on the next
+	// append, which is what keeps a long streaming message from re-parsing itself
+	// from offset 0 on every frame (9.3ms at 26KB, versus 0.1ms for the tail).
+	let committedBlocks: MarkdownBlock[] = [];
+	let committedEndOffset = 0;
+
+	function resetCommittedPrefix() {
+		committedBlocks = [];
+		committedEndOffset = 0;
+	}
+
+	/**
+	 * Shift top-level node offsets back into whole-document space after parsing
+	 * only a tail slice, so block hashes and ids match what a full parse produces
+	 * and the transform cache keeps hitting across frames.
+	 */
+	function rebaseTopLevelOffsets(children: unknown[], baseOffset: number) {
+		for (const child of children) {
+			const position = (
+				child as { position?: { start?: { offset?: number }; end?: { offset?: number } } }
+			).position;
+
+			if (position?.start?.offset != null) position.start.offset += baseOffset;
+			if (position?.end?.offset != null) position.end.offset += baseOffset;
+		}
+	}
+
+	function blockEndOffset(child: unknown): number | undefined {
+		return (child as { position?: { end?: { offset?: number } } }).position?.end?.offset;
+	}
 
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
@@ -358,6 +395,7 @@
 			unstableBlockHtml = '';
 			incompleteCodeBlock = null;
 			previousContent = '';
+			resetCommittedPrefix();
 			return;
 		}
 
@@ -365,6 +403,11 @@
 		const incompleteBlock = detectIncompleteCodeBlock(markdown);
 
 		if (incompleteBlock) {
+			// This branch tracks `previousContent` as the prefix rather than the whole
+			// document, so a committed offset taken against the full source would no
+			// longer line up. Drop it and let this path re-parse its prefix.
+			resetCommittedPrefix();
+
 			// Process only the prefix (content before the incomplete code block)
 			const prefixMarkdown = markdown.slice(0, incompleteBlock.openingIndex);
 
@@ -422,37 +465,57 @@
 
 		const normalized = preprocessLaTeX(markdown);
 		const processorInstance = processor();
-		const ast = processorInstance.parse(normalized) as MdastRoot;
-		const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
-		const stableCount = Math.max(mdastChildren.length - 1, 0);
-		const nextBlocks: MarkdownBlock[] = [];
 
 		// Check if we're in append mode for cache reuse
 		const appendMode = isAppendMode(markdown, previousContent);
+
+		// When math is present preprocessLaTeX rewrites the string, so mdast
+		// offsets no longer line up with source offsets and a committed prefix
+		// cannot be trusted. That path simply re-parses in full, as before.
+		const offsetsArePreserved = normalized === markdown;
+
+		if (!appendMode || !offsetsArePreserved) resetCommittedPrefix();
+
+		const baseOffset = committedEndOffset;
+		const parseSource = baseOffset > 0 ? normalized.slice(baseOffset) : normalized;
+		const ast = processorInstance.parse(parseSource) as MdastRoot;
+		const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
+
+		if (baseOffset > 0) rebaseTopLevelOffsets(mdastChildren, baseOffset);
+
+		const prefixBlocks = baseOffset > 0 ? committedBlocks : [];
+		const stableCount = Math.max(mdastChildren.length - 1, 0);
+		const nextBlocks: MarkdownBlock[] = [...prefixBlocks];
 		const previousBlockCount = appendMode ? renderedBlocks.length : 0;
 
 		for (let index = 0; index < stableCount; index++) {
 			const child = mdastChildren[index];
+			// Blocks are addressed by their position in the whole document, not in
+			// the slice that was parsed, so ids and hashes stay stable.
+			const documentIndex = prefixBlocks.length + index;
 
-			// In append mode, reuse previous blocks if unchanged
-			if (appendMode && index < previousBlockCount) {
-				const prevBlock = renderedBlocks[index];
-				const currentHash = getMdastNodeHash(child, index);
+			// In append mode, reuse previous blocks if unchanged. Recompute
+			// endOffset from the current (rebased) node: a block reused from the
+			// incomplete-code-block branch never carried one, and the commit loop
+			// stops at the first block without it.
+			if (appendMode && documentIndex < previousBlockCount) {
+				const prevBlock = renderedBlocks[documentIndex];
+				const currentHash = getMdastNodeHash(child, documentIndex);
 				if (prevBlock?.contentHash === currentHash) {
-					nextBlocks.push(prevBlock);
+					nextBlocks.push({ ...prevBlock, endOffset: blockEndOffset(child) });
 
 					continue;
 				}
 			}
 
 			// Transform this block (with caching)
-			const { html, hash } = await transformMdastNode(processorInstance, child, index);
+			const { html, hash } = await transformMdastNode(processorInstance, child, documentIndex);
 			const id = getHastNodeId(
 				{ position: (child as { position?: unknown }).position } as HastRootContent,
-				index
+				documentIndex
 			);
 
-			nextBlocks.push({ id, html, contentHash: hash });
+			nextBlocks.push({ id, html, contentHash: hash, endOffset: blockEndOffset(child) });
 		}
 
 		let unstableHtml = '';
@@ -465,6 +528,31 @@
 			)) as HastRoot;
 
 			unstableHtml = processorInstance.stringify(transformedRoot);
+		}
+
+		// Commit every leading block that ends before the last blank line. A blank
+		// line is a hard block boundary in CommonMark - lazy continuation and setext
+		// underlines cannot reach across one - so appended text can no longer alter
+		// those blocks, and the next frame can start parsing after them.
+		if (offsetsArePreserved) {
+			const lastBlankLine = normalized.lastIndexOf(BLOCK_BOUNDARY);
+
+			if (lastBlankLine > 0) {
+				const committed: MarkdownBlock[] = [];
+				let committedEnd = committedEndOffset;
+
+				for (const block of nextBlocks) {
+					if (block.endOffset == null || block.endOffset > lastBlankLine) break;
+
+					committed.push(block);
+					committedEnd = block.endOffset;
+				}
+
+				if (committed.length > 0) {
+					committedBlocks = committed;
+					committedEndOffset = committedEnd;
+				}
+			}
 		}
 
 		renderedBlocks = nextBlocks;

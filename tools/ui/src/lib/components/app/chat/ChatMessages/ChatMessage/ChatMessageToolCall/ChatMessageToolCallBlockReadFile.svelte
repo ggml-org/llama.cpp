@@ -20,7 +20,7 @@
 <ToolCallBlock {section} {open} {isStreaming} meta={readFileMeta} {onToggle}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Read file </span>
-		<span class="font-mono">{readFileMeta?.fileName}</span>
+		<span class="font-mono">{readFileMeta?.filePath}</span>
 		{#if readFileMeta?.lineRange}
 			<span class="text-muted-foreground"
 				>&nbsp;(lines {readFileMeta.lineRange.start}-{readFileMeta.lineRange.end})</span

@@ -258,11 +258,14 @@ describe('parseEditFileMeta', () => {
 });
 
 describe('parseReadFileMeta', () => {
-	it('parses file name alone (no range)', () => {
+	it('parses the file path alone (no range)', () => {
 		const meta = parseReadFileMeta(
 			makeSection({ toolArgs: '{"path":"/foo.txt"}' }, BuiltInTool.READ_FILE)
 		);
-		expect(meta?.fileName).toBe('foo.txt');
+		// The header renders the whole path, like write_file and edit_file. It used
+		// to collapse to a basename, which made it flicker through every segment as
+		// the value streamed in.
+		expect(meta?.filePath).toBe('/foo.txt');
 		expect(meta?.lineRange).toBeNull();
 	});
 
