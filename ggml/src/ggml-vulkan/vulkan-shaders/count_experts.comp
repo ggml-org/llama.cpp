@@ -11,6 +11,8 @@ layout (push_constant) uniform parameter
     uint32_t nb00;
     uint32_t nb01;
     uint32_t a_offset;
+    uint32_t n_experts;
+    uint32_t hoist_row_ids;
 } p;
 
 #define BLOCK_SIZE 256
@@ -21,11 +23,56 @@ layout (binding = 0) readonly buffer A {uint data_a[];};
 layout (binding = 1) writeonly buffer D {uint data_d[];};
 
 shared uint vals[BLOCK_SIZE];
+shared uint offsets[BLOCK_SIZE];
+shared uint cursors[BLOCK_SIZE];
 
 void main() {
     const uint expert_id = gl_WorkGroupID.x;
     const uint num_elements = p.ne00 * p.ne01;
     const uint tid = gl_LocalInvocationID.x;
+
+    if (p.hoist_row_ids != 0) {
+        if (tid < p.n_experts) {
+            vals[tid] = 0;
+        }
+        barrier();
+
+        for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
+            const uint i01 = idx / p.ne00;
+            const uint i00 = idx % p.ne00;
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
+            if (expert < p.n_experts) {
+                atomicAdd(vals[expert], 1);
+            }
+        }
+        barrier();
+
+        if (tid == 0) {
+            uint offset = 0;
+            for (uint expert = 0; expert < p.n_experts; ++expert) {
+                const uint count = vals[expert];
+                data_d[expert] = count;
+                data_d[p.n_experts + expert] = offset;
+                offsets[expert] = offset;
+                cursors[expert] = 0;
+                offset += count;
+            }
+            data_d[2 * p.n_experts] = offset;
+        }
+        barrier();
+
+        for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
+            const uint i01 = idx / p.ne00;
+            const uint i00 = idx % p.ne00;
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
+            if (expert < p.n_experts) {
+                const uint row = atomicAdd(cursors[expert], 1);
+                const uint packed_row_id = (i01 << 16) | (i00 & 0xffffu);
+                data_d[2 * p.n_experts + 1 + offsets[expert] + row] = packed_row_id;
+            }
+        }
+        return;
+    }
 
     uint count = 0;
     for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
