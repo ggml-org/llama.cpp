@@ -3039,7 +3039,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         if (ggml_check_edges(cgraph, node_idx, {{1, 0, 0}, {2, 0, 1}, {3, 0, 2}, {4, 0, 3}}) &&
             ggml_cuda_should_fuse_rms_norm_mul_rope(rms_norm, mul, rope) &&
             ggml_cuda_should_fuse_rope_set_rows(rope, view, set_rows)) {
-            return true;
+            int out_nodes[] = { node_idx + 4 };
+            return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int)ops.size(), out_nodes, 1);
         }
     }
 
@@ -3049,7 +3050,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         const ggml_tensor * rope     = cgraph->nodes[node_idx + 2];
 
         if (ggml_cuda_should_fuse_rms_norm_mul_rope(rms_norm, mul, rope)) {
-            return true;
+            int out_nodes[] = { node_idx + 2 };
+            return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int)ops.size(), out_nodes, 1);
         }
         return false;
     }
