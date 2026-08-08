@@ -8,6 +8,9 @@
         #include <sycl/ext/oneapi/bfloat16.hpp>
         #define GGML_SYCL_DMMV_HAS_BF16
     #endif
+    #include <sycl/ext/intel/esimd.hpp>
+    #include "esimd.hpp"
+    #define GGML_SYCL_DMMV_HAS_ESIMD
 #endif
 
 static void convert_f16(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
@@ -1864,6 +1867,96 @@ static void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
         });
 }
 
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+using ggml_sycl_esimd::GGML_SYCL_DMMV_ESIMD_WG_SIZE;
+
+// generic reordered dequantize-matvec: each work-group owns a pair of
+// consecutive output rows and updates one 32-wide accumulator per row
+template <ggml_type T>
+ESIMD_INLINE void dequantize_mul_mat_vec_reorder_esimd(
+        const void * vx, const float * y, float * dst,
+        const int ncols, const int nrows,
+        sycl::local_accessor<float, 1> lmem,
+        const sycl::nd_item<1> & it) {
+    using namespace sycl::ext::intel::esimd;
+    using traits = ggml_sycl_esimd::esimd_reorder_q_traits<T>;
+
+    const int    num_blocks_per_row = ncols / QK_K;
+    const size_t nb = (size_t) nrows * num_blocks_per_row;
+    const auto   ps = traits::make_ptrs(vx, nb);
+
+    const int  tid      = it.get_local_id(0);
+    const int  row_pair = it.get_group(0);
+    const int  row0     = row_pair * 2; // two consecutive output rows
+    const bool has_row1 = row0 + 1 < nrows;
+
+    // one 32-wide accumulator per output row (small footprint, no spill)
+    simd<float, 32> acc0 = 0.0f;
+    simd<float, 32> acc1 = 0.0f;
+
+    for (int ib = tid; ib < num_blocks_per_row; ib += GGML_SYCL_DMMV_ESIMD_WG_SIZE) {
+        simd<float, 256> y_vec = block_load<float, 256>(y + (size_t) ib * QK_K);
+
+        const size_t bi0 = (size_t) (row0 + 0) * num_blocks_per_row + ib;
+        const size_t bi1 = (size_t) (row0 + 1) * num_blocks_per_row + ib;
+
+        traits::mac_pair(ps, bi0, ps, bi1, has_row1, y_vec, acc0, acc1);
+    }
+
+    lmem[tid * 2 + 0] = reduce<float>(acc0, std::plus<>{});
+    lmem[tid * 2 + 1] = reduce<float>(acc1, std::plus<>{});
+    it.barrier(sycl::access::fence_space::local_space);
+
+    if (tid == 0) {
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        for (int p = 0; p < GGML_SYCL_DMMV_ESIMD_WG_SIZE; ++p) {
+            sum0 += lmem[p * 2 + 0];
+            sum1 += lmem[p * 2 + 1];
+        }
+        dst[row0 + 0] = sum0;
+        if (has_row1) {
+            dst[row0 + 1] = sum1;
+        }
+    }
+}
+
+static void dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(const void *vx, const float *y,
+                                                           float *dst, const int ncols,
+                                                           const int nrows,
+                                                           dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    const int workgroups = (nrows + 1) / 2;
+    stream->submit([&](sycl::handler &h) {
+        sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
+        h.parallel_for(
+            sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
+            [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
+                dequantize_mul_mat_vec_reorder_esimd<GGML_TYPE_Q4_K>(
+                    vx, y, dst, ncols, nrows, lmem, it);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(const void *vx, const float *y,
+                                                           float *dst, const int ncols,
+                                                           const int nrows,
+                                                           dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    const int workgroups = (nrows + 1) / 2;
+    stream->submit([&](sycl::handler &h) {
+        sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
+        h.parallel_for(
+            sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
+            [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
+                dequantize_mul_mat_vec_reorder_esimd<GGML_TYPE_Q6_K>(
+                    vx, y, dst, ncols, nrows, lmem, it);
+            });
+    });
+}
+
+#endif // GGML_SYCL_DMMV_HAS_ESIMD
+
 static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
                                                      const int nrows,
@@ -2000,7 +2093,15 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         case GGML_TYPE_Q4_K:
             if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
-                dequantize_mul_mat_vec_q4_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+                if (g_ggml_sycl_enable_esimd) {
+                    dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
+                else
+#endif
+                {
+                    dequantize_mul_mat_vec_q4_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
             } else {
                 dequantize_mul_mat_vec_q4_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
@@ -2016,7 +2117,15 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         case GGML_TYPE_Q6_K:
             if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
-                dequantize_mul_mat_vec_q6_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+                if (g_ggml_sycl_enable_esimd) {
+                    dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
+                else
+#endif
+                {
+                    dequantize_mul_mat_vec_q6_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
             } else {
                 dequantize_mul_mat_vec_q6_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
