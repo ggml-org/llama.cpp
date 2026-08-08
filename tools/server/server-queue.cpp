@@ -122,9 +122,11 @@ void server_queue::terminate() {
     condition_tasks.notify_all();
 }
 
-void server_queue::start_loop(int64_t idle_sleep_ms) {
+void server_queue::start_loop(int64_t idle_sleep_ms, int64_t heartbeat_ms) {
     running = true;
     time_last_task = ggml_time_ms();
+    time_last_heartbeat = ggml_time_ms();
+    heartbeat_interval_ms = heartbeat_ms;
 
     constexpr auto max_wait_time = std::chrono::seconds(1);
     auto should_sleep = [&]() -> bool {
@@ -201,6 +203,16 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
                 });
                 if (res) {
                     break; // new task arrived or terminate
+                }
+                // check heartbeat (GPU touch to prevent driver VRAM eviction)
+                if (callback_heartbeat && heartbeat_interval_ms > 0) {
+                    int64_t now_heartbeat = ggml_time_ms();
+                    if ((now_heartbeat - time_last_heartbeat) >= heartbeat_interval_ms) {
+                        lock.unlock(); // release lock before GPU op
+                        callback_heartbeat();
+                        lock.lock();
+                        time_last_heartbeat = ggml_time_ms();
+                    }
                 }
                 // otherwise, loop again to check sleeping condition
             }
