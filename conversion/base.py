@@ -154,6 +154,7 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
+        self._is_mxfp8 = False
         self._fp8_as_q8 = fp8_as_q8
         self._fp8_dequantized: set[str] = set()
 
@@ -784,8 +785,34 @@ class ModelBase:
 
         del experts, merged
 
+    def _generate_mxfp8_tensors(self):
+        consumed: list[str] = []
+        block_size, type_size = gguf.GGML_QUANT_SIZES[gguf.GGMLQuantizationType.MXFP8]
+
+        for name in self.model_tensors.keys():
+            if not name.endswith(".weight"):
+                continue
+            scale_name = name.removesuffix(".weight") + ".weight_scale"
+            if scale_name not in self.model_tensors:
+                continue
+
+            qs = LazyTorchTensor.to_eager(self.model_tensors[name]()).view(torch.uint8).contiguous().numpy()
+            e = LazyTorchTensor.to_eager(self.model_tensors[scale_name]()).contiguous().numpy()
+            n = qs.shape[-1] // block_size
+            data = np.concatenate(
+                (qs.reshape(*qs.shape[:-1], n, block_size), e.reshape(*e.shape[:-1], n, block_size // 32)),
+                axis=-1,
+            ).reshape(*qs.shape[:-1], n * type_size)
+            new_name = self.map_tensor_name(name)
+            logger.info(f"Repacked {new_name} with shape {list(qs.shape)} and quantization MXFP8")
+            self.gguf_writer.add_tensor(new_name, data, raw_dtype=gguf.GGMLQuantizationType.MXFP8)
+            consumed.extend((name, scale_name))
+
+        for name in consumed:
+            del self.model_tensors[name]
+
     def prepare_tensors(self):
-        # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
+        # detect NVFP4/MXFP8 quantization (ModelOpt and Compressed-tensors formats)
         quantization_config = self.hparams.get("quantization_config") or {}
         quant_algo = quantization_config.get("quant_algo")
         quant_method = quantization_config.get("quant_method")
@@ -825,6 +852,7 @@ class ModelBase:
 
         self._is_nvfp4 = quant_algo == "NVFP4"
         self._is_mxfp4 = quant_method == "mxfp4"
+        self._is_mxfp8 = quant_algo == "MXFP8"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -853,6 +881,8 @@ class ModelBase:
                         if input_scale_name not in self.model_tensors:
                             self.model_tensors[input_scale_name] = inverse_scale(self.model_tensors.pop(name))
             self._generate_nvfp4_tensors()
+        elif self._is_mxfp8:
+            self._generate_mxfp8_tensors()
 
         self.dequant_model()
 
@@ -1002,6 +1032,8 @@ class ModelBase:
                 self.ftype = gguf.LlamaFileType.MOSTLY_NVFP4
             elif self._is_mxfp4:
                 self.ftype = gguf.LlamaFileType.MOSTLY_MXFP4_MOE
+            elif self._is_mxfp8:
+                self.ftype = gguf.LlamaFileType.MOSTLY_MXFP8
 
         # Generate parameter weight class (useful for leader boards) if not yet determined
         if self.metadata.size_label is None and total_params > 0:
