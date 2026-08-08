@@ -1,0 +1,20 @@
+/*
+ * This single-source file is part of JZ's ggml-hexagon.
+ * 2024--2026 The ggml authors
+ * GitHub:  https://github.com/zhouwg/ggml-hexagon
+ * Any copies or derivative works of this file shall preserve the above attribution information,
+ * including the copyright notice and the GitHub repository URL.
+ *
+ * FastRPC IDL interface for GGML DSP
+ */
+
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+const string IDL_VERSION = "0.0.2";
+
+interface ggml_dsp : remote_handle64 {
+   AEEResult setclocks(in int32 diag_info, in int32 requested_thread_counts, rout int32 actual_thread_counts);
+   AEEResult register_ion(in uint32 ion_fd, in uint32 size_lo, in uint32 size_hi);
+   AEEResult execute_batch(in uint32 batch_offset, in uint32 batch_size);
+};

@@ -153,3 +153,16 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+
+# JZ ggml-hexagon
+/.ccache_cpu/
+/.ccache_qcom/
+/prebuilts/
+/refs/
+/docs/backend/jz-ggml-hexagon/
+ggml/src/ggml-hexagon/kernels/ggml_dsp.h
+ggml/src/ggml-hexagon/kernels/ggml_dsp_skel.c
+ggml/src/ggml-hexagon/kernels/ggml_dsp_stub.c
+log*.txt
+scripts/*.py
