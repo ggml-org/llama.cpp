@@ -171,6 +171,18 @@ void ggml_cuda_launch_mm_ids_helper(
 static constexpr int MM_IDS_PREFIX_THREADS = 256;
 static constexpr int MM_IDS_PREFIX_WARPS   = MM_IDS_PREFIX_THREADS / WARP_SIZE;
 
+static bool mm_ids_prefix_supported(
+        int n_experts, int n_tokens, int n_expert_used, int si1) {
+    const int device = ggml_cuda_get_device();
+    if (n_experts <= 0 || n_experts > MM_IDS_PREFIX_THREADS || n_tokens <= 0 ||
+        (n_expert_used != 4 && n_expert_used != 8) || si1 < n_expert_used ||
+        ggml_cuda_info().devices[device].warp_size != WARP_SIZE) {
+        return false;
+    }
+
+    return (int64_t) n_tokens * n_expert_used <= INT_MAX;
+}
+
 template <int n_expert_used>
 static __global__ void mm_ids_prefix_count(const int32_t * __restrict__ ids,
                                            int32_t * __restrict__ block_counts,
@@ -188,7 +200,7 @@ static __global__ void mm_ids_prefix_count(const int32_t * __restrict__ ids,
     if (route < n_rows) {
         const int token  = route / n_expert_used;
         const int slot   = route - token * n_expert_used;
-        const int expert = ids[token * si1 + slot];
+        const int expert = ids[(int64_t) token * si1 + slot];
         if ((unsigned) expert < (unsigned) n_experts) {
             atomicAdd(&counts[expert], 1);
         }
@@ -211,7 +223,7 @@ static __global__ void mm_ids_prefix_scan(const int32_t * __restrict__ block_cou
     int       total  = 0;
     if (expert < n_experts) {
         for (int block = 0; block < n_blocks; ++block) {
-            const int index       = block * n_experts + expert;
+            const int64_t index   = (int64_t) block * n_experts + expert;
             block_offsets[index] = total;
             total += block_counts[index];
         }
@@ -256,7 +268,7 @@ static __global__ void mm_ids_prefix_scatter(const int32_t * __restrict__ ids,
     if (route < n_rows) {
         const int token = route / n_expert_used;
         const int slot  = route - token * n_expert_used;
-        expert          = ids[token * si1 + slot];
+        expert          = ids[(int64_t) token * si1 + slot];
         if ((unsigned) expert < (unsigned) n_experts) {
             atomicAdd(&warp_counts[(threadIdx.x / WARP_SIZE) * n_experts + expert], 1);
         }
@@ -290,17 +302,27 @@ static __global__ void mm_ids_prefix_scatter(const int32_t * __restrict__ ids,
     const int row = expert_bounds[expert] + block_offsets[(int64_t) blockIdx.x * n_experts + expert] + local_rank;
     ids_src1[route] = row;
     ids_dst[row]    = route;
-    row_expert[row] = expert;
+    if (row_expert != nullptr) {
+        row_expert[row] = expert;
+    }
 }
 
-int ggml_cuda_mm_ids_prefix_block_count(int n_tokens, int n_expert_used) {
+static __global__ void mm_ids_fill_row_expert(
+        const int32_t * __restrict__ expert_bounds, int32_t * __restrict__ row_expert) {
+    const int expert = blockIdx.x;
+    for (int row = expert_bounds[expert] + threadIdx.x; row < expert_bounds[expert + 1]; row += blockDim.x) {
+        row_expert[row] = expert;
+    }
+}
+
+static int ggml_cuda_mm_ids_prefix_block_count(int n_tokens, int n_expert_used) {
     GGML_ASSERT(n_tokens >= 0 && n_expert_used >= 0);
     const int64_t n_rows = (int64_t) n_tokens * n_expert_used;
     GGML_ASSERT(n_rows <= INT_MAX);
-    return ((int) n_rows + MM_IDS_PREFIX_THREADS - 1) / MM_IDS_PREFIX_THREADS;
+    return (int) ((n_rows + MM_IDS_PREFIX_THREADS - 1) / MM_IDS_PREFIX_THREADS);
 }
 
-bool ggml_cuda_launch_mm_ids_prefix(const int32_t * __restrict__ ids,
+static bool ggml_cuda_launch_mm_ids_prefix(const int32_t * __restrict__ ids,
                                     int32_t * __restrict__ ids_src1,
                                     int32_t * __restrict__ ids_dst,
                                     int32_t * __restrict__ expert_bounds,
@@ -312,9 +334,7 @@ bool ggml_cuda_launch_mm_ids_prefix(const int32_t * __restrict__ ids,
                                     int n_expert_used,
                                     int si1,
                                     cudaStream_t stream) {
-    if (n_experts <= 0 || n_experts > MM_IDS_PREFIX_THREADS || n_tokens <= 0 ||
-        (n_expert_used != 4 && n_expert_used != 8) ||
-        si1 < n_expert_used) {
+    if (!mm_ids_prefix_supported(n_experts, n_tokens, n_expert_used, si1)) {
         return false;
     }
 
@@ -341,5 +361,115 @@ bool ggml_cuda_launch_mm_ids_prefix(const int32_t * __restrict__ ids,
             ids, block_offsets, expert_bounds, ids_src1, ids_dst, row_expert, n_rows, n_experts, si1);
     }
     CUDA_CHECK(cudaGetLastError());
+    return true;
+}
+
+bool ggml_cuda_mm_ids_get_requirements(
+        const ggml_cuda_mm_ids_plan & plan, ggml_cuda_mm_ids_plan_requirements & requirements) {
+    requirements = {};
+
+    if (plan.n_experts <= 0 || plan.n_tokens <= 0 || plan.n_expert_used <= 0 ||
+        plan.si1 < plan.n_expert_used) {
+        return false;
+    }
+    if (plan.src1_map != ggml_cuda_mm_ids_src1_map::compact_to_source &&
+        plan.src1_map != ggml_cuda_mm_ids_src1_map::source_to_compact) {
+        return false;
+    }
+    if (plan.src1_map == ggml_cuda_mm_ids_src1_map::compact_to_source &&
+        (plan.nchannels_y <= 0 || plan.sis1 <= 0)) {
+        return false;
+    }
+
+    const int64_t n_rows = (int64_t) plan.n_tokens * plan.n_expert_used;
+    if (n_rows > INT_MAX) {
+        return false;
+    }
+
+    const bool use_prefix =
+        plan.prefer_prefix && plan.src1_map == ggml_cuda_mm_ids_src1_map::source_to_compact &&
+        mm_ids_prefix_supported(plan.n_experts, plan.n_tokens, plan.n_expert_used, plan.si1);
+    if (!use_prefix && (plan.n_tokens >= (1 << 22) || plan.n_expert_used >= (1 << 10))) {
+        return false;
+    }
+
+    requirements.ids_src1_count      = (size_t) n_rows;
+    requirements.ids_dst_count       = (size_t) n_rows;
+    requirements.expert_bounds_count = (size_t) plan.n_experts + 1;
+    requirements.row_expert_count    = plan.populate_row_expert ? (size_t) n_rows : 0;
+
+    if (use_prefix) {
+        const size_t n_blocks = (size_t) ggml_cuda_mm_ids_prefix_block_count(plan.n_tokens, plan.n_expert_used);
+        if (n_blocks != 0 && (size_t) plan.n_experts > SIZE_MAX / n_blocks) {
+            requirements = {};
+            return false;
+        }
+        requirements.block_counts_count  = n_blocks * (size_t) plan.n_experts;
+        requirements.block_offsets_count = requirements.block_counts_count;
+    }
+    return true;
+}
+
+ggml_cuda_mm_ids_plan_storage::ggml_cuda_mm_ids_plan_storage(
+        ggml_cuda_pool & pool, const ggml_cuda_mm_ids_plan_requirements & requirements) :
+    ids_src1(pool, requirements.ids_src1_count),
+    ids_dst(pool, requirements.ids_dst_count),
+    expert_bounds(pool, requirements.expert_bounds_count),
+    row_expert(pool),
+    block_counts(pool),
+    block_offsets(pool) {
+    if (requirements.row_expert_count != 0) {
+        row_expert.alloc(requirements.row_expert_count);
+    }
+    if (requirements.block_counts_count != 0) {
+        block_counts.alloc(requirements.block_counts_count);
+        block_offsets.alloc(requirements.block_offsets_count);
+    }
+}
+
+ggml_cuda_mm_ids_plan_view ggml_cuda_mm_ids_plan_storage::view() {
+    return { ids_src1.ptr, ids_dst.ptr, expert_bounds.ptr, row_expert.ptr, block_counts.ptr, block_offsets.ptr };
+}
+
+bool ggml_cuda_launch_mm_ids_plan(
+        const int32_t * ids, const ggml_cuda_mm_ids_plan & plan, const ggml_cuda_mm_ids_plan_view & view,
+        cudaStream_t stream) {
+    ggml_cuda_mm_ids_plan_requirements requirements;
+    if (!ggml_cuda_mm_ids_get_requirements(plan, requirements) || ids == nullptr || view.ids_src1 == nullptr ||
+        view.ids_dst == nullptr || view.expert_bounds == nullptr ||
+        (plan.populate_row_expert && view.row_expert == nullptr)) {
+        return false;
+    }
+
+    const bool use_prefix = requirements.block_counts_count != 0 && view.block_counts != nullptr &&
+        view.block_offsets != nullptr;
+    if (use_prefix) {
+        int32_t * row_expert = plan.populate_row_expert ? view.row_expert : nullptr;
+        return ggml_cuda_launch_mm_ids_prefix(
+            ids, view.ids_src1, view.ids_dst, view.expert_bounds, row_expert, view.block_counts,
+            view.block_offsets, plan.n_experts, plan.n_tokens, plan.n_expert_used, plan.si1, stream);
+    }
+
+    if (plan.n_tokens >= (1 << 22) || plan.n_expert_used >= (1 << 10)) {
+        return false;
+    }
+
+    const int    device        = ggml_cuda_get_device();
+    const size_t shared_memory = (size_t) plan.n_tokens * sizeof(mm_ids_helper_store);
+    if (shared_memory > ggml_cuda_info().devices[device].smpbo) {
+        return false;
+    }
+
+    const bool write_inverse = plan.src1_map == ggml_cuda_mm_ids_src1_map::source_to_compact;
+    ggml_cuda_launch_mm_ids_helper(
+        ids, view.ids_src1, view.ids_dst, view.expert_bounds, plan.n_experts, plan.n_tokens, plan.n_expert_used,
+        plan.nchannels_y, plan.si1, plan.sis1, write_inverse, stream);
+    CUDA_CHECK(cudaGetLastError());
+
+    if (plan.populate_row_expert) {
+        mm_ids_fill_row_expert<<<plan.n_experts, MM_IDS_PREFIX_THREADS, 0, stream>>>(
+            view.expert_bounds, view.row_expert);
+        CUDA_CHECK(cudaGetLastError());
+    }
     return true;
 }

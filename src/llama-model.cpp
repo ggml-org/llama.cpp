@@ -979,9 +979,6 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
         }
     }
 
-    // add the device default buffer type
-    buft_list.emplace_back(dev, ggml_backend_dev_buffer_type(dev));
-
     // add the device extra buffer type (if any)
     ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
     if (reg) {
@@ -996,6 +993,9 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
             }
         }
     }
+
+    // add the device default buffer type
+    buft_list.emplace_back(dev, ggml_backend_dev_buffer_type(dev));
 
     return buft_list;
 }

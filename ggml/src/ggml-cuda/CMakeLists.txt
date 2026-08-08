@@ -230,9 +230,6 @@ if (CUDAToolkit_FOUND)
         target_sources(ggml-cuda PRIVATE $<TARGET_OBJECTS:ggml-cuda-cutlass>)
 
         target_compile_definitions(ggml-cuda PRIVATE GGML_CUDA_CUTLASS)
-        target_include_directories(ggml-cuda PRIVATE
-            "${GGML_CUDA_CUTLASS_PATH}/include"
-            "${GGML_CUDA_CUTLASS_PATH}/tools/util/include")
     endif()
 
     if (GGML_CUDA_NCCL)
@@ -307,7 +304,7 @@ if (CUDAToolkit_FOUND)
     else()
         # CCCL 3.2 onwards will require a cpp-standard-compliant preprocessor for MSVC
         # https://github.com/NVIDIA/cccl/pull/6827
-        list(APPEND CUDA_CXX_FLAGS /Zc:preprocessor)
+        list(APPEND CUDA_CXX_FLAGS /Zc:preprocessor /bigobj)
     endif()
 
     list(JOIN   CUDA_CXX_FLAGS " " CUDA_CXX_FLAGS_JOINED)  # pass host compiler flags as a single argument

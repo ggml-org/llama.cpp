@@ -1,5 +1,5 @@
 #include "mmvq.cuh"
-#include "mmq-cutlass-repack.cuh"
+#include "repack-cutlass-w4a4.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -7,19 +7,6 @@
 #include <cstdint>
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
-
-static __device__ __forceinline__ int64_t mmvq_cutlass_scale_offset(
-        int row, int scale_block, int padded_scale_blocks) {
-    const int inner_k       = scale_block % 4;
-    const int inner_m       = (row % 128) / 32;
-    const int outer_m       = row % 32;
-    const int k_tile        = scale_block / 4;
-    const int m_tile        = row / 128;
-    const int k_tile_stride = 512;
-    const int m_tile_stride = (padded_scale_blocks / 4) * k_tile_stride;
-    return (int64_t) m_tile * m_tile_stride + (int64_t) k_tile * k_tile_stride +
-        outer_m * 16 + inner_m * 4 + inner_k;
-}
 
 static __device__ __forceinline__ uint32_t mmvq_cutlass_expand_nibbles(uint16_t packed) {
     const uint32_t value = packed;
@@ -60,7 +47,7 @@ static __device__ __forceinline__ float vec_dot_cutlass_q8_1(
             sumi = ggml_cuda_dp4a(value.y, q8[l + 4], sumi);
         }
         const uint8_t scale = scales[(int64_t) group * scale_stride +
-            mmvq_cutlass_scale_offset(row, k_block, padded_scale_blocks)];
+            ggml_cuda_cutlass_blockscaled_scale_offset(row, k_block, padded_scale_blocks)];
         return ggml_cuda_e8m0_to_fp32(scale) * 0.5f * __low2float(bq8_1->ds) * sumi;
     } else {
         static_assert(type == GGML_TYPE_NVFP4, "CUTLASS MMVQ supports FP4 weights");
@@ -81,7 +68,7 @@ static __device__ __forceinline__ float vec_dot_cutlass_q8_1(
             sumi = ggml_cuda_dp4a(value0.y, get_int_b4(bq8->qs, i8 + 2), sumi);
             sumi = ggml_cuda_dp4a(value1.x, get_int_b4(bq8->qs, i8 + 1), sumi);
             sumi = ggml_cuda_dp4a(value1.y, get_int_b4(bq8->qs, i8 + 3), sumi);
-            const uint8_t scale = scales[(int64_t) group * scale_stride + mmvq_cutlass_scale_offset(
+            const uint8_t scale = scales[(int64_t) group * scale_stride + ggml_cuda_cutlass_blockscaled_scale_offset(
                 row, 4 * k_block + scale_index, padded_scale_blocks)];
             sum += ggml_cuda_ue4m3_to_fp32(scale) * __low2float(bq8->ds) * sumi;
         }
@@ -673,6 +660,8 @@ static __global__ void mul_mat_vec_q(
 
     const block_q8_1 * y = ((const block_q8_1 *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
     const int kbx_offset = sample_x*stride_sample_x + channel_x*stride_channel_x + row0*stride_row_x;
+    const int64_t cutlass_kbx_offset = (int64_t) sample_x * stride_sample_x +
+        (int64_t) channel_x * stride_channel_x + (int64_t) row0 * stride_row_x;
 
     for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
         const int kby = kbx * (qk/QK8_1); // y block index that aligns with kbx
@@ -687,7 +676,7 @@ static __global__ void mul_mat_vec_q(
                 if constexpr (cutlass_layout) {
                     tmp[j][i] += vec_dot_cutlass_q8_1<type>(
                         (const uint8_t *) vx, vx_scales, &y[j*stride_col_y + kby],
-                        kbx_offset + i*stride_row_x + kbx, row0 + i, channel_x, kbx, kqs,
+                        cutlass_kbx_offset + i*stride_row_x + kbx, row0 + i, channel_x, kbx, kqs,
                         padded_scale_blocks, scale_stride);
                 } else {
                     tmp[j][i] += vec_dot_q_cuda(
@@ -832,7 +821,9 @@ static __global__ void mul_mat_vec_q_moe(
     const uint32_t channel_y = fastmodulo(channel_dst, nchannels_y);
 
     const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
-    const int kbx_offset  = channel_x*stride_channel_x + row0*stride_row_x;
+    const int kbx_offset = channel_x*stride_channel_x + row0*stride_row_x;
+    const int64_t cutlass_kbx_offset = (int64_t) channel_x * stride_channel_x +
+        (int64_t) row0 * stride_row_x;
 
     // partial sum for each thread
     float tmp[c_rows_per_block] = {0.0f};
@@ -845,7 +836,7 @@ static __global__ void mul_mat_vec_q_moe(
         for (int i = 0; i < c_rows_per_block; ++i) {
             if constexpr (cutlass_layout) {
                 tmp[i] += vec_dot_cutlass_q8_1<type>(
-                    (const uint8_t *) vx, vx_scales, &y[kby], kbx_offset + i*stride_row_x + kbx,
+                    (const uint8_t *) vx, vx_scales, &y[kby], cutlass_kbx_offset + i*stride_row_x + kbx,
                     row0 + i, channel_x, kbx, kqs, padded_scale_blocks, scale_stride);
             } else {
                 tmp[i] += vec_dot_q_cuda(vx, &y[kby], kbx_offset + i*stride_row_x + kbx, kqs);
@@ -1352,7 +1343,8 @@ void ggml_cuda_mul_mat_vec_q(
     }
 
     // If src0 is a temporary compute buffer, clear any potential padding.
-    if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+    if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+        !ggml_backend_buft_is_cuda_cutlass(ggml_backend_buffer_get_type(src0->buffer))) {
         const size_t size_data  = ggml_nbytes(src0);
         const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
         if (size_alloc > size_data) {
@@ -1394,12 +1386,11 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
     ggml_cuda_cutlass_weight cutlass_weight;
-    const bool cutlass_layout = ggml_cuda_cutlass_get_inplace_weight(ctx, src0, cutlass_weight);
+    const bool cutlass_layout = ggml_cuda_cutlass_weight_from_tensor(src0, cutlass_weight);
     const uint8_t * cutlass_scales = nullptr;
     int padded_scale_blocks = 0;
     int scale_stride = 0;
     if (cutlass_layout) {
-        ggml_cuda_cutlass_weight_wait_ready(cutlass_weight, stream);
         const int qk = src0->type == GGML_TYPE_NVFP4 ? QK_NVFP4 : QK_MXFP4;
         const int scale_vector_size = src0->type == GGML_TYPE_NVFP4 ? QK_NVFP4_SUB : QK_MXFP4;
         s01 = cutlass_weight.k / qk;

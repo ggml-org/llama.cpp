@@ -1411,27 +1411,6 @@ struct ggml_cuda_stream_context {
     }
 };
 
-uint64_t ggml_cuda_buffer_get_generation(ggml_backend_buffer_t buffer);
-
-struct ggml_cuda_cutlass_weight_cache_entry {
-    const ggml_tensor *   source                             = nullptr;
-    const void *          source_data                        = nullptr;
-    ggml_backend_buffer_t source_buffer                      = nullptr;
-    uint64_t              source_buffer_generation           = 0;
-    const ggml_tensor *   source_secondary                   = nullptr;
-    const void *          source_secondary_data              = nullptr;
-    ggml_backend_buffer_t source_secondary_buffer            = nullptr;
-    uint64_t              source_secondary_buffer_generation = 0;
-    int64_t               ne[3]                              = {};
-    void *                data                               = nullptr;
-    void *                scales_data                        = nullptr;
-    bool                  owns_data                          = true;
-    bool                  preserves_source                   = true;
-    int64_t               k                                  = 0;
-    int                   scale_stride                       = 0;
-    cudaEvent_t           ready                              = nullptr;
-};
-
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1500,9 +1479,6 @@ struct ggml_backend_cuda_context {
     }
 
     ggml_cuda_stream_context concurrent_stream_context;
-
-    std::vector<ggml_cuda_cutlass_weight_cache_entry> cutlass_weight_cache;
-    cudaStream_t cutlass_weight_stream = nullptr;
 
     ~ggml_backend_cuda_context();
 
@@ -1662,6 +1638,20 @@ static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
 
 #endif //defined(GGML_CUDA_USE_PDL)
 
+static bool ggml_cuda_kernel_should_use_pdl(const void * kernel) {
+#if defined(GGML_CUDA_USE_PDL)
+    static const bool enabled = []() {
+        const char * env = getenv("GGML_CUDA_PDL");
+        return env == nullptr || std::atoi(env) != 0;
+    }();
+
+    return enabled && ggml_cuda_kernel_can_use_pdl(kernel);
+#else
+    GGML_UNUSED(kernel);
+    return false;
+#endif
+}
+
 // PDL and __restrict__ need to be mutually exclusive, see https://github.com/ggml-org/llama.cpp/pull/24030
 # if (defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER)
 # define GGML_CUDA_RESTRICT
@@ -1672,13 +1662,7 @@ static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
 template<typename Kernel, typename... Args>
 static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args&&... args) {
 #if defined(GGML_CUDA_USE_PDL)
-
-    static const bool env_pdl_enabled = []() {
-        const char * env = getenv("GGML_CUDA_PDL");
-        return env == nullptr || std::atoi(env) != 0;
-    }();
-
-    if (env_pdl_enabled && ggml_cuda_kernel_can_use_pdl(reinterpret_cast<const void *>(kernel))) {
+    if (ggml_cuda_kernel_should_use_pdl(reinterpret_cast<const void *>(kernel))) {
         auto pdl_cfg = ggml_cuda_pdl_config(launch_params);
 
         CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, std::forward<Args>(args)... ));
