@@ -32,6 +32,12 @@
 #include <utility>
 #include <vector>
 
+static constexpr uintptr_t GGML_CUDA_REPACK_NVFP4_MAGIC = 0x4e5646503452504bULL;
+
+static inline bool ggml_cuda_tensor_is_repacked_nvfp4(const ggml_tensor * tensor) {
+    return tensor->extra == (void *) GGML_CUDA_REPACK_NVFP4_MAGIC;
+}
+
 #if defined(GGML_USE_HIP)
 #include "vendors/hip.h"
 #elif defined(GGML_USE_MUSA)
