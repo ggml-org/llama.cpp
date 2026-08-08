@@ -383,10 +383,9 @@ def main() -> int:
                  "-ts", "1/1/1/1", "-fa", "on", "-np", "1"], root / "logs" / f"imatrix-{name}.log", env)
             matrices.append(matrix)
         merged = root / "imatrices" / "imatrix-mtp-merged.gguf"
-        merge_cmd = [str(bin_dir / "llama-imatrix")]
-        for matrix in matrices:
-            merge_cmd += ["--in-file", str(matrix)]
-        merge_cmd += ["-o", str(merged)]
+        merge_cmd = [str(bin_dir / "llama-imatrix"), "-m", args.model,
+                     "--in-file", ",".join(str(matrix) for matrix in matrices),
+                     "-o", str(merged)]
         run(merge_cmd, root / "logs" / "imatrix-merge.log")
     else:
         merged = root / "imatrices" / "imatrix-mtp-merged.gguf"
