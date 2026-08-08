@@ -88,6 +88,17 @@ struct ggml_metal_op {
         return ggml_can_fuse_ext(gf, idxs.data() + i0, ops, n_ops);
     }
 
+    // mark the consumed node at position i as elided: the fusing op already wrote its dst,
+    // so the encode loop must not add its mem ranges to the concurrency tracker. Otherwise a
+    // later op reading that dst would see a false overlap and trigger a spurious barrier.
+    void fuse_elide_dst(int i) {
+        dst_elided.push_back(i);
+    }
+
+    bool is_dst_elided(int i) const {
+        return std::find(dst_elided.begin(), dst_elided.end(), i) != dst_elided.end();
+    }
+
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
     ggml_metal_encoder_t enc;
@@ -108,6 +119,9 @@ private:
 
     // non-empty node indices
     std::vector<int> idxs;
+
+    // positions of fused nodes whose dst must not be tracked (see fuse_elide_dst)
+    std::vector<int> dst_elided;
 };
 
 ggml_metal_op_t ggml_metal_op_init(
@@ -510,6 +524,9 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
 
     // update the mem ranges in the encoding context
     for (int i = 0; i < n_fuse; ++i) {
+        if (ctx->is_dst_elided(idx + i)) {
+            continue;
+        }
         if (!ggml_metal_op_concurrency_add(ctx, ctx->node(idx + i))) {
             ggml_metal_op_concurrency_reset(ctx);
         }
@@ -1810,6 +1827,61 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+// Match gated_delta_net + the trailing cpy that scatters its state snapshots into the
+// recurrent cache, so the kernel writes them straight to the cache and the cpy is elided.
+// The cpy reads the gdn output through a view of a different shape, so ctx->can_fuse() cannot
+// express it; the linkage and geometry are validated directly instead.
+static bool ggml_metal_op_can_fuse_gdn_cache(ggml_metal_op_t        ctx,
+                                             int                    idx,
+                                             ggml_metal_buffer_id * cache_buf_id,
+                                             int32_t              * slot_stride) {
+    const ggml_tensor * gdn = ctx->node(idx);
+
+    if (gdn->op != GGML_OP_GATED_DELTA_NET || gdn->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int64_t S_v      = gdn->src[2]->ne[0];
+    const int64_t H        = gdn->src[2]->ne[1];
+    const int64_t n_tokens = gdn->src[2]->ne[2];
+    const int64_t n_seqs   = gdn->src[2]->ne[3];
+    const int64_t K        = ggml_get_op_params_i32(gdn, 0);
+    const size_t  tail_off = ggml_row_size(GGML_TYPE_F32, S_v * H * n_tokens * n_seqs);
+
+    const int64_t D         = S_v * S_v * H;
+    const int64_t n_written = std::min<int64_t>(n_tokens, K);
+
+    // the scatter cpy is the next real op (views are filtered out of the node list)
+    if (idx + 1 >= ctx->n_nodes()) {
+        return false;
+    }
+
+    const ggml_tensor * cpy = ctx->node(idx + 1);
+    if (cpy->op != GGML_OP_CPY) {
+        return false;
+    }
+
+    const ggml_tensor * src = cpy->src[0]; // gdn snapshot tail view
+    const ggml_tensor * dst = cpy->src[1]; // cache view
+
+    if (src->view_src != gdn || src->view_offs != tail_off || !ggml_is_contiguous(src)) {
+        return false;
+    }
+
+    const int64_t expected_ne[GGML_MAX_DIMS] = { D, n_seqs, n_written, 1 };
+    if (dst->type != GGML_TYPE_F32 || dst->data == nullptr ||
+        !std::equal(expected_ne, expected_ne + GGML_MAX_DIMS, dst->ne) ||
+        dst->nb[0] != ggml_type_size(GGML_TYPE_F32) ||
+        dst->nb[1] != (size_t) ggml_row_size(GGML_TYPE_F32, D)) {
+        return false;
+    }
+
+    *cache_buf_id = ggml_metal_get_buffer_id(dst);
+    *slot_stride  = K > 1 ? (int32_t) (dst->nb[2] / sizeof(float)) : 0;
+
+    return true;
+}
+
 int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -1826,7 +1898,19 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
+    // try to fuse the trailing cpy that scatters state snapshots into the recurrent cache
+    ggml_metal_buffer_id cache_buf_id = { nullptr, 0 };
+    int32_t slot_stride = 0;
+    const bool fused = ctx->use_fusion && ggml_metal_op_can_fuse_gdn_cache(ctx, idx, &cache_buf_id, &slot_stride);
+
     auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op);
+
+    if (!fused) {
+        // unfused: snapshots go to the dst tail, right after the attn scores
+        cache_buf_id  = ggml_metal_get_buffer_id(op);
+        cache_buf_id.offs += (size_t) ggml_row_size(GGML_TYPE_F32, ne20 * ne21 * ne22 * ne23);
+        slot_stride   = ne20 * ne20 * ne21 * ne23;
+    }
 
     int ida = 0;
 
@@ -1858,6 +1942,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.ns02 =*/ (int32_t) (nb02/sizeof(float)),
         /*.ns12 =*/ (int32_t) (nb12/sizeof(float)),
         /*.ns22 =*/ (int32_t) (nb22/sizeof(float)),
+        /*.state_out_stride =*/ slot_stride,
         /*.ne0  =*/ ne0,
         /*.ne1  =*/ ne1,
         /*.ne2  =*/ ne2,
@@ -1876,11 +1961,19 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), ida++); // gate
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // beta
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst (attn scores)
+    ggml_metal_encoder_set_buffer  (enc, cache_buf_id,                         ida++); // state_out
 
     const int nsg = pipeline.nsg;
 
     ggml_metal_encoder_dispatch_threadgroups(enc, op->src[2]->ne[0]/nsg, op->src[2]->ne[1], op->src[2]->ne[3], 32, nsg, 1);
+
+    if (fused) {
+        // the kernel wrote the snapshots straight to the cache, so the cpy is redundant:
+        // consume it and keep its cache range out of the concurrency tracker
+        ctx->fuse_elide_dst(idx + 1);
+        return 2;
+    }
 
     return 1;
 }
