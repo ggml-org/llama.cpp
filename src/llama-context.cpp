@@ -1318,6 +1318,41 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
+// Returns true if any input tensor of the graph resides in a buffer that is
+// host-visible but owned by a non-CPU device (ROCm_Host, CUDA_Host, Vulkan_Host).
+//
+// Such a buffer is created through the CPU buffer interface, so
+// ggml_backend_tensor_set on it is a bare memcpy on the calling thread: it never
+// reaches the owning backend, and therefore cannot be ordered against an
+// in-flight graph_compute_async whose kernels are still reading the tensor.
+// The scheduler cannot help either - it inserts no copy or sync for these
+// tensors precisely because the backend advertises that it can consume the
+// buffer directly (ggml_backend_dev_supports_buft).
+static bool graph_has_device_host_inputs(ggml_cgraph * gf) {
+    for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+        ggml_tensor * node = ggml_graph_node(gf, i);
+
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            ggml_tensor * src = node->src[j];
+
+            if (src == nullptr || !(src->flags & GGML_TENSOR_FLAG_INPUT) || src->buffer == nullptr) {
+                continue;
+            }
+
+            if (!ggml_backend_buffer_is_host(src->buffer)) {
+                continue;
+            }
+
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(src->buffer));
+            if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
@@ -1366,6 +1401,17 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
         }
+
+        gf_host_inputs = graph_has_device_host_inputs(gf);
+    }
+
+    // the previous graph_compute_async may still be reading the input tensors that
+    // set_inputs is about to overwrite. this is only a hazard for inputs in a
+    // device-owned host buffer - see graph_has_device_host_inputs() - and costs
+    // nothing in practice: during decode the logits readback has already
+    // synchronized, and during prefill the wait is dwarfed by the ubatch itself.
+    if (gf_host_inputs) {
+        ggml_backend_sched_synchronize(sched.get());
     }
 
     // set the input data for the input tensors
