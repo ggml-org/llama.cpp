@@ -205,7 +205,7 @@ ggml_tensor * llama_model_granite::graph::build_attention_layer(
 
     const bool use_rope = hparams.rope_finetuned;
     if (use_rope) {
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
         Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, rope_factors,
                 n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,

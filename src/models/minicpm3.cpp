@@ -91,7 +91,7 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
         // norm
         cur = build_norm(inpL,
