@@ -181,7 +181,9 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             // partial rollback via per-token snapshot index (bounded by n_rs_seq)
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
                 const llama_pos rollback = cell.pos - (p0 - 1);
-                if (rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
+                // pending rollback is single-use
+                const bool pending = (size_t) seq_id < rs_idx.size() && rs_idx[seq_id] != 0;
+                if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
                     set_rs_idx(seq_id, (uint32_t) rollback);
                     cell.pos = p0 - 1;
                     return true;

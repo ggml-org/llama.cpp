@@ -704,8 +704,7 @@ static std::vector<llama_kv_cache_dsv4_context::comp_plan> dsv4_build_comp_plans
     std::vector<llama_kv_cache_dsv4_context::comp_plan> plans;
     plans.reserve(ubatches.size());
 
-    // the rollback restore is consumed by the first ubatch that touches the seq,
-    // matching the recurrent path's consume-once s_copy() semantics
+    // the first ubatch touching a seq consumes its rollback restore
     std::vector<uint32_t> rs(rs_idx);
     for (const llama_ubatch & ubatch : ubatches) {
         plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream, n_rs_seq, rs));
@@ -1442,6 +1441,11 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
 
         const llama_pos rollback = pos_max - (p0 - 1);
         if (rollback < 1 || rollback > (llama_pos) n_rs_seq) {
+            return false;
+        }
+
+        // pending rollback is single-use: stacked partial removals don't compose
+        if (rs_idx[seq_id] != 0) {
             return false;
         }
 
