@@ -1,0 +1,75 @@
+root ::= (blank-line | line)*
+
+blank-line ::= indent "\n"
+line ::= indent stmt comment? "\n"
+
+indent ::= [ \t]*
+
+stmt ::= import-stmt | class-def | func-def | if-stmt | while-stmt | for-stmt | return-stmt | assign-stmt | expr-stmt | "pass" | "break" | "continue"
+
+import-stmt ::= "from" ws dotted-name ws "import" ws import-list | "import" ws dotted-name
+
+dotted-name ::= identifier ("." identifier)*
+import-list ::= identifier (ws "," ws identifier)*
+
+class-def ::= "class" ws identifier (ws "(" ws dotted-name? ws ")")? ws ":"
+
+func-def ::= "def" ws identifier ws "(" ws params? ws ")" ws ":"
+
+params ::= param (ws "," ws param)*
+param ::= identifier (ws "=" ws expr)?
+
+if-stmt ::= "if" ws expr ws ":" | "elif" ws expr ws ":" | "else" ws ":"
+
+while-stmt ::= "while" ws expr ws ":"
+
+for-stmt ::= "for" ws for-target-list ws "in" ws expr ws ":"
+
+for-target-list ::= identifier (ws "," ws identifier)*
+
+return-stmt ::= "return" (ws expr)?
+
+assign-stmt ::= target-list ws assign-op ws expr
+target-list ::= target (ws "," ws target)*
+# target excludes the call trailer - "f(x)" is not a valid assignment target,
+# only attribute (.id) and subscript ([expr]) are (a call trailer would let
+# "self.dfs(key) = []" parse as an assignment, which is a Python syntax error)
+target ::= identifier ("." identifier | "[" ws expr ws "]")*
+assign-op ::= "=" | "+=" | "-=" | "*=" | "/="
+
+expr-stmt ::= expr
+
+comment ::= ws "#" [^\n]*
+
+expr ::= or-expr
+
+or-expr ::= and-expr (ws "or" ws and-expr)*
+and-expr ::= not-expr (ws "and" ws not-expr)*
+not-expr ::= "not" ws not-expr | comparison
+
+comparison ::= arith (ws comp-op ws arith)*
+comp-op ::= "==" | "!=" | "<=" | ">=" | "<" | ">" | "not" ws "in" | "in" | "is" ws "not" | "is"
+
+arith ::= term (ws ("+" | "-") ws term)*
+term ::= factor (ws ("*" | "//" | "/" | "%") ws factor)*
+factor ::= "-" factor | power
+
+power ::= atom trailer*
+
+trailer ::= "." identifier | "(" ws arglist? ws ")" | "[" ws expr ws "]"
+
+arglist ::= arg (ws "," ws arg)*
+arg ::= expr | identifier ws "=" ws expr
+
+atom ::= number | string | fstring | "True" | "False" | "None" | identifier | "(" ws (expr (ws "," ws expr)* (ws ",")?)? ws ")" | "[" ws (expr (ws "," ws expr)* (ws ",")?)? ws "]" | "{" ws (dict-body | arglist)? ws "}"
+
+fstring ::= "f\"" ([^"\\] | "\\" [\x00-\xFF])* "\"" | "f'" ([^'\\] | "\\" [\x00-\xFF])* "'"
+
+dict-body ::= dict-item (ws "," ws dict-item)*
+dict-item ::= expr ws ":" ws expr
+
+identifier ::= [a-zA-Z_] [a-zA-Z0-9_]*
+number ::= [0-9]+ ("." [0-9]+)?
+string ::= "\"" ([^"\\] | "\\" [\x00-\xFF])* "\"" | "'" ([^'\\] | "\\" [\x00-\xFF])* "'"
+
+ws ::= [ \t]*

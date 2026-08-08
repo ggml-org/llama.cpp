@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: object-like define
+// EXPECT: accept_all
+#define TABLE_SIZE 100

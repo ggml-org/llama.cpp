@@ -1,0 +1,109 @@
+# Java Grammar (simplified EBNF for XGrammar)
+# Whitespace-aware: BPE tokenizers glue leading spaces onto the next token,
+# so "ws" (optional whitespace) must be threaded between adjacent elements.
+
+root ::= ws compilation_unit
+
+compilation_unit ::= (package_declaration ws)? (import_declaration ws)* (type_declaration ws)*
+
+package_declaration ::= "package" ws qualified_name ws ";"
+import_declaration ::= "import" ws ("static" ws)? qualified_name (ws "." ws "*")? ws ";"
+type_declaration ::= class_declaration | interface_declaration | enum_declaration
+
+class_declaration ::= (modifier ws)* "class" ws identifier (ws type_parameters)? (ws "extends" ws identifier (ws type_arguments)?)? (ws "implements" ws type_list)? ws class_body
+interface_declaration ::= (modifier ws)* "interface" ws identifier (ws type_parameters)? (ws "extends" ws type_list)? ws interface_body
+enum_declaration ::= (modifier ws)* "enum" ws identifier (ws "implements" ws type_list)? ws enum_body
+
+modifier ::= "public" | "private" | "protected" | "static" | "final" | "abstract" | "synchronized" | "volatile" | "transient" | "native" | "strictfp" | annotation
+annotation ::= "@" ws identifier (ws "(" ws (annotation_element)? ws ")")?
+annotation_element ::= expression | identifier ws "=" ws expression (ws "," ws identifier ws "=" ws expression)*
+
+type_parameters ::= "<" ws type_parameter (ws "," ws type_parameter)* ws ">"
+type_parameter ::= identifier (ws "extends" ws type_bound)?
+type_bound ::= type (ws "&" ws type)*
+
+type_arguments ::= "<" ws (type_argument (ws "," ws type_argument)*)? ws ">"
+type_argument ::= type | "?" (ws "extends" ws type | ws "super" ws type)?
+
+class_body ::= "{" ws (class_member ws)* "}"
+interface_body ::= "{" ws (interface_member ws)* "}"
+enum_body ::= "{" ws enum_constant (ws "," ws enum_constant)* (ws ",")? (ws ";")? (ws class_member)* ws "}"
+
+class_member ::= field_declaration | method_declaration | constructor_declaration | class_declaration | interface_declaration | static_initializer | instance_initializer
+interface_member ::= field_declaration | method_signature ws ";" | class_declaration | interface_declaration
+enum_constant ::= identifier (ws "(" ws argument_list? ws ")")? (ws class_body)?
+
+field_declaration ::= (modifier ws)* type ws variable_declarator (ws "," ws variable_declarator)* ws ";"
+variable_declarator ::= identifier (ws "=" ws (array_initializer | expression))?
+array_initializer ::= "{" ws (variable_declarator_value (ws "," ws variable_declarator_value)*)? ws "}"
+variable_declarator_value ::= expression | array_initializer
+method_declaration ::= (modifier ws)* (type_parameters ws)? (type ws)? identifier ws "(" ws parameter_list? ws ")" (ws "throws" ws type_list)? ws (method_body | ";")
+method_signature ::= (modifier ws)* (type_parameters ws)? (type ws)? identifier ws "(" ws parameter_list? ws ")" (ws "throws" ws type_list)?
+constructor_declaration ::= (modifier ws)* (type_parameters ws)? identifier ws "(" ws parameter_list? ws ")" (ws "throws" ws type_list)? ws method_body
+static_initializer ::= "static" ws block
+instance_initializer ::= block
+
+method_body ::= block
+block ::= "{" ws (statement ws)* "}"
+
+parameter_list ::= parameter (ws "," ws parameter)*
+parameter ::= (modifier ws)* type ws "..." ws identifier | (modifier ws)* type ws identifier
+
+statement ::= block | expression_statement | if_statement | while_statement | for_statement | do_while_statement | switch_statement | try_statement | return_statement | throw_statement | break_statement | continue_statement | variable_declaration_statement | ";"
+
+expression_statement ::= expression ws ";"
+if_statement ::= "if" ws "(" ws expression ws ")" ws statement (ws "else" ws statement)?
+while_statement ::= "while" ws "(" ws expression ws ")" ws statement
+for_statement ::= "for" ws "(" ws for_init? ws ";" ws expression? ws ";" ws expression? ws ")" ws statement | "for" ws "(" ws type ws identifier ws ":" ws expression ws ")" ws statement
+for_init ::= variable_declaration | expression
+do_while_statement ::= "do" ws statement ws "while" ws "(" ws expression ws ")" ws ";"
+switch_statement ::= "switch" ws "(" ws expression ws ")" ws "{" ws (switch_case ws)* "}"
+switch_case ::= ("case" ws expression | "default") ws ":" (ws statement)*
+try_statement ::= "try" ws block (ws catch_clause)* (ws finally_clause)?
+catch_clause ::= "catch" ws "(" ws type ws identifier ws ")" ws block
+finally_clause ::= "finally" ws block
+return_statement ::= "return" (ws expression)? ws ";"
+throw_statement ::= "throw" ws expression ws ";"
+break_statement ::= "break" (ws identifier)? ws ";"
+continue_statement ::= "continue" (ws identifier)? ws ";"
+variable_declaration_statement ::= variable_declaration ws ";"
+variable_declaration ::= (modifier ws)* type ws variable_declarator (ws "," ws variable_declarator)*
+
+type_list ::= type (ws "," ws type)*
+type ::= identifier (ws "." ws identifier)* (ws type_arguments)? (ws "[" ws "]")*
+qualified_name ::= identifier (ws "." ws identifier)* (ws type_arguments)?
+
+expression ::= assignment_expression
+assignment_expression ::= conditional_expression (ws assignment_operator ws assignment_expression)?
+assignment_operator ::= "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>="
+conditional_expression ::= logical_or_expression (ws "?" ws expression ws ":" ws expression)?
+logical_or_expression ::= logical_and_expression (ws "||" ws logical_and_expression)*
+logical_and_expression ::= inclusive_or_expression (ws "&&" ws inclusive_or_expression)*
+inclusive_or_expression ::= exclusive_or_expression (ws "|" ws exclusive_or_expression)*
+exclusive_or_expression ::= and_expression (ws "^" ws and_expression)*
+and_expression ::= equality_expression (ws "&" ws equality_expression)*
+equality_expression ::= relational_expression (ws ("==" | "!=") ws relational_expression)*
+relational_expression ::= shift_expression (ws ("<=" | ">=" | "instanceof" | "<" | ">") ws shift_expression)*
+shift_expression ::= additive_expression (ws (">>>" | "<<" | ">>") ws additive_expression)*
+additive_expression ::= multiplicative_expression (ws ("+" | "-") ws multiplicative_expression)*
+multiplicative_expression ::= unary_expression (ws ("*" | "/" | "%") ws unary_expression)*
+unary_expression ::= ("+" | "-" | "++" | "--" | "!" | "~") ws unary_expression | cast_expression | postfix_expression
+cast_expression ::= "(" ws type ws ")" ws unary_expression
+postfix_expression ::= primary_expression (ws postfix_op)*
+postfix_op ::= "." ws identifier | "[" ws expression ws "]" | "(" ws argument_list? ws ")" | "++" | "--"
+
+argument_list ::= expression (ws "," ws expression)*
+primary_expression ::= literal | identifier | "this" | "super" | "new" ws type ws "(" ws argument_list? ws ")" | lambda_expression | "(" ws expression ws ")"
+lambda_expression ::= (identifier | "(" ws (identifier (ws "," ws identifier)*)? ws ")") ws "->" ws (expression | block)
+
+literal ::= integer_literal | float_literal | char_literal | string_literal | boolean_literal | "null"
+integer_literal ::= [0-9]+ [lL]? | "0x" [0-9a-fA-F]+ [lL]?
+float_literal ::= [0-9]+ "." [0-9]* ([eE] [+-]? [0-9]+)? [fFdD]?
+char_literal ::= "'" [^'\\] "'" | "'" "\\" [abfnrtv\\'"0] "'"
+string_literal ::= "\"" ([^"\\] | "\\" [\x00-\xFF])* "\""
+boolean_literal ::= "true" | "false"
+
+identifier ::= [a-zA-Z_$][a-zA-Z0-9_$]*
+
+ws ::= ([ \t\n\r] | comment)*
+comment ::= "//" [^\n]* "\n" | "/*" ([^*] | "*" [^/])* "*/"

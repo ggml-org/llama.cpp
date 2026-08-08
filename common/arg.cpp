@@ -836,6 +836,21 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     postprocess_cpu_params(params.speculative.draft.cpuparams,       &params.cpuparams);
     postprocess_cpu_params(params.speculative.draft.cpuparams_batch, &params.cpuparams_batch);
 
+    // validate deterministic draft flag combinations
+    if (params.speculative.deterministic_draft.det_accept_all && !params.speculative.deterministic_draft.enabled) {
+        throw std::invalid_argument(
+            "--det-draft-accept-all requires --deterministic-draft-model (plugin not loaded)");
+    }
+
+    // warn if n_max is 0 while filter is enabled
+    if (params.speculative.deterministic_draft.enabled && params.speculative.deterministic_draft.n_max == 0) {
+        LOG_WRN("--det-draft-n-max is 0, deterministic draft filter is effectively disabled\n");
+    }
+
+    if (params.speculative.deterministic_draft.enabled && params.speculative.deterministic_draft.n_max > 0) {
+        params.speculative.draft.n_max = params.speculative.deterministic_draft.n_max;
+    }
+
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
@@ -1640,6 +1655,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             if (value < 0) {
                 throw std::invalid_argument("checkpoint-min-step must be non-negative");
+
             }
             params.checkpoint_min_step = value;
         }
@@ -4195,6 +4211,45 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("ngram min hits must be at least 1");
             }
             params.speculative.ngram_map_k4v.min_hits = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    //
+    // deterministic draft (grammar-constrained decoder) parameters
+    //
+
+    add_opt(common_arg(
+        {"--det-draft-model", "--deterministic-draft-model"}, "FNAME",
+        "path to the deterministic draft (grammar-constrained decoder) plugin (.so/.dylib/.dll)\n"
+        " (default: unused)\n"
+        "auto-enables --spec-type draft-mtp; requires an MTP-enabled model",
+        [](common_params & params, const std::string & value) {
+            params.speculative.deterministic_draft.plugin_path = value;
+            params.speculative.deterministic_draft.enabled = true;
+
+            // auto-imply draft-mtp + deterministic draft types
+            auto & types = params.speculative.types;
+            if (std::find(types.begin(), types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) == types.end()) {
+                types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+            }
+            if (std::find(types.begin(), types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_DETERMINISTIC) == types.end()) {
+                types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_DETERMINISTIC);
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--det-draft-n-max", "--deterministic-draft-n-max"}, "N",
+        string_format("max tokens to validate per deterministic draft (-1=all, 0=disabled, default: %d)",
+            params.speculative.deterministic_draft.n_max),
+        [](common_params & params, int value) {
+            params.speculative.deterministic_draft.n_max = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--det-draft-accept-all"},
+        "accept all filter-passed tokens without target model verification (default: false)",
+        [](common_params & params) {
+            params.speculative.deterministic_draft.det_accept_all = true;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 

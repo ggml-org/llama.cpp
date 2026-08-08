@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: unknown directive with garbage must be rejected
+// EXPECT: reject_any
+#frobnicator !!! @@@ not-a-directive

@@ -1,0 +1,63 @@
+// TEST: java
+// DESC: producer-consumer with wait/notify
+// EXPECT: accept_all
+import java.util.LinkedList;
+import java.util.Queue;
+
+public class ProducerConsumer {
+    private final Queue<Integer> queue = new LinkedList<>();
+    private final int capacity;
+
+    public ProducerConsumer(int capacity) {
+        this.capacity = capacity;
+    }
+
+    public synchronized void produce(int value) throws InterruptedException {
+        while (queue.size() == capacity) {
+            wait();
+        }
+        queue.offer(value);
+        notifyAll();
+    }
+
+    public synchronized int consume() throws InterruptedException {
+        while (queue.isEmpty()) {
+            wait();
+        }
+        int value = queue.poll();
+        notifyAll();
+        return value;
+    }
+
+    public static void main(String[] args) {
+        ProducerConsumer pc = new ProducerConsumer(5);
+        Thread producer = new Thread(() -> {
+            try {
+                for (int i = 0; i < 10; i++) {
+                    pc.produce(i);
+                    System.out.println("Produced: " + i);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        Thread consumer = new Thread(() -> {
+            try {
+                for (int i = 0; i < 10; i++) {
+                    int value = pc.consume();
+                    System.out.println("Consumed: " + value);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        producer.start();
+        consumer.start();
+        try {
+            producer.join();
+            consumer.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}

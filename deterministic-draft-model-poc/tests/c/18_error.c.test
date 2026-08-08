@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: error directive
+// EXPECT: accept_all
+#error Boom

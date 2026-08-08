@@ -1,0 +1,95 @@
+# C Grammar (simplified EBNF for XGrammar)
+# Whitespace-aware: BPE tokenizers glue leading spaces onto the next token,
+# so "ws" (optional whitespace) must be threaded between adjacent elements.
+
+root ::= ws program
+
+program ::= (declaration | function_definition | preprocessor | ws)*
+
+# Directives are single-line: only horizontal whitespace (hws) is allowed
+# inside them. Macro bodies and #if expressions stay loose (arbitrary token
+# soup), but the directive name and #include filename shape are strict.
+preprocessor ::= "#" hws ( include_directive | define_directive | undef_directive
+                         | ifdef_directive | ifndef_directive | if_directive | elif_directive
+                         | else_directive | endif_directive | error_directive | warning_directive
+                         | pragma_directive | line_directive | "\n" )
+
+include_directive ::= "include" hws ( "<" [a-zA-Z0-9_./+-]+ ">" | "\"" [^\n"]+ "\"" ) hws "\n"
+define_directive ::= "define" hws1 identifier ( "(" hws ( identifier ( hws "," hws identifier )* )? hws ")" )? ( hws1 [^\n]* )? hws "\n"
+undef_directive ::= "undef" hws1 identifier hws "\n"
+ifdef_directive ::= "ifdef" hws1 identifier hws "\n"
+ifndef_directive ::= "ifndef" hws1 identifier hws "\n"
+if_directive ::= "if" hws1 [^\n]+ "\n"
+elif_directive ::= "elif" hws1 [^\n]+ "\n"
+else_directive ::= "else" hws "\n"
+endif_directive ::= "endif" hws "\n"
+error_directive ::= "error" ( hws1 [^\n]* )? hws "\n"
+warning_directive ::= "warning" ( hws1 [^\n]* )? hws "\n"
+pragma_directive ::= "pragma" hws1 [^\n]+ "\n"
+line_directive ::= "line" hws1 [0-9]+ ( hws1 "\"" [^\n"]+ "\"" )? hws "\n"
+
+hws ::= [ \t]*
+hws1 ::= [ \t]+
+
+declaration ::= struct_or_union_definition ws ";" | enum_definition ws ";" | type_specifier ws declarator_list ws ";"
+struct_or_union_definition ::= ("struct" | "union") ws identifier? ws "{" ws (struct_member ws)* "}"
+struct_member ::= type_specifier ws declarator_list ws ";"
+enum_definition ::= "enum" ws identifier? ws "{" ws enum_list ws "}"
+enum_list ::= identifier (ws "=" ws constant)? (ws "," ws identifier (ws "=" ws constant)?)*
+type_specifier ::= type_keyword (ws type_keyword (ws type_keyword)?)?
+type_keyword ::= "void" | "int" | "char" | "float" | "double" | "long" | "short" | "unsigned" | "signed" | "const" | "static" | "extern" | "typedef" | "struct" | "union" | "enum" | identifier
+declarator_list ::= declarator (ws "," ws declarator)*
+declarator ::= ("*" ws)* identifier (ws "[" ws expression? ws "]")* (ws "(" ws parameter_list? ws ")")? (ws "=" ws initializer)?
+             | "(" ws ("*" ws)+ identifier ws ")" ws "(" ws parameter_list? ws ")" (ws "=" ws initializer)?
+
+initializer ::= "{" ws (initializer (ws "," ws initializer)*)? ws "}" | assignment_expression
+
+function_definition ::= type_specifier ws ("*" ws)* identifier ws "(" ws parameter_list? ws ")" ws compound_statement
+parameter_list ::= parameter_declaration (ws "," ws parameter_declaration)*
+parameter_declaration ::= type_specifier (ws declarator)?
+
+compound_statement ::= "{" ws statement* ws "}"
+statement ::= compound_statement ws | expression_statement ws | selection_statement ws | iteration_statement ws | jump_statement ws | declaration ws | ";" ws
+
+expression_statement ::= expression? ws ";"
+selection_statement ::= "if" ws "(" ws expression ws ")" ws statement (ws "else" ws statement)? | "switch" ws "(" ws expression ws ")" ws "{" ws case_statement* ws "}"
+case_statement ::= "case" ws expression ws ":" ws statement* | "default" ws ":" ws statement*
+
+iteration_statement ::= "while" ws "(" ws expression ws ")" ws statement | "do" ws statement ws "while" ws "(" ws expression ws ")" ws ";" | "for" ws "(" ws (declaration | expression? ws ";") ws expression? ws ";" ws expression? ws ")" ws statement
+
+jump_statement ::= "break" ws ";" | "continue" ws ";" | "return" ws expression? ws ";" | "goto" ws identifier ws ";"
+
+expression ::= assignment_expression (ws "," ws assignment_expression)*
+assignment_expression ::= conditional_expression (ws assignment_operator ws assignment_expression)?
+assignment_operator ::= "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=" | "&=" | "^=" | "|="
+conditional_expression ::= logical_or_expression (ws "?" ws expression ws ":" ws conditional_expression)?
+logical_or_expression ::= logical_and_expression (ws "||" ws logical_and_expression)*
+logical_and_expression ::= inclusive_or_expression (ws "&&" ws inclusive_or_expression)*
+inclusive_or_expression ::= exclusive_or_expression (ws "|" ws exclusive_or_expression)*
+exclusive_or_expression ::= and_expression (ws "^" ws and_expression)*
+and_expression ::= equality_expression (ws "&" ws equality_expression)*
+equality_expression ::= relational_expression (ws ("==" | "!=") ws relational_expression)*
+relational_expression ::= shift_expression (ws ("<=" | ">=" | "<" | ">") ws shift_expression)*
+shift_expression ::= additive_expression (ws ("<<" | ">>") ws additive_expression)*
+additive_expression ::= multiplicative_expression (ws ("+" | "-") ws multiplicative_expression)*
+multiplicative_expression ::= cast_expression (ws ("*" | "/" | "%") ws cast_expression)*
+cast_expression ::= "(" ws type_specifier ws ("*" ws)* ")" ws cast_expression | unary_expression
+unary_expression ::= postfix_expression | ("++" | "--" | "&" | "*" | "+" | "-" | "~" | "!") ws unary_expression | "sizeof" ws (unary_expression | "(" ws type_specifier ws ("*" ws)* ")")
+postfix_expression ::= primary_expression (ws postfix_op)*
+postfix_op ::= "[" ws expression ws "]" | "(" ws argument_expression_list? ws ")" | "." ws identifier | "->" ws identifier | "++" | "--"
+
+argument_expression_list ::= assignment_expression (ws "," ws assignment_expression)*
+primary_expression ::= identifier | constant | string_literal | "(" ws expression ws ")"
+
+identifier ::= [a-zA-Z_][a-zA-Z0-9_]*
+constant ::= [0-9]+ "." [0-9]* ([eE] [+-]? [0-9]+)? floating_suffix?
+           | [0-9]+ [eE] [+-]? [0-9]+ floating_suffix?
+           | [0-9]+ integer_suffix?
+           | "0x" [0-9a-fA-F]+ integer_suffix?
+           | "'" [^'\\] "'" | "'" "\\" [abfnrtv\\'"0] "'"
+integer_suffix ::= [uU] ([lL] [lL]?)? | [lL] [lL]? [uU]?
+floating_suffix ::= [fFlL]
+string_literal ::= "\"" ([^"\\] | "\\" [\x00-\xFF])* "\""
+
+ws ::= ([ \t\n\r] | comment)*
+comment ::= "//" [^\n]* "\n" | "/*" ([^*] | "*" [^/])* "*/"

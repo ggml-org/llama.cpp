@@ -1,0 +1,77 @@
+// TEST: java
+// DESC: complete binary search tree with insert, search, and inorder traversal
+// EXPECT: accept_all
+import java.util.*;
+
+public class BinarySearchTree {
+    static class Node {
+        int value;
+        Node left, right;
+
+        Node(int value) {
+            this.value = value;
+            left = null;
+            right = null;
+        }
+    }
+
+    private Node root;
+
+    public void insert(int value) {
+        root = insertRec(root, value);
+    }
+
+    private Node insertRec(Node node, int value) {
+        if (node == null) {
+            return new Node(value);
+        }
+        if (value < node.value) {
+            node.left = insertRec(node.left, value);
+        } else if (value > node.value) {
+            node.right = insertRec(node.right, value);
+        }
+        return node;
+    }
+
+    public boolean search(int value) {
+        return searchRec(root, value);
+    }
+
+    private boolean searchRec(Node node, int value) {
+        if (node == null) {
+            return false;
+        }
+        if (value == node.value) {
+            return true;
+        }
+        if (value < node.value) {
+            return searchRec(node.left, value);
+        }
+        return searchRec(node.right, value);
+    }
+
+    public List<Integer> inorder() {
+        List<Integer> result = new ArrayList<>();
+        inorderRec(root, result);
+        return result;
+    }
+
+    private void inorderRec(Node node, List<Integer> result) {
+        if (node != null) {
+            inorderRec(node.left, result);
+            result.add(node.value);
+            inorderRec(node.right, result);
+        }
+    }
+
+    public static void main(String[] args) {
+        BinarySearchTree bst = new BinarySearchTree();
+        int[] values = {50, 30, 70, 20, 40, 60, 80};
+        for (int v : values) {
+            bst.insert(v);
+        }
+        System.out.println("Inorder: " + bst.inorder());
+        System.out.println("Search 40: " + bst.search(40));
+        System.out.println("Search 99: " + bst.search(99));
+    }
+}

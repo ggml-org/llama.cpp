@@ -1,0 +1,83 @@
+// TEST: c
+// DESC: hash table with chaining for collision resolution
+// EXPECT: accept_all
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define TABLE_SIZE 100
+
+struct Entry {
+    char *key;
+    int value;
+    struct Entry *next;
+};
+
+struct HashTable {
+    struct Entry *table[TABLE_SIZE];
+};
+
+unsigned int hash(const char *key) {
+    unsigned int hash = 0;
+    while (*key) {
+        hash = (hash * 31) + *key++;
+    }
+    return hash % TABLE_SIZE;
+}
+
+struct HashTable *hashtable_create(void) {
+    struct HashTable *ht = (struct HashTable *)calloc(1, sizeof(struct HashTable));
+    return ht;
+}
+
+void hashtable_put(struct HashTable *ht, const char *key, int value) {
+    unsigned int idx = hash(key);
+    struct Entry *entry = ht->table[idx];
+    while (entry != NULL) {
+        if (strcmp(entry->key, key) == 0) {
+            entry->value = value;
+            return;
+        }
+        entry = entry->next;
+    }
+    struct Entry *new_entry = (struct Entry *)malloc(sizeof(struct Entry));
+    new_entry->key = strdup(key);
+    new_entry->value = value;
+    new_entry->next = ht->table[idx];
+    ht->table[idx] = new_entry;
+}
+
+int hashtable_get(struct HashTable *ht, const char *key) {
+    unsigned int idx = hash(key);
+    struct Entry *entry = ht->table[idx];
+    while (entry != NULL) {
+        if (strcmp(entry->key, key) == 0) {
+            return entry->value;
+        }
+        entry = entry->next;
+    }
+    return -1;
+}
+
+void hashtable_free(struct HashTable *ht) {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        struct Entry *entry = ht->table[i];
+        while (entry != NULL) {
+            struct Entry *temp = entry;
+            entry = entry->next;
+            free(temp->key);
+            free(temp);
+        }
+    }
+    free(ht);
+}
+
+int main() {
+    struct HashTable *ht = hashtable_create();
+    hashtable_put(ht, "alice", 42);
+    hashtable_put(ht, "bob", 99);
+    printf("alice: %d\n", hashtable_get(ht, "alice"));
+    printf("bob: %d\n", hashtable_get(ht, "bob"));
+    hashtable_free(ht);
+    return 0;
+}

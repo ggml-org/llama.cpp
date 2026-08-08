@@ -1,0 +1,6 @@
+// TEST: c
+// DESC: missing semicolon between expression and if - tolerated by trailing-edge design
+// EXPECT: reject_any
+void quicksort(int arr[], int lo, int hi) {
+    1. if (lo) hi = -1;
+}

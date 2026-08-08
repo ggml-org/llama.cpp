@@ -1,0 +1,70 @@
+# TEST: python
+# DESC: complete graph with BFS and DFS traversal
+# EXPECT: accept_all
+from collections import deque
+
+
+class Graph:
+    def __init__(self):
+        self.adj = {}
+
+    def add_edge(self, u, v):
+        if u not in self.adj:
+            self.adj[u] = []
+        if v not in self.adj:
+            self.adj[v] = []
+        self.adj[u].append(v)
+        self.adj[v].append(u)
+
+    def bfs(self, start):
+        visited = set()
+        queue = deque([start])
+        result = []
+        while queue:
+            node = queue.popleft()
+            if node in visited:
+                continue
+            visited.add(node)
+            result.append(node)
+            for neighbor in self.adj.get(node, []):
+                if neighbor not in visited:
+                    queue.append(neighbor)
+        return result
+
+    def dfs(self, start):
+        visited = set()
+        result = []
+        self._dfs_rec(start, visited, result)
+        return result
+
+    def _dfs_rec(self, node, visited, result):
+        visited.add(node)
+        result.append(node)
+        for neighbor in self.adj.get(node, []):
+            if neighbor not in visited:
+                self._dfs_rec(neighbor, visited, result)
+
+    def shortest_path(self, start, end):
+        if start == end:
+            return [start]
+        visited = {start}
+        queue = deque([(start, [start])])
+        while queue:
+            node, path = queue.popleft()
+            for neighbor in self.adj.get(node, []):
+                if neighbor == end:
+                    return path + [neighbor]
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, path + [neighbor]))
+        return None
+
+
+if __name__ == "__main__":
+    g = Graph()
+    edges = [(1, 2), (1, 3), (2, 4), (3, 4), (4, 5), (3, 5)]
+    for u, v in edges:
+        g.add_edge(u, v)
+    print("BFS from 1:", g.bfs(1))
+    print("DFS from 1:", g.dfs(1))
+    print("Shortest path 1->5:", g.shortest_path(1, 5))
