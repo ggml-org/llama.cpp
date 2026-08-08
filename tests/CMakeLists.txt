@@ -217,6 +217,18 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
+    if (GGML_CUDA AND NOT GGML_HIP AND NOT GGML_MUSA)
+        llama_test(
+            test-recurrent-state-rollback
+            NAME test-recurrent-state-rollback-nemotron-h
+            LABEL main
+            ARGS -m "${MODEL_DIR}/nemotron_h-dense.gguf" -ngl all
+        )
+        set_tests_properties(test-recurrent-state-rollback-nemotron-h PROPERTIES
+            FIXTURES_REQUIRED generate-models
+        )
+    endif()
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
