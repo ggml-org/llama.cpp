@@ -69,6 +69,7 @@ static void test_laguna_xs2_tool_format(testing & t);
 
 // CohereForAI template analysis tests
 static void test_cohere_reasoning_detection(testing & t);
+static void test_thinking_alias_reasoning_detection(testing & t);
 static void test_cohere_analysis(testing & t);
 
 // SmolLM3 template analysis tests
@@ -1484,6 +1485,26 @@ static common_chat_template load_cohere_template(testing & t) {
 
 static void test_cohere_analysis(testing & t) {
     t.test("Cohere reasoning detection", test_cohere_reasoning_detection);
+    t.test("thinking field reasoning detection", test_thinking_alias_reasoning_detection);
+}
+
+static void test_thinking_alias_reasoning_detection(testing & t) {
+    const std::string template_source = R"(
+{%- for message in messages %}
+{%- if message.role == 'user' %}<|USER|>{{ message.content }}
+{%- elif message.role == 'assistant' %}<|ASSISTANT|>{% if message.thinking %}<|START_THINKING|>{{ message.thinking }}<|END_THINKING|>{% endif %}<|START_RESPONSE|>{{ message.content }}<|END_RESPONSE|>
+{%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}<|ASSISTANT|>{% endif %})";
+    common_chat_template tmpl(template_source, "", "");
+
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    t.assert_equal("thinking alias should use tag-based reasoning", reasoning_mode::TAG_BASED,
+                   analysis.reasoning.mode);
+    t.assert_equal("thinking alias start marker", "<|START_THINKING|>", analysis.reasoning.start);
+    t.assert_equal("thinking alias end marker", "<|END_THINKING|>", analysis.reasoning.end);
 }
 
 static void test_cohere_reasoning_detection(testing & t) {
