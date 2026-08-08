@@ -4572,6 +4572,77 @@ struct test_mul_mat_id_fusion : public test_case {
     }
 };
 
+// GGML_OP_MOE_FFN
+struct test_moe_ffn : public test_case {
+    const ggml_type type_up;
+    const ggml_type type_down;
+    const int64_t n_embd;
+    const int64_t n_ff;
+    const int n_expert;
+    const int n_expert_used;
+    const int64_t n_tokens;
+    const bool merged; // gate and up stored as one tensor
+
+    std::string vars() override {
+        return VARS_TO_STR8(type_up, type_down, n_embd, n_ff, n_expert, n_expert_used, n_tokens, merged);
+    }
+
+    double max_nmse_err() override {
+        // three chained quantized GEMMs, each at mul_mat_id-level error
+        return 2e-3;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        // On blackwell fp4 weights are paired with fp4 activations. mul_mat_id allows 2e-2 for a
+        // single such GEMM; this op chains three, so the tolerance scales accordingly.
+        const bool fp4 = type_up   == GGML_TYPE_MXFP4 || type_up   == GGML_TYPE_NVFP4 ||
+                         type_down == GGML_TYPE_MXFP4 || type_down == GGML_TYPE_NVFP4;
+        if (fp4 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+            return 5e-2;
+        }
+        return max_nmse_err();
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * n_tokens * (n_expert*n_embd + n_expert_used*3*n_embd*n_ff);
+    }
+
+    test_moe_ffn(ggml_type type_up = GGML_TYPE_Q4_K, ggml_type type_down = GGML_TYPE_Q4_K,
+            int64_t n_embd = 256, int64_t n_ff = 256, int n_expert = 32, int n_expert_used = 4, int64_t n_tokens = 96,
+            bool merged = false)
+        : type_up(type_up), type_down(type_down), n_embd(n_embd), n_ff(n_ff),
+          n_expert(n_expert), n_expert_used(n_expert_used), n_tokens(n_tokens), merged(merged) {
+        GGML_ASSERT(n_expert_used <= n_expert);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * gate_inp = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_expert);
+        ggml_set_name(gate_inp, "gate_inp");
+
+        ggml_tensor * up_exps = ggml_new_tensor_3d(ctx, type_up, n_embd, merged ? 2*n_ff : n_ff, n_expert);
+        ggml_set_name(up_exps, merged ? "gate_up_exps" : "up_exps");
+
+        ggml_tensor * gate_exps = nullptr;
+        if (!merged) {
+            gate_exps = ggml_new_tensor_3d(ctx, type_up, n_embd, n_ff, n_expert);
+            ggml_set_name(gate_exps, "gate_exps");
+        }
+
+        ggml_tensor * down_exps = ggml_new_tensor_3d(ctx, type_down, n_ff, n_embd, n_expert);
+        ggml_set_name(down_exps, "down_exps");
+
+        ggml_tensor * out = ggml_moe_ffn(ctx, x, gate_inp, up_exps, gate_exps, down_exps, n_expert_used,
+            GGML_MOE_GATING_OP_SOFTMAX, /*norm_w =*/ true, GGML_GLU_OP_SWIGLU);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_OUT_PROD
 struct test_out_prod : public test_case {
     const ggml_type type_a;
@@ -8848,6 +8919,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
 
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 256, 64, 256,
+        {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 2));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 512, 64, 256,
+        {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 2));
+
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {
             test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  i, 256, { 1,  1}, {1, 1}));
@@ -9038,6 +9114,34 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // gpt-oss issue with Vulkan mmq_id
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
+
+    for (ggml_type type_up : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K}) {
+        for (ggml_type type_down : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+            test_cases.emplace_back(new test_moe_ffn(type_up, type_down, 256, 256, 32, 4, 96));
+        }
+    }
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, 256, 512, 32, 4, 1));
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, 256, 512, 32, 32, 17));
+    // Qwen3.6-35B-A3B shapes
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, 2048, 512, 256, 8, 128));
+    // merged gate_up
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,  256, 256, 32, 4,  96, true));
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_0, GGML_TYPE_Q4_K,  256, 256, 32, 4,  96, true));
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, 2048, 512, 256, 8, 128, true));
+    // small batches take the mul_mat_vec_q path inside the op; cover both layouts there
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,  256, 256, 32, 4,   1, true));
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,  256, 256, 32, 4,   8, false));
+    test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0,  256, 256, 32, 4,   4, true));
+    // fp4 experts: on Blackwell these use fp4 activations, elsewhere the ordinary q8_1 path.
+    // up/gate and down are decided independently, so cover a mixed-format case too.
+    for (ggml_type t : {GGML_TYPE_MXFP4, GGML_TYPE_NVFP4}) {
+        test_cases.emplace_back(new test_moe_ffn(t, t,               256, 256, 32, 4,  96, false));
+        test_cases.emplace_back(new test_moe_ffn(t, t,               256, 256, 32, 4,  96, true));
+        test_cases.emplace_back(new test_moe_ffn(t, t,               256, 512, 32, 4,   1, false));
+        test_cases.emplace_back(new test_moe_ffn(t, GGML_TYPE_Q5_K,  256, 256, 32, 4,  96, false));
+        test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, t,  256, 256, 32, 4,  96, false));
+        test_cases.emplace_back(new test_moe_ffn(t, t,              2048, 512, 256, 8, 128, false));
+    }
 
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
@@ -9917,6 +10021,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
             }
+        }
+    }
+
+    // Qwen3.6-35B-A3B-UD-Q4_K_M MoE FFN
+    for (int bs : {64, 128, 512, 2048}) {
+        for (bool merged : {false, true}) {
+            test_cases.emplace_back(new test_moe_ffn(GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, 2048, 512, 256, 8, bs, merged));
         }
     }
 
