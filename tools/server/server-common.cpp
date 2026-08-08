@@ -238,18 +238,17 @@ static inline raw_buffer base64_decode(const std::string & encoded_string) {
 
 namespace {
 
-constexpr uint32_t SERVER_TOKENS_STATE_MAGIC   = 0x53544d4d; // 'STMM'
 constexpr uint32_t SERVER_TOKENS_STATE_VERSION = 1;
 
 template <typename T>
-void server_tokens_state_write(std::vector<uint8_t> & data, T value) {
-    const auto * ptr = reinterpret_cast<const uint8_t *>(&value);
+void server_tokens_state_write(std::vector<char> & data, T value) {
+    const auto * ptr = reinterpret_cast<const char *>(&value);
     data.insert(data.end(), ptr, ptr + sizeof(value));
 }
 
 class server_tokens_state_reader {
 public:
-    server_tokens_state_reader(const uint8_t * data, size_t size) : data(data), size(size) {}
+    server_tokens_state_reader(const char * data, size_t size) : data(data), size(size) {}
 
     template <typename T>
     T read() {
@@ -262,11 +261,21 @@ public:
         return value;
     }
 
+    void read_raw(void * dst, size_t length) {
+        if (size - pos < length) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        if (length > 0) {
+            std::memcpy(dst, data + pos, length);
+        }
+        pos += length;
+    }
+
     std::string read_string(size_t length) {
         if (size - pos < length) {
             throw std::runtime_error("Unexpected end of server tokens state");
         }
-        std::string value(reinterpret_cast<const char *>(data + pos), length);
+        std::string value(data + pos, length);
         pos += length;
         return value;
     }
@@ -275,8 +284,12 @@ public:
         return pos == size;
     }
 
+    size_t remaining() const {
+        return size - pos;
+    }
+
 private:
-    const uint8_t * data;
+    const char * data;
     size_t size;
     size_t pos = 0;
 };
@@ -463,18 +476,17 @@ const llama_tokens & server_tokens::get_tokens() const {
     return tokens;
 }
 
-const llama_tokens & server_tokens::get_tokens_for_save() const {
-    return tokens;
-}
+std::vector<char> server_tokens::serialize() const {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
 
-std::vector<uint8_t> server_tokens::serialize_media_state() const {
-    if (map_idx_to_media.empty()) {
-        return {};
-    }
-
-    std::vector<uint8_t> data;
-    server_tokens_state_write(data, SERVER_TOKENS_STATE_MAGIC);
+    std::vector<char> data;
+    server_tokens_state_write(data, (llama_token) LLAMA_TOKEN_NULL);
     server_tokens_state_write(data, SERVER_TOKENS_STATE_VERSION);
+    server_tokens_state_write(data, server_tokens_state_u32(tokens.size()));
+
+    const auto * tokens_bytes = reinterpret_cast<const char *>(tokens.data());
+    data.insert(data.end(), tokens_bytes, tokens_bytes + tokens.size() * sizeof(llama_token));
+
     server_tokens_state_write(data, server_tokens_state_u32(map_idx_to_media.size()));
 
     for (const auto & item : map_idx_to_media) {
@@ -502,34 +514,44 @@ std::vector<uint8_t> server_tokens::serialize_media_state() const {
         server_tokens_state_write(data, server_tokens_state_u32(chunk_size));
         const size_t offset = data.size();
         data.resize(offset + chunk_size);
-        if (mtmd_input_chunk_save(chunk, reinterpret_cast<char *>(data.data() + offset), chunk_size, nullptr) != 0) {
+        if (mtmd_input_chunk_save(chunk, data.data() + offset, chunk_size, nullptr) != 0) {
             throw std::runtime_error("Cannot serialize image chunk in server tokens");
         }
     }
 
+    // zero-pad the byte stream into whole tokens
+    data.resize((data.size() + sizeof(llama_token) - 1) / sizeof(llama_token) * sizeof(llama_token), 0);
+
     return data;
 }
 
-server_tokens server_tokens::deserialize_media_state(
-        const llama_tokens & tokens, bool has_mtmd, const uint8_t * data, size_t size) {
-    if (!has_mtmd) {
-        throw std::runtime_error("Cannot restore image tokens without an mmproj");
+server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_mtmd) {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    if (packed.empty() || packed[0] != LLAMA_TOKEN_NULL) {
+        // plain token list, as written by older versions
+        return server_tokens(packed, has_mtmd);
     }
 
-    server_tokens_state_reader reader(data, size);
-    if (reader.read<uint32_t>() != SERVER_TOKENS_STATE_MAGIC) {
-        throw std::runtime_error("Invalid server tokens state magic");
-    }
+    server_tokens_state_reader reader(reinterpret_cast<const char *>(packed.data()), packed.size() * sizeof(llama_token));
+    reader.read<llama_token>(); // format marker
     if (reader.read<uint32_t>() != SERVER_TOKENS_STATE_VERSION) {
         throw std::runtime_error("Unsupported server tokens state version");
     }
 
+    const uint32_t n_tokens = reader.read<uint32_t>();
+    if (n_tokens > reader.remaining() / sizeof(llama_token)) {
+        throw std::runtime_error("Unexpected end of server tokens state");
+    }
+    llama_tokens tokens(n_tokens);
+    reader.read_raw(tokens.data(), (size_t) n_tokens * sizeof(llama_token));
+
     const uint32_t n_media = reader.read<uint32_t>();
-    if (n_media == 0) {
-        throw std::runtime_error("Server tokens state contains no images");
+    if (n_media > 0 && !has_mtmd) {
+        throw std::runtime_error("Cannot restore image tokens without an mmproj");
     }
 
-    server_tokens result(tokens, true);
+    server_tokens result(tokens, has_mtmd);
     size_t last_end = 0;
 
     for (uint32_t i = 0; i < n_media; ++i) {
@@ -548,24 +570,29 @@ server_tokens server_tokens::deserialize_media_state(
         if (id == nullptr || id[0] == '\0') {
             throw std::runtime_error("Image ID is missing in server tokens state");
         }
-        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+        const size_t n_chunk_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
         const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
-        if (n_tokens == 0 || n_pos <= 0 || start_idx < last_end ||
-                start_idx > tokens.size() || n_tokens > tokens.size() - start_idx) {
+        if (n_chunk_tokens == 0 || n_pos <= 0 || start_idx < last_end ||
+                start_idx > tokens.size() || n_chunk_tokens > tokens.size() - start_idx) {
             throw std::runtime_error("Invalid image range in server tokens state");
         }
-        for (size_t j = start_idx; j < start_idx + n_tokens; ++j) {
+        for (size_t j = start_idx; j < start_idx + n_chunk_tokens; ++j) {
             if (tokens[j] != LLAMA_TOKEN_NULL) {
                 throw std::runtime_error("Image range does not match server tokens");
             }
         }
 
         result.map_idx_to_media[start_idx] = std::move(chunk);
-        last_end = start_idx + n_tokens;
+        last_end = start_idx + n_chunk_tokens;
     }
 
-    if (!reader.done()) {
+    if (reader.remaining() >= sizeof(llama_token)) {
         throw std::runtime_error("Trailing data in server tokens state");
+    }
+    while (!reader.done()) {
+        if (reader.read<uint8_t>() != 0) {
+            throw std::runtime_error("Invalid padding in server tokens state");
+        }
     }
 
     for (size_t i = 0; i < tokens.size();) {

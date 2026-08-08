@@ -201,14 +201,15 @@ public:
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens);
 
-    // for compatibility with speculative decoding, ctx shift, slot save/load
+    // for compatibility with speculative decoding, ctx shift
     const llama_tokens & get_tokens() const;
-    const llama_tokens & get_tokens_for_save() const;
 
     llama_tokens get_text_tokens() const;
 
-    std::vector<uint8_t> serialize_media_state() const;
-    static server_tokens deserialize_media_state(const llama_tokens & tokens, bool has_mtmd, const uint8_t * data, size_t size);
+    // packed into the token payload of a sequence state file: [LLAMA_TOKEN_NULL][version][n_tokens][tokens][n_media]([start_idx][chunk_size][image chunk])...[zero padding]
+    // a payload that does not start with LLAMA_TOKEN_NULL is a plain token list, as written by older versions
+    std::vector<char> serialize() const;
+    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
