@@ -55,6 +55,9 @@ struct llama_mmap {
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
+
+    // true if the mapping was page-locked for DMA (see llama_mmap ctor)
+    bool host_registered = false;
 };
 
 struct llama_mlock {
