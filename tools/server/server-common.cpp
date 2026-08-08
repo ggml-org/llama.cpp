@@ -865,7 +865,7 @@ static void handle_media(
         // load local image file
         std::string file_path = url.substr(7); // remove "file://"
         raw_buffer data;
-        if (!fs_validate_filename(file_path, true)) {
+        if (!fs_validate_path_in_directory(file_path, media_path)) {
             throw std::invalid_argument("file path is not allowed: " + file_path);
         }
         SRV_INF("loading image from local file '%s'\n", (media_path + file_path).c_str());
