@@ -101,6 +101,51 @@ class BertModel(TextModel):
 
         yield from super().modify_tensors(data_torch, name, bid)
 
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # ColBERT (late-interaction) sentence-transformers models store the
+        # per-token projection as a Dense module directly after the
+        # transformer, with no pooling module in between (e.g. PyLate models
+        # such as lightonai/GTE-ModernColBERT-v1: 1_Dense/model.safetensors
+        # holding a single linear layer projecting n_embd -> 128). Convert it
+        # to the dense_2 output projection so the embeddings are emitted at
+        # the projected width instead of the hidden size.
+        if self.model_arch not in (gguf.MODEL_ARCH.BERT, gguf.MODEL_ARCH.MODERN_BERT):
+            # DENSE_2_OUT is only declared (and loaded at runtime) for these archs
+            return
+
+        modules_file = self.dir_model / "modules.json"
+        if not modules_file.is_file():
+            return
+        with open(modules_file, encoding="utf-8") as f:
+            modules = json.load(f)
+        # only a Dense module directly after the transformer is a late-interaction
+        # projection; a Dense module after pooling is a regular sentence-transformers
+        # embedding projection (see --sentence-transformers-dense-modules)
+        if len(modules) < 2 or not modules[1]["type"].endswith("Dense"):
+            return
+        tensors_file = self.dir_model / modules[1]["path"] / "model.safetensors"
+        if not tensors_file.is_file():
+            raise ValueError(f"modules.json declares a Dense module at {modules[1]['path']} "
+                             f"but {tensors_file} does not exist")
+
+        from safetensors.torch import load_file
+
+        tensors = load_file(tensors_file)
+        if "linear.weight" not in tensors or not set(tensors.keys()) <= {"linear.weight", "linear.bias"}:
+            raise ValueError(f"{tensors_file} exists but is not a recognized Dense module: "
+                             f"expected 'linear.weight' and optional 'linear.bias', found keys: {sorted(tensors.keys())}")
+        weight = tensors["linear.weight"]
+        if weight.dim() != 2:
+            raise ValueError(f"expected 'linear.weight' in {tensors_file} to be 2-dimensional, got shape {tuple(weight.shape)}")
+        self.gguf_writer.add_embedding_length_out(weight.shape[0])
+
+        yield "dense_2.weight", weight.clone()
+
+        if (bias := tensors.get("linear.bias")) is not None:
+            if bias.dim() != 1 or bias.shape[0] != weight.shape[0]:
+                raise ValueError(f"expected 'linear.bias' in {tensors_file} to have shape ({weight.shape[0]},), got shape {tuple(bias.shape)}")
+            yield "dense_2.bias", bias.clone()
+
     def _xlmroberta_tokenizer_init(self) -> None:
         # we need the pad_token_id to know how to chop down position_embd matrix
         if (pad_token_id := self.hparams.get("pad_token_id")) is not None:
