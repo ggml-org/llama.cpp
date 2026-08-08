@@ -23,3 +23,20 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
+
+if(LLAMA_BUILD_TESTS)
+    set(LLAMA_BENCH_TEST_MODEL "${CMAKE_BINARY_DIR}/tests/test-models/qwen35-dense.gguf")
+
+    add_test(
+        NAME test-llama-bench-continue-on-error
+        COMMAND ${CMAKE_COMMAND}
+            -DLLAMA_BENCH=$<TARGET_FILE:llama-bench>
+            -DGOOD_MODEL=${LLAMA_BENCH_TEST_MODEL}
+            -DMISSING_MODEL=${CMAKE_CURRENT_BINARY_DIR}/missing-model.gguf
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/test-continue-on-error.cmake
+    )
+    set_tests_properties(test-llama-bench-continue-on-error PROPERTIES
+        LABELS main
+        FIXTURES_REQUIRED generate-models
+    )
+endif()
