@@ -217,6 +217,18 @@ static inline bool ggml_hexagon_is_hmx_weight_type(enum ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_F32 || ggml_hexagon_is_repack_type(type);
 }
 
+static inline bool ggml_hexagon_can_flatten_mul_mat(
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst
+) {
+    return ggml_hexagon_is_repack_type(src0->type) &&
+           src0->ne[2] == 1 && src0->ne[3] == 1 &&
+           (src1->ne[2] != 1 || src1->ne[3] != 1) &&
+           src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+           ggml_is_contiguous(src1) && ggml_is_contiguous(dst);
+}
+
 struct ggml_hexagon_session;
 
 static void ggml_hexagon_precompute_matmul_params(
@@ -2202,7 +2214,9 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
     const int ne00  = src0->ne[0];
     const int ne11  = src1->ne[1];
     const int ne12  = src1->ne[2];
+    const int ne13  = src1->ne[3];
     const int wtype = src0->type;
+    const bool can_flatten = ggml_hexagon_can_flatten_mul_mat(src0, src1, dst);
 
     // HMX weight tile requires N to be 32-aligned.
     if (ne01_padded % 32 != 0) {
@@ -2220,7 +2234,7 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
     }
 
     // Quantized HMX kernels only handle flat 2D matmul (or matmul_id wrapping flat 2D matmuls).
-    if (!is_matmul_id && is_batched && wtype != GGML_TYPE_F16) {
+    if (!is_matmul_id && is_batched && !can_flatten && wtype != GGML_TYPE_F16) {
         return false;
     }
 
@@ -2230,7 +2244,7 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
     }
 
     // M alignment: Use HMX when M > HTP_MM_HMX_MIN_NROWS
-    const int m = is_matmul_id ? ne12 : ne11;
+    const int m = is_matmul_id ? ne12 : (can_flatten ? ne11 * ne12 * ne13 : ne11);
     if (m <= HTP_MM_HMX_MIN_NROWS) {
         return false;
     }
@@ -2251,18 +2265,20 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
     int ne02,
     int ne11,
     int ne12,
-    int ne11_padded,
+    int m_padded,
     bool is_matmul_id,
     bool is_batched,
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
     const int aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
-    const bool pipeline = is_matmul_id ? false : htp_mm_hmx_pipeline(ne11);
+    const bool can_flatten = ggml_hexagon_can_flatten_mul_mat(src0, src1, dst);
+    const int m = can_flatten ? ne11 * src1->ne[2] * src1->ne[3] : ne11;
+    const bool pipeline = is_matmul_id ? false : htp_mm_hmx_pipeline(m);
     const int n_threads = (int)sess->n_threads;
     const int ne10 = src1->ne[0];
 
-    const bool is_batched_val = is_matmul_id ? false : is_batched;
+    const bool is_batched_val = is_batched && !is_matmul_id && !can_flatten;
     const int group_size = (ne02 > 0 ? ne12 / ne02 : 1);
 
     size_t m_chunk = 0;
@@ -2282,7 +2298,7 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
     if (!use_grouped) {
         // Fallback to simple 2D path (group_size = 1)
         const int m_id_rows = (int) ((size_t) dst->ne[1] * dst->ne[2]);
-        if (!htp_mm_hmx_solve_2d_params(wtype, ne00_padded, m_id_rows, ne01_padded, ne11_padded, ne11, n_threads, pipeline, is_matmul_id, aligned_tile_size, vtcm_budget, &m_chunk, &n_chunk, &act_threads_selected, &vtcm_size)) {
+        if (!htp_mm_hmx_solve_2d_params(wtype, ne00_padded, m_id_rows, ne01_padded, m_padded, m, n_threads, pipeline, is_matmul_id, aligned_tile_size, vtcm_budget, &m_chunk, &n_chunk, &act_threads_selected, &vtcm_size)) {
             return false;
         }
     }
@@ -2303,7 +2319,7 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
     kparams->vtcm_src1_size = 0;
     kparams->vtcm_dst_size = 0;
 
-    if (is_batched && !is_matmul_id) {
+    if (is_batched_val) {
         kparams->kernel_type = HTP_MM_KERNEL_HMX_F16_BATCHED;
     } else {
         kparams->kernel_type = HTP_MM_KERNEL_HMX_2D;
@@ -2527,17 +2543,20 @@ static void ggml_hexagon_precompute_matmul_params_impl(
     const bool is_repack = ggml_hexagon_is_repack_type((ggml_type) wtype);
     const int ne00_padded = is_repack ? hex_round_up(ne00, 32) : ne00;
     const int ne01_padded = is_repack ? hex_round_up(ne01, 32) : ne01;
-    const int ne11_padded = hex_round_up(ne11, 32);
+    const int src1_nrows = ne11 * ne12 * ne13;
 
     const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
-    const bool is_batched   = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
+    const bool can_flatten = ggml_hexagon_can_flatten_mul_mat(src0, src1, dst);
+    const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
+    const int m = can_flatten ? src1_nrows : ne11;
+    const int m_padded = hex_round_up(m, 32);
 
     const size_t vtcm_budget = sess->vtcm_size;
 
     // Check HMX eligibility and try precomputing HMX parameters
     bool hmx_enabled = (sess->n_hmx > 0) && (opt_mm_select >= 3);
     if (hmx_enabled && ggml_hexagon_matmul_is_hmx_eligible(src0, src1, dst, ne01_padded, is_matmul_id, is_batched)) {
-        if (ggml_hexagon_precompute_hmx_mm_params(sess, src0, src1, dst, wtype, ne00_padded, ne01_padded, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, vtcm_budget, kparams)) {
+        if (ggml_hexagon_precompute_hmx_mm_params(sess, src0, src1, dst, wtype, ne00_padded, ne01_padded, ne02, ne11, ne12, m_padded, is_matmul_id, is_batched, vtcm_budget, kparams)) {
             goto finalize;
         }
     }
@@ -2807,7 +2826,8 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
 
-            if (src1->ne[2] != 1 || src1->ne[3] != 1) {
+            if ((src1->ne[2] != 1 || src1->ne[3] != 1) &&
+                !ggml_hexagon_can_flatten_mul_mat(src0, src1, dst)) {
                 return false;  // no broadcasting (for now)
             }
 
@@ -3626,7 +3646,9 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
                 struct htp_mm_kernel_params kparams;
                 ggml_hexagon_precompute_fused_matmul_add_params(sess, n->src[0], n->src[1], src2, next_node, &kparams);
                 const int src1_nrows = n->src[1]->ne[1] * n->src[1]->ne[2] * n->src[1]->ne[3];
-                const bool can_fuse = (kparams.n_hmx > 0) || (src1_nrows == 1);
+                const bool can_flatten = ggml_hexagon_can_flatten_mul_mat(n->src[0], n->src[1], n);
+                // Keep flattened matmuls unfused until src2 broadcasting over ne2/ne3 is supported
+                const bool can_fuse = (kparams.n_hmx > 0 && !can_flatten) || (src1_nrows == 1);
                 if (can_fuse && (size_t)kparams.vtcm_size <= sess->vtcm_size) {
                     htp_opnode node(n, {}, HTP_OP_MUL_MAT_ADD);
                     node.add_fused(next_node);
