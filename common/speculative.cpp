@@ -2292,6 +2292,9 @@ common_params common_base_params_to_speculative(const common_params & params) {
     result.cache_type_k  = params_spec.cache_type_k;
     result.cache_type_v  = params_spec.cache_type_v;
     result.n_outputs_max = params.n_parallel;
+    // explicit set embedding and pooling_type
+    result.embedding     = false;
+    result.pooling_type  = LLAMA_POOLING_TYPE_NONE;
 
     return result;
 }
