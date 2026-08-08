@@ -718,17 +718,17 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context * dev_ctx,
     const char * src0_type_name;
 
     if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_Q4_0 && node->src[1]->type == GGML_TYPE_F32 &&
-        node->src[1]->ne[1] >= 53 &&      // N >= 53
+        node->src[1]->ne[1] >= 17 &&      // N < 17: vec_dot faster (measured)
         node->src[0]->ne[1] % 16 == 0 &&  // M % TILE_M
         node->src[0]->ne[0] % 32 == 0) {  // K % BLOCK_K (Q4_0 block)
 
-        // Matrix engine for N >= 53; partial N (via n_cur-1) and errata padding are handled in-kernel.
+        // Matrix engine for N >= 17; partial N (via n_cur-1) and errata padding are handled in-kernel.
         kernel_name    = "mul_mat_Q4_0_matrix_engine";
         src0_type_name = "Q4_0";
 
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_Q4_0 &&
                node->src[1]->type == GGML_TYPE_F32) {
-        kernel_name    = "mul_mat_Q4_0";  // N < 53, or M % 16 != 0 or K % 32 != 0
+        kernel_name    = "mul_mat_Q4_0";  // N < 17, or M % 16 != 0 or K % 32 != 0
         src0_type_name = "Q4_0";
 
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_Q8_0 &&
