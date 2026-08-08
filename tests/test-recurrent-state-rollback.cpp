@@ -36,6 +36,12 @@ static bool decode_one(llama_context * ctx, llama_token tok, llama_pos pos) {
 }
 
 int main(int argc, char ** argv) {
+#ifdef GGML_USE_WEBGPU
+    // TODO: enable when test-llama-archs can generate Qwen3.5 models with WebGPU.
+    fprintf(stderr, "%s : skipping because Qwen3.5 model generation is unsupported with WebGPU\n", __func__);
+    return 0;
+#endif
+
     std::setlocale(LC_NUMERIC, "C");
 
     common_params params;
