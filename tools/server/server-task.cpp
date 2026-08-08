@@ -1552,6 +1552,10 @@ json server_task_result_metrics::to_json() {
 
         { "n_tokens_max",                    n_tokens_max },
 
+        { "n_prompt_tokens_cache_total",     n_prompt_tokens_cache_total },
+
+        { "n_ctx_shift_total",               n_ctx_shift_total },
+
         { "n_prompt_tokens_processed",       n_prompt_tokens_processed },
         { "t_prompt_processing",             t_prompt_processing },
         { "n_tokens_predicted",              n_tokens_predicted },
@@ -1564,6 +1568,9 @@ json server_task_result_metrics::to_json() {
         { "n_draft_accepted_total",          n_draft_accepted_total },
         { "n_draft_verif_steps_total",       n_draft_verif_steps_total },
         { "n_accepted_per_pos_total",        n_accepted_per_pos_total },
+
+        { "kv_cache_tokens",                 kv_cache_tokens },
+        { "kv_cache_cells",                  kv_cache_cells },
 
         { "slots",                           slots_data },
     };

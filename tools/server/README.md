@@ -1071,9 +1071,13 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 | `llamacpp:tokens_predicted_total` | Counter | Number of generation tokens processed. |
 | `llamacpp:tokens_predicted_seconds_total` | Counter | Predict process time in seconds. |
 | `llamacpp:predicted_tokens_seconds` | Gauge | Average generation throughput in tokens/s. |
+| `llamacpp:prompt_tokens_cache_total` | Counter | Number of prompt tokens reused from the KV cache (i.e. not re-evaluated). |
+| `llamacpp:n_ctx_shift_total` | Counter | Total number of context shifts (oldest tokens discarded to make room). |
 | `llamacpp:requests_processing` | Gauge | Number of requests processing. |
 | `llamacpp:requests_deferred` | Gauge | Number of requests deferred. |
 | `llamacpp:n_tokens_max` | Counter | High watermark of the context size observed. |
+| `llamacpp:kv_cache_tokens` | Gauge | Current number of tokens held in the KV cache across all slots. |
+| `llamacpp:kv_cache_cells` | Gauge | Total KV cache capacity in tokens (n_ctx). |
 | `llamacpp:n_decode_total` | Counter | Total Number of llama_decode() calls. |
 | `llamacpp:n_busy_slots_per_decode` | Gauge | Average number of busy slots per llama_decode() call. |
 | `llamacpp:spec_decode_num_draft_tokens_total` | Counter | Total draft tokens generated (0 when spec-decode is off). |
