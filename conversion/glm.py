@@ -206,9 +206,69 @@ class Glm4MoeModel(TextModel):
 @ModelBase.register("Glm4MoeLiteForCausalLM")
 class Glm4MoeLiteModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
+    skip_mtp = False
+    supports_mtp_export = True
+    _n_main_layers: int | None = None
 
     def set_vocab(self):
         return self._set_vocab_glm()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        num_hidden_layers = self.hparams["num_hidden_layers"]
+        self.num_nextn_predict_layers = self.hparams.get("num_nextn_predict_layers", 0)
+        self.skip_mtp = self.no_mtp or self.num_nextn_predict_layers == 0
+
+        if self.skip_mtp:
+            self.block_count = num_hidden_layers
+        else:
+            self.block_count = num_hidden_layers + self.num_nextn_predict_layers
+
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        if self.skip_mtp:
+            return
+
+        self.gguf_writer.add_nextn_predict_layers(self.num_nextn_predict_layers)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item):
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        if cls._n_main_layers is not None:
+            match = re.match(r"model\.layers\.(\d+)\.", name)
+            is_mtp = match is not None and int(match.group(1)) >= cls._n_main_layers
+            if is_mtp and cls.no_mtp:
+                return None
+            if cls.mtp_only and not is_mtp and name not in (
+                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+            ):
+                return None
+
+        return name, gen
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
 
 @ModelBase.register("GlmMoeDsaForCausalLM")

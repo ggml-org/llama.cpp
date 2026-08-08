@@ -1,11 +1,19 @@
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
+import {
+	BuiltInTool,
+	GlobSearchType,
+	HealthCheckStatus,
+	JsonSchemaType,
+	ToolCallType,
+	ToolSource
+} from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	buildSandboxToolDefinition,
+	HOME_TILDE,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -19,7 +27,11 @@ class ToolsStore {
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
+	// builtin tools that resolve their paths against the working directory,
+	// as declared by the server in its `/tools` listing
+	private _cwdAwareTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
+	private _serverHome = $state<string | null | undefined>(undefined);
 
 	constructor() {
 		try {
@@ -136,6 +148,10 @@ class ToolsStore {
 
 	get builtinTools(): OpenAIToolDefinition[] {
 		return this._builtinTools;
+	}
+
+	get serverHome(): string | null {
+		return this._serverHome ?? null;
 	}
 
 	get mcpTools(): OpenAIToolDefinition[] {
@@ -463,6 +479,21 @@ class ToolsStore {
 		return this.getEnabledToolsForLLM().length > 0;
 	}
 
+	/**
+	 * Check if a working directory is worth setting: at least one builtin tool
+	 * that reads it is both served and left enabled by the user.
+	 */
+	get hasEnabledCwdTools(): boolean {
+		return this._builtinTools.some((def) => {
+			const name = def.function.name;
+
+			return (
+				this._cwdAwareTools.has(name) &&
+				!this._disabledTools.has(this.toolKey(ToolSource.BUILTIN, name))
+			);
+		});
+	}
+
 	async fetchBuiltinTools(): Promise<void> {
 		if (this._loading) return;
 
@@ -473,6 +504,9 @@ class ToolsStore {
 		try {
 			const toolInfos = await ToolsService.list();
 			this._builtinTools = toolInfos.map((info) => info.definition);
+			this._cwdAwareTools = new SvelteSet(
+				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
+			);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			this._error = errorMessage;
@@ -487,6 +521,29 @@ class ToolsStore {
 		} finally {
 			this._loading = false;
 		}
+	}
+
+	/**
+	 * Absolute home directory on the server, resolved once per session via
+	 * file_glob_search's `base` field (the server expands `~`). Anchors the
+	 * directory picker's search scope and the `~` abbreviation of cwd
+	 * displays. Returns null when tools are unavailable.
+	 */
+	async resolveServerHome(): Promise<string | null> {
+		if (this._serverHome !== undefined) return this._serverHome;
+		try {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
+				path: HOME_TILDE,
+				type: GlobSearchType.DIR,
+				max_depth: 1,
+				limit: 1
+			});
+			this._serverHome = typeof res.base === 'string' ? res.base : null;
+		} catch {
+			// searches still work via a literal `~`, only `~` abbreviation degrades
+			this._serverHome = null;
+		}
+		return this._serverHome;
 	}
 }
 
