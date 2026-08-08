@@ -5,7 +5,6 @@ void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
-    ml.get_key(LLM_KV_ATTENTION_POST_NORM_RMS_EPS, hparams.f_post_norm_rms_eps);
 
     // SWA layers share the model rope theta; they are also the only layers that use rope
     // here (global layers are NoPE), so the 10000.0 default would apply to all of them.
@@ -66,6 +65,9 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
     : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+
+    // Different to f_norm_rms_eps for post-attn / post-FFN norms
+    const float post_norm_eps = 1e-8f;
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -143,8 +145,7 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
             cb(cur, "attn_o_proj", il);
         }
 
-        // post-attention norm (uses f_post_norm_rms_eps, not the general f_norm_rms_eps).
-        cur = ggml_rms_norm(ctx0, cur, hparams.f_post_norm_rms_eps);
+        cur = ggml_rms_norm(ctx0, cur, post_norm_eps);
         cur = ggml_mul(ctx0, cur, model.layers[il].attn_post_norm);
         cb(cur, "attn_post_norm", il);
 
@@ -169,8 +170,7 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
-        // post-FFN norm (uses f_post_norm_rms_eps, not the general f_norm_rms_eps).
-        cur = ggml_rms_norm(ctx0, cur, hparams.f_post_norm_rms_eps);
+        cur = ggml_rms_norm(ctx0, cur, post_norm_eps);
         cur = ggml_mul(ctx0, cur, model.layers[il].ffn_post_norm);
         cb(cur, "ffn_post_norm", il);
 
