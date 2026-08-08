@@ -31,13 +31,15 @@ import { BuiltInTool, ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
-import { isAbortError } from '$lib/utils';
+import { isAbortError, getAudioInputFormat } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
+	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
 	MCP_ATTACHMENT_NAME_PREFIX,
-	DEFAULT_IMAGE_EXTENSION
+	DEFAULT_IMAGE_EXTENSION,
+	AUDIO_FILE_EXTENSION_REGEX
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -77,7 +79,8 @@ import type {
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
-	DatabaseMessageExtraImageFile
+	DatabaseMessageExtraImageFile,
+	DatabaseMessageExtraAudioFile
 } from '$lib/types/database';
 
 function createDefaultSession(): AgenticSession {
@@ -928,7 +931,15 @@ class AgenticStore {
 					{ type: ContentPartType.TEXT, text: cleanedResult }
 				];
 				for (const attachment of attachments) {
-					if (attachment.type === AttachmentType.IMAGE) {
+					if (attachment.type === AttachmentType.AUDIO) {
+						contentParts.push({
+							type: ContentPartType.INPUT_AUDIO,
+							input_audio: {
+								data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
+								format: getAudioInputFormat((attachment as DatabaseMessageExtraAudioFile).mimeType)
+							}
+						});
+					} else if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
 								type: ContentPartType.IMAGE_URL,
@@ -1025,11 +1036,23 @@ class AgenticStore {
 				return line;
 			}
 
+			// Audio extras require raw base64 in base64Data (not full data URI).
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
 			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
 				attachments.push({ type: AttachmentType.IMAGE, name, base64Url: trimmedLine });
+
+				return `[Attachment saved: ${name}]`;
+			}
+
+			if (mimeType.startsWith('audio/')) {
+				attachments.push({
+					type: AttachmentType.AUDIO,
+					name,
+					mimeType,
+					base64Data: base64Data
+				});
 
 				return `[Attachment saved: ${name}]`;
 			}
@@ -1041,6 +1064,11 @@ class AgenticStore {
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
+		if (mimeType.startsWith('audio/')) {
+			const extension = AUDIO_MIME_TO_EXTENSION[mimeType] ?? 'mp3';
+			return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+		}
+
 		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
 
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
