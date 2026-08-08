@@ -459,6 +459,20 @@ struct llama_mmap::impl {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
 
+#ifdef __linux__
+        // Hint the kernel to back this region with 2MB huge pages where possible.
+        // For a 1 GB model weights map this can drop the number of pages from ~262K
+        // 4KB pages to ~512 2MB pages, reducing TLB pressure and (critically)
+        // reducing the number of re-faults when pages get evicted under memory
+        // pressure. No-op if THP is not enabled / supported.
+        if (!numa) {
+            if (madvise(addr, file->size(), MADV_HUGEPAGE)) {
+                LLAMA_LOG_DEBUG("note: madvise(.., MADV_HUGEPAGE) not applied: %s\n",
+                        strerror(errno));
+            }
+        }
+#endif
+
         if (prefetch > 0) {
             if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
                 LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
