@@ -716,7 +716,7 @@ class Gemma4Model(Gemma3Model):
         rope_freqs_full = torch.tensor(values, dtype=torch.float32)
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), rope_freqs_full)
 
-    def _generate_nvfp4_tensors(self):
+    def _generate_nvfp4_tensors(self, packed_weights: set[str] | None = None):
         # Gemma-4 stores a per-layer router.per_expert_scale ([n_expert]) that scales
         # each expert's contribution. It's mathematically equivalent to a per-expert
         # scalar on the down_proj output, which is exactly where ffn_down_exps_s is
@@ -738,7 +738,7 @@ class Gemma4Model(Gemma3Model):
             for e, w2 in enumerate(w2_targets):
                 s = self.model_tensors[w2]
                 self.model_tensors[w2] = lambda s=s, r=r, i=e: s() * r()[i]
-        super()._generate_nvfp4_tensors()
+        super()._generate_nvfp4_tensors(packed_weights)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
