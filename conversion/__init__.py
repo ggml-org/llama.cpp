@@ -180,6 +180,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Olmo3ForCausalLM": "olmo",
     "OlmoForCausalLM": "olmo",
     "OlmoeForCausalLM": "olmo",
+    "OnyxAssistantModel": "onyx",
     "OnyxForConditionalGeneration": "onyx",
     "OpenELMForCausalLM": "openelm",
     "OrionForCausalLM": "orion",
