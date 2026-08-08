@@ -6311,12 +6311,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
 
-        if (device->driver_id == vk::DriverId::eMoltenvk) {
-            // Disable external_memory_host until https://github.com/KhronosGroup/MoltenVK/pull/2622
-            // is available in the Vulkan SDK.
-            device->external_memory_host = false;
-        }
-
         // Implementing the async backend interfaces seems broken on older Intel HW,
         // see https://github.com/ggml-org/llama.cpp/issues/17302.
         device->support_async = (device->vendor_id != VK_VENDOR_ID_INTEL ||
@@ -6376,19 +6370,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBasic);
         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
-#ifdef __APPLE__
-        // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
-        if (device->vendor_id == VK_VENDOR_ID_AMD) {
-            device->subgroup_arithmetic = false;
-        }
-#endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
-#ifdef __APPLE__
-        if (device->vendor_id == VK_VENDOR_ID_AMD) {
-            device->subgroup_shuffle = false;
-        }
-#endif
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                      (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
 
@@ -16611,10 +16594,6 @@ static bool ggml_vk_can_fuse_topk_moe(ggml_backend_vk_context * ctx, const struc
             !ggml_is_contiguous(cgraph->nodes[node_idx + 2]->src[1])) {
             return false;
         }
-        // sigmoid fusion seems to generate infinities on moltenvk
-        if (ctx->device->driver_id == vk::DriverId::eMoltenvk) {
-            return false;
-        }
         break;
     case TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS:
         softmax = cgraph->nodes[node_idx + 0]; // really softplus
@@ -18046,6 +18025,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 bool coopmat2 = device->coopmat2;
                 uint32_t HSK = op->src[1]->ne[0];
                 uint32_t HSV = op->src[2]->ne[0];
+
+#ifdef __APPLE__
+                // Subgroup shuffle on MoltenVK seems to only work when HSK and HSV are multiples of 32.
+                if (device->driver_id == vk::DriverId::eMoltenvk) {
+                    if ((HSK % 32) != 0 || (HSV % 32) != 0) {
+                        return false;
+                    }
+                }
+#endif
+
                 if ((HSK % 8) != 0 || (HSV % 8) != 0) {
                     return false;
                 }
@@ -18507,6 +18496,16 @@ static int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op) {
 
 static bool ggml_backend_vk_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_vk_device_context * dev_ctx = (ggml_backend_vk_device_context *)dev->context;
+
+#ifdef __APPLE__
+    const vk_device & device = ggml_vk_get_device(dev_ctx->device);
+    if (device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eMoltenvk
+            && (op->op == GGML_OP_MUL_MAT_ID)) {
+        // For some reason, MoltenVK on AMD GPUs has a bug that causes garbage output when
+        // MUL_MAT_ID is offloaded (as in MoE models).
+        return false;
+    }
+#endif
 
     return ggml_vk_get_op_batch_size(op) >= dev_ctx->op_offload_min_batch_size;
 }
