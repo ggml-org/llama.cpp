@@ -704,11 +704,57 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 // CLI argument parsing functions
 //
 
+// apply options from config files (if present), in increasing order of precedence:
+// system-wide (/etc/llama.cpp/config.ini) then user (${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini)
+// these act as defaults: env variables and CLI arguments both override them
+static void common_params_apply_config_file(common_params & params, llama_example ex) {
+    std::vector<std::string> paths;
+
+#if defined(_WIN32)
+    if (const char * program_data = std::getenv("PROGRAMDATA")) {
+        paths.push_back(std::string(program_data) + "\\llama.cpp\\config.ini");
+    }
+#else
+    paths.push_back("/etc/llama.cpp/config.ini");
+#endif
+
+    try {
+        paths.push_back(fs_get_config_directory() + "config.ini");
+    } catch (const std::exception & e) {
+        LOG_DBG("could not determine user config directory: %s\n", e.what());
+    }
+
+    std::vector<std::string> found;
+    for (const auto & path : paths) {
+        if (std::filesystem::exists(path)) {
+            found.push_back(path);
+        }
+    }
+    if (found.empty()) {
+        return;
+    }
+
+    common_preset_context ctx(ex);
+    for (const auto & path : found) {
+        LOG_DBG("loading config file: %s\n", path.c_str());
+        common_preset global;
+        common_presets presets = ctx.load_from_ini(path, global);
+        global.apply_to_params(params);
+        auto it = presets.find(COMMON_PRESET_DEFAULT_NAME);
+        if (it != presets.end()) {
+            it->second.apply_to_params(params);
+        }
+    }
+}
+
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
     // setup log directly from params.verbosity: see tools/cli/cli.cpp
     common_log_set_verbosity_thold(params.verbosity);
+
+    // config file applies first, so env variables and CLI arguments override it
+    common_params_apply_config_file(params, ctx_arg.ex);
 
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
