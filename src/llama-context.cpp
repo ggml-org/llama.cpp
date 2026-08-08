@@ -4182,6 +4182,29 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
     return ctx->memory_breakdown();
 }
 
+extern "C" const llama_memory_breakdown_entry * llama_get_memory_breakdown_entries(
+        const struct llama_context * ctx,
+        size_t * count) {
+    static thread_local std::vector<llama_memory_breakdown_entry> entries;
+
+    entries.clear();
+
+    const llama_memory_breakdown breakdown = llama_get_memory_breakdown(ctx);
+
+    for (const auto & [buft, data] : breakdown) {
+        entries.push_back({
+            ggml_backend_buft_name(buft),
+            data.model,
+            data.context,
+            data.compute,
+        });
+    }
+
+    *count = entries.size();
+
+    return entries.data();
+}
+
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
 }
