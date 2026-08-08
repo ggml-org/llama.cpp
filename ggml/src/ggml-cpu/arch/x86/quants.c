@@ -552,6 +552,62 @@ static inline __m128i get_scale_shuffle(int i) {
 }
 #endif
 
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+#  define GGML_DPBUSD_256 _mm256_dpbusd_epi32
+#elif defined(__AVXVNNI__)
+#  define GGML_DPBUSD_256 _mm256_dpbusd_avx_epi32
+#endif
+
+void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if (defined(__AVX512VNNI__) && defined(__AVX512VL__)) || defined(__AVXVNNI__)
+    const int qk = QK2_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const __m256i ones  = _mm256_set1_epi8(1);
+    const __m128i idxlo = _mm_setr_epi8(0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3);
+    const __m128i idxhi = _mm_setr_epi8(4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7);
+    const __m256i mul   = _mm256_setr_epi16(64,16,4,1, 64,16,4,1, 64,16,4,1, 64,16,4,1);
+    const __m256i three = _mm256_set1_epi16(3);
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int i = 0; i < nb; i++) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
+        __m256 acc_block = _mm256_setzero_ps();
+        for (int k = 0; k < 2; k++) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i * 2 + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
+            const __m256i qy = _mm256_loadu_si256((const __m256i *) yb->qs);
+            const __m128i src = _mm_loadl_epi64((const __m128i *) &x[i].qs[k * 8]);
+            const __m256i rep = MM256_SET_M128I(_mm_shuffle_epi8(src, idxhi), _mm_shuffle_epi8(src, idxlo));
+            __m256i r0 = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(rep));
+            __m256i r1 = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(rep, 1));
+            r0 = _mm256_and_si256(_mm256_srli_epi16(_mm256_mullo_epi16(r0, mul), 6), three);
+            r1 = _mm256_and_si256(_mm256_srli_epi16(_mm256_mullo_epi16(r1, mul), 6), three);
+            const __m256i codes = _mm256_permute4x64_epi64(_mm256_packus_epi16(r0, r1), 0xD8);
+            const __m256i dp = GGML_DPBUSD_256(_mm256_setzero_si256(), codes, qy);
+            const __m256i sy = GGML_DPBUSD_256(_mm256_setzero_si256(), ones, qy);
+            const __m256 dot = _mm256_cvtepi32_ps(_mm256_sub_epi32(dp, sy));
+            acc_block = _mm256_add_ps(acc_block, _mm256_mul_ps(_mm256_set1_ps(d1), dot));
+        }
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(_mm256_set1_ps(d0), acc_block));
+    }
+
+    *s = hsum_float_8(acc);
+#else
+    ggml_vec_dot_q2_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK1_0;
     const int nb = n / qk;
