@@ -126,12 +126,6 @@ class OnyxAssistantModel(TextModel):
             self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in h["layer_types"]])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Invert transformers' permute_rope
-        if ".self_attn.q_proj." in name:
-            data_torch = _unpermute_for_rope(data_torch, int(self.hparams["num_attention_heads"]))
-        elif ".self_attn.k_proj." in name:
-            data_torch = _unpermute_for_rope(data_torch, int(self.hparams["num_key_value_heads"]))
-        elif ".self_attn.q_norm." in name or ".self_attn.k_norm." in name:
-            data_torch = _unpermute_for_rope(data_torch, 1)
-
+        # DFlash defaults to NEOX (rotate_half) rope, matching transformers HF layout for Q/K, QK-norms
+        # no permutation needed.
         yield (self.map_tensor_name(name), data_torch)
