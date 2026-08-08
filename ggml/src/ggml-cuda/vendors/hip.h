@@ -10,6 +10,11 @@
 #include <rccl/rccl.h>
 #endif // GGML_USE_NCCL
 
+#if HIP_VERSION >= 60100000
+#define GGML_CUDA_USE_CUB
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#endif // HIP_VERSION >= 60100000
 
 #define CUBLAS_GEMM_DEFAULT HIPBLAS_GEMM_DEFAULT
 #define CUBLAS_GEMM_DEFAULT_TENSOR_OP HIPBLAS_GEMM_DEFAULT
@@ -118,6 +123,9 @@
 #define cudaStreamPerThread hipStreamPerThread
 #define cudaStreamSynchronize hipStreamSynchronize
 #define cudaStreamWaitEvent hipStreamWaitEvent
+#define cudaStreamIsCapturing hipStreamIsCapturing
+#define cudaStreamCaptureStatus hipStreamCaptureStatus
+#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
 #define cudaGraphExec_t hipGraphExec_t
 #define cudaGraphNode_t hipGraphNode_t
 #define cudaKernelNodeParams hipKernelNodeParams

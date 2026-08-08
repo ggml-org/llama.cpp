@@ -85,7 +85,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev hipcub-dev libssl-dev rocwmma-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
