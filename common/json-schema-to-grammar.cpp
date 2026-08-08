@@ -15,6 +15,15 @@
 using json = nlohmann::ordered_json;
 
 static std::string build_repetition(const std::string & item_rule, int min_items, int max_items, const std::string & separator_rule = "") {
+    // The GBNF grammar parser rejects explicit repetition counts above
+    // MAX_REPETITION_THRESHOLD (2000). JSON Schema bounds such as maxLength /
+    // maxItems routinely exceed that (e.g. maxLength: 8192), which would make
+    // the whole grammar unparseable. Treat any bound above the threshold as
+    // unbounded ("{min,}") instead of failing the request.
+    constexpr int kMaxGrammarRepetition = 2000;
+    if (max_items > kMaxGrammarRepetition) {
+        max_items = std::numeric_limits<int>::max();
+    }
     auto has_max = max_items != std::numeric_limits<int>::max();
 
     if (max_items == 0) {
@@ -346,11 +355,21 @@ private:
     }
 
     std::string _visit_pattern(const std::string & pattern, const std::string & name) {
-        if (!(pattern.front() == '^' && pattern.back() == '$')) {
-            _errors.push_back("Pattern must start with '^' and end with '$'");
-            return "";
+        // Some clients (e.g. agent frameworks) emit patterns without ^...$ anchors.
+        // JSON Schema "pattern" is a substring match; anchoring to a full match is
+        // the closest faithful approximation we can build, so accept it instead of
+        // rejecting the whole schema.
+        std::string anchored = pattern;
+        if (!anchored.empty() && anchored.front() != '^') {
+            anchored = "^" + anchored;
         }
-        std::string sub_pattern = pattern.substr(1, pattern.length() - 2);
+        if (!anchored.empty() && anchored.back() != '$') {
+            anchored = anchored + "$";
+        }
+        if (anchored.empty()) {
+            return _add_rule(name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
+        }
+        std::string sub_pattern = anchored.substr(1, anchored.length() - 2);
         std::unordered_map<std::string, std::string> sub_rule_ids;
 
         size_t i = 0;
@@ -448,8 +467,38 @@ private:
                     i++;
                     while (i < length && sub_pattern[i] != ']') {
                         if (sub_pattern[i] == '\\') {
-                            square_brackets += sub_pattern.substr(i, 2);
-                            i += 2;
+                            if (i + 1 < length) {
+                                char esc = sub_pattern[i + 1];
+                                // Expand Perl-style escapes inside character classes
+                                // into plain ranges GBNF understands.
+                                if (esc == 'd') {
+                                    square_brackets += "0-9";
+                                    i += 2;
+                                    continue;
+                                }
+                                if (esc == 'w') {
+                                    square_brackets += "A-Za-z0-9_";
+                                    i += 2;
+                                    continue;
+                                }
+                                if (esc == 's') {
+                                    square_brackets += " \\t\\n\\r";
+                                    i += 2;
+                                    continue;
+                                }
+                                if (esc == 'D' || esc == 'W' || esc == 'S') {
+                                    // Negated Perl classes cannot be expanded inside a
+                                    // character class; drop the escape (approximation).
+                                    _warnings.push_back("Unsupported pattern syntax in character class");
+                                    i += 2;
+                                    continue;
+                                }
+                                square_brackets += sub_pattern.substr(i, 2);
+                                i += 2;
+                            } else {
+                                square_brackets += sub_pattern[i];
+                                i++;
+                            }
                         } else {
                             square_brackets += sub_pattern[i];
                             i++;
@@ -530,8 +579,37 @@ private:
                                 literal += sub_pattern[i];
                                 i++;
                             } else {
-                                literal += sub_pattern.substr(i, 2);
-                                i += 2;
+                                // Map common Perl-style escapes to GBNF character classes so they
+                                // produce valid grammar instead of an unparseable literal.
+                                std::string class_rule;
+                                switch (next) {
+                                    case 'd': class_rule = "[0-9]"; break;
+                                    case 'D': class_rule = "[^0-9]"; break;
+                                    case 'w': class_rule = "[A-Za-z0-9_]"; break;
+                                    case 'W': class_rule = "[^A-Za-z0-9_]"; break;
+                                    case 's': class_rule = "[ \\t\\n\\r]"; break;
+                                    case 'S': class_rule = "[^ \\t\\n\\r]"; break;
+                                    case 'n': class_rule = "\\n"; break;
+                                    case 't': class_rule = "\\t"; break;
+                                    case 'r': class_rule = "\\r"; break;
+                                    case 'b':
+                                    case 'B':
+                                        // word boundary: not representable, drop
+                                        class_rule = "\"\"";
+                                        break;
+                                    default: break;
+                                }
+                                if (!class_rule.empty()) {
+                                    if (!literal.empty()) {
+                                        seq.emplace_back(literal, true);
+                                        literal.clear();
+                                    }
+                                    seq.emplace_back(class_rule, false);
+                                    i += 2;
+                                } else {
+                                    literal += sub_pattern.substr(i, 2);
+                                    i += 2;
+                                }
                             }
                         } else if (sub_pattern[i] == '"') {
                             literal += "\\\"";
