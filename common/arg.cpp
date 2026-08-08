@@ -1255,6 +1255,10 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         exit(1); // for other exceptions, we exit with status code 1
     }
 
+    // apply the --prio process priority setting
+    // non-fatal on failure, a warning is logged by the callee
+    set_process_priority(params.cpuparams.priority);
+
     return true;
 }
 
