@@ -43,6 +43,7 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 #include <string>
 #include <cmath>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <charconv>
 #include <mutex>
@@ -467,6 +468,12 @@ struct ggml_opencl_fa_kernels {
     // MQ_GQA=8 specializations
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_g8;
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8;
+    // MQ_GQA=2/3 specializations, key {dk, dv, gqa}: without them non-GQA4
+    // models (e.g. gqa=3 Llama-3.2) fall back to the register-spilled
+    // q1_split kernels at depth.
+    std::map<std::tuple<int, int, int>, cl_kernel> f32_f16_q1_vec_mq_split_gqa;
+    std::map<std::tuple<int, int, int>, cl_kernel> f32_f16_q1_vec_mq_split_gqa_k_img;
+    std::map<std::tuple<int, int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_gqa;
     // k-image variant of MQ_G8 vec_mq_split
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_k_img;
     // k-image variant of MQ_GQA=4 vec_mq_split
@@ -503,6 +510,29 @@ struct ggml_opencl_fa_kernels {
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_g8;
     // Cluster-parallel q8_0 decode
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_c8;
+    std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_g8_c8;  // GQA8 cluster (dk=64)
+    // Head-split sibling of the above: MQ_GQA=4 x FA_HEAD_SUB=2 workgroups per
+    // KV head, to cut the 592 B/WI the GQA8 form reports (f16's head-split
+    // kernel is at 368 for the same shape).
+    std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_g8_c8_hs2;
+    std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_hs2;
+    // Per-shape workgroup size and head-split factor for the above. fa_hs_wg /
+    // fa_hs_sub below are single scalars written by the DK=64 build site; once a
+    // second head dimension builds the same family they stop being unambiguous.
+    std::map<std::pair<int, int>, int>       f32_f16_q1_vec_mq_split_g8_hs2_wg;
+    std::map<std::pair<int, int>, int>       f32_f16_q1_vec_mq_split_g8_hs2_sub;
+    std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_gqa4_hs2;
+    // q1_vec_mq_split built alone (FA_MQ_SPLIT_ONLY) for a specific
+    // (dk, dv, gqa), with its own MQ_NSG_SPLIT / FA_HEAD_SUB. Used where the
+    // shared program either cannot hold the MQ family (DK=512) or produces a
+    // kernel the device refuses to launch at the required workgroup size
+    // (DK=256 gqa=8: per-kernel max 128 < required 192 on the X2-90).
+    std::map<std::tuple<int, int, int>, cl_kernel> mq_narrow;
+    std::map<std::tuple<int, int, int>, cl_kernel> mq_narrow_k_img;  // same, K as image1d_buffer_t
+    std::map<std::tuple<int, int, int>, int>       mq_narrow_wg;
+    std::map<std::tuple<int, int, int>, int>       mq_narrow_hs;  // gqa4 via MQ_GQA=2 x 2 WGs  // gqa8 via MQ_GQA=4 x 2 WGs
+    int fa_hs_wg  = 128;  // workgroup size of the head-split program
+    int fa_hs_sub = 2;    // FA_HEAD_SUB it was built with
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0;               // prefill (baseline)
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0_split;         // N_SPLIT>1 variant
     std::map<std::pair<int, int>, int>       f32_q8_0_split_wg_size;        // wg_size = bm*n_split
@@ -534,6 +564,15 @@ struct ggml_opencl_fa_kernels {
     // attempted (variant, (dk, dv))
     // all attempted FA kernels appear here, but those not registered failed compilation
     std::set<std::pair<int, std::pair<int, int>>> variant_attempted;
+
+    // Flash-decoding partials scratch, reused across FA calls. Decode issues
+    // one FD dispatch per attention layer, so a per-call clCreateBuffer /
+    // clReleaseMemObject pair costs one driver round-trip per layer per token.
+    // Reuse is safe on the in-order queue: the split kernel fully writes the
+    // range the immediately following merge reads, and no FA call outlives its
+    // own merge.
+    cl_mem fd_partial_pool      = nullptr;
+    size_t fd_partial_pool_size = 0;
 };
 
 // backend context
@@ -1107,6 +1146,13 @@ struct ggml_backend_opencl_context {
             write_profiling_info();
             profiling_results.clear();
 #endif
+            // Release the flash-decoding partials scratch.
+            if (fa.fd_partial_pool) {
+                CL_CHECK(clReleaseMemObject(fa.fd_partial_pool));
+                fa.fd_partial_pool      = nullptr;
+                fa.fd_partial_pool_size = 0;
+            }
+
             // release pooled image1d_buffer views over KV cache layers.
             for (auto & kv : kq_img_pool) {
                 if (kv.second.image)      { CL_CHECK(clReleaseMemObject(kv.second.image)); }
@@ -4794,6 +4840,135 @@ static bool ggml_opencl_ensure_fa_f32_f16_prefill_512(ggml_backend_opencl_contex
     return true;
 }
 
+// DK=512 (Gemma-4 global layers) decode: q1_vec in its own minimal program.
+//
+// The shared DK=512 decode program is built -D FA_DECODE_MINIMAL, which drops
+// q1_vec, because its DV=512 vector arrays dominate the shader compiler's host
+// memory and made the build fragile. The fallback is flash_attn_f32_f16_q1,
+// whose ACC_TYPE4 o_acc[DV_VEC] is 2 KB of private array per work item at
+// DV=512 — it spills to DDR, walks K twice, and runs on n_head workgroups with
+// no K-split. Measured on gemma-4-E4B @d4096 (X2-90): ~30 ms/token for the 7
+// global layers = 3.9 GB/s against a ~130 GB/s roofline.
+//
+// FA_VEC_ONLY isolates q1_vec exactly as FA_PREFILL_ONLY isolates the BM tile,
+// so the compiler only ever sees one kernel. Best-effort: on failure the
+// dispatch falls back to q1 as before.
+static bool ggml_opencl_ensure_fa_f32_f16_vec_512(ggml_backend_opencl_context * backend_ctx) {
+    const int dk = 512, dv = 512;
+    const std::pair<int, int> dk_dv = {dk, dv};
+    if (backend_ctx->fa.f32_f16_q1_vec.count(dk_dv) > 0) return true;
+
+    static bool failed = false;
+    if (failed) return false;
+
+    // Decline WITHOUT latching if the shared compile options are not up yet. This is
+    // reachable from supports_op, which llama.cpp calls before load_cl_kernels() has
+    // run, and a build attempted with an empty option prefix is missing -cl-std and
+    // fails on every subgroup builtin. Latching that would disable this kernel for
+    // the rest of the process rather than for one call.
+    if (backend_ctx->kernel_compile_opts.empty()) return false;
+
+    const ggml_opencl_fa_dim * cfg = nullptr;
+    for (const auto & d : g_opencl_fa_dims) {
+        if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
+    }
+    if (cfg == nullptr) { failed = true; return false; }
+
+    const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_F32_F16) +
+                             " -D FA_DECODE_ONLY -D FA_VEC_ONLY";
+    cl_program prog = build_program_from_source_ex(
+        backend_ctx->context, backend_ctx->device,
+        ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts,
+        /*fatal=*/false, "fa f32_f16 decode512 vec", backend_ctx->queue);
+    if (!prog) { failed = true; return false; }
+
+    cl_int err;
+    cl_kernel k = clCreateKernel(prog, "flash_attn_f32_f16_q1_vec", &err);
+    if (err != CL_SUCCESS) { clReleaseProgram(prog); failed = true; return false; }
+    if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, 256,
+                                       "flash_attn_f32_f16_q1_vec (decode512)", dk, dv)) {
+        clReleaseKernel(k);
+        clReleaseProgram(prog);
+        failed = true;
+        return false;
+    }
+    backend_ctx->fa.f32_f16_q1_vec[dk_dv] = k;
+    ggml_opencl_log_fa_kernel_spill(backend_ctx, k, "flash_attn_f32_f16_q1_vec (decode512)", dk, dv);
+    clReleaseProgram(prog);
+    return true;
+}
+
+// DK=512 decode, KV-head-coalesced + flash-decoding split, in its own program.
+//
+// q1_vec still reads the KV cache once per QUERY head: gemma-4-E4B is
+// n_head 8 / n_head_kv 2, so its global layers stream 4x more KV than they
+// have to (E2B, n_head_kv 1, streams 8x). The MQ split kernel gives one
+// workgroup all MQ_GQA query heads of a KV head — the KV row is read once and
+// shared — and splits n_kv across workgroups, which the DK=512 decode path has
+// never had (q1/q1_vec run n_head workgroups, no K-split).
+//
+// FA_MQ_ONLY drops the prefill tile and the legacy decode kernels;
+// FA_MQ_SPLIT_ONLY additionally drops q1_vec_mq, the cluster (c8) forms and the
+// K-image form, leaving exactly one kernel — the same isolation trick that lets
+// the BM tile and q1_vec build at DK=512 at all.
+// head_sub > 1 runs an MQ_GQA = gqa/head_sub program on head_sub workgroups per
+// KV head: per-head lane state (o_acc, m_i, l_i, slope) shrinks by that factor
+// and the grid grows by it, paying one extra read of each KV row. At DV=512 the
+// per-head state is large (E2B's gqa=8 form measures 752 B/work-item, past the
+// 512 B occupancy cliff) and the grid is small (E2B has a single KV head), so
+// both sides of that trade point the same way.
+static bool ggml_opencl_ensure_fa_mq_narrow(ggml_backend_opencl_context * backend_ctx,
+                                           int dk, int dv, int gqa, int head_sub, int nsg_split,
+                                           bool k_img) {
+    const std::tuple<int, int, int> key = {dk, dv, gqa};
+    const int mq_gqa = gqa / head_sub;
+    auto & target = k_img ? backend_ctx->fa.mq_narrow_k_img : backend_ctx->fa.mq_narrow;
+    if (target.count(key) > 0) return true;
+
+    static std::set<std::tuple<int, int, int, int>> failed;
+    const std::tuple<int, int, int, int> fkey = {dk, dv, gqa, k_img ? 1 : 0};
+    if (failed.count(fkey) > 0) return false;
+
+    const ggml_opencl_fa_dim * cfg = nullptr;
+    for (const auto & d : g_opencl_fa_dims) {
+        if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
+    }
+    if (cfg == nullptr) { failed.insert(fkey); return false; }
+
+    const size_t wg = (size_t) 64 * nsg_split;
+    const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_F32_F16) +
+                             " -D FA_MQ_ONLY -D FA_MQ_SPLIT_ONLY -D MQ_GQA=" + std::to_string(mq_gqa) +
+                             " -D MQ_NSG_SPLIT=" + std::to_string(nsg_split) +
+                             " -D FA_HEAD_SUB=" + std::to_string(head_sub) +
+                             (k_img ? " -D FA_MQ_KIMG" : "");
+    const std::string tag = std::string("fa f32_f16 mq_split narrow") + (k_img ? " k_img" : "") +
+                            " dk" + std::to_string(dk) +
+                            " gqa" + std::to_string(gqa) + " mq" + std::to_string(mq_gqa) +
+                            " hs" + std::to_string(head_sub) + " wg" + std::to_string(wg);
+    cl_program prog = build_program_from_source_ex(
+        backend_ctx->context, backend_ctx->device,
+        ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts,
+        /*fatal=*/false, tag.c_str(), backend_ctx->queue);
+    if (!prog) { failed.insert(fkey); return false; }
+
+    cl_int err;
+    cl_kernel k = clCreateKernel(prog,
+        k_img ? "flash_attn_f32_f16_q1_vec_mq_split_k_img" : "flash_attn_f32_f16_q1_vec_mq_split", &err);
+    if (err != CL_SUCCESS) { clReleaseProgram(prog); failed.insert(fkey); return false; }
+    if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, wg, tag.c_str(), dk, dv)) {
+        clReleaseKernel(k);
+        clReleaseProgram(prog);
+        failed.insert(fkey);
+        return false;
+    }
+    target[key]                       = k;
+    backend_ctx->fa.mq_narrow_wg[key] = (int) wg;
+    backend_ctx->fa.mq_narrow_hs[key] = head_sub;
+    ggml_opencl_log_fa_kernel_spill(backend_ctx, k, tag.c_str(), dk, dv);
+    clReleaseProgram(prog);
+    return true;
+}
+
 // Compile one (variant, dk, dv); memoised. false = compiler rejected.
 static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_ctx, int dk, int dv, ggml_opencl_fa_variant variant) {
     const std::pair<int, int> dk_dv = {dk, dv};
@@ -4913,6 +5088,24 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
     }();
     const int fa_cl_c_gqa4 = fa_cl_c_env ? fa_cl_c_env
         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 16 : 0);
+
+    // dp4a QK dot in the q8_0 decode kernels: +3% tg at depth on the A8X
+    // (mq_split stays at the 512 B/WI boundary), -1..-2% on the X2E (its c8
+    // kernel sits exactly AT the boundary and the packing state pushes it
+    // over). Enable only where measured positive.
+    // dp4a int-QK in the q8_0 decode FA kernels. Default A8X-only: it measured
+    // -1.3/-2.2% on X2-90, attributed at the time to the Q-packing state pushing
+    // the kernel past a 512 B/WI spill cliff. That mechanism is now in doubt (a
+    // 216 B/WI decode FA kernel measured 31x SLOWER than the 576 B cluster one),
+    // so keep it forceable either way for re-measurement.
+    static const int fa_q8_int_env = []{
+        const char * e = getenv("GGML_OPENCL_FA_Q8_INT_QK");
+        if (e == NULL || e[0] == 0) { return -1; }
+        return (e[0] != '0') ? 1 : 0;
+    }();
+    const bool fa_q8_int_qk = (fa_q8_int_env >= 0)
+        ? (fa_q8_int_env == 1)
+        : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X);
     const std::string opts_cl_c_gqa4 = fa_cl_c_gqa4
         ? " -D FA_CL_C=" + std::to_string(fa_cl_c_gqa4) : std::string();
     const std::string fa_cl_c_g8_val = std::to_string(fa_cl_c_gqa4 ? fa_cl_c_gqa4 * 2 : 16);
@@ -4929,8 +5122,13 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         case FA_VARIANT_Q4_0_SPLIT:      tag = "fa q4_0 split";      break;
         default: break;
     }
+    std::string opts_q8_int;
+    if ((variant == FA_VARIANT_Q8_0 || variant == FA_VARIANT_Q8_0_SPLIT) && !fa_q8_int_qk) {
+        opts_q8_int = " -D FA_Q8_INT_QK_OFF";
+    }
+
     cl_program prog = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device, src.c_str(), opts + opts_cl_c_gqa4,
+        backend_ctx->context, backend_ctx->device, src.c_str(), opts + opts_cl_c_gqa4 + opts_q8_int,
         /*fatal=*/false, tag, backend_ctx->queue);
     if (!prog) { return false; }
 
@@ -5123,6 +5321,256 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                 }
                 clReleaseProgram(prog_g8);
             }
+            // dk=64 gqa8 (gpt-oss-class): a C=16 cluster-parallel g8 program.
+            // Every lane stays active (DK_VEC=16 = one quartet per cluster
+            // lane) and each K/V row is read once for all 8 heads, vs the
+            // q1_split fallback's per-head WGs re-reading the same KV 8x.
+            // Lighter than the fallback too (840: 784 vs 912 B/WI).
+            // The plain mq_split was measured -48% here (48/64 lanes idle) -
+            // the cluster layout is the only MQ shape that fits dk=64.
+            // Same head split for the GQA4 DK=128 program (Qwen3 / Llama /
+            // Mistral class), which sits at exactly 512 B/WI. MQ_GQA=2 spread
+            // over two workgroups per KV head halves o_acc/m/l/slope.
+            // Default on; opt out with GGML_OPENCL_FA_HS_GQA4=0. Measured
+            // X2E +4.8% (Qwen3-4B) / +3.2% (Llama-3-8B), X1E +18.0%, and
+            // A8X +61% / +42% / +33% (Qwen3-4B / Llama-3-8B / Mistral-7B),
+            // where it also makes FA-on beat FA-off on this shape.
+            // No device gate is needed because those three families are the
+            // only ones that reach this dispatch: A7X declines every mixed and
+            // quantized FA combination above (compiler SIGSEGV) and E17
+            // declines FLASH_ATTN_EXT outright, so the kernel is unreachable on
+            // the 740 and the 850 -- both confirmed on device.
+            if (!fa_decode_only && dk == 128 && dv == 128 && backend_ctx->has_subgroup_shuffle &&
+                !(getenv("GGML_OPENCL_FA_HS_GQA4") && getenv("GGML_OPENCL_FA_HS_GQA4")[0] == '0')) {
+                const std::string opts_hs4 = opts +
+                    " -D FA_MQ_ONLY -D MQ_GQA=2 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2"
+                    " -D FA_CL_C=16 -D FA_HEAD_SUB=2 -D FA_CL_MHRED=1";
+                cl_program prog_hs4 = build_program_from_source_ex(
+                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_hs4,
+                    /*fatal=*/false, "fa f32_f16 MQ_GQA=2 c16 dk128 headsub2", backend_ctx->queue);
+                if (prog_hs4) {
+                    cl_kernel k = clCreateKernel(prog_hs4, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
+                    if (err == CL_SUCCESS) {
+                        if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, 128,
+                                                          "flash_attn_f32_f16_q1_vec_mq_split_c8 (hs gqa4)", dk, dv)) {
+                            backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa4_hs2[{dk, dv}] = k;
+                            ggml_opencl_log_fa_kernel_spill(backend_ctx, k,
+                                "flash_attn_f32_f16_q1_vec_mq_split_gqa4_hs2", dk, dv);
+                        } else {
+                            clReleaseKernel(k);
+                        }
+                    }
+                    clReleaseProgram(prog_hs4);
+                }
+            }
+            if (!fa_decode_only && dk == 64 && dv == 64 && backend_ctx->has_subgroup_shuffle) {
+                // Fold the 8 per-head cluster butterflies into one halving
+                // butterfly: 15 shuffles per KV row instead of 32, with the
+                // rounds ordered so each head's summation tree is unchanged
+                // (bit-identical scores). Applied at this one build site, so
+                // every other program compiles the byte-exact original.
+                // Opt-out for diagnosis: GGML_OPENCL_FA_MHRED=0.
+                // Tuning knobs for the head-split program (defaults = shipped config).
+                static const int fa_head_sub_n = []{
+                    const char * e = std::getenv("GGML_OPENCL_FA_HEAD_SUB_N");
+                    const int v = (e && e[0]) ? atoi(e) : 2;
+                    return (v == 2 || v == 4) ? v : 2;
+                }();
+                // One subgroup per workgroup. The kernel has a barrier (Q staging),
+                // so WG=128 forces two waves co-resident on a CU; WG=64 lets the
+                // scheduler pack independent workgroups instead. +1.5/+2.1/+4.4%
+                // over MQ_NSG_SPLIT=2 at the same 368 B/WI.
+                static const int fa_hs_nsg = []{
+                    const char * e = std::getenv("GGML_OPENCL_FA_HS_NSG");
+                    const int v = (e && e[0]) ? atoi(e) : 1;
+                    return (v == 1 || v == 2) ? v : 1;
+                }();
+                static const bool mhred_on = []{
+                    const char * e = std::getenv("GGML_OPENCL_FA_MHRED");
+                    return !(e && e[0] == '0');
+                }();
+                const std::string opts_g8c16 = opts +
+                    " -D FA_MQ_ONLY -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16"
+                    " -D FA_CL_MASK_BCAST=1" +
+                    (mhred_on ? " -D FA_CL_MHRED=1" : "");
+
+                // gqa=8 served by an MQ_GQA=4 kernel across two workgroups per KV
+                // head. Halves every per-lane per-head array (o_acc, m_i, l_i,
+                // slope) and doubles the grid; costs a 2x KV re-read, which is
+                // affordable while the kernel runs at ~34 GB/s against a measured
+                // 136 GB/s streaming floor. Probe for the "waves resident per CU"
+                // hypothesis -- register footprint is the only mechanism left after
+                // spill, workgroup count, MLP and load path were all falsified.
+                {
+                    const std::string opts_hs2 = opts +
+                        " -D FA_MQ_ONLY -D MQ_GQA=" + std::to_string(8 / fa_head_sub_n) +
+                        " -D MQ_NSG=" + std::to_string(fa_hs_nsg) +
+                        " -D MQ_NSG_SPLIT=" + std::to_string(fa_hs_nsg) +
+                        " -D FA_CL_C=16 -D FA_HEAD_SUB=" + std::to_string(fa_head_sub_n) +
+                        " -D FA_CL_MASK_BCAST=1" +
+                        (mhred_on ? " -D FA_CL_MHRED=1" : "");
+                    cl_program prog_hs2 = build_program_from_source_ex(
+                        backend_ctx->context, backend_ctx->device, src.c_str(), opts_hs2,
+                        /*fatal=*/false, "fa f32_f16 MQ_GQA=4 c16 dk64 headsub2",
+                        backend_ctx->queue);
+                    if (prog_hs2) {
+                        cl_kernel k_hs2 = clCreateKernel(prog_hs2, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
+                        if (err == CL_SUCCESS) {
+                            if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_hs2, (size_t)(64 * fa_hs_nsg),
+                                                              "flash_attn_f32_f16_q1_vec_mq_split_c8 (hs2)", dk, dv)) {
+                                backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2[{dk, dv}] = k_hs2;
+                                backend_ctx->fa.fa_hs_wg  = 64 * fa_hs_nsg;
+                                backend_ctx->fa.fa_hs_sub = fa_head_sub_n;
+                                ggml_opencl_log_fa_kernel_spill(backend_ctx, k_hs2,
+                                    "flash_attn_f32_f16_q1_vec_mq_split_g8_hs2", dk, dv);
+                            } else {
+                                clReleaseKernel(k_hs2);
+                            }
+                        }
+                        clReleaseProgram(prog_hs2);
+                    }
+                }
+
+                // Same cluster kernel with K read through image1d_buffer_t. The buffer
+                // path streams KV at ~22 GB/s while the GEMVs in the same graph reach
+                // ~118 GB/s; the texture path is what those GEMVs use. Env-gated until
+                // measured.
+                const std::string opts_g8c16_kimg = opts_g8c16 + " -D FA_K_IMG";
+                cl_program prog_g8c16_kimg = build_program_from_source_ex(
+                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_g8c16_kimg,
+                    /*fatal=*/false, "fa f32_f16 MQ_GQA=8 c16 dk64 k_img", backend_ctx->queue);
+                if (prog_g8c16_kimg) {
+                    cl_kernel k_g8c16_kimg = clCreateKernel(prog_g8c16_kimg, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
+                    if (err == CL_SUCCESS) {
+                        if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_g8c16_kimg, 128,
+                                                          "fa f32_f16 MQ_GQA=8 c16 dk64 k_img", dk, dv)) {
+                            backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa_k_img[{dk, dv, 8}] = k_g8c16_kimg;
+                            ggml_opencl_log_fa_kernel_spill(backend_ctx, k_g8c16_kimg, "fa f32_f16 MQ_GQA=8 c16 dk64 k_img", dk, dv);
+                        } else {
+                            clReleaseKernel(k_g8c16_kimg);
+                        }
+                    }
+                    clReleaseProgram(prog_g8c16_kimg);
+                }
+                cl_program prog_g8c16 = build_program_from_source_ex(
+                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_g8c16,
+                    /*fatal=*/false, "fa f32_f16 MQ_GQA=8 c16 dk64", backend_ctx->queue);
+                if (prog_g8c16) {
+                    cl_kernel k_g8c16 = clCreateKernel(prog_g8c16, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
+                    if (err == CL_SUCCESS) {
+                        if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_g8c16, 128,
+                                                          "fa f32_f16 MQ_GQA=8 c16 dk64", dk, dv)) {
+                            backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa[{dk, dv, 8}] = k_g8c16;
+                            ggml_opencl_log_fa_kernel_spill(backend_ctx, k_g8c16, "fa f32_f16 MQ_GQA=8 c16 dk64", dk, dv);
+                        } else {
+                            clReleaseKernel(k_g8c16);
+                        }
+                    }
+                    clReleaseProgram(prog_g8c16);
+                }
+            }
+            // MQ_GQA=2/3 specializations (dk=dv=128 models only): give gqa=2/3
+            // models the healthy MQ decode kernel instead of the spilled
+            // q1_split fallback (1168 B/WI on DX.50, 192-thread cap).
+            if (!fa_decode_only && dk == 128 && dv == 128) {
+                for (int gqa_n = 2; gqa_n <= 3; ++gqa_n) {
+                    const std::string opts_gn = opts + " -D FA_MQ_ONLY -D MQ_GQA=" + std::to_string(gqa_n);
+                    const std::string tag_gn  = "fa f32_f16 MQ_GQA=" + std::to_string(gqa_n);
+                    cl_program prog_gn = build_program_from_source_ex(
+                        backend_ctx->context, backend_ctx->device, src.c_str(), opts_gn,
+                        /*fatal=*/false, tag_gn.c_str(), backend_ctx->queue);
+                    if (prog_gn) {
+                        cl_kernel k_gn = clCreateKernel(prog_gn, "flash_attn_f32_f16_q1_vec_mq_split", &err);
+                        if (err == CL_SUCCESS) {
+                            if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_gn, 256,
+                                                              tag_gn.c_str(), dk, dv)) {
+                                backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa[{dk, dv, gqa_n}] = k_gn;
+                                ggml_opencl_log_fa_kernel_spill(backend_ctx, k_gn, tag_gn.c_str(), dk, dv);
+                            } else {
+                                clReleaseKernel(k_gn);
+                            }
+                        }
+                        clReleaseProgram(prog_gn);
+                    }
+                }
+            }
+            // gqa=8 at DK=128 served by an MQ_GQA=4 kernel spread over
+            // FA_HEAD_SUB workgroups per KV head. That treatment exists only at
+            // dk=64 today, and dk=64 is where it turned gpt-oss from a loss into
+            // a win. The dk=128 evidence points the same way: every dk=128 model
+            // that GAINS from -fa 1 at depth on the X2-90 (Qwen3-4B, Qwen3-8B,
+            // Llama-3-8B, +11..17% tg @d8192) runs MQ_GQA=4, and the one that
+            // LOSES ~20% there (Qwen3-30B-A3B) is the only dk=128 shape running
+            // MQ_GQA=8. Cost is the usual head-split trade: per-lane o_acc/m_i/
+            // l_i/slope halve and the grid doubles, paying one extra read of
+            // each KV row.
+            //
+            // Deliberately the GQA4 c8 options plus FA_HEAD_SUB and nothing else
+            // -- no MHRED, no mask broadcast -- so the measurement attributes to
+            // the head split alone rather than to a bundle.
+            //
+            // DEFAULT ON, opt out with GGML_OPENCL_FA_G8_HS_DK128=0. No device
+            // predicate, matching the gqa 4 / 8 arms it sits beside: all three
+            // generations that reach this dispatch were measured and none
+            // inverts. Per-op (test-backend-ops perf, dk=128 gqa=8 f16, nb=1),
+            // route off -> on:
+            //
+            //   X2-90       kv4096  552 ->  368 us (+50%)   kv8192 1100 ->  725 (+52%)
+            //   840  (A8X)  kv4096 2082 -> 1144 us (+82%)   kv8192 3470 -> 2235 (+55%)
+            //   X1-85 (X1E) kv4096 1596 ->  751 us (+112%)  kv8192 3214 -> 1466 (+119%)
+            //
+            // FLASH_ATTN_EXT is 0 FAIL in both routings on each of them, matching
+            // that device's own unpatched baseline (X2 2696 OK, 840 2699, X1-85
+            // 2696). End-to-end is X2-only on purpose: Qwen3-30B-A3B is the
+            // fleet's only dk=128 gqa=8 model and neither the 840 (19.5 GB
+            // MemAvailable) nor X1-85 (~6 GB per-context cap) can hold it, so the
+            // per-op number is what carries the other two generations.
+            static const bool g8_hs_dk128_on = []{
+                const char * e = std::getenv("GGML_OPENCL_FA_G8_HS_DK128");
+                return !(e != nullptr && e[0] == '0');
+            }();
+            if (!fa_decode_only && dk == 128 && dv == 128 &&
+                backend_ctx->has_subgroup_shuffle && g8_hs_dk128_on) {
+                // 4 is the measured optimum, not an extrapolation. X2-90 tg128 at
+                // d4096/d8192: 31.1/24.7 at FA_HEAD_SUB=2, 33.0/25.7 at 4, and
+                // 30.5/23.3 at 8 -- MQ_GQA=1 overshoots and lands BELOW 2, so the
+                // grid mechanism saturates here rather than continuing.
+                static const int hs_n = []{
+                    const char * e = std::getenv("GGML_OPENCL_FA_G8_HS_DK128_SUB");
+                    const int v = (e && e[0]) ? atoi(e) : 4;
+                    return (v == 2 || v == 4 || v == 8) ? v : 4;
+                }();
+                static const int hs_nsg = []{
+                    const char * e = std::getenv("GGML_OPENCL_FA_G8_HS_DK128_NSG");
+                    const int v = (e && e[0]) ? atoi(e) : 2;
+                    return (v >= 1 && v <= 4) ? v : 2;
+                }();
+                const size_t hs_wg = (size_t) (64 * hs_nsg);
+                const std::string opts_hs = opts +
+                    " -D FA_MQ_ONLY -D MQ_GQA=" + std::to_string(8 / hs_n) +
+                    " -D MQ_NSG=" + std::to_string(hs_nsg) +
+                    " -D MQ_NSG_SPLIT=" + std::to_string(hs_nsg) +
+                    " -D FA_HEAD_SUB=" + std::to_string(hs_n) + opts_cl_c_gqa4;
+                const std::string tag_hs = "fa f32_f16 MQ_GQA=" + std::to_string(8 / hs_n) +
+                    " dk128 g8 headsub" + std::to_string(hs_n) + " wg" + std::to_string(hs_wg);
+                cl_program prog_hs = build_program_from_source_ex(
+                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_hs,
+                    /*fatal=*/false, tag_hs.c_str(), backend_ctx->queue);
+                if (prog_hs) {
+                    cl_kernel k_hs = clCreateKernel(prog_hs, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
+                    if (err == CL_SUCCESS) {
+                        if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_hs, hs_wg, tag_hs.c_str(), dk, dv)) {
+                            backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2[{dk, dv}]     = k_hs;
+                            backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2_wg[{dk, dv}]  = (int) hs_wg;
+                            backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2_sub[{dk, dv}] = hs_n;
+                            ggml_opencl_log_fa_kernel_spill(backend_ctx, k_hs, tag_hs.c_str(), dk, dv);
+                        } else {
+                            clReleaseKernel(k_hs);
+                        }
+                    }
+                    clReleaseProgram(prog_hs);
+                }
+            }
             // NSG_SPLIT=2 programs for the cluster-parallel kernel: its register
             // footprint caps the per-kernel WG at 128 on X2 (< the stock 256/192
             // requirement), so it can never register from the stock programs.
@@ -5255,7 +5703,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             // Second compile with MQ_GQA=8, MQ_NSG=3, MQ_NSG_SPLIT=3
             auto & m_mq_split_g8 = is_q8 ? backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8
                                          : backend_ctx->fa.f32_q4_0_q1_vec_mq_split_g8;
-            const std::string opts_mq_g8 = opts + " -D MQ_GQA=8 -D MQ_NSG=3 -D MQ_NSG_SPLIT=3";
+            const std::string opts_mq_g8 = opts + " -D MQ_GQA=8 -D MQ_NSG=3 -D MQ_NSG_SPLIT=3" + opts_q8_int;
             cl_program prog_mq_g8 = build_program_from_source_ex(
                 backend_ctx->context, backend_ctx->device, src.c_str(), opts_mq_g8,
                 /*fatal=*/false, is_q8 ? "fa q8_0 MQ_GQA=8" : "fa q4_0 MQ_GQA=8",
@@ -5274,12 +5722,36 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                 }
                 clReleaseProgram(prog_mq_g8);
             }
+            // MQ_GQA=2/3 specializations (q8_0, dk=dv=128): replace the
+            // spilled q1_split fallback for gqa=2/3 models.
+            if (is_q8 && dk == 128 && dv == 128) {
+                for (int gqa_n = 2; gqa_n <= 3; ++gqa_n) {
+                    const std::string opts_gn = opts + " -D MQ_GQA=" + std::to_string(gqa_n) + opts_q8_int;
+                    const std::string tag_gn  = "fa q8_0 MQ_GQA=" + std::to_string(gqa_n);
+                    cl_program prog_gn = build_program_from_source_ex(
+                        backend_ctx->context, backend_ctx->device, src.c_str(), opts_gn,
+                        /*fatal=*/false, tag_gn.c_str(), backend_ctx->queue);
+                    if (prog_gn) {
+                        cl_kernel k_gn = clCreateKernel(prog_gn, name_mq_split.c_str(), &err);
+                        if (err == CL_SUCCESS) {
+                            if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_gn, 256,
+                                                              tag_gn.c_str(), dk, dv)) {
+                                backend_ctx->fa.f32_q8_0_q1_vec_mq_split_gqa[{dk, dv, gqa_n}] = k_gn;
+                                ggml_opencl_log_fa_kernel_spill(backend_ctx, k_gn, tag_gn.c_str(), dk, dv);
+                            } else {
+                                clReleaseKernel(k_gn);
+                            }
+                        }
+                        clReleaseProgram(prog_gn);
+                    }
+                }
+            }
             // GQA=4 cluster-parallel program (NSG_SPLIT=2 / WG=128)
             if (backend_ctx->has_subgroup_shuffle) {
                 auto & m_c8_gqa4 = is_q8 ? backend_ctx->fa.f32_q8_0_q1_vec_mq_split_c8
                                          : backend_ctx->fa.f32_q4_0_q1_vec_mq_split_c8;
                 const std::string name_c8_gqa4 = name_q1 + "_vec_mq_split_c8";
-                const std::string opts_c8_gqa4 = opts + " -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2" + opts_cl_c_gqa4;
+                const std::string opts_c8_gqa4 = opts + " -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2" + opts_cl_c_gqa4 + opts_q8_int;
                 cl_program prog_c8_gqa4 = build_program_from_source_ex(
                     backend_ctx->context, backend_ctx->device, src.c_str(), opts_c8_gqa4,
                     /*fatal=*/false, is_q8 ? "fa q8_0 c8 GQA4 NSG2" : "fa q4_0 c8 GQA4 NSG2",
@@ -5296,6 +5768,105 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                         }
                     }
                     clReleaseProgram(prog_c8_gqa4);
+                }
+            }
+            // Cluster-parallel q8_0 GQA8 decode kernel. gpt-oss-class shapes
+            // (dk=dv=64, gqa=8) had no q8_0 MQ route at all: every q8_0 gqa8 gate
+            // required dk=128, so quantizing the KV cache dropped the model from
+            // the C=16 f16 cluster kernel onto the spilled scalar q1_split. Same
+            // FA_CL_C as the f16 dk=64 program -- at DK_VEC=16 a width of 8 would
+            // double the per-lane o_acc for MQ_GQA=8.
+            if (is_q8 && dk == 64 && dv == 64 && backend_ctx->has_subgroup_shuffle) {
+                // The f16 g8/c16 program has carried FA_CL_MHRED since the
+                // gpt-oss FD round; this fork never got it, and the shuffle
+                // chain it removes is what this kernel is actually spending its
+                // time on -- deleting the KV read outright still left it behind
+                // f16, so the gap is not the dequant.
+                // Opt out with GGML_OPENCL_FA_Q8_MHRED=0.
+                static const bool q8_mhred_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_MHRED");
+                    return !(e && e[0] == '0');
+                }();
+                // Mask broadcast + hoist. The mask was read inside the per-head
+                // score loop, after the cluster reduce: deleting it outright
+                // measured +8.8/+14.0% at d4096/d8192, which is the entire
+                // remaining deficit against f16.
+                // GGML_OPENCL_FA_Q8_MASK_BCAST=0 opts out.
+                static const bool q8_maskb_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_MASK_BCAST");
+                    return !(e && e[0] == '0');
+                }();
+                const std::string opts_q8_maskb =
+                    q8_maskb_on ? " -D FA_CL_MASK_BCAST=1" : "";
+                // Stage the mask a subgroup-block at a time: over FA_CL_C
+                // iterations the clusters touch Q1_WG_SIZE consecutive
+                // positions, so one coalesced load plus shuffles replaces
+                // FA_CL_C scattered ones. Needs the broadcast path (that is
+                // what makes the value one-per-position). Costs no LDS, which
+                // matters because this kernel is occupancy-bound.
+                // GGML_OPENCL_FA_Q8_MASK_SG=0 opts out.
+                static const bool q8_masksg_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_MASK_SG");
+                    return !(e && e[0] == '0');
+                }();
+                const std::string opts_q8_masksg =
+                    (q8_maskb_on && q8_masksg_on) ? " -D FA_CL_MASK_SG=1" : "";
+                const std::string opts_q8_g8c16 = opts +
+                    " -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16" +
+                    (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb + opts_q8_masksg +
+                    opts_q8_int;
+                cl_program prog_q8_g8c16 = build_program_from_source_ex(
+                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_g8c16,
+                    /*fatal=*/false, "fa q8_0 c16 GQA8 dk64", backend_ctx->queue);
+                if (prog_q8_g8c16) {
+                    cl_kernel k = clCreateKernel(prog_q8_g8c16, "flash_attn_f32_q8_0_q1_vec_mq_split_c8", &err);
+                    if (err == CL_SUCCESS) {
+                        if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, 128,
+                                                          "flash_attn_f32_q8_0_q1_vec_mq_split_c8 (g8 c16)", dk, dv)) {
+                            backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8[{dk, dv}] = k;
+                            ggml_opencl_log_fa_kernel_spill(backend_ctx, k,
+                                "flash_attn_f32_q8_0_q1_vec_mq_split_g8_c8", dk, dv);
+                        } else {
+                            clReleaseKernel(k);
+                        }
+                    }
+                    clReleaseProgram(prog_q8_g8c16);
+                }
+                // Head-split sibling: FA_HEAD_SUB=2 runs the gqa=8 shape as two
+                // MQ_GQA=4 workgroups per KV head. The measured reason to want
+                // it -- the q8 g8/c16 kernel reports private_mem 592 B/WI where
+                // the f16 head-split kernel for the same dk=64 gqa8 shape is at
+                // 368, and that occupancy gap is what the measured ceiling with
+                // the KV read removed pinned the deficit on. Costs one extra
+                // read of each KV row.
+                // Opt out with GGML_OPENCL_FA_Q8_HEAD_SUB=0.
+                static const bool q8_hs_on = []{
+                    const char * e = getenv("GGML_OPENCL_FA_Q8_HEAD_SUB");
+                    return !(e && e[0] == '0');
+                }();
+                if (q8_hs_on) {
+                    const std::string opts_q8_hs2 = opts +
+                        " -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=16"
+                        " -D FA_HEAD_SUB=2" +
+                        (q8_mhred_on ? " -D FA_CL_MHRED=1" : "") + opts_q8_maskb + opts_q8_masksg +
+                        opts_q8_int;
+                    cl_program prog_q8_hs2 = build_program_from_source_ex(
+                        backend_ctx->context, backend_ctx->device, src.c_str(), opts_q8_hs2,
+                        /*fatal=*/false, "fa q8_0 c16 GQA4 hs2 dk64", backend_ctx->queue);
+                    if (prog_q8_hs2) {
+                        cl_kernel k_hs = clCreateKernel(prog_q8_hs2, "flash_attn_f32_q8_0_q1_vec_mq_split_c8", &err);
+                        if (err == CL_SUCCESS) {
+                            if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_hs, 128,
+                                                              "flash_attn_f32_q8_0_q1_vec_mq_split_c8 (hs2)", dk, dv)) {
+                                backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2[{dk, dv}] = k_hs;
+                                ggml_opencl_log_fa_kernel_spill(backend_ctx, k_hs,
+                                    "flash_attn_f32_q8_0_q1_vec_mq_split_g8_c8_hs2", dk, dv);
+                            } else {
+                                clReleaseKernel(k_hs);
+                            }
+                        }
+                        clReleaseProgram(prog_q8_hs2);
+                    }
                 }
             }
             // Cluster-parallel q4_0 decode kernel
@@ -7455,10 +8026,24 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     return false;
                 }
                 if (q->ne[1] == 1) {
-                    // DK=512 decode is bandwidth-bound and slower on the GPU
-                    // than on the CPU; decline it here so it runs on the CPU.
-                    // Prefill (n_q > 1) stays on the GPU.
-                    return false;
+                    // Declining DK=512 decode is NOT free: it makes every
+                    // global-attention layer a CPU island whose K and V views
+                    // (8.4 MB each at n_kv=4096) are copied device->host every
+                    // token - 17 graph splits against 3, and ~13 ms/token of
+                    // host time on gemma-4-E4B. It was still the better trade
+                    // while the only DK=512 decode kernel was q1, which holds
+                    // 2 KB/work-item of o_acc at DV=512 and spills it. With the
+                    // DV-split q1_vec and the KV-head-coalescing split kernel
+                    // (both built in their own minimal programs below) keeping
+                    // it on the GPU wins 44-61% tg at depth on the X2-90 and
+                    // 34-36% on the A8X. Opt out: GGML_OPENCL_FA_DK512_DECODE=0.
+                    static const char * dk512_env = getenv("GGML_OPENCL_FA_DK512_DECODE");
+                    if (dk512_env != NULL && dk512_env[0] == '0') {
+                        return false;
+                    }
+                    if (!ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx)) {
+                        return false;
+                    }
                 } else {
                     // prefill, BM-tile in its own FA_PREFILL_ONLY program
                     if (!ggml_opencl_ensure_fa_f32_f16_prefill_512(backend_ctx, /*split=*/false)) {
@@ -14499,6 +15084,13 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     } else if (is_mixed) {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F32_F16);
         if (fa_decode_only_512) {
+            // DK=512 decode: q1_vec lives in its own FA_VEC_ONLY program (the
+            // shared decode program must drop it to stay under the compiler's
+            // host-memory ceiling). Without it decode falls back to q1, which
+            // spills 2 KB/work-item of o_acc at DV=512.
+            if (n_q == 1) {
+                ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx);
+            }
             // DK=512: the BM-tile prefill kernels are specifically compiled from
             // FA_PREFILL_ONLY
             if (n_q > 1) {
@@ -14528,6 +15120,118 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         }
     } else {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F32);
+    }
+
+    // Narrow (one-kernel) MQ split programs for the shapes where the shared
+    // program cannot serve decode: gemma-4's DK=512 global layers (the MQ
+    // family does not fit the compiler there) and its DK=256 gqa=8 SWA layers
+    // (the stock g8 kernel needs a 192-thread workgroup, which the X2-90
+    // refuses per-kernel). Both otherwise fall back to a per-query-head kernel
+    // that re-reads the KV cache gqa times.
+    if (n_q == 1 && is_mixed && d_head_q == d_head_v &&
+        (d_head_q == 512 || d_head_q == 256) && n_head_kv > 0) {
+        const int gqa = n_head / n_head_kv;
+        // gqa == 2 is gemma-4-26B's SWA shape (n_head 16 / n_head_kv 8, 25 of its
+        // 30 layers). Without this arm those layers take the per-query-head
+        // kernel and re-read the KV cache twice, which is the whole of that
+        // model's -fa 1 decode regression.
+        //
+        // On by default; GGML_OPENCL_FA_MQN_GQA2=0 opts out. It was opt-in while
+        // the expectation was that only two query heads per KV read -- a quarter
+        // of the gqa 8 sharing -- could not amortise it well enough to beat the
+        // unfused path. Measurement says otherwise, so that reasoning is removed
+        // rather than left standing next to a default it argues against.
+        // X2-90, gemma-4-26B q4_0, tg128, one binary, this arm off -> on:
+        //
+        //   d0     36.16 -> 35.76    -1.1%   (inside run-to-run spread)
+        //   d1024  27.55 -> 32.31   +17.3%
+        //   d2048  26.56 -> 31.85   +19.9%
+        //   d4096  25.81 -> 30.60   +18.6%
+        //
+        // A separate build of the same commit reproduces this to within 2%.
+        //
+        // and on the 840 (A8X) +4.7% at d0, +21.2% at d2048. Two generations, no
+        // inversion at any depth measured. This only ever changes which decode
+        // kernel is picked, so d0 parity is the floor rather than a risk.
+        //
+        // No device predicate, matching the gqa 4 and 8 arms it sits beside.
+        // X1E is the one generation with no perf number, and it is deliberately
+        // not gated out rather than silently included: this is the only gqa == 2
+        // model on the fleet, and an X1-class per-context allocation cap (~6 GB)
+        // stops it loading at full offload there, so the shape is unreachable on
+        // X1E in practice rather than untested-and-risky. FLASH_ATTN_EXT coverage
+        // does run there. A7X and E17 never reach this function at all --
+        // supports_op declines f16-KV flash attention on both.
+        static const bool mqn_gqa2 = []{
+            const char * e = getenv("GGML_OPENCL_FA_MQN_GQA2");
+            return e == NULL || e[0] != '0';
+        }();
+        // gqa == 16 is gemma-4-12B's global-attention shape (n_head 16, n_head_kv 1,
+        // DK=DV=512). It matches none of the arms above, so every one of its decode
+        // dispatches lands on the legacy q1_vec kernel with no flash-decoding split
+        // and no multi-query sharing -- dispatch-traced on the X2-90: 40/40 decode
+        // FA calls were `q1_vec (dk=512 dv=512 gqa=16)`. That kernel re-reads the KV
+        // cache once per query head, 16x here.
+        // head_sub 8 (not 4) so the program is MQ_GQA=2: at DV=512 the per-head lane
+        // state is what pushes this shape past the ~512 B/work-item occupancy cliff,
+        // which is the same reason dk512/gqa8 runs head_sub 4 rather than 2.
+        // On by default; GGML_OPENCL_FA_MQN_GQA16=0 opts out. Measured on two
+        // generations, gemma-4-12B Q4_0 tg32 at d8192, this route off -> on:
+        // X2-90 10.37 -> 13.79 (+33.0%), and A8X 3.63 -> 4.46 (+22.7%, three
+        // matched pairs from the same start temperature, the on arms agreeing to
+        // 0.2%). d0 is parity on the X2-90 (15.65 -> 15.72) because the MQ route
+        // barely engages at shallow n_kv, so shallow contexts are the floor here
+        // rather than a risk. Against `-fa 0` the same X2-90 arm turns -7.4% /
+        // -16.0% at d4096 / d8192 into +8.9% / +11.7%.
+        //
+        // No device predicate, matching the gqa 4, 8 and 2 arms it sits beside.
+        // X1E is the one generation with no usable number and is deliberately not
+        // gated out: gemma-4-12B is 6.26 GiB against an X1-class per-context
+        // allocation cap near 6 GB, so runs there abort in clCreateBuffer
+        // non-deterministically (d1024 aborted while d2048 ran) and the survivors
+        // carry a +-20% spread. The shape is unreachable in practice on X1E
+        // rather than untested-and-risky, and the aborts reproduce with this
+        // route off. A7X and E17 never reach this function at all -- supports_op
+        // declines f16-KV flash attention on both.
+        static const bool mqn_gqa16 = []{
+            const char * e = getenv("GGML_OPENCL_FA_MQN_GQA16");
+            return e == NULL || e[0] != '0';
+        }();
+        if (gqa == 4 || gqa == 8 || (gqa == 2 && mqn_gqa2) || (gqa == 16 && mqn_gqa16)) {
+            // hs/nsg defaults are per-shape measurements on the X2-90; the env
+            // knobs exist to re-tune them elsewhere. DK=256 gqa=8 must stay at
+            // a 128-thread workgroup - the stock 192-thread g8 kernel is what
+            // the X2-90 refuses per-kernel.
+            int hs  = (d_head_q == 512) ? ((gqa == 8) ? 4 : ((gqa == 16) ? 8 : 1)) : ((gqa == 8) ? 2 : 1);
+            int nsg = (d_head_q == 256 && gqa == 8) ? 2 : 4;
+            static const int hs_env  = []{ const char * e = getenv("GGML_OPENCL_FA_MQN_HS");
+                                           return (e && e[0]) ? atoi(e) : 0; }();
+            static const int nsg_env = []{ const char * e = getenv("GGML_OPENCL_FA_MQN_NSG");
+                                           return (e && e[0]) ? atoi(e) : 0; }();
+            if (hs_env  > 0) hs  = hs_env;
+            if (nsg_env > 0) nsg = nsg_env;
+            // K through the texture cache (image1d_buffer_t) instead of a plain
+            // buffer. Measured on the X2-90 (palindromed, non-overlapping):
+            // E4B (gqa=4, head_sub=1) +3.5% @d4096 / +3.8% @d8192, but E2B
+            // (gqa=8, head_sub=4) -4.5% / -9.3%. The split tracks head_sub: with
+            // head_sub > 1 every KV row is re-read by that many workgroups, and
+            // the texture path's per-access latency is paid on each re-read
+            // instead of being amortised over one streaming pass. So enable it
+            // only where one workgroup owns the whole gqa group.
+            // GGML_OPENCL_FA_MQN_KIMG=0/1 forces it either way.
+            static const int mqn_kimg_env = []{
+                const char * e = getenv("GGML_OPENCL_FA_MQN_KIMG");
+                if (e == NULL || e[0] == 0) return -1;
+                return (e[0] != '0') ? 1 : 0;
+            }();
+            const bool mqn_kimg = (mqn_kimg_env >= 0) ? (mqn_kimg_env == 1) : (hs == 1);
+            if (gqa % hs == 0) {
+                ggml_opencl_ensure_fa_mq_narrow(backend_ctx, d_head_q, d_head_v, gqa, hs, nsg, false);
+                if (mqn_kimg) {
+                    ggml_opencl_ensure_fa_mq_narrow(backend_ctx, d_head_q, d_head_v, gqa, hs, nsg, true);
+                }
+            }
+        }
     }
 
     const std::pair<int, int> dk_dv = {d_head_q, d_head_v};
@@ -14790,6 +15494,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     cl_kernel fd_k_split = NULL;
     bool use_fd_mq = false;
     size_t fd_mq_wg = 256;  // MQ_GQA=4 kernel: Q1_WG_SIZE(64) * MQ_NSG_SPLIT(4)
+    int    fd_head_sub = 1; // workgroups per gqa group (FA_HEAD_SUB in the kernel)
     bool use_fa_k_img = false;  // K bound as image1d_buffer_t instead of (buf, offset)
 
     {
@@ -14818,10 +15523,65 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         const bool c8_f16_on = (c8_env_state >= 0) ? (c8_env_state == 1) : c8_default_on;
         // Quant-KV (q4_0/q8_0) GQA4 c8: default-on X2E + X1E
         const bool c8_quant_on = (c8_env_state >= 0) ? (c8_env_state == 1) : c8_default_on;
+        // dk=64 gqa8 served by an MQ_GQA=4 kernel across two workgroups per KV
+        // head: private_mem 576 -> 368 B/WI and twice the grid. Default on;
+        // opt-out GGML_OPENCL_FA_HEAD_SUB=0.
+        static const bool head_sub_on = []{
+            const char * e = getenv("GGML_OPENCL_FA_HEAD_SUB");
+            return !(e && e[0] == '0');
+        }();
+        // Minimum n_kv for the MQ (KV-sharing) decode routes. FD_MIN_N_KV is
+        // tuned for the flash-decoding split, but the MQ kernels also buy a
+        // gqa-fold of the KV reads, which pays below that: models with
+        // alternating SWA layers (gpt-oss: swa_period=2, window 128) sit at
+        // n_kv == 256 on half their layers and so never reach any KV-sharing
+        // kernel at any depth -- they run the legacy per-head q1 instead.
+        // This defaulted to FD_MIN_N_KV (2048) and was left opt-in on the grounds
+        // that it changes decode routing for every model below that and had only
+        // been measured on one. It has now been measured on four, and inheriting
+        // the split-tuned constant was simply wrong: below 2048 the MQ routes --
+        // including the dk=128 gqa=8 head split -- did not engage AT ALL, so a
+        // model spent its whole shallow-context life on the legacy per-head q1.
+        //
+        // X2-90 tg128, floor 2048 -> 32, each arm bracketed by an off arm either
+        // side:
+        //
+        //   Qwen3-30B-A3B  d0 41.3 -> 46.5 (+12%)  d1024 25.7 -> 41.8 (+63%)
+        //   Qwen3-4B       d0 38.8 -> 42.6 (+10%)  d1024 27.2 -> 39.0 (+43%)
+        //   gpt-oss-20b    d0 39.1 -> 39.6 (+1%)   d1024 35.8 -> 38.6 (+8%)
+        //   gemma-4-26B    d0 37.7 -> 37.5         d1024 33.8 -> 33.4
+        //
+        // and d4096 is flat everywhere (-0.9% to +2.0%), which is the control:
+        // above the old floor the routing is unchanged, so those columns should
+        // not move and they do not. gemma-4-26B is the neutral case rather than a
+        // regression -- its deltas sit inside the spread of its own two off arms.
+        //
+        // 32 rather than 128 because the d0 win needs a floor below n_kv there.
+        // GGML_OPENCL_FD_MIN_N_KV_MQ restores any value, including the old 2048.
+        static const int fd_min_n_kv_mq = []{
+            const char * e = getenv("GGML_OPENCL_FD_MIN_N_KV_MQ");
+            return (e && e[0]) ? atoi(e) : 32;
+        }();
+        // A shape with a narrow (purpose-built) MQ kernel carries its own,
+        // much lower n_kv floor. Those kernels exist only for shapes whose
+        // alternative is a per-query-head kernel re-reading the KV cache gqa
+        // times, so the KV-sharing win starts well below the split-tuned
+        // FD_MIN_N_KV -- and gemma-4's sliding window caps n_kv at 1024/256 on
+        // most layers, which would otherwise never reach any MQ route. Scoped
+        // to those shapes so no other model's decode routing changes.
+        static const int mq_narrow_min_n_kv = []{
+            const char * e = getenv("GGML_OPENCL_FA_MQN_MIN_N_KV");
+            return (e && e[0]) ? atoi(e) : 128;
+        }();
+        const bool have_mq_narrow =
+            backend_ctx->fa.mq_narrow.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0;
+        const int mq_n_kv_floor = have_mq_narrow
+            ? std::min(fd_min_n_kv_mq, mq_narrow_min_n_kv)
+            : fd_min_n_kv_mq;
         if (mq_enabled && mq_kv_ok && nq_in_vec_range && !is_causal &&
             backend_ctx->gpu_family != INTEL &&
             !use_local_tile &&
-            n_kv >= FD_MIN_N_KV &&
+            n_kv >= mq_n_kv_floor &&
             backend_ctx->fa.f32_merge.count(dk_dv) > 0) {
             if (nq1_only && lmq_on && is_mixed && d_head_q == 128 && d_head_v == 128 &&
                 gqa_ratio_dispatch == 8 &&
@@ -14835,6 +15595,29 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 fd_k_split = backend_ctx->fa.f32_f16_q1_local_mq_split.at(dk_dv);
                 use_fd_mq  = true;
                 fd_mq_wg   = 64;
+            } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 4 &&
+                d_head_q == 128 && d_head_v == 128 &&
+                n_head == n_head_kv * 4 &&
+                backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa4_hs2.count(dk_dv) > 0) {
+                fd_k_split  = backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa4_hs2.at(dk_dv);
+                use_fd_mq   = true;
+                fd_mq_wg    = 128;
+                fd_head_sub = 2;
+            // Narrow one-kernel MQ split program (gemma-4 DK=512 global layers
+            // and DK=256 gqa=8 SWA layers). Carries its own workgroup size and
+            // FA_HEAD_SUB, both chosen when it was built.
+            } else if (nq1_only && is_mixed &&
+                backend_ctx->fa.mq_narrow.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                const std::tuple<int, int, int> nk = {d_head_q, d_head_v, gqa_ratio_dispatch};
+                if (backend_ctx->fa.mq_narrow_k_img.count(nk) > 0) {
+                    fd_k_split   = backend_ctx->fa.mq_narrow_k_img.at(nk);
+                    use_fa_k_img = true;
+                } else {
+                    fd_k_split   = backend_ctx->fa.mq_narrow.at(nk);
+                }
+                use_fd_mq   = true;
+                fd_mq_wg    = (size_t) backend_ctx->fa.mq_narrow_wg.at(nk);
+                fd_head_sub = backend_ctx->fa.mq_narrow_hs.at(nk);
             } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 4 &&
                 ((d_head_q == 256 && d_head_v == 256) ||
                  (d_head_q == 128 && d_head_v == 128)) &&
@@ -14868,6 +15651,20 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 fd_k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_c32.at(dk_dv);
                 use_fd_mq  = true;
                 fd_mq_wg   = 128;
+            // Head-split g8 at DK=128 (Qwen3-30B-A3B class): MQ_GQA=4 over
+            // FA_HEAD_SUB workgroups per KV head. Checked BEFORE the stock g8
+            // cluster branch below so the A/B is one route against the other in
+            // the same binary; the program only exists when its build-side
+            // opt-in is set, so the default path is untouched.
+            } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 8 &&
+                d_head_q == 128 && d_head_v == 128 &&
+                n_head == n_head_kv * 8 &&
+                backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2.count(dk_dv) > 0 &&
+                backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2_wg.count(dk_dv) > 0) {
+                fd_k_split  = backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2.at(dk_dv);
+                use_fd_mq   = true;
+                fd_mq_wg    = (size_t) backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2_wg.at(dk_dv);
+                fd_head_sub = backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2_sub.at(dk_dv);
             // Cluster-parallel decode for the g8
             } else if (is_mixed && gqa_ratio_dispatch == 8 &&
                 d_head_q == 128 && d_head_v == 128 &&
@@ -14891,12 +15688,64 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 use_fd_mq    = true;
                 fd_mq_wg     = 192;
                 use_fa_k_img = true;
+            // NOTE (2026-07-29): routing dk=64 gqa8 (gpt-oss-class) to a g8
+            // NSG2 mq_split was measured at −48% vs the spilled q1_split
+            // fallback on the 840: at DK_VEC=16 the mq kernel idles 75% of
+            // each subgroup, and full lane utilization beats spill relief.
+            // The C=16 cluster kernel below keeps every lane active instead.
+            } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 8 &&
+                d_head_q == 64 && d_head_v == 64 &&
+                n_head == n_head_kv * 8 &&
+                head_sub_on &&
+                backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2.count({64, 64}) > 0) {
+                fd_k_split   = backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_hs2.at({64, 64});
+                use_fd_mq    = true;
+                fd_mq_wg     = (size_t) backend_ctx->fa.fa_hs_wg;
+                fd_head_sub  = backend_ctx->fa.fa_hs_sub;
+            } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 8 &&
+                d_head_q == 64 && d_head_v == 64 &&
+                n_head == n_head_kv * 8 &&
+                backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.count({64, 64, 8}) > 0) {
+                static const bool gqa_k_img_env = []{
+                    const char * e = std::getenv("GGML_OPENCL_FA_GQA_K_IMG");
+                    return e && e[0] && e[0] != '0';
+                }();
+                if (gqa_k_img_env &&
+                    backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa_k_img.count({64, 64, 8}) > 0) {
+                    fd_k_split   = backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa_k_img.at({64, 64, 8});
+                    use_fa_k_img = true;
+                } else {
+                    fd_k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.at({64, 64, 8});
+                }
+                use_fd_mq  = true;
+                fd_mq_wg   = 128;
             } else if (is_mixed && gqa_ratio_dispatch == 8 &&
                 d_head_q == 128 && d_head_v == 128 &&
                 backend_ctx->fa.f32_f16_q1_vec_mq_split_g8.count(dk_dv) > 0) {
                 fd_k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_g8.at(dk_dv);
                 use_fd_mq  = true;
                 fd_mq_wg   = 192;
+            } else if (nq1_only && is_q8_0 && gqa_ratio_dispatch == 8 &&
+                d_head_q == 64 && d_head_v == 64 &&
+                n_head == n_head_kv * 8 &&
+                (backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8.count(dk_dv) > 0 ||
+                 backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2.count(dk_dv) > 0)) {
+                // gpt-oss-class q8_0 KV: without this the model falls all the way
+                // back to the spilled scalar q1_split.
+                //
+                // Prefer the head-split sibling where it built: the GQA8 form
+                // reports private_mem 592 B/WI against the f16 head-split
+                // kernel's 368 for this same dk=64 gqa8 shape, and that
+                // occupancy gap -- not the dequant -- is what the measured
+                // ceiling with the KV read removed left unexplained.
+                if (backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2.count(dk_dv) > 0) {
+                    fd_k_split   = backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8_hs2.at(dk_dv);
+                    fd_head_sub  = 2;
+                } else {
+                    fd_k_split   = backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8_c8.at(dk_dv);
+                }
+                use_fd_mq  = true;
+                fd_mq_wg   = 128;
             } else if (nq1_only && is_q8_0 && gqa_ratio_dispatch == 8 &&
                 d_head_q == 128 && d_head_v == 128 &&
                 backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8.count(dk_dv) > 0) {
@@ -14914,6 +15763,20 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 } else {
                     fd_k_split = backend_ctx->fa.f32_q8_0_q1_vec_mq_split.at(dk_dv);
                 }
+                use_fd_mq  = true;
+            } else if (nq1_only && is_mixed &&
+                (gqa_ratio_dispatch == 2 || gqa_ratio_dispatch == 3) &&
+                n_head == n_head_kv * gqa_ratio_dispatch &&
+                d_head_q == 128 && d_head_v == 128 &&
+                backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                fd_k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.at({d_head_q, d_head_v, gqa_ratio_dispatch});
+                use_fd_mq  = true;
+            } else if (nq1_only && is_q8_0 &&
+                (gqa_ratio_dispatch == 2 || gqa_ratio_dispatch == 3) &&
+                n_head == n_head_kv * gqa_ratio_dispatch &&
+                d_head_q == 128 && d_head_v == 128 &&
+                backend_ctx->fa.f32_q8_0_q1_vec_mq_split_gqa.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                fd_k_split = backend_ctx->fa.f32_q8_0_q1_vec_mq_split_gqa.at({d_head_q, d_head_v, gqa_ratio_dispatch});
                 use_fd_mq  = true;
             } else if (nq1_only && is_q4_0) {
                 const char * q4_mq_env = getenv("GGML_OPENCL_FA_Q4_MQ");
@@ -14977,6 +15840,22 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         }
     }
     const bool use_fd = (fd_k_split != NULL);
+
+    static const bool fa_debug = getenv("GGML_OPENCL_FA_DEBUG") != NULL;
+    if (fa_debug && use_fd) {
+        char fd_kname[128] = {0};
+        clGetKernelInfo(fd_k_split, CL_KERNEL_FUNCTION_NAME, sizeof(fd_kname) - 1, fd_kname, NULL);
+        GGML_LOG_INFO("ggml_opencl: FA-decode kernel: %s (n_q=%d n_kv=%d dk=%d dv=%d gqa=%d)\n",
+                      fd_kname, n_q, n_kv, d_head_q, d_head_v, gqa_ratio_dispatch);
+    } else if (fa_debug) {
+        // Print the non-FD dispatch too. Without this, "no line" reads as
+        // "path not taken" when it can equally mean "fell back to the generic
+        // kernel", which is what hid half of gpt-oss's layers on the legacy q1.
+        char kname[128] = {0};
+        clGetKernelInfo(kernel, CL_KERNEL_FUNCTION_NAME, sizeof(kname) - 1, kname, NULL);
+        GGML_LOG_INFO("ggml_opencl: FA kernel (no FD): %s (n_q=%d n_kv=%d dk=%d dv=%d gqa=%d)\n",
+                      kname, n_q, n_kv, d_head_q, d_head_v, gqa_ratio_dispatch);
+    }
 
     const int n_q_blocks = n_q > 1 ? (n_q + block_m - 1) / block_m : 0;
     const int n_kv_blocks = (n_kv > 0 && block_n > 0) ? (n_kv + block_n - 1) / block_n : 0;
@@ -15102,22 +15981,94 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         int n_splits = (n_kv + fd_kv_per_split - 1) / fd_kv_per_split;
         if (n_splits < FD_MIN_SPLITS) { n_splits = FD_MIN_SPLITS; }
         if (n_splits > fd_max_splits) { n_splits = fd_max_splits; }
+
+        // Workgroup floor for the MQ routes. Their grid is
+        // (n_head_kv * n_batch) x n_splits workgroups, NOT one per query head:
+        // MQ_GQA query heads share a workgroup, so an 8-KV-head model at a
+        // short n_kv lands on 8 * FD_MIN_SPLITS = 16 workgroups, which is at
+        // or below the compute-unit count and leaves the device idle. Split
+        // the KV range further until every SP has work, but only while the
+        // slices stay wide enough to keep the cluster's lanes busy -- the
+        // split count is otherwise tuned for the deep layers, where raising
+        // it costs merge work and redundant Q loads (measured: a blanket
+        // kv_per_split of 64 is -2.5% at d4096, 32 is -8.7%).
+        // CL_DEVICE_MAX_COMPUTE_UNITS, queried once.
+        static const int fd_compute_units = [&]{
+            cl_uint n = 0;
+            clGetDeviceInfo(backend_ctx->device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(n), &n, NULL);
+            return (int) n;
+        }();
+        if (use_fd_mq && fd_compute_units > 0) {
+            const int wg_per_split = n_head_kv * n_batch;
+            static const int wg_mult = []{
+                const char * e = getenv("GGML_OPENCL_FD_MQ_WG_MULT");
+                return (e && e[0]) ? atoi(e) : 4;
+            }();
+            const int wg_target    = wg_mult * fd_compute_units;
+            const int min_kv_per_split = 32;
+            while (wg_per_split * n_splits < wg_target &&
+                   n_splits < fd_max_splits &&
+                   n_kv / (n_splits + 1) >= min_kv_per_split) {
+                n_splits++;
+            }
+        }
+
         const int kv_per_split = (n_kv + n_splits - 1) / n_splits;
 
         const int fa_partial_floats = 2 + d_head_v;
         const size_t partial_size_bytes =
             (size_t) n_batch * n_head * n_q * n_splits * fa_partial_floats * sizeof(float);
 
-        ggml_cl_flash_attn_temp_buffer temp_partial;
+        // Opt-out for diagnosis. Force-disabled while recordable queues are in
+        // use: a recording bakes the cl_mem handle into the captured dispatch,
+        // and a pool that grows afterwards would leave the replay pointing at a
+        // released buffer.
+        static const bool fd_pool_env_on = []{
+            const char * e = getenv("GGML_OPENCL_FD_PARTIAL_POOL");
+            return !(e && e[0] == '0');
+        }();
+        // NOTE: if a recordable-queue path is ever added, it must disable this
+        // pool -- a recording bakes the cl_mem handle into the captured dispatch
+        // and a later grow-realloc would leave the replay pointing at a freed
+        // buffer.
+        const bool fd_pool_on = fd_pool_env_on;
+
+        ggml_cl_flash_attn_temp_buffer temp_partial;  // unused when pooling
+        cl_mem partial_buffer = NULL;
         cl_int err;
-        temp_partial.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
+        if (fd_pool_on) {
+            // Grow-only, so a context whose split count varies per layer does
+            // not thrash the allocator.
+            if (backend_ctx->fa.fd_partial_pool_size < partial_size_bytes) {
+                if (backend_ctx->fa.fd_partial_pool != nullptr) {
+                    CL_CHECK(clFinish(backend_ctx->queue));
+                    CL_CHECK(clReleaseMemObject(backend_ctx->fa.fd_partial_pool));
+                    backend_ctx->fa.fd_partial_pool      = nullptr;
+                    backend_ctx->fa.fd_partial_pool_size = 0;
+                }
+                cl_mem grown = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
+                                              partial_size_bytes, NULL, &err);
+                if (err != CL_SUCCESS) {
+                    CL_CHECK(clFinish(backend_ctx->queue));
+                    grown = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
                                            partial_size_bytes, NULL, &err);
-        if (err != CL_SUCCESS) {
-            CL_CHECK(clFinish(backend_ctx->queue));
+                }
+                CL_CHECK(err);
+                backend_ctx->fa.fd_partial_pool      = grown;
+                backend_ctx->fa.fd_partial_pool_size = partial_size_bytes;
+            }
+            partial_buffer = backend_ctx->fa.fd_partial_pool;
+        } else {
             temp_partial.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
                                                partial_size_bytes, NULL, &err);
+            if (err != CL_SUCCESS) {
+                CL_CHECK(clFinish(backend_ctx->queue));
+                temp_partial.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE,
+                                                   partial_size_bytes, NULL, &err);
+            }
+            CL_CHECK(err);
+            partial_buffer = temp_partial.data;
         }
-        CL_CHECK(err);
 
         cl_kernel k_split = fd_k_split;
         int argi = 0;
@@ -15138,10 +16089,18 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                     backend_ctx, backend_ctx->kq_img_pool,
                     k_data_device, offset_k, k_bytes, CL_HALF_FLOAT);
             }
-
             // if image creation fails, fallback to buffer based kernels
+            if (getenv("GGML_OPENCL_FA_DEBUG")) {
+                GGML_LOG_INFO("ggml_opencl: FA k_img %s (pixels=%zu max=%zu)\n",
+                    k_img ? "CREATED -> texture path" : "FAILED -> buffer fallback",
+                    k_pixels, (size_t) backend_ctx->image_max_buffer_size);
+            }
             if (k_img == nullptr) {
-                if (gqa_ratio_dispatch == 4 &&
+                if (backend_ctx->fa.mq_narrow.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                    k_split = backend_ctx->fa.mq_narrow.at({d_head_q, d_head_v, gqa_ratio_dispatch});
+                } else if (backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                    k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.at({d_head_q, d_head_v, gqa_ratio_dispatch});
+                } else if (gqa_ratio_dispatch == 4 &&
                     backend_ctx->fa.f32_f16_q1_vec_mq_split.count(dk_dv) > 0) {
                     k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split.at(dk_dv);
                 } else {
@@ -15185,7 +16144,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_ulong), &mask_nb3));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &mask_ne2));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &mask_ne3));
-        CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_mem),   &temp_partial.data));
+        CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_mem),   &partial_buffer));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &n_splits));
         CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(int),      &kv_per_split));
 
@@ -15193,7 +16152,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         // matches Q1_WG_SIZE * NSG (MQ_GQA=4 -> 256; MQ_GQA=8 -> 192)
         const size_t fd_wg = use_fd_mq ? fd_mq_wg : 64;
         const size_t fd_head_dim = use_fd_mq
-            ? (size_t)(n_head_kv * n_batch)
+            ? (size_t)(n_head_kv * fd_head_sub * n_batch)
             : (size_t)(n_head     * n_batch);
         size_t fd_lws[3] = { fd_wg, 1, 1 };
         // gid(2) packs q_idx * n_splits + split_idx.
@@ -15202,7 +16161,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
 
         cl_kernel k_merge = backend_ctx->fa.f32_merge.at(dk_dv);
         argi = 0;
-        CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_mem),   &temp_partial.data));
+        CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_mem),   &partial_buffer));
         CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_mem),   &extra_o->data_device));
         CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(cl_ulong), &offset_o));
         CL_CHECK(clSetKernelArg(k_merge, argi++, sizeof(int),      &n_head));
