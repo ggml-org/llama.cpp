@@ -22,6 +22,8 @@ struct server_context_meta {
     bool has_inp_image;
     bool has_inp_audio;
     bool has_inp_video;
+    bool has_cap_chat;
+    bool has_cap_tts;
     json json_ui_settings;
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
@@ -151,6 +153,7 @@ struct server_routes {
     server_http_context::handler_t post_embeddings;
     server_http_context::handler_t post_embeddings_oai;
     server_http_context::handler_t post_rerank;
+    server_http_context::handler_t post_tts;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
 

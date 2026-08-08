@@ -10,6 +10,7 @@
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
+#include "mtmd-helper.h"
 
 using json = nlohmann::ordered_json;
 
@@ -27,6 +28,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_TTS,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -175,6 +177,9 @@ struct server_task {
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
 
+    // used by SERVER_TASK_TYPE_TTS
+    mtmd_helper::gen_audio::inp tts_inp;
+
     server_task() = default;
 
     server_task(server_task_type type) : type(type) {}
@@ -207,6 +212,7 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_TTS:
                 return true;
             default:
                 return false;
@@ -484,6 +490,16 @@ struct server_task_result_embd : server_task_result {
     json to_json_non_oaicompat();
 
     json to_json_oaicompat();
+};
+
+struct server_task_result_tts : server_task_result {
+    std::string audio; // raw bytes for this chunk (WAV or PCM, per request's out_type)
+    int32_t     sample_rate = 0;
+    bool        final = false; // true for the last chunk of a request
+
+    virtual bool is_stop() override { return final; }
+
+    virtual json to_json() override;
 };
 
 struct server_task_result_rerank : server_task_result {
