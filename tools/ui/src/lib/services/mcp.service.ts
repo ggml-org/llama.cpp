@@ -70,6 +70,7 @@ interface ToolResultContentItem {
 
 interface ToolCallResult {
 	content?: ToolResultContentItem[];
+	structuredContent?: Record<string, unknown>;
 	isError?: boolean;
 	_meta?: Record<string, unknown>;
 }
@@ -1003,10 +1004,20 @@ export class MCPService {
 		const content = result.content;
 		if (!Array.isArray(content)) return '';
 
-		return content
+		const formatted = content
 			.map((item) => this.formatSingleContent(item))
 			.filter(Boolean)
 			.join('\n');
+
+		if (formatted !== '') {
+			return formatted;
+		}
+
+		if (result.structuredContent && typeof result.structuredContent === 'object') {
+			return JSON.stringify(result.structuredContent);
+		}
+
+		return '';
 	}
 
 	private static formatSingleContent(content: ToolResultContentItem): string {
