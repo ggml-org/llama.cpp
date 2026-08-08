@@ -17,6 +17,56 @@ export interface IncompleteCodeBlock {
 	openingIndex: number;
 }
 
+// A fence line: up to 3 leading spaces (CommonMark), 3+ backticks, then
+// whatever trails on the same line.
+const FENCE_LINE_REGEX = /^ {0,3}(`{3,})(.*)$/;
+
+/**
+ * Splits text glued to a closing code fence onto its own line:
+ *
+ *     ```ts
+ *     let foo = 'bar';
+ *     ```create this file on ...
+ *
+ * A closing fence with trailing text is not a fence to the markdown
+ * parser, so the block would swallow the text as code. The chat form
+ * normally keeps the fence on its own line, but older messages and
+ * hand-pasted content can carry the glued form.
+ *
+ * Only trailing text containing whitespace is split: a single word
+ * after the backticks inside a fenced block is more likely nested
+ * markdown (a ```python example inside a ```md block) than glued prose.
+ */
+export function splitGluedClosingCodeFences(markdown: string): string {
+	if (!markdown.includes('```')) return markdown;
+
+	const lines = markdown.split(NEWLINE);
+	let inside = false;
+	let changed = false;
+
+	for (let i = 0; i < lines.length; i++) {
+		const match = FENCE_LINE_REGEX.exec(lines[i]);
+		if (!match) continue;
+
+		if (!inside) {
+			inside = true;
+			continue;
+		}
+
+		inside = false;
+
+		const trailing = match[2];
+		if (trailing.includes('`') || !/\s/.test(trailing)) continue;
+
+		lines[i] = lines[i].slice(0, lines[i].length - trailing.length);
+		lines.splice(i + 1, 0, trailing.trim());
+		i++;
+		changed = true;
+	}
+
+	return changed ? lines.join(NEWLINE) : markdown;
+}
+
 /**
  * Strips empty lines (whitespace-only) from the start and end of code.
  *

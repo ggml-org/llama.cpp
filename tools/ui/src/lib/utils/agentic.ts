@@ -38,6 +38,9 @@ export interface AgenticSection {
 	toolArgs?: string;
 	toolResult?: string;
 	toolResultExtras?: DatabaseMessageExtra[];
+	/** Working directory the tool call ran with (from the tool result
+	 *  message), shown by the exec_shell_command renderer. */
+	toolCwd?: string;
 	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
 	 *  downstream consumers correlate a section with the agentic loop's
 	 *  currently-executing tool, e.g. to drive live-streaming UI state
@@ -116,6 +119,7 @@ function deriveSingleTurnSections(
 			toolArgs: tc.function?.arguments,
 			toolResult: resultMsg?.content,
 			toolResultExtras: resultMsg?.extra,
+			toolCwd: resultMsg?.toolCwd,
 			toolCallId: tc.id
 		});
 	}

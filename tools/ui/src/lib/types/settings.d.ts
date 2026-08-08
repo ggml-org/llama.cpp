@@ -32,6 +32,9 @@ export interface SettingsEntry {
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
 	isPrivate?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
 	dependsOn?: string;
 	sync?: {
 		serverKey: string;
@@ -54,6 +57,9 @@ export interface SettingsFieldConfig {
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
 	isPrivate?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
 	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;

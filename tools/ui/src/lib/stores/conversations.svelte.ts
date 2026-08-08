@@ -86,6 +86,15 @@ class ConversationsStore {
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
+	/**
+	 * Working directory picked on the empty new-chat screen, before any
+	 * conversation exists. Consumed by `chatStore.sendMessage()`, which
+	 * records it into chat history as a synthetic message on first send.
+	 * Cleared by `loadConversation` and `clearActiveConversation` so a
+	 * stale pick can't bleed onto an unrelated chat.
+	 */
+	pendingCwd = $state<string | null>(null);
+
 	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
 	private static loadReasoningEffortDefault(): ReasoningEffort {
 		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
@@ -111,6 +120,9 @@ class ConversationsStore {
 		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
 		| null = null;
 
+	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
+	private initPromise: Promise<void> | null = null;
+
 	/**
 	 *
 	 *
@@ -121,19 +133,25 @@ class ConversationsStore {
 
 	/**
 	 * Initialize the store by loading conversations from database.
-	 * Must be called once after app startup.
+	 * Safe to call multiple times: concurrent callers share a single run,
+	 * and a failed run can be retried by calling again.
 	 */
-	async init(): Promise<void> {
-		if (!browser) return;
-		if (this.isInitialized) return;
+	init(): Promise<void> {
+		if (!browser) return Promise.resolve();
+		if (this.initPromise) return this.initPromise;
 
-		try {
-			await MigrationService.runAllMigrations();
-			await this.loadConversations();
-			this.isInitialized = true;
-		} catch (error) {
-			console.error('Failed to initialize conversations:', error);
-		}
+		this.initPromise = (async () => {
+			try {
+				await MigrationService.runAllMigrations();
+				await this.loadConversations();
+				this.isInitialized = true;
+			} catch (error) {
+				console.error('Failed to initialize conversations:', error);
+				this.initPromise = null;
+			}
+		})();
+
+		return this.initPromise;
 	}
 
 	/**
@@ -237,17 +255,17 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		const conversation = await DatabaseService.createConversation(conversationName);
 
 		// No MCP override list is seeded: getAllMcpServerOverrides resolves
 		// servers without a per-conversation override to `mcpServers[i].enabled`,
 		// and only explicit toggles are stored on the conversation.
-
-		// Inherit the global reasoning default into the new conversation
-		conversation.reasoningEffort = this.pendingReasoningEffort;
-		await DatabaseService.updateConversation(conversation.id, {
-			reasoningEffort: this.pendingReasoningEffort
+		// Working directory picked on the new-chat screen gets threaded in
+		// here too, then cleared so it doesn't bleed onto subsequent new chats.
+		const conversation = await DatabaseService.createConversation(conversationName, {
+			reasoningEffort: this.pendingReasoningEffort,
+			cwd: this.pendingCwd ?? undefined
 		});
+		this.pendingCwd = null;
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -270,6 +288,10 @@ class ConversationsStore {
 			if (!conversation) {
 				return false;
 			}
+
+			// Drop any cwd the user drafted on the empty new-chat screen -
+			// it doesn't belong to this conversation.
+			this.pendingCwd = null;
 
 			this.activeConversation = conversation;
 
@@ -301,6 +323,7 @@ class ConversationsStore {
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
 		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
+		this.pendingCwd = null;
 	}
 
 	/**
@@ -358,10 +381,7 @@ class ConversationsStore {
 	async deleteAll(): Promise<void> {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
-
-			for (const conv of allConversations) {
-				await DatabaseService.deleteConversation(conv.id);
-			}
+			await DatabaseService.bulkDeleteConversations(allConversations.map((c) => c.id));
 
 			this.clearActiveConversation();
 			this.conversations = [];
@@ -412,7 +432,9 @@ class ConversationsStore {
 			}
 
 			toast.success(
-				convIds.length === 1 ? 'Conversation deleted' : `${convIds.length} conversations deleted`
+				idsToRemove.size === 1
+					? 'Conversation deleted'
+					: `${idsToRemove.size} conversations deleted`
 			);
 		} catch (error) {
 			console.error('Failed to bulk delete conversations:', error);
@@ -443,7 +465,6 @@ class ConversationsStore {
 				const newPinned = updates.get(this.conversations[i].id);
 				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
 			}
-			this.conversations = [...this.conversations];
 
 			toast.success(
 				convIds.length === 1
@@ -552,7 +573,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].name = name;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -576,7 +596,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].pinned = newPinnedState;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -591,18 +610,33 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation lastModified timestamp and moves it to top of list
+	 * Marks a conversation as recently active: stamps lastModified (persisted)
+	 * and moves it to the top of the list. Only message-activity flows call
+	 * this; metadata updates (rename, pin, settings) do not.
+	 *
+	 * @param convId - Conversation that produced the activity, defaults to the active one
 	 */
-	updateConversationTimestamp(): void {
-		if (!this.activeConversation) return;
+	updateConversationTimestamp(convId?: string): void {
+		const targetId = convId ?? this.activeConversation?.id;
+		if (!targetId) return;
 
-		const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		const now = Date.now();
+
+		const chatIndex = this.conversations.findIndex((c) => c.id === targetId);
 
 		if (chatIndex !== -1) {
-			this.conversations[chatIndex].lastModified = Date.now();
+			this.conversations[chatIndex].lastModified = now;
 			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
 			this.conversations = [updatedConv, ...this.conversations];
 		}
+
+		if (this.activeConversation?.id === targetId) {
+			this.activeConversation = { ...this.activeConversation, lastModified: now };
+		}
+
+		DatabaseService.updateConversation(targetId, { lastModified: now }).catch((error) =>
+			console.error('Failed to update conversation timestamp:', error)
+		);
 	}
 
 	/**
@@ -773,7 +807,6 @@ class ConversationsStore {
 		if (convIndex !== -1) {
 			this.conversations[convIndex].mcpServerOverrides =
 				newOverrides.length > 0 ? newOverrides : undefined;
-			this.conversations = [...this.conversations];
 		}
 	}
 
@@ -837,8 +870,43 @@ class ConversationsStore {
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 		if (convIndex !== -1) {
 			this.conversations[convIndex].reasoningEffort = effort;
+		}
+	}
+
+	/**
+	 * Sets the working directory for the active conversation. Pass `null` or
+	 * an empty string to clear it, which restores the picker's empty state.
+	 *
+	 * On the empty new-chat screen (no active conversation yet), the value
+	 * is buffered into `pendingCwd` so the user can pick before
+	 * sending the first message; `createConversation()` consumes it.
+	 *
+	 * @param value - Absolute server-side path to the working directory, or null to clear
+	 */
+	async setCwd(value: string | null): Promise<void> {
+		const trimmed = value?.trim() || undefined;
+
+		// No chat yet - buffer for the first chat the user creates.
+		if (!this.activeConversation) {
+			this.pendingCwd = trimmed ?? null;
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			cwd: trimmed
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			cwd: trimmed
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].cwd = trimmed;
 			this.conversations = [...this.conversations];
 		}
+		this.pendingCwd = null;
 	}
 
 	/**
@@ -1155,6 +1223,7 @@ if (browser) {
 export const conversations = () => conversationsStore.conversations;
 export const activeConversation = () => conversationsStore.activeConversation;
 export const activeMessages = () => conversationsStore.activeMessages;
+export const pendingCwd = () => conversationsStore.pendingCwd;
 export const isConversationsInitialized = () => conversationsStore.isInitialized;
 
 /**

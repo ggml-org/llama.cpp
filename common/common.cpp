@@ -998,6 +998,23 @@ bool fs_is_directory(const std::string & path) {
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
 }
 
+std::string common_get_env(const std::string & name) {
+    const char * value = std::getenv(name.c_str());
+    return value == nullptr ? "" : value;
+}
+
+void common_set_env(const std::string & name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name.c_str());
+    } else {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+#endif
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
@@ -1285,16 +1302,6 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                 params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
 
-    //if (params.sampling.penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
-    //}
-
-    //if (params.sampling.dry_penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
-    //}
-
     // init the backend samplers as part of the context creation
     pimpl->samplers.resize(cparams.n_seq_max);
     pimpl->samplers_seq_config.resize(cparams.n_seq_max);
@@ -1462,18 +1469,32 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 common_init_result::~common_init_result() = default;
 
 std::string common_get_model_endpoint() {
-    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
-    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-    const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
-    std::string model_endpoint = "https://huggingface.co/";
-    if (endpoint_env) {
-        model_endpoint = endpoint_env;
-        if (model_endpoint.back() != '/') {
-            model_endpoint += '/';
-        }
+    std::string endpoint = common_get_env("MODEL_ENDPOINT");
+    if (endpoint.empty()) {
+        // the HF_ENDPOINT variable is respected for backward compatibility
+        endpoint = common_get_env("HF_ENDPOINT");
     }
-    return model_endpoint;
+    if (endpoint.empty()) {
+        return "https://huggingface.co/";
+    }
+    if (endpoint.back() != '/') {
+        endpoint += '/';
+    }
+    return endpoint;
+}
+
+char * common_get_model_or_exit(int argc, char * argv[]) {
+    if (argc > 1) {
+        return argv[1];
+    }
+
+    char * path = getenv("LLAMACPP_TEST_MODELFILE");
+    if (!path || strlen(path) == 0) {
+        fprintf(stderr, "\033[33mWARNING: No model file provided. Skipping this test. Set LLAMACPP_TEST_MODELFILE=<gguf_model_path> to silence this warning and run this test.\n\033[0m");
+        exit(EXIT_SUCCESS);
+    }
+
+    return path;
 }
 
 common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
@@ -1606,6 +1627,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
+    mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     return mparams;
 }
