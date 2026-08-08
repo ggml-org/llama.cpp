@@ -552,6 +552,53 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);
 }
 
+// E4M3 (OCP e4m3fn); not merged with ue4m3 above (the unsigned nvfp4-scale codec): the formats differ enough that a shared helper would need flags
+static inline float ggml_e4m3_to_fp32(uint8_t x) {
+    if ((x & 0x7F) == 0x7F) {
+        return NAN;
+    }
+    const float sign = (x & 0x80) ? -1.0f : 1.0f;
+    const int   exp  = (x >> 3) & 0xF;
+    const int   man  = x & 0x7;
+    if (exp == 0) {
+        return sign * ldexpf((float) man, -9);
+    }
+    return sign * ldexpf(1.0f + (float) man / 8.0f, exp - 7);
+}
+
+static inline uint8_t ggml_fp32_to_e4m3(float x) {
+    uint8_t sign = 0;
+    if (x < 0.0f) {
+        sign = 0x80;
+        x = -x;
+    }
+    if (!(x > 0.0f)) {
+        return sign;
+    }
+    if (x > 448.0f) {
+        x = 448.0f;
+    }
+    uint32_t bits;
+    memcpy(&bits, &x, 4);
+    const int fp32_exp = ((bits >> 23) & 0xFF) - 127;
+    const int fp32_man = (bits >> 20) & 0x7;
+    int exp = fp32_exp + 7;
+    if (exp <= 0) {
+        int man = (int) (x * 512.0f + 0.5f); // subnormal: man * 2^-9
+        // x < 2^-6 here, so man <= 8; man == 8 carries into the smallest normal (0x08 = 2^-6)
+        return sign | (uint8_t) man;
+    }
+    int man = fp32_man + ((bits >> 19) & 1);
+    if (man > 7) {
+        man = 0;
+        exp++;
+    }
+    if (exp > 15 || (exp == 15 && man == 7)) {
+        return sign | 0x7E;
+    }
+    return sign | (uint8_t) ((exp << 3) | man);
+}
+
 /**
  * Converts brain16 to float32.
  *

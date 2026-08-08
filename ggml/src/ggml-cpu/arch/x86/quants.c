@@ -1139,6 +1139,48 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     *s = sumf;
 }
 
+void ggml_vec_dot_e4m3_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_E4M3 == 0);
+    static_assert(QK_E4M3 == QK8_0, "QK_E4M3 and QK8_0 must be the same");
+
+    const block_e4m3 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_E4M3;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined __AVX2__
+    __m256 accum = _mm256_setzero_ps();
+    for (; ib < nb; ++ib) {
+        __m256 acc = _mm256_setzero_ps();
+        for (int j = 0; j < QK_E4M3; j += 8) {
+            const __m256 w = ggml_e4m3_decode_8_avx2(x[ib].qs + j);
+            const __m256 a = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(y[ib].qs + j))));
+            acc = _mm256_fmadd_ps(w, a, acc);
+        }
+        const float d = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+        accum = _mm256_fmadd_ps(_mm256_set1_ps(d), acc, accum);
+    }
+    sumf = hsum_float_8(accum);
+#endif
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+        float si = 0;
+        for (int j = 0; j < QK_E4M3; ++j) {
+            si += GGML_CPU_E4M3_TO_FP32(x[ib].qs[j]) * y[ib].qs[j];
+        }
+        sumf += d * si;
+    }
+    *s = sumf;
+}
+
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;

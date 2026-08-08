@@ -764,6 +764,58 @@ class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
         return (d * vals.astype(np.float32)).reshape(n_super, 64)
 
 
+class E4M3(__Quant, qtype=GGMLQuantizationType.E4M3):
+    @staticmethod
+    def fp32_to_e4m3(x: np.ndarray) -> np.ndarray:
+        # matches ggml_fp32_to_e4m3 in ggml-impl.h
+        sign = np.where(x < 0.0, np.uint8(0x80), np.uint8(0))
+        ax = np.minimum(np.abs(x).astype(np.float32), np.float32(448.0))
+        bits = ax.view(np.uint32)
+        fp32_exp = ((bits >> 23) & 0xFF).astype(np.int32) - 127
+        fp32_man = ((bits >> 20) & 0x7).astype(np.int32)
+        exp = fp32_exp + 7
+
+        # sub == 8 rounds up to the smallest normal (0x08)
+        sub = (ax * np.float32(512.0) + np.float32(0.5)).astype(np.int32)
+
+        man = fp32_man + ((bits >> 19) & 1).astype(np.int32)
+        carry = man > 7
+        man = np.where(carry, 0, man)
+        exp_n = np.where(carry, exp + 1, exp)
+        overflow = (exp_n > 15) | ((exp_n == 15) & (man == 7))
+        norm = np.where(overflow, 0x7E, (exp_n << 3) | man)
+
+        mag = np.where(ax > 0.0, np.where(exp <= 0, sub, norm), 0).astype(np.uint8)
+        return mag | sign
+
+    @staticmethod
+    def e4m3_to_fp32(x: np.ndarray) -> np.ndarray:
+        # matches ggml_e4m3_to_fp32 in ggml-impl.h
+        sign = np.where((x & 0x80) != 0, np.float32(-1.0), np.float32(1.0))
+        exp = ((x >> 3) & 0xF).astype(np.int32)
+        man = (x & 0x7).astype(np.float32)
+        val = sign * np.where(exp == 0,
+                              man * np.float32(2.0 ** -9),
+                              (1.0 + man / 8.0) * np.exp2((exp - 7).astype(np.float32)))
+        return np.where((x & 0x7F) == 0x7F, np.float32(np.nan), val.astype(np.float32))
+
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        d = abs(blocks).max(axis=1, keepdims=True) / 448
+        with np.errstate(divide="ignore"):
+            id = np.where(d == 0, 0, 1 / d)
+        qs = cls.fp32_to_e4m3(blocks * id)
+
+        d = d.astype(np.float16).view(np.uint8)
+        return np.concatenate([d, qs], axis=1)
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        d, qs = np.split(blocks, [2], axis=1)
+        d = d.view(np.float16).astype(np.float32)
+        return cls.e4m3_to_fp32(qs) * d
+
+
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):
     ksigns: bytes = (
         b"\x00\x81\x82\x03\x84\x05\x06\x87\x88\x09\x0a\x8b\x0c\x8d\x8e\x0f"
