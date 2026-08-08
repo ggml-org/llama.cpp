@@ -73,6 +73,109 @@ class GraniteModel(LlamaModel):
         return super().filter_tensors(item)
 
 
+@ModelBase.register("GraniteSWAForCausalLM")
+class GraniteSWAModel(GraniteModel):
+    """Conversion for IBM's GraniteSWAForCausalLM (interleaved sliding window attention)"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_SWA
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Add .weight suffix to sinks tensors (the C++ code expects blk.{bid}.attn_sinks.weight)
+        if "sinks" in name:
+            name += ".weight"
+
+        return super().filter_tensors((name, gen))
+
+    def set_gguf_parameters(self):
+        """GraniteSWA uses Granite parameters plus sliding window configuration."""
+        super().set_gguf_parameters()
+
+        # Add sliding_window from config
+        sliding_window = self.hparams.get("sliding_window", 128)
+        self.gguf_writer.add_sliding_window(sliding_window)
+        logger.info("gguf: (granite_swa) sliding_window = %s", sliding_window)
+
+        # Derive sliding_window_pattern from layer_types
+        if layer_types := self.hparams.get("layer_types"):
+            is_swa = [t == "sliding_attention" for t in layer_types]
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+            logger.info("gguf: (granite_swa) sliding_window_pattern = %d SWA layers / %d total",
+                        sum(is_swa), len(is_swa))
+        else:
+            # Fall back to period-based pattern: i % 4 != 0
+            # This matches the transformers default pattern
+            n_layers = self.block_count
+            is_swa = [i % 4 != 0 for i in range(n_layers)]
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+            logger.info("gguf: (granite_swa) sliding_window_pattern (inferred) = %d SWA layers / %d total",
+                        sum(is_swa), n_layers)
+
+        # Add rope_pattern from no_rope_layers
+        if no_rope_layers := self.hparams.get("no_rope_layers"):
+            # Convert 1/0 to bool (1 = use RoPE, 0 = NoPE)
+            rope_pattern = [bool(x) for x in no_rope_layers]
+            self.gguf_writer.add_rope_pattern(rope_pattern)
+            logger.info("gguf: (granite_swa) rope_pattern = %d RoPE layers / %d total",
+                        sum(rope_pattern), len(rope_pattern))
+
+
+@ModelBase.register("GraniteMoeSWAForCausalLM")
+class GraniteMoeSWAModel(GraniteSWAModel):
+    """Conversion for IBM's GraniteMoeSWAForCausalLM (unified dense + MoE with iSWA)"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_SWA
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if shared_intermediate_size := self.hparams.get("shared_intermediate_size"):
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_intermediate_size)
+            logger.info("gguf: (granitemoewa) shared_intermediate_size = %s", shared_intermediate_size)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        """Split merged MoE tensors (gate+up) following standard MoE pattern."""
+
+        # Handle expert FFN tensors (merged gate+up) - swash format: experts.gate_up_proj
+        if name.endswith("block_sparse_moe.experts.gate_up_proj"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, f"Merged FFN tensor size must be 2 * intermediate_size, got {data_torch.shape[-2]}"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            return
+
+        # Handle expert FFN down projection - swash format: experts.down_proj
+        if name.endswith("block_sparse_moe.experts.down_proj"):
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), bid)
+            return
+
+        # Handle expert FFN tensors (merged gate+up) - standard granite format: input_linear.weight
+        if name.endswith("block_sparse_moe.input_linear.weight"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            return
+
+        # Handle shared expert FFN tensors (if present)
+        if name.endswith("shared_mlp.input_linear.weight"):
+            ffn_dim = self.hparams.get("shared_intermediate_size", self.hparams["intermediate_size"])
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
+            return
+
+        # Handle shared expert output (if present)
+        if name.endswith("shared_mlp.output_linear.weight"):
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, bid), bid)
+            return
+
+        # Pass through to parent for all other tensors (including sinks)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
