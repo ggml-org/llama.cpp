@@ -14,6 +14,7 @@ struct server_tool {
     std::string display_name;
     bool permission_write = false;
     bool support_stream = false; // if true, output can be streamed
+    bool uses_cwd = false;       // if true, the tool resolves paths and runs against the working directory
 
     virtual ~server_tool() = default;
     virtual json get_definition() const = 0;

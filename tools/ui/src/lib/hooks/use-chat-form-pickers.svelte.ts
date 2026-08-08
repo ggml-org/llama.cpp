@@ -24,7 +24,7 @@ export interface UseChatFormPickersOptions {
 	/** Gates `/prompt`. */
 	hasPrompts: () => boolean;
 	/** Gates `/cwd`. */
-	hasBuiltinTools: () => boolean;
+	hasCwdTools: () => boolean;
 	getCwd: () => string | null;
 	/** Mention search fallback scope. */
 	getServerHome: () => string | null;
@@ -63,7 +63,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		getChatCommands({
 			showModelSelector: opts.getShowModelSelector(),
 			hasPrompts: opts.hasPrompts,
-			hasBuiltinTools: opts.hasBuiltinTools
+			hasCwdTools: opts.hasCwdTools
 		})
 	);
 

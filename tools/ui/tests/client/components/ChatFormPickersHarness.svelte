@@ -21,7 +21,7 @@
 		focusInput: () => {},
 		getShowModelSelector: () => true,
 		hasPrompts: () => true,
-		hasBuiltinTools: () => true,
+		hasCwdTools: () => true,
 		getCwd: () => null,
 		getServerHome: () => null,
 		openModelSelector: () => {
