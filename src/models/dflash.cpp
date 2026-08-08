@@ -150,6 +150,11 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         return;
     }
 
+    // optional: reduced-vocab drafts ship their own, full-vocab drafts share the target's via ctx_other
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+    output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+    output_b = create_tensor(tn(LLM_TENSOR_OUTPUT,     "bias"),   { n_vocab },         TENSOR_NOT_REQUIRED);
+
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
@@ -235,6 +240,11 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     const int64_t block_size = std::stoi(it->second);
     GGML_ASSERT(block_size > 0);
 
+    // bonus anchor (SpecForge exports): slot 0 holds a bonus token, not a prediction slot
+    const auto it_ba = model.gguf_kv.find("dflash.bonus_anchor");
+    const bool    bonus_anchor  = it_ba != model.gguf_kv.end() && it_ba->second == "true";
+    const int64_t i_first_pred  = bonus_anchor ? 1 : 0;
+
     const int64_t n_blocks = g.ubatch.n_seqs_unq;
     GGML_ASSERT(n_blocks > 0 && n_tok % n_blocks == 0 && "DSpark markov head requires equal-size blocks");
     // runtime tokens per block in this ubatch (anchor + drafted positions), bounded by training block_size
@@ -256,9 +266,15 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * cat      = nullptr;
     ggml_tensor * cat_conf = nullptr;
 
+    if (bonus_anchor) {
+        // bonus anchor slot: pass the logits through unbiased, pad the (unread) confidence column
+        cat      = ggml_cont(ctx0, ggml_view_2d(ctx0, base, n_vocab, n_blocks, base_stride, 0));
+        cat_conf = ggml_sigmoid(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0)));
+    }
+
     // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
     //       token pick, not the Markov conditioning path
-    for (int64_t i = 0; i < block_drafts; ++i) {
+    for (int64_t i = i_first_pred; i < block_drafts; ++i) {
         ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);   // [R, n_blocks]
         ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab, n_blocks]
 
@@ -488,6 +504,10 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
 
     cur = build_lora_mm(output, cur);
+    if (model.output_b) {
+        // reduced-draft-vocab exports: -1e9 on the target rows the draft cannot produce
+        cur = ggml_add(ctx0, cur, model.output_b);
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 

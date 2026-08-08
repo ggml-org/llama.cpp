@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("QWenLMHeadModel")
@@ -689,21 +689,101 @@ class DFlashModel(Qwen3Model):
         return super().filter_tensors((name, gen))
 
 
-@ModelBase.register("Qwen3DSparkModel")
+@ModelBase.register("Qwen3DSparkModel", "DSparkDraftModel", "DSparkSpeculator")
 class DSparkModel(DFlashModel):
-    # DSpark = DFlash + a semi-autoregressive Markov head
+    # DSpark = DFlash + a semi-autoregressive Markov head.
     model_arch = gguf.MODEL_ARCH.DFLASH
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # normalize the flat DeepSpec schema to DFlash's nested dflash_config
-        self.hparams.setdefault("dflash_config", {
-            k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
-        })
+    def __init__(self, dir_model, *args, **kwargs):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, False)
+
+        # only the arch name separates the SpecForge drafts from the DeepSpec ones
+        self._is_specforge = hparams["architectures"][0] in ("DSparkDraftModel", "DSparkSpeculator")
+        if "transformer_layer_config" in hparams:  # speculators nests the backbone hparams
+            hparams = {**hparams, **hparams["transformer_layer_config"]}
+
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+        # normalize both schemas to DFlash's nested dflash_config
+        if "aux_hidden_state_layer_ids" in self.hparams:
+            self.hparams.setdefault("dflash_config", {
+                "mask_token_id": self.hparams.get("mask_token_id"),
+                "target_layer_ids": [i - 1 for i in self.hparams["aux_hidden_state_layer_ids"]],
+            })
+        else:
+            self.hparams.setdefault("dflash_config", {
+                k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
+            })
+
+        if (markov_head_type := self.hparams.get("markov_head_type", "vanilla")) != "vanilla":
+            raise ValueError(f"unsupported markov_head_type {markov_head_type!r} (only 'vanilla' is supported)")
+
+        n_vocab = self.hparams["vocab_size"]
+        self._n_vocab_draft = self.hparams.get("draft_vocab_size") or n_vocab
+        if self._n_vocab_draft > n_vocab:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} exceeds vocab_size {n_vocab}")
+        self._d2t: Tensor | None = None
+        self._pending_reduced: list[tuple[str, Tensor]] = []
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self._is_specforge:
+            # 1+N fill-in block: the anchor slot is a bonus token, not a prediction slot
+            self.gguf_writer.add_bonus_anchor(not self.hparams.get("sample_from_anchor", False))
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
-        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
+        name = item[0]
+        if name == "t2d":  # training-only target->draft mask
             return None
-        return super().filter_tensors((name, gen))
+        if name == "d2t" or name.startswith("lm_head."):
+            # keep un-prefixed: d2t is consumed below, lm_head maps to output
+            return TextModel.filter_tensors(item)
+        return super().filter_tensors(item)
+
+    def _expand_reduced_vocab(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
+        assert self._d2t is not None
+        # the scatter needs real values (d2t indexing), so leave lazy-land here
+        data_torch = LazyTorchTensor.to_eager(data_torch)
+        n_vocab = self.hparams["vocab_size"]
+        rows = torch.arange(data_torch.shape[0], dtype=torch.long) + self._d2t
+        full = data_torch.new_zeros((n_vocab, data_torch.shape[1]))
+        full[rows] = data_torch
+        yield from super().modify_tensors(full, name, None)
+        if name.startswith("lm_head."):
+            # mask the target-vocab rows the draft cannot produce
+            bias = torch.full((n_vocab,), -1e9, dtype=torch.float32)
+            bias[rows] = 0.0
+            yield from super().modify_tensors(bias, "lm_head.bias", None)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "d2t":
+            # d2t[i] is the offset from draft row i to its target token id
+            self._d2t = LazyTorchTensor.to_eager(data_torch).to(torch.long)
+            pending, self._pending_reduced = self._pending_reduced, []
+            for pending_name, pending_data in pending:
+                yield from self._expand_reduced_vocab(pending_data, pending_name)
+            return
+
+        if not self._is_specforge and name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            # DeepSpec drafts share the target's embeddings and head via ctx_other
+            return
+
+        is_reduced = self._n_vocab_draft < self.hparams["vocab_size"] \
+            and (name.startswith("lm_head.") or name.endswith("markov_head.markov_w2.weight"))
+        if is_reduced:
+            if self._d2t is None:
+                self._pending_reduced.append((name, data_torch))
+            else:
+                yield from self._expand_reduced_vocab(data_torch, name)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._pending_reduced:
+            raise ValueError("reduced-vocab tensors present but no d2t table found: "
+                             + ", ".join(name for name, _ in self._pending_reduced))
