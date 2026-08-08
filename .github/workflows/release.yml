@@ -1229,7 +1229,6 @@ jobs:
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
@@ -1353,7 +1352,6 @@ jobs:
             -DGGML_NATIVE=OFF `
             -DGGML_CPU=OFF `
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" `
-            -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} `
             -DLLAMA_BUILD_BORINGSSL=ON
