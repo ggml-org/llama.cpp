@@ -412,7 +412,7 @@ static bool ggml_backend_buffer_is_rpc(ggml_backend_buffer_t buffer) {
     return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
 }
 
-static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
+static rpc_tensor serialize_tensor(const ggml_tensor * tensor, const socket_ptr & sock = nullptr) {
     rpc_tensor result;
     if (!tensor) {
         memset(&result, 0, sizeof(result));
@@ -424,8 +424,13 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
     if (tensor->buffer && ggml_backend_buffer_is_rpc(tensor->buffer)) {
         ggml_backend_buffer_t buffer = tensor->buffer;
         ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
-        result.buffer = ctx != nullptr ? ctx->remote_ptr : 0;
-        result.data = reinterpret_cast<uint64_t>(tensor->data);
+        if (ctx != nullptr && (sock == nullptr || ctx->sock == sock)) {
+            result.buffer = ctx->remote_ptr;
+            result.data = reinterpret_cast<uint64_t>(tensor->data);
+        } else {
+            result.buffer = 0;
+            result.data = 0;
+        }
     } else {
         result.buffer = 0;
         result.data   = 0;
@@ -675,7 +680,7 @@ static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
     // this is no-op because we don't have any async operations
 }
 
-static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
+static void add_tensor(ggml_tensor * tensor, const socket_ptr & sock, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
     if (tensor == nullptr) {
         return;
     }
@@ -684,18 +689,18 @@ static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, 
     }
     visited.insert(tensor);
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        add_tensor(tensor->src[i], tensors, visited);
+        add_tensor(tensor->src[i], sock, tensors, visited);
     }
-    add_tensor(tensor->view_src, tensors, visited);
-    tensors.push_back(serialize_tensor(tensor));
+    add_tensor(tensor->view_src, sock, tensors, visited);
+    tensors.push_back(serialize_tensor(tensor, sock));
 }
 
-static void serialize_graph(uint32_t device, const ggml_cgraph * cgraph, std::vector<uint8_t> & output) {
+static void serialize_graph(uint32_t device, const ggml_cgraph * cgraph, const socket_ptr & sock, std::vector<uint8_t> & output) {
     uint32_t n_nodes = cgraph->n_nodes;
     std::vector<rpc_tensor> tensors;
     std::unordered_set<ggml_tensor*> visited;
     for (uint32_t i = 0; i < n_nodes; i++) {
-        add_tensor(cgraph->nodes[i], tensors, visited);
+        add_tensor(cgraph->nodes[i], sock, tensors, visited);
     }
     // serialization format:
     // | device (4 bytes) | n_nodes (4 bytes) | nodes (n_nodes * sizeof(uint64_t) | n_tensors (4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
@@ -733,8 +738,8 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
     } else {
         rpc_dev_ctx->last_graph_uid = cgraph->uid;
         std::vector<uint8_t> input;
-        serialize_graph(rpc_ctx->device, cgraph, input);
         auto sock = get_socket(rpc_ctx->endpoint);
+        serialize_graph(rpc_ctx->device, cgraph, sock, input);
         bool status = send_rpc_cmd(sock, RPC_CMD_GRAPH_COMPUTE, input.data(), input.size());
         RPC_STATUS_ASSERT(status);
     }
