@@ -1241,7 +1241,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
         int n_expert_hot_s = params.expert_hot_s;
         int * p_expert_hot_s = params.expert_hot_s == -1 ? &n_expert_hot_s : nullptr;
-        common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+        const common_params_fit_status fit_status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split,
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
@@ -1261,6 +1261,9 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                         break;
                     }
                 }
+            } else if (fit_status == COMMON_PARAMS_FIT_STATUS_FAILURE) {
+                LOG_WRN("%s: --expert-hot-s -1 autofit aborted (explicit -ngl/-ncmoe or fit error); expert cache is OFF\n",
+                    __func__);
             } else {
                 LOG_WRN("%s: --expert-hot-s -1 autofit found no free VRAM for expert slots; expert cache is OFF\n",
                     __func__);

@@ -106,23 +106,46 @@ llama_expert_hotstore::llama_expert_hotstore(
     }
 
     // auto copy/move: copy keeps the RAM copy of promoted experts (needs the
-    // full exps set resident); move frees it (RAM-tight). pick copy only when
-    // the exps comfortably fit in available RAM.
+    // full exps set resident); move frees it (RAM-tight). mmap exps are
+    // file-backed page cache (kernel-reclaimable), so copy is always right
+    // there; the RAM check only matters on no-mmap (committed anonymous pool).
     if (!copy_mode) {
-        int64_t exps_bytes = 0;
-        for (int il = 0; il < n_layers; il++) {
-            exps_bytes += bytes_per_slot[il];
-        }
-        exps_bytes *= n_experts; // full exps set: per-slot bytes x experts per layer
-        const long page = sysconf(_SC_PAGESIZE);
-        const int64_t free_ram = (int64_t) sysconf(_SC_AVPHYS_PAGES) * page;
-        if (exps_bytes > 0 && free_ram > exps_bytes * 2) {
+        const bool mmap_mode = !entries.empty() && llama_expert_preload::index_of(entries[0].src) < 0;
+        if (mmap_mode) {
             copy_mode = true;
-            fprintf(stderr, "hotstore: copy mode: exps (%d MiB) fit in RAM (%d MiB free)\n",
-                (int) (exps_bytes / (1024*1024)), (int) (free_ram / (1024*1024)));
-        } else if (exps_bytes > 0) {
-            fprintf(stderr, "hotstore: move mode: exps (%d MiB) need more RAM than free (%d MiB)\n",
-                (int) (exps_bytes / (1024*1024)), (int) (free_ram / (1024*1024)));
+            fprintf(stderr, "hotstore: copy mode (mmap: exps are file-backed page cache)\n");
+        } else {
+            int64_t exps_bytes = 0;
+            for (int il = 0; il < n_layers; il++) {
+                exps_bytes += bytes_per_slot[il];
+            }
+            exps_bytes *= n_experts; // full exps set: per-slot bytes x experts per layer
+            // available RAM: MemAvailable includes reclaimable page cache;
+            // _SC_AVPHYS_PAGES only counts truly-free pages and underreports
+            int64_t free_ram = 0;
+            FILE * f = fopen("/proc/meminfo", "r");
+            if (f) {
+                char line[256];
+                while (fgets(line, sizeof(line), f)) {
+                    if (sscanf(line, "MemAvailable: %lld kB", &free_ram) == 1) {
+                        free_ram *= 1024;
+                        break;
+                    }
+                }
+                fclose(f);
+            }
+            if (free_ram <= 0) {
+                const long page = sysconf(_SC_PAGESIZE);
+                free_ram = (int64_t) sysconf(_SC_AVPHYS_PAGES) * page;
+            }
+            if (exps_bytes > 0 && free_ram > exps_bytes * 2) {
+                copy_mode = true;
+                fprintf(stderr, "hotstore: copy mode: exps (%d MiB) fit in RAM (%d MiB free)\n",
+                    (int) (exps_bytes / (1024*1024)), (int) (free_ram / (1024*1024)));
+            } else if (exps_bytes > 0) {
+                fprintf(stderr, "hotstore: move mode: exps (%d MiB) need more RAM than free (%d MiB)\n",
+                    (int) (exps_bytes / (1024*1024)), (int) (free_ram / (1024*1024)));
+            }
         }
     }
 
@@ -812,12 +835,9 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             }
         } // boundary gate
 
-        // ---- promote/demote (D2D): the top expert on a worse device that
-        //      beats the better device's coldest resident by hysteresis, with
-        //      the better slot dwelled, swaps through the staging buffer.
-        //      synchronous copies + inline verify (copy_top_s style); both
-        //      slots stay routed, only their device changes.
-        for (int g = 0; g + 1 < n_devices; g++) {
+        // ---- promote/demote (D2D): copy mode keeps RAM copies, so moves go
+        //      through the host pool; D2D would double the bandwidth for nothing
+        for (int g = 0; g + 1 < n_devices && !copy_mode; g++) {
             float worst_bound = INFINITY;
             int   worst_slot  = -1;
             for (int p = slot_start[g]; p < slot_end[g]; p++) {
@@ -854,14 +874,28 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             const int e_demote  = ste[worst_slot];
             const int e_promote = ste[best_slot];
             for (entry * ent : entries_by_layer[il]) {
+                const int pidx = llama_expert_preload::index_of(ent->src);
                 const size_t eslot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
                 const size_t off_w = (size_t) (worst_slot - slot_start[g]) * eslot;
                 const size_t off_b = (size_t) (best_slot - slot_start[g+1]) * eslot;
-                std::vector<uint8_t> s1(eslot), s2(eslot);
-                ggml_backend_tensor_get(ent->dst[g],   s1.data(), off_w, eslot); // demote
-                ggml_backend_tensor_get(ent->dst[g+1], s2.data(), off_b, eslot); // promote
-                ggml_backend_tensor_set(ent->dst[g+1], s1.data(), off_b, eslot);
-                ggml_backend_tensor_set(ent->dst[g],   s2.data(), off_w, eslot);
+                const uint8_t * src_demote = pidx >= 0
+                    ? llama_expert_preload::cpu_slice(pidx, e_demote)
+                    : nullptr;
+                const uint8_t * src_promote = pidx >= 0
+                    ? llama_expert_preload::cpu_slice(pidx, e_promote)
+                    : nullptr;
+                if (src_demote && src_promote) {
+                    // no-mmap: both experts are already host-resident (the
+                    // cold pool); write straight into the store, no GPU reads
+                    ggml_backend_tensor_set(ent->dst[g+1], src_demote,  off_b, eslot);
+                    ggml_backend_tensor_set(ent->dst[g],   src_promote, off_w, eslot);
+                } else {
+                    std::vector<uint8_t> s1(eslot), s2(eslot);
+                    ggml_backend_tensor_get(ent->dst[g],   s1.data(), off_w, eslot); // demote
+                    ggml_backend_tensor_get(ent->dst[g+1], s2.data(), off_b, eslot); // promote
+                    ggml_backend_tensor_set(ent->dst[g+1], s1.data(), off_b, eslot);
+                    ggml_backend_tensor_set(ent->dst[g],   s2.data(), off_w, eslot);
+                }
             }
             ste[worst_slot] = e_promote;
             ste[best_slot]  = e_demote;
@@ -947,11 +981,11 @@ bool llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap, b
     if (frozen) {
         return false;
     }
-    // continuous adaptive cadence: the sync period grows with the hit rate
-    // relative to the target. floor of 10 tokens (never resync more often),
-    // stretching to 32 as the hit rate climbs toward 6x the target.
+    // adaptive cadence: floor 10 (5 in copy mode: host-pool moves are half
+    // the bandwidth), stretching to 32 as the hit rate climbs toward 6x target
     float ratio = hit_rate_valid ? hit_rate / target_hit_rate() : 0.0f;
-    const int eff_period = std::max(10, std::min(32, 10 + (int) (22.0f * (ratio - 1.0f) / 5.0f)));
+    const int floor = copy_mode ? 5 : 10;
+    const int eff_period = std::max(floor, std::min(32, floor + (int) (27.0f * (ratio - 1.0f) / 5.0f)));
     if (heatmap.tokens_total / eff_period > last_sync_tokens / eff_period) {
         if (getenv("LLAMA_EXPERT_FULL_SYNC")) {
             // test: mirror the whole store to the top-S on each sync instead of
