@@ -148,6 +148,9 @@ void begin(struct ggml_backend_buffer_type * buft, size_t gpu_bytes, size_t cpu_
         return; // load_all_data can run more than once (fit estimate + real load)
     }
     g_gpu_buf = ggml_backend_buft_alloc_buffer(buft, gpu_bytes);
+    // zero the whole store up front: the sentinel plane and any unwritten gaps
+    // would otherwise carry per-launch garbage into the graph output (Vulkan)
+    ggml_backend_buffer_clear(g_gpu_buf, 0);
     g_ctx = ggml_init({ ggml_tensor_overhead() * (max_entries + 8), nullptr, true });
     g_cpu_buf = (uint8_t *) malloc(cpu_bytes);
     g_cpu_size = cpu_bytes;
