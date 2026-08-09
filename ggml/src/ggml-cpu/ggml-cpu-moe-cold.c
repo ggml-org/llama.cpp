@@ -50,6 +50,14 @@ static LONG atomic_fetch_add_explicit(atomic_int * ptr, LONG inc, memory_order m
 #include <stdatomic.h>
 #endif
 
+// __builtin_prefetch is a GCC/Clang builtin; MSVC has no equivalent, so
+// compile it to a no-op there
+#if defined(_MSC_VER) && !defined(__clang__)
+#define PREFETCH(p) ((void) 0)
+#else
+#define PREFETCH(p) __builtin_prefetch(p, 0, 3)
+#endif
+
 // resolve a cold expert's weight slice through the registered hook, else the
 // tensor's own data (mmap or the model buffer)
 static const char * moe_cold_slice(const struct ggml_tensor * w, int64_t e, const char * fallback) {
@@ -210,8 +218,8 @@ void ggml_compute_forward_moe_cold(
                 float * gout = gate_out + (col0[cur_a] + c)*n_ff;
                 float * uout = up_out   + (col0[cur_a] + c)*n_ff;
                 for (int64_t i = ir0_start; i < ir0_end; i++) {
-                    __builtin_prefetch(wg + (i + 1)*w_gate->nb[1], 0, 3);
-                    __builtin_prefetch(wu + (i + 1)*w_up->nb[1], 0, 3);
+                    PREFETCH(wg + (i + 1)*w_gate->nb[1]);
+                    PREFETCH(wu + (i + 1)*w_up->nb[1]);
                     vec_dot_g(ne_embd, &gout[i], 0, wg + i*w_gate->nb[1], 0, xcol, 0, 1);
                     vec_dot_g(ne_embd, &uout[i], 0, wu + i*w_up->nb[1], 0, xcol, 0, 1);
                 }
