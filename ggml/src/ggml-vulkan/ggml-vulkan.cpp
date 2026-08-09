@@ -17004,9 +17004,15 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
     // On weaker AMD GPUs larger submissions can hit a driver timeout, submit more often to avoid this
     if (ctx->device->vendor_id == VK_VENDOR_ID_AMD && ctx->device->shader_core_count > 0) {
-        if (ctx->device->architecture == AMD_GCN && ctx->device->shader_core_count < 32) {
+        // Apply to all GCN parts, not only small ones. Whether a submission trips the
+        // compute-ring timeout depends on how long it runs, not on the core count, and
+        // the cap is already per-CU so it scales itself. A 36-CU Polaris10 (RX 580) was
+        // excluded by the previous < 32 test and silently produced corrupt output on
+        // large CLIP encodes: the ring timed out, the kernel soft-recovered it, and the
+        // destroyed encode surfaced as garbage tokens with no error reported anywhere.
+        if (ctx->device->architecture == AMD_GCN) {
             flops_cap = 500'000'000ULL * ctx->device->shader_core_count;
-        } else if (ctx->device->architecture != AMD_GCN && ctx->device->shader_core_count < 24) {
+        } else if (ctx->device->shader_core_count < 24) {
             flops_cap = 2'000'000'000ULL * ctx->device->shader_core_count;
         }
     }
@@ -17037,7 +17043,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         submitted_nodes = 0;
         batch_flops = 0;
         if (submit_count < 3) {
-            flops_per_submit *= 2;
+            // Never ramp past flops_cap: that cap exists to keep a single submission
+            // under the driver timeout, and an unbounded doubling can undo it.
+            flops_per_submit = std::min(flops_cap, flops_per_submit * 2);
         }
         submit_count++;
     };
