@@ -51,6 +51,11 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    // attention fills KV over all tokens, but the MoE is position-wise: gather output rows before
+    // it to save FFN compute (unless unmasked embeddings_nextn needs the full-length hidden state)
+    const bool emit_h_nextn    = cparams.embeddings_nextn;
+    const bool crop_before_ffn = inp_out_ids && (!emit_h_nextn || cparams.embeddings_nextn_masked);
+
     auto * inp_attn = build_attn_inp_kv();
 
     ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
@@ -80,6 +85,11 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
 
     cur = ggml_add(ctx0, cur, inpSA);
     cb(cur, "mtp_attn_residual", il);
+
+    // gather the output rows here so the MoE FFN below only runs on the positions we keep
+    if (crop_before_ffn) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     // MoE FFN sub-layer (mtp.layers.1)
     ggml_tensor * ffn_residual = cur;
@@ -123,15 +133,16 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     cur = ggml_add(ctx0, cur, ffn_residual);
     cb(cur, "mtp_post_ffn", il);
 
-    // final head norm
-    ggml_tensor * head_norm_w = layer.nextn.shared_head_norm ? layer.nextn.shared_head_norm : model.output_norm;
-    GGML_ASSERT(head_norm_w && "NEMOTRON_H_MOE MTP: missing final head norm");
-    cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM, -1);
+    // final head norm: the MTP head has its own LayerNorm
+    GGML_ASSERT(layer.nextn.shared_head_norm && "NEMOTRON_H_MOE MTP: missing final head norm");
+    cur = build_norm(cur, layer.nextn.shared_head_norm, nullptr, LLM_NORM, -1);
 
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    if (!crop_before_ffn && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     // LM head
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
