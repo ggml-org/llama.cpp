@@ -17,8 +17,11 @@ from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logg
 from .qwen import QwenModel
 
 
-@ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM")
+@ModelBase.register("DeepseekOCRForCausalLM")
 class DeepseekOCRVisionModel(MmprojModel):
+    # HF dynamic_preprocess() max_num, which differs per model
+    preproc_max_tiles = 9
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR
@@ -42,6 +45,9 @@ class DeepseekOCRVisionModel(MmprojModel):
             self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
         # @bluebread: there's no window_size in config but just add it here anyway
         self.gguf_writer.add_vision_window_size(self.hparams.get("window_size", 14))
+
+        self.gguf_writer.add_vision_preproc_min_tiles(2)
+        self.gguf_writer.add_vision_preproc_max_tiles(self.preproc_max_tiles)
 
         # SAM configuration
         sam_hparams = hparams['sam']
@@ -93,8 +99,15 @@ class DeepseekOCRVisionModel(MmprojModel):
         return super().filter_tensors((name, gen))
 
 
+@ModelBase.register("UnlimitedOCRForCausalLM")
+class UnlimitedOCRVisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 32
+
+
 @ModelBase.register("DeepseekOCR2ForCausalLM")
 class DeepseekOCR2VisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 6
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR2
@@ -535,7 +548,10 @@ class DeepseekV4Model(TextModel):
             logger.info("Skipping %d DeepSeek-V4 MTP tensor(s) for conversion v0", type(self)._skipped_mtp_tensors)
 
         # add a default chat template; if the model has a built-in template, it will be overridden later
-        template_path = Path(__file__).parent.parent / "models" / "templates" / "deepseek-ai-DeepSeek-V4.jinja"
+        model_id_hint = self.remote_hf_model_id or self.dir_model.name
+        is_0731 = "0731" in model_id_hint
+        template_name = "deepseek-ai-DeepSeek-V4-Flash-0731.jinja" if is_0731 else "deepseek-ai-DeepSeek-V4.jinja"
+        template_path = Path(__file__).parent.parent / "models" / "templates" / template_name
         if template_path.is_file():
             with open(template_path, "r", encoding="utf-8") as f:
                 self.gguf_writer.add_chat_template(f.read())

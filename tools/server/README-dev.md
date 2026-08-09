@@ -199,6 +199,9 @@ Invoke a tool call, request body is a JSON object with:
 - `tool` (string): the name of the tool
 - `params` (object): a mapping from argument name (string) to argument value
 
+Headers:
+- `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
+
 Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
 
 Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:

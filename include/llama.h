@@ -1424,19 +1424,19 @@ extern "C" {
 
     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
-                             int32_t   penalty_last_n,   // last n tokens to penalize (0 = disable penalty, -1 = context size)
-                               float   penalty_repeat,   // 1.0 = disabled
-                               float   penalty_freq,     // 0.0 = disabled
-                               float   penalty_present); // 0.0 = disabled
+                             int32_t   n_vocab,
+                             int32_t   penalty_last_n,   // last n tokens to penalize (0 = disable penalty)
+                               float   penalty_repeat,   // must be > 0.0, 1.0 = disabled
+                               float   penalty_freq,     // must be finite, 0.0 = disabled
+                               float   penalty_present); // must be finite, 0.0 = disabled
 
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
     LLAMA_API struct llama_sampler * llama_sampler_init_dry(
             const struct llama_vocab *  vocab,
-                             int32_t    n_ctx_train,
                                float    dry_multiplier,
                                float    dry_base,
                              int32_t    dry_allowed_length,
-                             int32_t    dry_penalty_last_n,
+                             int32_t    dry_penalty_last_n, // last n tokens to penalize (0 = disable penalty)
                           const char ** seq_breakers,
                               size_t    num_breakers);
 
@@ -1589,6 +1589,23 @@ extern "C" {
         LLAMA_LORA_QAT_TYPE_Q8_0,
     };
 
+    struct llama_opt_critical_token_metadata {
+        float span_weight;
+        float reward_weight;
+    };
+
+    enum llama_opt_critical_token_mode {
+        LLAMA_OPT_CRITICAL_TOKEN_MODE_NONE,
+        LLAMA_OPT_CRITICAL_TOKEN_MODE_SPANS,
+        LLAMA_OPT_CRITICAL_TOKEN_MODE_CONFIDENCE,
+        LLAMA_OPT_CRITICAL_TOKEN_MODE_HYBRID,
+    };
+
+    enum llama_opt_critical_weight_shape {
+        LLAMA_OPT_CRITICAL_WEIGHT_SHAPE_CONSTANT,
+        LLAMA_OPT_CRITICAL_WEIGHT_SHAPE_LINEAR,
+    };
+
     struct llama_opt_params {
         uint32_t n_ctx_train; // assumed context size post training, use context size specified in llama_context if 0
 
@@ -1606,6 +1623,15 @@ extern "C" {
         // at the cost of ~0 extra compute (activations are kept, not recomputed).
         // Set to 0 (default) to disable.  Good values: 32–64 nodes ≈ every 1–2 transformer layers.
         int32_t grad_checkpoint_interval;
+
+        enum llama_opt_critical_token_mode   critical_token_mode;
+        float                                critical_token_weight;
+        float                                critical_confidence_threshold;
+        enum llama_opt_critical_weight_shape critical_weight_shape;
+        int32_t                              critical_warmup_steps;
+        float                                critical_max_fraction;
+        const int64_t                      * critical_step;
+        int32_t                              critical_stats_every;
 
     };
 

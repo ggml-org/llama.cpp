@@ -158,6 +158,29 @@ export { createBase64DataUrl } from './data-url';
 // Header utilities
 export { parseHeadersToArray, serializeHeaders } from './headers';
 
+// Working-directory display helpers (HOME-style tilde abbreviation)
+export {
+	abbreviateWorkingDir,
+	abbreviateHome,
+	lastPathSegment,
+	formatCwdMessage,
+	parseCwdMessage,
+	CWD_CHANGED_PREFIX,
+	CWD_CLEARED_TEXT,
+	type CwdMessageInfo
+} from './path-display';
+
+// Working-directory picker search helpers
+export {
+	splitPathQuery,
+	buildCaseInsensitiveGlob,
+	rankEntries,
+	joinPath,
+	highlightMatch,
+	type GlobEntry,
+	type PathQuery
+} from './working-directory';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
