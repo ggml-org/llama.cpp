@@ -2752,7 +2752,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--expert-no-evict"},
         {},
         "never evict experts from the hot store (fill-only, no move-back)",
-        [](common_params & params, bool value) {
+        [](common_params &, bool value) {
             llama_expert_preload::set_no_evict(value);
         }
     ));
