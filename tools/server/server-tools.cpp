@@ -1561,7 +1561,7 @@ struct server_tool_web_search : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Search the web using search engine or URL. Returns request contents."},
+                {"description", "Search the web using search engine or URL. Returns request contents. Requires wget2 to be installed."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
@@ -1603,6 +1603,7 @@ struct server_tool_web_search : server_tool {
           "--header=User-Agent: Mozilla/5.0 (compatible; WebSearch/1.0)",
           "--max-redirect=5",
           engine + encoded_query};
+          
         auto io  = make_tools_io(params);
         auto res = io->run(args, max_output, timeout);
         
