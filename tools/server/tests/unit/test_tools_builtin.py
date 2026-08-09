@@ -151,54 +151,59 @@ def test_tools_builtin_cwd_header():
             os.remove(marker_path)
 
 
-def _docker_unavailable_reason() -> str | None:
-    """None if docker can run the image these tests use, otherwise the reason it can't."""
-    docker_bin = shutil.which("docker")
-    if docker_bin is None:
-        return "docker is not installed"
+def _container_engine_unavailable_reason(engine: str) -> str | None:
+    """None if `engine` can run the image these tests use, otherwise the reason it can't."""
+    engine_bin = shutil.which(engine)
+    if engine_bin is None:
+        return f"{engine} is not installed"
     try:
-        # a daemon that answers `docker info` still cannot run a linux image when it serves
-        # windows containers, so probe the image itself, which also pulls it before the tests
-        subprocess.run([docker_bin, "run", "--rm", DOCKER_IMAGE, "true"], capture_output=True, timeout=60, check=True)
+        # a daemon that answers `info` still cannot run a linux image when it serves windows
+        # containers, so probe the image itself, which also pulls it before the tests
+        subprocess.run([engine_bin, "run", "--rm", DOCKER_IMAGE, "true"], capture_output=True, timeout=60, check=True)
     except Exception as e:
-        return f"docker cannot run {DOCKER_IMAGE}: {e}"
+        return f"{engine} cannot run {DOCKER_IMAGE}: {e}"
     return None
 
 
-@pytest.fixture
-def docker_container():
-    reason = _docker_unavailable_reason()
+@pytest.fixture(params=["docker", "podman"])
+def container_engine(request):
+    engine = request.param
+    reason = _container_engine_unavailable_reason(engine)
     if reason is not None:
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+    return engine
 
+
+@pytest.fixture
+def container_id(container_engine: str):
     proc = subprocess.run(
-        ["docker", "run", "-d", "--rm", DOCKER_IMAGE, "sleep", "300"],
+        [container_engine, "run", "-d", "--rm", DOCKER_IMAGE, "sleep", "300"],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
-        pytest.skip(f"failed to start docker container: {proc.stderr.strip()}")  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+        pytest.skip(f"failed to start {container_engine} container: {proc.stderr.strip()}")  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
-    container_id = proc.stdout.strip()
+    cid = proc.stdout.strip()
     try:
-        yield container_id
+        yield cid
     finally:
-        subprocess.run(["docker", "rm", "-f", container_id], capture_output=True)
+        subprocess.run([container_engine, "rm", "-f", cid], capture_output=True)
 
 
-def test_tools_builtin_runtime_header(docker_container: str):
+def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
     global server
     server.start()
 
-    headers = {"x-tool-runtime": f"docker-container:{docker_container}", "x-tool-cwd": "/tmp"}
+    headers = {"x-tool-runtime": f"{container_engine}-container:{container_id}", "x-tool-cwd": "/tmp"}
 
-    write_res = call_tool("write_file", {"path": "test.log", "content": "hello docker\n"}, headers=headers)
+    write_res = call_tool("write_file", {"path": "test.log", "content": "hello container\n"}, headers=headers)
     assert write_res["result"] == "file written successfully"
 
     read_res = call_tool("read_file", {"path": "test.log"}, headers=headers)
-    assert read_res["plain_text_response"] == "hello docker\n"
+    assert read_res["plain_text_response"] == "hello container\n"
 
     exec_res = call_tool("exec_shell_command", {"command": "cat test.log"}, headers=headers)
-    assert "hello docker" in exec_res["plain_text_response"]
+    assert "hello container" in exec_res["plain_text_response"]
 
 
 def test_tools_builtin_runtime_header_unknown_scheme():
@@ -226,7 +231,8 @@ def test_tools_builtin_runtime_header_rejects_ssh_option_injection():
     assert "invalid ssh target" in str(res.body)
 
 
-def test_tools_builtin_runtime_header_rejects_container_option_injection():
+@pytest.mark.parametrize("engine", ["docker", "podman"])
+def test_tools_builtin_runtime_header_rejects_container_option_injection(engine: str):
     global server
     server.start()
 
@@ -234,13 +240,16 @@ def test_tools_builtin_runtime_header_rejects_container_option_injection():
     # option, e.g. --privileged, must be rejected before it reaches the engine
     res = server.make_request("POST", "/tools",
                               data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": "docker-container:--privileged"})
+                              headers={"x-tool-runtime": f"{engine}-container:--privileged"})
     assert res.status_code == 500, res.body
     assert "invalid container id" in str(res.body)
 
 
 def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
-    reason = _docker_unavailable_reason()
+    # docker-only: the check reads the container hostname to recover the spawned id, which docker
+    # sets to the short id; podman rootless does not guarantee this, so the spawn lifecycle is
+    # exercised on docker while podman is covered through the attach path above
+    reason = _container_engine_unavailable_reason("docker")
     if reason is not None:
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
