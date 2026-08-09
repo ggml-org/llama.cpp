@@ -52,6 +52,32 @@ void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & pe
     }
 }
 
+void llama_expert_heatmap::update_ids(int layer_idx, const int32_t * expert_ids, int n_ids, int n_tokens) {
+    if (layer_idx < 0 || layer_idx >= n_layers || !expert_ids) {
+        return;
+    }
+    ++update_counter;
+    if (update_counter % 2 == 0) {
+        const float rate = decay_rate * decay_rate;
+        for (int i = 0; i < n_layers * n_experts; i++) {
+            heat[i] *= rate;
+        }
+    }
+    if (n_tokens == 1) {
+        generated_tokens_count++;
+    }
+    float * layer_heat = &heat[layer_idx * n_experts];
+    for (int t = 0; t < n_tokens; t++) {
+        for (int e = 0; e < n_ids; e++) {
+            const int32_t id = expert_ids[t * n_ids + e];
+            if (id >= 0 && id < n_experts) {
+                layer_heat[id] += 1.0f;
+            }
+        }
+    }
+    tokens_total += n_tokens;
+}
+
 void llama_expert_heatmap::log() const {
     LLAMA_LOG("=== Expert heatmap (tokens %" PRId64 ") ===\n", tokens_total);
 

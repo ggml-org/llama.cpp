@@ -16,34 +16,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#else
-#include <sys/mman.h>
-#include <unistd.h>
 #endif
-
-// drop the physical pages backing [ptr, ptr+len) that are fully inside the
-// range (inward-rounded to page boundaries) so neighbors are never clobbered.
-// on mmap'd tensors the pages re-fault from the file; on anonymous memory they
-// are discarded (the tier never reads them again while GPU-resident).
-static void release_pages(void * ptr, size_t len) {
-#ifdef _WIN32
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    const size_t page = si.dwPageSize;
-#else
-    const long page = sysconf(_SC_PAGESIZE);
-#endif
-    const uintptr_t base   = (uintptr_t) ptr;
-    const uintptr_t start  = (base + (uintptr_t) page - 1) & ~((uintptr_t) page - 1);
-    const uintptr_t end    = (base + len) & ~((uintptr_t) page - 1);
-    if (start < end) {
-#ifdef _WIN32
-        VirtualFree((LPVOID) start, end - start, MEM_RESET);
-#else
-        madvise((void *) start, end - start, MADV_DONTNEED);
-#endif
-    }
-}
 
 // FNV-1a of the first min(n, 1024) bytes - matches the launch hash sampling
 static uint64_t hash_slice_at(const uint8_t * p, size_t n) {
@@ -393,17 +366,7 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
             const int pidx = llama_expert_preload::index_of(e->src);
             if (preloaded) {
                 // the startup slices were streamed into the store at load
-                // (write_entry), so the GPU store is already sound; reclaim the
-                // model's host pages for the startup experts (no-mmap).
-                const char * src = e->src->data ? (const char *) ggml_get_data(e->src) : nullptr;
-                if (src) {
-                    for (int p = 0; p < hot_s; p++) {
-                        const int ex = ste[p];
-                        if (ex >= 0) {
-                            release_pages((void *) (src + (size_t) ex * slot), slot);
-                        }
-                    }
-                }
+                // (write_entry), so the GPU store is already sound.
                 continue;
             }
             const char * src = e->src->data ? (const char *) ggml_get_data(e->src) : nullptr;
@@ -420,8 +383,8 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
                     continue;
                 }
                 ggml_backend_tensor_set(e->dst[g], src + (size_t) ex * slot, (size_t) (p - slot_start[g]) * slot, slot);
-                // real reclaim: the expert now lives on the GPU, drop its RAM pages
-                release_pages((void *) (src + (size_t) ex * slot), slot);
+                // page hints are handled by llama_expert_pin (mmap only);
+                // DONTNEED here would refault from disk on eviction
             }
         }
         // startup batch is trusted on the GPU (filled from the file, hash-checked);

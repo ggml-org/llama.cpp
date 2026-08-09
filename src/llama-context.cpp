@@ -1,5 +1,6 @@
 #include "llama-context.h"
 
+#include "llama-expert-pin.h"
 #include "llama-expert-preload.h"
 
 #include "ggml.h"
@@ -464,8 +465,11 @@ llama_context::llama_context(
         }
     }
 
+    // heatmap exists for the tier, the heat log, or standalone pinning
+    // (LLAMA_EXPERT_PIN without the hot store)
     if (hparams.n_expert > 0 && !cparams.warmup &&
-        (params.expert_heat_log_period != 0 || params.expert_hot_s != 0)) {
+        (params.expert_heat_log_period != 0 || params.expert_hot_s != 0 ||
+         llama_expert_pin::active())) {
         expert_heatmap = std::make_unique<llama_expert_heatmap>(
             hparams.n_layer(), hparams.n_expert,
             params.expert_heat_decay,
@@ -1447,6 +1451,33 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         if (ubatch.n_tokens == 1 && getenv("LLAMA_EXPERT_HITRATE")) {
             expert_hotstore->log_hit_rate(res->moe_sel_experts);
         }
+    }
+
+    // standalone pin mode (no hot store): feed the heatmap from the graph
+    // readback and warm the top cold experts on mmap
+    if (expert_heatmap && !expert_hotstore && llama_expert_pin::active()) {
+        synchronize();
+        for (const auto & [il, tensor] : res->moe_sel_experts) {
+            if (!tensor || !tensor->data) {
+                continue;
+            }
+            const int n_ids = (int) tensor->ne[0];
+            const int n_tokens = (int) tensor->ne[1];
+            std::vector<int32_t> ids((size_t) n_ids * n_tokens);
+            ggml_backend_tensor_get(tensor, ids.data(), 0, ids.size() * sizeof(int32_t));
+            expert_heatmap->update_ids(il, ids.data(), n_ids, n_tokens);
+        }
+    }
+
+    // mmap page hints for the expert tier (hot store active: GPU-aware sets;
+    // standalone: everything is cold, warm the top fraction)
+    if (expert_heatmap && llama_expert_pin::active()) {
+        llama_expert_hotstore * hs = expert_hotstore.get();
+        llama_expert_pin::maybe_run(&model, expert_heatmap.get(),
+            [](void * ud, int il, int e) -> bool {
+                return ud != nullptr && static_cast<llama_expert_hotstore *>(ud)->is_resident(il, e);
+            },
+            hs);
     }
 
     ret = GGML_STATUS_SUCCESS;

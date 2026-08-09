@@ -64,10 +64,15 @@ struct llama_expert_hotstore {
     ggml_backend_buffer_ptr buf_cpu;
 
     // true once the first copy of the top-S experts landed (once per session)
-    bool is_filled = false;
-    // true when the store buffer was streamed by the loader (startup batch
+    bool is_filled = false;    // true when the store buffer was streamed by the loader (startup batch
     // already resident), so the fill does not copy again
     bool preloaded = false;
+
+    // true when expert e of layer il is GPU-counted (output comes from the store)
+    bool is_resident(int il, int e) const {
+        return il >= 0 && il < (int) gpu_routed.size() &&
+               e >= 0 && e < (int) gpu_routed[il].size() && gpu_routed[il][e] != 0;
+    }
 
     // re-sync cadence in tokens; 0 disables periodic re-sync
     int sync_period = 0;
