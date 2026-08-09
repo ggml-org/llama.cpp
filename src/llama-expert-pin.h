@@ -15,7 +15,7 @@ namespace llama_expert_pin {
         int   start_tokens  = 128;   // first pass at this many tokens
         float dontneed_gpu  = 0.20f; // top fraction of GPU experts to drop
         float willneed_gpu  = 0.20f; // bottom fraction of GPU experts to warm
-        float willneed_cold = 0.40f; // top fraction of cold experts to warm
+        float willneed_cold = 0.70f; // top fraction of cold experts to warm
     };
 
     const config & get_config();
