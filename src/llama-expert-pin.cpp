@@ -101,6 +101,24 @@ static void hint_experts(const llama_model * model,
     const int n_layers  = heatmap.n_layers;
     const int n_experts = heatmap.n_experts;
 
+    // RAM-pressure gate: only evict cold pages when the system is genuinely
+    // tight (MemAvailable under 10% of total).
+    bool ram_tight = false;
+    int64_t mem_total = 0, mem_avail = 0;
+    FILE * f = fopen("/proc/meminfo", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, "MemTotal: %lld kB", &mem_total) == 1) {
+                mem_total *= 1024;
+            } else if (sscanf(line, "MemAvailable: %lld kB", &mem_avail) == 1) {
+                mem_avail *= 1024;
+            }
+        }
+        fclose(f);
+    }
+    ram_tight = mem_total > 0 && mem_avail * 10 < mem_total;
+
     // group the exps tensors by layer
     std::vector<std::vector<const ggml_tensor *>> per_layer(n_layers);
     for (const auto & [name, tensor] : llama_internal_get_tensor_map(model)) {
@@ -171,6 +189,29 @@ static void hint_experts(const llama_model * model,
             for (int i = 0; i < n_warm; i++) {
                 for (const ggml_tensor * w : per_layer[il]) {
                     hint_expert(w, cold[i], true);
+                }
+            }
+        }
+
+        // RAM pressure: evict the bottom 10% of total heat that is resident
+        // in the mmap pool and has not been reused for a full dwell cycle.
+        if (ram_tight) {
+            std::vector<int> all(n_experts);
+            for (int e = 0; e < n_experts; e++) {
+                all[e] = e;
+            }
+            std::sort(all.begin(), all.end(), by_score);
+            const int n_evict = std::max(1, (int) (0.10f * (float) n_experts));
+            for (int i = 0; i < n_evict; i++) {
+                const int e = all[i];
+                if (is_gpu_resident && is_gpu_resident(ud, il, e)) {
+                    continue; // on GPU: its mmap pages are already dropped
+                }
+                if (heatmap.tokens_total - heatmap.last_reuse[il * n_experts + e] < 8) {
+                    continue; // reused within the dwell cycle: keep it
+                }
+                for (const ggml_tensor * w : per_layer[il]) {
+                    hint_expert(w, e, false);
                 }
             }
         }

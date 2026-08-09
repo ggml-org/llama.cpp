@@ -978,9 +978,6 @@ bool llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap, b
     if (multi_slot || heatmap.tokens_total <= 0) {
         return false;
     }
-    if (frozen) {
-        return false;
-    }
     // adaptive cadence: floor 10 (5 in copy mode: host-pool moves are half
     // the bandwidth), stretching to 32 as the hit rate climbs toward 6x target
     float ratio = hit_rate_valid ? hit_rate / target_hit_rate() : 0.0f;

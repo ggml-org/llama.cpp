@@ -98,7 +98,6 @@ struct llama_expert_hotstore {
     float hyst  = 0.0f; // 0 = gate off (swap freely)
     int   dwell = 0;    // minimum syncs a resident must keep; 0 = off
     bool  copy_mode = false; // keep the RAM copy of promoted experts (copy), else move
-    bool  frozen = false; // sidecar loaded: store is pre-warmed, skip adaptation
     // max concurrent transfers in flight per layer, per direction (eviction
     // queue + promotion queue). higher = faster store adaptation, at the cost
     // of more slots temporarily in transition (not counted).

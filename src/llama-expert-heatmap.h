@@ -15,6 +15,7 @@ struct llama_expert_heatmap {
     int64_t generated_tokens_count; // decode tokens seen; drives first-fill deferral
     int update_counter = 1; // batched decay every 2 updates; start at 1 for early stability
     std::vector<float> heat;
+    std::vector<int64_t> last_reuse; // last token each expert was routed (dwell gate)
 
     llama_expert_heatmap(int n_layers, int n_experts,
                          float decay_rate = 0.99f,

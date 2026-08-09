@@ -478,16 +478,12 @@ llama_context::llama_context(
             params.expert_hot_s);
     }
 
-    // expert sidecar: restore the heatmap from <model>.tier if present; freeze
-    // store adaptation so the run measures the pre-warmed store
+    // expert sidecar: restore the heatmap from <model>.tier if present; the
+    // store starts pre-warmed and keeps adapting from there
     expert_sidecar_enabled = params.expert_sidecar;
     expert_sidecar_path = std::string(params.model_path ? params.model_path : "") + ".tier";
-    bool sidecar_loaded = false;
     if (expert_heatmap && params.expert_sidecar) {
-        const std::string sc = expert_sidecar_path;
-        if (expert_heatmap->load(sc.c_str())) {
-            sidecar_loaded = true;
-        }
+        expert_heatmap->load(expert_sidecar_path.c_str());
     }
 
     if (hparams.n_expert > 0 && !cparams.warmup && params.expert_hot_s != 0) {
@@ -517,10 +513,6 @@ llama_context::llama_context(
                 __func__, params.expert_hot_s);
         }
         expert_hotstore->log();
-    }
-
-    if (sidecar_loaded && expert_hotstore) {
-        expert_hotstore->frozen = true;
     }
 
     // Initialize the full vocabulary token ids for backend samplers.

@@ -17,7 +17,8 @@ llama_expert_heatmap::llama_expert_heatmap(
     log_period(log_period),
     tokens_total(0),
     generated_tokens_count(0),
-    heat(n_layers * n_experts, 0.0f) {
+    heat(n_layers * n_experts, 0.0f),
+    last_reuse(n_layers * n_experts, 0) {
 }
 
 void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & per_layer, int n_tokens) {
@@ -28,9 +29,11 @@ void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & pe
             continue;
         }
         float * layer_heat = &heat[il * n_experts];
+        int64_t * layer_reuse = &last_reuse[il * n_experts];
         for (int e = 0; e < n_experts; e++) {
             if (cnt[e] > 0) {
                 layer_heat[e] += (float) cnt[e];
+                layer_reuse[e] = tokens_total;
             }
         }
     }
@@ -57,11 +60,13 @@ void llama_expert_heatmap::update_ids(int layer_idx, const int32_t * expert_ids,
         return;
     }
     float * layer_heat = &heat[layer_idx * n_experts];
+    int64_t * layer_reuse = &last_reuse[layer_idx * n_experts];
     for (int t = 0; t < n_tokens; t++) {
         for (int e = 0; e < n_ids; e++) {
             const int32_t id = expert_ids[t * n_ids + e];
             if (id >= 0 && id < n_experts) {
                 layer_heat[id] += 1.0f;
+                layer_reuse[id] = tokens_total;
             }
         }
     }
