@@ -203,20 +203,6 @@ static tools_io::exec_result run_subprocess(
         return res;
     }
 
-    // feed the child before reading it back: this relies on the child draining stdin as it goes,
-    // which `cat` does, and closing stdin is what tells it the input is over
-    if (stdin_data != nullptr) {
-        if (FILE * in = proc.stdin_file()) {
-            // a child that died early leaves nothing reading the pipe, so a short write is not
-            // an error in itself; the exit code below is what decides
-            if (!stdin_data->empty()) {
-                fwrite(stdin_data->data(), 1, stdin_data->size(), in);
-            }
-            fflush(in);
-        }
-        proc.close_stdin();
-    }
-
     std::atomic<bool> done{false};
     std::atomic<bool> timed_out{false};
 
@@ -231,6 +217,22 @@ static tools_io::exec_result run_subprocess(
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     });
+
+    // feed the child before reading it back: this relies on the child draining stdin as it goes,
+    // which `cat` does, and closing stdin is what tells it the input is over. the watchdog is
+    // already armed, so a transport that stalls while draining is terminated at the deadline,
+    // which breaks the pipe and unblocks the write (the server ignores SIGPIPE)
+    if (stdin_data != nullptr) {
+        if (FILE * in = proc.stdin_file()) {
+            // a child that died early leaves nothing reading the pipe, so a short write is not
+            // an error in itself; the exit code below is what decides
+            if (!stdin_data->empty()) {
+                fwrite(stdin_data->data(), 1, stdin_data->size(), in);
+            }
+            fflush(in);
+        }
+        proc.close_stdin();
+    }
 
     FILE * f = proc.stdout_file();
     std::string output;
@@ -759,6 +761,18 @@ static bool is_valid_ssh_target(const std::string & target) {
     });
 }
 
+// same exposure as the ssh target: the id reaches `<engine> exec` from a client header, and an
+// id starting with '-' would be parsed as an option, e.g. --privileged. docker and podman both
+// constrain names to an alphanumeric first character then [a-zA-Z0-9_.-], and ids are hex
+static bool is_valid_container_id(const std::string & id) {
+    if (id.empty() || !std::isalnum((unsigned char) id[0])) {
+        return false;
+    }
+    return std::all_of(id.begin(), id.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '.' || c == '-' || c == '_';
+    });
+}
+
 // runtime specs used by --tools-runtime and the x-tool-runtime header
 static const std::string SERVER_TOOL_RUNTIME_SSH = "ssh:";
 
@@ -798,8 +812,11 @@ static std::unique_ptr<tools_io> make_tools_io(const json & params) {
     container_runtime_spec container;
     if (parse_container_runtime(runtime, container)) {
         // spawning belongs to the runtime that owns the container, a tool call only attaches
-        if (!container.attach || container.arg.empty()) {
+        if (!container.attach) {
             throw std::runtime_error("tool runtime must name a running container: " + runtime);
+        }
+        if (!is_valid_container_id(container.arg)) {
+            throw std::runtime_error("invalid container id: " + container.arg);
         }
         return std::make_unique<tools_io_container>(container.bin, container.arg, cwd);
     }
@@ -1883,6 +1900,9 @@ struct server_tools_container_runtime : server_tools_runtime {
             container_id = parsed.arg;
             if (container_id.empty()) {
                 throw std::runtime_error("--tools-runtime " + bin + "-container:<id> requires a container id");
+            }
+            if (!is_valid_container_id(container_id)) {
+                throw std::runtime_error("invalid container id: " + container_id);
             }
         }
     }

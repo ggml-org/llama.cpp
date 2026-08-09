@@ -208,9 +208,35 @@ def test_tools_builtin_runtime_header_unknown_scheme():
     # an unknown runtime must fail, never silently fall back to running on the host
     res = server.make_request("POST", "/tools",
                               data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": "ssh:example.com"})
+                              headers={"x-tool-runtime": "fake:does-not-exist"})
     assert res.status_code == 500, res.body
     assert "unknown tool runtime" in str(res.body)
+
+
+def test_tools_builtin_runtime_header_rejects_ssh_option_injection():
+    global server
+    server.start()
+
+    # ssh reads options from its argv, so a target starting with '-' must be rejected
+    # before it reaches the command line, not passed through to run on the host
+    res = server.make_request("POST", "/tools",
+                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                              headers={"x-tool-runtime": "ssh:-oProxyCommand=touch /tmp/pwned"})
+    assert res.status_code == 500, res.body
+    assert "invalid ssh target" in str(res.body)
+
+
+def test_tools_builtin_runtime_header_rejects_container_option_injection():
+    global server
+    server.start()
+
+    # the container id lands on the `<engine> exec` command line, so an id shaped like an
+    # option, e.g. --privileged, must be rejected before it reaches the engine
+    res = server.make_request("POST", "/tools",
+                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                              headers={"x-tool-runtime": "docker-container:--privileged"})
+    assert res.status_code == 500, res.body
+    assert "invalid container id" in str(res.body)
 
 
 def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
