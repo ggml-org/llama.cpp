@@ -250,10 +250,6 @@ bool write_cold(size_t idx, const uint8_t * data, size_t nbytes) {
             e.src->name, g_cpu_buf[dst], g_cpu_buf[dst+1], g_cpu_buf[dst+2], g_cpu_buf[dst+3]);
     }
     ggml_mmid_cold_set_slice_fn(preload_slice_cb);
-    ggml_mmid_cold_set_hash_fn(
-        [](const struct ggml_tensor * src0, int expert) -> uint64_t {
-            return expected_hash(src0, expert);
-        });
     return true;
 }
 

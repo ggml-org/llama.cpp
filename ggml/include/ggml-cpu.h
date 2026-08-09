@@ -154,10 +154,6 @@ extern "C" {
     typedef const uint8_t * (*ggml_mmid_cold_slice_fn)(const struct ggml_tensor * src0, int expert);
     GGML_BACKEND_API void ggml_mmid_cold_set_slice_fn(ggml_mmid_cold_slice_fn fn);
 
-    // optional ground-truth hash provider for the cold op debug log
-    typedef uint64_t (*ggml_mmid_cold_hash_fn)(const struct ggml_tensor * src0, int expert);
-    GGML_BACKEND_API void ggml_mmid_cold_set_hash_fn(ggml_mmid_cold_hash_fn fn);
-
 #ifdef __cplusplus
 }
 #endif

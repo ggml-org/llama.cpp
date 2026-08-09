@@ -1442,19 +1442,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     if (expert_heatmap && expert_hotstore && expert_hotstore->is_filled) {
         expert_hotstore->read_counts(*expert_heatmap, ubatch.n_tokens);
     }
-    if (expert_heatmap && expert_hotstore) {
-        if (!expert_hotstore->is_filled) {
-            // fill happens pre-graph on the first ubatch (see above)
-        } else {
-            expert_hotstore->maybe_resync(*expert_heatmap, ubatch.n_tokens > 1);
-            // the post-resync sync is removed (default): the resync's store
-            // writes on the default stream race the graph's stream
-            if (getenv("LLAMA_EXPERT_SYNC_RESYNC")) {
-                synchronize();
-            }
-            if (ubatch.n_tokens == 1 && getenv("LLAMA_EXPERT_HITRATE")) {
-                expert_hotstore->log_hit_rate(res->moe_sel_experts);
-            }
+    if (expert_heatmap && expert_hotstore && expert_hotstore->is_filled) {
+        expert_hotstore->maybe_resync(*expert_heatmap, ubatch.n_tokens > 1);
+        if (ubatch.n_tokens == 1 && getenv("LLAMA_EXPERT_HITRATE")) {
+            expert_hotstore->log_hit_rate(res->moe_sel_experts);
         }
     }
 

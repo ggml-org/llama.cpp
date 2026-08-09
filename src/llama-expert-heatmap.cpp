@@ -1,9 +1,6 @@
 #include "llama-expert-heatmap.h"
 #include "llama-impl.h"
 
-#include "ggml.h"
-#include "ggml-backend.h"
-
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
@@ -22,18 +19,6 @@ llama_expert_heatmap::llama_expert_heatmap(
     heat(n_layers * n_experts, 0.0f) {
 }
 
-void llama_expert_heatmap::update(int layer_idx, const int32_t * expert_ids, int n_expert_used, int n_tokens, float multiplier) {
-    float * layer_heat = heat.data() + layer_idx * n_experts;
-
-    for (int t = 0; t < n_tokens; t++) {
-        for (int e = 0; e < n_expert_used; e++) {
-            int32_t id = expert_ids[t * n_expert_used + e];
-            if (id >= 0 && id < n_experts) {
-                layer_heat[id] += 1.0f * multiplier;
-            }
-        }
-    }
-}
 void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & per_layer, int n_tokens) {
     // batched decay: apply decay_rate^2 every two updates instead of
     // decay_rate every update (identical long-run weighting, half the work)
@@ -64,56 +49,6 @@ void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & pe
     tokens_total += n_tokens;
     if (log_period > 0 && tokens_total / log_period > (tokens_total - n_tokens) / log_period) {
         log();
-    }
-}
-
-void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel_experts) {
-    if (moe_sel_experts.empty()) {
-        return;
-    }
-
-    // batch the decay: apply decay_rate^2 every two updates instead of
-    // decay_rate every update (identical long-run weighting, half the work)
-    ++update_counter;
-    if (update_counter % 2 == 0) {
-        const float rate = decay_rate * decay_rate;
-        for (int i = 0; i < n_layers * n_experts; i++) {
-            heat[i] *= rate;
-        }
-    }
-
-    int64_t n_tokens = 0;
-    float multiplier = 1.0f;
-    // weight the first few decode tokens 15x so the initial hot store fill is
-    // driven by generation routing rather than the prompt-processing ubatches
-    if (moe_sel_experts.front().second->ne[1] == 1) {
-        generated_tokens_count++;
-        if (generated_tokens_count <= 3) {
-            multiplier = 15.0f;
-        }
-    }
-    for (const auto & [il, tensor] : moe_sel_experts) {
-        n_tokens = tensor->ne[1];
-
-        if (!tensor->data) {
-            continue;
-        }
-
-        std::vector<int32_t> expert_ids(tensor->ne[0] * n_tokens);
-        ggml_backend_tensor_get(tensor, expert_ids.data(), 0, expert_ids.size() * sizeof(int32_t));
-
-        update(il, expert_ids.data(), tensor->ne[0], n_tokens, multiplier);
-    }
-
-    tokens_total += n_tokens;
-    if (log_period > 0 && tokens_total / log_period > (tokens_total - n_tokens) / log_period) {
-        log();
-    }
-}
-
-void llama_expert_heatmap::decay_all() {
-    for (int i = 0; i < n_layers * n_experts; i++) {
-        heat[i] *= decay_rate;
     }
 }
 
