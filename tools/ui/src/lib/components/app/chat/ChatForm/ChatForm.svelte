@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
@@ -12,10 +13,10 @@
 	} from '$lib/components/app';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
-		INPUT_CLASSES,
-		SETTING_CONFIG_DEFAULT,
 		INITIAL_FILE_SIZE,
-		PROMPT_CONTENT_SEPARATOR
+		INPUT_CLASSES,
+		PROMPT_CONTENT_SEPARATOR,
+		SETTING_CONFIG_DEFAULT
 	} from '$lib/constants';
 	import {
 		ContentPartType,
@@ -24,20 +25,20 @@
 		MimeTypeText,
 		SpecialFileType
 	} from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
-	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
 	import {
-		conversationsStore,
-		activeMessages,
 		activeConversation,
+		activeMessages,
+		conversationsStore,
 		pendingCwd
 	} from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
+	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,
@@ -56,7 +57,6 @@
 		parseClipboardContent,
 		uuid
 	} from '$lib/utils';
-	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -167,11 +167,14 @@
 		// Committing a directory consumes the `/cwd` token; the chip's
 		// clear-X path has no token to consume.
 		const token = findCommandToken(value);
+
 		if (token && token.name === 'cwd') {
 			value = '';
 			onValueChange?.('');
 		}
+
 		await conversationsStore.setCwd(newDir);
+
 		if (conversationsStore.activeConversation) {
 			await chatStore.recordCwdChange(newDir?.trim() || null);
 		}
@@ -185,6 +188,7 @@
 
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
+
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 
@@ -200,13 +204,16 @@
 		}
 
 		const selectedId = selectedModelId();
+
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);
+
 			if (model) return model.model;
 		}
 
 		if (conversationModel) {
 			const model = options.find((m) => m.model === conversationModel);
+
 			if (model) return model.model;
 		}
 
@@ -238,6 +245,7 @@
 	$effect(() => {
 		const wantContenteditable =
 			containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
+
 		if (useContenteditable === wantContenteditable) return;
 
 		if (!caretOffsetPinned) {
@@ -268,8 +276,10 @@
 	export function checkModelSelected(): boolean {
 		if (!hasModelSelected) {
 			chatFormActionsRef?.openModelSelector();
+
 			return false;
 		}
+
 		return true;
 	}
 
@@ -284,6 +294,7 @@
 	function handleFileRemove(fileId: string) {
 		if (fileId.startsWith('attachment-')) {
 			const index = parseInt(fileId.replace('attachment-', ''), 10);
+
 			if (!isNaN(index) && index >= 0 && index < attachments.length) {
 				onAttachmentRemove?.(index);
 			}
@@ -333,6 +344,7 @@
 		if (files.length > 0) {
 			event.preventDefault();
 			onFilesAdd?.(files);
+
 			return;
 		}
 
@@ -354,6 +366,7 @@
 								type: MimeTypeText.PLAIN
 							})
 					);
+
 					onFilesAdd?.(attachmentFiles);
 				}
 
@@ -480,9 +493,11 @@
 	function handleMentionSelect(entry: FileMentionEntry) {
 		const cursor = inputRef?.getCaretOffset() ?? value.length;
 		const token = findMentionToken(value, cursor);
+
 		if (!token) return;
 
 		const built = buildMentionInsertion(entry, value, token);
+
 		if (!built) return;
 
 		// Pin the post-insertion caret BEFORE the swap effect runs;
@@ -504,6 +519,7 @@
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
 			console.warn('Audio recording not supported');
+
 			return;
 		}
 

@@ -26,6 +26,8 @@ export interface CommandDismissSnapshot {
 
 export function takeCommandDismissSnapshot(value: string): CommandDismissSnapshot | null {
 	const token = findCommandToken(value);
+
 	if (!token) return null;
+
 	return { name: token.name, args: token.args };
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { MCPPromptInfo } from '$lib/types';
 	import ChatFormPromptPickerArgumentInput from './ChatFormPromptPickerArgumentInput.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		prompt: MCPPromptInfo;

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -43,6 +43,7 @@
 		canScrollRight = scrollLeft < scrollWidth - clientWidth - 1;
 
 		const isScrollable = scrollWidth > clientWidth;
+
 		onScrollableChange?.(isScrollable);
 	}
 
@@ -59,6 +60,7 @@
 		if (!scrollContainer) return;
 
 		const observer = new ResizeObserver(() => updateScrollButtons());
+
 		observer.observe(scrollContainer);
 
 		return () => observer.disconnect();

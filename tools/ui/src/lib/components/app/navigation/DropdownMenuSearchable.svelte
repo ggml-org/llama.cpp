@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { SearchInput } from '$lib/components/app';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		placeholder?: string;

@@ -1,17 +1,17 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { base } from '$app/paths';
-	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
+	import { AlertTriangle, CheckCircle, Key, RefreshCw, XCircle } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { AUTHORIZATION_HEADER, BEARER_PREFIX, SETTINGS_KEYS } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ROUTES } from '$lib/constants/routes';
-	import { fade, fly, scale } from 'svelte/transition';
 	import { KeyboardKey } from '$lib/enums';
+	import { serverLoading, serverStore } from '$lib/stores/server.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
 		class?: string;
@@ -55,6 +55,7 @@
 		showApiKeyInput = true;
 		// Pre-fill with current API key if it exists
 		const currentConfig = config();
+
 		apiKeyInput = currentConfig.apiKey?.toString() || '';
 	}
 

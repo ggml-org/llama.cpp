@@ -1,3 +1,11 @@
+import { writeThemeFavicons } from './scripts/favicon-colorize';
+import {
+	FAVICON_COLORS,
+	PWA_ASSET_GENERATOR,
+	PWA_GENERATOR_DEVICES,
+	THEME_COLORS
+} from './src/lib/constants/pwa';
+import { SplashOrientation } from './src/lib/enums/splash.enums';
 import {
 	combinePresetAndAppleSplashScreens,
 	defineConfig,
@@ -5,14 +13,6 @@ import {
 } from '@vite-pwa/assets-generator/config';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import {
-	THEME_COLORS,
-	PWA_GENERATOR_DEVICES,
-	PWA_ASSET_GENERATOR,
-	FAVICON_COLORS
-} from './src/lib/constants/pwa';
-import { SplashOrientation } from './src/lib/enums/splash.enums';
-import { writeThemeFavicons } from './scripts/favicon-colorize';
 
 writeThemeFavicons(FAVICON_COLORS.LIGHT, FAVICON_COLORS.DARK, {
 	padding: PWA_ASSET_GENERATOR.FAVICON_PADDING
@@ -59,6 +59,7 @@ export default defineConfig({
 			name: (landscape, size, dark) => {
 				const orientation = landscape ? SplashOrientation.LANDSCAPE : SplashOrientation.PORTRAIT;
 				const darkPrefix = dark ? PWA_ASSET_GENERATOR.DARK_PREFIX : '';
+
 				return `apple-splash-${orientation}-${darkPrefix}${size.width}x${size.height}.png`;
 			}
 		},

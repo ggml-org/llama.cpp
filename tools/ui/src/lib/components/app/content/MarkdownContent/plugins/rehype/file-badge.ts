@@ -8,7 +8,6 @@
  * no tab stop); the full path stays available on `title`.
  */
 
-import { decodeFileLinkPath, getMentionBadgeIconPaths, getMentionBadgeLabel } from '$lib/utils';
 import {
 	FILE_URI_PREFIX,
 	MENTION_BADGE_CLASSNAME,
@@ -19,8 +18,9 @@ import {
 } from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
+import { decodeFileLinkPath, getMentionBadgeIconPaths, getMentionBadgeLabel } from '$lib/utils';
+import type { Element, Root } from 'hast';
 import type { Plugin } from 'unified';
-import type { Root, Element } from 'hast';
 import { visit } from 'unist-util-visit';
 
 // Trailing path separators mark a directory and are kept out of the label.
@@ -28,6 +28,7 @@ const TRAILING_SEPARATOR_REGEX = /\/+$/;
 
 function decodeHrefPath(href: string): string {
 	const stripped = href.startsWith(FILE_URI_PREFIX) ? href.slice(FILE_URI_PREFIX.length) : href;
+
 	return decodeFileLinkPath(stripped);
 }
 
@@ -35,6 +36,7 @@ function labelFromFileUrl(href: string): string {
 	const decoded = decodeHrefPath(href);
 	const trimmed = decoded.replace(TRAILING_SEPARATOR_REGEX, '');
 	const slash = trimmed.lastIndexOf(PATH_SEPARATOR);
+
 	return slash === -1 ? trimmed : trimmed.slice(slash + 1);
 }
 

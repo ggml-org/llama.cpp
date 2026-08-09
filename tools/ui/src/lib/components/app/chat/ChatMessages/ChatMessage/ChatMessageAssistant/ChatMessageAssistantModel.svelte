@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { ModelBadge, ModelsSelectorDropdown } from '$lib/components/app';
-	import { copyToClipboard } from '$lib/utils';
-	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { copyToClipboard } from '$lib/utils';
 
 	interface Props {
 		displayedModel: string | null;
@@ -38,6 +38,7 @@
 			}
 
 			onRegenerate(modelName);
+
 			return true;
 		}}
 	/>

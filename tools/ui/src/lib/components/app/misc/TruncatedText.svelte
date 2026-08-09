@@ -23,6 +23,7 @@
 			checkTruncation();
 
 			const observer = new ResizeObserver(checkTruncation);
+
 			observer.observe(textElement);
 
 			return () => observer.disconnect();

@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
-	import { Select as SelectPrimitive } from 'bits-ui';
-	import SelectScrollUpButton from './select-scroll-up-button.svelte';
 	import SelectScrollDownButton from './select-scroll-down-button.svelte';
+	import SelectScrollUpButton from './select-scroll-up-button.svelte';
 	import { cn, type WithoutChild } from '$lib/components/ui/utils.js';
+	import { Select as SelectPrimitive } from 'bits-ui';
+	import { onDestroy, onMount } from 'svelte';
 
 	let {
 		ref = $bindable(null),
@@ -20,7 +20,6 @@
 
 	onMount(() => {
 		const listenerOptions: AddEventListenerOptions = { passive: false };
-
 		const blockOutsideWheel = (event: WheelEvent) => {
 			if (!ref) {
 				return;
@@ -33,7 +32,6 @@
 				event.stopPropagation();
 			}
 		};
-
 		const blockOutsideTouchMove = (event: TouchEvent) => {
 			if (!ref) {
 				return;
@@ -68,7 +66,6 @@
 		const stopWheelPropagation = (event: WheelEvent) => {
 			event.stopPropagation();
 		};
-
 		const stopTouchPropagation = (event: TouchEvent) => {
 			event.stopPropagation();
 		};

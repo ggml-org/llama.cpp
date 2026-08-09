@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
 import { DiffLineKind } from '$lib/enums';
-import { computeLineDiff, renderUnifiedDiff, type DiffLine } from '$lib/utils';
+import { computeLineDiff, type DiffLine, renderUnifiedDiff } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('computeLineDiff', () => {
 	it('returns empty for two empty inputs', () => {
@@ -32,6 +32,7 @@ describe('computeLineDiff', () => {
 	it('preserves interleaved context around additions', () => {
 		const oldText = ['a', 'b', 'c'].join('\n');
 		const newText = ['a', 'b', 'B', 'c'].join('\n');
+
 		expect(computeLineDiff(oldText, newText)).toEqual([
 			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
 			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 },
@@ -45,6 +46,7 @@ describe('computeLineDiff', () => {
 		// show context flanking the changed line at its natural position.
 		const oldText = ['a', 'b', 'c', 'd'].join('\n');
 		const newText = ['a', 'b', 'X', 'd'].join('\n');
+
 		expect(computeLineDiff(oldText, newText)).toEqual([
 			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
 			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 },
@@ -57,6 +59,7 @@ describe('computeLineDiff', () => {
 	it('preserves interleaved context around removals', () => {
 		const oldText = ['a', 'b', 'c', 'd'].join('\n');
 		const newText = ['a', 'c', 'd'].join('\n');
+
 		expect(computeLineDiff(oldText, newText)).toEqual([
 			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
 			{ kind: 'remove', text: 'b', oldLine: 2 },
@@ -68,6 +71,7 @@ describe('computeLineDiff', () => {
 	it('handles purely identical inputs', () => {
 		const text = 'x\ny\nz';
 		const result = computeLineDiff(text, text);
+
 		expect(result).toEqual([
 			{ kind: 'context', text: 'x', oldLine: 1, newLine: 1 },
 			{ kind: 'context', text: 'y', oldLine: 2, newLine: 2 },
@@ -99,11 +103,13 @@ describe('computeLineDiff', () => {
 		// remove) carry no number on that side.
 		let lastOld = 0;
 		let lastNew = 0;
+
 		for (const line of diff) {
 			if (line.oldLine !== undefined) {
 				expect(line.oldLine).toBeGreaterThan(lastOld);
 				lastOld = line.oldLine;
 			}
+
 			if (line.newLine !== undefined) {
 				expect(line.newLine).toBeGreaterThan(lastNew);
 				lastNew = line.newLine;
@@ -123,6 +129,7 @@ describe('renderUnifiedDiff', () => {
 			{ kind: DiffLineKind.ADD, text: 'plus' },
 			{ kind: DiffLineKind.REMOVE, text: 'minus' }
 		];
+
 		expect(renderUnifiedDiff(lines)).toBe(' ctx\n+plus\n-minus');
 	});
 
@@ -131,6 +138,7 @@ describe('renderUnifiedDiff', () => {
 			{ kind: DiffLineKind.CONTEXT, text: 'a', oldLine: 1, newLine: 1 },
 			{ kind: DiffLineKind.ADD, text: 'b', newLine: 2 }
 		];
+
 		expect(renderUnifiedDiff(lines)).toBe(' a\n+b');
 	});
 });

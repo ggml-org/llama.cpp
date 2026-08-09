@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { Pin } from '@lucide/svelte';
-	import { buildConversationTree } from '$lib/stores/conversations.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import SidebarNavigationSearchResults from './SidebarNavigationSearchResults.svelte';
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
+	import { Pin } from '@lucide/svelte';
+	import { buildConversationTree } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		class: string;

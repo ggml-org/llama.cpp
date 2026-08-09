@@ -3,21 +3,21 @@
  * Contains common HAST element creation functions to avoid code duplication.
  */
 
-import type { Element, ElementContent } from 'hast';
 import {
-	CODE_BLOCK_HEADER_CLASS,
 	CODE_BLOCK_ACTIONS_CLASS,
+	CODE_BLOCK_HEADER_CLASS,
 	CODE_BLOCK_SCROLL_CONTAINER_CLASS,
+	CODE_ICON_SVG,
 	CODE_LANGUAGE_CLASS,
 	COPY_CODE_BTN_CLASS,
-	PREVIEW_CODE_BTN_CLASS,
-	TOGGLE_SOURCE_BTN_CLASS,
-	DIAGRAM_SOURCE_CLASS,
-	RELATIVE_CLASS,
 	COPY_ICON_SVG,
+	DIAGRAM_SOURCE_CLASS,
+	PREVIEW_CODE_BTN_CLASS,
 	PREVIEW_ICON_SVG,
-	CODE_ICON_SVG
+	RELATIVE_CLASS,
+	TOGGLE_SOURCE_BTN_CLASS
 } from '$lib/constants';
+import type { Element, ElementContent } from 'hast';
 
 export interface BlockIdGenerator {
 	(id: number): string;
@@ -110,6 +110,7 @@ export function createSourceView(
 		properties: { className: ['hljs', `language-${language}`] },
 		children: [{ type: 'text', value: source }]
 	};
+
 	return {
 		type: 'element',
 		tagName: 'div',
@@ -199,9 +200,12 @@ export function generateBlockId(prefix: string, windowKey: keyof Window): string
 	if (typeof window !== 'undefined') {
 		const idx = window[windowKey] as number | undefined;
 		const next = (idx ?? 0) + 1;
+
 		(window as unknown as Record<string, number>)[windowKey] = next;
+
 		return `${prefix}-${next}`;
 	}
+
 	// Fallback for SSR - use timestamp + random
 	return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Card } from '$lib/components/ui/card';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
+	import { Card } from '$lib/components/ui/card';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
@@ -31,6 +31,7 @@
 
 		if (content.includes('\n')) {
 			isMultiline = true;
+
 			return;
 		}
 

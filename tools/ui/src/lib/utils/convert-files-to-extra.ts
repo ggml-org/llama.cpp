@@ -1,14 +1,14 @@
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
+import { isLikelyTextFile, readFileAsText } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { FileTypeCategory, AttachmentType, SpecialFileType } from '$lib/enums';
 import { SETTINGS_KEYS } from '$lib/constants';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
+import type { ChatUploadedFile, DatabaseMessageExtra, FileProcessingResult } from '$lib/types';
 import { getFileTypeCategory } from '$lib/utils';
-import { readFileAsText, isLikelyTextFile } from './text-files';
 import { toast } from 'svelte-sonner';
-import type { FileProcessingResult, ChatUploadedFile, DatabaseMessageExtra } from '$lib/types';
 
 function readFileAsBase64(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -18,6 +18,7 @@ function readFileAsBase64(file: File): Promise<string> {
 			// Extract base64 data without the data URL prefix
 			const dataUrl = reader.result as string;
 			const base64 = dataUrl.split(',')[1];
+
 			resolve(base64);
 		};
 

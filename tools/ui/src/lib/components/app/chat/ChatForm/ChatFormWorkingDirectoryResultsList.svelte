@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Folder } from '@lucide/svelte';
-	import { fly } from 'svelte/transition';
-	import { highlightMatch } from '$lib/utils';
 	import { cn } from '$lib/components/ui/utils';
+	import { highlightMatch } from '$lib/utils';
+	import { fly } from 'svelte/transition';
 
 	// Fly-in transition for the results list.
 	const FLY_Y_PX = -4;

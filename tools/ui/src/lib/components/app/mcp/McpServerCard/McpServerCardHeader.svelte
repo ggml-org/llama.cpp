@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { Switch } from '$lib/components/ui/switch';
-	import { Badge } from '$lib/components/ui/badge';
 	import { McpCapabilitiesBadges, McpServerIdentity } from '$lib/components/app/mcp';
-	import { MCP_TRANSPORT_LABELS, MCP_TRANSPORT_ICONS } from '$lib/constants';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Switch } from '$lib/components/ui/switch';
+	import { MCP_TRANSPORT_ICONS, MCP_TRANSPORT_LABELS } from '$lib/constants';
 	import { MCPTransportType } from '$lib/enums';
-	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
+	import type { MCPCapabilitiesInfo, MCPServerInfo } from '$lib/types';
 
 	interface Props {
 		displayName: string;

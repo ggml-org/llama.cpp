@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-import { parseMcpServerSettings } from '$lib/utils/mcp';
 import { MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+import { parseMcpServerSettings } from '$lib/utils/mcp';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Tests for the mcpServers settings parser.
@@ -122,7 +122,6 @@ describe('parseMcpServerSettings', () => {
 			{ id: 'alpha', url: 'https://a.test' },
 			{ id: 'beta', url: 'https://b.test' }
 		];
-
 		const parsed = parseMcpServerSettings(JSON.stringify(source));
 
 		expect(parsed.map((entry) => entry.id)).toEqual(['gamma', 'alpha', 'beta']);

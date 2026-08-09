@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { Folder, X } from '@lucide/svelte';
-	import { abbreviateWorkingDir } from '$lib/utils';
-	import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ActionIcon } from '$lib/components/app/actions';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
+	import { abbreviateWorkingDir } from '$lib/utils';
 
 	interface Props {
 		directory?: string | null;

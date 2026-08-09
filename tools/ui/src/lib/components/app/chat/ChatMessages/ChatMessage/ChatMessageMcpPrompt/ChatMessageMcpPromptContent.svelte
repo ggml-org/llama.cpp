@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { Card } from '$lib/components/ui/card';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { SvelteMap } from 'svelte/reactivity';
-	import { McpPromptVariant } from '$lib/enums';
 	import { TruncatedText } from '$lib/components/app/misc';
+	import { Card } from '$lib/components/ui/card';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { McpPromptVariant } from '$lib/enums';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	interface ContentPart {
 		text: string;
@@ -39,9 +39,11 @@
 		}
 
 		const parts: ContentPart[] = [];
+
 		let remaining = prompt.content;
 
 		const valueToKey = new SvelteMap<string, string>();
+
 		for (const [key, value] of argumentEntries) {
 			if (value && value.trim()) {
 				valueToKey.set(value, key);
@@ -55,6 +57,7 @@
 
 			for (const value of sortedValues) {
 				const index = remaining.indexOf(value);
+
 				if (index !== -1 && (earliestMatch === null || index < earliestMatch.index)) {
 					earliestMatch = { index, value, key: valueToKey.get(value)! };
 				}

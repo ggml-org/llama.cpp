@@ -2,21 +2,21 @@
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
+	import {
+		agenticClearSteeringMessage,
+		agenticInjectSteeringMessage,
+		agenticPendingSteeringMessageContent,
+		agenticPendingSteeringMessageExtras
+	} from '$lib/stores/agentic.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import {
-		chatPendingMessageContent,
-		chatPendingMessageExtras,
 		chatClearPendingMessage,
-		chatInjectPendingMessage
+		chatInjectPendingMessage,
+		chatPendingMessageContent,
+		chatPendingMessageExtras
 	} from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
+	import { activeConversation, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import {
-		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras,
-		agenticClearSteeringMessage,
-		agenticInjectSteeringMessage
-	} from '$lib/stores/agentic.svelte';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
@@ -44,6 +44,7 @@
 				message.extra,
 				asPlainText
 			);
+
 			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		},
 
@@ -141,7 +142,6 @@
 		const filteredMessages = currentConfig.showSystemMessage
 			? messages
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
-
 		// Build display entries, grouping agentic sessions into single entries.
 		// An agentic session = assistant(with tool_calls) → tool → assistant → tool → ... → assistant(final)
 		const result: Array<{
@@ -160,6 +160,7 @@
 			if (msg.role === MessageRole.TOOL) continue;
 
 			const toolMessages: DatabaseMessage[] = [];
+
 			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
 				let j = i + 1;
 
@@ -207,10 +208,12 @@
 		}
 
 		let lastAssistantIdx = -1;
+
 		for (let i = result.length - 1; i >= 0; i--) {
 			if (result[i].message.role === MessageRole.ASSISTANT) {
 				result[i].isLastAssistantMessage = true;
 				lastAssistantIdx = i;
+
 				break;
 			}
 		}
@@ -225,6 +228,7 @@
 			for (let j = i + 1; j < result.length; j++) {
 				if (result[j].message.role === MessageRole.ASSISTANT) {
 					result[i].nextAssistantMessage = result[j].message;
+
 					break;
 				}
 			}

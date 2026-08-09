@@ -7,10 +7,10 @@
 // made per-token cost scale with conversation length (1.26ms at 1 prior message
 // -> 3.07ms at 40). Mutating in place keeps it flat.
 
-import { describe, it, expect } from 'vitest';
+import { MessageRole } from '$lib/enums';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import type { DatabaseMessage } from '$lib/types';
-import { MessageRole } from '$lib/enums';
+import { describe, expect, it } from 'vitest';
 
 function makeMessage(id: string): DatabaseMessage {
 	return {

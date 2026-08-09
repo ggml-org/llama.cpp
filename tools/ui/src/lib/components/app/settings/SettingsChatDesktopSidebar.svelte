@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Settings } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 
 	interface Props {

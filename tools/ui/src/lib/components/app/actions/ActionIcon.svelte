@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Button, type ButtonVariant, type ButtonSize } from '$lib/components/ui/button';
+	import { Button, type ButtonSize, type ButtonVariant } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import type { Component } from 'svelte';
 	import { TooltipSide } from '$lib/enums';
+	import type { Component } from 'svelte';
 
 	interface Props {
 		ariaLabel?: string;

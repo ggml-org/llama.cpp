@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { fade } from 'svelte/transition';
 	import type { UseProcessingStateReturn } from '$lib/hooks/use-processing-state.svelte';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		modelLoadingText: string | null;

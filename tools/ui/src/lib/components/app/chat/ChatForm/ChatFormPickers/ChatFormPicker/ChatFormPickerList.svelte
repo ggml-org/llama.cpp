@@ -1,9 +1,9 @@
 <script lang="ts" generics="T">
-	import type { Snippet } from 'svelte';
 	import { SearchInput } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
-	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { CHAT_FORM_POPOVER_MAX_HEIGHT } from '$lib/constants';
+	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		items: T[];

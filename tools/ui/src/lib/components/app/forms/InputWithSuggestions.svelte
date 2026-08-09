@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { fly } from 'svelte/transition';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { fly } from 'svelte/transition';
 
 	interface Props {
 		name: string;

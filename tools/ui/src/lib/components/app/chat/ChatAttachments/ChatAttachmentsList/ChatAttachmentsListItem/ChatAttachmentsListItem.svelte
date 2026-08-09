@@ -2,8 +2,8 @@
 	import {
 		ChatAttachmentsListItemMcpPrompt,
 		ChatAttachmentsListItemMcpResource,
-		ChatAttachmentsListItemThumbnailImage,
-		ChatAttachmentsListItemThumbnailFile
+		ChatAttachmentsListItemThumbnailFile,
+		ChatAttachmentsListItemThumbnailImage
 	} from '$lib/components/app';
 	import { AttachmentType } from '$lib/enums';
 	import type {

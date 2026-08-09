@@ -6,9 +6,9 @@
 		ChatMessageUserBubble
 	} from '$lib/components/app/chat';
 	import { getMessageEditContext } from '$lib/contexts';
+	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
-	import { MessageRole, ChatMessageStatisticsMode } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
@@ -60,6 +60,7 @@
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {
 		const timings = nextAssistantMessage?.timings;
+
 		if (!timings?.prompt_n || !timings?.prompt_ms) return null;
 
 		const agentic = timings.agentic;

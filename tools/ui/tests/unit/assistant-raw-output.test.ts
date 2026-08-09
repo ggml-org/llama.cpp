@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { AgenticSectionType } from '$lib/enums';
 import { REASONING_TAGS } from '$lib/constants';
-import { buildAssistantRawOutput, type AgenticSection } from '$lib/utils/agentic';
+import { AgenticSectionType } from '$lib/enums';
+import { type AgenticSection, buildAssistantRawOutput } from '$lib/utils/agentic';
+import { describe, expect, it } from 'vitest';
 
 function makeSection(
 	overrides: Partial<AgenticSection> & { type: AgenticSectionType }
@@ -19,6 +19,7 @@ describe('buildAssistantRawOutput', () => {
 
 	it('formats a reasoning section with a single newline between tags and content', () => {
 		const sections = [makeSection({ type: AgenticSectionType.REASONING, content: 'thinking...' })];
+
 		expect(buildAssistantRawOutput(sections)).toBe(
 			`${REASONING_TAGS.START}\nthinking...${REASONING_TAGS.END}`
 		);
@@ -26,6 +27,7 @@ describe('buildAssistantRawOutput', () => {
 
 	it('formats a text section as-is', () => {
 		const sections = [makeSection({ type: AgenticSectionType.TEXT, content: 'Hello' })];
+
 		expect(buildAssistantRawOutput(sections)).toBe('Hello');
 	});
 
@@ -38,6 +40,7 @@ describe('buildAssistantRawOutput', () => {
 				toolResult: 'file contents'
 			})
 		];
+
 		expect(buildAssistantRawOutput(sections)).toBe(
 			[
 				'{',
@@ -58,6 +61,7 @@ describe('buildAssistantRawOutput', () => {
 			makeSection({ type: AgenticSectionType.TEXT, content: 'Hello' }),
 			makeSection({ type: AgenticSectionType.TOOL_CALL, toolName: 'noop' })
 		];
+
 		expect(buildAssistantRawOutput(sections)).toBe('Hello\n\n{\n  "name": "noop"\n}');
 	});
 
@@ -70,6 +74,7 @@ describe('buildAssistantRawOutput', () => {
 				toolResult: 'result'
 			})
 		];
+
 		expect(buildAssistantRawOutput(sections)).toBe(
 			['{', '  "name": "broken",', '  "arguments": "{not json"', '}', '', '', 'result'].join('\n')
 		);

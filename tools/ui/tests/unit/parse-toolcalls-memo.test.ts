@@ -3,11 +3,11 @@
 // streaming text tokens trigger redundant JSON.parse calls on unchanged
 // tool call data.
 
-import { describe, it, expect, vi } from 'vitest';
-import { deriveAgenticSections } from '$lib/utils/agentic';
+import { AgenticSectionType, MessageRole } from '$lib/enums';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessage } from '$lib/types/database';
-import { MessageRole, AgenticSectionType } from '$lib/enums';
+import { deriveAgenticSections } from '$lib/utils/agentic';
+import { describe, expect, it, vi } from 'vitest';
 
 function makeMessage(overrides: Partial<DatabaseMessage>): DatabaseMessage {
 	return {
@@ -33,7 +33,6 @@ describe('parseToolCalls memoization', () => {
 		const toolCallsJson = JSON.stringify([
 			{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
 		]);
-
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });
 		const sections1 = deriveAgenticSections(msg, [], [], false);
 		const sections2 = deriveAgenticSections(msg, [], [], false);
@@ -46,7 +45,6 @@ describe('parseToolCalls memoization', () => {
 		const toolCallsJson = JSON.stringify([
 			{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
 		]);
-
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });
 		const spy = vi.spyOn(JSON, 'parse');
 
@@ -83,17 +81,15 @@ describe('deriveAgenticSections O(1) tool message lookup', () => {
 			{ id: 'call_1', type: 'function', function: { name: 'test_1', arguments: '{}' } },
 			{ id: 'call_2', type: 'function', function: { name: 'test_2', arguments: '{}' } }
 		]);
-
 		const toolMessages = [
 			makeMessage({ role: MessageRole.TOOL, toolCallId: 'call_1', content: 'result_1' }),
 			makeMessage({ role: MessageRole.TOOL, toolCallId: 'call_2', content: 'result_2' })
 		];
-
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });
 		const sections = deriveAgenticSections(msg, toolMessages, [], false);
-
 		// Expect: TEXT + 2 TOOL_CALL sections
 		const toolCallSections = sections.filter((s) => s.type === AgenticSectionType.TOOL_CALL);
+
 		expect(toolCallSections).toHaveLength(2);
 		expect(toolCallSections[0].toolResult).toBe('result_1');
 		expect(toolCallSections[1].toolResult).toBe('result_2');
@@ -103,11 +99,10 @@ describe('deriveAgenticSections O(1) tool message lookup', () => {
 		const toolCallsJson = JSON.stringify([
 			{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
 		]);
-
 		const msg = makeMessage({ content: '', toolCalls: toolCallsJson });
 		const sections = deriveAgenticSections(msg, [], [], true);
-
 		const toolCallSection = sections.find((s) => s.type === AgenticSectionType.TOOL_CALL_PENDING);
+
 		expect(toolCallSection).toBeDefined();
 		expect(toolCallSection?.content).toBe('');
 	});
@@ -123,7 +118,6 @@ describe('deriveAgenticSections O(1) tool message lookup', () => {
 			})
 		);
 		const toolCallsJson = JSON.stringify(toolCalls);
-
 		const toolMessages = Array.from({ length: N }, (_, i) =>
 			makeMessage({
 				role: MessageRole.TOOL,
@@ -131,15 +125,13 @@ describe('deriveAgenticSections O(1) tool message lookup', () => {
 				content: `result_${i}`
 			})
 		);
-
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });
-
 		// If the lookup were still O(n^2), this would be noticeably slow
 		const start = Date.now();
 		const sections = deriveAgenticSections(msg, toolMessages, [], false);
 		const elapsed = Date.now() - start;
-
 		const toolCallSections = sections.filter((s) => s.type === AgenticSectionType.TOOL_CALL);
+
 		expect(toolCallSections).toHaveLength(N);
 		expect(elapsed).toBeLessThan(100); // Should be fast with O(1) lookup
 	});

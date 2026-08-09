@@ -64,26 +64,29 @@
  * // With this plugin: <br> becomes line break, <ul> becomes actual list
  */
 
-import type { Plugin } from 'unified';
+import { BR_PATTERN, LI_PATTERN, LIST_PATTERN } from '$lib/constants';
 import type { Element, ElementContent, Root, Text } from 'hast';
+import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 import { visitParents } from 'unist-util-visit-parents';
-import { BR_PATTERN, LIST_PATTERN, LI_PATTERN } from '$lib/constants';
 
 /**
  * Expands text containing `<br>` tags into an array of text nodes and br elements.
  */
 function expandBrTags(value: string): ElementContent[] {
 	const matches = [...value.matchAll(BR_PATTERN)];
+
 	if (!matches.length) return [{ type: 'text', value } as Text];
 
 	const result: ElementContent[] = [];
+
 	let cursor = 0;
 
 	for (const m of matches) {
 		if (m.index! > cursor) {
 			result.push({ type: 'text', value: value.slice(cursor, m.index) } as Text);
 		}
+
 		result.push({ type: 'element', tagName: 'br', properties: {}, children: [] } as Element);
 		cursor = m.index! + m[0].length;
 	}
@@ -101,10 +104,12 @@ function expandBrTags(value: string): ElementContent[] {
  */
 function parseList(value: string): Element | null {
 	const match = value.trim().match(LIST_PATTERN);
+
 	if (!match) return null;
 
 	const body = match[1];
 	const items: ElementContent[] = [];
+
 	let cursor = 0;
 
 	for (const liMatch of body.matchAll(LI_PATTERN)) {
@@ -133,11 +138,13 @@ function parseList(value: string): Element | null {
 function processCell(cell: Element) {
 	visitParents(cell, 'text', (textNode: Text, ancestors) => {
 		const parent = ancestors[ancestors.length - 1];
+
 		if (!parent || parent.type !== 'element') return;
 
 		const parentEl = parent as Element;
 		const siblings = parentEl.children as ElementContent[];
 		const startIndex = siblings.indexOf(textNode as ElementContent);
+
 		if (startIndex === -1) return;
 
 		// Combine consecutive text nodes and <br> elements into one string
@@ -146,6 +153,7 @@ function processCell(cell: Element) {
 
 		for (let i = startIndex; i < siblings.length; i++) {
 			const sib = siblings[i];
+
 			if (sib.type === 'text') {
 				combined += (sib as Text).value;
 				endIndex = i;
@@ -159,13 +167,16 @@ function processCell(cell: Element) {
 
 		// Try parsing as list first (replaces entire combined range)
 		const list = parseList(combined);
+
 		if (list) {
 			siblings.splice(startIndex, endIndex - startIndex + 1, list);
+
 			return;
 		}
 
 		// Otherwise, just expand <br> tags in this text node
 		const expanded = expandBrTags(textNode.value);
+
 		if (expanded.length !== 1 || expanded[0] !== textNode) {
 			siblings.splice(startIndex, 1, ...expanded);
 		}

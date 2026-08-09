@@ -1,5 +1,5 @@
-import { SvelteMap } from 'svelte/reactivity';
 import type { ModelOption } from '$lib/types/models';
+import { SvelteMap } from 'svelte/reactivity';
 
 export interface ModelItem {
 	option: ModelOption;
@@ -19,6 +19,7 @@ export interface GroupedModelOptions {
 
 export function filterModelOptions(options: ModelOption[], searchTerm: string): ModelOption[] {
 	const term = searchTerm.trim().toLowerCase();
+
 	if (!term) return options;
 
 	return options.filter(
@@ -37,6 +38,7 @@ export function groupModelOptions(
 ): GroupedModelOptions {
 	// Loaded models
 	const loaded: ModelItem[] = [];
+
 	for (let i = 0; i < filteredOptions.length; i++) {
 		if (isModelLoaded(filteredOptions[i].model)) {
 			loaded.push({ option: filteredOptions[i], flatIndex: i });
@@ -46,6 +48,7 @@ export function groupModelOptions(
 	// Favorites (excluding loaded)
 	const loadedModelIds = new Set(loaded.map((item) => item.option.model));
 	const favorites: ModelItem[] = [];
+
 	for (let i = 0; i < filteredOptions.length; i++) {
 		if (
 			favoriteIds.has(filteredOptions[i].model) &&
@@ -58,12 +61,16 @@ export function groupModelOptions(
 	// Available models grouped by org (excluding loaded and favorites)
 	const available: OrgGroup[] = [];
 	const orgGroups = new SvelteMap<string, ModelItem[]>();
+
 	for (let i = 0; i < filteredOptions.length; i++) {
 		const option = filteredOptions[i];
+
 		if (loadedModelIds.has(option.model) || favoriteIds.has(option.model)) continue;
 
 		const key = option.parsedId?.orgName ?? '';
+
 		if (!orgGroups.has(key)) orgGroups.set(key, []);
+
 		orgGroups.get(key)!.push({ option, flatIndex: i });
 	}
 

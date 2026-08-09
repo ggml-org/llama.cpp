@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { ParameterSyncService } from './parameter-sync.service';
+import { describe, expect, it } from 'vitest';
 
 describe('ParameterSyncService', () => {
 	describe('roundFloatingPoint', () => {
@@ -12,7 +12,6 @@ describe('ParameterSyncService', () => {
 				top_k: 40,
 				samplers: ['top_k', 'typ_p', 'top_p', 'min_p', 'temperature']
 			};
-
 			const result = ParameterSyncService.extractServerDefaults({
 				...mockServerParams,
 				// Add other required fields to match the API type
@@ -75,7 +74,6 @@ describe('ParameterSyncService', () => {
 				max_tokens: -1,
 				temperature: 0.7
 			};
-
 			const result = ParameterSyncService.extractServerDefaults({
 				...mockServerParams,
 				// Minimal required fields

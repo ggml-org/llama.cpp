@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { deriveAgenticSections, hasAgenticContent } from '$lib/utils/agentic';
 import { AgenticSectionType, MessageRole } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types/database';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
+import type { DatabaseMessage } from '$lib/types/database';
+import { deriveAgenticSections, hasAgenticContent } from '$lib/utils/agentic';
+import { describe, expect, it } from 'vitest';
 
 function makeAssistant(overrides: Partial<DatabaseMessage> = {}): DatabaseMessage {
 	return {
@@ -37,12 +37,14 @@ describe('deriveAgenticSections', () => {
 	it('returns empty array for assistant with no content', () => {
 		const msg = makeAssistant({ content: '' });
 		const sections = deriveAgenticSections(msg);
+
 		expect(sections).toEqual([]);
 	});
 
 	it('returns text section for simple assistant message', () => {
 		const msg = makeAssistant({ content: 'Hello world' });
 		const sections = deriveAgenticSections(msg);
+
 		expect(sections).toHaveLength(1);
 		expect(sections[0].type).toBe(AgenticSectionType.TEXT);
 		expect(sections[0].content).toBe('Hello world');
@@ -54,6 +56,7 @@ describe('deriveAgenticSections', () => {
 			reasoningContent: 'Let me think...'
 		});
 		const sections = deriveAgenticSections(msg);
+
 		expect(sections).toHaveLength(2);
 		expect(sections[0].type).toBe(AgenticSectionType.REASONING);
 		expect(sections[0].content).toBe('Let me think...');
@@ -76,6 +79,7 @@ describe('deriveAgenticSections', () => {
 			content: 'Found 3 results'
 		});
 		const sections = deriveAgenticSections(msg, [toolResult]);
+
 		expect(sections).toHaveLength(2);
 		expect(sections[0].type).toBe(AgenticSectionType.TEXT);
 		expect(sections[1].type).toBe(AgenticSectionType.TOOL_CALL);
@@ -90,6 +94,7 @@ describe('deriveAgenticSections', () => {
 			])
 		});
 		const sections = deriveAgenticSections(msg, [], [], true);
+
 		expect(sections).toHaveLength(1);
 		expect(sections[0].type).toBe(AgenticSectionType.TOOL_CALL_PENDING);
 		expect(sections[0].toolName).toBe('bash');
@@ -111,6 +116,7 @@ describe('deriveAgenticSections', () => {
 			])
 		});
 		const sections = deriveAgenticSections(msg, [], [], true);
+
 		expect(sections).toHaveLength(1);
 		expect(sections[0].type).toBe(AgenticSectionType.TOOL_CALL_PENDING);
 		expect(sections[0].type).not.toBe(AgenticSectionType.TOOL_CALL_STREAMING);
@@ -135,9 +141,9 @@ describe('deriveAgenticSections', () => {
 			id: 'ast-2',
 			content: 'Final answer based on results.'
 		});
-
 		// toolMessages contains both tool result and continuation assistant
 		const sections = deriveAgenticSections(assistant1, [tool1, assistant2]);
+
 		expect(sections).toHaveLength(3);
 		// Turn 1
 		expect(sections[0].type).toBe(AgenticSectionType.TEXT);
@@ -184,8 +190,8 @@ describe('deriveAgenticSections', () => {
 			content: 'Here is the analysis.',
 			reasoningContent: 'The file contains...'
 		});
-
 		const sections = deriveAgenticSections(assistant1, [tool1, assistant2, tool2, assistant3]);
+
 		// Turn 1: tool_call (no text since content is empty)
 		// Turn 2: text + tool_call
 		// Turn 3: reasoning + text
@@ -206,6 +212,7 @@ describe('deriveAgenticSections', () => {
 			reasoningContent: 'Let me think about this...'
 		});
 		const sections = deriveAgenticSections(msg, [], [], true);
+
 		expect(sections).toHaveLength(1);
 		expect(sections[0].type).toBe(AgenticSectionType.REASONING_PENDING);
 		expect(sections[0].content).toBe('Let me think about this...');
@@ -217,6 +224,7 @@ describe('deriveAgenticSections', () => {
 			reasoningContent: 'Let me think...'
 		});
 		const sections = deriveAgenticSections(msg, [], [], true);
+
 		expect(sections).toHaveLength(2);
 		expect(sections[0].type).toBe(AgenticSectionType.REASONING);
 		expect(sections[1].type).toBe(AgenticSectionType.TEXT);
@@ -227,6 +235,7 @@ describe('deriveAgenticSections', () => {
 			reasoningContent: 'Let me think...'
 		});
 		const sections = deriveAgenticSections(msg, [], [], false);
+
 		expect(sections).toHaveLength(1);
 		expect(sections[0].type).toBe(AgenticSectionType.REASONING);
 	});
@@ -239,12 +248,11 @@ describe('deriveAgenticSections', () => {
 		});
 		const tool1 = makeToolMsg({ toolCallId: 'call_1', content: 'result' });
 		const assistant2 = makeAssistant({ id: 'ast-2', content: '' });
-
 		const streamingToolCalls: ApiChatCompletionToolCall[] = [
 			{ id: 'call_2', type: 'function', function: { name: 'write_file', arguments: '{"pa' } }
 		];
-
 		const sections = deriveAgenticSections(assistant1, [tool1, assistant2], streamingToolCalls);
+
 		// Turn 1: tool_call
 		// Turn 2 (streaming): streaming tool call
 		expect(sections.some((s) => s.type === AgenticSectionType.TOOL_CALL)).toBe(true);
@@ -255,6 +263,7 @@ describe('deriveAgenticSections', () => {
 describe('hasAgenticContent', () => {
 	it('returns false for plain assistant', () => {
 		const msg = makeAssistant({ content: 'Just text' });
+
 		expect(hasAgenticContent(msg)).toBe(false);
 	});
 
@@ -264,17 +273,20 @@ describe('hasAgenticContent', () => {
 				{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
 			])
 		});
+
 		expect(hasAgenticContent(msg)).toBe(true);
 	});
 
 	it('returns true when toolMessages are provided', () => {
 		const msg = makeAssistant();
 		const tool = makeToolMsg();
+
 		expect(hasAgenticContent(msg, [tool])).toBe(true);
 	});
 
 	it('returns false for empty toolCalls JSON', () => {
 		const msg = makeAssistant({ toolCalls: '[]' });
+
 		expect(hasAgenticContent(msg)).toBe(false);
 	});
 });

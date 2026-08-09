@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { MessageRole } from '$lib/enums';
+import { describe, expect, it } from 'vitest';
 
 /**
  * Tests for the new reasoning content handling.
@@ -31,11 +31,11 @@ describe('reasoning content in new structured format', () => {
 			content: 'The answer is 4.',
 			reasoningContent: 'Let me think: 2+2=4, basic arithmetic.'
 		};
-
 		const apiMessage: Record<string, unknown> = {
 			role: dbMessage.role,
 			content: dbMessage.content
 		};
+
 		if (dbMessage.reasoningContent) {
 			apiMessage.reasoning_content = dbMessage.reasoningContent;
 		}
@@ -53,13 +53,12 @@ describe('reasoning content in new structured format', () => {
 			content: 'The answer is 4.',
 			reasoningContent: 'internal thinking'
 		};
-
 		const excludeReasoningFromContext = true;
-
 		const apiMessage: Record<string, unknown> = {
 			role: dbMessage.role,
 			content: dbMessage.content
 		};
+
 		if (!excludeReasoningFromContext && dbMessage.reasoningContent) {
 			apiMessage.reasoning_content = dbMessage.reasoningContent;
 		}
@@ -74,11 +73,11 @@ describe('reasoning content in new structured format', () => {
 			content: 'No reasoning here.',
 			reasoningContent: undefined
 		};
-
 		const apiMessage: Record<string, unknown> = {
 			role: dbMessage.role,
 			content: dbMessage.content
 		};
+
 		if (dbMessage.reasoningContent) {
 			apiMessage.reasoning_content = dbMessage.reasoningContent;
 		}

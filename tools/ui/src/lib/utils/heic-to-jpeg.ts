@@ -1,5 +1,5 @@
-import { MimeTypeImage } from '$lib/enums';
 import { HEIC_JPEG_QUALITY } from '$lib/constants/image-size';
+import { MimeTypeImage } from '$lib/enums';
 
 // heic requires a relatively large decoder, in order to reduce primary bundle size
 // we lazily load this decoder from a CDN when needed, and cache it for future conversions
@@ -38,6 +38,7 @@ export async function heicFileToJpegDataURL(file: File | Blob): Promise<string> 
 
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
+
 		reader.onload = () => resolve(reader.result as string);
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(jpegBlob);

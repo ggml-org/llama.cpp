@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
 	import CircleIcon from '@lucide/svelte/icons/circle';
 	import { cn, type WithoutChild } from '$lib/components/ui/utils.js';
+	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
 
 	let {
 		ref = $bindable(null),

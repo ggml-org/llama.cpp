@@ -1,15 +1,15 @@
 <script lang="ts">
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
-	import * as Sheet from '$lib/components/ui/sheet';
-	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import {
 		DialogModelInformation,
 		ModelId,
 		ModelsSelectorList,
 		SearchInput
 	} from '$lib/components/app';
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
+	import * as Sheet from '$lib/components/ui/sheet';
 	import { ServerModelStatus } from '$lib/enums';
+	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
 	import { modelLoadFraction } from '$lib/utils';
 

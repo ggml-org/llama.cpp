@@ -3,19 +3,19 @@
 	// Renders section.toolArgs / section.toolResult directly using the
 	// shared chrome shell.
 
+	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
-	import { FileTypeText, ToolResultKind } from '$lib/enums';
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
+	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
+	import { FileTypeText, ToolResultKind } from '$lib/enums';
+	import type { DatabaseMessageExtra } from '$lib/types';
 	import {
+		type AgenticSection,
 		classifyToolResult,
 		formatJsonPretty,
-		parseToolResultWithImages,
-		type AgenticSection
+		parseToolResultWithImages
 	} from '$lib/utils';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;

@@ -5,9 +5,9 @@
 // fallback so MCP servers that return unparseable output still get
 // surfaced.
 
-import { BuiltInTool } from '$lib/enums';
-import { splitSearchSummaryList, type AgenticSection } from '$lib/utils';
 import { parseToolArgs } from './_shared';
+import { BuiltInTool } from '$lib/enums';
+import { type AgenticSection, splitSearchSummaryList } from '$lib/utils';
 
 export type GrepSearchMatch = {
 	file: string;
@@ -28,10 +28,12 @@ export type GrepSearchMeta = {
 
 export function parseGrepSearchMeta(section: AgenticSection): GrepSearchMeta | null {
 	const args = parseToolArgs(BuiltInTool.GREP_SEARCH, section);
+
 	if (!args) return null;
 
 	const path = typeof args.path === 'string' ? args.path : '';
 	const pattern = typeof args.pattern === 'string' ? args.pattern : '';
+
 	if (!path || !pattern) return null;
 
 	const include = typeof args.include === 'string' && args.include ? args.include : '**';
@@ -43,17 +45,21 @@ export function parseGrepSearchMeta(section: AgenticSection): GrepSearchMeta | n
 	let errorMessage: string | undefined;
 
 	const toolResultString = section.toolResult;
+
 	if (toolResultString) {
 		try {
 			const parsed: unknown = JSON.parse(toolResultString);
+
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 				const obj = parsed as Record<string, unknown>;
+
 				if (typeof obj.error === 'string') {
 					errorMessage = obj.error;
 				} else if (typeof obj.plain_text_response === 'string') {
 					const split = splitSearchSummaryList(obj.plain_text_response, (total) => {
 						totalMatches = total;
 					});
+
 					matches = split.lines.map((line) => parseGrepLine(line, showLineNumbers));
 				}
 			}
@@ -64,6 +70,7 @@ export function parseGrepSearchMeta(section: AgenticSection): GrepSearchMeta | n
 			const split = splitSearchSummaryList(toolResultString, (total) => {
 				totalMatches = total;
 			});
+
 			matches = split.lines.map((line) => parseGrepLine(line, showLineNumbers));
 		}
 	}
@@ -85,9 +92,11 @@ function parseGrepLine(line: string, showLineNumbers: boolean): GrepSearchMatch 
 	//   <file>:<content>          when return_line_numbers=false
 	//   <file>:<lineno>:<content> when return_line_numbers=true
 	const firstColon = line.indexOf(':');
+
 	if (firstColon === -1) {
 		return { file: line, content: '' };
 	}
+
 	const file = line.slice(0, firstColon);
 	const tail = line.slice(firstColon + 1);
 
@@ -96,10 +105,13 @@ function parseGrepLine(line: string, showLineNumbers: boolean): GrepSearchMatch 
 	}
 
 	const secondColon = tail.indexOf(':');
+
 	if (secondColon === -1) {
 		return { file, content: tail };
 	}
+
 	const lineNum = parseInt(tail.slice(0, secondColon), 10);
+
 	return {
 		file,
 		line: Number.isFinite(lineNum) ? lineNum : undefined,

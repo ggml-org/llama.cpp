@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash2, RefreshCw, Pencil } from '@lucide/svelte';
+	import { Pencil, RefreshCw, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 
 	interface Props {

@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { FolderOpen, Sparkles } from '@lucide/svelte';
-	import { MODEL_SELECTOR_ICON } from '$lib/constants';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { ChatFormCommandAction } from '$lib/enums';
-	import type { ChatFormCommand } from '$lib/types';
 	import {
 		ChatFormPickerList,
 		ChatFormPickerListItem,
 		ChatFormPickerPopover
 	} from '$lib/components/app/chat';
+	import { MODEL_SELECTOR_ICON } from '$lib/constants';
+	import { ChatFormCommandAction } from '$lib/enums';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
+	import type { ChatFormCommand } from '$lib/types';
 
 	/**
 	 * Slash-command picker; `query` (typed after `/`) filters the commands.
@@ -51,11 +51,15 @@
 
 	function stepEnabled(from: number, dir: number): number {
 		const n = filteredCommands.length;
+
 		if (n === 0) return -1;
+
 		for (let i = 1; i <= n; i++) {
 			const idx = (from + dir * i + n) % n;
+
 			if (!filteredCommands[idx].disabled) return idx;
 		}
+
 		return -1;
 	}
 
@@ -76,8 +80,10 @@
 	$effect(() => {
 		if (nav.hoveredIndex < 0 || nav.hoveredIndex >= filteredCommands.length) {
 			nav.reset(firstEnabledIndex());
+
 			return;
 		}
+
 		if (filteredCommands[nav.hoveredIndex].disabled) {
 			nav.reset(firstEnabledIndex());
 		}
@@ -85,6 +91,7 @@
 
 	function handleSelect(command: ChatFormCommand) {
 		if (command.disabled) return;
+
 		onSelect(command);
 		onClose();
 	}

@@ -24,9 +24,12 @@
 
 		try {
 			const parsed: unknown = JSON.parse(toolResultString);
+
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 				const obj = parsed as Record<string, unknown>;
+
 				if (typeof obj.error === 'string') return { errorMessage: obj.error };
+
 				if (typeof obj.result === 'string') return { dateString: obj.result.trim() };
 			}
 		} catch {

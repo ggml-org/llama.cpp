@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { FileX } from '@lucide/svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 
 	interface Props {
 		open: boolean;

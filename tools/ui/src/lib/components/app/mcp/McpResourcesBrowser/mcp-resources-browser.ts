@@ -24,17 +24,21 @@ export function buildResourceTree(
 	if (!searchQuery || !searchQuery.trim()) {
 		for (const resource of resourceList) {
 			const pathParts = parseResourcePath(resource.uri);
+
 			let current = root;
 
 			for (let i = 0; i < pathParts.length - 1; i++) {
 				const part = pathParts[i];
+
 				if (!current.children.has(part)) {
 					current.children.set(part, { name: part, children: new Map() });
 				}
+
 				current = current.children.get(part)!;
 			}
 
 			const fileName = pathParts[pathParts.length - 1] || resource.name;
+
 			current.children.set(resource.uri, {
 				name: fileName,
 				resource: { ...resource, serverName },
@@ -52,13 +56,16 @@ export function buildResourceTree(
 		if (!resourceMatchesSearch(resource, query)) continue;
 
 		const pathParts = parseResourcePath(resource.uri);
+
 		let current = root;
 
 		for (let i = 0; i < pathParts.length - 1; i++) {
 			const part = pathParts[i];
+
 			if (!current.children.has(part)) {
 				current.children.set(part, { name: part, children: new Map(), isFiltered: true });
 			}
+
 			current = current.children.get(part)!;
 		}
 
@@ -76,6 +83,7 @@ export function buildResourceTree(
 		if (node.resource) return true;
 
 		const toDelete: string[] = [];
+
 		for (const [name, child] of node.children.entries()) {
 			if (!cleanupEmptyFolders(child)) {
 				toDelete.push(name);
@@ -96,6 +104,7 @@ export function buildResourceTree(
 
 export function countTreeResources(node: ResourceTreeNode): number {
 	if (node.resource) return 1;
+
 	let count = 0;
 
 	for (const child of node.children.values()) {
@@ -111,6 +120,7 @@ export function sortTreeChildren(children: ResourceTreeNode[]): ResourceTreeNode
 		const bIsFolder = !b.resource && b.children.size > 0;
 
 		if (aIsFolder && !bIsFolder) return -1;
+
 		if (!aIsFolder && bIsFolder) return 1;
 
 		return a.name.localeCompare(b.name);

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { MermaidPreview } from '$lib/components/app/content';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 
 	interface Props {
 		open: boolean;

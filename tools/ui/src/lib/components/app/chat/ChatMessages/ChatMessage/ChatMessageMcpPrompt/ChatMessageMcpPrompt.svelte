@@ -5,7 +5,7 @@
 		ChatMessageMcpPromptContent
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { MessageRole, McpPromptVariant } from '$lib/enums';
+	import { McpPromptVariant, MessageRole } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {

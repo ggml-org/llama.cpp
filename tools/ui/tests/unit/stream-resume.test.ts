@@ -17,11 +17,12 @@ beforeAll(() => {
 			store.set(k, String(v));
 		}
 	};
+
 	(globalThis as unknown as { localStorage: Storage }).localStorage = polyfill;
 });
 
-import { ChatService } from '$lib/services/chat.service';
 import { STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX } from '$lib/constants';
+import { ChatService } from '$lib/services/chat.service';
 
 describe('ChatService stream resume', () => {
 	beforeEach(() => {
@@ -38,6 +39,7 @@ describe('ChatService stream resume', () => {
 	it('saves and reads back the byte count', () => {
 		ChatService.saveStreamState('conv-a', 4242);
 		const got = ChatService.getStreamState('conv-a');
+
 		expect(got).not.toBeNull();
 		expect(got!.bytesReceived).toBe(4242);
 		expect(typeof got!.updatedAt).toBe('number');
@@ -47,6 +49,7 @@ describe('ChatService stream resume', () => {
 		ChatService.saveStreamState('conv-a', 100);
 		ChatService.saveStreamState('conv-a', 200);
 		const got = ChatService.getStreamState('conv-a');
+
 		expect(got!.bytesReceived).toBe(200);
 	});
 

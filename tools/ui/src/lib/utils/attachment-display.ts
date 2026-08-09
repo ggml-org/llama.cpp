@@ -1,10 +1,10 @@
 import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
-import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
 import type {
 	AttachmentDisplayItemsOptions,
 	ChatAttachmentDisplayItem,
 	ChatUploadedFile
 } from '$lib/types';
+import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
 
 /**
  * Check if a display item represents an MCP prompt
@@ -14,9 +14,11 @@ export function isMcpPrompt(item: ChatAttachmentDisplayItem): boolean {
 	if (item.attachment?.type === AttachmentType.MCP_PROMPT) {
 		return true;
 	}
+
 	if (item.uploadedFile?.type === SpecialFileType.MCP_PROMPT && item.uploadedFile.mcpPrompt) {
 		return true;
 	}
+
 	return false;
 }
 

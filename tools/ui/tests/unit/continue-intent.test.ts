@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { classifyContinueIntent } from '$lib/utils/agentic';
 import { ContinueIntentKind, MessageRole, MessageType } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types/database';
+import { classifyContinueIntent } from '$lib/utils/agentic';
+import { describe, expect, it } from 'vitest';
 
 /**
  * Tests for the Continue button intent classifier.
@@ -21,8 +21,10 @@ import type { DatabaseMessage } from '$lib/types/database';
  */
 
 let nextId = 0;
+
 function makeMsg(role: MessageRole, opts: Partial<DatabaseMessage> = {}): DatabaseMessage {
 	nextId++;
+
 	return {
 		id: `msg-${nextId}`,
 		convId: 'conv-1',
@@ -46,7 +48,6 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.USER, { content: 'hello' }),
 			makeMsg(MessageRole.ASSISTANT, { content: 'hi there' })
 		];
-
 		const intent = classifyContinueIntent(messages, 1);
 
 		expect(intent).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
@@ -71,7 +72,6 @@ describe('classifyContinueIntent', () => {
 				toolCalls: toolCall('call_1', 'bash_tool', '{"command":"ls"}')
 			})
 		];
-
 		const intent = classifyContinueIntent(messages, 1);
 
 		expect(intent).toEqual({ kind: ContinueIntentKind.RERUN_TURN, truncateAfter: 0 });
@@ -86,7 +86,6 @@ describe('classifyContinueIntent', () => {
 			}),
 			makeMsg(MessageRole.TOOL, { content: 'file1\nfile2', toolCallId: 'call_1' })
 		];
-
 		const intent = classifyContinueIntent(messages, 1);
 
 		expect(intent).toEqual({ kind: ContinueIntentKind.NEXT_TURN, truncateAfter: 2 });
@@ -105,7 +104,6 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.TOOL, { content: 'r1', toolCallId: 'call_1' }),
 			makeMsg(MessageRole.TOOL, { content: 'r2', toolCallId: 'call_2' })
 		];
-
 		const intent = classifyContinueIntent(messages, 1);
 
 		expect(intent).toEqual({ kind: ContinueIntentKind.NEXT_TURN, truncateAfter: 3 });
@@ -122,7 +120,6 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.USER, { content: 'wait' }),
 			makeMsg(MessageRole.TOOL, { content: 'late', toolCallId: 'call_1' })
 		];
-
 		const intent = classifyContinueIntent(messages, 1);
 
 		// truncateAfter must point at the contiguous tool block, not jump over

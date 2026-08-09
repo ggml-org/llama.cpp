@@ -41,6 +41,7 @@ export function modelLoadProgressText(progress: ModelLoadProgress | null): strin
 	if (!progress) return null;
 
 	const label = modelLoadStageLabel(progress.current);
+
 	if (!label) return null;
 
 	return `${label} ${Math.round(modelLoadFraction(progress) * 100)}%`;

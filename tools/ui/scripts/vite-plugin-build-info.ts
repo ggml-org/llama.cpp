@@ -1,7 +1,7 @@
-import { writeFileSync, existsSync } from 'node:fs';
+import { BUILD_CONFIG } from '../src/lib/constants/pwa';
+import { existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';
-import { BUILD_CONFIG } from '../src/lib/constants/pwa';
 
 let processed = false;
 
@@ -21,15 +21,17 @@ export function buildInfoPlugin(): Plugin {
 			setTimeout(() => {
 				try {
 					if (processed) return;
+
 					processed = true;
 
 					const buildNumber = process.env.LLAMA_BUILD_NUMBER || 'b0000';
-
 					const outDir = resolve(OUTPUT_DIR);
 					const indexPath = resolve(outDir, 'index.html');
+
 					if (!existsSync(indexPath)) return;
 
 					const buildJsonPath = resolve(outDir, 'build.json');
+
 					writeFileSync(buildJsonPath, JSON.stringify({ version: buildNumber }), 'utf-8');
 					console.log(`Created build.json (version: ${buildNumber})`);
 				} catch (error) {

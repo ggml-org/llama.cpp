@@ -1,16 +1,16 @@
-import { onMount } from 'svelte';
+import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
+import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
 import {
-	modelsStore,
 	modelOptions,
 	modelsLoading,
+	modelsStore,
 	modelsUpdating,
 	selectedModelId,
 	singleModelName
 } from '$lib/stores/models.svelte';
 import { isRouterMode } from '$lib/stores/server.svelte';
-import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 import type { ModelOption } from '$lib/types/models';
+import { onMount } from 'svelte';
 
 export interface UseModelsSelectorOptions {
 	currentModel: () => string | null;
@@ -65,18 +65,18 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const activeId = $derived(selectedModelId());
 	const isRouter = $derived(isRouterMode());
 	const serverModel = $derived(singleModelName());
-
 	const currentModel = $derived(opts.currentModel());
 	const onModelChange = $derived(opts.onModelChange?.());
-
 	const isHighlightedCurrentModelActive = $derived.by(() => {
 		if (!isRouter || !currentModel) return false;
+
 		const currentOption = options.find((option) => option.model === currentModel);
+
 		return currentOption ? currentOption.id === activeId : false;
 	});
-
 	const isCurrentModelInCache = $derived.by(() => {
 		if (!isRouter || !currentModel) return true;
+
 		return options.some((option) => option.model === currentModel);
 	});
 
@@ -84,6 +84,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	let searchTerm = $state('');
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
+
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
 	const groupedFilteredOptions = $derived(
 		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
@@ -122,6 +123,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 	async function handleSelect(modelId: string) {
 		const option = options.find((opt) => opt.id === modelId);
+
 		if (!option) return;
 
 		let shouldCloseMenu = true;

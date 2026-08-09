@@ -1,18 +1,18 @@
-import { ReasoningEffort } from '$lib/enums';
 import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
 import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
+import { ReasoningEffort } from '$lib/enums';
+import { chatStore } from '$lib/stores/chat.svelte';
+import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
+import {
+	checkModelSupportsThinking,
+	loadedModelIds,
+	modelsStore,
+	propsCacheVersion,
+	supportsThinking
+} from '$lib/stores/models.svelte';
+import { isRouterMode } from '$lib/stores/server.svelte';
 import type { ReasoningEffortLevel } from '$lib/types';
 import type { DatabaseMessage } from '$lib/types/database';
-import {
-	modelsStore,
-	checkModelSupportsThinking,
-	supportsThinking,
-	propsCacheVersion,
-	loadedModelIds
-} from '$lib/stores/models.svelte';
-import { chatStore } from '$lib/stores/chat.svelte';
-import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
 
 export interface UseReasoningMenuReturn {
 	readonly modelSupportsThinking: boolean;
@@ -36,30 +36,29 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 	const conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
-
 	// a router chat can carry reasoning from an earlier turn before the props
 	// cache is primed, so a model that already produced thinking still qualifies
 	const modelSupportsThinkingFromMessages = $derived.by(() => {
 		const modelId = isRouterMode() ? modelsStore.selectedModelName || conversationModel : null;
+
 		if (!modelId) return false;
 
 		return conversationsStore.activeMessages.some(
 			(m) => m.role === 'assistant' && m.model === modelId && !!m.reasoningContent
 		);
 	});
-
 	const modelSupportsThinking = $derived.by(() => {
 		loadedModelIds();
 		propsCacheVersion();
 
 		if (isRouterMode()) {
 			const modelId = modelsStore.selectedModelName || conversationModel;
+
 			return checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages;
 		}
 
 		return supportsThinking() || modelSupportsThinkingFromMessages;
 	});
-
 	const currentEffort = $derived(conversationsStore.getReasoningEffort());
 	const thinkingEnabled = $derived(
 		currentEffort !== ReasoningEffort.OFF && currentEffort !== ReasoningEffort.DEFAULT
@@ -86,8 +85,11 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		},
 		tokenLabel(level: ReasoningEffortLevel): string | null {
 			if (level.value === ReasoningEffort.DEFAULT) return 'Model default';
+
 			const tokens = REASONING_EFFORT_TOKENS[level.value];
+
 			if (tokens === undefined) return null;
+
 			return tokens === -1 ? 'Unlimited' : `Max ${tokens.toLocaleString()} tokens`;
 		},
 		select(level: ReasoningEffortLevel): void {

@@ -1,37 +1,37 @@
-import { ColorMode } from '$lib/enums/ui.enums';
-import { SettingsFieldType } from '$lib/enums/settings.enums';
-import { SyncableParameterType } from '$lib/enums';
-import {
-	Funnel,
-	AlertTriangle,
-	Code,
-	Monitor,
-	ListRestart,
-	Sliders,
-	PencilRuler,
-	Database,
-	Monitor as MonitorIcon,
-	Sun,
-	Moon
-} from '@lucide/svelte';
-import type { Component } from 'svelte';
-import type {
-	SettingsConfigValue,
-	SyncableParameter,
-	SettingsEntry,
-	SettingsSectionTitle,
-	SettingsSectionEntry,
-	SettingsSection
-} from '$lib/types';
 import { CLI_FLAGS } from './cli-flags';
 import { DEFAULT_MCP_CONFIG } from './mcp';
-import {
-	FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH,
-	FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH
-} from './working-directory';
-import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
+import { SETTINGS_KEYS } from './settings-keys';
 import { TITLE_GENERATION } from './title-generation';
+import {
+	FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
+	FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH
+} from './working-directory';
+import {
+	AlertTriangle,
+	Code,
+	Database,
+	Funnel,
+	ListRestart,
+	Monitor,
+	Monitor as MonitorIcon,
+	Moon,
+	PencilRuler,
+	Sliders,
+	Sun
+} from '@lucide/svelte';
+import { SyncableParameterType } from '$lib/enums';
+import { SettingsFieldType } from '$lib/enums/settings.enums';
+import { ColorMode } from '$lib/enums/ui.enums';
+import type {
+	SettingsConfigValue,
+	SettingsEntry,
+	SettingsSection,
+	SettingsSectionEntry,
+	SettingsSectionTitle,
+	SyncableParameter
+} from '$lib/types';
+import type { Component } from 'svelte';
 
 export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
@@ -52,13 +52,11 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 		icon: Database
 	}
 ];
-
 const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component }> = [
 	{ value: ColorMode.SYSTEM, label: 'System', icon: MonitorIcon },
 	{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
 	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
 ];
-
 // Shared options for the title-generation radio group. Both paired registry entries
 // (USE_FIRST_LINE, USE_LLM) reference this list so labels stay in lockstep.
 const TITLE_GENERATION_RADIO_OPTIONS: Array<{
@@ -79,14 +77,12 @@ const TITLE_GENERATION_RADIO_OPTIONS: Array<{
 		isExperimental: true
 	}
 ];
-
 // Common shape for the conversation title radio entry.
 const TITLE_GENERATION_BASE = {
 	type: SettingsFieldType.RADIO,
 	section: SETTINGS_SECTION_SLUGS.GENERAL,
 	radioOptions: TITLE_GENERATION_RADIO_OPTIONS
 } as const;
-
 const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 	[SETTINGS_SECTION_SLUGS.GENERAL]: {
 		title: SETTINGS_SECTION_TITLES.GENERAL,
@@ -648,7 +644,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 		]
 	}
 } as const;
-
 const NON_UI_SETTINGS: SettingsEntry[] = [
 	{
 		key: SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE,
@@ -684,10 +679,12 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 
 function getAllSettings(): SettingsEntry[] {
 	const result: SettingsEntry[] = [];
+
 	for (const section of Object.values(SETTINGS_REGISTRY)) {
 		result.push(...section.settings);
 	}
 	result.push(...NON_UI_SETTINGS);
+
 	return result;
 }
 

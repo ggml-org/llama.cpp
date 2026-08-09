@@ -8,7 +8,6 @@ export function useScrollCarousel() {
 
 		const containerRect = scrollContainer.getBoundingClientRect();
 		const elementRect = element.getBoundingClientRect();
-
 		const elementCenter = elementRect.left + elementRect.width / 2;
 		const containerCenter = containerRect.left + containerRect.width / 2;
 		const scrollOffset = elementCenter - containerCenter;
@@ -18,11 +17,13 @@ export function useScrollCarousel() {
 
 	function scrollLeft() {
 		if (!scrollContainer) return;
+
 		scrollContainer.scrollBy({ left: -250, behavior: 'smooth' });
 	}
 
 	function scrollRight() {
 		if (!scrollContainer) return;
+
 		scrollContainer.scrollBy({ left: 250, behavior: 'smooth' });
 	}
 
@@ -30,6 +31,7 @@ export function useScrollCarousel() {
 		if (!scrollContainer) return;
 
 		const { scrollLeft: sl, scrollWidth, clientWidth } = scrollContainer;
+
 		canScrollLeft = sl > 0;
 		canScrollRight = sl < scrollWidth - clientWidth - 1;
 	}

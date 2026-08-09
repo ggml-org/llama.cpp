@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
-	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import type { MCPServerSettingsEntry } from '$lib/types';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		server: MCPServerSettingsEntry | undefined;

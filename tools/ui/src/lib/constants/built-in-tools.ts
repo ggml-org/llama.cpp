@@ -7,7 +7,6 @@
 // (see ChatMessageToolCallBlockGetDatetime and
 // ChatMessageToolCallBlockSearchResults for prior art).
 
-import type { Component } from 'svelte';
 import {
 	Braces,
 	Clock,
@@ -20,6 +19,7 @@ import {
 	Terminal
 } from '@lucide/svelte';
 import { BuiltInTool, ToolSource } from '$lib/enums';
+import type { Component } from 'svelte';
 
 export interface BuiltinToolUiEntry {
 	icon: Component;
@@ -57,5 +57,6 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 
 export function getBuiltinToolUi(toolName: string | undefined): BuiltinToolUiEntry | null {
 	if (!toolName) return null;
+
 	return (BUILTIN_TOOL_UI as Record<string, BuiltinToolUiEntry>)[toolName] ?? null;
 }

@@ -41,15 +41,12 @@ function detect(): DeviceContext {
 
 	const ua = navigator.userAgent;
 	const isTouch = navigator.maxTouchPoints > 0;
-
 	const isIOSDevice = UA_PATTERNS.IOS_PHONE.test(ua) || (UA_PATTERNS.MACINTOSH.test(ua) && isTouch);
-
 	// Safari keeps 'Safari/' in the UA; non-Safari iOS browsers emit their own
 	// token instead. WKWebView typically omits 'Safari/' entirely.
 	const hasSafariToken = UA_PATTERNS.SAFARI.test(ua) && !UA_PATTERNS.WEBVIEW_IOS.test(ua);
 	const isIOSSafari = isIOSDevice && hasSafariToken;
 	const isWKWebView = isIOSDevice && !hasSafariToken;
-
 	// navigator.standalone is the legacy iOS-only flag (deprecated but still
 	// present); display-mode: standalone is the modern standard (Safari 16.4+).
 	const isStandalone =

@@ -1,18 +1,18 @@
-import { describe, expect, it } from 'vitest';
-import { AgenticSectionType, BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/utils';
 import { parseToolArgs } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
-import { lastPathSegment, abbreviateHome, formatCwdMessage, parseCwdMessage } from '$lib/utils';
+import { parseEditFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/edit-file';
+import { parseExecShellCommandMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/exec-shell-command';
+import { parseFileGlobSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/file-glob-search';
+import { parseGrepSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/grep-search';
+import { parseReadFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/read-file';
+import { parseRunJavascriptMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/run-javascript';
 import {
 	parseWriteFileMeta,
 	type WriteFileMeta
 } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/write-file';
-import { parseEditFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/edit-file';
-import { parseReadFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/read-file';
-import { parseGrepSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/grep-search';
-import { parseFileGlobSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/file-glob-search';
-import { parseRunJavascriptMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/run-javascript';
-import { parseExecShellCommandMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/exec-shell-command';
+import { AgenticSectionType, BuiltInTool } from '$lib/enums';
+import type { AgenticSection } from '$lib/utils';
+import { abbreviateHome, formatCwdMessage, lastPathSegment, parseCwdMessage } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 function makeSection(
 	overrides: Partial<AgenticSection> = {},
@@ -91,6 +91,7 @@ describe('formatCwdMessage / parseCwdMessage', () => {
 
 	it('round-trips through the parser', () => {
 		const info = parseCwdMessage(formatCwdMessage('/Users/al/Documents', '/Users/al'));
+
 		expect(info?.path).toBe('/Users/al/Documents');
 		expect(info?.display).toBe('~/Documents');
 	});
@@ -115,6 +116,7 @@ describe('formatCwdMessage / parseCwdMessage', () => {
 describe('parseToolArgs (shared)', () => {
 	it('returns null when the section has no toolArgs', () => {
 		const result = parseToolArgs(BuiltInTool.READ_FILE, makeSection({ toolArgs: undefined }));
+
 		expect(result).toBeNull();
 	});
 
@@ -123,6 +125,7 @@ describe('parseToolArgs (shared)', () => {
 			BuiltInTool.READ_FILE,
 			makeSection({ toolArgs: '{"path":"/x"}' }, BuiltInTool.WRITE_FILE)
 		);
+
 		expect(result).toBeNull();
 	});
 
@@ -131,6 +134,7 @@ describe('parseToolArgs (shared)', () => {
 			BuiltInTool.READ_FILE,
 			makeSection({ toolArgs: '{"path": "/foo.tx' })
 		);
+
 		expect(result).toBeNull();
 	});
 
@@ -139,6 +143,7 @@ describe('parseToolArgs (shared)', () => {
 			BuiltInTool.READ_FILE,
 			makeSection({ toolArgs: '{"path":"/foo.txt"}' })
 		);
+
 		expect(result).toEqual({ path: '/foo.txt' });
 	});
 
@@ -148,6 +153,7 @@ describe('parseToolArgs (shared)', () => {
 			makeSection({ toolArgs: '{"path": "/foo.tx' }),
 			{ partial: true }
 		);
+
 		expect(result).toEqual({ path: '/foo.tx' });
 	});
 });
@@ -173,6 +179,7 @@ describe('parseWriteFileMeta', () => {
 		const meta = parseWriteFileMeta(
 			makeSection({ toolName: BuiltInTool.WRITE_FILE, toolArgs: '{"path":"/foo.t' })
 		);
+
 		expect(meta?.filePath).toBe('/foo.t');
 	});
 
@@ -187,6 +194,7 @@ describe('parseWriteFileMeta', () => {
 				BuiltInTool.WRITE_FILE
 			)
 		);
+
 		expect(meta).toMatchObject<Partial<WriteFileMeta>>({
 			filePath: '/foo.ts',
 			language: expect.any(String),
@@ -204,6 +212,7 @@ describe('parseWriteFileMeta', () => {
 				toolResult: '{"error":"permission denied"}'
 			})
 		);
+
 		expect(meta?.errorMessage).toBe('permission denied');
 	});
 });
@@ -220,6 +229,7 @@ describe('parseEditFileMeta', () => {
 			BuiltInTool.EDIT_FILE
 		);
 		const meta = parseEditFileMeta(section);
+
 		expect(meta?.edits).toEqual([
 			{ oldText: 'a', newText: 'b' },
 			{ oldText: 'c', newText: 'd' }
@@ -237,6 +247,7 @@ describe('parseEditFileMeta', () => {
 			BuiltInTool.EDIT_FILE
 		);
 		const meta = parseEditFileMeta(section);
+
 		// First entry is dropped (empty old_text). Second is kept
 		// (empty new_text is fine - it's the "delete" case).
 		expect(meta?.edits).toEqual([{ oldText: 'a', newText: '' }]);
@@ -252,6 +263,7 @@ describe('parseEditFileMeta', () => {
 			BuiltInTool.EDIT_FILE
 		);
 		const meta = parseEditFileMeta(section);
+
 		expect(meta?.errorMessage).toBe('bad path');
 		expect(meta?.resultMessage).toBeUndefined();
 	});
@@ -262,6 +274,7 @@ describe('parseReadFileMeta', () => {
 		const meta = parseReadFileMeta(
 			makeSection({ toolArgs: '{"path":"/foo.txt"}' }, BuiltInTool.READ_FILE)
 		);
+
 		expect(meta?.fileName).toBe('foo.txt');
 		expect(meta?.lineRange).toBeNull();
 	});
@@ -273,6 +286,7 @@ describe('parseReadFileMeta', () => {
 				BuiltInTool.READ_FILE
 			)
 		);
+
 		expect(meta?.lineRange).toEqual({ start: 10, end: 20 });
 	});
 
@@ -283,6 +297,7 @@ describe('parseReadFileMeta', () => {
 				BuiltInTool.READ_FILE
 			)
 		);
+
 		expect(meta?.lineRange).toEqual({ start: 10, end: 14 });
 	});
 
@@ -316,6 +331,7 @@ describe('parseGrepSearchMeta', () => {
 				BuiltInTool.GREP_SEARCH
 			)
 		);
+
 		expect(meta?.matches).toHaveLength(2);
 		expect(meta?.matches[0]).toEqual({ file: 'a.ts', content: 'hello' });
 	});
@@ -331,6 +347,7 @@ describe('parseGrepSearchMeta', () => {
 				BuiltInTool.GREP_SEARCH
 			)
 		);
+
 		expect(meta?.matches).toHaveLength(2);
 	});
 
@@ -345,6 +362,7 @@ describe('parseGrepSearchMeta', () => {
 				BuiltInTool.GREP_SEARCH
 			)
 		);
+
 		expect(meta?.matches[0]).toEqual({ file: 'a.ts', line: 12, content: 'hello' });
 		expect(meta?.showLineNumbers).toBe(true);
 	});
@@ -362,6 +380,7 @@ describe('parseFileGlobSearchMeta', () => {
 				BuiltInTool.FILE_GLOB_SEARCH
 			)
 		);
+
 		expect(meta?.matches).toEqual(['a.ts', 'b.ts']);
 	});
 
@@ -376,6 +395,7 @@ describe('parseFileGlobSearchMeta', () => {
 				BuiltInTool.FILE_GLOB_SEARCH
 			)
 		);
+
 		expect(meta?.matches).toEqual(['a.ts', 'b.ts']);
 	});
 
@@ -390,6 +410,7 @@ describe('parseFileGlobSearchMeta', () => {
 				BuiltInTool.FILE_GLOB_SEARCH
 			)
 		);
+
 		expect(meta?.errorMessage).toBe('permission denied');
 	});
 });
@@ -408,6 +429,7 @@ describe('parseRunJavascriptMeta', () => {
 				BuiltInTool.RUN_JAVASCRIPT
 			)
 		);
+
 		expect(meta?.code).toBe('Math.PI');
 		expect(meta?.timeoutMs).toBe(5000);
 	});
@@ -423,6 +445,7 @@ describe('parseRunJavascriptMeta', () => {
 				BuiltInTool.RUN_JAVASCRIPT
 			)
 		);
+
 		expect(meta?.errorMessage).toBe('undefined is not a function');
 	});
 
@@ -440,6 +463,7 @@ describe('parseRunJavascriptMeta', () => {
 				BuiltInTool.RUN_JAVASCRIPT
 			)
 		);
+
 		expect(meta?.errorMessage).toBeUndefined();
 	});
 
@@ -454,6 +478,7 @@ describe('parseRunJavascriptMeta', () => {
 				BuiltInTool.RUN_JAVASCRIPT
 			)
 		);
+
 		expect(meta?.errorMessage).toBe('undefined is not a function');
 	});
 });
@@ -466,6 +491,7 @@ describe('parseExecShellCommandMeta', () => {
 				BuiltInTool.EXEC_SHELL_COMMAND
 			)
 		);
+
 		expect(meta?.command).toBe('ls -la');
 	});
 

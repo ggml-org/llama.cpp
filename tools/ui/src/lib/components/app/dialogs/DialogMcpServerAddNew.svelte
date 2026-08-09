@@ -1,10 +1,8 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
+	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { parseHeadersToArray, uuid, canonicalizeServerUrl } from '$lib/utils';
 	import {
 		BEARER_PREFIX,
 		BOOL_FALSE_STRING,
@@ -14,8 +12,10 @@
 		RECOMMENDED_MCP_SERVERS,
 		REDACTED_HEADERS
 	} from '$lib/constants';
-	import { browser } from '$app/environment';
 	import { HealthCheckStatus } from '$lib/enums';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
 
 	interface Props {
 		open: boolean;
@@ -42,8 +42,11 @@
 
 	let selectedRecommendationId = $derived.by(() => {
 		const url = newServerUrl.trim();
+
 		if (!url) return null;
+
 		const targetCanonical = canonicalizeServerUrl(url);
+
 		return (
 			RECOMMENDED_MCP_SERVERS.find((rec) => canonicalizeServerUrl(rec.url) === targetCanonical)
 				?.id ?? null
@@ -72,6 +75,7 @@
 
 	let newServerUrlError = $derived.by(() => {
 		if (!newServerUrl.trim()) return 'URL is required';
+
 		try {
 			new URL(newServerUrl);
 
@@ -90,15 +94,18 @@
 	// Backward-compatible read: older versions stored a JSON array of dismissed ids.
 	function readRecommendationsDismissed(): boolean {
 		if (!browser) return false;
+
 		const raw = localStorage.getItem(DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY);
 
 		if (!raw) return false;
 
 		if (raw === BOOL_TRUE_STRING) return true;
+
 		if (raw === BOOL_FALSE_STRING) return false;
 
 		try {
 			const parsed = JSON.parse(raw);
+
 			return Array.isArray(parsed) && parsed.length > 0;
 		} catch {
 			return false;
@@ -207,6 +214,7 @@
 			newServerUseProxy = false;
 			newServerWantsAuthorization = false;
 		}
+
 		open = value;
 		onOpenChange?.(value);
 	}

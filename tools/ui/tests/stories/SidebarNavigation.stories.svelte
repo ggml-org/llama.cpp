@@ -81,8 +81,10 @@
 
 		// Expand sidebar first, then click Search in the expanded button list
 		const logoTrigger = screen.getByRole('button', { name: /expand navigation/i });
+
 		await userEvent.click(logoTrigger);
 		const searchTrigger = screen.getByText('Search');
+
 		userEvent.click(searchTrigger);
 	}}
 >
@@ -97,6 +99,7 @@
 	play={async () => {
 		// Mock empty conversations store
 		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+
 		conversationsStore.conversations = [];
 	}}
 >

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Info, Loader2 } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
-	import { abbreviateHome, type AgenticSection } from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { abbreviateHome, type AgenticSection } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -26,9 +26,12 @@
 
 		try {
 			const parsed: unknown = JSON.parse(toolResultString);
+
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 				const obj = parsed as Record<string, unknown>;
+
 				if (typeof obj.error === 'string') return { errorMessage: obj.error };
+
 				return {
 					os: typeof obj.os === 'string' ? obj.os : undefined,
 					cwd: typeof obj.cwd === 'string' ? obj.cwd : undefined

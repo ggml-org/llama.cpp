@@ -3,10 +3,10 @@
 	import { ChatMessageActionCard } from '$lib/components/app';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import * as ButtonGroup from '$lib/components/ui/button-group';
-	import { cn } from '$lib/components/ui/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { ToolSource, ToolPermissionDecision } from '$lib/enums';
+	import { cn } from '$lib/components/ui/utils';
 	import { TOOL_SERVER_LABELS } from '$lib/constants';
+	import { ToolPermissionDecision, ToolSource } from '$lib/enums';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 
 	interface Props {

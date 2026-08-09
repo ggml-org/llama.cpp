@@ -40,13 +40,13 @@ export function useAttachmentMenu(
 	close: () => void
 ): UseAttachmentMenuReturn {
 	const modalityFlags = $derived(getFlags());
-
 	const callbacks = $derived.by(() => {
 		const cbs = getCallbacks();
 		const wrap = (fn?: () => void) => () => {
 			close();
 			fn?.();
 		};
+
 		return {
 			[AttachmentAction.FILE_UPLOAD]: wrap(cbs.onFileUpload),
 			[AttachmentAction.SYSTEM_PROMPT_CLICK]: wrap(cbs.onSystemPromptClick),
@@ -57,11 +57,13 @@ export function useAttachmentMenu(
 
 	function isItemEnabled(enabledWhen: string | undefined): boolean {
 		if (!enabledWhen || enabledWhen === 'always') return true;
+
 		return !!modalityFlags[enabledWhen as keyof AttachmentModalityFlags];
 	}
 
 	function isItemVisible(visibleWhen: string | undefined): boolean {
 		if (!visibleWhen) return true;
+
 		return !!modalityFlags[visibleWhen as keyof AttachmentModalityFlags];
 	}
 

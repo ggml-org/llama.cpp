@@ -1,13 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { GLOB_WILDCARD, PATH_NAV_MAX_DEPTH } from '$lib/constants';
 import {
-	splitPathQuery,
 	buildCaseInsensitiveGlob,
 	buildGlobSearchArgs,
-	rankEntries,
+	highlightMatch,
 	joinPath,
-	highlightMatch
+	rankEntries,
+	splitPathQuery
 } from '$lib/utils';
-import { GLOB_WILDCARD, PATH_NAV_MAX_DEPTH } from '$lib/constants';
+import { describe, expect, it } from 'vitest';
 
 describe('splitPathQuery', () => {
 	it('treats a plain query as a home-relative glob (not navigation)', () => {
@@ -85,16 +85,19 @@ describe('rankEntries', () => {
 
 	it('ranks exact basename match first', () => {
 		const ranked = rankEntries(entries, 'read');
+
 		expect(ranked[0].path).toBe('/h/read');
 	});
 
 	it('breaks ties by shorter path, then alphabetically', () => {
 		const ranked = rankEntries(entries, 'read');
+
 		expect(ranked[ranked.length - 1].path).toBe('/h/readme.txt');
 	});
 
 	it('does not mutate the input', () => {
 		const snapshot = [...entries];
+
 		rankEntries(entries, 'read');
 		expect(entries).toEqual(snapshot);
 	});
@@ -132,6 +135,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('glob-matches home-relative within the scope path', () => {
 		const args = buildGlobSearchArgs('docs', '/home', DEPTH);
+
 		expect(args.path).toBe('/home');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('docs'));
 		expect(args.maxDepth).toBe(DEPTH);
@@ -141,6 +145,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('navigates home for a `~` path query', () => {
 		const args = buildGlobSearchArgs('~/proj', '/home', DEPTH);
+
 		expect(args.path).toBe('~');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('proj'));
 		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
@@ -150,6 +155,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('lists the scope root when a path query has no last segment', () => {
 		const args = buildGlobSearchArgs('~/', '/home', DEPTH);
+
 		expect(args.path).toBe('~');
 		expect(args.include).toBe(GLOB_WILDCARD);
 		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
@@ -157,6 +163,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('navigates an absolute path under its root', () => {
 		const args = buildGlobSearchArgs('/usr/local/bin', '/home', DEPTH);
+
 		expect(args.path).toBe('/usr/local');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('bin'));
 		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);

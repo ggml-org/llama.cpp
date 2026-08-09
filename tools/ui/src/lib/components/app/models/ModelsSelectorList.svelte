@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { ModelsSelectorOption } from '$lib/components/app';
 	import type { GroupedModelOptions, ModelItem } from './utils';
+	import { ModelsSelectorOption } from '$lib/components/app';
+	import { modelsStore } from '$lib/stores/models.svelte';
 
 	interface Props {
 		groups: GroupedModelOptions;

@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { parseReadFileMeta } from './parsers/read-file';
+	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { DEFAULT_LANGUAGE, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { type AgenticSection } from '$lib/utils';
-	import { parseReadFileMeta } from './parsers/read-file';
-	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;

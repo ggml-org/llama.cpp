@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { DatabaseService } from '$lib/services/database.service';
 import { MessageRole, MessageType } from '$lib/enums';
+import { DatabaseService } from '$lib/services/database.service';
 import type { ExportedConversation } from '$lib/types/database';
+import { afterEach, describe, expect, it } from 'vitest';
 
 function makeSession(id: string): ExportedConversation {
 	return {
@@ -23,6 +23,7 @@ function makeSession(id: string): ExportedConversation {
 
 afterEach(async () => {
 	const conversations = await DatabaseService.getAllConversations();
+
 	await DatabaseService.bulkDeleteConversations(conversations.map((conv) => conv.id));
 });
 

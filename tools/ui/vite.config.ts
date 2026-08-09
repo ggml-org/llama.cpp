@@ -1,22 +1,19 @@
-import tailwindcss from '@tailwindcss/vite';
+import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
+import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer';
+import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
+import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
+import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
+import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { sveltekit } from '@sveltejs/kit/vite';
+import tailwindcss from '@tailwindcss/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
+import { playwright } from '@vitest/browser-playwright';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-
 import { defineConfig, searchForWorkspaceRoot } from 'vite';
-import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
-import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
-import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
-import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
-import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer';
-import { playwright } from '@vitest/browser-playwright';
-import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
 	enabled: true,

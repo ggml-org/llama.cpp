@@ -10,15 +10,15 @@
 //
 // Run: npx vitest --project=client --run tests/client/agentic-stream.perf.svelte.test.ts
 
-import { describe, it } from 'vitest';
-import { render } from 'vitest-browser-svelte';
-import { tick } from 'svelte';
+import { perfState } from './components/agentic-perf-state.svelte';
 import AgenticPerfWrapper from './components/AgenticPerfWrapper.svelte';
 import ChatMessagesPerfWrapper from './components/ChatMessagesPerfWrapper.svelte';
-import { perfState } from './components/agentic-perf-state.svelte';
+import { MessageRole } from '$lib/enums';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import type { DatabaseMessage } from '$lib/types';
-import { MessageRole } from '$lib/enums';
+import { tick } from 'svelte';
+import { describe, it } from 'vitest';
+import { render } from 'vitest-browser-svelte';
 
 // --- fixture construction -------------------------------------------------
 
@@ -51,13 +51,17 @@ function blob(bytes: number, seed: string): string {
 	const line = `${seed} output line with some representative width to it`;
 	const n = Math.max(1, Math.ceil(bytes / (line.length + 1)));
 	const out: string[] = [];
+
 	for (let i = 0; i < n; i++) out.push(`${line} ${i}`);
+
 	return out.join('\n');
 }
 
 function diffLines(n: number, seed: string): string {
 	const out: string[] = [];
+
 	for (let i = 0; i < n; i++) out.push(`${seed} line ${i} const value_${i} = compute(${i});`);
+
 	return out.join('\n');
 }
 
@@ -86,6 +90,7 @@ function buildFixture(opts: FixtureOpts): {
 
 	for (let i = 0; i < opts.priorToolCalls; i++) {
 		const id = `call_${i}`;
+
 		toolCalls.push({
 			id,
 			type: 'function',
@@ -105,6 +110,7 @@ function buildFixture(opts: FixtureOpts): {
 
 	for (let i = 0; i < opts.editFileEdits; i++) {
 		const id = `edit_${i}`;
+
 		toolCalls.push({
 			id,
 			type: 'function',
@@ -174,18 +180,21 @@ async function measure(label: string, partial: Partial<FixtureOpts>, tokens = 60
 	await tick();
 
 	const CHUNK = 'The quick brown fox jumps over the lazy dog. ';
-	let accumulated = opts.openCodeFence ? '```notalanguage\n' : '';
-	const durations: number[] = [];
 
+	let accumulated = opts.openCodeFence ? '```notalanguage\n' : '';
+
+	const durations: number[] = [];
 	const wallStart = performance.now();
 
 	for (let i = 0; i < tokens; i++) {
 		accumulated += CHUNK;
+
 		if (opts.paragraphEvery > 0 && (i + 1) % opts.paragraphEvery === 0) {
 			accumulated += '\n\n';
 		}
 
 		const t0 = performance.now();
+
 		// Mirrors updateMessageAtIndex: a brand-new object identity per chunk.
 		perfState.message = { ...perfState.message!, content: accumulated };
 		await tick();
@@ -223,7 +232,6 @@ async function measure(label: string, partial: Partial<FixtureOpts>, tokens = 60
 function report() {
 	const pad = (s: string, n: number) => s.padEnd(n);
 	const num = (n: number) => n.toFixed(2).padStart(8);
-
 	const header = `${pad('fixture', 40)}${pad('tok', 5)}${'mean'.padStart(8)}${'p95'.padStart(8)}${'max'.padStart(8)}${'sync'.padStart(9)}${'wall'.padStart(9)}`;
 	const lines = [
 		'',
@@ -268,11 +276,13 @@ async function measureConversation(
 	agentic = false
 ) {
 	const history: DatabaseMessage[] = [];
+
 	for (let i = 0; i < priorMessages; i++) {
 		const isAssistant = i % 2 !== 0;
 
 		if (isAssistant && agentic) {
 			const id = `prior_call_${i}`;
+
 			history.push(
 				baseMessage({
 					role: MessageRole.ASSISTANT,
@@ -296,6 +306,7 @@ async function measureConversation(
 					content: `${blob(1024, `r${i}`)}\n[exit code: 0]`
 				})
 			);
+
 			continue;
 		}
 
@@ -308,16 +319,20 @@ async function measureConversation(
 	}
 
 	const streaming = baseMessage({ role: MessageRole.ASSISTANT, content: '' });
+
 	history.push(streaming);
 
 	conversationsStore.activeMessages = history;
 
 	const { unmount } = render(ChatMessagesPerfWrapper);
+
 	await tick();
 
 	const idx = conversationsStore.findMessageIndex(streaming.id);
 	const CHUNK = 'The quick brown fox jumps over the lazy dog. ';
+
 	let accumulated = '';
+
 	const durations: number[] = [];
 	const wallStart = performance.now();
 
@@ -325,6 +340,7 @@ async function measureConversation(
 		accumulated += CHUNK;
 
 		const t0 = performance.now();
+
 		// The real path: chat.svelte.ts -> conversations.svelte.ts.
 		conversationsStore.updateMessageAtIndex(idx, { content: accumulated });
 		await tick();

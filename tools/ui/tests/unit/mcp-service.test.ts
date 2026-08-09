@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client';
-import { MCPService } from '$lib/services/mcp.service';
-import { MCPConnectionPhase, MCPTransportType } from '$lib/enums';
-import type { MCPConnectionLog, MCPServerConfig } from '$lib/types';
 import { CORS_PROXY_HEADER_PREFIX } from '$lib/constants';
+import { MCPConnectionPhase, MCPTransportType } from '$lib/enums';
+import { MCPService } from '$lib/services/mcp.service';
+import type { MCPConnectionLog, MCPServerConfig } from '$lib/types';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type DiagnosticFetchFactory = (
 	serverName: string,
@@ -43,7 +43,6 @@ describe('MCPService', () => {
 			url: 'https://example.com/mcp',
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
-
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
 		await controller.fetch(config.url, { method: 'POST', body: '{}' });
@@ -73,7 +72,6 @@ describe('MCPService', () => {
 				'x-vendor-api-key': 'secret-key'
 			}
 		};
-
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log), {
 			headers: config.headers
 		});
@@ -114,7 +112,6 @@ describe('MCPService', () => {
 			transport: MCPTransportType.STREAMABLE_HTTP,
 			useProxy: true
 		};
-
 		const controller = createDiagnosticFetch(
 			config,
 			(log) => logs.push(log),
@@ -137,6 +134,7 @@ describe('MCPService', () => {
 		});
 
 		const sentHeaders = fetchMock.mock.calls[0]?.[1]?.headers as Headers;
+
 		expect(sentHeaders.get('authorization')).toBe('Bearer llama-server-key');
 		expect(sentHeaders.get(proxiedAuthToken)).toBe('target-token');
 		expect(sentHeaders.get(proxiedContentType)).toBe('application/json');
@@ -165,9 +163,7 @@ describe('MCPService', () => {
 			transport: MCPTransportType.STREAMABLE_HTTP,
 			useProxy: true
 		};
-
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log), {}, true);
-
 		const response = await controller.fetch(
 			'http://localhost:8080/cors-proxy?url=https%3A%2F%2Fexample.com%2Fmcp',
 			{ method: 'DELETE' }
@@ -196,7 +192,6 @@ describe('MCPService', () => {
 			url: 'https://example.com/mcp',
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
-
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
 		await controller.fetch(config.url, {
@@ -240,7 +235,6 @@ describe('MCPService', () => {
 			url: 'https://example.com/mcp',
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
-
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
 		await controller.fetch(config.url, {
@@ -273,7 +267,6 @@ describe('MCPService', () => {
 			url: 'http://localhost:8000/mcp',
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
-
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
 		await expect(controller.fetch(config.url, { method: 'POST', body: '{}' })).rejects.toThrow(
@@ -289,6 +282,7 @@ describe('MCPService', () => {
 	it('detaches phase error logging after the initialize handshake completes', async () => {
 		const phaseLogs: Array<{ phase: MCPConnectionPhase; log: MCPConnectionLog }> = [];
 		const stopPhaseLogging = vi.fn();
+
 		let emitClientError: ((error: Error) => void) | undefined;
 
 		vi.spyOn(MCPService, 'createTransport').mockReturnValue({

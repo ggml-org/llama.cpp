@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { findMentionToken, takeMentionDismissSnapshot } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('findMentionToken', () => {
 	it('returns null for an empty/bare cursor', () => {

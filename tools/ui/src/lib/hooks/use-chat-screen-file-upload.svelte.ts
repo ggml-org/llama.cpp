@@ -7,8 +7,8 @@
  * as reactive getters so validation tracks the model in real time.
  */
 
+import { filterFilesByModalities, isFileTypeSupported } from '$lib/utils';
 import { processFilesToChatUploaded } from '$lib/utils/browser-only';
-import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 
 interface UseChatScreenFileUploadOptions {
 	capabilities: () => { hasVision: boolean; hasAudio: boolean; hasVideo: boolean };
@@ -48,14 +48,16 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 			generallySupported,
 			options.capabilities()
 		);
-
 		const allUnsupportedFiles = [...generallyUnsupported, ...unsupportedFiles];
 
 		if (allUnsupportedFiles.length > 0) {
 			const supportedTypes: string[] = ['text files', 'PDFs'];
 			const caps = options.capabilities();
+
 			if (caps.hasVision) supportedTypes.push('images');
+
 			if (caps.hasAudio) supportedTypes.push('audio files');
+
 			if (caps.hasVideo) supportedTypes.push('video files');
 
 			fileErrorData = {
@@ -72,6 +74,7 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 				supportedFiles,
 				options.activeModelId() ?? undefined
 			);
+
 			uploadedFiles = [...uploadedFiles, ...processed];
 		}
 	}

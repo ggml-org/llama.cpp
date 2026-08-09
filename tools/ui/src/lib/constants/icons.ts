@@ -4,10 +4,10 @@
  */
 
 import {
+	Eye as VisionIcon,
 	File as FileIcon,
 	FileText as FileTextIcon,
 	Image as ImageIcon,
-	Eye as VisionIcon,
 	Mic as AudioIcon,
 	Video as VideoIcon
 } from '@lucide/svelte';

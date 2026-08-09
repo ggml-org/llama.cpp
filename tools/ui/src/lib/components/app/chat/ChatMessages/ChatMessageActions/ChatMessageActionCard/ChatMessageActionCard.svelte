@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import type { Snippet, Component } from 'svelte';
+	import type { Component, Snippet } from 'svelte';
 
 	interface Props {
 		icon: Component<{ class?: string }>;

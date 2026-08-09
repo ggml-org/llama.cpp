@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
 import { SourceHistory } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('SourceHistory', () => {
 	it('coalesces pushes inside the group window into one undo step', () => {
 		const h = new SourceHistory(100, 800);
+
 		h.push({ value: '', caret: 0 }, 1000);
 		h.push({ value: 'a', caret: 1 }, 1200);
 		h.push({ value: 'ab', caret: 2 }, 1500);
@@ -14,6 +15,7 @@ describe('SourceHistory', () => {
 
 	it('starts a new group once the window has passed', () => {
 		const h = new SourceHistory(100, 800);
+
 		h.push({ value: '', caret: 0 }, 1000);
 		h.push({ value: 'abc', caret: 3 }, 2000);
 
@@ -23,6 +25,7 @@ describe('SourceHistory', () => {
 
 	it('newGroup forces a separate entry even inside the window', () => {
 		const h = new SourceHistory(100, 800);
+
 		h.push({ value: '', caret: 0 }, 1000);
 		h.push({ value: 'abc', caret: 3 }, 1100, true);
 
@@ -32,9 +35,11 @@ describe('SourceHistory', () => {
 
 	it('redo round-trips and a fresh push clears the redo stack', () => {
 		const h = new SourceHistory(100, 800);
+
 		h.push({ value: '', caret: 0 }, 1000);
 
 		const undone = h.undo({ value: 'abc', caret: 3 });
+
 		expect(undone).toEqual({ value: '', caret: 0 });
 		expect(h.redo({ value: '', caret: 0 })).toEqual({ value: 'abc', caret: 3 });
 
@@ -45,6 +50,7 @@ describe('SourceHistory', () => {
 
 	it('starts a new group on the first edit after an undo', () => {
 		const h = new SourceHistory(100, 800);
+
 		h.push({ value: '', caret: 0 }, 1000);
 		h.undo({ value: 'abc', caret: 3 });
 
@@ -54,6 +60,7 @@ describe('SourceHistory', () => {
 
 	it('evicts the oldest entry past the limit', () => {
 		const h = new SourceHistory(2, 800);
+
 		h.push({ value: 'one', caret: 0 }, 1000);
 		h.push({ value: 'two', caret: 0 }, 2000);
 		h.push({ value: 'three', caret: 0 }, 3000);

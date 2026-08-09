@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
+	import { BookOpenText, Clock, Gauge, Layers, Sparkles, WholeWord, Wrench } from '@lucide/svelte';
 	import { ChatMessageStatisticsBadge } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ChatMessageStatsView, ChatMessageStatisticsMode } from '$lib/enums';
+	import { DEFAULT_PERFORMANCE_TIME, MS_PER_SECOND } from '$lib/constants';
+	import { ChatMessageStatisticsMode, ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
 	import { formatPerformanceTime } from '$lib/utils';
-	import { MS_PER_SECOND, DEFAULT_PERFORMANCE_TIME } from '$lib/constants';
 	import type { Component } from 'svelte';
 
 	interface Props {

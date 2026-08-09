@@ -1,24 +1,27 @@
-import { describe, it, expect } from 'vitest';
 import { AttachmentType } from '$lib/enums';
 import {
 	formatMessageForClipboard,
-	parseClipboardContent,
-	hasClipboardAttachments
+	hasClipboardAttachments,
+	parseClipboardContent
 } from '$lib/utils/clipboard';
+import { describe, expect, it } from 'vitest';
 
 describe('formatMessageForClipboard', () => {
 	it('returns plain content when no extras', () => {
 		const result = formatMessageForClipboard('Hello world', undefined);
+
 		expect(result).toBe('Hello world');
 	});
 
 	it('returns plain content when extras is empty array', () => {
 		const result = formatMessageForClipboard('Hello world', []);
+
 		expect(result).toBe('Hello world');
 	});
 
 	it('handles empty string content', () => {
 		const result = formatMessageForClipboard('', undefined);
+
 		expect(result).toBe('');
 	});
 
@@ -31,6 +34,7 @@ describe('formatMessageForClipboard', () => {
 			}
 		];
 		const result = formatMessageForClipboard('Hello world', extras);
+
 		expect(result).toBe('Hello world');
 	});
 
@@ -98,6 +102,7 @@ describe('formatMessageForClipboard', () => {
 		expect(result.startsWith('"')).toBe(true);
 		// The content should be properly escaped
 		const parsed = JSON.parse(result.split('\n')[0]);
+
 		expect(parsed).toBe(content);
 	});
 
@@ -166,6 +171,7 @@ describe('formatMessageForClipboard', () => {
 
 	it('returns plain content when asPlainText is true but no attachments', () => {
 		const result = formatMessageForClipboard('Hello world', [], true);
+
 		expect(result).toBe('Hello world');
 	});
 
@@ -216,7 +222,6 @@ describe('parseClipboardContent', () => {
 
 	it('returns original text when JSON array is malformed', () => {
 		const input = '"Hello"\n[invalid json';
-
 		const result = parseClipboardContent(input);
 
 		expect(result.message).toBe('"Hello"\n[invalid json');
@@ -229,7 +234,6 @@ describe('parseClipboardContent', () => {
   {"type":"TEXT","name":"file1.txt","content":"File 1 content"},
   {"type":"TEXT","name":"file2.txt","content":"File 2 content"}
 ]`;
-
 		const result = parseClipboardContent(input);
 
 		expect(result.message).toBe('Hello world');
@@ -245,7 +249,6 @@ describe('parseClipboardContent', () => {
 [
   {"type":"TEXT","name":"file.txt","content":"test"}
 ]`;
-
 		const result = parseClipboardContent(input);
 
 		expect(result.message).toBe('Hello "world" with quotes');
@@ -257,7 +260,6 @@ describe('parseClipboardContent', () => {
 [
   {"type":"TEXT","name":"file.txt","content":"test"}
 ]`;
-
 		const result = parseClipboardContent(input);
 
 		expect(result.message).toBe('Hello\nworld');
@@ -266,7 +268,6 @@ describe('parseClipboardContent', () => {
 
 	it('returns message only when no array follows', () => {
 		const input = '"Just a quoted string"';
-
 		const result = parseClipboardContent(input);
 
 		expect(result.message).toBe('Just a quoted string');
@@ -281,7 +282,6 @@ describe('parseClipboardContent', () => {
   {"name":"missing-type.txt","content":"missing"},
   {"type":"TEXT","content":"missing name"}
 ]`;
-
 		const result = parseClipboardContent(input);
 
 		expect(result.message).toBe('Hello');
@@ -291,7 +291,6 @@ describe('parseClipboardContent', () => {
 
 	it('handles empty attachments array', () => {
 		const input = '"Hello"\n[]';
-
 		const result = parseClipboardContent(input);
 
 		expect(result.message).toBe('Hello');
@@ -312,7 +311,6 @@ describe('parseClipboardContent', () => {
 				content: 'Another file'
 			}
 		];
-
 		const formatted = formatMessageForClipboard(originalContent, originalExtras);
 		const parsed = parseClipboardContent(formatted);
 

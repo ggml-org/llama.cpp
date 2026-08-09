@@ -21,12 +21,12 @@
 </script>
 
 <script lang="ts">
-	import { Dialog as SheetPrimitive } from 'bits-ui';
-	import XIcon from '@lucide/svelte/icons/x';
-	import type { Snippet } from 'svelte';
 	import SheetOverlay from './sheet-overlay.svelte';
+	import XIcon from '@lucide/svelte/icons/x';
 	import { cn, type WithoutChildrenOrChild } from '$lib/components/ui/utils.js';
 	import { PANEL_CLASSES } from '$lib/constants';
+	import { Dialog as SheetPrimitive } from 'bits-ui';
+	import type { Snippet } from 'svelte';
 
 	let {
 		ref = $bindable(null),

@@ -1,14 +1,14 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, GitBranch } from '@lucide/svelte';
+	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Trash2 } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageActionIconsBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
-	import { Switch } from '$lib/components/ui/switch';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
+	import { Switch } from '$lib/components/ui/switch';
 	import { MessageRole } from '$lib/enums';
 	import { activeConversation } from '$lib/stores/conversations.svelte';
 

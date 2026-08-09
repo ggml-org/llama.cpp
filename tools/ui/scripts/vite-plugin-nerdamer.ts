@@ -4,7 +4,6 @@ import { fileURLToPath } from 'url';
 import type { Plugin } from 'vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const VENDORS_DIR = resolve(__dirname, '../src/lib/vendors');
 const VIRTUAL_ID = 'virtual:nerdamer';
 const RESOLVED_ID = '\0' + VIRTUAL_ID;
@@ -27,6 +26,7 @@ export function nerdamerPlugin(): Plugin {
 		},
 		async load(id) {
 			if (id !== RESOLVED_ID) return undefined;
+
 			if (bundled === null) {
 				const result = await build({
 					entryPoints: [resolve(VENDORS_DIR, 'nerdamer-prime/all.js')],
@@ -41,8 +41,10 @@ export function nerdamerPlugin(): Plugin {
 					write: false,
 					logLevel: 'silent'
 				});
+
 				bundled = result.outputFiles[0].text;
 			}
+
 			return `export default ${JSON.stringify(bundled)};`;
 		}
 	};

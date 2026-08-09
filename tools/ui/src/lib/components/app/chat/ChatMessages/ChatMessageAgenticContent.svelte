@@ -1,29 +1,28 @@
 <script lang="ts">
+	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
+	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
 	import {
-		ChatMessageStatistics,
-		MarkdownContent,
+		ChatMessageActionCardContinueRequest,
 		ChatMessageActionCardPermissionRequest,
-		ChatMessageActionCardContinueRequest
+		ChatMessageStatistics,
+		MarkdownContent
 	} from '$lib/components/app';
-
 	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
+	import {
+		agenticExecutingToolCallId,
+		agenticLastError,
+		agenticPendingContinueRequest,
+		agenticPendingPermissionRequest,
+		agenticResolveContinue,
+		agenticResolvePermission
+	} from '$lib/stores/agentic.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import type {
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
-	import { deriveAgenticSections, type AgenticSection } from '$lib/utils';
-	import {
-		agenticPendingPermissionRequest,
-		agenticResolvePermission,
-		agenticPendingContinueRequest,
-		agenticResolveContinue,
-		agenticLastError,
-		agenticExecutingToolCallId
-	} from '$lib/stores/agentic.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
-	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
+	import { type AgenticSection, deriveAgenticSections } from '$lib/utils';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -60,6 +59,7 @@
 	$effect(() => {
 		if (pendingPermission !== prevPendingRef) {
 			prevPendingRef = pendingPermission;
+
 			if (pendingPermission) {
 				permissionDismissed = false;
 			}
@@ -81,6 +81,7 @@
 	$effect(() => {
 		if (pendingContinue !== prevContinueRef) {
 			prevContinueRef = pendingContinue;
+
 			if (pendingContinue) {
 				continueDismissed = false;
 			}
@@ -105,6 +106,7 @@
 
 	const turnGroups: TurnGroup[] = $derived.by(() => {
 		const groups: TurnGroup[] = [];
+
 		let currentTurn: AgenticSection[] = [];
 		let currentIndices: number[] = [];
 		let prevWasTool = false;

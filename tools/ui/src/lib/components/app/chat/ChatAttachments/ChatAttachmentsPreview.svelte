@@ -12,12 +12,12 @@
 		getAttachmentDisplayItems,
 		getLanguageFromFilename,
 		isAudioFile,
-		isVideoFile,
 		isImageFile,
 		isMcpPrompt,
 		isMcpResource,
 		isPdfFile,
-		isTextFile
+		isTextFile,
+		isVideoFile
 	} from '$lib/utils';
 
 	interface PreviewItem {
@@ -88,6 +88,7 @@
 
 	$effect(() => {
 		const index = currentIndex;
+
 		setTimeout(() => {
 			const thumbnail = document.querySelector(`[data-thumbnail-index="${index}"]`);
 

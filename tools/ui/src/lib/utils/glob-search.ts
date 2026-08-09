@@ -4,22 +4,22 @@
  * result instead of re-walking the tree.
  */
 
-import { BuiltInTool, GlobSearchType } from '$lib/enums';
-import { ToolsService } from '$lib/services/tools.service';
+import { lastPathSegment } from './path-display';
+import {
+	buildGlobSearchArgs,
+	type GlobEntry,
+	type GlobSearchArgs,
+	joinPath,
+	rankEntries
+} from './working-directory';
 import {
 	GLOB_WILDCARD,
 	PATH_NAV_MAX_DEPTH,
 	PATH_SEPARATOR,
 	WINDOWS_SEPARATOR
 } from '$lib/constants';
-import { lastPathSegment } from './path-display';
-import {
-	buildGlobSearchArgs,
-	joinPath,
-	rankEntries,
-	type GlobEntry,
-	type GlobSearchArgs
-} from './working-directory';
+import { BuiltInTool, GlobSearchType } from '$lib/enums';
+import { ToolsService } from '$lib/services/tools.service';
 
 const SEARCH_CACHE_TTL_MS = 2000;
 
@@ -45,6 +45,7 @@ export async function runGlobSearch(
 ): Promise<GlobSearchResult> {
 	const key = `${type}\u0000${args.path}\u0000${args.include}\u0000${args.maxDepth}\u0000${limit}`;
 	const cached = searchCache.get(key);
+
 	if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
 		return { base: cached.base, entries: cached.results };
 	}
@@ -60,11 +61,13 @@ export async function runGlobSearch(
 	const base = typeof res.base === 'string' ? res.base : '';
 	const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
 	const now = Date.now();
+
 	// prune stale entries so the short-lived cache cannot grow unbounded
 	for (const [k, v] of searchCache) {
 		if (now - v.at >= SEARCH_CACHE_TTL_MS) searchCache.delete(k);
 	}
 	searchCache.set(key, { results: entries, base, at: now });
+
 	return { base, entries };
 }
 
@@ -114,15 +117,15 @@ export async function runGlobSearchWithChildren(
 		descendOnTrailingSeparator = false,
 		childMaxDepth = PATH_NAV_MAX_DEPTH
 	} = options;
-
 	const args = buildGlobSearchArgs(query, scopePath, searchDepth);
 	const res = await runGlobSearch(args, type, limit, signal);
+
 	if (res.error) return { base: res.base, args, entries: [], error: res.error };
 
 	const ranked = rankEntries(res.entries, args.rankQuery);
 	const entries = ranked.map((e) => toEntryResult(e, res.base));
-
 	const last = args.last;
+
 	if (last) {
 		const wantsDescend = descendOnTrailingSeparator
 			? query.endsWith(PATH_SEPARATOR) || query.endsWith(WINDOWS_SEPARATOR)
@@ -130,6 +133,7 @@ export async function runGlobSearchWithChildren(
 		const exact = ranked.find(
 			(e) => e.type === 'dir' && lastPathSegment(e.path).toLowerCase() === last.toLowerCase()
 		);
+
 		if (wantsDescend && exact) {
 			const exactDir = joinPath(res.base, exact.path);
 			const childRes = await runGlobSearch(
@@ -138,10 +142,12 @@ export async function runGlobSearchWithChildren(
 				limit,
 				signal
 			);
+
 			if (!childRes.error) {
 				const children = childRes.entries
 					.map((e) => toEntryResult(e, childRes.base))
 					.sort((a, b) => a.path.localeCompare(b.path));
+
 				return { base: res.base, args, entries: [...entries, ...children], exactDir };
 			}
 		}

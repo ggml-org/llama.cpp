@@ -2,7 +2,7 @@
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import type { MCPConnectionLog } from '$lib/types';
-	import { formatTime, getMcpLogLevelIcon, getMcpLogLevelClass } from '$lib/utils';
+	import { formatTime, getMcpLogLevelClass, getMcpLogLevelIcon } from '$lib/utils';
 
 	interface Props {
 		logs: MCPConnectionLog[];

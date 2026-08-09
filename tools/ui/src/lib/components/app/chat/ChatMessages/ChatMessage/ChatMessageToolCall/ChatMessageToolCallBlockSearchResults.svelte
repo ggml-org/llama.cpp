@@ -1,17 +1,17 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
 	import { Globe, Loader2 } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
 	import * as HoverCard from '$lib/components/ui/hover-card';
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
 	import { AgenticSectionType } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
-		extractSearchResults,
+		type AgenticSection,
 		extractSearchQuery,
+		extractSearchResults,
 		faviconForUrl,
 		sanitizeExternalUrl,
-		type SearchResult,
-		type AgenticSection
+		type SearchResult
 	} from '$lib/utils';
 
 	interface Props {
@@ -43,6 +43,7 @@
 	// retrospective.
 	const title = $derived.by(() => {
 		const verb = showSpinner ? 'Searching' : 'Searched';
+
 		return query ? `${verb} web for "${query}"` : `${verb} web`;
 	});
 
@@ -52,9 +53,12 @@
 
 	function formatPublishDate(iso: string | undefined): string | null {
 		if (!iso) return null;
+
 		try {
 			const date = new Date(iso);
+
 			if (Number.isNaN(date.getTime())) return iso;
+
 			return date.toLocaleDateString(undefined, {
 				year: 'numeric',
 				month: 'short',

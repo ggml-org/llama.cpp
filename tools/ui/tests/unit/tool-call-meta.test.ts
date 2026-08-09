@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { tryParseToolResultObject } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('tryParseToolResultObject', () => {
 	it('returns null when no result is provided', () => {

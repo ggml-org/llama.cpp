@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { AlertTriangle, TimerOff } from '@lucide/svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { ErrorDialogType } from '$lib/enums';
 
 	interface Props {

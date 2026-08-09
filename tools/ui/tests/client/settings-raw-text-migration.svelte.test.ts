@@ -4,9 +4,9 @@
 // winning when the legacy keys disagree. Legacy keys are removed from the
 // persisted config so they do not stay orphaned in localStorage.
 
-import { beforeEach, describe, expect, it } from 'vitest';
-import { settingsStore, config } from '$lib/stores/settings.svelte';
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 function seedConfig(stored: Record<string, unknown>) {
 	localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(stored));
@@ -53,6 +53,7 @@ describe('renderContentAsRawText migration', () => {
 		expect(config().renderContentAsRawText).toBe(false);
 
 		const stored = persisted();
+
 		expect(stored.renderUserContentAsMarkdown).toBeUndefined();
 		expect(stored.renderThinkingAsMarkdown).toBeUndefined();
 		expect(stored.renderUserContentAsRawText).toBeUndefined();

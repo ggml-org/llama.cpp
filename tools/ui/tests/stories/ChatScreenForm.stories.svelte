@@ -1,10 +1,10 @@
 <script module lang="ts">
+	import jpgAsset from './fixtures/assets/1.jpg?url';
+	import pdfAsset from './fixtures/assets/example.pdf?raw';
+	import svgAsset from './fixtures/assets/hf-logo.svg?url';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatScreenForm from '$lib/components/app/chat/ChatScreen/ChatScreenForm.svelte';
 	import { expect } from 'storybook/test';
-	import jpgAsset from './fixtures/assets/1.jpg?url';
-	import svgAsset from './fixtures/assets/hf-logo.svg?url';
-	import pdfAsset from './fixtures/assets/example.pdf?raw';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatScreen/ChatScreenForm',
@@ -62,6 +62,7 @@
 		await expect(textarea).toHaveValue(text);
 
 		const fileInput = document.querySelector('input[type="file"]');
+
 		await expect(fileInput).not.toHaveAttribute('accept');
 	}}
 />

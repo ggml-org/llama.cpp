@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
 import { MessageRole } from '$lib/enums';
-import { deriveAgenticSections } from '$lib/utils/agentic';
 import type { DatabaseMessage } from '$lib/types/database';
+import { deriveAgenticSections } from '$lib/utils/agentic';
+import { describe, expect, it } from 'vitest';
 
 function makeAssistant(overrides: Partial<DatabaseMessage> = {}): DatabaseMessage {
 	return {
@@ -24,8 +24,10 @@ function makeAssistant(overrides: Partial<DatabaseMessage> = {}): DatabaseMessag
 // onAssistantTurnComplete(...undefined).
 function buildApiToolCalls(message: DatabaseMessage): unknown[] | undefined {
 	if (!message.toolCalls) return undefined;
+
 	try {
 		const parsed = JSON.parse(message.toolCalls);
+
 		return Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined;
 	} catch {
 		return undefined;
@@ -51,7 +53,6 @@ describe('partial tool call cleanup', () => {
 				}
 			])
 		});
-
 		const apiToolCalls = buildApiToolCalls(message);
 
 		// The bug: even though arguments are invalid, the outer array parses and
@@ -59,6 +60,7 @@ describe('partial tool call cleanup', () => {
 		// own for the server to execute the tool.
 		expect(apiToolCalls).toBeDefined();
 		const args = (apiToolCalls![0] as { function: { arguments: string } }).function.arguments;
+
 		expect(() => JSON.parse(args)).toThrow();
 	});
 
@@ -71,8 +73,8 @@ describe('partial tool call cleanup', () => {
 			content: 'partial reasoning',
 			toolCalls: ''
 		});
-
 		const apiToolCalls = buildApiToolCalls(clearedMessage);
+
 		expect(apiToolCalls).toBeUndefined();
 	});
 
@@ -86,8 +88,8 @@ describe('partial tool call cleanup', () => {
 			reasoningContent: 'thinking about read_to',
 			toolCalls: ''
 		});
-
 		const sections = deriveAgenticSections(cleared);
+
 		expect(sections).toHaveLength(1);
 		expect(sections[0].type).toBe('reasoning');
 		expect(sections.some((s) => s.type.includes('tool_call'))).toBe(false);

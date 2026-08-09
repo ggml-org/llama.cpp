@@ -1,5 +1,5 @@
+import { CONFIG_LOCALSTORAGE_KEY, STORAGE_APP_NAME } from '$lib/constants';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { STORAGE_APP_NAME, CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 
 // node env unit project has no DOM, install a minimal localStorage backed by a Map
 beforeAll(() => {
@@ -18,6 +18,7 @@ beforeAll(() => {
 			store.set(k, String(v));
 		}
 	};
+
 	(globalThis as unknown as { localStorage: Storage }).localStorage = polyfill;
 });
 
@@ -45,6 +46,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 	async function runMigrations() {
 		const { MigrationService } = await import('$lib/services/migration.service');
+
 		await MigrationService.runAllMigrations();
 	}
 
@@ -135,6 +137,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 		await runMigrations();
 
 		const after = readConfig();
+
 		expect(after.mcpServers).toBe(originalServers);
 		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(true);
 	});
@@ -150,8 +153,10 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 		await MigrationService.runAllMigrations();
 
 		const stateRaw = localStorage.getItem(MIGRATION_STATE_KEY);
+
 		expect(stateRaw).not.toBeNull();
 		const state = JSON.parse(stateRaw!) as { completed: string[]; failed: string[] };
+
 		expect(state.completed).toContain('mcp-default-overrides-merge-v1');
 		expect(state.failed).not.toContain('mcp-default-overrides-merge-v1');
 	});

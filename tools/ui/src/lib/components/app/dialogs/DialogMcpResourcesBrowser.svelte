@@ -1,24 +1,24 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { FolderOpen, Plus, Loader2, Braces } from '@lucide/svelte';
-	import { toast } from 'svelte-sonner';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { Braces, FolderOpen, Loader2, Plus } from '@lucide/svelte';
 	import {
-		mcpResources,
-		mcpTotalResourceCount,
-		mcpResourceStore
-	} from '$lib/stores/mcp-resources.svelte';
-	import {
-		McpResourcesBrowser,
 		McpResourcePreview,
+		McpResourcesBrowser,
 		McpResourceTemplateForm
 	} from '$lib/components/app';
+	import { Button } from '$lib/components/ui/button';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import {
+		mcpResources,
+		mcpResourceStore,
+		mcpTotalResourceCount
+	} from '$lib/stores/mcp-resources.svelte';
+	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
-	import type { MCPResourceInfo, MCPResourceContent, MCPResourceTemplateInfo } from '$lib/types';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		open?: boolean;
@@ -144,6 +144,7 @@
 				if (mcpResourceStore.isAttached(templatePreviewUri)) {
 					toast.info('Resource already attached');
 					handleOpenChange(false);
+
 					return;
 				}
 
@@ -152,8 +153,8 @@
 					name: templatePreviewUri.split('/').pop() || templatePreviewUri,
 					serverName: selectedTemplate.serverName
 				};
-
 				const attachment = mcpResourceStore.addAttachment(resourceInfo);
+
 				mcpResourceStore.updateAttachmentContent(attachment.id, templatePreviewContent);
 
 				toast.success(`Resource attached: ${resourceInfo.name}`);
@@ -215,6 +216,7 @@
 		return allResources.sort((a, b) => {
 			const aName = getResourceDisplayName(a);
 			const bName = getResourceDisplayName(b);
+
 			return aName.localeCompare(bName);
 		});
 	}

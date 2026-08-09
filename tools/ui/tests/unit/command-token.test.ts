@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { findCommandToken, takeCommandDismissSnapshot } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('findCommandToken', () => {
 	it('returns null when the value does not start with a slash', () => {

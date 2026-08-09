@@ -1,63 +1,63 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
 	StreamableHTTPClientTransport,
 	StreamableHTTPError
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import type {
-	Tool,
-	Prompt,
-	GetPromptResult,
-	ListChangedHandlers
-} from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type {
+	GetPromptResult,
+	ListChangedHandlers,
+	Prompt,
+	Tool
+} from '@modelcontextprotocol/sdk/types.js';
 import {
-	DEFAULT_MCP_CONFIG,
+	CORS_PROXY_ENDPOINT,
+	CORS_PROXY_HEADER_PREFIX,
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE,
-	CORS_PROXY_HEADER_PREFIX,
-	MCP_PARTIAL_REDACT_HEADERS,
-	CORS_PROXY_ENDPOINT
+	DEFAULT_MCP_CONFIG,
+	MCP_PARTIAL_REDACT_HEADERS
 } from '$lib/constants';
 import {
 	MCPConnectionPhase,
-	MCPLogLevel,
-	MCPTransportType,
 	MCPContentType,
-	MCPRefType
+	MCPLogLevel,
+	MCPRefType,
+	MCPTransportType
 } from '$lib/enums';
 import type {
-	MCPServerConfig,
-	MCPResourceIcon,
-	ToolCallParams,
-	ToolExecutionResult,
-	Implementation,
 	ClientCapabilities,
+	Implementation,
 	MCPConnection,
-	MCPPhaseCallback,
 	MCPConnectionLog,
-	MCPServerInfo,
+	MCPPhaseCallback,
+	MCPReadResourceResult,
 	MCPResource,
-	MCPResourceTemplate,
 	MCPResourceContent,
-	MCPReadResourceResult
+	MCPResourceIcon,
+	MCPResourceTemplate,
+	MCPServerConfig,
+	MCPServerInfo,
+	ToolCallParams,
+	ToolExecutionResult
 } from '$lib/types';
 import {
-	buildProxiedUrl,
 	buildProxiedHeaders,
-	getAuthHeaders,
-	sanitizeHeaders,
-	throwIfAborted,
-	isAbortError,
+	buildProxiedUrl,
 	createBase64DataUrl,
-	getRequestUrl,
-	getRequestMethod,
-	getRequestBody,
-	summarizeRequestBody,
-	formatDiagnosticErrorMessage,
 	extractJsonRpcMethods,
-	type RequestBodySummary
+	formatDiagnosticErrorMessage,
+	getAuthHeaders,
+	getRequestBody,
+	getRequestMethod,
+	getRequestUrl,
+	isAbortError,
+	type RequestBodySummary,
+	sanitizeHeaders,
+	summarizeRequestBody,
+	throwIfAborted
 } from '$lib/utils';
 
 interface ToolResultContentItem {
@@ -144,6 +144,7 @@ export class MCPService {
 				useProxy && !key.toLowerCase().startsWith(CORS_PROXY_HEADER_PREFIX)
 					? `${CORS_PROXY_HEADER_PREFIX}${key}`
 					: key;
+
 			requestHeaders.set(proxiedKey, value);
 		}
 	}
@@ -244,6 +245,7 @@ export class MCPService {
 		disable: () => void;
 	} {
 		let enabled = true;
+
 		const logIfEnabled = (log: MCPConnectionLog) => {
 			if (enabled) {
 				onLog?.(log);
@@ -254,6 +256,7 @@ export class MCPService {
 			fetch: async (input, init) => {
 				if (useProxy && typeof window !== 'undefined') {
 					let requestUrlStr = '';
+
 					if (typeof input === 'string') {
 						requestUrlStr = input;
 					} else if (input instanceof URL) {
@@ -262,6 +265,7 @@ export class MCPService {
 
 					if (requestUrlStr) {
 						const parsedRequestUrl = new URL(requestUrlStr, window.location.origin);
+
 						if (
 							parsedRequestUrl.origin === window.location.origin &&
 							!parsedRequestUrl.pathname.includes(CORS_PROXY_ENDPOINT)
@@ -650,7 +654,6 @@ export class MCPService {
 				listChanged: listChangedHandlers
 			}
 		);
-
 		const runtimeErrorHandler = (error: Error) => {
 			// the SDK reports any post initialize error here, including the abort we trigger
 			// ourselves on the next health check cycle, on tab unload, or on server teardown.
@@ -661,7 +664,9 @@ export class MCPService {
 			if (isAbortError(error)) {
 				return;
 			}
+
 			const msg = error?.message ?? '';
+
 			if (
 				/SSE stream disconnected:.*AbortError/i.test(msg) ||
 				/AbortError: .*aborted/i.test(msg) ||
@@ -669,6 +674,7 @@ export class MCPService {
 			) {
 				return;
 			}
+
 			console.error(`[MCPService][${serverName}] Protocol error after initialize:`, error);
 		};
 
@@ -701,6 +707,7 @@ export class MCPService {
 
 		try {
 			let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+
 			const handshakeDeadline = new Promise<never>((_, reject) => {
 				handshakeTimer = setTimeout(() => {
 					void transport.close().catch(() => {});
@@ -804,7 +811,6 @@ export class MCPService {
 			requestTimeoutMs:
 				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
 		});
-
 		const connectionTimeMs = Math.round(performance.now() - startTime);
 
 		// Phase: Connected
@@ -815,6 +821,7 @@ export class MCPService {
 				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
 			)
 		);
+
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log(
 				`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
@@ -861,6 +868,7 @@ export class MCPService {
 			// by not setting onerror, but since we use it for protocol logging,
 			// we must clear it before disconnect.
 			connection.client.onerror = undefined;
+
 			if (connection.transport.onclose) {
 				connection.transport.onclose = undefined;
 			}
@@ -1001,6 +1009,7 @@ export class MCPService {
 	 */
 	private static formatToolResult(result: ToolCallResult): string {
 		const content = result.content;
+
 		if (!Array.isArray(content)) return '';
 
 		return content
@@ -1022,6 +1031,7 @@ export class MCPService {
 			const resource = content.resource;
 
 			if (resource.text) return resource.text;
+
 			if (resource.blob) return resource.blob;
 
 			return JSON.stringify(resource);
@@ -1113,10 +1123,12 @@ export class MCPService {
 	 */
 	static async listAllResources(connection: MCPConnection): Promise<MCPResource[]> {
 		const allResources: MCPResource[] = [];
+
 		let cursor: string | undefined;
 
 		do {
 			const result = await this.listResources(connection, cursor);
+
 			allResources.push(...result.resources);
 			cursor = result.nextCursor;
 		} while (cursor);
@@ -1162,10 +1174,12 @@ export class MCPService {
 	 */
 	static async listAllResourceTemplates(connection: MCPConnection): Promise<MCPResourceTemplate[]> {
 		const allTemplates: MCPResourceTemplate[] = [];
+
 		let cursor: string | undefined;
 
 		do {
 			const result = await this.listResourceTemplates(connection, cursor);
+
 			allTemplates.push(...result.resourceTemplates);
 			cursor = result.nextCursor;
 		} while (cursor);

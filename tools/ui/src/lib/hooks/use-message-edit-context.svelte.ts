@@ -24,13 +24,16 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 
 	async function handleSaveEdit() {
 		const trimmed = editedContent.trim();
+
 		if (!trimmed && editedExtras.length === 0 && editedUploadedFiles.length === 0) return;
 
 		let finalExtras: DatabaseMessageExtra[] = $state.snapshot(editedExtras);
+
 		if (editedUploadedFiles.length > 0) {
 			const plainFiles = $state.snapshot(editedUploadedFiles);
 			const result = await parseFilesToMessageExtras(plainFiles);
 			const newExtras = result?.extras || [];
+
 			finalExtras = [...finalExtras, ...newExtras];
 		}
 

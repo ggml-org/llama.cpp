@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { BUILD_CONFIG } from '../src/lib/constants/pwa';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';
-import { BUILD_CONFIG } from '../src/lib/constants/pwa';
 
 let processed = false;
 
@@ -11,11 +11,15 @@ function rewrite(path: string, pairs: [string, string][]): void {
 	if (!existsSync(path)) {
 		return;
 	}
+
 	const text = readFileSync(path, 'utf-8');
+
 	let out = text;
+
 	for (const [from, to] of pairs) {
 		out = out.split(from).join(to);
 	}
+
 	if (out !== text) {
 		writeFileSync(path, out, 'utf-8');
 	}
@@ -38,6 +42,7 @@ export function relativizeBasePlugin(): Plugin {
 			setTimeout(() => {
 				try {
 					if (processed) return;
+
 					processed = true;
 
 					const outDir = resolve(OUTPUT_DIR);

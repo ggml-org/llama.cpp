@@ -1,24 +1,24 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
-	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { DatabaseService } from '$lib/services/database.service';
-	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
-	import { REASONING_TAGS } from '$lib/constants/agentic';
-	import { MessageRole, AttachmentType, AgenticSectionType } from '$lib/enums';
 	import {
 		ChatMessageAssistant,
-		ChatMessageUser,
-		ChatMessageSystem,
+		ChatMessageMcpPrompt,
 		ChatMessageSynthetic,
-		ChatMessageMcpPrompt
+		ChatMessageSystem,
+		ChatMessageUser
 	} from '$lib/components/app/chat';
-	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { deriveAgenticSections } from '$lib/utils';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
+	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { ROUTES } from '$lib/constants/routes';
+	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
+	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
+	import { DatabaseService } from '$lib/services/database.service';
+	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { deriveAgenticSections } from '$lib/utils';
+	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 
 	interface Props {
 		class?: string;
@@ -72,10 +72,12 @@
 				case AgenticSectionType.REASONING:
 				case AgenticSectionType.REASONING_PENDING:
 					parts.push(`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`);
+
 					break;
 
 				case AgenticSectionType.TEXT:
 					parts.push(section.content);
+
 					break;
 
 				case AgenticSectionType.TOOL_CALL:
@@ -170,7 +172,9 @@
 
 	let mcpPromptExtra = $derived.by(() => {
 		if (message.role !== MessageRole.USER) return null;
+
 		if (message.content.trim()) return null;
+
 		if (!message.extra || message.extra.length !== 1) return null;
 
 		const extra = message.extra[0];
@@ -238,6 +242,7 @@
 
 	function handleEdit() {
 		isEditing = true;
+
 		// Clear temporary placeholder content for system messages
 		if (message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER) {
 			editedContent = '';
@@ -281,6 +286,7 @@
 	// After the system message flow ends, hand focus to the main chat form
 	function focusMainChatForm() {
 		if (isMobile.current) return;
+
 		document.querySelector<HTMLTextAreaElement>('.chat-screen-form-wrapper textarea')?.focus();
 	}
 
@@ -292,23 +298,29 @@
 			// If content is empty, remove without deleting children
 			if (!newContent) {
 				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+
 				isEditing = false;
+
 				if (conversationDeleted) {
 					goto(ROUTES.START);
 				} else {
 					focusMainChatForm();
 				}
+
 				return;
 			}
 
 			await DatabaseService.updateMessage(message.id, { content: newContent });
 			const index = conversationsStore.findMessageIndex(message.id);
+
 			if (index !== -1) {
 				conversationsStore.updateMessageAtIndex(index, { content: newContent });
 			}
+
 			focusMainChatForm();
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
+
 			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
 		} else {
 			// For assistant messages, preserve exact content including trailing whitespace
@@ -325,6 +337,7 @@
 		if (message.role === MessageRole.USER) {
 			// For user messages, trim to avoid accidental whitespace
 			const finalExtras = await getMergedExtras();
+
 			chatActions.editUserMessagePreserveResponses(message, editedContent.trim(), finalExtras);
 		}
 

@@ -1,7 +1,7 @@
+import { ROUTES } from './routes';
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import type { Component } from 'svelte';
-import { ROUTES } from './routes';
 
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';

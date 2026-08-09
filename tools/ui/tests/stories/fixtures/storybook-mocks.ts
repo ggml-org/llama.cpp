@@ -1,5 +1,5 @@
-import { serverStore } from '$lib/stores/server.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 
 /**
  * Mock server properties for Storybook testing
@@ -8,6 +8,7 @@ import { modelsStore } from '$lib/stores/models.svelte';
 export function mockServerProps(props: Partial<ApiLlamaCppServerProps>): void {
 	// Reset any pointer-events from previous tests (dropdown cleanup)
 	const body = document.querySelector('body');
+
 	if (body) body.style.pointerEvents = '';
 
 	// Directly set the props for testing purposes

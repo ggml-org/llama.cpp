@@ -24,25 +24,33 @@ export class SourceHistory {
 	push(entry: SourceHistoryEntry, now: number, newGroup = false): void {
 		if (newGroup || now - this.lastPush >= this.groupWindowMs || this.undoStack.length === 0) {
 			this.undoStack.push(entry);
+
 			if (this.undoStack.length > this.limit) this.undoStack.shift();
 		}
+
 		this.lastPush = now;
 		this.redoStack = [];
 	}
 
 	undo(current: SourceHistoryEntry): SourceHistoryEntry | null {
 		const entry = this.undoStack.pop();
+
 		if (!entry) return null;
+
 		this.redoStack.push(current);
 		this.lastPush = 0; // the next edit after an undo starts a new group
+
 		return entry;
 	}
 
 	redo(current: SourceHistoryEntry): SourceHistoryEntry | null {
 		const entry = this.redoStack.pop();
+
 		if (!entry) return null;
+
 		this.undoStack.push(current);
 		this.lastPush = 0;
+
 		return entry;
 	}
 }

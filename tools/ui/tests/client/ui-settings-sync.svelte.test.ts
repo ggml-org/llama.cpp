@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { settingsStore, config } from '$lib/stores/settings.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { serverStore } from '$lib/stores/server.svelte';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 function mockProps(uiSettings: Record<string, string | number | boolean>) {
 	Object.defineProperty(serverStore, 'props', {
@@ -43,6 +43,7 @@ describe('server ui_settings application semantics', () => {
 		expect(config().theme).toBe('light');
 		expect(config().apiKey).toBe('sk-user-key');
 		const stored = JSON.parse(localStorage.getItem(CONFIG_LOCALSTORAGE_KEY) ?? '{}');
+
 		expect(stored.apiKey).toBe('sk-user-key');
 	});
 

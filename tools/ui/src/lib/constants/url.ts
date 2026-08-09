@@ -1,7 +1,5 @@
 const STD = ['com', 'net', 'org', 'gov', 'edu'] as const;
-
 const STD_MIL = [...STD, 'mil'] as const;
-
 const ccTLD_PREFIXES: Record<string, readonly string[]> = {
 	// --- Standard 5 only ---
 	ar: STD,
@@ -112,7 +110,6 @@ const ccTLD_PREFIXES: Record<string, readonly string[]> = {
 	uk: ['co', 'org', 'net', 'ac', 'gov', 'mil', 'nhs', 'police', 'mod', 'ltd', 'plc', 'me', 'sch'],
 	za: ['co', 'org', 'net', 'web', 'law', 'mil']
 };
-
 const WILDCARD_BASES: Record<string, readonly string[]> = {
 	br: ['nom', 'blog'],
 	jp: [

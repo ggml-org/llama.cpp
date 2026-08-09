@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { ModelsService } from '$lib/services/models.service';
+import { describe, expect, it } from 'vitest';
 
 const { parseModelId } = ModelsService;
 

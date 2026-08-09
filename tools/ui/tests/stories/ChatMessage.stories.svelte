@@ -93,6 +93,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
+
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
 />
@@ -105,6 +106,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
+
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
 />
@@ -117,6 +119,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
+
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
 />
@@ -129,6 +132,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
+
 		settingsStore.updateConfig('showRawOutputSwitch', true);
 	}}
 />
@@ -141,16 +145,18 @@
 	asChild
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
+
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 		// Phase 1: Stream reasoning content in chunks
 		let reasoningText =
 			'I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.';
-
 		let reasoningChunk = 'I';
 		let i = 0;
+
 		while (i < reasoningText.length) {
 			const chunkSize = Math.floor(Math.random() * 5) + 3; // Random 3-7 characters
 			const chunk = reasoningText.slice(i, i + chunkSize);
+
 			reasoningChunk += chunk;
 
 			// Update the reactive state directly
@@ -164,11 +170,13 @@
 			"Based on my analysis, here's the solution:\n\n**Step 1:** First, we need to understand the requirements clearly.\n\n**Step 2:** Then we can implement the solution systematically.\n\n**Step 3:** Finally, we test and validate the results.\n\nThis approach ensures we cover all aspects of the problem effectively.";
 
 		let contentChunk = '';
+
 		i = 0;
 
 		while (i < regularText.length) {
 			const chunkSize = Math.floor(Math.random() * 5) + 3; // Random 3-7 characters
 			const chunk = regularText.slice(i, i + chunkSize);
+
 			contentChunk += chunk;
 
 			// Update the reactive state directly
@@ -193,6 +201,7 @@
 	}}
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings.svelte');
+
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 		// Import the chat store to simulate loading state
 		const { chatStore } = await import('$lib/stores/chat.svelte');

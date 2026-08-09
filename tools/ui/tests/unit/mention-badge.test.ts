@@ -1,16 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { FileMentionEntryType } from '$lib/enums';
 import {
-	MENTION_BADGE_FILE_ICON_PATHS,
-	MENTION_BADGE_FOLDER_ICON_PATHS,
 	buildMentionInsertion,
 	containsFileMentionLink,
 	decodeFileLinkPath,
 	encodeFileLinkPath,
 	fileMentionLinkRe,
 	getMentionBadgeIconPaths,
-	getMentionBadgeLabel
+	getMentionBadgeLabel,
+	MENTION_BADGE_FILE_ICON_PATHS,
+	MENTION_BADGE_FOLDER_ICON_PATHS
 } from '$lib/utils';
-import { FileMentionEntryType } from '$lib/enums';
+import { describe, expect, it } from 'vitest';
 
 describe('encodeFileLinkPath', () => {
 	it('leaves a clean path unchanged', () => {
@@ -47,6 +47,7 @@ describe('fileMentionLinkRe', () => {
 		const match = fileMentionLinkRe().exec(
 			'[Screenshot (1).png](file:///Users/foo/Screenshot (1).png)'
 		);
+
 		expect(match).not.toBeNull();
 		expect(match?.[1]).toBe('Screenshot (1).png');
 		expect(match?.[2]).toBe('/Users/foo/Screenshot (1).png');
@@ -137,8 +138,10 @@ describe('buildMentionInsertion', () => {
 			start: 6,
 			end: 11
 		});
+
 		expect(result).not.toBeNull();
 		const { newValue, caretOffset } = result!;
+
 		expect(newValue).toBe('hello [myRepo](file:///Users/foo/myRepo) ');
 		expect(caretOffset).toBe(6 + '[myRepo](file:///Users/foo/myRepo) '.length);
 	});
@@ -149,6 +152,7 @@ describe('buildMentionInsertion', () => {
 			start: 4,
 			end: 8
 		})!;
+
 		expect(newValue).toBe('see [src](file:///Users/foo/myRepo/src/) ');
 	});
 
@@ -159,11 +163,13 @@ describe('buildMentionInsertion', () => {
 			value,
 			{ start: 0, end: 4 }
 		)!;
+
 		expect(newValue).toBe('[Pic (1).png](file:///Users/foo/Desktop/Pic%20(1).png) ');
 	});
 
 	it('re-adds the directory marker when the cleaned path empties', () => {
 		const { newValue } = buildMentionInsertion(dir('/', 'root'), '/', { start: 0, end: 1 })!;
+
 		expect(newValue).toBe('[root](file:///) ');
 	});
 

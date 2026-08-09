@@ -1,7 +1,7 @@
-import { page } from '$app/state';
 import { beforeNavigate } from '$app/navigation';
-import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
+import { page } from '$app/state';
 import { ROUTES } from '$lib/constants/routes';
+import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
 
 export interface ChatSettings {
 	reset: () => void;
@@ -12,7 +12,6 @@ export function useSettingsNavigation() {
 		activePanel: 'chat' as 'chat' | 'settings' | 'mcp',
 		chatSettingsRef: undefined as ChatSettings | undefined
 	});
-
 	const isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
 
 	beforeNavigate(({ to, from }) => {

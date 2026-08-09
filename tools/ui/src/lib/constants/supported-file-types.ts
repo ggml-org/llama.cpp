@@ -12,11 +12,11 @@ import {
 	FileTypeImage,
 	FileTypePdf,
 	FileTypeText,
-	MimeTypeAudio,
-	MimeTypeVideo,
-	MimeTypeImage,
 	MimeTypeApplication,
-	MimeTypeText
+	MimeTypeAudio,
+	MimeTypeImage,
+	MimeTypeText,
+	MimeTypeVideo
 } from '$lib/enums';
 import { FileExtensionVideo, FileTypeVideo } from '$lib/enums/files.enums';
 

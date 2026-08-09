@@ -27,16 +27,18 @@ export interface DiffLine {
 export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	const oldLines = splitLines(oldText);
 	const newLines = splitLines(newText);
-
 	const m = oldLines.length;
 	const n = newLines.length;
 
 	if (m === 0 && n === 0) return [];
+
 	if (m === 0) return newLines.map((t, k) => ({ kind: DiffLineKind.ADD, text: t, newLine: k + 1 }));
+
 	if (n === 0)
 		return oldLines.map((t, k) => ({ kind: DiffLineKind.REMOVE, text: t, oldLine: k + 1 }));
 
 	const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+
 	for (let i = 1; i <= m; i++) {
 		for (let j = 1; j <= n; j++) {
 			if (oldLines[i - 1] === newLines[j - 1]) {
@@ -48,8 +50,10 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	}
 
 	const result: DiffLine[] = [];
+
 	let i = m;
 	let j = n;
+
 	while (i > 0 && j > 0) {
 		if (oldLines[i - 1] === newLines[j - 1]) {
 			result.push({
@@ -78,6 +82,7 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	}
 
 	result.reverse();
+
 	return result;
 }
 
@@ -87,19 +92,25 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
  */
 export function renderUnifiedDiff(lines: DiffLine[]): string {
 	if (lines.length === 0) return '';
+
 	return lines.map((l) => prefixFor(l.kind) + l.text).join('\n');
 }
 
 /** Column-1 marker for a `DiffLine`: ` `, `+`, or `-`. */
 export function prefixFor(kind: DiffLineKind): string {
 	if (kind === DiffLineKind.ADD) return '+';
+
 	if (kind === DiffLineKind.REMOVE) return '-';
+
 	return ' ';
 }
 
 function splitLines(text: string): string[] {
 	if (text === '') return [];
+
 	const parts = text.split('\n');
+
 	if (parts[parts.length - 1] === '') parts.pop();
+
 	return parts.map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
 }

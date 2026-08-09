@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Lightbulb } from '@lucide/svelte';
 	import { CollapsibleContentBlock, MarkdownContent } from '$lib/components/app';
-	import { AgenticSectionType } from '$lib/enums';
 	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { AgenticSectionType } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import type { AgenticSection } from '$lib/utils';
@@ -38,9 +38,11 @@
 		if (isPending && !isStreaming) {
 			return hasReasoningError ? REASONING_SUBTITLE_ERROR : REASONING_SUBTITLE_CANCELLED;
 		}
+
 		if (section.wasInterrupted) {
 			return hasReasoningError ? REASONING_SUBTITLE_ERROR : REASONING_SUBTITLE_CANCELLED;
 		}
+
 		return isStreaming ? '' : undefined;
 	});
 	const shimmerTitle = $derived(isPending && isStreaming);
@@ -55,6 +57,7 @@
 
 	function isAtBottom(): boolean {
 		if (!scrollEl) return false;
+
 		return (
 			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
 			SCROLL_BOTTOM_THRESHOLD_PX
@@ -63,8 +66,10 @@
 
 	function scrollToBottomOnFrame() {
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
+
 			// User may scroll between scheduling and paint.
 			if (scrollEl && !userScrolledUp) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
@@ -74,18 +79,23 @@
 
 	function handleScrollEvent() {
 		if (!scrollEl) return;
+
 		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+
 		if (isScrollingUp && !isAtBottom()) {
 			userScrolledUp = true;
 		} else if (isAtBottom()) {
 			userScrolledUp = false;
 		}
+
 		lastScrollTop = scrollEl.scrollTop;
 	}
 
 	$effect(() => {
 		void section.content;
+
 		if (!scrollEl || !isPending || !isStreaming) return;
+
 		scrollToBottomOnFrame();
 	});
 
@@ -95,6 +105,7 @@
 		if (!scrollEl || !isPending || !isStreaming) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+
 		observer.observe(scrollEl, {
 			childList: true,
 			subtree: true,

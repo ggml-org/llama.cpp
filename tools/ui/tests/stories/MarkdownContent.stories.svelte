@@ -1,14 +1,14 @@
 <script module lang="ts">
-	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { expect } from 'storybook/test';
-	import { MarkdownContent } from '$lib/components/app';
 	import { AI_TUTORIAL_MD } from './fixtures/ai-tutorial.js';
 	import { API_DOCS_MD } from './fixtures/api-docs.js';
 	import { BLOG_POST_MD } from './fixtures/blog-post.js';
 	import { DATA_ANALYSIS_MD } from './fixtures/data-analysis.js';
-	import { README_MD } from './fixtures/readme.js';
-	import { MATH_FORMULAS_MD } from './fixtures/math-formulas.js';
 	import { EMPTY_MD } from './fixtures/empty.js';
+	import { MATH_FORMULAS_MD } from './fixtures/math-formulas.js';
+	import { README_MD } from './fixtures/readme.js';
+	import { defineMeta } from '@storybook/addon-svelte-csf';
+	import { MarkdownContent } from '$lib/components/app';
+	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({
 		title: 'Components/MarkdownContent',
@@ -70,6 +70,7 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 	}}
 	play={async (context) => {
 		const { canvasElement } = context;
+
 		// Wait for component to render
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -97,22 +98,26 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 		const hugginFaceLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://huggingface.co'
 		);
+
 		expect(hugginFaceLink).toBeTruthy();
 		expect(hugginFaceLink?.textContent).toBe('Hugging Face Homepage');
 
 		const githubLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://github.com/ggml-org/llama.cpp'
 		);
+
 		expect(githubLink).toBeTruthy();
 		expect(githubLink?.textContent).toBe('GitHub Repository');
 
 		const openaiLink = linkList.find((link) => link.getAttribute('href') === 'https://openai.com');
+
 		expect(openaiLink).toBeTruthy();
 		expect(openaiLink?.textContent).toBe('OpenAI Website');
 
 		const googleLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://www.google.com'
 		);
+
 		expect(googleLink).toBeTruthy();
 		expect(googleLink?.textContent).toBe('Google Search');
 
@@ -120,11 +125,13 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 		const exampleLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://example.com'
 		);
+
 		expect(exampleLink).toBeTruthy();
 
 		const pythonDocsLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://docs.python.org'
 		);
+
 		expect(pythonDocsLink).toBeTruthy();
 
 		console.log(`✅ URL Links test passed - Found ${links.length} links with proper attributes`);

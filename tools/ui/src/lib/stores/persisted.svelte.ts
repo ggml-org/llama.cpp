@@ -28,6 +28,7 @@ export function persisted<T>(key: string, initialValue: T): PersistedValue<T> {
 		try {
 			if (next === null || next === undefined) {
 				localStorage.removeItem(key);
+
 				return;
 			}
 

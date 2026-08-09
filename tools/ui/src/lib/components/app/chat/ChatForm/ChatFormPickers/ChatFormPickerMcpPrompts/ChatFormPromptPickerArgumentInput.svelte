@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { MCPPromptInfo } from '$lib/types';
-	import { fly } from 'svelte/transition';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import type { MCPPromptInfo } from '$lib/types';
+	import { fly } from 'svelte/transition';
 
 	type PromptArgument = NonNullable<MCPPromptInfo['arguments']>[number];
 
