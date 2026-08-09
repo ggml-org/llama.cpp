@@ -46,6 +46,33 @@ build/bin/aikar-prune analyze \
 
 Calibration collects selection count and frequency, router probability sum and mean, routed expert output L2 norm, and `mean(router_probability * output_norm)`. Experts are ranked once per layer by the final metric with original expert ID as the deterministic tie-breaker. Every larger ratio takes a longer prefix of the same ranking, so pruning sets are nested.
 
+The first calibration writes `pruning-results/importance-cache.json`. The cache contains model and dataset identities, context size, baseline token/NLL aggregates, and the raw per-layer expert statistics. It does not contain a ratio-specific ranking. A later `analyze` command with compatible inputs loads this cache instead of running baseline calibration again. Use `--importance-cache FILE` to share one cache across output directories.
+
+Ratio evaluation is enabled by default. Use `--no-evaluate` to generate profiles without loading and evaluating each soft-pruned model:
+
+```sh
+build/bin/aikar-prune analyze \
+  --model gemma-4-26b-a4b-q4_0.gguf \
+  --dataset calibration.jsonl \
+  --importance-cache calibration-importance.json \
+  --ratios 0.05,0.10,0.15,0.20,0.25 \
+  --no-evaluate \
+  --output-dir pruning-profiles
+```
+
+`--evaluate` explicitly selects the default evaluated mode. Skipping ratio evaluation does not skip a cache miss's initial calibration. It skips only the full dataset passes for the generated soft-pruned profiles. `analysis.json` records `evaluation_enabled`, and unevaluated ratio entries record `evaluated: false`.
+
+Once a cache exists, the `profiles` subcommand can create arbitrary compatible ratio profiles without opening or hashing the model or reading the dataset:
+
+```sh
+build/bin/aikar-prune profiles \
+  --importance-cache calibration-importance.json \
+  --ratios 0.06,0.12,0.18,0.24 \
+  --output-dir another-profile-set
+```
+
+The selected `--ppl-mask` must have at least one evaluated token in the cached calibration. `--max-layer-ratio` and router Top-K safety checks still apply when profiles are generated.
+
 Perplexity uses stable accumulated negative log-likelihood:
 
 ```text
@@ -53,6 +80,8 @@ ppl = exp(total_nll / evaluated_token_count)
 ```
 
 Baseline and pruned evaluations use identical rendered tokens, context windows, batches, and field masks. `analysis.json` contains all four field perplexities, timing, throughput, routing entropy, load imbalance, invalid-route count, and per-expert calibration statistics. `analysis.csv` contains one row per ratio. `README.txt` is a short human-readable summary.
+
+JSONL reading, message parsing, template rendering, and tokenization use ordered parallel work queues. `--dataset-threads N` sets their worker limit; zero selects the physical core count. Results are collected in input order, and the pruning field masks use the same rendered text and token-start semantics in serial and parallel modes.
 
 ## Run the server
 

@@ -70,10 +70,19 @@ static void test_dataset() {
         require(file != nullptr);
         fputs("{\"messages\":[{\"role\":\"user\",\"content\":\"Question\"},{\"role\":\"assistant\",\"content\":\"Answer\"}]}\n", file);
         fputs("{\"messages\":[{\"role\":\"user\",\"content\":\"Solve\"},{\"role\":\"assistant\",\"reasoning\":\"Work\",\"content\":\"Final\"}]}\n", file);
+        fputs("{\"messages\":[{\"role\":\"user\",\"content\":\"Q1\"},{\"role\":\"assistant\",\"content\":\"A1\"},{\"role\":\"user\",\"content\":\"Q2\"},{\"role\":\"assistant\",\"content\":\"A2\"},{\"role\":\"user\",\"content\":\"Q3\"},{\"role\":\"assistant\",\"content\":\"A3\"},{\"role\":\"user\",\"content\":\"Q4\"},{\"role\":\"assistant\",\"content\":\"A4\"},{\"role\":\"user\",\"content\":\"Q5\"},{\"role\":\"assistant\",\"content\":\"A5\"}]}\n", file);
         fclose(file);
     }
-    const aikar_dataset dataset = aikar_dataset_load(path, model, templates.get());
-    require(dataset.records.size() == 2);
+    const aikar_dataset dataset = aikar_dataset_load(path, model, templates.get(), 1);
+    const aikar_dataset parallel_dataset = aikar_dataset_load(path, model, templates.get(), 4);
+    require(dataset.records.size() == 3);
+    require(parallel_dataset.records.size() == dataset.records.size());
+    require(parallel_dataset.total_tokens == dataset.total_tokens);
+    for (size_t i = 0; i < dataset.records.size(); ++i) {
+        require(parallel_dataset.records[i].line == dataset.records[i].line);
+        require(parallel_dataset.records[i].tokens == dataset.records[i].tokens);
+        require(parallel_dataset.records[i].token_fields == dataset.records[i].token_fields);
+    }
     size_t assistant = 0;
     size_t reasoning = 0;
     size_t content = 0;

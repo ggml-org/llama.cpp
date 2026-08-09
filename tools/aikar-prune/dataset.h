@@ -32,4 +32,5 @@ bool aikar_token_is_evaluated(const aikar_dataset_record & record, size_t token_
 aikar_dataset aikar_dataset_load(
         const std::string & path,
         const llama_model * model,
-        const common_chat_templates * templates);
+        const common_chat_templates * templates,
+        int32_t n_threads = 0);

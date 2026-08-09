@@ -40,6 +40,7 @@
 #include "arg.h"
 #include "chat.h"
 #include "common.h"
+#include "jsonl.h"
 #include "log.h"
 #include "llama.h"
 #include "gguf.h"
@@ -235,11 +236,6 @@ struct tokenization_request {
     float reward = 1.0f;
 };
 
-struct jsonl_input_line {
-    std::string text;
-    int lineno;
-};
-
 struct jsonl_load_result {
     tokenization_request request;
     training_sample      sample;
@@ -268,165 +264,6 @@ struct jsonl_line_state {
     bool prepared = false;
     std::atomic<bool> failed { false };
 };
-
-class dataset_worker_pool {
-public:
-    explicit dataset_worker_pool(size_t n_workers) {
-        if (n_workers <= 1) {
-            return;
-        }
-
-        workers.reserve(n_workers);
-        for (size_t i = 0; i < n_workers; ++i) {
-            workers.emplace_back([this, i] { worker_loop(i); });
-        }
-    }
-
-    ~dataset_worker_pool() {
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            stop = true;
-        }
-        work_ready.notify_all();
-        for (std::thread & worker : workers) {
-            worker.join();
-        }
-    }
-
-    void parallel_for(size_t n_tasks, const std::function<void(size_t, size_t)> & fn) {
-        if (n_tasks == 0) {
-            return;
-        }
-        if (workers.empty()) {
-            for (size_t i = 0; i < n_tasks; ++i) {
-                fn(i, 0);
-            }
-            return;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            task = fn;
-            task_count = n_tasks;
-            next_task.store(0);
-            workers_pending = workers.size();
-            exception = nullptr;
-            ++generation;
-        }
-        work_ready.notify_all();
-
-        std::unique_lock<std::mutex> lock(mutex);
-        work_done.wait(lock, [this] { return workers_pending == 0; });
-        if (exception) {
-            std::rethrow_exception(exception);
-        }
-    }
-
-private:
-    void worker_loop(size_t worker_index) {
-        size_t worker_generation = 0;
-        for (;;) {
-            std::function<void(size_t, size_t)> current_task;
-            size_t current_task_count = 0;
-            {
-                std::unique_lock<std::mutex> lock(mutex);
-                work_ready.wait(lock, [&] { return stop || generation != worker_generation; });
-                if (stop) {
-                    return;
-                }
-                worker_generation = generation;
-                current_task = task;
-                current_task_count = task_count;
-            }
-
-            for (;;) {
-                const size_t i = next_task.fetch_add(1);
-                if (i >= current_task_count) {
-                    break;
-                }
-                try {
-                    current_task(i, worker_index);
-                } catch (...) {
-                    std::lock_guard<std::mutex> lock(mutex);
-                    if (!exception) {
-                        exception = std::current_exception();
-                    }
-                }
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(mutex);
-                if (--workers_pending == 0) {
-                    task = {};
-                    work_done.notify_one();
-                }
-            }
-        }
-    }
-
-    std::vector<std::thread> workers;
-    std::mutex mutex;
-    std::condition_variable work_ready;
-    std::condition_variable work_done;
-    std::function<void(size_t, size_t)> task;
-    std::atomic<size_t> next_task { 0 };
-    size_t task_count = 0;
-    size_t workers_pending = 0;
-    size_t generation = 0;
-    std::exception_ptr exception;
-    bool stop = false;
-};
-
-static size_t physical_core_count() {
-#ifdef __linux__
-    std::ifstream cpuinfo("/proc/cpuinfo");
-    if (cpuinfo.is_open()) {
-        std::set<std::pair<int, int>> cores;
-        int package_id = -1;
-        int core_id = -1;
-        std::string line;
-
-        auto add_core = [&] {
-            if (package_id >= 0 && core_id >= 0) {
-                cores.insert({ package_id, core_id });
-            }
-            package_id = -1;
-            core_id = -1;
-        };
-
-        while (std::getline(cpuinfo, line)) {
-            if (line.empty()) {
-                add_core();
-                continue;
-            }
-
-            const size_t colon = line.find(':');
-            if (colon == std::string::npos) continue;
-            const std::string key = line.substr(0, colon);
-            if (key.find("physical id") != std::string::npos) {
-                package_id = std::stoi(line.substr(colon + 1));
-            } else if (key.find("core id") != std::string::npos) {
-                core_id = std::stoi(line.substr(colon + 1));
-            }
-        }
-        add_core();
-
-        if (!cores.empty()) {
-            return cores.size();
-        }
-    }
-#endif
-
-    return std::max(1u, std::thread::hardware_concurrency());
-}
-
-static size_t dataset_worker_limit(int32_t requested) {
-    return requested > 0 ? (size_t) requested : physical_core_count();
-}
-
-static size_t dataset_worker_count(int32_t requested, size_t n_tasks) {
-    return std::min(n_tasks, dataset_worker_limit(requested));
-}
 
 static bool critical_mode_uses_spans(const std::string & mode) {
     return mode == "spans" || mode == "hybrid";
@@ -544,36 +381,27 @@ static std::vector<training_sample> load_jsonl(
         const std::string  & critical_mode,
         float                critical_default_weight) {
 
-    std::ifstream f(path);
-    if (!f.is_open()) {
-        LOG_ERR("%s: cannot open %s\n", __func__, path.c_str());
-        return {};
-    }
-
     std::vector<training_sample> samples;
-    std::vector<jsonl_input_line> lines;
-    std::string line;
-    int lineno = 0;
     bool logged_preview = false;
-
-    while (std::getline(f, line)) {
-        ++lineno;
-        if (line.empty()) continue;
-
-        lines.push_back({ std::move(line), lineno });
+    std::vector<common_jsonl_line> lines;
+    try {
+        lines = common_jsonl_read_lines(path, COMMON_JSONL_EMPTY_LINE_SKIP);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: %s\n", __func__, e.what());
+        return {};
     }
 
     std::vector<jsonl_load_result> results(lines.size());
     std::vector<std::unique_ptr<jsonl_line_state>> states;
     states.reserve(lines.size());
-    for (const jsonl_input_line & input : lines) {
+    for (const common_jsonl_line & input : lines) {
         auto state = std::make_unique<jsonl_line_state>();
-        state->lineno = input.lineno;
+        state->lineno = (int) input.number;
         states.push_back(std::move(state));
     }
 
-    const size_t worker_limit = dataset_worker_limit(n_threads);
-    const size_t n_json_workers = dataset_worker_count(n_threads, lines.size());
+    const size_t worker_limit = common_jsonl_worker_limit(n_threads);
+    const size_t n_json_workers = common_jsonl_worker_count(n_threads, lines.size());
     auto parse_json_line = [&](size_t i) {
         jsonl_line_state & state = *states[i];
         try {
@@ -584,29 +412,11 @@ static std::vector<training_sample> load_jsonl(
         }
     };
 
-    if (n_json_workers <= 1) {
-        for (size_t i = 0; i < lines.size(); ++i) {
-            parse_json_line(i);
-        }
-    } else {
-        std::atomic<size_t> next_line { 0 };
-        std::vector<std::thread> workers;
-        workers.reserve(n_json_workers);
-        for (size_t worker = 0; worker < n_json_workers; ++worker) {
-            workers.emplace_back([&] {
-                for (;;) {
-                    const size_t i = next_line.fetch_add(1);
-                    if (i >= lines.size()) {
-                        break;
-                    }
-                    parse_json_line(i);
-                }
-            });
-        }
-        for (std::thread & worker : workers) {
-            worker.join();
-        }
+    {
+        common_jsonl_worker_pool json_pool(n_json_workers);
+        json_pool.parallel_for(lines.size(), [&](size_t i, size_t) { parse_json_line(i); });
     }
+    for (common_jsonl_line & input : lines) std::string().swap(input.text);
 
     const size_t message_parallel_min = 8;
     size_t n_valid_json = 0;
@@ -650,7 +460,7 @@ static std::vector<training_sample> load_jsonl(
     }
 
     {
-        dataset_worker_pool worker_pool(n_workers);
+        common_jsonl_worker_pool worker_pool(n_workers);
         std::vector<jsonl_message_task> message_tasks;
         message_tasks.reserve(message_task_hint);
         for (size_t i = 0; i < states.size(); ++i) {
@@ -673,13 +483,7 @@ static std::vector<training_sample> load_jsonl(
             try {
                 for (size_t mi = task.first_message; mi < task.first_message + task.message_count; ++mi) {
                     const nlohmann::json & data = *state.message_data[mi];
-                    common_chat_msg msg;
-                    msg.role = data.value("role", "user");
-                    common_chat_msg_content_part part;
-                    part.type = "text";
-                    part.text = data.value("content", "");
-                    msg.content_parts.push_back(std::move(part));
-                    state.messages[mi] = std::move(msg);
+                    state.messages[mi] = common_jsonl_parse_chat_message(data, COMMON_JSONL_CHAT_PARSE_TEXT);
                     if (!tmpls) {
                         state.chatml_messages[mi] = apply_chatml_message(state.messages[mi]);
                     }
