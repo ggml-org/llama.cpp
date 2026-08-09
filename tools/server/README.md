@@ -115,6 +115,22 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K) |
 | `--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V) |
 
+### Expert tier params
+
+| Argument | Explanation |
+| -------- | ----------- |
+| `-ehs, --expert-hot-s N` | expert hot store slots: -1 = autofit from free VRAM, 0 = disabled, N = manual top-N slots<br/>(env: LLAMA_ARG_EXPERT_HOT_S) |
+| `--expert-pin N` | fraction (percent) of cold experts to keep pinned in RAM via madvise, 0 = off, -1 = auto<br/>(env: LLAMA_ARG_EXPERT_PIN) |
+| `--expert-copy` | copy experts to the GPU store (keep the RAM copy). default: move (GPU store replaces the RAM copy; frees RAM)<br/>(env: LLAMA_ARG_EXPERT_COPY) |
+| `--expert-sidecar` | load the expert heatmap sidecar (`<model>.tier`) at start, save it at exit<br/>(env: LLAMA_ARG_EXPERT_SIDECAR) |
+| `--expert-gpu N` | put the expert store on this GPU index (default: -1 = all GPUs)<br/>(env: LLAMA_ARG_EXPERT_GPU) |
+| `--expert-sync-period N` | expert hot store re-sync cadence in tokens (default: 1)<br/>(env: LLAMA_ARG_EXPERT_SYNC_PERIOD) |
+| `--expert-hyst F` | expert hot store hysteresis ratio (default: 1.3, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_HYST) |
+| `--expert-dwell N` | expert hot store minimum dwell updates before swap (default: 0 = off)<br/>(env: LLAMA_ARG_EXPERT_DWELL) |
+| `--expert-heat-decay F` | expert heatmap decay rate per update (default: 0.999)<br/>(env: LLAMA_ARG_EXPERT_HEAT_DECAY) |
+| `--expert-heat-log-period N` | print the expert heatmap at generation end (default: 0, 0 = off)<br/>(env: LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD) |
+| `--expert-no-evict` | never evict experts from the hot store (fill-only, no move-back) |
+
 
 ### Sampling params
 
