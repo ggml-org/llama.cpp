@@ -1952,6 +1952,10 @@ private:
     // spawns "<engine> run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
     // so the container stays alive until we close it (see destructor) or it is killed from the outside
     void spawn() {
+        // create() writes over the handle it is given, so the previous one is released first,
+        // otherwise a respawn leaks the pipes and the process handle of the container that died
+        proc.join();
+
         std::error_code ec;
         fs::path cidfile = fs::temp_directory_path(ec) / string_format(
             "llama-tools-runtime-cid-%zu.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
