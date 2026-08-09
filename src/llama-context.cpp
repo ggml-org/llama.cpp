@@ -7,6 +7,9 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-iswa.h"
+#include "llama-memory-recurrent.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -32,74 +35,14 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     throw std::runtime_error("Unsupported ctx type");
 }
 
-static bool llama_backend_dev_supports_ssm_scan_rollback(ggml_backend_dev_t dev, const llama_hparams & hparams) {
-    if (dev == nullptr) {
-        return false;
+static void llama_memory_set_rs_seq(llama_memory_i * memory, uint32_t n_rs_seq) {
+    if (auto * mem = dynamic_cast<llama_memory_recurrent *>(memory)) {
+        mem->n_rs_seq = n_rs_seq;
+    } else if (auto * mem = dynamic_cast<llama_memory_hybrid *>(memory)) {
+        mem->get_mem_recr()->n_rs_seq = n_rs_seq;
+    } else if (auto * mem = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
+        mem->get_mem_recr()->n_rs_seq = n_rs_seq;
     }
-
-    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-    if (reg == nullptr || std::strcmp(ggml_backend_reg_name(reg), "CUDA") != 0) {
-        return false;
-    }
-
-    if (hparams.ssm_d_state == 0 || hparams.ssm_d_inner == 0 || hparams.ssm_dt_rank == 0) {
-        return false;
-    }
-
-    if (hparams.ssm_d_inner % hparams.ssm_dt_rank != 0) {
-        return false;
-    }
-
-    const int64_t d_state      = hparams.ssm_d_state;
-    const int64_t d_inner      = hparams.ssm_d_inner;
-    const int64_t n_head       = hparams.ssm_dt_rank;
-    const int64_t head_dim     = d_inner / n_head;
-    const int64_t n_group      = hparams.ssm_n_group ? hparams.ssm_n_group : 1;
-    const int64_t n_seq_tokens = 2;
-    const int64_t n_seqs       = 1;
-    const int64_t K            = 2;
-
-    ggml_init_params params = {
-        /*.mem_size   =*/ ggml_tensor_overhead()*16,
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-
-    ggml_context_ptr ctx { ggml_init(params) };
-    if (!ctx) {
-        throw std::runtime_error("failed to create ggml context for SSM rollback support check");
-    }
-
-    ggml_tensor * s   = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, d_state, head_dim, n_head, n_seqs);
-    ggml_tensor * x   = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, head_dim, n_head, n_seq_tokens, n_seqs);
-    ggml_tensor * dt  = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, n_head, n_seq_tokens, n_seqs);
-    ggml_tensor * A   = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 1, n_head);
-    ggml_tensor * B   = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, d_state, n_group, n_seq_tokens, n_seqs);
-    ggml_tensor * C   = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, d_state, n_group, n_seq_tokens, n_seqs);
-    ggml_tensor * ids = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_seqs);
-
-    ggml_tensor * op = ggml_ssm_scan(ctx.get(), s, x, dt, A, B, C, ids, K);
-
-    return ggml_backend_dev_supports_op(dev, op);
-}
-
-static bool llama_model_supports_rs_rollback(const llama_model & model) {
-    if (!llm_arch_supports_rs_rollback(model.arch)) {
-        return false;
-    }
-
-    if (model.arch != LLM_ARCH_NEMOTRON_H && model.arch != LLM_ARCH_NEMOTRON_H_MOE) {
-        return true;
-    }
-
-    for (uint32_t il = 0; il < model.hparams.n_layer_all; ++il) {
-        if (model.hparams.is_recr(il) &&
-                !llama_backend_dev_supports_ssm_scan_rollback(model.dev_layer((int) il), model.hparams)) {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 struct llm_fused_op_probe {
@@ -150,6 +93,12 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+static const llm_fused_op_probe llm_fused_op_ssm_rollback_probe = {
+    /*.op               =*/ LLM_FUSED_OP_SSM_ROLLBACK,
+    /*.name             =*/ "recurrent-state rollback snapshots",
+    /*.n_tokens_per_seq =*/ 2,
+};
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -172,8 +121,8 @@ llama_context::llama_context(
     }
 
     cparams.n_rs_seq = params.n_rs_seq;
-    if (cparams.n_rs_seq > 0 && !llama_model_supports_rs_rollback(model)) {
-        LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model/backend does not support recurrent partial rollback; clamping to 0\n",
+    if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
+        LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model does not support recurrent partial rollback; clamping to 0\n",
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
     }
@@ -596,6 +545,15 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
             ggml_backend_t backend_fused = ggml_backend_sched_get_tensor_backend(sched.get(), node.tensor);
             ggml_backend_dev_t device_fused = backend_fused ? ggml_backend_get_device(backend_fused) : nullptr;
 
+            if (probe.op == LLM_FUSED_OP_SSM_ROLLBACK &&
+                    device_fused != nullptr &&
+                    ggml_backend_dev_type(device_fused) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                LLAMA_LOG_WARN("%s: %s not supported on device %s\n",
+                        func, probe.name, ggml_backend_dev_name(device_fused));
+                device_mismatch = true;
+                break;
+            }
+
             // TODO: make this descriptor-specific; model.dev_layer() preserves the current behavior,
             // but is still wrong for cases like --no-kv-offload.
             ggml_backend_dev_t device_layer = model.dev_layer(node.il);
@@ -645,6 +603,15 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_dsv4_hc_comb_probe, cparams.fused_dsv4_hc_comb);
         resolve(llm_fused_op_dsv4_hc_post_probe, cparams.fused_dsv4_hc_post);
         cparams.auto_fhc = false;
+    }
+
+    if (cparams.n_rs_seq > 0) {
+        bool enabled = true;
+        resolve(llm_fused_op_ssm_rollback_probe, enabled);
+        if (!enabled) {
+            cparams.n_rs_seq = 0;
+            llama_memory_set_rs_seq(memory.get(), 0);
+        }
     }
 }
 

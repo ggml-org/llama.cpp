@@ -168,7 +168,6 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
 
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
     const int64_t K            = cparams.n_rs_seq > 0 ? (int64_t) cparams.n_rs_seq + 1 : 1;
-    const int64_t state_slots  = (int64_t) mem_size * K;
 
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
@@ -178,6 +177,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
 
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
+    const int64_t state_slots     = ssm_states_all->ne[1];
 
     ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
     conv               = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs);
@@ -262,6 +262,9 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
         };
 
         ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+        if (K > 1) {
+            res->add_fused_node({ LLM_FUSED_OP_SSM_ROLLBACK, y_ssm, il });
+        }
 
         const int64_t D            = d_state * d_inner;
         const int64_t n_written    = std::min<int64_t>(n_seq_tokens, K);
