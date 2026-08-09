@@ -12,6 +12,19 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+// MSVC POSIX layer: map open/close to _open/_close and emulate pread
+#define open  _open
+#define close _close
+#define O_RDONLY _O_RDONLY
+static long long pread(int fd, void * buf, size_t n, long long off) {
+    if (_lseeki64(fd, off, SEEK_SET) < 0) {
+        return -1;
+    }
+    return _read(fd, buf, (unsigned int) n);
+}
 #else
 #include <sys/mman.h>
 #include <unistd.h>
@@ -71,7 +84,6 @@ void set_model_path(const char * path) {
     }
     g_fd = open(g_path.c_str(), O_RDONLY);
 }
-
 void set_slots(int s) {
     g_slots = s;
 }
@@ -210,9 +222,9 @@ bool read_expert(size_t idx, int expert, void * out, size_t n) {
     if (n > e.plane_bytes) {
         return false;
     }
-    const ssize_t got = pread(g_fd >= 0 ? g_fd : e.fd, out, n,
-        (off_t) (e.file_off + (size_t) expert * e.plane_bytes));
-    return got == (ssize_t) n;
+    const long long got = pread(g_fd >= 0 ? g_fd : e.fd, out, n,
+        (long long) (e.file_off + (size_t) expert * e.plane_bytes));
+    return got == (long long) n;
 }
 
 bool write_cold(size_t idx, const uint8_t * data, size_t nbytes) {

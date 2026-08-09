@@ -13,7 +13,10 @@
 #include <cmath>
 #include <cstring>
 #include <regex>
+
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -123,6 +126,12 @@ llama_expert_hotstore::llama_expert_hotstore(
             // available RAM: MemAvailable includes reclaimable page cache;
             // _SC_AVPHYS_PAGES only counts truly-free pages and underreports
             int64_t free_ram = 0;
+#if defined(_WIN32)
+            MEMORYSTATUSEX ms = { sizeof(ms) };
+            if (GlobalMemoryStatusEx(&ms)) {
+                free_ram = (int64_t) ms.ullAvailPhys;
+            }
+#else
             FILE * f = fopen("/proc/meminfo", "r");
             if (f) {
                 char line[256];
@@ -138,6 +147,7 @@ llama_expert_hotstore::llama_expert_hotstore(
                 const long page = sysconf(_SC_PAGESIZE);
                 free_ram = (int64_t) sysconf(_SC_AVPHYS_PAGES) * page;
             }
+#endif
             if (exps_bytes > 0 && free_ram > exps_bytes * 2) {
                 copy_mode = true;
                 fprintf(stderr, "hotstore: copy mode: exps (%d MiB) fit in RAM (%d MiB free)\n",
