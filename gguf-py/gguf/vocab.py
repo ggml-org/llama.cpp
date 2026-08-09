@@ -562,8 +562,8 @@ class LlamaHfVocab(Vocab):
             and not tokenizer_model.get('byte_fallback', True)
         )
         if is_llama3:
-            raise TypeError('Llama 3 must be converted with BpeVocab')
-
+            # Llama 3 uses BPE, not SentencePiece
+            setattr(self, "tokenizer_model", "gpt2")
         if not is_llama3 and (
             tokenizer_model['type'] != 'BPE' or not tokenizer_model.get('byte_fallback', False)
             or tokenizer_json['decoder']['type'] != 'Sequence'
