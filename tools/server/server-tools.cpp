@@ -218,14 +218,11 @@ static tools_io::exec_result run_subprocess(
         }
     });
 
-    // feed the child before reading it back: this relies on the child draining stdin as it goes,
-    // which `cat` does, and closing stdin is what tells it the input is over. the watchdog is
-    // already armed, so a transport that stalls while draining is terminated at the deadline,
-    // which breaks the pipe and unblocks the write (the server ignores SIGPIPE)
+    // feed the child before reading it back: it drains stdin as it goes, and closing stdin is
+    // what tells it the input is over. the watchdog above bounds a transport that stalls here
     if (stdin_data != nullptr) {
         if (FILE * in = proc.stdin_file()) {
-            // a child that died early leaves nothing reading the pipe, so a short write is not
-            // an error in itself; the exit code below is what decides
+            // a short write is not an error in itself, the exit code below is what decides
             if (!stdin_data->empty()) {
                 fwrite(stdin_data->data(), 1, stdin_data->size(), in);
             }
@@ -491,7 +488,7 @@ private:
     }
 };
 
-// timeout for auxiliary isolate calls (stat/mkdir/ls/cp helpers); exec_shell_command uses its own
+// timeout for auxiliary isolate calls (stat/mkdir/ls helpers); exec_shell_command uses its own
 // caller-controlled timeout instead, enforced separately in run()
 static constexpr int SERVER_TOOL_ISOLATE_EXEC_TIMEOUT = 15; // seconds
 static constexpr size_t SERVER_TOOL_ISOLATE_READ_FILE_MAX_SIZE = 64 * 1024 * 1024; // 64 MB
@@ -629,7 +626,7 @@ protected:
 private:
     std::string cwd;
 
-    // set the working directory in the command itself, the `-w` of a container engine has no equivalent on every transport
+    // set the working directory in the command itself, no `-w` equivalent exists on every transport
     // auxiliary calls do not need this, they use the absolute paths from resolve()
     std::vector<std::string> with_cwd(const std::vector<std::string> & inner) const {
         if (cwd.empty()) {
@@ -762,8 +759,7 @@ static bool is_valid_ssh_target(const std::string & target) {
 }
 
 // same exposure as the ssh target: the id reaches `<engine> exec` from a client header, and an
-// id starting with '-' would be parsed as an option, e.g. --privileged. docker and podman both
-// constrain names to an alphanumeric first character then [a-zA-Z0-9_.-], and ids are hex
+// id starting with '-' would be parsed as an option, e.g. --privileged
 static bool is_valid_container_id(const std::string & id) {
     if (id.empty() || !std::isalnum((unsigned char) id[0])) {
         return false;
@@ -776,7 +772,7 @@ static bool is_valid_container_id(const std::string & id) {
 // runtime specs used by --tools-runtime and the x-tool-runtime header
 static const std::string SERVER_TOOL_RUNTIME_SSH = "ssh:";
 
-// container engines sharing the run/exec/cp/inspect verbs, hence a single implementation
+// container engines sharing the run/exec/inspect verbs, hence a single implementation
 static const char * SERVER_TOOL_CONTAINER_ENGINES[] = {"docker", "podman"};
 
 // "<engine>:<image>" spawns a container and owns it, "<engine>-container:<id>" attaches to one
@@ -1858,8 +1854,7 @@ struct server_mcp_tool : server_tool {
 };
 
 // resolves --tools-runtime into the isolate that every tool call runs through. spec() returns the
-// runtime string make_tools_io() understands, refreshed per call so a lifecycle-managed backend can
-// re-check or respawn its target first
+// runtime string make_tools_io() understands, and is called once per tool call
 struct server_tools_runtime {
     virtual ~server_tools_runtime() = default;
     virtual std::string spec() = 0;
@@ -1875,9 +1870,8 @@ private:
     std::string runtime_spec;
 };
 
-// owns the container used as the sandboxed runtime for tool invocations, as configured by
-// --tools-runtime. "spawned" mode starts and stops the container itself; "existing" mode just reuses
-// a container id the user already has running and never stops it.
+// owns the container the tools run in, as configured by --tools-runtime: the spawned mode starts
+// and stops it, the attach mode reuses a running one and never stops it
 struct server_tools_container_runtime : server_tools_runtime {
     server_tools_container_runtime(const server_tools_container_runtime &) = delete;
 
@@ -1952,8 +1946,7 @@ private:
     // spawns "<engine> run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
     // so the container stays alive until we close it (see destructor) or it is killed from the outside
     void spawn() {
-        // create() writes over the handle it is given, so the previous one is released first,
-        // otherwise a respawn leaks the pipes and the process handle of the container that died
+        // create() writes over the handle it is given, so the previous one is released first
         proc.join();
 
         std::error_code ec;
