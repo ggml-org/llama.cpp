@@ -5940,6 +5940,16 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 return src0_type == GGML_TYPE_F32;
             }
         case GGML_OP_CONCAT:
+            // the concat kernel selects by op->type and aborts on any other type
+            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16
+#ifdef GGML_SYCL_HAS_BF16
+                    || op->type == GGML_TYPE_BF16
+#endif
+                    || op->type == GGML_TYPE_I32 || op->type == GGML_TYPE_I16
+                    || op->type == GGML_TYPE_I64 || op->type == GGML_TYPE_I8
+                   ) &&
+                   op->src[0]->type == op->type &&
+                   op->src[1]->type == op->type;
         case GGML_OP_DUP:
         case GGML_OP_ARGMAX:
         case GGML_OP_NONE:
