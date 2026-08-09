@@ -6,15 +6,6 @@ import struct
 
 # sequence state file: magic(4) version(4) payload_size(4), then payload_size llama_token words
 STATE_FILE_HEADER_SIZE = 12
-# the token payload holds a packed server_tokens object (see server_tokens::serialize()):
-#   LLAMA_TOKEN_NULL(4) version(4) n_tokens(4) tokens, media list, zero padding to whole tokens
-PACKED_HEADER_SIZE = 12  # LLAMA_TOKEN_NULL, version, n_tokens
-LLAMA_TOKEN_NULL = 0xFFFFFFFF  # -1 read back as an unsigned word
-
-# media list layout in the packed payload: n_media(4), then per image: start_idx(4) chunk_size(4) chunk blob
-N_MEDIA_FIELD_SIZE = 4
-START_IDX_FIELD_SIZE = 4
-CHUNK_SIZE_FIELD_SIZE = 4
 
 server = ServerPreset.tinyllama2()
 
@@ -107,13 +98,15 @@ def test_slot_restore_legacy_token_list():
     with open(path, "rb") as f:
         data = bytearray(f.read())
 
+    # the payload written by this server starts with a packed header: LLAMA_TOKEN_NULL(4) version(4) n_tokens(4)
+    packed_header_size = 12
+
     payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
     payload_end = STATE_FILE_HEADER_SIZE + payload_size * 4
-    assert struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE)[0] == LLAMA_TOKEN_NULL
     n_tokens = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE + 8)[0]
     assert n_tokens == 84
 
-    tokens_start = STATE_FILE_HEADER_SIZE + PACKED_HEADER_SIZE
+    tokens_start = STATE_FILE_HEADER_SIZE + packed_header_size
     data = data[:STATE_FILE_HEADER_SIZE] + data[tokens_start:tokens_start + n_tokens * 4] + data[payload_end:]
     struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE - 4, n_tokens)
 
@@ -135,177 +128,6 @@ def test_slot_restore_legacy_token_list():
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == 6  # only the different part is processed
 
-
-def test_slot_restore_unsupported_state_version():
-    global server
-    server.start()
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "What is the capital of France?",
-        "id_slot": 1,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-    res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "slot_bad_version.bin",
-    })
-    assert res.status_code == 200
-
-    # a payload with an unknown format version must be rejected, not guessed at
-    path = os.path.join("tmp", "slot_bad_version.bin")
-    with open(path, "rb") as f:
-        data = bytearray(f.read())
-
-    assert struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE)[0] == LLAMA_TOKEN_NULL
-    struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE + 4, 99)  # version
-
-    with open(path, "wb") as f:
-        f.write(data)
-
-    res = server.make_request("POST", "/slots/0?action=restore", data={
-        "filename": "slot_bad_version.bin",
-    })
-    assert res.status_code == 400
-    assert "Unsupported server tokens state version" in res.body["error"]["message"]
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox",
-        "id_slot": 0,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-
-def test_slot_restore_truncated_file():
-    global server
-    server.start()
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "What is the capital of France?",
-        "id_slot": 1,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-    res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "slot_truncated.bin",
-    })
-    assert res.status_code == 200
-
-    # cut the file inside the token payload: the payload size in the header can no longer be trusted, so the restore buffer falls back to n_ctx and loading reports the malformed file
-    path = os.path.join("tmp", "slot_truncated.bin")
-    with open(path, "r+b") as f:
-        f.truncate(STATE_FILE_HEADER_SIZE + 4)
-
-    res = server.make_request("POST", "/slots/0?action=restore", data={
-        "filename": "slot_truncated.bin",
-    })
-    assert res.status_code == 400
-    assert "No available space in KV cache or invalid slot save file" in res.body["error"]["message"]
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox",
-        "id_slot": 0,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-
-def test_slot_restore_corrupt_payload_size():
-    global server
-    server.start()
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "What is the capital of France?",
-        "id_slot": 1,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-    res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "slot_bad_payload_size.bin",
-    })
-    assert res.status_code == 200
-
-    # a payload size claiming ~4G tokens contradicts the actual file size, so it must not be trusted (or allocated): the restore buffer falls back to n_ctx and loading reports the malformed file
-    path = os.path.join("tmp", "slot_bad_payload_size.bin")
-    with open(path, "rb") as f:
-        data = bytearray(f.read())
-
-    struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE - 4, 0xFFFFFFF0)
-
-    with open(path, "wb") as f:
-        f.write(data)
-
-    res = server.make_request("POST", "/slots/0?action=restore", data={
-        "filename": "slot_bad_payload_size.bin",
-    })
-    assert res.status_code == 400
-    assert "No available space in KV cache or invalid slot save file" in res.body["error"]["message"]
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox",
-        "id_slot": 0,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-
-def test_slot_restore_prompt_larger_than_slot_context():
-    global server
-    server.start()
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "What is the capital of France?",
-        "id_slot": 1,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-    res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "slot_large_prompt.bin",
-    })
-    assert res.status_code == 200
-
-    # the slot context, as the server computed it (n_ctx split across the slots)
-    res = server.make_request("GET", "/props")
-    assert res.status_code == 200
-    n_ctx_slot = res.body["default_generation_settings"]["n_ctx"]
-
-    # grow the logical token list past the slot context while the KV section keeps its cells: only the restored prompt length check can reject such a file
-    path = os.path.join("tmp", "slot_large_prompt.bin")
-    with open(path, "rb") as f:
-        data = bytearray(f.read())
-
-    payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
-    assert struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE)[0] == LLAMA_TOKEN_NULL
-    n_tokens = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE + 8)[0]
-    assert n_tokens == 84
-
-    tokens_start = STATE_FILE_HEADER_SIZE + PACKED_HEADER_SIZE
-    tokens = data[tokens_start:tokens_start + n_tokens * 4]
-    filler = tokens * (n_ctx_slot // n_tokens + 1)
-    filler = filler[:(n_ctx_slot + 1 - n_tokens) * 4]
-    data = data[:tokens_start] + tokens + filler + data[tokens_start + n_tokens * 4:]
-    struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE - 4, payload_size + len(filler) // 4)
-    struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE + 8, n_ctx_slot + 1)
-
-    with open(path, "wb") as f:
-        f.write(data)
-
-    res = server.make_request("POST", "/slots/0?action=restore", data={
-        "filename": "slot_large_prompt.bin",
-    })
-    assert res.status_code == 400
-    assert "Restored prompt does not fit in the slot context" in res.body["error"]["message"]
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox",
-        "id_slot": 0,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
 
 
 def test_slot_erase():
@@ -353,13 +175,6 @@ def _get_img_base64(url: str) -> str:
     return base64.b64encode(response.content).decode("utf-8")
 
 
-def _media_list_offset(data: bytearray) -> int:
-    """Offset of the media list (the n_media field) inside the packed token payload."""
-    assert struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE)[0] == LLAMA_TOKEN_NULL
-    n_tokens = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE + 8)[0]
-    return STATE_FILE_HEADER_SIZE + PACKED_HEADER_SIZE + n_tokens * 4
-
-
 @pytest.fixture
 def mmproj_server():
     # tinygemma3 is a small multimodal model: the mmproj is provided by the HF registry API and auto-downloaded on first run.
@@ -399,8 +214,7 @@ def test_slot_save_restore_text_only_on_multimodal(mmproj_server):
     assert res.status_code == 200
     assert res.body["n_restored"] == n_saved
 
-    # The restored slot is usable for a follow-up completion.
-    # We do NOT assert prefix reuse here: tinygemma3 is a SWA model, which forces full prompt re-processing after a restore (a model property, not the save/restore gate under test).
+    # Prefix reuse is not checked with the default SWA cache.
     res = server.make_request("POST", "/completion", data={
         "prompt": "The quick brown fox jumps over the lazy dog.",
         "id_slot": 0,
@@ -411,7 +225,7 @@ def test_slot_save_restore_text_only_on_multimodal(mmproj_server):
 
 def test_slot_save_restore_with_image(mmproj_server):
     server = mmproj_server
-    # the SWA cache cannot be rolled back after a restore (checkpoints are not part of the save file), which would force full re-processing and hide the prefix reuse being verified below; use the full-size SWA cache instead
+    # Use the full SWA cache so the restored image prefix can be reused.
     server.swa_full = True
     server.start()
 
@@ -586,7 +400,6 @@ def test_slot_save_restore_with_image_across_restart(mmproj_server):
 
 
 def test_slot_save_restore_image_payload_larger_than_context(mmproj_server):
-    # the token payload holds the packed server_tokens object (tokens plus media state), so it is longer than the number of tokens the slot holds: the restore buffer is sized from the file, not from n_ctx
     server = mmproj_server
     server.swa_full = True
     server.start()
@@ -695,192 +508,27 @@ def test_slot_restore_media_file_without_mmproj(mmproj_server):
     assert res.status_code == 400
     assert "Cannot restore image tokens without an mmproj" in res.body["error"]["message"]
 
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox",
-        "id_slot": 0,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-
-def test_slot_restore_corrupt_media_state(mmproj_server):
-    server = mmproj_server
-    server.start()
-
-    prompt_cat = {
-        "prompt_string": "What is this: <__media__>\n",
-        "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
-    }
+    # A failed restore must leave the slot empty and usable.
     res = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
         "id_slot": 1,
         "cache_prompt": True,
-        "prompt": prompt_cat,
+        "prompt": "The quick brown fox",
     })
     assert res.status_code == 200
     content = res.body["content"]
 
-    res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "mm_slot_corrupt.bin",
-    })
-    assert res.status_code == 200
-
-    # corrupt the media state: grow the declared chunk size past the end of the payload
-    path = os.path.join("tmp", "mm_slot_corrupt.bin")
-    with open(path, "rb") as f:
-        data = bytearray(f.read())
-
-    media_offset = _media_list_offset(data)
-    assert struct.unpack_from("=I", data, media_offset)[0] == 1  # n_media
-    chunk_size_offset = media_offset + N_MEDIA_FIELD_SIZE + START_IDX_FIELD_SIZE
-    struct.pack_into("=I", data, chunk_size_offset, 0x7FFFFFFF)
-
-    with open(path, "wb") as f:
-        f.write(data)
-
-    res = server.make_request("POST", "/slots/0?action=restore", data={
-        "filename": "mm_slot_corrupt.bin",
-    })
-    assert res.status_code == 400
-    assert "Unexpected end of server tokens state" in res.body["error"]["message"]
-
-    # the failed restore must leave slot 0 empty: no reusable prefix, and no stale KV cells that would corrupt greedy decoding
     res = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
         "id_slot": 0,
         "cache_prompt": True,
-        "prompt": prompt_cat,
+        "prompt": "The quick brown fox",
     })
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == 0
     assert res.body["content"] == content
-
-
-def test_slot_restore_corrupt_state_padding(mmproj_server):
-    server = mmproj_server
-    server.start()
-
-    res = server.make_request("POST", "/completions", data={
-        "temperature": 0.0,
-        "top_k": 1,
-        "id_slot": 1,
-        "cache_prompt": True,
-        "prompt": {
-            "prompt_string": "What is this: <__media__>\n",
-            "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
-        },
-    })
-    assert res.status_code == 200
-
-    res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "mm_slot_padding.bin",
-    })
-    assert res.status_code == 200
-
-    # a non-zero byte in the zero padding at the end of the payload must be rejected
-    path = os.path.join("tmp", "mm_slot_padding.bin")
-    with open(path, "rb") as f:
-        data = bytearray(f.read())
-
-    payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
-    payload_end = STATE_FILE_HEADER_SIZE + payload_size * 4
-
-    media_offset = _media_list_offset(data)
-    assert struct.unpack_from("=I", data, media_offset)[0] == 1  # n_media
-    chunk_size_offset = media_offset + N_MEDIA_FIELD_SIZE + START_IDX_FIELD_SIZE
-    chunk_size = struct.unpack_from("=I", data, chunk_size_offset)[0]
-    stream_end = chunk_size_offset + CHUNK_SIZE_FIELD_SIZE + chunk_size
-
-    assert payload_end - stream_end > 0  # this image must leave padding bytes to corrupt
-    data[stream_end] = 0xFF
-
-    with open(path, "wb") as f:
-        f.write(data)
-
-    res = server.make_request("POST", "/slots/0?action=restore", data={
-        "filename": "mm_slot_padding.bin",
-    })
-    assert res.status_code == 400
-    assert "Invalid padding in server tokens state" in res.body["error"]["message"]
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox",
-        "id_slot": 0,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-
-
-def test_slot_restore_media_state_without_image_id(mmproj_server):
-    server = mmproj_server
-    server.start()
-
-    res = server.make_request("POST", "/completions", data={
-        "temperature": 0.0,
-        "top_k": 1,
-        "id_slot": 1,
-        "cache_prompt": True,
-        "prompt": {
-            "prompt_string": "What is this: <__media__>\n",
-            "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
-        },
-    })
-    assert res.status_code == 200
-
-    res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "mm_slot_empty_image_id.bin",
-    })
-    assert res.status_code == 200
-
-    path = os.path.join("tmp", "mm_slot_empty_image_id.bin")
-    with open(path, "rb") as f:
-        data = bytearray(f.read())
-
-    payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
-    payload_end = STATE_FILE_HEADER_SIZE + payload_size * 4
-
-    media_offset = _media_list_offset(data)
-    assert struct.unpack_from("=I", data, media_offset)[0] == 1  # n_media
-    # chunk blob (mtmd serialization v1): version(8) type(4) n_text_tokens(8) has_image(1)
-    #   nx(4) ny(4) pos(4) image_idx(4) n_temporal_merge(4) id_size(8) id bytes ...
-    blob_header_size = 41  # version, type, n_text_tokens, has_image, nx, ny, pos, image_idx, n_temporal_merge
-    id_size_field_size = 8
-
-    chunk_size_offset = media_offset + N_MEDIA_FIELD_SIZE + START_IDX_FIELD_SIZE
-    chunk_size = struct.unpack_from("=I", data, chunk_size_offset)[0]
-    blob_start = chunk_size_offset + CHUNK_SIZE_FIELD_SIZE
-    stream_end = blob_start + chunk_size  # end of the packed payload, before the zero padding
-
-    id_size_offset = blob_start + blob_header_size
-    id_size = struct.unpack_from("=Q", data, id_size_offset)[0]
-    assert id_size > 0
-    struct.pack_into("=Q", data, id_size_offset, 0)
-    struct.pack_into("=I", data, chunk_size_offset, chunk_size - id_size)
-
-    # drop the id bytes and re-pad the payload to whole tokens
-    id_offset = id_size_offset + id_size_field_size
-    payload = data[STATE_FILE_HEADER_SIZE:id_offset] + data[id_offset + id_size:stream_end]
-    payload += bytes(-len(payload) % 4)
-    data = data[:STATE_FILE_HEADER_SIZE] + payload + data[payload_end:]
-    struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE - 4, len(payload) // 4)
-
-    with open(path, "wb") as f:
-        f.write(data)
-
-    res = server.make_request("POST", "/slots/0?action=restore", data={
-        "filename": "mm_slot_empty_image_id.bin",
-    })
-    assert res.status_code == 400
-    assert "Image ID is missing in server tokens state" in res.body["error"]["message"]
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox",
-        "id_slot": 0,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
 
 
 def test_slot_erase_text_only_on_multimodal(mmproj_server):

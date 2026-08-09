@@ -206,7 +206,7 @@ public:
 
     llama_tokens get_text_tokens() const;
 
-    // packed into the token payload of a sequence state file: [LLAMA_TOKEN_NULL][version][n_tokens][tokens][n_media]([start_idx][chunk_size][image chunk])...[zero padding]
+    // packed into the token payload of a sequence state file: [LLAMA_TOKEN_NULL][version][n_tokens][tokens][n_media][start_idx]...([chunk_size][image chunk])...[zero padding]
     // a payload that does not start with LLAMA_TOKEN_NULL is a plain token list, as written by older versions
     std::vector<char> serialize() const;
     static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);

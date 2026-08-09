@@ -54,32 +54,6 @@ static uint32_t server_n_outputs_max(const common_params & params) {
     return std::max<uint32_t>(1, std::min<uint64_t>(n_batch, n_outputs));
 }
 
-// the token payload of a sequence state file holds a packed server_tokens object (see server_tokens::serialize()), so it can be longer than the number of tokens the slot holds.
-// read its size from the file header, falling back to n_ctx if the header cannot be trusted - llama_state_seq_load_file() then reports the malformed file.
-// TODO: remove this once llama_state_seq_save_file() can store arbitrary user data
-static size_t state_file_payload_size(const std::string & filepath, size_t fallback) {
-    constexpr std::streamoff header_size = 3 * sizeof(uint32_t); // magic, version, payload size
-
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return fallback;
-    }
-
-    const std::streamoff file_size = file.tellg();
-    if (file_size < header_size) {
-        return fallback;
-    }
-
-    uint32_t payload_size = 0;
-    file.seekg(header_size - sizeof(payload_size), std::ios::beg);
-    file.read(reinterpret_cast<char *>(&payload_size), sizeof(payload_size));
-    if (!file || payload_size > (file_size - header_size) / (std::streamoff) sizeof(llama_token)) {
-        return fallback;
-    }
-
-    return payload_size;
-}
-
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
@@ -2675,10 +2649,13 @@ private:
 
                     size_t nread = 0;
                     try {
-                        llama_tokens packed;
-                        packed.resize(state_file_payload_size(filepath, slot->n_ctx));
                         size_t n_packed = 0;
-                        nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
+                        llama_tokens packed;
+                        nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
+                        if (nread != 0) {
+                            packed.resize(std::max<size_t>(1, n_packed));
+                            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
+                        }
                         if (nread == 0) {
                             throw std::runtime_error("No available space in KV cache or invalid slot save file");
                         }
