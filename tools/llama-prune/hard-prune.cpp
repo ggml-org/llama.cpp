@@ -87,7 +87,7 @@ void write_report(const aikar_hard_prune_report & report, const std::string & ou
         mappings.push_back({ { "layer", layer.first }, { "original_to_new", mapping } });
     }
     json root = {
-        { "format", "aikar-moe-hard-prune-report" },
+        { "format", "llama-moe-hard-prune-report" },
         { "version", 1 },
         { "source_bytes", report.source_bytes },
         { "output_bytes", report.output_bytes },

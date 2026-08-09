@@ -1,4 +1,4 @@
-set(TARGET aikar-prune)
+set(TARGET llama-prune)
 
 add_executable(${TARGET}
     dataset.cpp

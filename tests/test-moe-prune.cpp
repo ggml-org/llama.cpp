@@ -64,7 +64,7 @@ static void test_dataset() {
     require(model != nullptr);
     common_chat_templates_ptr templates = common_chat_templates_init(model, "");
 
-    const std::string path = "/tmp/aikar-moe-prune-test-data.jsonl";
+    const std::string path = "/tmp/llama-moe-prune-test-data.jsonl";
     {
         FILE * file = fopen(path.c_str(), "wb");
         require(file != nullptr);
@@ -147,7 +147,7 @@ int main() {
         for (int32_t expert : small) require(std::find(large.begin(), large.end(), expert) != large.end());
     }
 
-    const std::string path = "/tmp/aikar-moe-prune-test-profile.json";
+    const std::string path = "/tmp/llama-moe-prune-test-profile.json";
     common_moe_prune_profile_write(profiles[0], path);
     const common_moe_prune_profile loaded = common_moe_prune_profile_load(path);
     common_moe_prune_profile_validate(loaded, model);
@@ -172,8 +172,8 @@ int main() {
     require(std::abs(stats[1][2].mean_output_norm() - 0.6) < 1e-12);
     require(std::abs(stats[1][2].importance() - 0.3) < 1e-12);
 
-    const std::string source_path = "/tmp/aikar-moe-prune-test-source.gguf";
-    const std::string output_path = "/tmp/aikar-moe-prune-test-output.gguf";
+    const std::string source_path = "/tmp/llama-moe-prune-test-source.gguf";
+    const std::string output_path = "/tmp/llama-moe-prune-test-output.gguf";
     make_fixture(source_path);
     const common_moe_prune_model_info fixture_info = common_moe_prune_inspect_model(source_path);
     require(fixture_info.model_hash == common_moe_prune_sha256_file(source_path));

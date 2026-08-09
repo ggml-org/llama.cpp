@@ -240,7 +240,7 @@ common_moe_prune_profile common_moe_prune_profile_load(const std::string & path)
     } catch (const std::exception & e) {
         throw std::runtime_error("invalid pruning profile JSON: " + std::string(e.what()));
     }
-    if (!root.is_object() || root.value("format", "") != "aikar-moe-prune") {
+    if (!root.is_object() || root.value("format", "") != "llama-moe-prune") {
         throw std::runtime_error("invalid pruning profile format");
     }
     common_moe_prune_profile profile;
@@ -283,7 +283,7 @@ void common_moe_prune_profile_write(const common_moe_prune_profile & profile, co
         layers[std::to_string(item.first)] = { { "disabled_experts", item.second.disabled_experts } };
     }
     json root = {
-        { "format", "aikar-moe-prune" },
+        { "format", "llama-moe-prune" },
         { "version", profile.version },
         { "mode", profile.mode },
         { "model", {

@@ -459,7 +459,7 @@ std::string importance_cache_path(const options & opts) {
 
 json importance_cache_json(const importance_cache_data & cache, aikar_ppl_mask primary) {
     return {
-        { "format", "aikar-moe-prune-importance-cache" },
+        { "format", "llama-moe-prune-importance-cache" },
         { "version", 1 },
         { "model", {
             { "architecture", cache.model.architecture },
@@ -497,7 +497,7 @@ importance_cache_data load_importance_cache(const std::string & path) {
     if (!in) throw std::runtime_error("failed to open importance cache: " + path);
     json root;
     in >> root;
-    if (root.value("format", "") != "aikar-moe-prune-importance-cache" || root.value("version", 0) != 1) {
+    if (root.value("format", "") != "llama-moe-prune-importance-cache" || root.value("version", 0) != 1) {
         throw std::runtime_error("unsupported importance cache format: " + path);
     }
     importance_cache_data result;
@@ -537,7 +537,7 @@ std::optional<importance_cache_data> load_legacy_baseline_checkpoint(
         std::ifstream in(path);
         json root;
         in >> root;
-        if (root.value("format", "") != "aikar-moe-prune-baseline-checkpoint" || root.value("version", 0) != 1 ||
+        if (root.value("format", "") != "llama-moe-prune-baseline-checkpoint" || root.value("version", 0) != 1 ||
             root.value("model_hash", "") != model.model_hash || root.value("expert_tensor_hash", "") != model.expert_tensor_hash ||
             root.value("dataset_hash", "") != dataset_hash || root.value("ppl_mask", "") != aikar_ppl_mask_name(opts.mask) ||
             root.value("ctx_size", 0) != opts.n_ctx) return std::nullopt;
@@ -634,7 +634,7 @@ void run_profiles(const options & opts) {
     const importance_cache_data cache = load_importance_cache(opts.importance_cache);
     const std::vector<common_moe_prune_profile> profiles = make_and_write_profiles(opts, cache);
     json result = {
-        { "format", "aikar-moe-prune-profile-generation" },
+        { "format", "llama-moe-prune-profile-generation" },
         { "version", 1 },
         { "importance_cache", opts.importance_cache },
         { "model_hash", cache.model.model_hash },
@@ -706,7 +706,7 @@ void run_analyze(const options & opts) {
     std::vector<common_moe_prune_profile> profiles = make_and_write_profiles(opts, *cache);
 
     json analysis = {
-        { "format", "aikar-moe-prune-analysis" },
+        { "format", "llama-moe-prune-analysis" },
         { "version", 1 },
         { "model", {
             { "architecture", model_info.architecture },
