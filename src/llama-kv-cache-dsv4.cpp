@@ -1594,9 +1594,10 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
     kv_raw->state_read(io, seq_id, flags);
 
     if (!partial_only) {
-        kv_csa->clear(true);
-        kv_hca->clear(true);
-        kv_lid->clear(true);
+        // only the restoring sequence's rows are read back below, so the clear has to be
+        // scoped to it as well - clearing every stream would leave the other sequences
+        // with zeroed compressed K and no way to recover it
+        clear_compressed(seq_id, true);
 
         dsv4_state_read_k_cache(io, kv_csa.get(), seq_id, flags);
         dsv4_state_read_k_cache(io, kv_hca.get(), seq_id, flags);
