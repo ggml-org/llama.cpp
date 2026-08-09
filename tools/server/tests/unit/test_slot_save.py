@@ -506,7 +506,7 @@ def test_slot_restore_media_file_without_mmproj(mmproj_server):
         "filename": "mm_slot_no_mmproj.bin",
     })
     assert res.status_code == 400
-    assert "Cannot restore image tokens without an mmproj" in res.body["error"]["message"]
+    assert "Cannot restore media tokens without an mmproj" in res.body["error"]["message"]
 
     # A failed restore must leave the slot empty and usable.
     res = server.make_request("POST", "/completions", data={

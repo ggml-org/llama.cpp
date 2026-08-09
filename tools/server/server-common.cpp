@@ -268,14 +268,14 @@ public:
         data.insert(data.end(), ptr, ptr + values.size() * sizeof(T));
     }
 
-    void write_image_chunk(const mtmd_input_chunk * chunk) {
+    void write_media_chunk(const mtmd_input_chunk * chunk) {
         size_t chunk_size = 0;
         if (mtmd_input_chunk_save(chunk, nullptr, 0, &chunk_size) != 0 || chunk_size == 0) {
-            throw std::runtime_error("Cannot serialize image chunk in server tokens");
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
         }
         std::vector<char> chunk_data(server_tokens_state_u32(chunk_size));
         if (mtmd_input_chunk_save(chunk, chunk_data.data(), chunk_data.size(), nullptr) != 0) {
-            throw std::runtime_error("Cannot serialize image chunk in server tokens");
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
         }
         write(chunk_data);
     }
@@ -526,23 +526,7 @@ std::vector<char> server_tokens::serialize() const {
     writer.write(media_keys);
 
     for (const auto & item : map_idx_to_media) {
-        const auto * chunk = item.second.get();
-        const auto type = mtmd_input_chunk_get_type(chunk);
-        if (type != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-            throw std::runtime_error("Slot save with audio tokens is not supported");
-        }
-
-        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
-        const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk);
-        const char * id = mtmd_input_chunk_get_id(chunk);
-        if (n_tokens == 0 || n_pos <= 0) {
-            throw std::runtime_error("Invalid image chunk in server tokens");
-        }
-        if (id == nullptr || id[0] == '\0') {
-            throw std::runtime_error("Slot save with image tokens without an ID is not supported");
-        }
-
-        writer.write_image_chunk(chunk);
+        writer.write_media_chunk(item.second.get());
     }
 
     return writer.take();
@@ -564,47 +548,30 @@ server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_m
 
     const llama_tokens tokens = reader.read_vector<llama_token>();
 
-    // the image start indices, followed by the image chunks in the same order
+    // the media start indices, followed by the media chunks in the same order
     const std::vector<uint32_t> media_keys = reader.read_vector<uint32_t>();
     if (!media_keys.empty() && !has_mtmd) {
-        throw std::runtime_error("Cannot restore image tokens without an mmproj");
+        throw std::runtime_error("Cannot restore media tokens without an mmproj");
     }
 
     server_tokens result(tokens, has_mtmd);
-    size_t last_end = 0;
 
     for (const uint32_t key : media_keys) {
         const size_t start_idx = key;
         const std::vector<char> chunk_data = reader.read_vector<char>();
         if (chunk_data.empty()) {
-            throw std::runtime_error("Cannot load image chunk from server tokens state");
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
         }
 
         mtmd::input_chunk_ptr chunk(mtmd_input_chunk_load(chunk_data.data(), chunk_data.size()));
         if (!chunk) {
-            throw std::runtime_error("Cannot load image chunk from server tokens state");
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
         }
-        if (mtmd_input_chunk_get_type(chunk.get()) != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+        const auto type = mtmd_input_chunk_get_type(chunk.get());
+        if (type != MTMD_INPUT_CHUNK_TYPE_IMAGE && type != MTMD_INPUT_CHUNK_TYPE_AUDIO) {
             throw std::runtime_error("Unsupported media type in server tokens state");
         }
-        const char * id = mtmd_input_chunk_get_id(chunk.get());
-        if (id == nullptr || id[0] == '\0') {
-            throw std::runtime_error("Image ID is missing in server tokens state");
-        }
-        const size_t n_chunk_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-        const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
-        if (n_chunk_tokens == 0 || n_pos <= 0 || start_idx < last_end ||
-                start_idx > tokens.size() || n_chunk_tokens > tokens.size() - start_idx) {
-            throw std::runtime_error("Invalid image range in server tokens state");
-        }
-        for (size_t j = start_idx; j < start_idx + n_chunk_tokens; ++j) {
-            if (tokens[j] != LLAMA_TOKEN_NULL) {
-                throw std::runtime_error("Image range does not match server tokens");
-            }
-        }
-
         result.map_idx_to_media[start_idx] = std::move(chunk);
-        last_end = start_idx + n_chunk_tokens;
     }
 
     if (reader.remaining() >= sizeof(llama_token)) {
@@ -614,18 +581,6 @@ server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_m
         if (reader.read<uint8_t>() != 0) {
             throw std::runtime_error("Invalid padding in server tokens state");
         }
-    }
-
-    for (size_t i = 0; i < tokens.size();) {
-        if (tokens[i] != LLAMA_TOKEN_NULL) {
-            ++i;
-            continue;
-        }
-        const auto it = result.map_idx_to_media.find(i);
-        if (it == result.map_idx_to_media.end()) {
-            throw std::runtime_error("Image token has no descriptor");
-        }
-        i += mtmd_input_chunk_get_n_tokens(it->second.get());
     }
 
     return result;
@@ -753,14 +708,25 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    size_t n_media = 0;
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto & t = tokens[i];
         if (t == LLAMA_TOKEN_NULL) {
             try {
                 const auto & chunk = find_chunk(i);
-                size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-                i += n_tokens - 1; // will be +1 by the for loop
+                const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+                const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+                if (n_tokens == 0 || n_pos <= 0 || n_tokens > tokens.size() - i) {
+                    return false;
+                }
+                for (size_t j = i; j < i + n_tokens; ++j) {
+                    if (tokens[j] != LLAMA_TOKEN_NULL) {
+                        return false;
+                    }
+                }
+                ++n_media;
+                i += n_tokens - 1;
             } catch (const std::exception & e) {
                 return false;
             }
@@ -768,7 +734,7 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
             return false;
         }
     }
-    return true;
+    return n_media == map_idx_to_media.size();
 }
 
 server_tokens server_tokens::clone() const {

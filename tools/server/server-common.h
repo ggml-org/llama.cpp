@@ -206,7 +206,7 @@ public:
 
     llama_tokens get_text_tokens() const;
 
-    // packed into the token payload of a sequence state file: [LLAMA_TOKEN_NULL][version][n_tokens][tokens][n_media][start_idx]...([chunk_size][image chunk])...[zero padding]
+    // packed into the token payload of a sequence state file: [LLAMA_TOKEN_NULL][version][n_tokens][tokens][n_media][start_idx]...([chunk_size][media chunk])...[zero padding]
     // a payload that does not start with LLAMA_TOKEN_NULL is a plain token list, as written by older versions
     std::vector<char> serialize() const;
     static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
@@ -235,7 +235,7 @@ public:
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
 
-    // make sure all text tokens are within the vocab range
+    // check text token IDs and the mapping between media chunks and token ranges
     bool validate(const struct llama_context * ctx) const;
 
     server_tokens clone() const;
