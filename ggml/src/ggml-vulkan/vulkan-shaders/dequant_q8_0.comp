@@ -19,10 +19,7 @@ void main() {
     }
 
 #ifdef DEQUANT_TRANSPOSE
-    // Fused dequant+transpose for FA quant-KV: source physical is [HS, NH, KV, NS]
-    // (p.M=HS, p.K=NH, p.stride_a=KV); write to per-head-contiguous dest [HS, KV, NH, NS] so the
-    // f16 FA reads KV coalesced. A q8_0 block = 32 consecutive HS elements at fixed (head,kv) ->
-    // 32 contiguous dest positions.
+    // read [HS, NH, KV, NS], write [HS, KV, NH, NS]
     const uint HS = p.M, NH = p.K, KVn = p.stride_a;
     const uint e0 = ib * 32;
     const uint b_idx = (e0 % HS)

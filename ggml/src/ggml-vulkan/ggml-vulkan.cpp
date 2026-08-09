@@ -10260,13 +10260,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32 || k->type == GGML_TYPE_BF16;
 
-    // For prefill with quantized K/V, dequantize+transpose K/V once into a per-head-contiguous
-    // f16 scratch and run the f16 FA path, instead of the coopmat1 shader re-dequantizing the
-    // whole KV inside every Q-workgroup. The KV-cache view reaching FA is [0,2,1,3]-permuted but
-    // dense, so we require dense allocation (not ggml_is_contiguous), block-contiguous dim0, and
-    // heads physically inner (nb[1] >= nb[2]) since the transpose shader assumes that source order.
-    // Only engages where a fused dequant-transpose shader exists (q8_0). Prefill only
-    // (n_rows >= 64); measured neutral at shallow depth and up to ~2x at long context.
+    // dequant K/V once into an f16 scratch, reordered KV layout so FA can read without a stride
     const bool k_quant = k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_BF16 && k->type != GGML_TYPE_F32;
     const bool v_quant = v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_BF16 && v->type != GGML_TYPE_F32;
     const bool use_dequant_kv = k_quant && v_quant && neq1 >= 64 &&
@@ -10314,8 +10308,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t nbk2_eff = (uint32_t)nbk2, nbk3_eff = (uint32_t)nbk3;
     uint32_t nbv2_eff = (uint32_t)nbv2, nbv3_eff = (uint32_t)nbv3;
     if (use_dequant_kv) {
-        // The dequant+transpose below lands K/V in a contiguous [HS, KV, n_head_kv, ns] f16 scratch,
-        // so the FA reads KV coalesced (k_stride=HS). Plain contiguous strides.
         k_stride = HSK;
         v_stride = HSV;
         nbk2_eff = (uint32_t)((uint64_t)HSK * KV * sizeof(ggml_fp16_t));
@@ -10454,14 +10446,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_subbuffer sinks_buf = sinks ? ggml_vk_tensor_subbuffer(ctx, sinks) : q_buf;
     vk_subbuffer mask_opt_buf = use_mask_opt ? ggml_vk_subbuffer(ctx, ctx->prealloc_y, 0) : q_buf;
 
-    // Dequant+transpose quant K/V directly into a per-head-contiguous [HS, KV, n_head_kv, ns] f16
-    // scratch (dequant_*_transpose shader) so the f16 FA reads KV coalesced. One pass, no temp.
-    // prealloc_x layout: [Kdst | Vdst]. Transpose push const: M=HS, K=n_head_kv, stride_a=KV, nel.
     if (use_dequant_kv) {
         const uint64_t fp = sizeof(ggml_fp16_t);
         const uint64_t k_f16_sz = (uint64_t)ggml_nelements(k) * fp;
         const uint64_t v_f16_sz = (uint64_t)ggml_nelements(v) * fp;
-        // size vs maxStorageBufferRange is enforced by the use_dequant_kv gate above (falls back rather than aborting)
         if (ctx->prealloc_size_x < k_f16_sz + v_f16_sz) {
             ctx->prealloc_size_x = k_f16_sz + v_f16_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
