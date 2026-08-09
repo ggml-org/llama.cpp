@@ -1,0 +1,23 @@
+name: Convert PR to draft
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: write # required for "gh pr ready" command, see https://github.com/cli/cli/issues/8910
+
+jobs:
+  convert-to-draft:
+    if: github.event.label.name == 'draft' && github.event.pull_request.draft == false
+    runs-on: ubuntu-slim
+    steps:
+      - name: Convert PR to draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr ready --undo "$PR_URL"
+          gh pr edit "$PR_URL" --remove-label draft
