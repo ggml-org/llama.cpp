@@ -3447,6 +3447,16 @@ struct ggml_tensor * ggml_moe_cold(
     return result;
 }
 
+static ggml_mmid_cold_slice_fn g_mmid_cold_slice_fn = NULL;
+
+GGML_API void ggml_mmid_cold_set_slice_fn(ggml_mmid_cold_slice_fn fn) {
+    g_mmid_cold_slice_fn = fn;
+}
+
+GGML_API const uint8_t * ggml_mmid_cold_get_slice(const struct ggml_tensor * src0, int expert) {
+    return g_mmid_cold_slice_fn ? g_mmid_cold_slice_fn(src0, expert) : NULL;
+}
+
 // ggml_out_prod
 
 static inline bool ggml_can_out_prod(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {

@@ -1481,6 +1481,12 @@ extern "C" {
             struct ggml_tensor  * counts,
             int32_t               act);
 
+    // optional per-expert slice source for the MoE cold op; base lib so the
+    // dlopen'd ggml-cpu module and the llama lib both resolve it
+    typedef const uint8_t * (*ggml_mmid_cold_slice_fn)(const struct ggml_tensor * src0, int expert);
+    GGML_API void ggml_mmid_cold_set_slice_fn(ggml_mmid_cold_slice_fn fn);
+    GGML_API const uint8_t * ggml_mmid_cold_get_slice(const struct ggml_tensor * src0, int expert);
+
     // A: m columns, n rows,
     // B: p columns, n rows,
     // result is m columns, p rows
