@@ -481,15 +481,17 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     res->t_embd = cur;
 
     // lm_head from the target model (shared via ctx_other)
-    auto * output = model.output;
+    auto * output   = model.output;
+    auto * output_s = model.output_s;
     if (output == nullptr) {
         GGML_ASSERT(cparams.ctx_other != nullptr);
         const auto * model_other = llama_get_model(cparams.ctx_other);
         GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
-        output = model_other->output;
+        output   = model_other->output;
+        output_s = model_other->output_s;
     }
 
-    cur = build_lora_mm(output, cur);
+    cur = build_lora_mm(output, cur, output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
@@ -657,15 +659,17 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     cb(cur, "result_norm", -1);
 
     // lm_head from the target model (shared via ctx_other)
-    auto * output = model.output;
+    auto * output   = model.output;
+    auto * output_s = model.output_s;
     if (output == nullptr) {
         GGML_ASSERT(cparams.ctx_other != nullptr);
         const auto * model_other = llama_get_model(cparams.ctx_other);
         GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
-        output = model_other->output;
+        output   = model_other->output;
+        output_s = model_other->output_s;
     }
 
-    cur = build_lora_mm(output, cur);
+    cur = build_lora_mm(output, cur, output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
