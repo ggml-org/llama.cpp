@@ -375,6 +375,10 @@ private:
     std::unique_ptr<llama_expert_heatmap> expert_heatmap;
     std::unique_ptr<llama_expert_hotstore> expert_hotstore;
 
+    // expert sidecar: <model>.tier path and flag, kept for the destructor save
+    bool        expert_sidecar_enabled = false;
+    std::string expert_sidecar_path;
+
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
 

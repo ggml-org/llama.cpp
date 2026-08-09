@@ -790,6 +790,63 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             }
         } // boundary gate
 
+        // ---- promote/demote (D2D): the top expert on a worse device that
+        //      beats the better device's coldest resident by hysteresis, with
+        //      the better slot dwelled, swaps through the staging buffer.
+        //      synchronous copies + inline verify (copy_top_s style); both
+        //      slots stay routed, only their device changes.
+        for (int g = 0; g + 1 < n_devices; g++) {
+            float worst_bound = INFINITY;
+            int   worst_slot  = -1;
+            for (int p = slot_start[g]; p < slot_end[g]; p++) {
+                if (ste[p] < 0) {
+                    continue;
+                }
+                const float s = heatmap.get_score(il, ste[p]);
+                if (s < worst_bound) {
+                    worst_bound = s;
+                    worst_slot  = p;
+                }
+            }
+            if (worst_slot < 0 || dc[worst_slot] < dwell) {
+                continue;
+            }
+            int   best_slot  = -1;
+            float best_score = -INFINITY;
+            for (int p = slot_start[g+1]; p < slot_end[g+1]; p++) {
+                if (ste[p] < 0) {
+                    continue;
+                }
+                const float s = heatmap.get_score(il, ste[p]);
+                if (s > best_score) {
+                    best_score = s;
+                    best_slot  = p;
+                }
+            }
+            if (best_slot < 0 || best_score < hyst * worst_bound) {
+                continue;
+            }
+            const int e_demote  = ste[worst_slot];
+            const int e_promote = ste[best_slot];
+            for (entry * ent : entries_by_layer[il]) {
+                const size_t eslot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
+                const size_t off_w = (size_t) (worst_slot - slot_start[g]) * eslot;
+                const size_t off_b = (size_t) (best_slot - slot_start[g+1]) * eslot;
+                std::vector<uint8_t> s1(eslot), s2(eslot);
+                ggml_backend_tensor_get(ent->dst[g],   s1.data(), off_w, eslot); // demote
+                ggml_backend_tensor_get(ent->dst[g+1], s2.data(), off_b, eslot); // promote
+                ggml_backend_tensor_set(ent->dst[g+1], s1.data(), off_b, eslot);
+                ggml_backend_tensor_set(ent->dst[g],   s2.data(), off_w, eslot);
+            }
+            ste[worst_slot] = e_promote;
+            ste[best_slot]  = e_demote;
+            dc[worst_slot] = -elapsed;
+            dc[best_slot]  = -elapsed;
+            dirty[il] = 1;
+            changed++;
+            break; // one D2D swap per layer per tick
+        }
+
         // ---- move-in (1/token, gated): fill a free slot with the hottest CPU
         //      expert that should be on the GPU. check the free slot first (the
         //      common blocker), then the move-in queue (rarer), then evaluate.
@@ -855,6 +912,9 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
 bool llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap, bool multi_slot) {
     // n_tokens>1 (multi-slot) freezes the hot store: no swapping during the batch
     if (multi_slot || heatmap.tokens_total <= 0) {
+        return false;
+    }
+    if (frozen) {
         return false;
     }
     // continuous adaptive cadence: the sync period grows with the hit rate

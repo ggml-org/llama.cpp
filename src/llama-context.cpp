@@ -478,6 +478,18 @@ llama_context::llama_context(
             params.expert_hot_s);
     }
 
+    // expert sidecar: restore the heatmap from <model>.tier if present; freeze
+    // store adaptation so the run measures the pre-warmed store
+    expert_sidecar_enabled = params.expert_sidecar;
+    expert_sidecar_path = std::string(params.model_path ? params.model_path : "") + ".tier";
+    bool sidecar_loaded = false;
+    if (expert_heatmap && params.expert_sidecar) {
+        const std::string sc = expert_sidecar_path;
+        if (expert_heatmap->load(sc.c_str())) {
+            sidecar_loaded = true;
+        }
+    }
+
     if (hparams.n_expert > 0 && !cparams.warmup && params.expert_hot_s != 0) {
         const int sync_period = params.expert_sync_period;
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
@@ -507,6 +519,10 @@ llama_context::llama_context(
         expert_hotstore->log();
     }
 
+    if (sidecar_loaded && expert_hotstore) {
+        expert_hotstore->frozen = true;
+    }
+
     // Initialize the full vocabulary token ids for backend samplers.
     {
         const int n_vocab = model.vocab.n_tokens();
@@ -519,6 +535,10 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
+    if (expert_heatmap && expert_sidecar_enabled && !cparams.warmup) {
+        const std::string sc = expert_sidecar_path;
+        expert_heatmap->save(sc.c_str());
+    }
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
 
@@ -3625,6 +3645,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.model_path                  =*/ nullptr,
         /*.expert_heat_decay           =*/ 0.999f,
         /*.expert_heat_log_period      =*/ 0,
         /*.expert_hot_s                =*/ 0,
@@ -3633,6 +3654,7 @@ llama_context_params llama_context_default_params() {
         /*.expert_dwell                =*/ 0,
         /*.expert_pin_pct              =*/ -1,
         /*.expert_copy                 =*/ false,
+        /*.expert_sidecar              =*/ false,
         /*.ctx_other                   =*/ nullptr,
     };
 

@@ -3,8 +3,9 @@
 
 #include <algorithm>
 #include <cinttypes>
-#include <cstdio>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 
 llama_expert_heatmap::llama_expert_heatmap(
         int n_layers, int n_experts,
@@ -131,4 +132,48 @@ std::vector<int> llama_expert_heatmap::get_top_s(int layer_idx, int s) const {
 
     result.assign(indices.begin(), indices.begin() + k);
     return result;
+}
+
+bool llama_expert_heatmap::save(const char * path) const {
+    FILE * f = fopen(path, "wb");
+    if (!f) {
+        return false;
+    }
+    const char magic[4] = {'H', 'M', 'S', 'D'};
+    const int32_t nl = n_layers, ne = n_experts, uc = update_counter;
+    const int64_t tt = tokens_total, gc = generated_tokens_count;
+    bool ok = fwrite(magic, 1, 4, f) == 4 &&
+        fwrite(&nl, sizeof(nl), 1, f) == 1 &&
+        fwrite(&ne, sizeof(ne), 1, f) == 1 &&
+        fwrite(&tt, sizeof(tt), 1, f) == 1 &&
+        fwrite(&gc, sizeof(gc), 1, f) == 1 &&
+        fwrite(&uc, sizeof(uc), 1, f) == 1 &&
+        fwrite(heat.data(), sizeof(float), heat.size(), f) == heat.size();
+    fclose(f);
+    return ok;
+}
+
+bool llama_expert_heatmap::load(const char * path) {
+    FILE * f = fopen(path, "rb");
+    if (!f) {
+        return false;
+    }
+    char magic[4] = {0};
+    int32_t nl = 0, ne = 0, uc = 0;
+    int64_t tt = 0, gc = 0;
+    const bool ok = fread(magic, 1, 4, f) == 4 && memcmp(magic, "HMSD", 4) == 0 &&
+        fread(&nl, sizeof(nl), 1, f) == 1 && nl == n_layers &&
+        fread(&ne, sizeof(ne), 1, f) == 1 && ne == n_experts &&
+        fread(&tt, sizeof(tt), 1, f) == 1 &&
+        fread(&gc, sizeof(gc), 1, f) == 1 &&
+        fread(&uc, sizeof(uc), 1, f) == 1 &&
+        fread(heat.data(), sizeof(float), heat.size(), f) == heat.size();
+    fclose(f);
+    if (!ok) {
+        return false;
+    }
+    tokens_total = tt;
+    generated_tokens_count = gc;
+    update_counter = uc;
+    return true;
 }
