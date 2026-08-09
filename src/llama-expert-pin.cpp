@@ -35,9 +35,8 @@ static void madvise_range(const void * p, size_t len, bool keep) {
 #endif
 }
 
-// only hint file-backed (mmap) host tensors; anonymous buffers must never be
-// DONTNEED'd (would zero them). a host tensor without a data pointer has no
-// pages to hint.
+// only hint file-backed (mmap) host tensors; DONTNEED on anonymous buffers
+// would zero them. no data pointer = no pages to hint.
 static bool hintable(const ggml_tensor * w) {
     if (!w || !w->data) {
         return false;
@@ -70,9 +69,18 @@ const config & get_config() {
     return g_config;
 }
 
+static int g_pct = -1;
+
+void set_pct(int pct) {
+    g_pct = pct;
+}
+
+int get_pct() {
+    return g_pct;
+}
+
 bool active() {
-    static const bool v = getenv("LLAMA_EXPERT_PIN") != nullptr;
-    return v;
+    return getenv("LLAMA_EXPERT_PIN") != nullptr || g_pct > 0;
 }
 
 // exps tensors per layer, e.g. blk.0.ffn_gate_exps.weight
@@ -152,8 +160,14 @@ static void hint_experts(const llama_model * model,
         // cold: warm the top fraction (most likely promoted next)
         if (!cold.empty()) {
             std::sort(cold.begin(), cold.end(), by_score);
+            float cold_pct = g_config.willneed_cold;
+            if (const char * e = getenv("LLAMA_EXPERT_PIN_WILLNEED_COLD")) {
+                cold_pct = (float) atof(e);
+            } else if (g_pct > 0) {
+                cold_pct = (float) g_pct / 100.0f;
+            }
             const int n_warm = std::min((int) cold.size(),
-                (int) (g_config.willneed_cold * (float) cold.size()));
+                (int) (cold_pct * (float) cold.size()));
             for (int i = 0; i < n_warm; i++) {
                 for (const ggml_tensor * w : per_layer[il]) {
                     hint_expert(w, cold[i], true);

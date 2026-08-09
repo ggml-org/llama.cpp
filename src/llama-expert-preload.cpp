@@ -80,16 +80,7 @@ int get_slots() {
     return g_slots;
 }
 
-bool g_force = false;
 bool g_no_evict = false;
-
-void set_force(bool force) {
-    g_force = force;
-}
-
-bool get_force() {
-    return g_force;
-}
 
 void set_no_evict(bool no_evict) {
     g_no_evict = no_evict;
@@ -102,9 +93,6 @@ bool get_no_evict() {
 bool tier_will_engage() {
     if (g_slots <= 0) {
         return false;
-    }
-    if (g_force || getenv("LLAMA_EXPERT_CACHE_FORCE") != nullptr) {
-        return true;
     }
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         const ggml_backend_dev_t dev = ggml_backend_dev_get(i);

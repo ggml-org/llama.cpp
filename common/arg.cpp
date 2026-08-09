@@ -2706,7 +2706,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_EXPERT_HEAT_DECAY"));
     add_opt(common_arg(
         {"--expert-heat-log-period"}, "N",
-        "expert heatmap log interval in updates (default: 0, 0 = off)",
+        "print the expert heatmap at generation end (default: 0, 0 = off)",
         [](common_params & params, int value) {
             params.expert_heat_log_period = value;
         }
@@ -2741,14 +2741,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_EXPERT_HOT_S"));
     add_opt(common_arg(
-        {"--ecf", "--expert-cache-force"},
-        {},
-        "enable the expert cache (hot store) on non-CUDA backends (testing/emergency only)",
-        [](common_params & params, bool value) {
-            params.expert_cache_force = value;
-            llama_expert_preload::set_force(value);
+        {"--expert-pin"}, "N",
+        "fraction (percent) of cold experts to keep pinned in RAM via madvise, "
+        "0 = off, -1 = auto (hot store sets 40, else 0)",
+        [](common_params & params, int value) {
+            params.expert_pin_pct = value;
         }
-    ));
+    ).set_env("LLAMA_ARG_EXPERT_PIN"));
     add_opt(common_arg(
         {"--expert-no-evict"},
         {},

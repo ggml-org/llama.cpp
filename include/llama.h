@@ -409,7 +409,7 @@ extern "C" {
         int   expert_sync_period;      // hot store re-sync cadence in tokens
         float expert_hyst;            // hysteresis ratio for slot swaps
         int   expert_dwell;           // min updates a resident slot keeps before swap
-        bool  expert_cache_force;      // bypass the CUDA-only hot store guard
+        int   expert_pin_pct;         // percent of cold experts to keep pinned (madvise); -1 = auto
 
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
@@ -576,6 +576,9 @@ extern "C" {
     LLAMA_API const struct llama_model * llama_get_model   (const struct llama_context * ctx);
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
     LLAMA_API  enum llama_pooling_type   llama_pooling_type(const struct llama_context * ctx); // TODO: rename to llama_get_pooling_type
+
+    // print the expert heatmap (no-op when the tier is not active)
+    LLAMA_API void llama_print_expert_heatmap(const struct llama_context * ctx);
 
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);

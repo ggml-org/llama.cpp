@@ -27,6 +27,9 @@ struct llama_expert_heatmap {
 
     // standalone path (no cold op): per-expert increment from graph readback
     void update_ids(int layer_idx, const int32_t * expert_ids, int n_ids, int n_tokens);
+
+    // once per ubatch: decay + token counters
+    void tick(int n_tokens);
     void log() const;
 
     float get_score(int layer_idx, int expert_id) const;

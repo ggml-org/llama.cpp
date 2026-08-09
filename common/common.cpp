@@ -1274,6 +1274,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             __func__);
     }
 
+    // --expert-pin -1 auto: 40 with the hot store, 0 without
+    if (params.expert_pin_pct == -1) {
+        params.expert_pin_pct = params.expert_hot_s != 0 ? 40 : 0;
+        cparams.expert_pin_pct = params.expert_pin_pct;
+    }
+
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
         return;
@@ -1700,7 +1706,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.expert_sync_period      = params.expert_sync_period;
     cparams.expert_hyst            = params.expert_hyst;
     cparams.expert_dwell           = params.expert_dwell;
-    cparams.expert_cache_force      = params.expert_cache_force;
+    cparams.expert_pin_pct         = params.expert_pin_pct;
 
     return cparams;
 }

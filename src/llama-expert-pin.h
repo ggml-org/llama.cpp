@@ -5,9 +5,8 @@
 struct llama_expert_heatmap;
 struct llama_model;
 
-// mmap page hints for the expert tier. replaces the unconditional MADV_DONTNEED
-// on GPU-bound experts: a periodic pass drops the hottest GPU experts' pages
-// and warms the ones most likely to be needed next.
+// mmap page hints for the expert tier. periodic madvise pass: drop the hottest
+// GPU experts' pages, warm the ones most likely needed next.
 namespace llama_expert_pin {
 
     // dials, all env-overridable with these defaults
@@ -21,11 +20,15 @@ namespace llama_expert_pin {
 
     const config & get_config();
 
-    // true when pinning is enabled (LLAMA_EXPERT_PIN set)
+    // resolved pin fraction from --expert-pin (percent, -1 = unset)
+    void set_pct(int pct);
+    int  get_pct();
+
+    // true when pinning is enabled (LLAMA_EXPERT_PIN set or pct > 0)
     bool active();
 
-    // periodic madvise pass. heatmap feeds the rankings; is_gpu_resident
-    // (ud, il, e) marks store residents, nullptr = standalone (all cold).
+    // periodic madvise pass. is_gpu_resident marks store residents,
+    // nullptr = standalone (all cold)
     void maybe_run(const llama_model * model,
                    const llama_expert_heatmap * heatmap,
                    bool (*is_gpu_resident)(void * ud, int il, int e),

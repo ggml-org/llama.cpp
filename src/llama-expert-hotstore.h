@@ -159,8 +159,8 @@ llama_expert_hotstore(const llama_model * model, int n_layers,
     // returns true if any slot changed (caller should synchronize the GPU).
     bool resync_top_s(const llama_expert_heatmap & heatmap);
 
-    // --ecf mode: mirror the entire store to the top-S every token (direct
-    // swaps, hash-verified, copy-on-read). no pacing queues.
+    // LLAMA_EXPERT_FULL_SYNC: mirror the store to the top-S every token
+    // (direct swaps, hash-verified, copy-on-read). no pacing queues.
     bool resync_full_mirror(const llama_expert_heatmap & heatmap, int budget = 1);
 
     // cadence-gated wrapper: re-sync only if tokens_total crossed sync_period;

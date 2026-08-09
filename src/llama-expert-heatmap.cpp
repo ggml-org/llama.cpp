@@ -20,19 +20,7 @@ llama_expert_heatmap::llama_expert_heatmap(
 }
 
 void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & per_layer, int n_tokens) {
-    // batched decay: apply decay_rate^2 every two updates instead of
-    // decay_rate every update (identical long-run weighting, half the work)
-    ++update_counter;
-    if (update_counter % 2 == 0) {
-        const float rate = decay_rate * decay_rate;
-        for (int i = 0; i < n_layers * n_experts; i++) {
-            heat[i] *= rate;
-        }
-    }
-
-    if (n_tokens == 1) {
-        generated_tokens_count++;
-    }
+    tick(n_tokens);
     for (int il = 0; il < n_layers && il < (int) per_layer.size(); il++) {
         const int32_t * cnt = per_layer[il];
         if (!cnt) {
@@ -45,17 +33,11 @@ void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & pe
             }
         }
     }
-
-    tokens_total += n_tokens;
-    if (log_period > 0 && tokens_total / log_period > (tokens_total - n_tokens) / log_period) {
-        log();
-    }
 }
 
-void llama_expert_heatmap::update_ids(int layer_idx, const int32_t * expert_ids, int n_ids, int n_tokens) {
-    if (layer_idx < 0 || layer_idx >= n_layers || !expert_ids) {
-        return;
-    }
+void llama_expert_heatmap::tick(int n_tokens) {
+    // batched decay: apply decay_rate^2 every two updates instead of
+    // decay_rate every update (identical long-run weighting, half the work)
     ++update_counter;
     if (update_counter % 2 == 0) {
         const float rate = decay_rate * decay_rate;
@@ -66,6 +48,13 @@ void llama_expert_heatmap::update_ids(int layer_idx, const int32_t * expert_ids,
     if (n_tokens == 1) {
         generated_tokens_count++;
     }
+    tokens_total += n_tokens;
+}
+
+void llama_expert_heatmap::update_ids(int layer_idx, const int32_t * expert_ids, int n_ids, int n_tokens) {
+    if (layer_idx < 0 || layer_idx >= n_layers || !expert_ids) {
+        return;
+    }
     float * layer_heat = &heat[layer_idx * n_experts];
     for (int t = 0; t < n_tokens; t++) {
         for (int e = 0; e < n_ids; e++) {
@@ -75,11 +64,10 @@ void llama_expert_heatmap::update_ids(int layer_idx, const int32_t * expert_ids,
             }
         }
     }
-    tokens_total += n_tokens;
 }
 
 void llama_expert_heatmap::log() const {
-    LLAMA_LOG("=== Expert heatmap (tokens %" PRId64 ") ===\n", tokens_total);
+    LLAMA_LOG("expert_heatmap: tokens %" PRId64 "\n", tokens_total);
 
     for (int l = 0; l < n_layers; l++) {
         const float * layer_heat = heat.data() + l * n_experts;

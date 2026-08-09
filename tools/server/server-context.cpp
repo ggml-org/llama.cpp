@@ -3170,6 +3170,7 @@ private:
                             SLT_WRN(slot, "%s", "empty prompt - releasing slot\n");
 
                             slot.print_timings();
+                            llama_print_expert_heatmap(slot.ctx_tgt);
                             send_final_response(slot);
                             slot.release();
 
@@ -3853,6 +3854,7 @@ private:
             if (!process_token(result, slot)) {
                 // release slot because of stop condition
                 slot.print_timings();
+                llama_print_expert_heatmap(slot.ctx_tgt);
                 send_final_response(slot);
                 metrics.on_prediction(slot);
                 slot.release();

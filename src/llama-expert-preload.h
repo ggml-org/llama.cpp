@@ -22,8 +22,6 @@ namespace llama_expert_preload {
     void set_slots(int s);
     int  get_slots();
     void set_model_path(const char * path); // for the debug disk hash
-    void set_force(bool force);             // --ecf / LLAMA_EXPERT_CACHE_FORCE
-    bool get_force();                       // full-sync-every-token mode
     void set_no_evict(bool no_evict);       // --expert-no-evict
     bool get_no_evict();
 

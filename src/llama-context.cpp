@@ -467,6 +467,7 @@ llama_context::llama_context(
 
     // heatmap exists for the tier, the heat log, or standalone pinning
     // (LLAMA_EXPERT_PIN without the hot store)
+    llama_expert_pin::set_pct(params.expert_pin_pct);
     if (hparams.n_expert > 0 && !cparams.warmup &&
         (params.expert_heat_log_period != 0 || params.expert_hot_s != 0 ||
          llama_expert_pin::active())) {
@@ -484,9 +485,7 @@ llama_context::llama_context(
             params.expert_hot_s, sync_period,
             params.expert_hyst, params.expert_dwell);
         // enable the GPU hot store on any GPU backend (CUDA, Vulkan, ROCm,
-        // SYCL, Metal, ...). --expert-cache-force overrides the guard.
-        const bool force = params.expert_cache_force || getenv("LLAMA_EXPERT_CACHE_FORCE") != nullptr;
-        llama_expert_preload::set_force(force);
+        // SYCL, Metal, ...).
         bool cache_enabled = false;
         std::vector<ggml_backend_buffer_type_t> gpu_bufts;
         for (auto & backend : backends) {
@@ -501,8 +500,8 @@ llama_context::llama_context(
             cache_enabled = expert_hotstore->allocate(gpu_bufts, model.tensor_split(), (int) gpu_bufts.size());
         }
         // launch hint: cache did not engage, usually no GPU accelerator
-        if (!cache_enabled && !force) {
-            LLAMA_LOG_WARN("%s: expert cache is OFF: %d slots requested but no GPU backend in use (use --ecf to force it on)\n",
+        if (!cache_enabled) {
+            LLAMA_LOG_WARN("%s: expert cache is OFF: %d slots requested but no GPU backend in use\n",
                 __func__, params.expert_hot_s);
         }
         expert_hotstore->log();
@@ -1441,9 +1440,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    // the cold op tallied the selected experts into host counts during the
-    // compute; feed them into the heatmap directly (no D2H readback, no sync)
-    if (expert_heatmap && expert_hotstore && expert_hotstore->is_filled) {
+    // cold-op counts feed the heatmap directly (no D2H readback, no sync).
+    // decode only: prefill routing is uniform and would dilute the ranking.
+    if (expert_heatmap && expert_hotstore && expert_hotstore->is_filled && ubatch.n_tokens == 1) {
         expert_hotstore->read_counts(*expert_heatmap, ubatch.n_tokens);
     }
     if (expert_heatmap && expert_hotstore && expert_hotstore->is_filled) {
@@ -1454,8 +1453,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
 
     // standalone pin mode (no hot store): feed the heatmap from the graph
-    // readback and warm the top cold experts on mmap
-    if (expert_heatmap && !expert_hotstore && llama_expert_pin::active()) {
+    // readback. decode only (see above).
+    if (expert_heatmap && !expert_hotstore && llama_expert_pin::active() && ubatch.n_tokens == 1) {
+        expert_heatmap->tick(1);
         synchronize();
         for (const auto & [il, tensor] : res->moe_sel_experts) {
             if (!tensor || !tensor->data) {
@@ -2459,6 +2459,19 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         res += lora->get_n_nodes();
     }
     return res;
+}
+
+void llama_context::print_expert_heatmap() const {
+    // --expert-heat-log-period: print at generation end (0 = off)
+    if (expert_heatmap && expert_heatmap->log_period != 0) {
+        expert_heatmap->log();
+    }
+}
+
+void llama_print_expert_heatmap(const struct llama_context * ctx) {
+    if (ctx) {
+        ctx->print_expert_heatmap();
+    }
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {
@@ -3618,7 +3631,7 @@ llama_context_params llama_context_default_params() {
         /*.expert_sync_period          =*/ 1,
         /*.expert_hyst                 =*/ 1.3f,
         /*.expert_dwell                =*/ 0,
-        /*.expert_cache_force         =*/ false,
+        /*.expert_pin_pct              =*/ -1,
         /*.ctx_other                   =*/ nullptr,
     };
 

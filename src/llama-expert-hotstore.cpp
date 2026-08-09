@@ -399,12 +399,12 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
     last_sync_tokens = heatmap.tokens_total;
     is_filled = true;
     update_luts();
-    fprintf(stderr, "=== Expert hot store: startup batch moved to GPU ===\n");
+    fprintf(stderr, "hotstore: startup batch moved to GPU\n");
     return true;
 }
 
-// --ecf mode: pa4-style direct swap (1 per layer per token). copy the new
-// expert to a free or gate-cleared slot, verify the GPU copy, route
+// LLAMA_EXPERT_FULL_SYNC: direct swap (1 per layer per token). copy the
+// new expert to a free or gate-cleared slot, verify the GPU copy, route
 // immediately. no handshake pacing queues - the verify is the safety net.
 bool llama_expert_hotstore::resync_full_mirror(const llama_expert_heatmap & heatmap, int budget) {
     if (!is_filled || hot_s <= 0 || buf_dev.empty()) {
@@ -531,9 +531,6 @@ static size_t staging_slot_off(const std::vector<llama_expert_hotstore::entry *>
 bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
     if (!is_filled || hot_s <= 0 || buf_dev.empty()) {
         return false;
-    }
-    if (llama_expert_preload::get_force()) {
-        return resync_full_mirror(heatmap); // --ecf: full store mirror every token
     }
     if (getenv("LLAMA_EXPERT_DEBUG")) {
         fprintf(stderr, "hotstore: resync tok=%lld\n", (long long) heatmap.tokens_total);
@@ -845,7 +842,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
     if (changed > 0) {
         update_luts(dirty);
         if (getenv("LLAMA_EXPERT_DEBUG")) {
-            fprintf(stderr, "=== Expert hot store: re-sync changed %d slots ===\n", changed);
+            fprintf(stderr, "hotstore: re-sync changed %d slots\n", changed);
         }
     }
     return changed > 0;
@@ -981,7 +978,7 @@ void llama_expert_hotstore::log_hit_rate(const std::vector<std::pair<int, ggml_t
         }
     }
     if (total > 0) {
-        fprintf(stderr, "=== expert hot hit rate: %zu/%zu = %.1f%% ===\n", hits, total, 100.0f * (float) hits / (float) total);
+        fprintf(stderr, "hotstore: hit rate %zu/%zu = %.1f%%\n", hits, total, 100.0f * (float) hits / (float) total);
     }
 }
 
@@ -1035,7 +1032,7 @@ float llama_expert_hotstore::target_hit_rate() const {
 }
 
 void llama_expert_hotstore::log() const {
-    fprintf(stderr, "=== Expert hotstore sizing (S=%d) ===\n", hot_s);
+    fprintf(stderr, "hotstore: sizing (S=%d)\n", hot_s);
     const bool debug = getenv("LLAMA_EXPERT_DEBUG") != nullptr;
     size_t total = 0;    for (int il = 0; il < n_layers; il++) {
         total += bytes_per_slot[il];
