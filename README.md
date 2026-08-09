@@ -16,6 +16,42 @@
 
 </div>
 
+## AMD AI PRO Optimisation and eGPU Compatibility
+
+This fork adds AMD RDNA4 (gfx1201) support and eGPU (Thunderbolt) compatibility to the Vulkan backend. Tested on a Radeon AI PRO R9700 (Navi 48) eGPU with the AMD proprietary Windows driver.
+
+### Changes vs upstream
+
+- **RDNA4 / gfx1201 detection**: the AMD proprietary Windows driver does not expose `VK_NV_cooperative_matrix2`, so upstream mis-detects RDNA4 as RDNA3. This fork detects gfx1201/gfx1200 by PCI device ID (0x755x / 0x759x) and applies the correct pipeline config (subgroup size 32).
+- **WMMA (matrix cores) on gfx12**: enables the `VK_KHR_cooperative_matrix` path on RDNA4. The coopmat shaders (`OpCooperativeMatrixLoad/MulAdd/StoreKHR`, 16x16x16 f16/f32/int8/fp8/bf16) lower to `v_wmma_*` instructions on gfx12. Verify at startup: the log line `matrix cores: KHR_coopmat`.
+- **eGPU / Thunderbolt memory fix**: the AMD proprietary driver mis-reports buffer `memoryTypeBits` as host-memory-only on eGPUs, which makes every device-local buffer allocation fail with `ErrorOutOfDeviceMemory` despite free VRAM. This fork probes for the broken condition at device init and then trusts the memory type property flags for device-local requests. Force with `GGML_VK_IGNORE_BUFFER_MEMORY_TYPE_BITS=1`.
+
+### Build (Windows)
+
+```sh
+cmake -B build-vulkan -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-vulkan --config Release -j 8
+```
+
+Requires the Vulkan SDK and MSVC. Select the eGPU with `GGML_VK_VISIBLE_DEVICES=<idx>` (see the device list printed at startup).
+
+### MTP (multi-token prediction) speculative decoding
+
+For models with a built-in MTP head (e.g. Qwen3.6-35B-A3B-MTP):
+
+```sh
+llama-server -m model.gguf --spec-type draft-mtp -ngl 99 -c 65536
+```
+
+Measured on the R9700 eGPU (Qwen3.6-35B-A3B Q4_K_S, 256 tokens): 6.96 t/s baseline -> 9.88 t/s with draft-mtp (~1.4x), 65-81% draft acceptance. Check `draft acceptance` in the server log to confirm MTP is active.
+
+### Roadmap (further speed work)
+
+- Tune MTP draft depth; try `-fa`, KV cache quantization (`-ctk q8_0 -ctv q8_0`), and Q4_0/IQ4_XS quants
+- Enable coopmat in the MoE `mul_mat_id` path on RDNA4 (largest potential decode win for MoE models)
+- wave64 pipeline variants for gfx12
+- Linux + RADV exposes `VK_NV_cooperative_matrix2` and the decode-vector extension (faster prompt processing); HIP/ROCm is also worth benchmarking against Vulkan on the same GPU
+
 ## Quick start
 
 A few options to get `llama.cpp` installed on your machine:

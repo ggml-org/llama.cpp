@@ -395,6 +395,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    AMD_RDNA4,
     INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
@@ -410,6 +411,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         bool amd_shader_core_properties = false;
         bool integer_dot_product = false;
         bool subgroup_size_control = false;
+        bool coopmat2 = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_AMD_shader_core_properties", properties.extensionName) == 0) {
@@ -418,6 +420,8 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 integer_dot_product = true;
             } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
                 subgroup_size_control = true;
+            } else if (strcmp("VK_NV_cooperative_matrix2", properties.extensionName) == 0) {
+                coopmat2 = true;
             }
         }
 
@@ -443,6 +447,15 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // RDNA
             if (shader_core_props_amd.wavefrontsPerSimd == 20) {
                 return vk_device_architecture::AMD_RDNA1;
+            }
+            if (coopmat2) {
+                // RDNA4 (gfx12) exposes VK_NV_cooperative_matrix2 for WMMA
+                return vk_device_architecture::AMD_RDNA4;
+            }
+            // AMD proprietary drivers do not expose VK_NV_cooperative_matrix2, use PCI IDs
+            // 0x755x: gfx1201 (Navi 48), 0x759x: gfx1200 (Navi 44)
+            if ((props.deviceID & 0xFFF0) == 0x7550 || (props.deviceID & 0xFFF0) == 0x7590) {
+                return vk_device_architecture::AMD_RDNA4;
             }
             if (integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
                 return vk_device_architecture::AMD_RDNA3;
@@ -1104,6 +1117,7 @@ struct vk_device_struct {
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
+    bool ignore_buffer_memory_type_bits = false;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -3389,12 +3403,21 @@ static void ggml_vk_queue_command_pools_cleanup(vk_device& device) {
     }
 }
 
-static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags) {
+static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags, bool ignore_memory_type_bits = false) {
     std::vector<uint32_t> indices;
 
+#ifdef GGML_VULKAN_DEBUG
+    std::cerr << "mem_req size=" << mem_req->size << " bits=" << std::hex << mem_req->memoryTypeBits << std::dec << " flags=" << to_string(flags) << std::endl;
+#endif
     for (uint32_t i = 0; i < mem_props->memoryTypeCount; ++i) {
         vk::MemoryType memory_type = mem_props->memoryTypes[i];
-        if ((mem_req->memoryTypeBits & ((uint64_t)1 << i)) &&
+#ifdef GGML_VULKAN_DEBUG
+        std::cerr << "  type[" << i << "] heap=" << memory_type.heapIndex
+                  << " props=" << to_string(memory_type.propertyFlags)
+                  << " heapSize=" << mem_props->memoryHeaps[memory_type.heapIndex].size
+                  << " bit=" << ((mem_req->memoryTypeBits & ((uint64_t)1 << i)) ? "set" : "clear") << std::endl;
+#endif
+        if ((ignore_memory_type_bits || (mem_req->memoryTypeBits & ((uint64_t)1 << i))) &&
             (flags & memory_type.propertyFlags) == flags &&
             mem_props->memoryHeaps[memory_type.heapIndex].size >= mem_req->size) {
             indices.push_back(i);
@@ -3500,7 +3523,10 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         for (auto it = req_flags_list.begin(); it != req_flags_list.end(); it++) {
             const auto & req_flags = *it;
 
-            const std::vector<uint32_t> memory_type_indices = ggml_vk_find_memory_properties(&mem_props, &mem_req, req_flags);
+            // some drivers mis-report buffer memoryTypeBits as host-only (seen on AMD eGPU via Thunderbolt),
+            // trust the memory type property flags instead for device-local requests
+            const bool ignore_bits = device->ignore_buffer_memory_type_bits && (req_flags & vk::MemoryPropertyFlagBits::eDeviceLocal);
+            const std::vector<uint32_t> memory_type_indices = ggml_vk_find_memory_properties(&mem_props, &mem_req, req_flags, ignore_bits);
 
             if (memory_type_indices.empty()) {
                 continue;
@@ -4083,6 +4109,20 @@ static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
     },
     {
         vk_device_architecture::AMD_RDNA2,
+        {
+            rdna2_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::AMD_RDNA3,
+        {
+            rdna2_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::AMD_RDNA4,
         {
             rdna2_pipelines,
         },
@@ -6142,6 +6182,44 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch);
 static uint32_t ggml_vk_intel_shader_core_count(const vk::PhysicalDevice& vkdev);
 
+// Check if the driver mis-reports buffer memoryTypeBits as host-only while device-local
+// memory works when bound directly (seen with AMD proprietary driver on eGPU).
+static bool ggml_vk_buffer_memory_type_bits_broken(vk_device& device) {
+    vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+
+    vk::Buffer test_buffer = device->device.createBuffer({ {}, 256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst, vk::SharingMode::eExclusive, 0, nullptr });
+    vk::MemoryRequirements mem_req = device->device.getBufferMemoryRequirements(test_buffer);
+
+    uint32_t device_local_idx = mem_props.memoryTypeCount;
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+        if (!(mem_props.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+            continue;
+        }
+        if (mem_req.memoryTypeBits & (1u << i)) {
+            device->device.destroyBuffer(test_buffer);
+            return false;
+        }
+        if (device_local_idx == mem_props.memoryTypeCount) {
+            device_local_idx = i;
+        }
+    }
+    if (device_local_idx == mem_props.memoryTypeCount) {
+        device->device.destroyBuffer(test_buffer);
+        return false;
+    }
+    // bits are broken, verify that device-local memory can be bound directly
+    bool ok = false;
+    try {
+        vk::DeviceMemory mem = device->device.allocateMemory({ mem_req.size, device_local_idx });
+        device->device.bindBufferMemory(test_buffer, mem, 0);
+        device->device.freeMemory(mem);
+        ok = true;
+    } catch (const vk::SystemError&) {
+    }
+    device->device.destroyBuffer(test_buffer);
+    return ok;
+}
+
 static vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
 
@@ -6174,6 +6252,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         const char* GGML_VK_ALLOW_SYSMEM_FALLBACK = getenv("GGML_VK_ALLOW_SYSMEM_FALLBACK");
         device->allow_sysmem_fallback = GGML_VK_ALLOW_SYSMEM_FALLBACK != nullptr;
+
+        const char* GGML_VK_IGNORE_BUFFER_MEMORY_TYPE_BITS = getenv("GGML_VK_IGNORE_BUFFER_MEMORY_TYPE_BITS");
+        device->ignore_buffer_memory_type_bits = GGML_VK_IGNORE_BUFFER_MEMORY_TYPE_BITS != nullptr;
 
         const char* GGML_VK_DISABLE_GRAPH_OPTIMIZE = getenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
         device->disable_graph_optimize = GGML_VK_DISABLE_GRAPH_OPTIMIZE != nullptr;
@@ -6927,9 +7008,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
 
-        if (device->device_fault) {
+if (device->device_fault) {
             device->pfn_vkGetDeviceFaultInfoEXT = (PFN_vkGetDeviceFaultInfoEXT)
                 vkGetDeviceProcAddr(device->device, "vkGetDeviceFaultInfoEXT");
+        }
+        if (!device->ignore_buffer_memory_type_bits && ggml_vk_buffer_memory_type_bits_broken(device)) {
+            GGML_LOG_WARN("ggml_vulkan: device %s does not expose device-local memory for buffers, using it anyway\n", device->name.c_str());
+            device->ignore_buffer_memory_type_bits = true;
         }
 
         // Queues
@@ -18818,7 +18903,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
-            return arch == vk_device_architecture::AMD_RDNA3;
+            return arch == vk_device_architecture::AMD_RDNA3 || arch == vk_device_architecture::AMD_RDNA4;
         }
         return true;
     default:
