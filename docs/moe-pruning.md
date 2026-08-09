@@ -1,6 +1,6 @@
 # Static MoE expert pruning
 
-`aikar-prune` implements static expert pruning for Gemma 4 26B A4B. The initial hard-pruning implementation supports the Q4_0 QAT GGUF layout loaded by `src/models/gemma4.cpp`. Other architectures and Gemma 4 variants fail with an unsupported-architecture error.
+`llama-prune` implements static expert pruning for Gemma 4 26B A4B. The initial hard-pruning implementation supports the Q4_0 QAT GGUF layout loaded by `src/models/gemma4.cpp`. Other architectures and Gemma 4 variants fail with an unsupported-architecture error.
 
 > Soft pruning does not modify model weights. It statically disables selected experts when the model is loaded. The selected profile cannot be changed while the server is running.
 
@@ -33,7 +33,7 @@ Field masks use a deterministic token-start rule. A rendered token belongs to th
 ## Analyze
 
 ```sh
-build/bin/aikar-prune analyze \
+build/bin/llama-prune analyze \
   --model gemma-4-26b-a4b-q4_0.gguf \
   --dataset calibration.jsonl \
   --ratios 0.05,0.10,0.15,0.20,0.25 \
@@ -51,7 +51,7 @@ The first calibration writes `pruning-results/importance-cache.json`. The cache 
 Ratio evaluation is enabled by default. Use `--no-evaluate` to generate profiles without loading and evaluating each soft-pruned model:
 
 ```sh
-build/bin/aikar-prune analyze \
+build/bin/llama-prune analyze \
   --model gemma-4-26b-a4b-q4_0.gguf \
   --dataset calibration.jsonl \
   --importance-cache calibration-importance.json \
@@ -65,7 +65,7 @@ build/bin/aikar-prune analyze \
 Once a cache exists, the `profiles` subcommand can create arbitrary compatible ratio profiles without opening or hashing the model or reading the dataset:
 
 ```sh
-build/bin/aikar-prune profiles \
+build/bin/llama-prune profiles \
   --importance-cache calibration-importance.json \
   --ratios 0.06,0.12,0.18,0.24 \
   --output-dir another-profile-set
@@ -98,11 +98,11 @@ Validation covers format, version, architecture, full model SHA-256, expert iden
 ## Inspect and hard prune
 
 ```sh
-build/bin/aikar-prune inspect \
+build/bin/llama-prune inspect \
   --model gemma-4-26b-a4b-q4_0.gguf \
   --profile pruning-results/profile-020.json
 
-build/bin/aikar-prune hard \
+build/bin/llama-prune hard \
   --model gemma-4-26b-a4b-q4_0.gguf \
   --profile pruning-results/profile-020.json \
   --output gemma-4-26b-a4b-pruned.gguf \

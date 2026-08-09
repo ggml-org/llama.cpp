@@ -100,10 +100,10 @@ struct importance_cache_data {
 void usage() {
     std::cout <<
         "usage:\n"
-        "  aikar-prune analyze --model MODEL --dataset DATA --ratios RATIO,... --output-dir DIR [options]\n"
-        "  aikar-prune profiles --importance-cache CACHE --ratios RATIO,... --output-dir DIR [options]\n"
-        "  aikar-prune inspect --model MODEL --profile PROFILE\n"
-        "  aikar-prune hard --model MODEL --profile PROFILE --output MODEL [--dataset DATA]\n\n"
+        "  llama-prune analyze --model MODEL --dataset DATA --ratios RATIO,... --output-dir DIR [options]\n"
+        "  llama-prune profiles --importance-cache CACHE --ratios RATIO,... --output-dir DIR [options]\n"
+        "  llama-prune inspect --model MODEL --profile PROFILE\n"
+        "  llama-prune hard --model MODEL --profile PROFILE --output MODEL [--dataset DATA]\n\n"
         "options:\n"
         "  --metric router-output\n"
         "  --ppl-mask all|assistant|reasoning|content\n"
@@ -373,7 +373,7 @@ evaluation_result evaluate(
                 result.processed_tokens += batch.n_tokens;
                 const auto now = std::chrono::steady_clock::now();
                 if (now - last_progress >= std::chrono::seconds(5)) {
-                    std::cerr << "aikar-prune: " << label << ": record " << record_index + 1 << '/' << dataset.records.size()
+                    std::cerr << "llama-prune: " << label << ": record " << record_index + 1 << '/' << dataset.records.size()
                               << ", processed " << result.processed_tokens << " tokens\n";
                     last_progress = now;
                 }
@@ -400,7 +400,7 @@ evaluation_result evaluate(
         }
     }
     result.router_load_imbalance = imbalance_layers == 0 ? 0.0 : imbalance_sum / imbalance_layers;
-    std::cerr << "aikar-prune: " << label << " complete: " << result.processed_tokens << " tokens in "
+    std::cerr << "llama-prune: " << label << " complete: " << result.processed_tokens << " tokens in "
               << result.elapsed_seconds << " seconds (" << result.throughput << " tokens/s)\n";
     return result;
 }
@@ -656,7 +656,7 @@ void run_profiles(const options & opts) {
 
 void run_analyze(const options & opts) {
     std::filesystem::create_directories(opts.output_dir);
-    std::cerr << "aikar-prune: inspecting model and hashing GGUF\n";
+    std::cerr << "llama-prune: inspecting model and hashing GGUF\n";
     const common_moe_prune_model_info model_info = common_moe_prune_inspect_model(opts.model);
     aikar_dataset dataset;
     const std::string dataset_hash = common_moe_prune_sha256_file(opts.dataset);
@@ -667,29 +667,29 @@ void run_analyze(const options & opts) {
         const std::string mismatch = importance_cache_mismatch(loaded, model_info, dataset_hash, opts);
         if (mismatch.empty()) {
             cache = std::move(loaded);
-            std::cerr << "aikar-prune: loaded importance cache " << cache_path << '\n';
+            std::cerr << "llama-prune: loaded importance cache " << cache_path << '\n';
         } else if (!opts.importance_cache.empty()) {
             throw std::runtime_error("importance cache is incompatible: " + mismatch);
         } else {
-            std::cerr << "aikar-prune: ignoring incompatible automatic importance cache: " << mismatch << '\n';
+            std::cerr << "llama-prune: ignoring incompatible automatic importance cache: " << mismatch << '\n';
         }
     } else if (opts.importance_cache.empty()) {
         cache = load_legacy_baseline_checkpoint(opts.output_dir + "/baseline-checkpoint.json", model_info, dataset_hash, opts);
         if (cache) {
             write_json_atomic(cache_path, importance_cache_json(*cache, opts.mask), "importance cache");
-            std::cerr << "aikar-prune: migrated baseline checkpoint to " << cache_path << '\n';
+            std::cerr << "llama-prune: migrated baseline checkpoint to " << cache_path << '\n';
         }
     }
     if (!cache) {
         route_collector baseline_collector;
         baseline_collector.n_expert = model_info.expert_count;
         baseline_collector.collect_output_norm = true;
-        std::cerr << "aikar-prune: loading baseline model\n";
+        std::cerr << "llama-prune: loading baseline model\n";
         loaded_model baseline_model = load_model(opts, &baseline_collector, nullptr);
         common_chat_templates_ptr templates = common_chat_templates_init(baseline_model.init->model(), "");
-        std::cerr << "aikar-prune: loading and tokenizing dataset\n";
+        std::cerr << "llama-prune: loading and tokenizing dataset\n";
         dataset = aikar_dataset_load(opts.dataset, baseline_model.init->model(), templates.get(), opts.dataset_threads);
-        std::cerr << "aikar-prune: dataset contains " << dataset.records.size() << " records and " << dataset.total_tokens << " tokens\n";
+        std::cerr << "llama-prune: dataset contains " << dataset.records.size() << " records and " << dataset.total_tokens << " tokens\n";
         importance_cache_data created;
         created.model = model_info;
         created.baseline = evaluate(baseline_model.context.get(), dataset, baseline_collector, opts, "baseline");
@@ -699,10 +699,10 @@ void run_analyze(const options & opts) {
         created.n_ctx = opts.n_ctx;
         write_json_atomic(cache_path, importance_cache_json(created, opts.mask), "importance cache");
         cache = std::move(created);
-        std::cerr << "aikar-prune: saved importance cache " << cache_path << '\n';
+        std::cerr << "llama-prune: saved importance cache " << cache_path << '\n';
     }
     const evaluation_result & baseline = cache->baseline;
-    std::cerr << "aikar-prune: released baseline model before pruned evaluations\n";
+    std::cerr << "llama-prune: released baseline model before pruned evaluations\n";
     std::vector<common_moe_prune_profile> profiles = make_and_write_profiles(opts, *cache);
 
     json analysis = {
@@ -764,13 +764,13 @@ void run_analyze(const options & opts) {
         }
         route_collector collector;
         collector.n_expert = model_info.expert_count;
-        std::cerr << "aikar-prune: loading model for ratio " << profile.requested_ratio << '\n';
+        std::cerr << "llama-prune: loading model for ratio " << profile.requested_ratio << '\n';
         loaded_model pruned_model = load_model(opts, &collector, &profile);
         if (dataset.records.empty()) {
-            std::cerr << "aikar-prune: loading and tokenizing dataset\n";
+            std::cerr << "llama-prune: loading and tokenizing dataset\n";
             common_chat_templates_ptr templates = common_chat_templates_init(pruned_model.init->model(), "");
             dataset = aikar_dataset_load(opts.dataset, pruned_model.init->model(), templates.get(), opts.dataset_threads);
-            std::cerr << "aikar-prune: dataset contains " << dataset.records.size() << " records and " << dataset.total_tokens << " tokens\n";
+            std::cerr << "llama-prune: dataset contains " << dataset.records.size() << " records and " << dataset.total_tokens << " tokens\n";
         }
         const evaluation_result pruned = evaluate(
             pruned_model.context.get(), dataset, collector, opts, "ratio " + std::to_string(profile.requested_ratio));
