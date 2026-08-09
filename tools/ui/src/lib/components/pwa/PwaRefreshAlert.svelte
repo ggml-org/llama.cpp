@@ -2,7 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 
-	let { needRefresh: needRefreshProp, updateServiceWorker, forceReload } = $props();
+	let { forceReload, needRefresh: needRefreshProp, updateServiceWorker } = $props();
 	let needRefresh = $derived(needRefreshProp ?? false);
 </script>
 

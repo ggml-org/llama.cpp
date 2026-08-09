@@ -266,8 +266,8 @@ class ConversationsStore {
 		// Working directory picked on the new-chat screen gets threaded in
 		// here too, then cleared so it doesn't bleed onto subsequent new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
-			reasoningEffort: this.pendingReasoningEffort,
-			cwd: this.pendingCwd ?? undefined
+			cwd: this.pendingCwd ?? undefined,
+			reasoningEffort: this.pendingReasoningEffort
 		});
 
 		this.pendingCwd = null;
@@ -735,7 +735,7 @@ class ConversationsStore {
 
 		if (!server) return undefined;
 
-		return { serverId, enabled: server.enabled };
+		return { enabled: server.enabled, serverId };
 	}
 
 	/**
@@ -766,7 +766,7 @@ class ConversationsStore {
 		return mcpStore.getServers().map((s) => {
 			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
 
-			return { serverId: s.id, enabled: override?.enabled ?? s.enabled };
+			return { enabled: override?.enabled ?? s.enabled, serverId: s.id };
 		});
 	}
 
@@ -800,8 +800,8 @@ class ConversationsStore {
 		// Clone to plain objects to avoid Proxy serialization issues with IndexedDB
 		const currentOverrides = (this.activeConversation.mcpServerOverrides || []).map(
 			(o: McpServerOverride) => ({
-				serverId: o.serverId,
-				enabled: o.enabled
+				enabled: o.enabled,
+				serverId: o.serverId
 			})
 		);
 
@@ -816,9 +816,9 @@ class ConversationsStore {
 
 			if (existingIndex >= 0) {
 				newOverrides = [...currentOverrides];
-				newOverrides[existingIndex] = { serverId, enabled };
+				newOverrides[existingIndex] = { enabled, serverId };
 			} else {
-				newOverrides = [...currentOverrides, { serverId, enabled }];
+				newOverrides = [...currentOverrides, { enabled, serverId }];
 			}
 		}
 
@@ -1028,8 +1028,8 @@ class ConversationsStore {
 	serializeSessionToJsonl(data: ExportedConversation): string {
 		const { conv, messages } = data;
 		const sessionLine = JSON.stringify({
-			type: SessionRecordType.SESSION,
 			harness: SESSION_HARNESS,
+			type: SessionRecordType.SESSION,
 			...conv
 		});
 		const messageLines = messages.map((message: DatabaseMessage) => {
@@ -1037,7 +1037,7 @@ class ConversationsStore {
 			const { toolCalls, ...rest } = message;
 			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
 
-			return JSON.stringify({ type: SessionRecordType.MESSAGE, message: normalized });
+			return JSON.stringify({ message: normalized, type: SessionRecordType.MESSAGE });
 		});
 
 		return [sessionLine, ...messageLines].join(NEWLINE);

@@ -101,11 +101,11 @@ export class MCPService {
 		details?: unknown
 	): MCPConnectionLog {
 		return {
-			timestamp: new Date(),
-			phase,
-			message,
+			details,
 			level,
-			details
+			message,
+			phase,
+			timestamp: new Date()
 		};
 	}
 
@@ -118,12 +118,12 @@ export class MCPService {
 	): DiagnosticRequestDetails {
 		const body = getRequestBody(input, init);
 		const details: DiagnosticRequestDetails = {
-			url: getRequestUrl(input),
-			method: getRequestMethod(input, init, baseInit).toUpperCase(),
+			body: summarizeRequestBody(body),
 			credentials: init?.credentials ?? baseInit.credentials,
-			mode: init?.mode ?? baseInit.mode,
 			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, MCP_PARTIAL_REDACT_HEADERS),
-			body: summarizeRequestBody(body)
+			method: getRequestMethod(input, init, baseInit).toUpperCase(),
+			mode: init?.mode ?? baseInit.mode,
+			url: getRequestUrl(input)
 		};
 		const jsonRpcMethods = extractJsonRpcMethods(body);
 
@@ -152,12 +152,12 @@ export class MCPService {
 	private static summarizeError(error: unknown): Record<string, unknown> {
 		if (error instanceof Error) {
 			return {
-				name: error.name,
-				message: error.message,
 				cause:
 					error.cause instanceof Error
-						? { name: error.cause.name, message: error.cause.message }
+						? { message: error.cause.message, name: error.cause.name }
 						: error.cause,
+				message: error.message,
+				name: error.name,
 				stack: error.stack?.split('\n').slice(0, 6).join('\n')
 			};
 		}
@@ -174,13 +174,13 @@ export class MCPService {
 		}
 
 		return {
+			isSecureContext: window.isSecureContext,
 			location: window.location.href,
 			origin: window.location.origin,
 			protocol: window.location.protocol,
-			isSecureContext: window.isSecureContext,
+			sameOrigin: window.location.origin === targetUrl.origin,
 			targetOrigin: targetUrl.origin,
 			targetProtocol: targetUrl.protocol,
-			sameOrigin: window.location.origin === targetUrl.origin,
 			useProxy
 		};
 	}
@@ -253,6 +253,9 @@ export class MCPService {
 		};
 
 		return {
+			disable: () => {
+				enabled = false;
+			},
 			fetch: async (input, init) => {
 				if (useProxy && typeof window !== 'undefined') {
 					let requestUrlStr = '';
@@ -312,8 +315,8 @@ export class MCPService {
 						`HTTP ${method} ${url}`,
 						MCPLogLevel.INFO,
 						{
-							serverName,
-							request
+							request,
+							serverName
 						}
 					)
 				);
@@ -328,11 +331,11 @@ export class MCPService {
 							MCPLogLevel.INFO,
 							{
 								response: {
-									url,
+									durationMs: 0,
+									isFake: true,
 									status: response.status,
 									statusText: response.statusText,
-									durationMs: 0,
-									isFake: true
+									url
 								}
 							}
 						)
@@ -357,11 +360,11 @@ export class MCPService {
 							response.ok ? MCPLogLevel.INFO : MCPLogLevel.WARN,
 							{
 								response: {
-									url,
+									durationMs,
+									headers: sanitizeHeaders(response.headers, undefined, MCP_PARTIAL_REDACT_HEADERS),
 									status: response.status,
 									statusText: response.statusText,
-									headers: sanitizeHeaders(response.headers, undefined, MCP_PARTIAL_REDACT_HEADERS),
-									durationMs
+									url
 								}
 							}
 						)
@@ -377,21 +380,18 @@ export class MCPService {
 							`HTTP ${method} ${url} failed: ${formatDiagnosticErrorMessage(error)}`,
 							MCPLogLevel.ERROR,
 							{
-								serverName,
-								request,
-								error: this.summarizeError(error),
 								browser: this.getBrowserContext(targetUrl, useProxy),
+								durationMs,
+								error: this.summarizeError(error),
 								hints: this.getConnectionHints(targetUrl, config, error),
-								durationMs
+								request,
+								serverName
 							}
 						)
 					);
 
 					throw error;
 				}
-			},
-			disable: () => {
-				enabled = false;
 			}
 		};
 	}
@@ -467,15 +467,15 @@ export class MCPService {
 			}
 
 			return {
+				stopPhaseLogging: () => {},
 				transport: new WebSocketClientTransport(url),
-				type: MCPTransportType.WEBSOCKET,
-				stopPhaseLogging: () => {}
+				type: MCPTransportType.WEBSOCKET
 			};
 		}
 
 		if (config.transport === MCPTransportType.SSE) {
 			const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
-			const { fetch: diagnosticFetch, disable: stopPhaseLogging } = this.createDiagnosticFetch(
+			const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
 				serverName,
 				config,
 				requestInit,
@@ -489,18 +489,18 @@ export class MCPService {
 			}
 
 			return {
+				stopPhaseLogging,
 				transport: new SSEClientTransport(url, {
-					requestInit,
+					eventSourceInit: { fetch: diagnosticFetch },
 					fetch: diagnosticFetch,
-					eventSourceInit: { fetch: diagnosticFetch }
+					requestInit
 				}),
-				type: MCPTransportType.SSE,
-				stopPhaseLogging
+				type: MCPTransportType.SSE
 			};
 		}
 
 		const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
-		const { fetch: diagnosticFetch, disable: stopPhaseLogging } = this.createDiagnosticFetch(
+		const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
 			serverName,
 			config,
 			requestInit,
@@ -519,25 +519,25 @@ export class MCPService {
 			}
 
 			return {
+				stopPhaseLogging,
 				transport: new StreamableHTTPClientTransport(url, {
-					requestInit,
-					fetch: diagnosticFetch
+					fetch: diagnosticFetch,
+					requestInit
 				}),
-				type: MCPTransportType.STREAMABLE_HTTP,
-				stopPhaseLogging
+				type: MCPTransportType.STREAMABLE_HTTP
 			};
 		} catch (httpError) {
 			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
 
 			try {
 				return {
+					stopPhaseLogging,
 					transport: new SSEClientTransport(url, {
-						requestInit,
+						eventSourceInit: { fetch: diagnosticFetch },
 						fetch: diagnosticFetch,
-						eventSourceInit: { fetch: diagnosticFetch }
+						requestInit
 					}),
-					type: MCPTransportType.SSE,
-					stopPhaseLogging
+					type: MCPTransportType.SSE
 				};
 			} catch (sseError) {
 				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
@@ -561,17 +561,17 @@ export class MCPService {
 		}
 
 		return {
-			name: impl.name,
-			version: impl.version,
-			title: impl.title,
 			description: impl.description,
-			websiteUrl: impl.websiteUrl,
 			icons: impl.icons?.map((icon: MCPResourceIcon) => ({
-				src: icon.src,
 				mimeType: icon.mimeType,
 				sizes: icon.sizes,
+				src: icon.src,
 				theme: icon.theme
-			}))
+			})),
+			name: impl.name,
+			title: impl.title,
+			version: impl.version,
+			websiteUrl: impl.websiteUrl
 		};
 	}
 
@@ -621,9 +621,9 @@ export class MCPService {
 		}
 
 		const {
+			stopPhaseLogging,
 			transport,
-			type: transportType,
-			stopPhaseLogging
+			type: transportType
 		} = this.createTransport(serverName, serverConfig, (log) => onPhase?.(log.phase, log));
 
 		// Setup WebSocket reconnection handler
@@ -743,21 +743,21 @@ export class MCPService {
 					}`,
 					MCPLogLevel.ERROR,
 					{
-						error: this.summarizeError(error),
+						browser: this.getBrowserContext(url, serverConfig.useProxy ?? false),
 						config: {
-							serverName,
 							configuredUrl: serverConfig.url,
+							credentials: serverConfig.credentials,
 							effectiveUrl: url.href,
-							transportType,
-							useProxy: serverConfig.useProxy ?? false,
 							headers: sanitizeHeaders(
 								serverConfig.headers,
 								Object.keys(serverConfig.headers ?? {}),
 								MCP_PARTIAL_REDACT_HEADERS
 							),
-							credentials: serverConfig.credentials
+							serverName,
+							transportType,
+							useProxy: serverConfig.useProxy ?? false
 						},
-						browser: this.getBrowserContext(url, serverConfig.useProxy ?? false),
+						error: this.summarizeError(error),
 						hints: this.getConnectionHints(url, serverConfig, error)
 					}
 				)
@@ -784,10 +784,10 @@ export class MCPService {
 				}
 			),
 			{
-				serverInfo,
-				serverCapabilities,
 				clientCapabilities: effectiveCapabilities,
-				instructions
+				instructions,
+				serverCapabilities,
+				serverInfo
 			}
 		);
 
@@ -803,13 +803,13 @@ export class MCPService {
 
 		const tools = await this.listTools({
 			client,
-			transport,
-			tools: [],
-			serverName,
-			transportType,
 			connectionTimeMs: 0,
 			requestTimeoutMs:
-				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
+				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000,
+			serverName,
+			tools: [],
+			transport,
+			transportType
 		});
 		const connectionTimeMs = Math.round(performance.now() - startTime);
 
@@ -830,18 +830,18 @@ export class MCPService {
 
 		return {
 			client,
-			transport,
-			tools,
-			serverName,
-			transportType,
-			serverInfo,
-			serverCapabilities,
 			clientCapabilities: effectiveCapabilities,
-			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-			instructions,
 			connectionTimeMs,
+			instructions,
+			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
 			requestTimeoutMs:
-				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
+				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000,
+			serverCapabilities,
+			serverInfo,
+			serverName,
+			tools,
+			transport,
+			transportType
 		};
 	}
 
@@ -944,7 +944,7 @@ export class MCPService {
 		args?: Record<string, string>
 	): Promise<GetPromptResult> {
 		try {
-			return await connection.client.getPrompt({ name, arguments: args });
+			return await connection.client.getPrompt({ arguments: args, name });
 		} catch (error) {
 			console.error(`[MCPService][${connection.serverName}] Failed to get prompt:`, error);
 
@@ -972,7 +972,7 @@ export class MCPService {
 
 		try {
 			const result = await connection.client.callTool(
-				{ name: params.name, arguments: params.arguments },
+				{ arguments: params.arguments, name: params.name },
 				undefined,
 				{ signal, timeout: connection.requestTimeoutMs }
 			);
@@ -1068,8 +1068,8 @@ export class MCPService {
 	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
 		try {
 			const result = await connection.client.complete({
-				ref,
-				argument
+				argument,
+				ref
 			});
 
 			return result.completion;
@@ -1102,8 +1102,8 @@ export class MCPService {
 			const result = await connection.client.listResources(cursor ? { cursor } : undefined);
 
 			return {
-				resources: (result.resources ?? []) as MCPResource[],
-				nextCursor: result.nextCursor
+				nextCursor: result.nextCursor,
+				resources: (result.resources ?? []) as MCPResource[]
 			};
 		} catch (error) {
 			if (this.isSessionExpiredError(error)) {
@@ -1150,8 +1150,8 @@ export class MCPService {
 			const result = await connection.client.listResourceTemplates(cursor ? { cursor } : undefined);
 
 			return {
-				resourceTemplates: (result.resourceTemplates ?? []) as MCPResourceTemplate[],
-				nextCursor: result.nextCursor
+				nextCursor: result.nextCursor,
+				resourceTemplates: (result.resourceTemplates ?? []) as MCPResourceTemplate[]
 			};
 		} catch (error) {
 			if (this.isSessionExpiredError(error)) {
@@ -1201,8 +1201,8 @@ export class MCPService {
 			const result = await connection.client.readResource({ uri });
 
 			return {
-				contents: (result.contents ?? []) as MCPResourceContent[],
-				_meta: result._meta
+				_meta: result._meta,
+				contents: (result.contents ?? []) as MCPResourceContent[]
 			};
 		} catch (error) {
 			console.error(`[MCPService][${connection.serverName}] Failed to read resource:`, error);

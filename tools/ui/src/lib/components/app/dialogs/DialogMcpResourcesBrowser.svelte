@@ -27,7 +27,7 @@
 		preSelectedUri?: string;
 	}
 
-	let { open = $bindable(false), onOpenChange, onAttach, preSelectedUri }: Props = $props();
+	let { onAttach, onOpenChange, open = $bindable(false), preSelectedUri }: Props = $props();
 
 	let selectedResources = new SvelteSet<string>();
 	let lastSelectedUri = $state<string | null>(null);
@@ -149,9 +149,9 @@
 				}
 
 				const resourceInfo: MCPResourceInfo = {
-					uri: templatePreviewUri,
 					name: templatePreviewUri.split('/').pop() || templatePreviewUri,
-					serverName: selectedTemplate.serverName
+					serverName: selectedTemplate.serverName,
+					uri: templatePreviewUri
 				};
 				const attachment = mcpResourceStore.addAttachment(resourceInfo);
 
@@ -341,9 +341,9 @@
 					<!-- Template resolved: show preview -->
 					<McpResourcePreview
 						resource={{
-							uri: templatePreviewUri ?? '',
 							name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
-							serverName: selectedTemplate?.serverName || ''
+							serverName: selectedTemplate?.serverName || '',
+							uri: templatePreviewUri ?? ''
 						}}
 						preloadedContent={templatePreviewContent}
 					/>

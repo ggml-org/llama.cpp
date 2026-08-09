@@ -32,10 +32,10 @@
 		class: className,
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
-		searchQuery = $bindable(''),
-		onSearchDeactivated,
+		onNewChat,
 		onSearchClick,
-		onNewChat
+		onSearchDeactivated,
+		searchQuery = $bindable('')
 	}: Props = $props();
 
 	let initialized = $state(false);
@@ -118,8 +118,8 @@
 					? undefined
 					: onSearchClick}
 			{@const itemTransition = {
-				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
+				duration: ICON_STRIP_TRANSITION_DURATION,
 				easing: circIn
 			}}
 
@@ -166,8 +166,8 @@
 					? undefined
 					: onSearchClick}
 			{@const itemTransition = {
-				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
+				duration: ICON_STRIP_TRANSITION_DURATION,
 				easing: circIn
 			}}
 

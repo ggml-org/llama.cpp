@@ -377,7 +377,7 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				if (text.length === 0) continue;
 
 				if (pendingPoint) {
-					const { node, index } = pendingPoint;
+					const { index, node } = pendingPoint;
 
 					pendingPoint = null;
 
@@ -416,7 +416,7 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 			const elIndex = Array.prototype.indexOf.call(parentNode.childNodes, el);
 
 			if (pendingPoint) {
-				const { node, index } = pendingPoint;
+				const { index, node } = pendingPoint;
 
 				pendingPoint = null;
 
@@ -462,7 +462,7 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				walk(el);
 				first = false;
 
-				if (isBlock) pendingPoint = { node: parentNode, index: elIndex + 1 };
+				if (isBlock) pendingPoint = { index: elIndex + 1, node: parentNode };
 
 				continue;
 			}

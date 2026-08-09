@@ -9,13 +9,13 @@
 	import { ErrorDialogType } from '$lib/enums';
 
 	let {
-		showDeleteDialog,
-		handleDeleteConfirm,
-		showEmptyFileDialog,
-		emptyFileNames,
 		activeErrorDialog,
+		emptyFileNames,
+		fileUpload,
+		handleDeleteConfirm,
 		handleErrorDialogOpenChange,
-		fileUpload
+		showDeleteDialog,
+		showEmptyFileDialog
 	} = $props();
 </script>
 

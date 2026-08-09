@@ -60,11 +60,11 @@ export async function processFilesToChatUploaded(
 	for (const file of files) {
 		const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
 		const base: ChatUploadedFile = {
+			file,
 			id,
 			name: file.name,
 			size: file.size,
-			type: file.type,
-			file
+			type: file.type
 		};
 
 		try {
@@ -114,7 +114,6 @@ export async function processFilesToChatUploaded(
 
 				if (hasVisionSupport && !currentConfig.pdfAsImage) {
 					toast.info(`You can enable parsing PDF as images with vision models.`, {
-						duration: 8000,
 						action: {
 							label: 'Enable PDF as Images',
 							onClick: () => {
@@ -123,7 +122,8 @@ export async function processFilesToChatUploaded(
 									duration: 3000
 								});
 							}
-						}
+						},
+						duration: 8000
 					});
 				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {

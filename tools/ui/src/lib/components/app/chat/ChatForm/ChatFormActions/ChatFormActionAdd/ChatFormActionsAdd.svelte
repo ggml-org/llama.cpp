@@ -21,9 +21,9 @@
 	let {
 		disabled = false,
 		hasAudioModality = false,
-		hasVideoModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
+		hasVideoModality = false,
 		hasVisionModality = false,
 		onFileUpload,
 		onMcpPromptClick,

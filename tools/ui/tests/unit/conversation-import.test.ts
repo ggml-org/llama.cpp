@@ -12,12 +12,12 @@ let conversationsStore: typeof import('$lib/stores/conversations.svelte').conver
 beforeAll(async () => {
 	const store = new Map<string, string>();
 	const polyfill: Storage = {
-		get length() {
-			return store.size;
-		},
 		clear: () => store.clear(),
 		getItem: (k) => (store.has(k) ? store.get(k)! : null),
 		key: (i) => Array.from(store.keys())[i] ?? null,
+		get length() {
+			return store.size;
+		},
 		removeItem: (k) => {
 			store.delete(k);
 		},
@@ -33,17 +33,17 @@ beforeAll(async () => {
 
 function makeSession(id: string): ExportedConversation {
 	return {
-		conv: { id, currNode: `${id}-msg`, lastModified: 0, name: `Chat ${id}` },
+		conv: { currNode: `${id}-msg`, id, lastModified: 0, name: `Chat ${id}` },
 		messages: [
 			{
-				id: `${id}-msg`,
-				convId: id,
-				type: MessageType.TEXT,
-				timestamp: 0,
-				role: MessageRole.USER,
+				children: [],
 				content: `hello from ${id}`,
+				convId: id,
+				id: `${id}-msg`,
 				parent: null,
-				children: []
+				role: MessageRole.USER,
+				timestamp: 0,
+				type: MessageType.TEXT
 			}
 		]
 	} as unknown as ExportedConversation;

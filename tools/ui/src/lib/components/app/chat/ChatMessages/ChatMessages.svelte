@@ -30,13 +30,19 @@
 		onMessagesReady?: (messageCount: number) => void;
 	}
 
-	let { messages = [], onUserAction, onMessagesReady }: Props = $props();
+	let { messages = [], onMessagesReady, onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 
 	const currentConfig = config();
 
 	setChatActionsContext({
+		continueAssistantMessage: async (message: DatabaseMessage) => {
+			onUserAction?.();
+			await chatStore.continueAssistantMessage(message.id);
+			refreshAllMessages();
+		},
+
 		copy: async (message: DatabaseMessage) => {
 			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
 			const clipboardContent = formatMessageForClipboard(
@@ -53,8 +59,14 @@
 			refreshAllMessages();
 		},
 
-		navigateToSibling: async (siblingId: string) => {
-			await conversationsStore.navigateToSibling(siblingId);
+		editUserMessagePreserveResponses: async (
+			message: DatabaseMessage,
+			newContent: string,
+			newExtras?: DatabaseMessageExtra[]
+		) => {
+			onUserAction?.();
+			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
+			refreshAllMessages();
 		},
 
 		editWithBranching: async (
@@ -77,33 +89,21 @@
 			refreshAllMessages();
 		},
 
-		editUserMessagePreserveResponses: async (
+		forkConversation: async (
 			message: DatabaseMessage,
-			newContent: string,
-			newExtras?: DatabaseMessageExtra[]
+			options: { name: string; includeAttachments: boolean }
 		) => {
-			onUserAction?.();
-			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
-			refreshAllMessages();
+			await conversationsStore.forkConversation(message.id, options);
+		},
+
+		navigateToSibling: async (siblingId: string) => {
+			await conversationsStore.navigateToSibling(siblingId);
 		},
 
 		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
 			onUserAction?.();
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 			refreshAllMessages();
-		},
-
-		continueAssistantMessage: async (message: DatabaseMessage) => {
-			onUserAction?.();
-			await chatStore.continueAssistantMessage(message.id);
-			refreshAllMessages();
-		},
-
-		forkConversation: async (
-			message: DatabaseMessage,
-			options: { name: string; includeAttachments: boolean }
-		) => {
-			await conversationsStore.forkConversation(message.id, options);
 		}
 	});
 
@@ -191,19 +191,19 @@
 			}
 
 			const siblingInfo = siblingInfoByMessageId.get(msg.id) ?? {
+				currentIndex: 0,
 				message: msg,
 				siblingIds: [msg.id],
-				currentIndex: 0,
 				totalSiblings: 1
 			};
 
 			result.push({
-				message: msg,
-				toolMessages,
 				isLastAssistantMessage: false,
 				isLastUserMessage: false,
+				message: msg,
 				nextAssistantMessage: null,
-				siblingInfo
+				siblingInfo,
+				toolMessages
 			});
 		}
 
@@ -239,7 +239,7 @@
 </script>
 
 <div>
-	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, isLastUserMessage, nextAssistantMessage, siblingInfo } (message.id)}
+	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
 		<ChatMessage
 			class="mx-auto mt-12 w-full max-w-3xl"
 			{message}

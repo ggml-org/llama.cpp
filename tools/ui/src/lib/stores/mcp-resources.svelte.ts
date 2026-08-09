@@ -110,12 +110,12 @@ class MCPResourceStore {
 		templates: MCPResourceTemplate[]
 	): void {
 		this._serverResources.set(serverName, {
-			serverName,
-			resources,
-			templates,
+			error: undefined,
 			lastFetched: new Date(),
 			loading: false,
-			error: undefined
+			resources,
+			serverName,
+			templates
 		});
 		console.log(
 			`[MCPResources][${serverName}] Set ${resources.length} resources, ${templates.length} templates`
@@ -132,11 +132,11 @@ class MCPResourceStore {
 			this._serverResources.set(serverName, { ...existing, loading });
 		} else {
 			this._serverResources.set(serverName, {
-				serverName,
-				resources: [],
-				templates: [],
+				error: undefined,
 				loading,
-				error: undefined
+				resources: [],
+				serverName,
+				templates: []
 			});
 		}
 	}
@@ -148,14 +148,14 @@ class MCPResourceStore {
 		const existing = this._serverResources.get(serverName);
 
 		if (existing) {
-			this._serverResources.set(serverName, { ...existing, loading: false, error });
+			this._serverResources.set(serverName, { ...existing, error, loading: false });
 		} else {
 			this._serverResources.set(serverName, {
-				serverName,
-				resources: [],
-				templates: [],
+				error,
 				loading: false,
-				error
+				resources: [],
+				serverName,
+				templates: []
 			});
 		}
 	}
@@ -176,14 +176,14 @@ class MCPResourceStore {
 		for (const [serverName, serverRes] of this._serverResources) {
 			for (const resource of serverRes.resources) {
 				result.push({
-					uri: resource.uri,
-					name: resource.name,
-					title: resource.title,
-					description: resource.description,
-					mimeType: resource.mimeType,
-					serverName,
 					annotations: resource.annotations,
-					icons: resource.icons
+					description: resource.description,
+					icons: resource.icons,
+					mimeType: resource.mimeType,
+					name: resource.name,
+					serverName,
+					title: resource.title,
+					uri: resource.uri
 				});
 			}
 		}
@@ -200,14 +200,14 @@ class MCPResourceStore {
 		for (const [serverName, serverRes] of this._serverResources) {
 			for (const template of serverRes.templates) {
 				result.push({
-					uriTemplate: template.uriTemplate,
-					name: template.name,
-					title: template.title,
-					description: template.description,
-					mimeType: template.mimeType,
-					serverName,
 					annotations: template.annotations,
-					icons: template.icons
+					description: template.description,
+					icons: template.icons,
+					mimeType: template.mimeType,
+					name: template.name,
+					serverName,
+					title: template.title,
+					uriTemplate: template.uriTemplate
 				});
 			}
 		}
@@ -261,9 +261,9 @@ class MCPResourceStore {
 		}
 
 		this._cachedResources.set(resource.uri, {
-			resource,
 			content,
 			fetchedAt: new Date(),
+			resource,
 			subscribed: this._subscriptions.has(resource.uri)
 		});
 		console.log(`[MCPResources] Cached content for: ${resource.uri}`);
@@ -319,9 +319,9 @@ class MCPResourceStore {
 	 */
 	addSubscription(uri: string, serverName: string): void {
 		this._subscriptions.set(uri, {
-			uri,
 			serverName,
-			subscribedAt: new Date()
+			subscribedAt: new Date(),
+			uri
 		});
 
 		// Update cached resource if exists
@@ -405,8 +405,8 @@ class MCPResourceStore {
 	addAttachment(resource: MCPResourceInfo): MCPResourceAttachment {
 		const attachment: MCPResourceAttachment = {
 			id: generateAttachmentId(),
-			resource,
-			loading: true
+			loading: true,
+			resource
 		};
 
 		this._attachments = [...this._attachments, attachment];
@@ -420,7 +420,7 @@ class MCPResourceStore {
 	 */
 	updateAttachmentContent(attachmentId: string, content: MCPResourceContent[]): void {
 		this._attachments = this._attachments.map((att) =>
-			att.id === attachmentId ? { ...att, content, loading: false, error: undefined } : att
+			att.id === attachmentId ? { ...att, content, error: undefined, loading: false } : att
 		);
 	}
 
@@ -429,7 +429,7 @@ class MCPResourceStore {
 	 */
 	updateAttachmentError(attachmentId: string, error: string): void {
 		this._attachments = this._attachments.map((att) =>
-			att.id === attachmentId ? { ...att, loading: false, error } : att
+			att.id === attachmentId ? { ...att, error, loading: false } : att
 		);
 	}
 
@@ -495,14 +495,14 @@ class MCPResourceStore {
 
 			if (resource) {
 				return {
-					uri: resource.uri,
-					name: resource.name,
-					title: resource.title,
-					description: resource.description,
-					mimeType: resource.mimeType,
-					serverName,
 					annotations: resource.annotations,
-					icons: resource.icons
+					description: resource.description,
+					icons: resource.icons,
+					mimeType: resource.mimeType,
+					name: resource.name,
+					serverName,
+					title: resource.title,
+					uri: resource.uri
 				};
 			}
 		}
@@ -594,12 +594,12 @@ class MCPResourceStore {
 
 			if (contentParts.length > 0) {
 				extras.push({
-					type: AttachmentType.MCP_RESOURCE,
-					name: resourceName,
-					uri: attachment.resource.uri,
-					serverName: attachment.resource.serverName,
 					content: contentParts.join(NEWLINE),
-					mimeType: attachment.resource.mimeType
+					mimeType: attachment.resource.mimeType,
+					name: resourceName,
+					serverName: attachment.resource.serverName,
+					type: AttachmentType.MCP_RESOURCE,
+					uri: attachment.resource.uri
 				});
 			}
 		}

@@ -40,18 +40,18 @@
 
 	let {
 		conversation,
+		depth = 0,
+		isActive = false,
+		isSelected = false,
+		isSelectionMode = false,
 		onDelete,
 		onEdit,
-		onSelect,
-		onStop,
-		onToggleSelect,
 		onEnterSelectionMode,
-		onSelectionClick,
 		onRowMouseDown,
-		isActive = false,
-		isSelectionMode = false,
-		isSelected = false,
-		depth = 0
+		onSelect,
+		onSelectionClick,
+		onStop,
+		onToggleSelect
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
@@ -282,9 +282,9 @@
 						icon: Trash2,
 						label: 'Delete',
 						onclick: handleDelete,
-						variant: 'destructive',
+						separator: true,
 						shortcut: ['shift', 'cmd', 'd'],
-						separator: true
+						variant: 'destructive'
 					}
 				]}
 			/>

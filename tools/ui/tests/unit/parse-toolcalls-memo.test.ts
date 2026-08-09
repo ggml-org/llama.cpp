@@ -11,14 +11,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 function makeMessage(overrides: Partial<DatabaseMessage>): DatabaseMessage {
 	return {
-		id: 'm1',
-		convId: 'c1',
-		type: 'text',
-		timestamp: 0,
-		role: MessageRole.ASSISTANT,
-		content: '',
-		parent: null,
 		children: [],
+		content: '',
+		convId: 'c1',
+		id: 'm1',
+		parent: null,
+		role: MessageRole.ASSISTANT,
+		timestamp: 0,
+		type: 'text',
 		...overrides
 	} as DatabaseMessage;
 }
@@ -31,7 +31,7 @@ describe('parseToolCalls memoization', () => {
 		// re-parse (which we verify by checking the returned sections
 		// are equivalent).
 		const toolCallsJson = JSON.stringify([
-			{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
+			{ function: { arguments: '{}', name: 'test' }, id: 'call_1', type: 'function' }
 		]);
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });
 		const sections1 = deriveAgenticSections(msg, [], [], false);
@@ -43,7 +43,7 @@ describe('parseToolCalls memoization', () => {
 
 	it('does not re-parse JSON on cache hit', () => {
 		const toolCallsJson = JSON.stringify([
-			{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
+			{ function: { arguments: '{}', name: 'test' }, id: 'call_1', type: 'function' }
 		]);
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });
 		const spy = vi.spyOn(JSON, 'parse');
@@ -78,12 +78,12 @@ describe('parseToolCalls memoization', () => {
 describe('deriveAgenticSections O(1) tool message lookup', () => {
 	it('matches tool messages to tool calls by toolCallId', () => {
 		const toolCallsJson = JSON.stringify([
-			{ id: 'call_1', type: 'function', function: { name: 'test_1', arguments: '{}' } },
-			{ id: 'call_2', type: 'function', function: { name: 'test_2', arguments: '{}' } }
+			{ function: { arguments: '{}', name: 'test_1' }, id: 'call_1', type: 'function' },
+			{ function: { arguments: '{}', name: 'test_2' }, id: 'call_2', type: 'function' }
 		]);
 		const toolMessages = [
-			makeMessage({ role: MessageRole.TOOL, toolCallId: 'call_1', content: 'result_1' }),
-			makeMessage({ role: MessageRole.TOOL, toolCallId: 'call_2', content: 'result_2' })
+			makeMessage({ content: 'result_1', role: MessageRole.TOOL, toolCallId: 'call_1' }),
+			makeMessage({ content: 'result_2', role: MessageRole.TOOL, toolCallId: 'call_2' })
 		];
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });
 		const sections = deriveAgenticSections(msg, toolMessages, [], false);
@@ -97,7 +97,7 @@ describe('deriveAgenticSections O(1) tool message lookup', () => {
 
 	it('handles missing tool messages (pending calls during streaming)', () => {
 		const toolCallsJson = JSON.stringify([
-			{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
+			{ function: { arguments: '{}', name: 'test' }, id: 'call_1', type: 'function' }
 		]);
 		const msg = makeMessage({ content: '', toolCalls: toolCallsJson });
 		const sections = deriveAgenticSections(msg, [], [], true);
@@ -112,17 +112,17 @@ describe('deriveAgenticSections O(1) tool message lookup', () => {
 		const toolCalls = Array.from(
 			{ length: N },
 			(_, i): ApiChatCompletionToolCall => ({
+				function: { arguments: '{}', name: `tool_${i}` },
 				id: `call_${i}`,
-				type: 'function',
-				function: { name: `tool_${i}`, arguments: '{}' }
+				type: 'function'
 			})
 		);
 		const toolCallsJson = JSON.stringify(toolCalls);
 		const toolMessages = Array.from({ length: N }, (_, i) =>
 			makeMessage({
+				content: `result_${i}`,
 				role: MessageRole.TOOL,
-				toolCallId: `call_${i}`,
-				content: `result_${i}`
+				toolCallId: `call_${i}`
 			})
 		);
 		const msg = makeMessage({ content: 'hello', toolCalls: toolCallsJson });

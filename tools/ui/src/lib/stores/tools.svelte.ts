@@ -146,12 +146,12 @@ class ToolsStore {
 		schema?: Record<string, unknown>
 	): OpenAIToolDefinition {
 		return {
-			type: ToolCallType.FUNCTION,
 			function: {
-				name,
 				description,
-				parameters: schema ?? { type: JsonSchemaType.OBJECT, properties: {}, required: [] }
-			}
+				name,
+				parameters: schema ?? { properties: {}, required: [], type: JsonSchemaType.OBJECT }
+			},
+			type: ToolCallType.FUNCTION
 		};
 	}
 
@@ -212,22 +212,22 @@ class ToolsStore {
 
 				for (const tool of connection.tools) {
 					const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-						type: JsonSchemaType.OBJECT,
 						properties: {},
-						required: []
+						required: [],
+						type: JsonSchemaType.OBJECT
 					};
 
 					out.push({
-						serverId,
-						serverName,
 						definition: {
-							type: ToolCallType.FUNCTION,
 							function: {
-								name: tool.name,
 								description: tool.description,
+								name: tool.name,
 								parameters: this.normalizeJsonSchema(rawSchema)
-							}
-						}
+							},
+							type: ToolCallType.FUNCTION
+						},
+						serverId,
+						serverName
 					});
 				}
 			}
@@ -235,9 +235,9 @@ class ToolsStore {
 			for (const { serverId, serverName, tools } of this.getMcpToolsFromHealthChecks()) {
 				for (const tool of tools) {
 					out.push({
+						definition: this.mcpDefinition(tool.name, tool.description),
 						serverId,
-						serverName,
-						definition: this.mcpDefinition(tool.name, tool.description)
+						serverName
 					});
 				}
 			}
@@ -261,9 +261,9 @@ class ToolsStore {
 			const name = def.function.name;
 
 			push({
-				source: ToolSource.BUILTIN,
+				definition: def,
 				key: this.toolKey(ToolSource.BUILTIN, name),
-				definition: def
+				source: ToolSource.BUILTIN
 			});
 		}
 
@@ -271,21 +271,21 @@ class ToolsStore {
 			const name = def.function.name;
 
 			push({
-				source: ToolSource.FRONTEND,
+				definition: def,
 				key: this.toolKey(ToolSource.FRONTEND, name),
-				definition: def
+				source: ToolSource.FRONTEND
 			});
 		}
 
-		for (const { serverId, serverName, definition } of this.mcpEntries()) {
+		for (const { definition, serverId, serverName } of this.mcpEntries()) {
 			const name = definition.function.name;
 
 			push({
-				source: ToolSource.MCP,
+				definition,
+				key: this.toolKey(ToolSource.MCP, name, serverId),
 				serverId,
 				serverName,
-				key: this.toolKey(ToolSource.MCP, name, serverId),
-				definition
+				source: ToolSource.MCP
 			});
 		}
 
@@ -293,9 +293,9 @@ class ToolsStore {
 			const name = def.function.name;
 
 			push({
-				source: ToolSource.CUSTOM,
+				definition: def,
 				key: this.toolKey(ToolSource.CUSTOM, name),
-				definition: def
+				source: ToolSource.CUSTOM
 			});
 		}
 
@@ -315,10 +315,10 @@ class ToolsStore {
 
 			if (!group) {
 				group = {
-					source: entry.source,
 					key: groupKey,
 					label: this.groupLabel(entry),
 					serverId: entry.serverId,
+					source: entry.source,
 					tools: []
 				};
 				byKey.set(groupKey, group);
@@ -572,10 +572,10 @@ class ToolsStore {
 
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
-				path: HOME_TILDE,
-				type: GlobSearchType.DIR,
+				limit: 1,
 				max_depth: 1,
-				limit: 1
+				path: HOME_TILDE,
+				type: GlobSearchType.DIR
 			});
 
 			this._serverHome = typeof res.base === 'string' ? res.base : null;

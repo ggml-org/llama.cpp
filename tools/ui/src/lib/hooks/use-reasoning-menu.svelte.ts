@@ -65,23 +65,26 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 	);
 
 	return {
-		get modelSupportsThinking() {
-			return modelSupportsThinking;
-		},
-		get thinkingEnabled() {
-			return thinkingEnabled;
+		get currentEffort() {
+			return currentEffort;
 		},
 		get isOff() {
 			return currentEffort === ReasoningEffort.OFF;
 		},
-		get currentEffort() {
-			return currentEffort;
+		isSelected(level: ReasoningEffortLevel): boolean {
+			return currentEffort === level.value;
 		},
 		get levels() {
 			return REASONING_EFFORT_LEVELS;
 		},
-		isSelected(level: ReasoningEffortLevel): boolean {
-			return currentEffort === level.value;
+		get modelSupportsThinking() {
+			return modelSupportsThinking;
+		},
+		select(level: ReasoningEffortLevel): void {
+			conversationsStore.setReasoningEffort(level.value as ReasoningEffort);
+		},
+		get thinkingEnabled() {
+			return thinkingEnabled;
 		},
 		tokenLabel(level: ReasoningEffortLevel): string | null {
 			if (level.value === ReasoningEffort.DEFAULT) return 'Model default';
@@ -91,9 +94,6 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 			if (tokens === undefined) return null;
 
 			return tokens === -1 ? 'Unlimited' : `Max ${tokens.toLocaleString()} tokens`;
-		},
-		select(level: ReasoningEffortLevel): void {
-			conversationsStore.setReasoningEffort(level.value as ReasoningEffort);
 		}
 	};
 }

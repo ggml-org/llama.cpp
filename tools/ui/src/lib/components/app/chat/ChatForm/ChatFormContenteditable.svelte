@@ -252,7 +252,7 @@
 		if (!rootElement) return;
 
 		history.push(
-			{ value: lastEmittedValue, caret: rangeToTextOffset(rootElement, safeRange()) },
+			{ caret: rangeToTextOffset(rootElement, safeRange()), value: lastEmittedValue },
 			Date.now(),
 			newGroup
 		);
@@ -540,8 +540,8 @@
 			if (isUndo || isRedo) {
 				event.preventDefault();
 				const current = {
-					value: lastEmittedValue,
-					caret: rangeToTextOffset(rootElement, safeRange())
+					caret: rangeToTextOffset(rootElement, safeRange()),
+					value: lastEmittedValue
 				};
 				const entry = isUndo ? history.undo(current) : history.redo(current);
 
@@ -696,7 +696,7 @@
 		const start = rangeToTextOffset(rootElement, startRange);
 		const end = rangeToTextOffset(rootElement, range);
 
-		return { text: source.slice(start, end), range };
+		return { range, text: source.slice(start, end) };
 	}
 
 	function handleCopy(event: ClipboardEvent) {

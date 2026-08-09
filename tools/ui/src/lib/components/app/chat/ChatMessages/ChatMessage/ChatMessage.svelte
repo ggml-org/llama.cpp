@@ -32,12 +32,12 @@
 
 	let {
 		class: className = '',
-		message,
-		toolMessages = [],
 		isLastAssistantMessage = false,
 		isLastUserMessage = false,
+		message,
 		nextAssistantMessage = null,
-		siblingInfo = null
+		siblingInfo = null,
+		toolMessages = []
 	}: Props = $props();
 
 	const chatActions = getChatActionsContext();
@@ -117,9 +117,7 @@
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
 
 	setMessageEditContext({
-		get isEditing() {
-			return isEditing;
-		},
+		cancel: handleCancelEdit,
 		get editedContent() {
 			return editedContent;
 		},
@@ -129,6 +127,12 @@
 		get editedUploadedFiles() {
 			return editedUploadedFiles;
 		},
+		get isEditing() {
+			return isEditing;
+		},
+		get messageRole() {
+			return message.role;
+		},
 		get originalContent() {
 			return message.role === MessageRole.ASSISTANT
 				? (rawEditContent ?? message.content)
@@ -137,36 +141,32 @@
 		get originalExtras() {
 			return message.extra || [];
 		},
-		get showSaveOnlyOption() {
-			return showSaveOnlyOption;
-		},
-		get showBranchAfterEditOption() {
-			return showBranchAfterEditOption;
-		},
-		get shouldBranchAfterEdit() {
-			return shouldBranchAfterEdit;
-		},
-		get messageRole() {
-			return message.role;
-		},
 		get rawEditContent() {
 			return rawEditContent;
 		},
+		save: handleSaveEdit,
+		saveOnly: handleSaveEditOnly,
 		setContent: (content: string) => {
 			editedContent = content;
 		},
 		setExtras: (extras: DatabaseMessageExtra[]) => {
 			editedExtras = extras;
 		},
-		setUploadedFiles: (files: ChatUploadedFile[]) => {
-			editedUploadedFiles = files;
-		},
 		setShouldBranchAfterEdit: (value: boolean) => {
 			shouldBranchAfterEdit = value;
 		},
-		save: handleSaveEdit,
-		saveOnly: handleSaveEditOnly,
-		cancel: handleCancelEdit,
+		setUploadedFiles: (files: ChatUploadedFile[]) => {
+			editedUploadedFiles = files;
+		},
+		get shouldBranchAfterEdit() {
+			return shouldBranchAfterEdit;
+		},
+		get showBranchAfterEditOption() {
+			return showBranchAfterEditOption;
+		},
+		get showSaveOnlyOption() {
+			return showSaveOnlyOption;
+		},
 		startEdit: handleEdit
 	});
 

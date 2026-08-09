@@ -61,5 +61,5 @@ export function parseFileGlobSearchMeta(section: AgenticSection): FileGlobSearch
 		}
 	}
 
-	return { path, include, exclude, matches, totalMatches, errorMessage };
+	return { errorMessage, exclude, include, matches, path, totalMatches };
 }

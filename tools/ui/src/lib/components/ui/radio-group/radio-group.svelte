@@ -3,8 +3,8 @@
 	import { RadioGroup as RadioGroupPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
+		ref = $bindable(null),
 		value = $bindable(''),
 		...restProps
 	}: RadioGroupPrimitive.RootProps = $props();

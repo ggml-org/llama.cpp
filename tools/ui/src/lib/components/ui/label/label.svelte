@@ -3,8 +3,8 @@
 	import { Label as LabelPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: LabelPrimitive.RootProps = $props();
 </script>

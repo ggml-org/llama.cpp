@@ -21,20 +21,20 @@
 	}
 
 	let {
-		prompt,
-		promptArgs,
-		suggestions,
-		loadingSuggestions,
 		activeAutocomplete,
 		autocompleteIndex,
-		promptError,
-		onArgInput,
-		onArgKeydown,
+		loadingSuggestions,
 		onArgBlur,
 		onArgFocus,
+		onArgInput,
+		onArgKeydown,
+		onCancel,
 		onSelectSuggestion,
 		onSubmit,
-		onCancel
+		prompt,
+		promptArgs,
+		promptError,
+		suggestions
 	}: Props = $props();
 </script>
 

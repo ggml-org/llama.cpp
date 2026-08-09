@@ -14,12 +14,12 @@
 	}
 
 	let {
-		content,
 		attachments = [],
-		renderMarkdown = false,
-		textColorClass = 'text-foreground',
 		cardBgClass = 'dark:bg-primary/15',
-		maxHeightStyle = ''
+		content,
+		maxHeightStyle = '',
+		renderMarkdown = false,
+		textColorClass = 'text-foreground'
 	}: Props = $props();
 
 	let isMultiline = $state(false);

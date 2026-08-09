@@ -3,8 +3,8 @@
 	import { Dialog as SheetPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: SheetPrimitive.TitleProps = $props();
 </script>

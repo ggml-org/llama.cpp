@@ -13,7 +13,7 @@
 		onResetView: () => void;
 	}
 
-	let { scale, svgHtml, onZoomIn, onZoomOut, onResetView }: Props = $props();
+	let { onResetView, onZoomIn, onZoomOut, scale, svgHtml }: Props = $props();
 
 	function downloadSvg() {
 		if (!svgHtml) return;

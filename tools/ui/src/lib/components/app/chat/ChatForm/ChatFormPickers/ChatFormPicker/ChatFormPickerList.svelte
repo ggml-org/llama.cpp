@@ -28,22 +28,22 @@
 	}
 
 	let {
-		items,
-		isLoading,
-		selectedIndex,
-		searchQuery = $bindable(),
-		showSearchInput,
-		searchPlaceholder = 'Search...',
-		emptyMessage,
 		autofocus = false,
-		inputRef = $bindable(null),
-		onSearchClose,
-		itemKey,
-		item,
-		skeleton,
-		skeletonCount = 6,
+		emptyMessage,
 		footer,
-		scrollTrigger
+		inputRef = $bindable(null),
+		isLoading,
+		item,
+		itemKey,
+		items,
+		onSearchClose,
+		scrollTrigger,
+		searchPlaceholder = 'Search...',
+		searchQuery = $bindable(),
+		selectedIndex,
+		showSearchInput,
+		skeleton,
+		skeletonCount = 6
 	}: Props = $props();
 
 	let listContainer = $state<HTMLDivElement | null>(null);
@@ -55,11 +55,11 @@
 	// selectedIndex/items.length are untracked so hover and result replacement
 	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger.
 	useScrollActiveRow({
-		getTrigger: () => scrollTrigger,
+		dataIndex: 'picker',
 		getContainer: () => listContainer,
-		getIndex: () => selectedIndex,
 		getCount: () => items.length,
-		dataIndex: 'picker'
+		getIndex: () => selectedIndex,
+		getTrigger: () => scrollTrigger
 	});
 </script>
 

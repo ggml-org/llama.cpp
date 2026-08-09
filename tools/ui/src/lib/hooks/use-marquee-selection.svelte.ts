@@ -256,11 +256,11 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	}
 
 	return {
-		rowMouseDown,
-		rowClick,
-		reset,
 		get dragAnchorId() {
 			return dragAnchorId;
-		}
+		},
+		reset,
+		rowClick,
+		rowMouseDown
 	};
 }

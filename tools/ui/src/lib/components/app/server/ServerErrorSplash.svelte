@@ -72,8 +72,8 @@
 			// Test the API key by making a real request to the server
 			const response = await fetch(`${base}/props`, {
 				headers: {
-					'Content-Type': 'application/json',
-					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKeyInput.trim()}`
+					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKeyInput.trim()}`,
+					'Content-Type': 'application/json'
 				}
 			});
 
@@ -145,7 +145,7 @@
 		</div>
 
 		{#if isAccessDeniedError && !showApiKeyInput}
-			<div in:fly={{ y: 10, duration: 300, delay: 200 }} class="mb-4">
+			<div in:fly={{ delay: 200, duration: 300, y: 10 }} class="mb-4">
 				<Button onclick={handleShowApiKeyInput} variant="outline" class="w-full">
 					<Key class={ICON_CLASS_DEFAULT} />
 					Enter API Key
@@ -154,7 +154,7 @@
 		{/if}
 
 		{#if showApiKeyInput}
-			<div in:fly={{ y: 10, duration: 300, delay: 200 }} class="mb-4 space-y-3 text-left">
+			<div in:fly={{ delay: 200, duration: 300, y: 10 }} class="mb-4 space-y-3 text-left">
 				<div class="space-y-2">
 					<Label for="api-key-input" class="text-sm font-medium">API Key</Label>
 
@@ -192,12 +192,12 @@
 						{/if}
 					</div>
 					{#if apiKeyError}
-						<p class="text-sm text-destructive" in:fly={{ y: -10, duration: 200 }}>
+						<p class="text-sm text-destructive" in:fly={{ duration: 200, y: -10 }}>
 							{apiKeyError}
 						</p>
 					{/if}
 					{#if apiKeyState === 'success'}
-						<p class="text-sm text-green-600" in:fly={{ y: -10, duration: 200 }}>
+						<p class="text-sm text-green-600" in:fly={{ duration: 200, y: -10 }}>
 							✓ API key validated successfully! Connecting...
 						</p>
 					{/if}
@@ -236,7 +236,7 @@
 		{/if}
 
 		{#if showRetry}
-			<div in:fly={{ y: 10, duration: 300, delay: 200 }}>
+			<div in:fly={{ delay: 200, duration: 300, y: 10 }}>
 				<Button onclick={handleRetryConnection} disabled={isServerLoading} class="w-full">
 					{#if isServerLoading}
 						<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin" />
@@ -252,7 +252,7 @@
 		{/if}
 
 		{#if showTroubleshooting}
-			<div class="mt-4 text-left" in:fly={{ y: 10, duration: 300, delay: 400 }}>
+			<div class="mt-4 text-left" in:fly={{ delay: 400, duration: 300, y: 10 }}>
 				<details class="text-sm">
 					<summary class="cursor-pointer text-muted-foreground hover:text-foreground">
 						Troubleshooting

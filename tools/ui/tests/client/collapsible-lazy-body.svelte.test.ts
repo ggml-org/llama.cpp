@@ -16,20 +16,20 @@ const MARKER = 'collapsible-body-marker';
 describe('collapsible wrappers render their body lazily', () => {
 	for (const variant of ['content', 'terminal'] as const) {
 		it(`${variant}: body is absent while closed and present once open`, async () => {
-			const screen = render(CollapsibleLazyBodyHarness, { variant, open: false });
+			const screen = render(CollapsibleLazyBodyHarness, { open: false, variant });
 
 			await tick();
 
 			expect(document.body.textContent).not.toContain(MARKER);
 
-			await screen.rerender({ variant, open: true });
+			await screen.rerender({ open: true, variant });
 			await tick();
 
 			expect(document.body.textContent).toContain(MARKER);
 
 			// And it unmounts again on close, so a collapsed block stops costing
 			// anything during streaming.
-			await screen.rerender({ variant, open: false });
+			await screen.rerender({ open: false, variant });
 			await tick();
 
 			expect(document.body.textContent).not.toContain(MARKER);

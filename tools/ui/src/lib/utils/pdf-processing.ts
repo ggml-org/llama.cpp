@@ -113,9 +113,9 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 			}
 
 			const task = page.render({
+				canvas: canvas,
 				canvasContext: ctx,
-				viewport: viewport,
-				canvas: canvas
+				viewport: viewport
 			});
 
 			pages.push(

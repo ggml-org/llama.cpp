@@ -87,5 +87,5 @@ export function buildMentionInsertion(
 	const insertion = `[${basename}](${FILE_URI_PREFIX}${encodeFileLinkPath(pathWithSeparator)}) `;
 	const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);
 
-	return { newValue, caretOffset: token.start + insertion.length };
+	return { caretOffset: token.start + insertion.length, newValue };
 }

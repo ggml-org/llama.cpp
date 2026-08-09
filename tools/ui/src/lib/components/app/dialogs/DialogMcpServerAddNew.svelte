@@ -22,7 +22,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), onOpenChange }: Props = $props();
+	let { onOpenChange, open = $bindable() }: Props = $props();
 
 	let newServerUrl = $state('');
 	let newServerName = $state('');
@@ -149,10 +149,10 @@
 		const previewId = `${MCP_SERVER_ID_PREFIX}-preview-${run}`;
 		const timer = setTimeout(async () => {
 			await mcpStore.runHealthCheck({
-				id: previewId,
 				enabled: false,
-				url,
 				headers: headers || undefined,
+				id: previewId,
+				url,
 				useProxy
 			});
 
@@ -225,16 +225,16 @@
 		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
 		mcpStore.addServer({
-			id: newServerId,
-			enabled: true,
-			url: newServerUrl.trim(),
 			// A name equal to the autofilled server-reported one is not a
 			// customization: keep following the automatic label.
 			displayName:
 				newServerName.trim() && newServerName.trim() !== nameAutoFilled.trim()
 					? newServerName.trim()
 					: undefined,
+			enabled: true,
 			headers: newServerHeaders.trim() || undefined,
+			id: newServerId,
+			url: newServerUrl.trim(),
 			useProxy: newServerUseProxy
 		});
 

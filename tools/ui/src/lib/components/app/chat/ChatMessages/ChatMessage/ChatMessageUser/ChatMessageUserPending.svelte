@@ -16,9 +16,9 @@
 		class: className = '',
 		content,
 		extras = [],
-		onSendImmediately,
+		onDelete,
 		onEdit,
-		onDelete
+		onSendImmediately
 	}: Props = $props();
 
 	const editCtx = useMessageEditContext({

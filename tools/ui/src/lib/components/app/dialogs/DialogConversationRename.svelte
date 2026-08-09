@@ -13,11 +13,11 @@
 	}
 
 	let {
-		open = $bindable(),
 		currentTitle,
-		value = $bindable(''),
+		onCancel,
 		onConfirm,
-		onCancel
+		open = $bindable(),
+		value = $bindable('')
 	}: Props = $props();
 
 	let inputRef = $state<HTMLInputElement | null>(null);

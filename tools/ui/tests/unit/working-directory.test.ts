@@ -15,54 +15,54 @@ describe('splitPathQuery', () => {
 	});
 
 	it('navigates the root for `/`', () => {
-		expect(splitPathQuery('/')).toEqual({ parent: '/', last: '' });
+		expect(splitPathQuery('/')).toEqual({ last: '', parent: '/' });
 	});
 
 	it('navigates home for `~`', () => {
-		expect(splitPathQuery('~')).toEqual({ parent: '~', last: '' });
+		expect(splitPathQuery('~')).toEqual({ last: '', parent: '~' });
 	});
 
 	it('splits an absolute path into parent and last segment', () => {
-		expect(splitPathQuery('/Users/al/proj')).toEqual({ parent: '/Users/al', last: 'proj' });
+		expect(splitPathQuery('/Users/al/proj')).toEqual({ last: 'proj', parent: '/Users/al' });
 	});
 
 	it('navigates a Windows drive path written with backslashes', () => {
 		expect(splitPathQuery('C:\\repos\\llama.cpp')).toEqual({
-			parent: 'C:/repos',
-			last: 'llama.cpp'
+			last: 'llama.cpp',
+			parent: 'C:/repos'
 		});
 	});
 
 	it('navigates a Windows drive path written with forward slashes', () => {
-		expect(splitPathQuery('D:/repos')).toEqual({ parent: 'D:/', last: 'repos' });
+		expect(splitPathQuery('D:/repos')).toEqual({ last: 'repos', parent: 'D:/' });
 	});
 
 	it('treats a bare drive as its root', () => {
-		expect(splitPathQuery('D:')).toEqual({ parent: 'D:/', last: '' });
-		expect(splitPathQuery('D:\\')).toEqual({ parent: 'D:/', last: '' });
+		expect(splitPathQuery('D:')).toEqual({ last: '', parent: 'D:/' });
+		expect(splitPathQuery('D:\\')).toEqual({ last: '', parent: 'D:/' });
 	});
 
 	it('navigates a UNC share', () => {
 		expect(splitPathQuery('\\\\host\\share\\proj')).toEqual({
-			parent: '//host/share/',
-			last: 'proj'
+			last: 'proj',
+			parent: '//host/share/'
 		});
 	});
 
 	it('keeps a backslash as a POSIX filename character', () => {
-		expect(splitPathQuery('/tmp/a\\b')).toEqual({ parent: '/tmp', last: 'a\\b' });
+		expect(splitPathQuery('/tmp/a\\b')).toEqual({ last: 'a\\b', parent: '/tmp' });
 	});
 
 	it('splits a home-relative path into parent and last segment', () => {
-		expect(splitPathQuery('~/Documents')).toEqual({ parent: '~', last: 'Documents' });
+		expect(splitPathQuery('~/Documents')).toEqual({ last: 'Documents', parent: '~' });
 	});
 
 	it('strips trailing slashes before splitting', () => {
-		expect(splitPathQuery('/Users/al/')).toEqual({ parent: '/Users', last: 'al' });
+		expect(splitPathQuery('/Users/al/')).toEqual({ last: 'al', parent: '/Users' });
 	});
 
 	it('handles a single-segment absolute path', () => {
-		expect(splitPathQuery('/opt')).toEqual({ parent: '/', last: 'opt' });
+		expect(splitPathQuery('/opt')).toEqual({ last: 'opt', parent: '/' });
 	});
 });
 
@@ -115,18 +115,18 @@ describe('joinPath', () => {
 
 describe('highlightMatch', () => {
 	it('returns a single non-matching segment when query is empty', () => {
-		expect(highlightMatch('abc', '')).toEqual([{ text: 'abc', match: false }]);
+		expect(highlightMatch('abc', '')).toEqual([{ match: false, text: 'abc' }]);
 	});
 
 	it('marks every case-insensitive occurrence of the query', () => {
 		expect(highlightMatch('aXa', 'ax')).toEqual([
-			{ text: 'aX', match: true },
-			{ text: 'a', match: false }
+			{ match: true, text: 'aX' },
+			{ match: false, text: 'a' }
 		]);
 	});
 
 	it('returns non-matching text when the query is absent', () => {
-		expect(highlightMatch('abc', 'z')).toEqual([{ text: 'abc', match: false }]);
+		expect(highlightMatch('abc', 'z')).toEqual([{ match: false, text: 'abc' }]);
 	});
 });
 

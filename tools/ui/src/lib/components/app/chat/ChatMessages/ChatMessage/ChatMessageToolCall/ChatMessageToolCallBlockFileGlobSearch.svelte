@@ -12,7 +12,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const fileGlobMeta = $derived(parseFileGlobSearchMeta(section));
 	const home = $derived(toolsStore.serverHome);

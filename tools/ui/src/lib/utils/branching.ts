@@ -188,9 +188,9 @@ export function getMessageSiblings(
 	if (message.parent === null) {
 		// No parent means this is likely a root node with no siblings
 		return {
+			currentIndex: 0,
 			message,
 			siblingIds: [messageId],
-			currentIndex: 0,
 			totalSiblings: 1
 		};
 	}
@@ -200,9 +200,9 @@ export function getMessageSiblings(
 	if (!parentNode) {
 		// Parent not found - treat as single message
 		return {
+			currentIndex: 0,
 			message,
 			siblingIds: [messageId],
-			currentIndex: 0,
 			totalSiblings: 1
 		};
 	}
@@ -218,9 +218,9 @@ export function getMessageSiblings(
 	const currentIndex = siblingIds.indexOf(messageId);
 
 	return {
+		currentIndex,
 		message,
 		siblingIds: siblingLeafIds,
-		currentIndex,
 		totalSiblings: siblingIds.length
 	};
 }

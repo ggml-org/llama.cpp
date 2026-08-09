@@ -27,9 +27,9 @@
 		disabled = false,
 		forceForegroundText = false,
 		hasAudioModality = $bindable(false),
+		hasModelSelected = $bindable(false),
 		hasVideoModality = $bindable(false),
 		hasVisionModality = $bindable(false),
-		hasModelSelected = $bindable(false),
 		isSelectedModelInCache = $bindable(true),
 		submitTooltip = $bindable(''),
 		useGlobalSelection = false

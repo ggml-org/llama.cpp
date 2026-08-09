@@ -19,9 +19,9 @@
 	}
 
 	let {
+		class: className = '',
 		code,
 		language = 'text',
-		class: className = '',
 		maxHeight = '60vh',
 		maxWidth = '',
 		streaming = false
@@ -116,9 +116,9 @@
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
 
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();

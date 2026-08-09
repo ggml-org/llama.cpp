@@ -20,32 +20,32 @@ export function nerdamerPlugin(): Plugin {
 	let bundled: string | null = null;
 
 	return {
-		name: 'llamacpp:nerdamer',
-		resolveId(id) {
-			return id === VIRTUAL_ID ? RESOLVED_ID : undefined;
-		},
 		async load(id) {
 			if (id !== RESOLVED_ID) return undefined;
 
 			if (bundled === null) {
 				const result = await build({
-					entryPoints: [resolve(VENDORS_DIR, 'nerdamer-prime/all.js')],
-					bundle: true,
-					minify: true,
-					format: 'iife',
-					globalName: 'nerdamer',
 					alias: {
 						'big-integer': resolve(VENDORS_DIR, 'big-integer/BigInteger.js'),
 						'decimal.js': resolve(VENDORS_DIR, 'decimal.js/decimal.js')
 					},
-					write: false,
-					logLevel: 'silent'
+					bundle: true,
+					entryPoints: [resolve(VENDORS_DIR, 'nerdamer-prime/all.js')],
+					format: 'iife',
+					globalName: 'nerdamer',
+					logLevel: 'silent',
+					minify: true,
+					write: false
 				});
 
 				bundled = result.outputFiles[0].text;
 			}
 
 			return `export default ${JSON.stringify(bundled)};`;
+		},
+		name: 'llamacpp:nerdamer',
+		resolveId(id) {
+			return id === VIRTUAL_ID ? RESOLVED_ID : undefined;
 		}
 	};
 }

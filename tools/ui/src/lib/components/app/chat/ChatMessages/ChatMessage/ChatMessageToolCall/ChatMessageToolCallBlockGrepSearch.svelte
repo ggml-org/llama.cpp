@@ -12,7 +12,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const grepMeta = $derived(parseGrepSearchMeta(section));
 	const home = $derived(toolsStore.serverHome);

@@ -4,8 +4,8 @@
 	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: AlertDialogPrimitive.ActionProps = $props();
 </script>

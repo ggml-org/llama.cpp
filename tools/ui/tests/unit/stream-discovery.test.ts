@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 function makeSession(overrides: Partial<ApiStreamSession>): ApiStreamSession {
 	return {
+		completed_at: 0,
 		conversation_id: 'conv',
 		is_done: true,
-		total_bytes: 0,
 		started_at: 0,
-		completed_at: 0,
+		total_bytes: 0,
 		...overrides
 	};
 }

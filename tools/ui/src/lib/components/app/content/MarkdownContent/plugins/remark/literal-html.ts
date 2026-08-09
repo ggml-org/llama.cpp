@@ -73,9 +73,9 @@ export const remarkLiteralHtml: Plugin<[], Root> = () => {
 
 			if (!PHRASE_PARENTS.has(parent.type as string)) {
 				const paragraph: Paragraph = {
-					type: 'paragraph',
 					children: replacement as Paragraph['children'],
-					data: { literalHtml: true }
+					data: { literalHtml: true },
+					type: 'paragraph'
 				};
 				const siblings = parent.children as unknown as Content[];
 

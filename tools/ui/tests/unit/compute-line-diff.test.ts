@@ -9,23 +9,23 @@ describe('computeLineDiff', () => {
 
 	it('marks every line as removed for an empty new text', () => {
 		expect(computeLineDiff('a\nb\nc', '')).toEqual([
-			{ kind: 'remove', text: 'a', oldLine: 1 },
-			{ kind: 'remove', text: 'b', oldLine: 2 },
-			{ kind: 'remove', text: 'c', oldLine: 3 }
+			{ kind: 'remove', oldLine: 1, text: 'a' },
+			{ kind: 'remove', oldLine: 2, text: 'b' },
+			{ kind: 'remove', oldLine: 3, text: 'c' }
 		]);
 	});
 
 	it('marks every line as added for an empty old text', () => {
 		expect(computeLineDiff('', 'a\nb')).toEqual([
-			{ kind: 'add', text: 'a', newLine: 1 },
-			{ kind: 'add', text: 'b', newLine: 2 }
+			{ kind: 'add', newLine: 1, text: 'a' },
+			{ kind: 'add', newLine: 2, text: 'b' }
 		]);
 	});
 
 	it('detects a single-line replace', () => {
 		expect(computeLineDiff('old', 'new')).toEqual([
-			{ kind: 'add', text: 'new', newLine: 1 },
-			{ kind: 'remove', text: 'old', oldLine: 1 }
+			{ kind: 'add', newLine: 1, text: 'new' },
+			{ kind: 'remove', oldLine: 1, text: 'old' }
 		]);
 	});
 
@@ -34,10 +34,10 @@ describe('computeLineDiff', () => {
 		const newText = ['a', 'b', 'B', 'c'].join('\n');
 
 		expect(computeLineDiff(oldText, newText)).toEqual([
-			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
-			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 },
-			{ kind: 'add', text: 'B', newLine: 3 },
-			{ kind: 'context', text: 'c', oldLine: 3, newLine: 4 }
+			{ kind: 'context', newLine: 1, oldLine: 1, text: 'a' },
+			{ kind: 'context', newLine: 2, oldLine: 2, text: 'b' },
+			{ kind: 'add', newLine: 3, text: 'B' },
+			{ kind: 'context', newLine: 4, oldLine: 3, text: 'c' }
 		]);
 	});
 
@@ -48,11 +48,11 @@ describe('computeLineDiff', () => {
 		const newText = ['a', 'b', 'X', 'd'].join('\n');
 
 		expect(computeLineDiff(oldText, newText)).toEqual([
-			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
-			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 },
-			{ kind: 'add', text: 'X', newLine: 3 },
-			{ kind: 'remove', text: 'c', oldLine: 3 },
-			{ kind: 'context', text: 'd', oldLine: 4, newLine: 4 }
+			{ kind: 'context', newLine: 1, oldLine: 1, text: 'a' },
+			{ kind: 'context', newLine: 2, oldLine: 2, text: 'b' },
+			{ kind: 'add', newLine: 3, text: 'X' },
+			{ kind: 'remove', oldLine: 3, text: 'c' },
+			{ kind: 'context', newLine: 4, oldLine: 4, text: 'd' }
 		]);
 	});
 
@@ -61,10 +61,10 @@ describe('computeLineDiff', () => {
 		const newText = ['a', 'c', 'd'].join('\n');
 
 		expect(computeLineDiff(oldText, newText)).toEqual([
-			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
-			{ kind: 'remove', text: 'b', oldLine: 2 },
-			{ kind: 'context', text: 'c', oldLine: 3, newLine: 2 },
-			{ kind: 'context', text: 'd', oldLine: 4, newLine: 3 }
+			{ kind: 'context', newLine: 1, oldLine: 1, text: 'a' },
+			{ kind: 'remove', oldLine: 2, text: 'b' },
+			{ kind: 'context', newLine: 2, oldLine: 3, text: 'c' },
+			{ kind: 'context', newLine: 3, oldLine: 4, text: 'd' }
 		]);
 	});
 
@@ -73,23 +73,23 @@ describe('computeLineDiff', () => {
 		const result = computeLineDiff(text, text);
 
 		expect(result).toEqual([
-			{ kind: 'context', text: 'x', oldLine: 1, newLine: 1 },
-			{ kind: 'context', text: 'y', oldLine: 2, newLine: 2 },
-			{ kind: 'context', text: 'z', oldLine: 3, newLine: 3 }
+			{ kind: 'context', newLine: 1, oldLine: 1, text: 'x' },
+			{ kind: 'context', newLine: 2, oldLine: 2, text: 'y' },
+			{ kind: 'context', newLine: 3, oldLine: 3, text: 'z' }
 		]);
 	});
 
 	it('strips a trailing newline on the old/new inputs', () => {
 		expect(computeLineDiff('a\n', 'a\nb\n')).toEqual([
-			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
-			{ kind: 'add', text: 'b', newLine: 2 }
+			{ kind: 'context', newLine: 1, oldLine: 1, text: 'a' },
+			{ kind: 'add', newLine: 2, text: 'b' }
 		]);
 	});
 
 	it('normalizes trailing CR on each line', () => {
 		expect(computeLineDiff('a\r\nb\r\n', 'a\nb')).toEqual([
-			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
-			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 }
+			{ kind: 'context', newLine: 1, oldLine: 1, text: 'a' },
+			{ kind: 'context', newLine: 2, oldLine: 2, text: 'b' }
 		]);
 	});
 
@@ -135,8 +135,8 @@ describe('renderUnifiedDiff', () => {
 
 	it('ignores oldLine/newLine metadata when emitting prefixes', () => {
 		const lines: DiffLine[] = [
-			{ kind: DiffLineKind.CONTEXT, text: 'a', oldLine: 1, newLine: 1 },
-			{ kind: DiffLineKind.ADD, text: 'b', newLine: 2 }
+			{ kind: DiffLineKind.CONTEXT, newLine: 1, oldLine: 1, text: 'a' },
+			{ kind: DiffLineKind.ADD, newLine: 2, text: 'b' }
 		];
 
 		expect(renderUnifiedDiff(lines)).toBe(' a\n+b');

@@ -81,7 +81,7 @@ async function makeCircle(targetFilename) {
 	const tmpMask = path.join(STATIC_DIR, '.mask-tmp.png');
 
 	await sharp(maskBuf, {
-		raw: { width: size, height: size, channels: 4 }
+		raw: { channels: 4, height: size, width: size }
 	})
 		.png()
 		.toFile(tmpMask);
@@ -92,8 +92,8 @@ async function makeCircle(targetFilename) {
 	const offset = Math.floor((size - scaledSize) / 2);
 	const scaledBuf = await sharp(sourcePath)
 		.resize(scaledSize, scaledSize, {
-			fit: 'cover',
-			background: { r: 255, g: 255, b: 255, alpha: 1 }
+			background: { alpha: 1, b: 255, g: 255, r: 255 },
+			fit: 'cover'
 		})
 		.ensureAlpha()
 		.png()
@@ -101,15 +101,15 @@ async function makeCircle(targetFilename) {
 	// Step 2: Composite scaled image onto white background, then apply circular mask
 	const output = await sharp({
 		create: {
-			width: size,
-			height: size,
+			background: { alpha: 1, b: 255, g: 255, r: 255 },
 			channels: 4,
-			background: { r: 255, g: 255, b: 255, alpha: 1 }
+			height: size,
+			width: size
 		}
 	})
 		.composite([
-			{ input: scaledBuf, top: offset, left: offset },
-			{ input: tmpMask, top: 0, left: 0, blend: 'dest-in' }
+			{ input: scaledBuf, left: offset, top: offset },
+			{ blend: 'dest-in', input: tmpMask, left: 0, top: 0 }
 		])
 		.png()
 		.toBuffer();

@@ -55,7 +55,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 	// Track last known processing stats for when promptProgress disappears
 	$effect(() => {
 		if (processingState?.promptProgress) {
-			const { processed, total, time_ms, cache } = processingState.promptProgress;
+			const { cache, processed, time_ms, total } = processingState.promptProgress;
 			const actualProcessed = processed - cache;
 			const actualTotal = total - cache;
 
@@ -63,10 +63,10 @@ export function useProcessingState(): UseProcessingStateReturn {
 				const tokensPerSecond = actualProcessed / (time_ms / 1000);
 
 				lastKnownProcessingStats = {
-					tokensProcessed: actualProcessed,
-					totalTokens: actualTotal,
 					timeMs: time_ms,
-					tokensPerSecond
+					tokensPerSecond,
+					tokensProcessed: actualProcessed,
+					totalTokens: actualTotal
 				};
 			}
 		}
@@ -127,7 +127,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 
 		// Show prompt processing progress with ETA during preparation phase
 		if (stateToUse.promptProgress) {
-			const { processed, total, time_ms, cache } = stateToUse.promptProgress;
+			const { cache, processed, time_ms, total } = stateToUse.promptProgress;
 			const actualProcessed = processed - cache;
 			const actualTotal = total - cache;
 
@@ -245,7 +245,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 	function getPromptProgressText(): string | null {
 		if (!processingState?.promptProgress) return null;
 
-		const { processed, total, cache } = processingState.promptProgress;
+		const { cache, processed, total } = processingState.promptProgress;
 		const actualProcessed = processed - cache;
 		const actualTotal = total - cache;
 		const percent = Math.round((actualProcessed / actualTotal) * 100);
@@ -266,7 +266,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 	 */
 	function getLiveProcessingStats(): LiveProcessingStats | null {
 		if (processingState?.promptProgress) {
-			const { processed, total, time_ms, cache } = processingState.promptProgress;
+			const { cache, processed, time_ms, total } = processingState.promptProgress;
 			const actualProcessed = processed - cache;
 			const actualTotal = total - cache;
 
@@ -274,10 +274,10 @@ export function useProcessingState(): UseProcessingStateReturn {
 				const tokensPerSecond = actualProcessed / (time_ms / 1000);
 
 				return {
-					tokensProcessed: actualProcessed,
-					totalTokens: actualTotal,
 					timeMs: time_ms,
-					tokensPerSecond
+					tokensPerSecond,
+					tokensProcessed: actualProcessed,
+					totalTokens: actualTotal
 				};
 			}
 		}
@@ -301,22 +301,22 @@ export function useProcessingState(): UseProcessingStateReturn {
 			tokensPerSecond && tokensPerSecond > 0 ? (tokensDecoded / tokensPerSecond) * 1000 : 0;
 
 		return {
-			tokensGenerated: tokensDecoded,
 			timeMs,
+			tokensGenerated: tokensDecoded,
 			tokensPerSecond: tokensPerSecond || 0
 		};
 	}
 
 	return {
+		getLiveGenerationStats,
+		getLiveProcessingStats,
+		getProcessingDetails,
+		getProcessingMessage,
+		getPromptProgressText,
+		getTechnicalDetails,
 		get processingState() {
 			return processingState;
 		},
-		getProcessingDetails,
-		getTechnicalDetails,
-		getProcessingMessage,
-		getPromptProgressText,
-		getLiveProcessingStats,
-		getLiveGenerationStats,
 		shouldShowDetails,
 		startMonitoring,
 		stopMonitoring

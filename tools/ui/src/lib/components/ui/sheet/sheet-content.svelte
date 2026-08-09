@@ -2,18 +2,18 @@
 	import { tv, type VariantProps } from 'tailwind-variants';
 	export const sheetVariants = tv({
 		base: `border-border/30 dark:border-border/20 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fill-mode-forwards fixed z-50 flex flex-col gap-4 shadow-sm transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 ${PANEL_CLASSES}`,
+		defaultVariants: {
+			side: 'right'
+		},
 		variants: {
 			side: {
-				top: 'data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto border-b',
 				bottom:
 					'data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t',
 				left: 'data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-full w-3/4 border-r sm:max-w-sm',
 				right:
-					'data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-3/4 border-l sm:max-w-sm'
+					'data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-3/4 border-l sm:max-w-sm',
+				top: 'data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto border-b'
 			}
-		},
-		defaultVariants: {
-			side: 'right'
 		}
 	});
 
@@ -29,11 +29,11 @@
 	import type { Snippet } from 'svelte';
 
 	let {
-		ref = $bindable(null),
-		class: className,
-		side = 'right',
-		portalProps,
 		children,
+		class: className,
+		portalProps,
+		ref = $bindable(null),
+		side = 'right',
 		...restProps
 	}: WithoutChildrenOrChild<SheetPrimitive.ContentProps> & {
 		portalProps?: SheetPrimitive.PortalProps;

@@ -48,7 +48,7 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 
 		const newText = typeof obj.new_text === 'string' ? obj.new_text : '';
 
-		edits.push({ oldText, newText });
+		edits.push({ newText, oldText });
 	}
 
 	const resultObj = tryParseToolResultObject(section.toolResult);
@@ -70,11 +70,11 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 	}
 
 	return {
+		edits,
+		editsApplied,
+		errorMessage,
 		fileName,
 		filePath: rawPath,
-		edits,
-		resultMessage,
-		editsApplied,
-		errorMessage
+		resultMessage
 	};
 }

@@ -12,12 +12,12 @@
 	}
 
 	let {
+		children,
 		class: className = '',
 		isOpen = $bindable(false),
-		srLabel = 'Open picker',
 		onClose,
 		onKeydown,
-		children
+		srLabel = 'Open picker'
 	}: Props = $props();
 </script>
 

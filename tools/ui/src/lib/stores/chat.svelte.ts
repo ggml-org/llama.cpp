@@ -166,9 +166,9 @@ class ChatStore {
 	): void {
 		this.touchConversationState(convId);
 		this.chatStreamingStates.set(convId, {
-			response,
 			messageId,
-			model: model ?? this.chatStreamingStates.get(convId)?.model
+			model: model ?? this.chatStreamingStates.get(convId)?.model,
+			response
 		});
 
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
@@ -233,9 +233,9 @@ class ChatStore {
 		try {
 			// POST the one conv id we are probing
 			listResp = await fetch(`./v1/streams/lookup`, {
-				method: 'POST',
+				body: JSON.stringify({ conversation_ids: [convId] }),
 				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
-				body: JSON.stringify({ conversation_ids: [convId] })
+				method: 'POST'
 			});
 		} catch (e) {
 			console.warn('probeServerStream fetch failed:', e);
@@ -351,14 +351,14 @@ class ChatStore {
 			try {
 				const placeholder = await DatabaseService.createMessageBranch(
 					{
-						convId,
-						role: MessageRole.ASSISTANT,
-						content: '',
-						type: MessageType.TEXT,
-						timestamp: Date.now(),
-						parent: messages[lastUserIdx].id,
 						children: [],
-						toolCalls: ''
+						content: '',
+						convId,
+						parent: messages[lastUserIdx].id,
+						role: MessageRole.ASSISTANT,
+						timestamp: Date.now(),
+						toolCalls: '',
+						type: MessageType.TEXT
 					} as Omit<DatabaseMessage, 'id'>,
 					messages[lastUserIdx].id
 				);
@@ -454,8 +454,8 @@ class ChatStore {
 					await DatabaseService.updateMessage(targetMessageId, {
 						content,
 						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || '',
-						timings
+						timings,
+						toolCalls: toolCalls || ''
 					});
 					writeActive({
 						content,
@@ -738,7 +738,7 @@ class ChatStore {
 	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
 		if (!this._pendingDraftMessage && this._pendingDraftFiles.length === 0) return null;
 
-		const d = { message: this._pendingDraftMessage, files: [...this._pendingDraftFiles] };
+		const d = { files: [...this._pendingDraftFiles], message: this._pendingDraftMessage };
 
 		this._pendingDraftMessage = '';
 		this._pendingDraftFiles = [];
@@ -807,9 +807,9 @@ class ChatStore {
 
 		try {
 			const resp = await fetch('./v1/streams/lookup', {
-				method: 'POST',
+				body: JSON.stringify({ conversation_ids: lookupIds }),
 				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
-				body: JSON.stringify({ conversation_ids: lookupIds })
+				method: 'POST'
 			});
 
 			if (!resp.ok) return;
@@ -972,7 +972,7 @@ class ChatStore {
 
 		if (expectedRole && message.role !== expectedRole) return null;
 
-		return { message, index };
+		return { index, message };
 	}
 
 	async addMessage(
@@ -1003,15 +1003,15 @@ class ChatStore {
 
 		const message = await DatabaseService.createMessageBranch(
 			{
-				convId: activeConv.id,
-				role,
+				children: [],
 				content,
-				type,
+				convId: activeConv.id,
+				extra: extras,
+				isSynthetic,
+				role,
 				timestamp: Date.now(),
 				toolCalls: '',
-				children: [],
-				extra: extras,
-				isSynthetic
+				type
 			},
 			parentId
 		);
@@ -1177,14 +1177,14 @@ class ChatStore {
 
 		return await DatabaseService.createMessageBranch(
 			{
-				convId: activeConv.id,
-				type: MessageType.TEXT,
-				role: MessageRole.ASSISTANT,
+				children: [],
 				content: '',
+				convId: activeConv.id,
+				model: null,
+				role: MessageRole.ASSISTANT,
 				timestamp: Date.now(),
 				toolCalls: '',
-				children: [],
-				model: null
+				type: MessageType.TEXT
 			},
 			parentId || null
 		);
@@ -1314,9 +1314,9 @@ class ChatStore {
 			).contextInfo;
 
 			this.showErrorDialog({
-				type: dialogType,
+				contextInfo,
 				message: error instanceof Error ? error.message : 'Unknown error',
-				contextInfo
+				type: dialogType
 			});
 		}
 	}
@@ -1415,67 +1415,69 @@ class ChatStore {
 		this.setActiveProcessingConversation(convId);
 		const abortController = this.getOrCreateAbortController(convId);
 		const streamCallbacks: ChatStreamCallbacks = {
-			onChunk: (chunk: string) => {
-				streamedContent += chunk;
-				updateStreamingUI();
-				this.setChatReasoning(convId, false);
-			},
-			onReasoningChunk: (chunk: string) => {
-				streamedReasoningContent += chunk;
-				// mark streaming state so a stop mid-thinking can persist the partial reasoning
-				this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
-				const idx = conversationsStore.findMessageIndex(currentMessageId);
+			createAssistantMessage: async () => {
+				// Reset streaming state for new message
+				streamedContent = '';
+				streamedReasoningContent = '';
 
-				conversationsStore.updateMessageAtIndex(idx, {
-					reasoningContent: streamedReasoningContent
-				});
-				this.setChatReasoning(convId, true);
-			},
-			onToolCallsStreaming: (toolCalls) => {
-				const idx = conversationsStore.findMessageIndex(currentMessageId);
-
-				conversationsStore.updateMessageAtIndex(idx, {
-					toolCalls: JSON.stringify(toolCalls)
-				});
-			},
-			onAttachments: (messageId: string, extras: DatabaseMessageExtra[]) => {
-				if (!extras.length) return;
-
-				const idx = conversationsStore.findMessageIndex(messageId);
-
-				if (idx === -1) return;
-
-				const msg = conversationsStore.activeMessages[idx];
-				const updatedExtras = [...(msg.extra || []), ...extras];
-
-				conversationsStore.updateMessageAtIndex(idx, { extra: updatedExtras });
-				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
-			},
-			onModel: (modelName: string) => recordModel(modelName),
-			onCompletionId: (id: string) => recordCompletionId(id),
-			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
-				// Update the first assistant message with cumulative agentic timings
-				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-
-				conversationsStore.updateMessageAtIndex(idx, { timings: intermediateTimings });
-			},
-			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-				const tokensPerSecond =
-					timings?.predicted_ms && timings?.predicted_n
-						? (timings.predicted_n / timings.predicted_ms) * 1000
-						: 0;
-
-				this.updateProcessingStateFromTimings(
+				const msg = await DatabaseService.createMessageBranch(
 					{
-						prompt_n: timings?.prompt_n || 0,
-						prompt_ms: timings?.prompt_ms,
-						predicted_n: timings?.predicted_n || 0,
-						predicted_per_second: tokensPerSecond,
-						cache_n: timings?.cache_n || 0,
-						prompt_progress: promptProgress
+						children: [],
+						content: '',
+						convId,
+						model: resolvedModel,
+						role: MessageRole.ASSISTANT,
+						timestamp: Date.now(),
+						toolCalls: '',
+						type: MessageType.TEXT
 					},
-					convId
+					lastCreatedInFlow
 				);
+
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.addMessageToActive(msg);
+				}
+
+				currentMessageId = msg.id;
+				lastCreatedInFlow = msg.id;
+
+				return msg;
+			},
+			createToolResultMessage: async (
+				toolCallId: string,
+				content: string,
+				extras?: DatabaseMessageExtra[],
+				toolCwd?: string
+			) => {
+				const msg = await DatabaseService.createMessageBranch(
+					{
+						children: [],
+						content,
+						convId,
+						extra: extras,
+						role: MessageRole.TOOL,
+						timestamp: Date.now(),
+						toolCallId,
+						toolCalls: '',
+						toolCwd,
+						type: MessageType.TEXT
+					},
+					currentMessageId
+				);
+
+				// mirror into the active store and move the node pointer only when this
+				// conversation is displayed; otherwise persist the node move straight to
+				// the db for the owning conv so a foreign conv's currNode stays untouched
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.addMessageToActive(msg);
+					await conversationsStore.updateCurrentNode(msg.id);
+				} else {
+					await DatabaseService.updateCurrentNode(convId, msg.id);
+				}
+
+				lastCreatedInFlow = msg.id;
+
+				return msg;
 			},
 			onAssistantTurnComplete: async (
 				content: string,
@@ -1486,8 +1488,8 @@ class ChatStore {
 				const updateData: Record<string, unknown> = {
 					content,
 					reasoningContent: reasoningContent || undefined,
-					toolCalls: toolCalls ? JSON.stringify(toolCalls) : '',
-					timings
+					timings,
+					toolCalls: toolCalls ? JSON.stringify(toolCalls) : ''
 				};
 
 				if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
@@ -1514,96 +1516,57 @@ class ChatStore {
 					await DatabaseService.updateCurrentNode(convId, currentMessageId);
 				}
 			},
-			createToolResultMessage: async (
-				toolCallId: string,
-				content: string,
-				extras?: DatabaseMessageExtra[],
-				toolCwd?: string
-			) => {
-				const msg = await DatabaseService.createMessageBranch(
-					{
-						convId,
-						type: MessageType.TEXT,
-						role: MessageRole.TOOL,
-						content,
-						toolCallId,
-						toolCwd,
-						timestamp: Date.now(),
-						toolCalls: '',
-						children: [],
-						extra: extras
-					},
-					currentMessageId
-				);
+			onAttachments: (messageId: string, extras: DatabaseMessageExtra[]) => {
+				if (!extras.length) return;
 
-				// mirror into the active store and move the node pointer only when this
-				// conversation is displayed; otherwise persist the node move straight to
-				// the db for the owning conv so a foreign conv's currNode stays untouched
-				if (conversationsStore.activeConversation?.id === convId) {
-					conversationsStore.addMessageToActive(msg);
-					await conversationsStore.updateCurrentNode(msg.id);
-				} else {
-					await DatabaseService.updateCurrentNode(convId, msg.id);
-				}
+				const idx = conversationsStore.findMessageIndex(messageId);
 
-				lastCreatedInFlow = msg.id;
+				if (idx === -1) return;
 
-				return msg;
+				const msg = conversationsStore.activeMessages[idx];
+				const updatedExtras = [...(msg.extra || []), ...extras];
+
+				conversationsStore.updateMessageAtIndex(idx, { extra: updatedExtras });
+				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
 			},
-			updateToolResultMessage: async (
-				messageId: string,
-				content: string,
-				extras?: DatabaseMessageExtra[]
-			) => {
-				// Persist latest content + merged extras; mirror into the active
-				// store so the chat view sees live updates for streaming tools
-				// (e.g. exec_shell_command). The existing tool message node
-				// pointer stays put - the renderer is already scoped to it.
-				const updates: Partial<DatabaseMessage> = { content };
-
-				if (extras) {
-					const idx = conversationsStore.findMessageIndex(messageId);
-					const existing = idx >= 0 ? (conversationsStore.activeMessages[idx]?.extra ?? []) : [];
-					const merged = [...existing, ...extras];
-
-					updates.extra = merged;
-				}
-
-				if (conversationsStore.activeConversation?.id === convId) {
-					const idx = conversationsStore.findMessageIndex(messageId);
-
-					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
-				}
-
-				await DatabaseService.updateMessage(messageId, updates);
+			onChunk: (chunk: string) => {
+				streamedContent += chunk;
+				updateStreamingUI();
+				this.setChatReasoning(convId, false);
 			},
-			createAssistantMessage: async () => {
-				// Reset streaming state for new message
-				streamedContent = '';
-				streamedReasoningContent = '';
+			onCompletionId: (id: string) => recordCompletionId(id),
+			onError: async (error: Error) => {
+				this.setStreamingActive(false);
 
-				const msg = await DatabaseService.createMessageBranch(
-					{
-						convId,
-						type: MessageType.TEXT,
-						role: MessageRole.ASSISTANT,
-						content: '',
-						timestamp: Date.now(),
-						toolCalls: '',
-						children: [],
-						model: resolvedModel
-					},
-					lastCreatedInFlow
-				);
+				if (isAbortError(error)) {
+					cleanupStreamingState();
+					// If aborted with a pending message (e.g. "Send immediately"), re-send it
+					const pending = this.consumePendingMessage(convId);
 
-				if (conversationsStore.activeConversation?.id === convId) {
-					conversationsStore.addMessageToActive(msg);
+					if (pending) {
+						this.sendMessage(pending.content, pending.extras);
+					}
+
+					return;
 				}
 
-				currentMessageId = msg.id;
-				lastCreatedInFlow = msg.id;
+				console.error('Streaming error:', error);
+				// keep whatever was streamed so far, the message stays in memory and in DB
+				await this.savePartialResponseIfNeeded(convId);
+				cleanupStreamingState();
+				this.clearPendingMessage(convId);
 
-				return msg;
+				const contextInfo = (
+					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+				).contextInfo;
+
+				this.showErrorDialog({
+					contextInfo,
+					message: error.message,
+					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER
+				});
+
+				if (onError) onError(error);
 			},
 			onFlowComplete: (finalTimings?: ChatMessageTimings) => {
 				if (finalTimings) {
@@ -1632,53 +1595,90 @@ class ChatStore {
 					);
 				}
 			},
-			onError: async (error: Error) => {
-				this.setStreamingActive(false);
+			onModel: (modelName: string) => recordModel(modelName),
+			onReasoningChunk: (chunk: string) => {
+				streamedReasoningContent += chunk;
+				// mark streaming state so a stop mid-thinking can persist the partial reasoning
+				this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
+				const idx = conversationsStore.findMessageIndex(currentMessageId);
 
-				if (isAbortError(error)) {
-					cleanupStreamingState();
-					// If aborted with a pending message (e.g. "Send immediately"), re-send it
-					const pending = this.consumePendingMessage(convId);
+				conversationsStore.updateMessageAtIndex(idx, {
+					reasoningContent: streamedReasoningContent
+				});
+				this.setChatReasoning(convId, true);
+			},
+			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+				const tokensPerSecond =
+					timings?.predicted_ms && timings?.predicted_n
+						? (timings.predicted_n / timings.predicted_ms) * 1000
+						: 0;
 
-					if (pending) {
-						this.sendMessage(pending.content, pending.extras);
-					}
+				this.updateProcessingStateFromTimings(
+					{
+						cache_n: timings?.cache_n || 0,
+						predicted_n: timings?.predicted_n || 0,
+						predicted_per_second: tokensPerSecond,
+						prompt_ms: timings?.prompt_ms,
+						prompt_n: timings?.prompt_n || 0,
+						prompt_progress: promptProgress
+					},
+					convId
+				);
+			},
+			onToolCallsStreaming: (toolCalls) => {
+				const idx = conversationsStore.findMessageIndex(currentMessageId);
 
-					return;
+				conversationsStore.updateMessageAtIndex(idx, {
+					toolCalls: JSON.stringify(toolCalls)
+				});
+			},
+			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
+				// Update the first assistant message with cumulative agentic timings
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+
+				conversationsStore.updateMessageAtIndex(idx, { timings: intermediateTimings });
+			},
+			updateToolResultMessage: async (
+				messageId: string,
+				content: string,
+				extras?: DatabaseMessageExtra[]
+			) => {
+				// Persist latest content + merged extras; mirror into the active
+				// store so the chat view sees live updates for streaming tools
+				// (e.g. exec_shell_command). The existing tool message node
+				// pointer stays put - the renderer is already scoped to it.
+				const updates: Partial<DatabaseMessage> = { content };
+
+				if (extras) {
+					const idx = conversationsStore.findMessageIndex(messageId);
+					const existing = idx >= 0 ? (conversationsStore.activeMessages[idx]?.extra ?? []) : [];
+					const merged = [...existing, ...extras];
+
+					updates.extra = merged;
 				}
 
-				console.error('Streaming error:', error);
-				// keep whatever was streamed so far, the message stays in memory and in DB
-				await this.savePartialResponseIfNeeded(convId);
-				cleanupStreamingState();
-				this.clearPendingMessage(convId);
+				if (conversationsStore.activeConversation?.id === convId) {
+					const idx = conversationsStore.findMessageIndex(messageId);
 
-				const contextInfo = (
-					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
-				).contextInfo;
+					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
+				}
 
-				this.showErrorDialog({
-					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
-					message: error.message,
-					contextInfo
-				});
-
-				if (onError) onError(error);
+				await DatabaseService.updateMessage(messageId, updates);
 			}
 		};
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 
 		{
 			const agenticResult = await agenticStore.runAgenticFlow({
+				callbacks: streamCallbacks,
 				conversationId: convId,
 				messages: allMessages,
 				options: {
 					...this.getApiOptions(),
 					...(effectiveModel ? { model: effectiveModel } : {})
 				},
-				callbacks: streamCallbacks,
-				signal: abortController.signal,
-				perChatOverrides
+				perChatOverrides,
+				signal: abortController.signal
 			});
 
 			if (agenticResult.handled) {
@@ -1703,17 +1703,7 @@ class ChatStore {
 			{
 				...this.getApiOptions(),
 				...(effectiveModel ? { model: effectiveModel } : {}),
-				stream: true,
 				onChunk: streamCallbacks.onChunk,
-				onReasoningChunk: streamCallbacks.onReasoningChunk,
-				onModel: streamCallbacks.onModel,
-				onCompletionId: streamCallbacks.onCompletionId,
-				onTimings: streamCallbacks.onTimings,
-				onConnectionState: (state: StreamConnectionState) => {
-					if (convId === conversationsStore.activeConversation?.id) {
-						this.streamConnectionState = state;
-					}
-				},
 				onComplete: async (
 					finalContent?: string,
 					reasoningContent?: string,
@@ -1725,8 +1715,8 @@ class ChatStore {
 					const updateData: Record<string, unknown> = {
 						content,
 						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || '',
-						timings
+						timings,
+						toolCalls: toolCalls || ''
 					};
 
 					if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
@@ -1764,7 +1754,17 @@ class ChatStore {
 						await this.sendMessage(pending.content, pending.extras);
 					}
 				},
-				onError: streamCallbacks.onError
+				onCompletionId: streamCallbacks.onCompletionId,
+				onConnectionState: (state: StreamConnectionState) => {
+					if (convId === conversationsStore.activeConversation?.id) {
+						this.streamConnectionState = state;
+					}
+				},
+				onError: streamCallbacks.onError,
+				onModel: streamCallbacks.onModel,
+				onReasoningChunk: streamCallbacks.onReasoningChunk,
+				onTimings: streamCallbacks.onTimings,
+				stream: true
 			},
 			convId,
 			abortController.signal
@@ -1821,8 +1821,8 @@ class ChatStore {
 			.replace('{{USER}}', String(userContent || ''))
 			.replace('{{ASSISTANT}}', String(assistantContent || ''));
 		const titleMessage: ApiChatMessageData = {
-			role: MessageRole.USER,
-			content: titlePrompt
+			content: titlePrompt,
+			role: MessageRole.USER
 		};
 		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
 
@@ -1898,14 +1898,14 @@ class ChatStore {
 
 			if (lastKnownState) {
 				updateData.timings = {
-					prompt_n: lastKnownState.promptTokens || 0,
-					prompt_ms: lastKnownState.promptMs,
-					predicted_n: lastKnownState.tokensDecoded || 0,
 					cache_n: lastKnownState.cacheTokens || 0,
 					predicted_ms:
 						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
 							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-							: undefined
+							: undefined,
+					predicted_n: lastKnownState.tokensDecoded || 0,
+					prompt_ms: lastKnownState.promptMs,
+					prompt_n: lastKnownState.promptTokens || 0
 				};
 			}
 
@@ -1935,7 +1935,7 @@ class ChatStore {
 
 		if (!result) return;
 
-		const { message: messageToUpdate, index: messageIndex } = result;
+		const { index: messageIndex, message: messageToUpdate } = result;
 		const originalContent = messageToUpdate.content;
 
 		try {
@@ -2042,14 +2042,14 @@ class ChatStore {
 			this.clearChatStreaming(activeConv.id);
 			const newAssistantMessage = await DatabaseService.createMessageBranch(
 				{
-					convId: msg.convId,
-					type: msg.type,
-					timestamp: Date.now(),
-					role: msg.role,
-					content: '',
-					toolCalls: '',
 					children: [],
-					model: null
+					content: '',
+					convId: msg.convId,
+					model: null,
+					role: msg.role,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: msg.type
 				},
 				parentMessage.id
 			);
@@ -2088,7 +2088,7 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 
 		if (!activeConv)
-			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
+			return { assistantMessages: 0, messageTypes: [], totalCount: 0, userMessages: 0 };
 
 		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 		const messageToDelete = findMessageById(allMessages, messageId);
@@ -2097,8 +2097,8 @@ class ChatStore {
 		if (messageToDelete?.role === MessageRole.SYSTEM) {
 			const messagesToDelete = allMessages.filter((m) => m.id === messageId);
 
-			let userMessages = 0,
-				assistantMessages = 0;
+			let assistantMessages = 0,
+				userMessages = 0;
 
 			const messageTypes: string[] = [];
 
@@ -2114,15 +2114,15 @@ class ChatStore {
 				}
 			}
 
-			return { totalCount: 1, userMessages, assistantMessages, messageTypes };
+			return { assistantMessages, messageTypes, totalCount: 1, userMessages };
 		}
 
 		const descendants = findDescendantMessages(allMessages, messageId);
 		const allToDelete = [messageId, ...descendants];
 		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
 
-		let userMessages = 0,
-			assistantMessages = 0;
+		let assistantMessages = 0,
+			userMessages = 0;
 
 		const messageTypes: string[] = [];
 
@@ -2138,7 +2138,7 @@ class ChatStore {
 			}
 		}
 
-		return { totalCount: allToDelete.length, userMessages, assistantMessages, messageTypes };
+		return { assistantMessages, messageTypes, totalCount: allToDelete.length, userMessages };
 	}
 
 	async deleteMessage(messageId: string): Promise<void> {
@@ -2214,14 +2214,14 @@ class ChatStore {
 
 			const newAssistantMessage = await DatabaseService.createMessageBranch(
 				{
-					convId: activeConv.id,
-					type: MessageType.TEXT,
-					timestamp: Date.now(),
-					role: MessageRole.ASSISTANT,
-					content: '',
-					toolCalls: '',
 					children: [],
-					model: null
+					content: '',
+					convId: activeConv.id,
+					model: null,
+					role: MessageRole.ASSISTANT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: MessageType.TEXT
 				},
 				anchorMessage.id
 			);
@@ -2252,7 +2252,7 @@ class ChatStore {
 
 		if (!result) return;
 
-		const { message: msg, index: idx } = result;
+		const { index: idx, message: msg } = result;
 		// Decide which resume path applies. tool_calls without tool results can
 		// not be resumed mid sequence by continue_final_message, branch instead.
 		// tool_calls already paired with tool results need a fresh next turn,
@@ -2308,53 +2308,11 @@ class ChatStore {
 				{
 					...this.getApiOptions(),
 					continueFinalMessage: true,
-					onConnectionState: (state: StreamConnectionState) => {
-						if (msg.convId === conversationsStore.activeConversation?.id) {
-							this.streamConnectionState = state;
-						}
-					},
 					onChunk: (chunk: string) => {
 						appendedContent += chunk;
 						hasReceivedContent = true;
 						updateStreamingContent(originalContent + appendedContent);
 						this.setChatReasoning(msg.convId, false);
-					},
-					onCompletionId: (id: string) => {
-						if (!id) return;
-
-						// refresh the message id so a later skip targets the live slot after a continue
-						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
-							completionId: id
-						});
-						DatabaseService.updateMessage(msg.id, { completionId: id }).catch(() => {});
-					},
-					onReasoningChunk: (chunk: string) => {
-						appendedReasoning += chunk;
-						hasReceivedContent = true;
-						// mark streaming state so a stop mid-thinking can persist the partial reasoning
-						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
-						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
-							reasoningContent: originalReasoning + appendedReasoning
-						});
-						this.setChatReasoning(msg.convId, true);
-					},
-					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-						const tokensPerSecond =
-							timings?.predicted_ms && timings?.predicted_n
-								? (timings.predicted_n / timings.predicted_ms) * 1000
-								: 0;
-
-						this.updateProcessingStateFromTimings(
-							{
-								prompt_n: timings?.prompt_n || 0,
-								prompt_ms: timings?.prompt_ms,
-								predicted_n: timings?.predicted_n || 0,
-								predicted_per_second: tokensPerSecond,
-								cache_n: timings?.cache_n || 0,
-								prompt_progress: promptProgress
-							},
-							msg.convId
-						);
 					},
 					onComplete: async (
 						finalContent?: string,
@@ -2387,6 +2345,20 @@ class ChatStore {
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
+					},
+					onCompletionId: (id: string) => {
+						if (!id) return;
+
+						// refresh the message id so a later skip targets the live slot after a continue
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
+							completionId: id
+						});
+						DatabaseService.updateMessage(msg.id, { completionId: id }).catch(() => {});
+					},
+					onConnectionState: (state: StreamConnectionState) => {
+						if (msg.convId === conversationsStore.activeConversation?.id) {
+							this.streamConnectionState = state;
+						}
 					},
 					onError: async (error: Error) => {
 						if (isAbortError(error)) {
@@ -2431,10 +2403,37 @@ class ChatStore {
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
 						this.showErrorDialog({
-							type:
-								error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
-							message: error.message
+							message: error.message,
+							type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER
 						});
+					},
+					onReasoningChunk: (chunk: string) => {
+						appendedReasoning += chunk;
+						hasReceivedContent = true;
+						// mark streaming state so a stop mid-thinking can persist the partial reasoning
+						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
+							reasoningContent: originalReasoning + appendedReasoning
+						});
+						this.setChatReasoning(msg.convId, true);
+					},
+					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+						const tokensPerSecond =
+							timings?.predicted_ms && timings?.predicted_n
+								? (timings.predicted_n / timings.predicted_ms) * 1000
+								: 0;
+
+						this.updateProcessingStateFromTimings(
+							{
+								cache_n: timings?.cache_n || 0,
+								predicted_n: timings?.predicted_n || 0,
+								predicted_per_second: tokensPerSecond,
+								prompt_ms: timings?.prompt_ms,
+								prompt_n: timings?.prompt_n || 0,
+								prompt_progress: promptProgress
+							},
+							msg.convId
+						);
 					}
 				},
 
@@ -2461,20 +2460,20 @@ class ChatStore {
 
 		if (!result) return;
 
-		const { message: msg, index: idx } = result;
+		const { index: idx, message: msg } = result;
 
 		try {
 			if (shouldBranch) {
 				const newMessage = await DatabaseService.createMessageBranch(
 					{
-						convId: msg.convId,
-						type: msg.type,
-						timestamp: Date.now(),
-						role: msg.role,
-						content: newContent,
-						toolCalls: msg.toolCalls || '',
 						children: [],
-						model: msg.model
+						content: newContent,
+						convId: msg.convId,
+						model: msg.model,
+						role: msg.role,
+						timestamp: Date.now(),
+						toolCalls: msg.toolCalls || '',
+						type: msg.type
 					},
 					msg.parent!
 				);
@@ -2506,7 +2505,7 @@ class ChatStore {
 
 		if (!result) return;
 
-		const { message: msg, index: idx } = result;
+		const { index: idx, message: msg } = result;
 
 		try {
 			const updateData: Partial<DatabaseMessage> = { content: newContent };
@@ -2548,7 +2547,7 @@ class ChatStore {
 
 		if (!result) return;
 
-		const { message: msg, index: idx } = result;
+		const { index: idx, message: msg } = result;
 
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
@@ -2571,8 +2570,8 @@ class ChatStore {
 				// No responses after this message — update in place instead of branching
 				const updates: Partial<DatabaseMessage> = {
 					content: newContent,
-					timestamp: Date.now(),
-					extra: extrasToUse
+					extra: extrasToUse,
+					timestamp: Date.now()
 				};
 
 				await DatabaseService.updateMessage(msg.id, updates);
@@ -2586,15 +2585,15 @@ class ChatStore {
 
 				const newMessage = await DatabaseService.createMessageBranch(
 					{
-						convId: msg.convId,
-						type: msg.type,
-						timestamp: Date.now(),
-						role: msg.role,
-						content: newContent,
-						toolCalls: msg.toolCalls || '',
 						children: [],
+						content: newContent,
+						convId: msg.convId,
 						extra: extrasToUse,
-						model: msg.model
+						model: msg.model,
+						role: msg.role,
+						timestamp: Date.now(),
+						toolCalls: msg.toolCalls || '',
+						type: msg.type
 					},
 					parentId
 				);
@@ -2638,14 +2637,14 @@ class ChatStore {
 			) as DatabaseMessage[];
 			const assistantMessage = await DatabaseService.createMessageBranch(
 				{
-					convId: activeConv.id,
-					type: MessageType.TEXT,
-					timestamp: Date.now(),
-					role: MessageRole.ASSISTANT,
-					content: '',
-					toolCalls: '',
 					children: [],
-					model: null
+					content: '',
+					convId: activeConv.id,
+					model: null,
+					role: MessageRole.ASSISTANT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: MessageType.TEXT
 				},
 				userMessageId
 			);
@@ -2710,11 +2709,11 @@ class ChatStore {
 	}
 
 	private parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
-		const promptTokens = (timingData.prompt_n as number) || 0,
-			promptMs = (timingData.prompt_ms as number) || undefined,
+		const cacheTokens = (timingData.cache_n as number) || 0,
 			predictedTokens = (timingData.predicted_n as number) || 0,
-			tokensPerSecond = (timingData.predicted_per_second as number) || 0,
-			cacheTokens = (timingData.cache_n as number) || 0;
+			promptMs = (timingData.prompt_ms as number) || undefined,
+			promptTokens = (timingData.prompt_n as number) || 0,
+			tokensPerSecond = (timingData.predicted_per_second as number) || 0;
 		const promptProgress = timingData.prompt_progress as
 			| { total: number; cache: number; processed: number; time_ms: number }
 			| undefined;
@@ -2731,23 +2730,23 @@ class ChatStore {
 			: undefined;
 
 		return {
-			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
-			tokensDecoded: predictedTokens,
-			tokensRemaining: outputTokensMax - predictedTokens,
-			contextUsed,
+			cacheTokens,
 			contextTotal,
-			outputTokensUsed,
-			outputTokensMax,
+			contextUsed,
 			hasNextToken: predictedTokens > 0,
-			tokensPerSecond,
-			temperature: currentConfig.temperature ?? 0.8,
-			topP: currentConfig.top_p ?? 0.95,
-			speculative: false,
+			outputTokensMax,
+			outputTokensUsed,
 			progressPercent,
+			promptMs,
 			promptProgress,
 			promptTokens,
-			promptMs,
-			cacheTokens
+			speculative: false,
+			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
+			temperature: currentConfig.temperature ?? 0.8,
+			tokensDecoded: predictedTokens,
+			tokensPerSecond,
+			tokensRemaining: outputTokensMax - predictedTokens,
+			topP: currentConfig.top_p ?? 0.95
 		};
 	}
 
@@ -2757,14 +2756,14 @@ class ChatStore {
 
 			if (message.role === MessageRole.ASSISTANT && message.timings) {
 				const restoredState = this.parseTimingData({
-					prompt_n: message.timings.prompt_n || 0,
-					prompt_ms: message.timings.prompt_ms,
+					cache_n: message.timings.cache_n || 0,
 					predicted_n: message.timings.predicted_n || 0,
 					predicted_per_second:
 						message.timings.predicted_n && message.timings.predicted_ms
 							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
 							: 0,
-					cache_n: message.timings.cache_n || 0
+					prompt_ms: message.timings.prompt_ms,
+					prompt_n: message.timings.prompt_n || 0
 				});
 
 				if (restoredState) {

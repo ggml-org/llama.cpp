@@ -5,10 +5,10 @@
 	import { Checkbox as CheckboxPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		checked = $bindable(false),
-		indeterminate = $bindable(false),
 		class: className,
+		indeterminate = $bindable(false),
+		ref = $bindable(null),
 		...restProps
 	}: WithoutChildrenOrChild<CheckboxPrimitive.RootProps> = $props();
 </script>

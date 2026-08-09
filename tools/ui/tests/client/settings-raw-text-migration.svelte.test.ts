@@ -39,7 +39,7 @@ describe('renderContentAsRawText migration', () => {
 	});
 
 	it('lets any explicit raw-text preference win when the legacy keys disagree', () => {
-		seedConfig({ renderUserContentAsMarkdown: true, renderThinkingAsMarkdown: false });
+		seedConfig({ renderThinkingAsMarkdown: false, renderUserContentAsMarkdown: true });
 		expect(config().renderContentAsRawText).toBe(true);
 	});
 

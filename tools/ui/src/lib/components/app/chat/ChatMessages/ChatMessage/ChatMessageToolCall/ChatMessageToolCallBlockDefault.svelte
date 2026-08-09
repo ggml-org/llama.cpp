@@ -25,7 +25,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, attachments, onToggle }: Props = $props();
+	let { attachments, isStreaming, onToggle, open, section }: Props = $props();
 
 	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
 	const outputKind = $derived(classifyToolResult(section.toolResult));

@@ -46,9 +46,7 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 	}
 
 	setMessageEditContext({
-		get isEditing() {
-			return isEditing;
-		},
+		cancel: handleCancelEdit,
 		get editedContent() {
 			return editedContent;
 		},
@@ -58,24 +56,20 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 		get editedUploadedFiles() {
 			return editedUploadedFiles;
 		},
+		get isEditing() {
+			return isEditing;
+		},
+		get messageRole() {
+			return MessageRole.USER;
+		},
 		get originalContent() {
 			return options.getContent();
 		},
 		get originalExtras() {
 			return options.getExtras();
 		},
-		get showSaveOnlyOption() {
-			return options.showSaveOnlyOption ?? false;
-		},
-		get showBranchAfterEditOption() {
-			return false;
-		},
-		get shouldBranchAfterEdit() {
-			return false;
-		},
-		get messageRole() {
-			return MessageRole.USER;
-		},
+		save: handleSaveEdit,
+		saveOnly: handleSaveEdit,
 		setContent: (c: string) => {
 			editedContent = c;
 		},
@@ -85,18 +79,24 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 		setUploadedFiles: (f: ChatUploadedFile[]) => {
 			editedUploadedFiles = f;
 		},
-		save: handleSaveEdit,
-		saveOnly: handleSaveEdit,
-		cancel: handleCancelEdit,
+		get shouldBranchAfterEdit() {
+			return false;
+		},
+		get showBranchAfterEditOption() {
+			return false;
+		},
+		get showSaveOnlyOption() {
+			return options.showSaveOnlyOption ?? false;
+		},
 		startEdit: handleEdit
 	});
 
 	return {
-		get isEditing() {
-			return isEditing;
-		},
+		handleCancelEdit,
 		handleEdit,
 		handleSaveEdit,
-		handleCancelEdit
+		get isEditing() {
+			return isEditing;
+		}
 	};
 }

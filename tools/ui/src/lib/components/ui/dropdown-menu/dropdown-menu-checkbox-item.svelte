@@ -6,11 +6,11 @@
 	import type { Snippet } from 'svelte';
 
 	let {
-		ref = $bindable(null),
 		checked = $bindable(false),
-		indeterminate = $bindable(false),
-		class: className,
 		children: childrenProp,
+		class: className,
+		indeterminate = $bindable(false),
+		ref = $bindable(null),
 		...restProps
 	}: WithoutChildrenOrChild<DropdownMenuPrimitive.CheckboxItemProps> & {
 		children?: Snippet;

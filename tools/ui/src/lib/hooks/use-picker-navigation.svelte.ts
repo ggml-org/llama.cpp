@@ -100,17 +100,17 @@ export function usePickerNavigation(opts: UsePickerNavigationOptions) {
 	}
 
 	return {
+		bumpScroll,
+		handleKeydown,
 		get hoveredIndex() {
 			return hoveredIndex;
 		},
+		move,
+		reset,
 		get scrollTrigger() {
 			return scrollTrigger;
 		},
-		reset,
-		setHover,
-		move,
-		bumpScroll,
-		handleKeydown
+		setHover
 	};
 }
 

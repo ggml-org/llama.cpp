@@ -11,7 +11,7 @@
 		class?: string;
 	}
 
-	let { logs, connectionTimeMs, defaultExpanded = false, class: className }: Props = $props();
+	let { class: className, connectionTimeMs, defaultExpanded = false, logs }: Props = $props();
 
 	let isExpanded = $derived(defaultExpanded);
 

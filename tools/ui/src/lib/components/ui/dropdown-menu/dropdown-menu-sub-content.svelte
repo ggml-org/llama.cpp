@@ -3,8 +3,8 @@
 	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: DropdownMenuPrimitive.SubContentProps = $props();
 </script>

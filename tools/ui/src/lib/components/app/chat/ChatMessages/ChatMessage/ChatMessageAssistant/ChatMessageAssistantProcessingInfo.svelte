@@ -8,7 +8,7 @@
 		position: 'top' | 'bottom';
 	}
 
-	let { modelLoadingText, processingState, position }: Props = $props();
+	let { modelLoadingText, position, processingState }: Props = $props();
 
 	const marginClass = position === 'top' ? 'mt-6' : 'mt-4';
 </script>

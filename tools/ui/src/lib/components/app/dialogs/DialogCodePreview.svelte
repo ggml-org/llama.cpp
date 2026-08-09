@@ -9,7 +9,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), code, language, onOpenChange }: Props = $props();
+	let { code, language, onOpenChange, open = $bindable() }: Props = $props();
 
 	let iframeRef = $state<HTMLIFrameElement | null>(null);
 

@@ -65,8 +65,8 @@ export const rehypeEnhanceSvgBlocks: Plugin<[], Root> = () => {
 			// Store the svg source in data attribute for copy and render
 			node.properties = {
 				...node.properties,
-				[SVG_SOURCE_ATTR]: svgSource,
-				[SVG_ID_ATTR]: svgId
+				[SVG_ID_ATTR]: svgId,
+				[SVG_SOURCE_ATTR]: svgSource
 			};
 
 			const actions = [
@@ -83,8 +83,8 @@ export const rehypeEnhanceSvgBlocks: Plugin<[], Root> = () => {
 				SVG_WRAPPER_CLASS,
 				SVG_SCROLL_CONTAINER_CLASS,
 				{
-					[SVG_ID_ATTR]: svgId,
-					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED
+					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED,
+					[SVG_ID_ATTR]: svgId
 				},
 				[sourceView]
 			);

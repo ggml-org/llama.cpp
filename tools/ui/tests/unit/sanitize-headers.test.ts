@@ -8,19 +8,19 @@ describe('sanitizeHeaders', () => {
 	});
 
 	it('passes through non-sensitive headers', () => {
-		const headers = new Headers({ 'content-type': 'application/json', accept: 'text/html' });
+		const headers = new Headers({ accept: 'text/html', 'content-type': 'application/json' });
 
 		expect(sanitizeHeaders(headers)).toEqual({
-			'content-type': 'application/json',
-			accept: 'text/html'
+			accept: 'text/html',
+			'content-type': 'application/json'
 		});
 	});
 
 	it('redacts known sensitive headers', () => {
 		const headers = new Headers({
 			authorization: 'Bearer secret',
-			'x-api-key': 'key-123',
-			'content-type': 'application/json'
+			'content-type': 'application/json',
+			'x-api-key': 'key-123'
 		});
 		const result = sanitizeHeaders(headers);
 
@@ -44,8 +44,8 @@ describe('sanitizeHeaders', () => {
 
 	it('redacts extra headers provided by the caller', () => {
 		const headers = new Headers({
-			'x-vendor-key': 'vendor-secret',
-			'content-type': 'application/json'
+			'content-type': 'application/json',
+			'x-vendor-key': 'vendor-secret'
 		});
 		const result = sanitizeHeaders(headers, ['x-vendor-key']);
 

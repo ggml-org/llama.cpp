@@ -17,11 +17,11 @@
 
 	let {
 		conversations,
+		isOpen = true,
 		messageCountMap = new Map(),
 		mode,
 		onCancel,
-		onConfirm,
-		isOpen = true
+		onConfirm
 	}: Props = $props();
 
 	let searchQuery = $state('');
@@ -51,9 +51,9 @@
 	);
 
 	const marquee = useMarqueeSelection({
-		selectedIds: () => selectedIds,
+		enabled: () => isOpen,
 		orderedIds: () => orderedIds,
-		enabled: () => isOpen
+		selectedIds: () => selectedIds
 	});
 
 	function toggleAll() {

@@ -39,10 +39,10 @@ export class DatabaseService {
 		fields?: Partial<Omit<DatabaseConversation, 'id' | 'name' | 'lastModified'>>
 	): Promise<DatabaseConversation> {
 		const conversation: DatabaseConversation = {
-			id: uuid(),
-			name,
-			lastModified: Date.now(),
 			currNode: '',
+			id: uuid(),
+			lastModified: Date.now(),
+			name,
 			...fields
 		};
 
@@ -86,10 +86,10 @@ export class DatabaseService {
 
 				const newMessage: DatabaseMessage = {
 					...message,
+					children: [],
 					id: uuid(),
 					parent: parentId,
-					toolCalls: message.toolCalls ?? '',
-					children: []
+					toolCalls: message.toolCalls ?? ''
 				};
 
 				await db[IDXDB_TABLES.messages].add(newMessage);
@@ -123,15 +123,15 @@ export class DatabaseService {
 	 */
 	static async createRootMessage(convId: string): Promise<string> {
 		const rootMessage: DatabaseMessage = {
-			id: uuid(),
-			convId,
-			type: 'root',
-			timestamp: Date.now(),
-			role: MessageRole.SYSTEM,
+			children: [],
 			content: '',
+			convId,
+			id: uuid(),
 			parent: null,
+			role: MessageRole.SYSTEM,
+			timestamp: Date.now(),
 			toolCalls: '',
-			children: []
+			type: 'root'
 		};
 
 		await db[IDXDB_TABLES.messages].add(rootMessage);
@@ -167,14 +167,14 @@ export class DatabaseService {
 			}
 
 			const systemMessage: DatabaseMessage = {
-				id: uuid(),
-				convId,
-				type: MessageRole.SYSTEM,
-				timestamp: Date.now(),
-				role: MessageRole.SYSTEM,
+				children: [],
 				content: trimmedPrompt,
+				convId,
+				id: uuid(),
 				parent: parentId,
-				children: []
+				role: MessageRole.SYSTEM,
+				timestamp: Date.now(),
+				type: MessageRole.SYSTEM
 			};
 
 			await db[IDXDB_TABLES.messages].add(systemMessage);
@@ -702,27 +702,27 @@ export class DatabaseService {
 
 					return {
 						...msg,
-						id: newId,
-						convId: newConvId,
-						parent: newParent,
 						children: newChildren,
-						extra: options.includeAttachments ? msg.extra : undefined
+						convId: newConvId,
+						extra: options.includeAttachments ? msg.extra : undefined,
+						id: newId,
+						parent: newParent
 					};
 				});
 				const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
 				const newConv: DatabaseConversation = {
-					id: newConvId,
-					name: options.name,
-					lastModified: Date.now(),
 					currNode: lastClonedMessage.id,
+					cwd: sourceConv.cwd,
 					forkedFromConversationId: sourceConvId,
+					id: newConvId,
+					lastModified: Date.now(),
 					mcpServerOverrides: sourceConv.mcpServerOverrides
 						? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
-								serverId: o.serverId,
-								enabled: o.enabled
+								enabled: o.enabled,
+								serverId: o.serverId
 							}))
 						: undefined,
-					cwd: sourceConv.cwd
+					name: options.name
 				};
 
 				await db[IDXDB_TABLES.conversations].add(newConv);

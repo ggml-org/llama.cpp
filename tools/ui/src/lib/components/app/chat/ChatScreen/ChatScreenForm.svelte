@@ -67,11 +67,11 @@
 
 	const { clearDraft } = useDraftMessages({
 		getChatId: () => chatId,
-		getMessage: () => message,
 		getFiles: () => uploadedFiles,
-		setMessage: (m) => (message = m),
+		getInitialMessage: () => initialMessage,
+		getMessage: () => message,
 		setFiles: (f) => (uploadedFiles = f),
-		getInitialMessage: () => initialMessage
+		setMessage: (m) => (message = m)
 	});
 
 	function handleFilesAdd(files: File[]) {
@@ -102,7 +102,7 @@
 	}
 
 	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ message, files: uploadedFiles });
+		onSystemPromptAdd?.({ files: uploadedFiles, message });
 	}
 
 	function handleUploadedFileRemove(fileId: string) {

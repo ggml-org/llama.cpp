@@ -44,8 +44,8 @@ const EDIT_NEW_400 = lines(400, 'new');
 const EDIT_OLD_50 = lines(50, 'old');
 const EDIT_NEW_50 = lines(50, 'new');
 const WRITE_FILE_ARGS = JSON.stringify({
-	path: '/src/lib/thing.ts',
-	content: lines(1500, 'src')
+	content: lines(1500, 'src'),
+	path: '/src/lib/thing.ts'
 });
 const MARKDOWN_50KB = Array.from(
 	{ length: 400 },

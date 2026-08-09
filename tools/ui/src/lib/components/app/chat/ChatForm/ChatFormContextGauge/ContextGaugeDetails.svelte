@@ -18,15 +18,15 @@
 	}
 
 	let {
-		currentRead,
-		currentFresh,
-		currentCache,
-		currentOutput,
-		kvTotal,
-		cumulativeRead,
-		cumulativeOutput,
-		cumulativeCacheTotal,
 		averageTokensPerSecond,
+		cumulativeCacheTotal,
+		cumulativeOutput,
+		cumulativeRead,
+		currentCache,
+		currentFresh,
+		currentOutput,
+		currentRead,
+		kvTotal,
 		transientDetails
 	}: Props = $props();
 

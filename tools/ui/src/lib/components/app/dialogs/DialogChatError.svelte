@@ -11,7 +11,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), type, message, contextInfo, onOpenChange }: Props = $props();
+	let { contextInfo, message, onOpenChange, open = $bindable(), type }: Props = $props();
 
 	const isTimeout = $derived(type === ErrorDialogType.TIMEOUT);
 	const title = $derived(isTimeout ? 'TCP Timeout' : 'Server Error');

@@ -132,12 +132,12 @@ export class ModelsService {
 	 */
 	static parseModelId(modelId: string): ParsedModelId {
 		const result: ParsedModelId = {
-			raw: modelId,
-			orgName: null,
-			modelName: null,
-			params: null,
 			activatedParams: null,
+			modelName: null,
+			orgName: null,
+			params: null,
 			quantization: null,
+			raw: modelId,
 			tags: []
 		};
 		// strip directory path and weight extension so a bare `-m /path/file.gguf`

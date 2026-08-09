@@ -76,14 +76,14 @@ export function parseGrepSearchMeta(section: AgenticSection): GrepSearchMeta | n
 	}
 
 	return {
+		errorMessage,
+		exclude,
+		include,
+		matches,
 		path,
 		pattern,
-		include,
-		exclude,
 		showLineNumbers,
-		matches,
-		totalMatches,
-		errorMessage
+		totalMatches
 	};
 }
 
@@ -94,27 +94,27 @@ function parseGrepLine(line: string, showLineNumbers: boolean): GrepSearchMatch 
 	const firstColon = line.indexOf(':');
 
 	if (firstColon === -1) {
-		return { file: line, content: '' };
+		return { content: '', file: line };
 	}
 
 	const file = line.slice(0, firstColon);
 	const tail = line.slice(firstColon + 1);
 
 	if (!showLineNumbers) {
-		return { file, content: tail };
+		return { content: tail, file };
 	}
 
 	const secondColon = tail.indexOf(':');
 
 	if (secondColon === -1) {
-		return { file, content: tail };
+		return { content: tail, file };
 	}
 
 	const lineNum = parseInt(tail.slice(0, secondColon), 10);
 
 	return {
+		content: tail.slice(secondColon + 1),
 		file,
-		line: Number.isFinite(lineNum) ? lineNum : undefined,
-		content: tail.slice(secondColon + 1)
+		line: Number.isFinite(lineNum) ? lineNum : undefined
 	};
 }

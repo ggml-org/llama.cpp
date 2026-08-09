@@ -38,18 +38,18 @@
 
 	let {
 		class: className = '',
-		isOpen,
-		query,
 		customAnchor = null,
-		scopePath = null,
+		isOpen,
 		onClose,
+		onOpened,
 		onSelect,
-		onOpened
+		query,
+		scopePath = null
 	}: Props = $props();
 
 	const nav = usePickerNavigation({
-		isOpen: () => isOpen,
 		count: () => displayedItems.length,
+		isOpen: () => isOpen,
 		onClose: () => onClose(),
 		onSelect: (index) => handleSelect(displayedItems[index])
 	});
@@ -79,8 +79,8 @@
 	const MENTION_SEARCH_LIMIT = 50;
 
 	const search = useDebouncedSearch({
-		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen && fileSearchEnabled,
+		debounceMs: SEARCH_DEBOUNCE_MS,
 		getQuery: () => trimmedQuery,
 		run: async (query, signal, isCurrent) => {
 			try {
@@ -92,7 +92,7 @@
 					searchDepth,
 					MENTION_SEARCH_LIMIT,
 					signal,
-					{ type: GlobSearchType.ALL, descendOnTrailingSeparator: true }
+					{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
 				);
 
 				if (!isCurrent()) return;
@@ -105,8 +105,8 @@
 				}
 
 				const toEntry = (e: GlobEntryResult): FileMentionEntry => ({
-					path: e.path,
 					name: e.name,
+					path: e.path,
 					type: e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
 				});
 

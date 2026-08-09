@@ -8,7 +8,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), emptyFiles, onOpenChange }: Props = $props();
+	let { emptyFiles, onOpenChange, open = $bindable() }: Props = $props();
 
 	function handleOpenChange(newOpen: boolean) {
 		open = newOpen;

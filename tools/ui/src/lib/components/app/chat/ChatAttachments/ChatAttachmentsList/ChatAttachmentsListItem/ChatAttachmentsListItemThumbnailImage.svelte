@@ -20,9 +20,9 @@
 		height = 'h-16',
 		id,
 		imageClass = '',
+		name,
 		onclick,
 		onRemove,
-		name,
 		preview,
 		readonly = false,
 		width = 'w-auto'

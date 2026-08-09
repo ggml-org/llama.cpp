@@ -14,7 +14,7 @@
 		modelId?: string | null;
 	}
 
-	let { open = $bindable(), onOpenChange, modelId = null }: Props = $props();
+	let { modelId = null, onOpenChange, open = $bindable() }: Props = $props();
 
 	let isRouter = $derived(serverStore.isRouterMode);
 

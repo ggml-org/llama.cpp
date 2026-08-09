@@ -5,8 +5,8 @@ function makeSseResponse(events: string[]): Response {
 	const body = events.join('\n\n') + '\n\n';
 
 	return new Response(body, {
-		status: 200,
-		headers: { 'content-type': 'text/event-stream' }
+		headers: { 'content-type': 'text/event-stream' },
+		status: 200
 	});
 }
 
@@ -61,8 +61,8 @@ describe('parseSseJsonStream', () => {
 			}
 		});
 		const response = new Response(stream, {
-			status: 200,
-			headers: { 'content-type': 'text/event-stream' }
+			headers: { 'content-type': 'text/event-stream' },
+			status: 200
 		});
 		const collected: unknown[] = [];
 

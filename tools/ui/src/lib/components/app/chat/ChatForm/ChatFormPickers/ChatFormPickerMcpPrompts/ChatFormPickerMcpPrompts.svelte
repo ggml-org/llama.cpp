@@ -32,11 +32,11 @@
 	let {
 		class: className = '',
 		isOpen = false,
-		searchQuery = '',
 		onClose,
-		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError
+		onPromptLoadError,
+		onPromptLoadStart,
+		searchQuery = ''
 	}: Props = $props();
 
 	let prompts = $state<MCPPromptInfo[]>([]);
@@ -168,9 +168,9 @@
 
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log('[ChatFormPickerMcpPrompts] Fetching completions for:', {
-				serverName: selectedPrompt.serverName,
-				promptName: selectedPrompt.name,
 				argName,
+				promptName: selectedPrompt.name,
+				serverName: selectedPrompt.serverName,
 				value
 			});
 		}
@@ -188,9 +188,9 @@
 			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log('[ChatFormPickerMcpPrompts] Autocomplete result:', {
 					argName,
-					value,
 					result,
-					suggestionsCount: result?.values.length ?? 0
+					suggestionsCount: result?.values.length ?? 0,
+					value
 				});
 			}
 

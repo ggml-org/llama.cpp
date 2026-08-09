@@ -12,7 +12,7 @@
 		onSectionChange?: (section: SettingsSectionTitle) => void;
 	}
 
-	let { sections, isActive, getHref, onSectionChange }: Props = $props();
+	let { getHref, isActive, onSectionChange, sections }: Props = $props();
 
 	const carousel = useScrollCarousel();
 

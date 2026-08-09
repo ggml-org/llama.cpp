@@ -73,13 +73,13 @@ export function splitPathQuery(query: string): PathQuery | null {
 	const parentOf = (dirs: string) =>
 		rootLength > 0 ? root + dirs : HOME_TILDE + PATH_SEPARATOR + dirs;
 
-	if (!rest) return { parent: root, last: '' };
+	if (!rest) return { last: '', parent: root };
 
 	const idx = rest.lastIndexOf(PATH_SEPARATOR);
 
-	if (idx === -1) return { parent: root, last: rest };
+	if (idx === -1) return { last: rest, parent: root };
 
-	return { parent: parentOf(rest.slice(0, idx)), last: rest.slice(idx + 1) };
+	return { last: rest.slice(idx + 1), parent: parentOf(rest.slice(0, idx)) };
 }
 
 export function buildCaseInsensitiveGlob(query: string): string {
@@ -124,7 +124,7 @@ export function buildGlobSearchArgs(
 		: buildCaseInsensitiveGlob(query);
 	const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : searchDepth;
 
-	return { path, include, maxDepth, rankQuery: pathQuery?.last ?? query, last: pathQuery?.last };
+	return { include, last: pathQuery?.last, maxDepth, path, rankQuery: pathQuery?.last ?? query };
 }
 
 const RANK_EXACT = 0;
@@ -161,7 +161,7 @@ export function joinPath(base: string, rel: string): string {
 }
 
 export function highlightMatch(text: string, query: string): { text: string; match: boolean }[] {
-	if (!query) return [{ text, match: false }];
+	if (!query) return [{ match: false, text }];
 
 	const segments: { text: string; match: boolean }[] = [];
 	const lowerText = text.toLowerCase();
@@ -173,14 +173,14 @@ export function highlightMatch(text: string, query: string): { text: string; mat
 		const idx = lowerText.indexOf(lowerQuery, i);
 
 		if (idx < 0) {
-			segments.push({ text: text.slice(i), match: false });
+			segments.push({ match: false, text: text.slice(i) });
 
 			break;
 		}
 
-		if (idx > i) segments.push({ text: text.slice(i, idx), match: false });
+		if (idx > i) segments.push({ match: false, text: text.slice(i, idx) });
 
-		segments.push({ text: text.slice(idx, idx + query.length), match: true });
+		segments.push({ match: true, text: text.slice(idx, idx + query.length) });
 		i = idx + query.length;
 	}
 

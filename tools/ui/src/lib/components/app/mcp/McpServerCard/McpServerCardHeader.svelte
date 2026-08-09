@@ -18,13 +18,13 @@
 	}
 
 	let {
-		displayName,
-		faviconUrl,
-		enabled,
+		capabilities,
 		disabled = false,
+		displayName,
+		enabled,
+		faviconUrl,
 		onToggle,
 		serverInfo,
-		capabilities,
 		transportType
 	}: Props = $props();
 </script>

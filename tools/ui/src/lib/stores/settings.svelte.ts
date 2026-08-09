@@ -562,10 +562,10 @@ class SettingsStore {
 		}
 
 		return {
-			version: 1,
-			timestamp: Date.now(),
 			config: configToExport,
-			userOverrides: Array.from(this.userOverrides)
+			timestamp: Date.now(),
+			userOverrides: Array.from(this.userOverrides),
+			version: 1
 		};
 	}
 

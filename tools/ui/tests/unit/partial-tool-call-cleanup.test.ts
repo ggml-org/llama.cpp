@@ -5,14 +5,14 @@ import { describe, expect, it } from 'vitest';
 
 function makeAssistant(overrides: Partial<DatabaseMessage> = {}): DatabaseMessage {
 	return {
-		id: overrides.id ?? 'ast-1',
-		convId: 'conv-1',
-		type: 'text',
-		timestamp: Date.now(),
-		role: MessageRole.ASSISTANT,
-		content: overrides.content ?? '',
-		parent: null,
 		children: [],
+		content: overrides.content ?? '',
+		convId: 'conv-1',
+		id: overrides.id ?? 'ast-1',
+		parent: null,
+		role: MessageRole.ASSISTANT,
+		timestamp: Date.now(),
+		type: 'text',
 		...overrides
 	} as DatabaseMessage;
 }
@@ -44,12 +44,12 @@ describe('partial tool call cleanup', () => {
 			content: 'partial reasoning',
 			toolCalls: JSON.stringify([
 				{
-					id: 'call_1',
-					type: 'function',
 					function: {
-						name: 'exec_shell_command',
-						arguments: '{"command":`grep -n \\"read_to\\" ` /Users'
-					}
+						arguments: '{"command":`grep -n \\"read_to\\" ` /Users',
+						name: 'exec_shell_command'
+					},
+					id: 'call_1',
+					type: 'function'
 				}
 			])
 		});

@@ -26,20 +26,20 @@ function makeMsg(role: MessageRole, opts: Partial<DatabaseMessage> = {}): Databa
 	nextId++;
 
 	return {
-		id: `msg-${nextId}`,
-		convId: 'conv-1',
-		type: MessageType.TEXT,
-		timestamp: nextId,
-		role,
-		content: '',
-		parent: null,
 		children: [],
+		content: '',
+		convId: 'conv-1',
+		id: `msg-${nextId}`,
+		parent: null,
+		role,
+		timestamp: nextId,
+		type: MessageType.TEXT,
 		...opts
 	};
 }
 
 function toolCall(id: string, name: string, args: string = '{}'): string {
-	return JSON.stringify([{ id, type: 'function', function: { name, arguments: args } }]);
+	return JSON.stringify([{ function: { arguments: args, name }, id, type: 'function' }]);
 }
 
 describe('classifyContinueIntent', () => {
@@ -97,8 +97,8 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.ASSISTANT, {
 				content: '',
 				toolCalls: JSON.stringify([
-					{ id: 'call_1', type: 'function', function: { name: 'a', arguments: '{}' } },
-					{ id: 'call_2', type: 'function', function: { name: 'b', arguments: '{}' } }
+					{ function: { arguments: '{}', name: 'a' }, id: 'call_1', type: 'function' },
+					{ function: { arguments: '{}', name: 'b' }, id: 'call_2', type: 'function' }
 				])
 			}),
 			makeMsg(MessageRole.TOOL, { content: 'r1', toolCallId: 'call_1' }),

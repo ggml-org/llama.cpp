@@ -10,7 +10,7 @@
 		onSectionChange?: (section: SettingsSectionTitle) => void;
 	}
 
-	let { sections, isActive, getHref, onSectionChange }: Props = $props();
+	let { getHref, isActive, onSectionChange, sections }: Props = $props();
 </script>
 
 <div class="sticky top-2 hidden w-64 flex-col self-start bg-background py-4 md:flex gap-6">

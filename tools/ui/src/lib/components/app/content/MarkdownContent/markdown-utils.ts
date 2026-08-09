@@ -81,5 +81,5 @@ export function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
 	const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
 	const language = languageLabel?.textContent?.trim() || 'text';
 
-	return { rawCode, language };
+	return { language, rawCode };
 }

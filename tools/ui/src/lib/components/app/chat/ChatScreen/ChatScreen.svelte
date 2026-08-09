@@ -68,12 +68,12 @@
 	const scroll = useChatScreenScroll(autoScroll);
 	const activeModel = useChatScreenActiveModel();
 	const fileUpload = useChatScreenFileUpload({
+		activeModelId: () => activeModel.activeModelId,
 		capabilities: () => ({
-			hasVision: activeModel.hasVisionModality,
 			hasAudio: activeModel.hasAudioModality,
-			hasVideo: activeModel.hasVideoModality
-		}),
-		activeModelId: () => activeModel.activeModelId
+			hasVideo: activeModel.hasVideoModality,
+			hasVision: activeModel.hasVisionModality
+		})
 	});
 	const dragAndDrop = useChatScreenDragAndDrop({
 		onDrop: fileUpload.handleFileUpload
@@ -206,8 +206,8 @@
 				const baseHeight = container.scrollHeight - innerHeight;
 
 				container.scrollTo({
-					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
-					behavior: 'smooth'
+					behavior: 'smooth',
+					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight
 				});
 			} else if (lastUserBubble) {
 				// On desktop, place the last user message near the top of the viewport
@@ -215,8 +215,8 @@
 				const bubbleRect = lastUserBubble.getBoundingClientRect();
 
 				container.scrollTo({
-					top: Math.max(0, container.scrollTop + bubbleRect.top - topPadding),
-					behavior: 'smooth'
+					behavior: 'smooth',
+					top: Math.max(0, container.scrollTop + bubbleRect.top - topPadding)
 				});
 			} else {
 				autoScroll.scrollToBottom();
@@ -344,8 +344,8 @@
 						onclick={() => {
 							mobileScrollDownHint = false;
 							scroll.chatScrollContainer?.scrollTo({
-								top: scroll.chatScrollContainer.scrollHeight,
-								behavior: 'smooth'
+								behavior: 'smooth',
+								top: scroll.chatScrollContainer.scrollHeight
 							});
 						}}
 					/>

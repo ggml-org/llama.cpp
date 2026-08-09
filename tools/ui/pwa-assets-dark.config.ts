@@ -10,18 +10,18 @@ export default defineConfig({
 	headLinkOptions: {
 		preset: '2023'
 	},
+	images: ['static/favicon-dark.svg'],
 	preset: {
-		transparent: {
-			sizes: [],
-			favicons: [[48, 'favicon-dark.ico']],
-			padding: PWA_ASSET_GENERATOR.FAVICON_PADDING
+		apple: {
+			sizes: []
 		},
 		maskable: {
 			sizes: []
 		},
-		apple: {
+		transparent: {
+			favicons: [[48, 'favicon-dark.ico']],
+			padding: PWA_ASSET_GENERATOR.FAVICON_PADDING,
 			sizes: []
 		}
-	},
-	images: ['static/favicon-dark.svg']
+	}
 });

@@ -40,17 +40,17 @@ export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null 
 	const eNum = Number(endRaw);
 
 	if (startRaw != null && endRaw != null && Number.isFinite(sNum) && Number.isFinite(eNum)) {
-		lineRange = { start: sNum, end: eNum };
+		lineRange = { end: eNum, start: sNum };
 	} else if (startRaw != null && countRaw != null) {
 		const cNum = Number(countRaw);
 
 		if (Number.isFinite(sNum) && Number.isFinite(cNum)) {
-			lineRange = { start: sNum, end: sNum + cNum - 1 };
+			lineRange = { end: sNum + cNum - 1, start: sNum };
 		}
 	}
 
 	const fileType = getFileTypeByExtension(fileName);
 	const language = fileType ? fileType.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') : DEFAULT_LANGUAGE;
 
-	return { fileName, lineRange, language };
+	return { fileName, language, lineRange };
 }

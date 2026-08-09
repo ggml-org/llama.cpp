@@ -19,7 +19,7 @@ export function buildResourceTree(
 	serverName: string,
 	searchQuery?: string
 ): ResourceTreeNode {
-	const root: ResourceTreeNode = { name: 'root', children: new Map() };
+	const root: ResourceTreeNode = { children: new Map(), name: 'root' };
 
 	if (!searchQuery || !searchQuery.trim()) {
 		for (const resource of resourceList) {
@@ -31,7 +31,7 @@ export function buildResourceTree(
 				const part = pathParts[i];
 
 				if (!current.children.has(part)) {
-					current.children.set(part, { name: part, children: new Map() });
+					current.children.set(part, { children: new Map(), name: part });
 				}
 
 				current = current.children.get(part)!;
@@ -40,9 +40,9 @@ export function buildResourceTree(
 			const fileName = pathParts[pathParts.length - 1] || resource.name;
 
 			current.children.set(resource.uri, {
+				children: new Map(),
 				name: fileName,
-				resource: { ...resource, serverName },
-				children: new Map()
+				resource: { ...resource, serverName }
 			});
 		}
 
@@ -63,7 +63,7 @@ export function buildResourceTree(
 			const part = pathParts[i];
 
 			if (!current.children.has(part)) {
-				current.children.set(part, { name: part, children: new Map(), isFiltered: true });
+				current.children.set(part, { children: new Map(), isFiltered: true, name: part });
 			}
 
 			current = current.children.get(part)!;
@@ -72,10 +72,10 @@ export function buildResourceTree(
 		const fileName = pathParts[pathParts.length - 1] || resource.name;
 
 		current.children.set(resource.uri, {
-			name: fileName,
-			resource: { ...resource, serverName },
 			children: new Map(),
-			isFiltered: true
+			isFiltered: true,
+			name: fileName,
+			resource: { ...resource, serverName }
 		});
 	}
 

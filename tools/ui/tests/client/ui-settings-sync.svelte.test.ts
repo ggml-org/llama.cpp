@@ -21,7 +21,7 @@ describe('server ui_settings application semantics', () => {
 
 	it('applies the admin defaults once for a new user', () => {
 		settingsStore.initialize();
-		mockProps({ theme: 'dark', apiKey: '' });
+		mockProps({ apiKey: '', theme: 'dark' });
 
 		settingsStore.syncWithServerDefaults();
 
@@ -35,7 +35,7 @@ describe('server ui_settings application semantics', () => {
 
 		// simulated F5: config now exists in localStorage
 		settingsStore.initialize();
-		mockProps({ theme: 'dark', apiKey: '' });
+		mockProps({ apiKey: '', theme: 'dark' });
 
 		settingsStore.syncWithServerDefaults();
 		settingsStore.syncWithServerDefaults();
@@ -51,7 +51,7 @@ describe('server ui_settings application semantics', () => {
 		settingsStore.initialize();
 		settingsStore.updateConfig('theme', 'light');
 		settingsStore.updateConfig('apiKey', 'sk-user-key');
-		mockProps({ theme: 'dark', apiKey: '' });
+		mockProps({ apiKey: '', theme: 'dark' });
 
 		settingsStore.forceSyncWithServerDefaults();
 

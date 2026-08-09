@@ -103,12 +103,12 @@ export class ChatService {
 			await ChatService.sendMessage(
 				[message],
 				{
-					model: model || undefined,
-					stream: true,
 					custom: { chat_template_kwargs: { enable_thinking: false } },
+					model: model || undefined,
 					onChunk: (chunk: string) => {
 						titleResponse += chunk;
-					}
+					},
+					stream: true
 				},
 				undefined,
 				signal
@@ -145,50 +145,50 @@ export class ChatService {
 		signal?: AbortSignal
 	): Promise<string | void> {
 		const {
-			stream,
-			onChunk,
-			onComplete,
-			onError,
-			onConnectionState,
-			onReasoningChunk,
-			onToolCallChunk,
-			onModel,
-			onCompletionId,
-			onTimings,
-			// Tools for function calling
-			tools,
-			// Generation parameters
-			temperature,
-			max_tokens,
+			backend_sampling,
+			continueFinalMessage,
+			custom,
+			// Config options
+			disableReasoningParsing,
+			dry_allowed_length,
+			dry_base,
+			dry_multiplier,
+			dry_penalty_last_n,
+			dynatemp_exponent,
 			// Sampling parameters
 			dynatemp_range,
-			dynatemp_exponent,
-			top_k,
-			top_p,
+			enableThinking,
+			excludeReasoningFromContext,
+			frequency_penalty,
+			max_tokens,
 			min_p,
-			xtc_probability,
-			xtc_threshold,
-			typ_p,
+			onChunk,
+			onComplete,
+			onCompletionId,
+			onConnectionState,
+			onError,
+			onModel,
+			onReasoningChunk,
+			onTimings,
+			onToolCallChunk,
+			presence_penalty,
+			reasoningEffort,
 			// Penalty parameters
 			repeat_last_n,
 			repeat_penalty,
-			presence_penalty,
-			frequency_penalty,
-			dry_multiplier,
-			dry_base,
-			dry_allowed_length,
-			dry_penalty_last_n,
 			// Other parameters
 			samplers,
-			backend_sampling,
-			custom,
+			stream,
+			// Generation parameters
+			temperature,
 			timings_per_token,
-			// Config options
-			disableReasoningParsing,
-			excludeReasoningFromContext,
-			enableThinking,
-			reasoningEffort,
-			continueFinalMessage
+			// Tools for function calling
+			tools,
+			top_k,
+			top_p,
+			typ_p,
+			xtc_probability,
+			xtc_threshold
 		} = options;
 		const normalizedMessages: ApiChatMessageData[] = (
 			await Promise.all(
@@ -244,10 +244,10 @@ export class ChatService {
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: ApiChatCompletionRequest['messages'][0] = {
-					role: msg.role,
 					content: msg.content,
-					tool_calls: msg.tool_calls,
-					tool_call_id: msg.tool_call_id
+					role: msg.role,
+					tool_call_id: msg.tool_call_id,
+					tool_calls: msg.tool_calls
 				};
 
 				// Include reasoning_content from the dedicated field
@@ -257,9 +257,9 @@ export class ChatService {
 
 				return mapped;
 			}),
-			stream,
 			return_progress: stream ? true : undefined,
 			sse_ping_interval: stream ? 1 : undefined,
+			stream,
 			tools: tools && tools.length > 0 ? tools : undefined
 		};
 
@@ -370,9 +370,9 @@ export class ChatService {
 			}
 
 			const response = await fetch(API_CHAT.COMPLETIONS, {
-				method: 'POST',
-				headers,
 				body: JSON.stringify(requestBody),
+				headers,
+				method: 'POST',
 				signal
 			});
 
@@ -499,25 +499,25 @@ export class ChatService {
 		}
 
 		const body: Record<string, unknown> = {
-			id: completionId,
-			action: CONTROL_ACTION.END_REASONING
+			action: CONTROL_ACTION.END_REASONING,
+			id: completionId
 		};
 
 		if (model) body.model = model;
 
 		try {
 			const res = await fetch(API_CHAT.CONTROL, {
-				method: 'POST',
+				body: JSON.stringify(body),
 				headers: getJsonHeaders(),
-				body: JSON.stringify(body)
+				method: 'POST'
 			});
 			const data = await res.json().catch(() => null);
 
 			if (!res.ok || data?.success !== true) {
 				console.error('stopReasoning: control request failed', {
-					status: res.status,
 					completionId,
-					response: data
+					response: data,
+					status: res.status
 				});
 
 				return false;
@@ -553,8 +553,8 @@ export class ChatService {
 			const id = streamIdentity(conversationId, model);
 
 			await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}`, {
-				method: 'DELETE',
-				headers: getAuthHeaders()
+				headers: getAuthHeaders(),
+				method: 'DELETE'
 			});
 		} catch (e) {
 			console.warn('cancelServerStream failed:', e);
@@ -599,8 +599,8 @@ export class ChatService {
 		try {
 			const state: ResumableStreamState = {
 				bytesReceived,
-				updatedAt: Date.now(),
-				model: model ?? null
+				model: model ?? null,
+				updatedAt: Date.now()
 			};
 
 			localStorage.setItem(streamStorageKey(conversationId), JSON.stringify(state));
@@ -693,7 +693,7 @@ export class ChatService {
 		const id = streamIdentity(conversationId, model);
 		const url = `${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}&from=${from}`;
 
-		return await fetch(url, { method: 'GET', signal, headers: getAuthHeaders() });
+		return await fetch(url, { headers: getAuthHeaders(), method: 'GET', signal });
 	}
 
 	static async preEncode(
@@ -726,10 +726,10 @@ export class ChatService {
 		const requestBody: Record<string, unknown> = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: Record<string, unknown> = {
-					role: msg.role,
 					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
-					tool_calls: msg.tool_calls,
-					tool_call_id: msg.tool_call_id
+					role: msg.role,
+					tool_call_id: msg.tool_call_id,
+					tool_calls: msg.tool_calls
 				};
 
 				if (!excludeReasoning && msg.reasoning_content) {
@@ -738,8 +738,8 @@ export class ChatService {
 
 				return mapped;
 			}),
-			stream: false,
-			n_predict: 0
+			n_predict: 0,
+			stream: false
 		};
 
 		if (model) {
@@ -748,9 +748,9 @@ export class ChatService {
 
 		try {
 			await fetch(API_CHAT.COMPLETIONS, {
-				method: 'POST',
-				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
+				headers: getJsonHeaders(),
+				method: 'POST',
 				signal
 			});
 		} catch (error) {
@@ -1271,8 +1271,8 @@ export class ChatService {
 		// Handle tool result messages (role: 'tool')
 		if (message.role === MessageRole.TOOL && message.toolCallId) {
 			return {
-				role: MessageRole.TOOL,
 				content: message.content,
+				role: MessageRole.TOOL,
 				tool_call_id: message.toolCallId
 			};
 		}
@@ -1290,8 +1290,8 @@ export class ChatService {
 
 		if (!message.extra || message.extra.length === 0) {
 			const result: ApiChatMessageData = {
-				role: message.role as MessageRole,
-				content: message.content
+				content: message.content,
+				role: message.role as MessageRole
 			};
 
 			if (message.reasoningContent) {
@@ -1313,8 +1313,8 @@ export class ChatService {
 
 		for (const textFile of textFiles) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText('File', textFile.name, textFile.content)
+				text: formatAttachmentText('File', textFile.name, textFile.content),
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1326,8 +1326,8 @@ export class ChatService {
 
 		for (const legacyContextFile of legacyContextFiles) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content)
+				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content),
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1343,8 +1343,8 @@ export class ChatService {
 			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
 
 			contentParts.push({
-				type: ContentPartType.IMAGE_URL,
-				image_url: { url: base64Url }
+				image_url: { url: base64Url },
+				type: ContentPartType.IMAGE_URL
 			});
 		}
 
@@ -1355,18 +1355,18 @@ export class ChatService {
 
 		for (const audio of audioFiles) {
 			contentParts.push({
-				type: ContentPartType.INPUT_AUDIO,
 				input_audio: {
 					data: audio.base64Data,
 					format: getAudioInputFormat(audio.mimeType)
-				}
+				},
+				type: ContentPartType.INPUT_AUDIO
 			});
 		}
 
 		if (message.content) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: message.content
+				text: message.content,
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1377,7 +1377,6 @@ export class ChatService {
 
 		for (const video of videoFiles) {
 			contentParts.push({
-				type: ContentPartType.INPUT_VIDEO,
 				input_video: {
 					data: video.base64Data,
 					format: video.mimeType.includes('mp4')
@@ -1385,7 +1384,8 @@ export class ChatService {
 						: video.mimeType.includes('ogg')
 							? 'ogg'
 							: 'auto'
-				}
+				},
+				type: ContentPartType.INPUT_VIDEO
 			});
 		}
 
@@ -1398,14 +1398,14 @@ export class ChatService {
 			if (pdfFile.processedAsImages && pdfFile.images) {
 				for (let i = 0; i < pdfFile.images.length; i++) {
 					contentParts.push({
-						type: ContentPartType.IMAGE_URL,
-						image_url: { url: pdfFile.images[i] }
+						image_url: { url: pdfFile.images[i] },
+						type: ContentPartType.IMAGE_URL
 					});
 				}
 			} else {
 				contentParts.push({
-					type: ContentPartType.TEXT,
-					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content)
+					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content),
+					type: ContentPartType.TEXT
 				});
 			}
 		}
@@ -1417,13 +1417,13 @@ export class ChatService {
 
 		for (const mcpPrompt of mcpPrompts) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
 				text: formatAttachmentText(
 					ATTACHMENT_LABEL_MCP_PROMPT,
 					mcpPrompt.name,
 					mcpPrompt.content,
 					mcpPrompt.serverName
-				)
+				),
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1434,19 +1434,19 @@ export class ChatService {
 
 		for (const mcpResource of mcpResources) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
 				text: formatAttachmentText(
 					ATTACHMENT_LABEL_MCP_RESOURCE,
 					mcpResource.name,
 					mcpResource.content,
 					mcpResource.serverName
-				)
+				),
+				type: ContentPartType.TEXT
 			});
 		}
 
 		const result: ApiChatMessageData = {
-			role: message.role as MessageRole,
-			content: contentParts
+			content: contentParts,
+			role: message.role as MessageRole
 		};
 
 		if (message.reasoningContent) {
@@ -1511,8 +1511,8 @@ export class ChatService {
 
 			if (errorData.error && 'n_prompt_tokens' in errorData.error && 'n_ctx' in errorData.error) {
 				error.contextInfo = {
-					n_prompt_tokens: errorData.error.n_prompt_tokens,
-					n_ctx: errorData.error.n_ctx
+					n_ctx: errorData.error.n_ctx,
+					n_prompt_tokens: errorData.error.n_prompt_tokens
 				};
 			}
 

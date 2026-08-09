@@ -46,19 +46,19 @@
 	}
 
 	let {
-		url,
 		headers,
-		name = '',
-		onNameChange,
-		namePlaceholder = 'Name reported by the server',
-		useProxy = false,
-		onUrlChange,
-		onHeadersChange,
-		onUseProxyChange,
-		urlError = null,
 		id = 'server',
-		wantsAuthorization = $bindable(false),
-		required = false
+		name = '',
+		namePlaceholder = 'Name reported by the server',
+		onHeadersChange,
+		onNameChange,
+		onUrlChange,
+		onUseProxyChange,
+		required = false,
+		url,
+		urlError = null,
+		useProxy = false,
+		wantsAuthorization = $bindable(false)
 	}: Props = $props();
 
 	let isWebSocket = $derived(

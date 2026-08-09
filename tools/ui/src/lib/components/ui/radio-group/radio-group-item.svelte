@@ -4,8 +4,8 @@
 	import { RadioGroup as RadioGroupPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: WithoutChildrenOrChild<RadioGroupPrimitive.ItemProps> = $props();
 </script>

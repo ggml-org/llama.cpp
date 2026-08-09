@@ -23,15 +23,15 @@
 	}
 
 	let {
-		class: className = '',
-		pairs,
-		onPairsChange,
-		keyPlaceholder = 'Key',
-		valuePlaceholder = 'Value',
 		addButtonLabel = 'Add',
+		class: className = '',
 		emptyMessage = 'No items configured.',
+		keyPlaceholder = 'Key',
+		onPairsChange,
+		pairs,
 		sectionLabel,
-		sectionLabelOptional = true
+		sectionLabelOptional = true,
+		valuePlaceholder = 'Value'
 	}: Props = $props();
 
 	// Pre-allocate the ref array so `bind:ref={keyInputRefs[index]}` never reads `undefined`

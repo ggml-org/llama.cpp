@@ -17,12 +17,12 @@
 	}
 
 	let {
-		section,
-		open,
-		isStreaming,
-		hasReasoningError = false,
 		attachments,
-		onToggle
+		hasReasoningError = false,
+		isStreaming,
+		onToggle,
+		open,
+		section
 	}: Props = $props();
 
 	const currentConfig = config();
@@ -107,9 +107,9 @@
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
 
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();

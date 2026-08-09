@@ -60,8 +60,8 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 
 	it('pre-existing Bearer header pre-fills the bearer input with the token stripped', async () => {
 		const existing = JSON.stringify({
-			'X-Trace-Id': 'abc',
-			[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}preexisting`
+			[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}preexisting`,
+			'X-Trace-Id': 'abc'
 		});
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 

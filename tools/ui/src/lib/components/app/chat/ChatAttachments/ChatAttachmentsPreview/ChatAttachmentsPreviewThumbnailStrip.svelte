@@ -18,7 +18,7 @@
 		onNavigate: (index: number) => void;
 	}
 
-	let { items, currentIndex, onNavigate }: Props = $props();
+	let { currentIndex, items, onNavigate }: Props = $props();
 
 	function getFileExtension(name: string): string {
 		const parts = name.split('.');

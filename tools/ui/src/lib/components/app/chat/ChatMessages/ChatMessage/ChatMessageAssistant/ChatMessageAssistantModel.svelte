@@ -11,7 +11,7 @@
 		onRegenerate: (modelOverride?: string) => void;
 	}
 
-	let { displayedModel, isRouter, isLoading, onRegenerate }: Props = $props();
+	let { displayedModel, isLoading, isRouter, onRegenerate }: Props = $props();
 
 	let pendingModel = $state<string | null>(null);
 

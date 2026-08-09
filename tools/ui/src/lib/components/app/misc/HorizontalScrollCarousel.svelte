@@ -10,7 +10,7 @@
 		onScrollableChange?: (isScrollable: boolean) => void;
 	}
 
-	let { class: className = '', children, gapSize = '3', onScrollableChange }: Props = $props();
+	let { children, class: className = '', gapSize = '3', onScrollableChange }: Props = $props();
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
@@ -22,7 +22,7 @@
 
 		if (!scrollContainer) return;
 
-		scrollContainer.scrollBy({ left: scrollContainer.clientWidth * -0.67, behavior: 'smooth' });
+		scrollContainer.scrollBy({ behavior: 'smooth', left: scrollContainer.clientWidth * -0.67 });
 	}
 
 	function scrollRight(event?: MouseEvent) {
@@ -31,13 +31,13 @@
 
 		if (!scrollContainer) return;
 
-		scrollContainer.scrollBy({ left: scrollContainer.clientWidth * 0.67, behavior: 'smooth' });
+		scrollContainer.scrollBy({ behavior: 'smooth', left: scrollContainer.clientWidth * 0.67 });
 	}
 
 	function updateScrollButtons() {
 		if (!scrollContainer) return;
 
-		const { scrollLeft, scrollWidth, clientWidth } = scrollContainer;
+		const { clientWidth, scrollLeft, scrollWidth } = scrollContainer;
 
 		canScrollLeft = scrollLeft > 0;
 		canScrollRight = scrollLeft < scrollWidth - clientWidth - 1;

@@ -5,10 +5,10 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 
 	let {
-		open = $bindable(),
 		includeSensitiveData = $bindable(false),
 		onCancel,
-		onConfirm
+		onConfirm,
+		open = $bindable()
 	}: {
 		open: boolean;
 		includeSensitiveData: boolean;

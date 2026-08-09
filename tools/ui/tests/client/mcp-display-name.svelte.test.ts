@@ -11,9 +11,9 @@ describe('mcp server display name', () => {
 
 	it('custom display name wins over the url fallback', () => {
 		const server = mcpStore.addServer({
+			displayName: 'My Tools',
 			enabled: false,
-			url: 'https://mcp.example.com/a',
-			displayName: 'My Tools'
+			url: 'https://mcp.example.com/a'
 		});
 
 		expect(mcpStore.getServerLabel(server)).toBe('My Tools');
@@ -27,14 +27,14 @@ describe('mcp server display name', () => {
 
 	it('identical labels get positional suffixes', () => {
 		const a = mcpStore.addServer({
+			displayName: 'GitHub',
 			enabled: false,
-			url: 'https://mcp.example.com/a',
-			displayName: 'GitHub'
+			url: 'https://mcp.example.com/a'
 		});
 		const b = mcpStore.addServer({
+			displayName: 'GitHub',
 			enabled: false,
-			url: 'https://mcp.example.com/b',
-			displayName: 'GitHub'
+			url: 'https://mcp.example.com/b'
 		});
 
 		expect(mcpStore.getServerLabel(a)).toBe('GitHub (1)');
@@ -43,14 +43,14 @@ describe('mcp server display name', () => {
 
 	it('renaming one twin dissolves the suffixes', () => {
 		const a = mcpStore.addServer({
+			displayName: 'GitHub',
 			enabled: false,
-			url: 'https://mcp.example.com/a',
-			displayName: 'GitHub'
+			url: 'https://mcp.example.com/a'
 		});
 		const b = mcpStore.addServer({
+			displayName: 'GitHub',
 			enabled: false,
-			url: 'https://mcp.example.com/b',
-			displayName: 'GitHub'
+			url: 'https://mcp.example.com/b'
 		});
 
 		mcpStore.updateServer(b.id, { displayName: 'GitHub Work' });
@@ -62,12 +62,12 @@ describe('mcp server display name', () => {
 		let captured = '';
 
 		const screen = await render(McpServerForm, {
-			url: 'https://mcp.example.com/a',
 			headers: '',
 			name: '',
-			onUrlChange: () => {},
 			onHeadersChange: () => {},
-			onNameChange: (v: string) => (captured = v)
+			onNameChange: (v: string) => (captured = v),
+			onUrlChange: () => {},
+			url: 'https://mcp.example.com/a'
 		});
 		const input = screen.getByLabelText('Display name');
 

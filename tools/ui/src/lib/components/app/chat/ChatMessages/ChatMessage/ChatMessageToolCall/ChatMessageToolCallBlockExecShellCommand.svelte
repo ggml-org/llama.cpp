@@ -39,7 +39,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, isExecuting = false, attachments, onToggle }: Props = $props();
+	let { attachments, isExecuting = false, isStreaming, onToggle, open, section }: Props = $props();
 
 	// `isLive` covers all in-flight phases: pre-chunk spinner and
 	// streaming itself. Frozen output (tool done while agent continues)
@@ -158,9 +158,9 @@
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
 
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();

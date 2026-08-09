@@ -41,7 +41,7 @@ export function groupModelOptions(
 
 	for (let i = 0; i < filteredOptions.length; i++) {
 		if (isModelLoaded(filteredOptions[i].model)) {
-			loaded.push({ option: filteredOptions[i], flatIndex: i });
+			loaded.push({ flatIndex: i, option: filteredOptions[i] });
 		}
 	}
 
@@ -54,7 +54,7 @@ export function groupModelOptions(
 			favoriteIds.has(filteredOptions[i].model) &&
 			!loadedModelIds.has(filteredOptions[i].model)
 		) {
-			favorites.push({ option: filteredOptions[i], flatIndex: i });
+			favorites.push({ flatIndex: i, option: filteredOptions[i] });
 		}
 	}
 
@@ -71,12 +71,12 @@ export function groupModelOptions(
 
 		if (!orgGroups.has(key)) orgGroups.set(key, []);
 
-		orgGroups.get(key)!.push({ option, flatIndex: i });
+		orgGroups.get(key)!.push({ flatIndex: i, option });
 	}
 
 	for (const [orgName, items] of orgGroups) {
-		available.push({ orgName: orgName || null, items });
+		available.push({ items, orgName: orgName || null });
 	}
 
-	return { loaded, favorites, available };
+	return { available, favorites, loaded };
 }

@@ -72,7 +72,7 @@ export function filterFilesByModalities(
 	const supportedFiles: File[] = [];
 	const unsupportedFiles: File[] = [];
 	const modalityReasons: Record<string, string> = {};
-	const { hasVision, hasAudio, hasVideo } = capabilities;
+	const { hasAudio, hasVideo, hasVision } = capabilities;
 
 	for (const file of files) {
 		const category = getFileTypeCategory(file.type);
@@ -124,7 +124,7 @@ export function filterFilesByModalities(
 		}
 	}
 
-	return { supportedFiles, unsupportedFiles, modalityReasons };
+	return { modalityReasons, supportedFiles, unsupportedFiles };
 }
 
 /**
@@ -141,7 +141,7 @@ export function generateModalityErrorMessage(
 ): string {
 	if (unsupportedFiles.length === 0) return '';
 
-	const { hasVision, hasAudio, hasVideo } = capabilities;
+	const { hasAudio, hasVideo, hasVision } = capabilities;
 
 	let message = '';
 

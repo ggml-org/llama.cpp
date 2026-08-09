@@ -32,10 +32,10 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 
 	if (m === 0 && n === 0) return [];
 
-	if (m === 0) return newLines.map((t, k) => ({ kind: DiffLineKind.ADD, text: t, newLine: k + 1 }));
+	if (m === 0) return newLines.map((t, k) => ({ kind: DiffLineKind.ADD, newLine: k + 1, text: t }));
 
 	if (n === 0)
-		return oldLines.map((t, k) => ({ kind: DiffLineKind.REMOVE, text: t, oldLine: k + 1 }));
+		return oldLines.map((t, k) => ({ kind: DiffLineKind.REMOVE, oldLine: k + 1, text: t }));
 
 	const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
 
@@ -58,26 +58,26 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 		if (oldLines[i - 1] === newLines[j - 1]) {
 			result.push({
 				kind: DiffLineKind.CONTEXT,
-				text: oldLines[i - 1],
+				newLine: j,
 				oldLine: i,
-				newLine: j
+				text: oldLines[i - 1]
 			});
 			i--;
 			j--;
 		} else if (lcs[i - 1][j] >= lcs[i][j - 1]) {
-			result.push({ kind: DiffLineKind.REMOVE, text: oldLines[i - 1], oldLine: i });
+			result.push({ kind: DiffLineKind.REMOVE, oldLine: i, text: oldLines[i - 1] });
 			i--;
 		} else {
-			result.push({ kind: DiffLineKind.ADD, text: newLines[j - 1], newLine: j });
+			result.push({ kind: DiffLineKind.ADD, newLine: j, text: newLines[j - 1] });
 			j--;
 		}
 	}
 	while (i > 0) {
-		result.push({ kind: DiffLineKind.REMOVE, text: oldLines[i - 1], oldLine: i });
+		result.push({ kind: DiffLineKind.REMOVE, oldLine: i, text: oldLines[i - 1] });
 		i--;
 	}
 	while (j > 0) {
-		result.push({ kind: DiffLineKind.ADD, text: newLines[j - 1], newLine: j });
+		result.push({ kind: DiffLineKind.ADD, newLine: j, text: newLines[j - 1] });
 		j--;
 	}
 

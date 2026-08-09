@@ -26,18 +26,18 @@ export interface DesktopIconStripItem {
 }
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
-	{ icon: SquarePen, tooltip: 'New chat', route: ROUTES.NEW_CHAT, keys: ['shift', 'cmd', 'o'] },
-	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
+	{ icon: SquarePen, keys: ['shift', 'cmd', 'o'], route: ROUTES.NEW_CHAT, tooltip: 'New chat' },
+	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
+		activeRouteId: '/mcp-servers',
 		icon: McpLogo,
-		tooltip: 'MCP Servers',
 		route: ROUTES.MCP_SERVERS,
-		activeRouteId: '/mcp-servers'
+		tooltip: 'MCP Servers'
 	},
 	{
+		activeUrlIncludes: '#/settings',
 		icon: Settings,
-		tooltip: 'Settings',
 		route: `${ROUTES.SETTINGS}/general`,
-		activeUrlIncludes: '#/settings'
+		tooltip: 'Settings'
 	}
 ];

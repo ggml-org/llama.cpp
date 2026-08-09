@@ -125,10 +125,10 @@ export class ParameterSyncService {
 		const source = isUserOverride ? ParameterSource.CUSTOM : ParameterSource.DEFAULT;
 
 		return {
-			value: currentValue,
-			source,
 			serverDefault: hasPropsDefault ? propsDefaults[key] : undefined, // Keep same field name for compatibility
-			userOverride: isUserOverride ? currentValue : undefined
+			source,
+			userOverride: isUserOverride ? currentValue : undefined,
+			value: currentValue
 		};
 	}
 
@@ -208,8 +208,8 @@ export class ParameterSyncService {
 			if (serverValue !== undefined) {
 				diff[key] = {
 					current: currentValue,
-					server: serverValue,
-					differs: currentValue !== serverValue
+					differs: currentValue !== serverValue,
+					server: serverValue
 				};
 			}
 		}

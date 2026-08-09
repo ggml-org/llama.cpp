@@ -82,13 +82,13 @@ import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
 	return {
-		isRunning: false,
 		currentTurn: 0,
-		totalToolCalls: 0,
+		executingToolCallId: null,
+		isRunning: false,
 		lastError: null,
-		streamingToolCall: null,
 		pendingPermissionRequest: null,
-		executingToolCallId: null
+		streamingToolCall: null,
+		totalToolCalls: 0
 	};
 }
 
@@ -100,39 +100,39 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 			message.tool_calls.length > 0
 		) {
 			return {
-				role: MessageRole.ASSISTANT,
 				content: message.content,
 				reasoning_content: message.reasoning_content,
+				role: MessageRole.ASSISTANT,
 				tool_calls: message.tool_calls.map((call, index) => ({
-					id: call.id ?? `call_${index}`,
-					type: (call.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
 					function: {
-						name: call.function?.name ?? '',
-						arguments: call.function?.arguments ?? ''
-					}
+						arguments: call.function?.arguments ?? '',
+						name: call.function?.name ?? ''
+					},
+					id: call.id ?? `call_${index}`,
+					type: (call.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION
 				}))
 			} satisfies AgenticMessage;
 		}
 
 		if (message.role === MessageRole.ASSISTANT) {
 			return {
-				role: MessageRole.ASSISTANT,
 				content: message.content,
-				reasoning_content: message.reasoning_content
+				reasoning_content: message.reasoning_content,
+				role: MessageRole.ASSISTANT
 			} satisfies AgenticMessage;
 		}
 
 		if (message.role === MessageRole.TOOL && message.tool_call_id) {
 			return {
+				content: typeof message.content === 'string' ? message.content : '',
 				role: MessageRole.TOOL,
-				tool_call_id: message.tool_call_id,
-				content: typeof message.content === 'string' ? message.content : ''
+				tool_call_id: message.tool_call_id
 			} satisfies AgenticMessage;
 		}
 
 		return {
-			role: message.role as MessageRole.SYSTEM | MessageRole.USER,
-			content: message.content
+			content: message.content,
+			role: message.role as MessageRole.SYSTEM | MessageRole.USER
 		} satisfies AgenticMessage;
 	});
 }
@@ -334,7 +334,7 @@ class AgenticStore {
 			return ToolPermissionDecision.ONCE;
 		}
 
-		this._pendingPermissions.set(conversationId, { toolName, serverLabel });
+		this._pendingPermissions.set(conversationId, { serverLabel, toolName });
 
 		return new Promise<ToolPermissionDecision>((resolve) => {
 			if (signal?.aborted) {
@@ -414,7 +414,7 @@ class AgenticStore {
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
-		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
+		const { callbacks, conversationId, messages, options = {}, perChatOverrides, signal } = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
 		this._pendingPermissions.set(conversationId, null);
@@ -472,23 +472,23 @@ class AgenticStore {
 		});
 
 		this.updateSession(conversationId, {
-			isRunning: true,
 			currentTurn: 0,
-			totalToolCalls: 0,
-			lastError: null
+			isRunning: true,
+			lastError: null,
+			totalToolCalls: 0
 		});
 
 		if (hasMcpServers) mcpStore.acquireConnection();
 
 		try {
 			await this.executeAgenticLoop({
+				agenticConfig,
+				callbacks,
 				conversationId,
 				messages: normalizedMessages,
 				options,
-				tools,
-				agenticConfig,
-				callbacks,
-				signal
+				signal,
+				tools
 			});
 
 			return { handled: true };
@@ -498,7 +498,7 @@ class AgenticStore {
 			this.updateSession(conversationId, { lastError: normalizedError });
 			callbacks.onError?.(normalizedError);
 
-			return { handled: true, error: normalizedError };
+			return { error: normalizedError, handled: true };
 		} finally {
 			this.updateSession(conversationId, { isRunning: false });
 
@@ -521,21 +521,21 @@ class AgenticStore {
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
 	}): Promise<void> {
-		const { conversationId, messages, options, tools, agenticConfig, callbacks, signal } = params;
+		const { agenticConfig, callbacks, conversationId, messages, options, signal, tools } = params;
 		const {
-			onChunk,
-			onReasoningChunk,
-			onToolCallsStreaming,
-			onAttachments,
-			onModel,
-			onCompletionId,
-			onAssistantTurnComplete,
-			createToolResultMessage,
-			updateToolResultMessage,
 			createAssistantMessage,
+			createToolResultMessage,
+			onAssistantTurnComplete,
+			onAttachments,
+			onChunk,
+			onCompletionId,
 			onFlowComplete,
+			onModel,
+			onReasoningChunk,
 			onTimings,
-			onTurnComplete
+			onToolCallsStreaming,
+			onTurnComplete,
+			updateToolResultMessage
 		} = callbacks;
 		const sessionMessages: AgenticMessage[] = toAgenticMessages(messages);
 
@@ -543,12 +543,12 @@ class AgenticStore {
 		let totalToolCallCount = 0;
 
 		const agenticTimings: ChatMessageAgenticTimings = {
-			turns: 0,
+			llm: { predicted_ms: 0, predicted_n: 0, prompt_ms: 0, prompt_n: 0 },
+			perTurn: [],
+			toolCalls: [],
 			toolCallsCount: 0,
 			toolsMs: 0,
-			toolCalls: [],
-			perTurn: [],
-			llm: { predicted_n: 0, predicted_ms: 0, prompt_n: 0, prompt_ms: 0 }
+			turns: 0
 		};
 		const maxTurns = agenticConfig.maxTurns;
 		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
@@ -595,10 +595,10 @@ class AgenticStore {
 			let turnTimings: ChatMessageTimings | undefined;
 
 			const turnStats: ChatMessageAgenticTurnStats = {
-				turn: turn + 1,
-				llm: { predicted_n: 0, predicted_ms: 0, prompt_n: 0, prompt_ms: 0 },
+				llm: { predicted_ms: 0, predicted_n: 0, prompt_ms: 0, prompt_n: 0 },
 				toolCalls: [],
-				toolsMs: 0
+				toolsMs: 0,
+				turn: turn + 1
 			};
 
 			try {
@@ -606,15 +606,29 @@ class AgenticStore {
 					sessionMessages as ApiChatMessageData[],
 					{
 						...options,
-						stream: true,
-						tools: tools.length > 0 ? tools : undefined,
 						onChunk: (chunk: string) => {
 							turnContent += chunk;
 							onChunk?.(chunk);
 						},
+						onComplete: () => {
+							/* Completion handled after sendMessage resolves */
+						},
+						onCompletionId,
+						onError: (error: Error) => {
+							throw error;
+						},
+						onModel,
 						onReasoningChunk: (chunk: string) => {
 							turnReasoningContent += chunk;
 							onReasoningChunk?.(chunk);
+						},
+						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
+							onTimings?.(timings, progress);
+
+							if (timings) {
+								capturedTimings = timings;
+								turnTimings = timings;
+							}
 						},
 						onToolCallChunk: (serialized: string) => {
 							try {
@@ -634,7 +648,7 @@ class AgenticStore {
 										lastStreamingToolCallName = name;
 										lastStreamingToolCallArgsLength = argsLengthBucket;
 										this.updateSession(conversationId, {
-											streamingToolCall: { name, arguments: args }
+											streamingToolCall: { arguments: args, name }
 										});
 									}
 								}
@@ -642,22 +656,8 @@ class AgenticStore {
 								/* Ignore parse errors during streaming */
 							}
 						},
-						onModel,
-						onCompletionId,
-						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
-							onTimings?.(timings, progress);
-
-							if (timings) {
-								capturedTimings = timings;
-								turnTimings = timings;
-							}
-						},
-						onComplete: () => {
-							/* Completion handled after sendMessage resolves */
-						},
-						onError: (error: Error) => {
-							throw error;
-						}
+						stream: true,
+						tools: tools.length > 0 ? tools : undefined
 					},
 					conversationId,
 					signal
@@ -782,9 +782,9 @@ class AgenticStore {
 
 			// Add assistant message to session history
 			sessionMessages.push({
-				role: MessageRole.ASSISTANT,
 				content: turnContent || undefined,
 				reasoning_content: turnReasoningContent || undefined,
+				role: MessageRole.ASSISTANT,
 				tool_calls: normalizedCalls
 			});
 
@@ -812,9 +812,9 @@ class AgenticStore {
 						}
 
 						sessionMessages.push({
+							content: interruptedContent,
 							role: MessageRole.TOOL,
-							tool_call_id: remainingCall.id,
-							content: interruptedContent
+							tool_call_id: remainingCall.id
 						});
 					}
 
@@ -907,8 +907,8 @@ class AgenticStore {
 							if (executionResult.isError) toolSuccess = false;
 						} else {
 							const mcpCall: MCPToolCall = {
-								id: toolCall.id,
-								function: { name: toolName, arguments: toolCall.function.arguments }
+								function: { arguments: toolCall.function.arguments, name: toolName },
+								id: toolCall.id
 							};
 							const executionResult = await mcpStore.executeTool(mcpCall, signal);
 
@@ -939,8 +939,8 @@ class AgenticStore {
 
 				const toolDurationMs = performance.now() - toolStartTime;
 				const toolTiming: ChatMessageToolCallTiming = {
-					name: toolCall.function.name,
 					duration_ms: Math.round(toolDurationMs),
+					name: toolCall.function.name,
 					success: toolSuccess
 				};
 
@@ -956,7 +956,7 @@ class AgenticStore {
 					return;
 				}
 
-				const { cleanedResult, attachments } = this.extractBase64Attachments(result);
+				const { attachments, cleanedResult } = this.extractBase64Attachments(result);
 
 				// For streaming tools the result message was created empty
 				// at the start of execution and updated in place as chunks
@@ -986,17 +986,17 @@ class AgenticStore {
 
 				// Build content parts for session history (including images for vision models)
 				const contentParts: ApiChatMessageContentPart[] = [
-					{ type: ContentPartType.TEXT, text: cleanedResult }
+					{ text: cleanedResult, type: ContentPartType.TEXT }
 				];
 
 				for (const attachment of attachments) {
 					if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
-								type: ContentPartType.IMAGE_URL,
 								image_url: {
 									url: (attachment as DatabaseMessageExtraImageFile).base64Url
-								}
+								},
+								type: ContentPartType.IMAGE_URL
 							});
 						} else {
 							console.info(
@@ -1007,9 +1007,9 @@ class AgenticStore {
 				}
 
 				sessionMessages.push({
+					content: contentParts.length === 1 ? cleanedResult : contentParts,
 					role: MessageRole.TOOL,
-					tool_call_id: toolCall.id,
-					content: contentParts.length === 1 ? cleanedResult : contentParts
+					tool_call_id: toolCall.id
 				});
 			}
 
@@ -1042,12 +1042,12 @@ class AgenticStore {
 		if (agenticTimings.toolCallsCount === 0) return capturedTimings;
 
 		return {
-			predicted_n: capturedTimings?.predicted_n,
-			predicted_ms: capturedTimings?.predicted_ms,
-			prompt_n: capturedTimings?.prompt_n,
-			prompt_ms: capturedTimings?.prompt_ms,
+			agentic: agenticTimings,
 			cache_n: capturedTimings?.cache_n,
-			agentic: agenticTimings
+			predicted_ms: capturedTimings?.predicted_ms,
+			predicted_n: capturedTimings?.predicted_n,
+			prompt_ms: capturedTimings?.prompt_ms,
+			prompt_n: capturedTimings?.prompt_n
 		};
 	}
 
@@ -1055,12 +1055,12 @@ class AgenticStore {
 		if (!toolCalls) return [];
 
 		return toolCalls.map((call, index) => ({
-			id: call?.id ?? `tool_${index}`,
-			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
 			function: {
-				name: call?.function?.name ?? '',
-				arguments: call?.function?.arguments ?? ''
-			}
+				arguments: call?.function?.arguments ?? '',
+				name: call?.function?.name ?? ''
+			},
+			id: call?.id ?? `tool_${index}`,
+			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION
 		}));
 	}
 
@@ -1069,7 +1069,7 @@ class AgenticStore {
 		attachments: DatabaseMessageExtra[];
 	} {
 		if (!result.trim()) {
-			return { cleanedResult: result, attachments: [] };
+			return { attachments: [], cleanedResult: result };
 		}
 
 		const lines = result.split(NEWLINE);
@@ -1096,7 +1096,7 @@ class AgenticStore {
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
 			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
-				attachments.push({ type: AttachmentType.IMAGE, name, base64Url: trimmedLine });
+				attachments.push({ base64Url: trimmedLine, name, type: AttachmentType.IMAGE });
 
 				return `[Attachment saved: ${name}]`;
 			}
@@ -1104,7 +1104,7 @@ class AgenticStore {
 			return line;
 		});
 
-		return { cleanedResult: cleanedLines.join(NEWLINE), attachments };
+		return { attachments, cleanedResult: cleanedLines.join(NEWLINE) };
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {

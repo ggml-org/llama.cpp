@@ -145,19 +145,19 @@ export function formatMessageForClipboard(
 			const mcpAtt = att as DatabaseMessageExtraMcpPrompt;
 
 			return {
-				type: AttachmentType.MCP_PROMPT,
-				name: mcpAtt.name,
-				serverName: mcpAtt.serverName,
-				promptName: mcpAtt.promptName,
+				arguments: mcpAtt.arguments,
 				content: mcpAtt.content,
-				arguments: mcpAtt.arguments
+				name: mcpAtt.name,
+				promptName: mcpAtt.promptName,
+				serverName: mcpAtt.serverName,
+				type: AttachmentType.MCP_PROMPT
 			} as ClipboardMcpPromptAttachment;
 		}
 
 		return {
-			type: AttachmentType.TEXT,
+			content: att.content,
 			name: att.name,
-			content: att.content
+			type: AttachmentType.TEXT
 		} as ClipboardTextAttachment;
 	});
 
@@ -173,9 +173,9 @@ export function formatMessageForClipboard(
  */
 export function parseClipboardContent(clipboardText: string): ParsedClipboardContent {
 	const defaultResult: ParsedClipboardContent = {
+		mcpPromptAttachments: [],
 		message: clipboardText,
-		textAttachments: [],
-		mcpPromptAttachments: []
+		textAttachments: []
 	};
 
 	if (!clipboardText.startsWith('"')) {
@@ -218,9 +218,9 @@ export function parseClipboardContent(clipboardText: string): ParsedClipboardCon
 
 		if (!remainingPart || !remainingPart.startsWith('[')) {
 			return {
+				mcpPromptAttachments: [],
 				message,
-				textAttachments: [],
-				mcpPromptAttachments: []
+				textAttachments: []
 			};
 		}
 
@@ -231,26 +231,26 @@ export function parseClipboardContent(clipboardText: string): ParsedClipboardCon
 		for (const att of attachments) {
 			if (isValidMcpPromptAttachment(att)) {
 				validMcpPromptAttachments.push({
-					type: AttachmentType.MCP_PROMPT,
-					name: att.name,
-					serverName: att.serverName,
-					promptName: att.promptName,
+					arguments: att.arguments,
 					content: att.content,
-					arguments: att.arguments
+					name: att.name,
+					promptName: att.promptName,
+					serverName: att.serverName,
+					type: AttachmentType.MCP_PROMPT
 				});
 			} else if (isValidTextAttachment(att)) {
 				validTextAttachments.push({
-					type: AttachmentType.TEXT,
+					content: att.content,
 					name: att.name,
-					content: att.content
+					type: AttachmentType.TEXT
 				});
 			}
 		}
 
 		return {
+			mcpPromptAttachments: validMcpPromptAttachments,
 			message,
-			textAttachments: validTextAttachments,
-			mcpPromptAttachments: validMcpPromptAttachments
+			textAttachments: validTextAttachments
 		};
 	} catch {
 		return defaultResult;

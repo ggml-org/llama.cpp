@@ -36,7 +36,6 @@ function rewrite(path: string, pairs: [string, string][]): void {
  */
 export function relativizeBasePlugin(): Plugin {
 	return {
-		name: 'llamacpp:relativize-base',
 		apply: 'build',
 		closeBundle() {
 			setTimeout(() => {
@@ -61,6 +60,7 @@ export function relativizeBasePlugin(): Plugin {
 					console.error('Failed to relativize base refs:', error);
 				}
 			}, 100);
-		}
+		},
+		name: 'llamacpp:relativize-base'
 	};
 }

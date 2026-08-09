@@ -11,14 +11,14 @@ class DraftMessagesStore {
 	getDraftMessage(chatId: string | undefined): DraftMessage {
 		const key = chatId ?? NEW_CHAT_DRAFT_KEY;
 
-		return this.drafts.get(key) ?? { message: '', files: [] };
+		return this.drafts.get(key) ?? { files: [], message: '' };
 	}
 
 	saveDraftMessage(chatId: string | undefined, message: string, files: ChatUploadedFile[]): void {
 		const key = chatId ?? NEW_CHAT_DRAFT_KEY;
 
 		if (message || files.length > 0) {
-			this.drafts.set(key, { message, files: [...files] });
+			this.drafts.set(key, { files: [...files], message });
 		} else {
 			this.drafts.delete(key);
 		}

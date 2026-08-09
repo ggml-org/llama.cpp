@@ -30,15 +30,15 @@
 	}
 
 	let {
-		option,
-		isSelected,
-		isHighlighted,
-		isFav,
 		hideOrgName = false,
-		onSelect,
-		onMouseEnter,
+		isFav,
+		isHighlighted,
+		isSelected,
+		onInfoClick,
 		onKeyDown,
-		onInfoClick
+		onMouseEnter,
+		onSelect,
+		option
 	}: Props = $props();
 
 	let currentRouterModels = $derived(routerModels());

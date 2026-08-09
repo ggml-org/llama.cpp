@@ -20,12 +20,12 @@
 	let {
 		displayName,
 		faviconUrl = null,
-		serverInfo,
 		iconClass = 'h-5 w-5',
 		iconRounded = 'rounded-sm',
+		nameClass,
+		serverInfo,
 		showVersion = true,
-		showWebsite = true,
-		nameClass
+		showWebsite = true
 	}: Props = $props();
 
 	let safeWebsiteUrl = $derived(

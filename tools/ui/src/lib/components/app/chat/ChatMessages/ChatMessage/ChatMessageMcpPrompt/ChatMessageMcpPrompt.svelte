@@ -30,17 +30,17 @@
 
 	let {
 		class: className = '',
-		message,
-		mcpPrompt,
-		siblingInfo = null,
-		showDeleteDialog,
 		deletionInfo,
-		onCopy,
-		onEdit,
-		onDelete,
+		mcpPrompt,
+		message,
 		onConfirmDelete,
+		onCopy,
+		onDelete,
+		onEdit,
 		onNavigateToSibling,
-		onShowDeleteDialogChange
+		onShowDeleteDialogChange,
+		showDeleteDialog,
+		siblingInfo = null
 	}: Props = $props();
 
 	// Get edit context

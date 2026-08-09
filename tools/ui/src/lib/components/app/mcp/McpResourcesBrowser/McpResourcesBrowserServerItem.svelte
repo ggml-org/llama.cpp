@@ -31,18 +31,18 @@
 	}
 
 	let {
-		serverName,
-		serverRes,
-		isExpanded,
-		selectedUris,
-		selectedTemplateUri,
 		expandedFolders,
-		onToggleServer,
-		onToggleFolder,
+		isExpanded,
 		onSelect,
-		onToggle,
 		onTemplateSelect,
-		searchQuery = ''
+		onToggle,
+		onToggleFolder,
+		onToggleServer,
+		searchQuery = '',
+		selectedTemplateUri,
+		selectedUris,
+		serverName,
+		serverRes
 	}: Props = $props();
 
 	let serverDisplayName = $derived(mcpStore.getServerDisplayName(serverName));
@@ -55,14 +55,14 @@
 
 	const templateInfos = $derived<MCPResourceTemplateInfo[]>(
 		serverRes.templates.map((t) => ({
-			uriTemplate: t.uriTemplate,
-			name: t.name,
-			title: t.title,
-			description: t.description,
-			mimeType: t.mimeType,
-			serverName,
 			annotations: t.annotations,
-			icons: t.icons
+			description: t.description,
+			icons: t.icons,
+			mimeType: t.mimeType,
+			name: t.name,
+			serverName,
+			title: t.title,
+			uriTemplate: t.uriTemplate
 		}))
 	);
 

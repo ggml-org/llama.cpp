@@ -42,21 +42,21 @@
 		actionsPosition,
 		deletionInfo,
 		justify,
-		onCopy,
-		onEdit,
 		onConfirmDelete,
 		onContinue,
+		onCopy,
 		onDelete,
+		onEdit,
 		onForkConversation,
 		onNavigateToSibling,
-		onShowDeleteDialogChange,
+		onRawOutputToggle,
 		onRegenerate,
+		onShowDeleteDialogChange,
+		rawOutputEnabled = false,
 		role,
-		siblingInfo = null,
 		showDeleteDialog,
 		showRawOutputSwitch = false,
-		rawOutputEnabled = false,
-		onRawOutputToggle
+		siblingInfo = null
 	}: Props = $props();
 
 	let showForkDialog = $state(false);
@@ -77,7 +77,7 @@
 	}
 
 	function handleConfirmFork() {
-		onForkConversation?.({ name: forkName.trim(), includeAttachments: forkIncludeAttachments });
+		onForkConversation?.({ includeAttachments: forkIncludeAttachments, name: forkName.trim() });
 		showForkDialog = false;
 	}
 </script>

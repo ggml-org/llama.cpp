@@ -5,14 +5,14 @@
 	import type { ComponentProps } from 'svelte';
 
 	let {
-		ref = $bindable(null),
-		class: className,
-		sideOffset = 4,
-		side,
 		align = 'center',
-		collisionPadding = 8,
 		avoidCollisions = true,
+		class: className,
+		collisionPadding = 8,
 		portalProps,
+		ref = $bindable(null),
+		side,
+		sideOffset = 4,
 		...restProps
 	}: PopoverPrimitive.ContentProps & {
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof PopoverPortal>>;

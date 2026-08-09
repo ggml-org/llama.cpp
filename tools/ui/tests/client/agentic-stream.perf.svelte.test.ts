@@ -40,11 +40,11 @@ interface FixtureOpts {
 }
 
 const DEFAULTS: FixtureOpts = {
-	priorToolCalls: 0,
-	toolResultBytes: 1024,
 	editFileEdits: 0,
 	openCodeFence: false,
-	paragraphEvery: 0
+	paragraphEvery: 0,
+	priorToolCalls: 0,
+	toolResultBytes: 1024
 };
 
 function blob(bytes: number, seed: string): string {
@@ -69,14 +69,14 @@ let msgSeq = 0;
 
 function baseMessage(overrides: Partial<DatabaseMessage>): DatabaseMessage {
 	return {
-		id: `m${msgSeq++}`,
-		convId: 'perf-conv',
-		type: 'text',
-		timestamp: 0,
-		role: MessageRole.ASSISTANT,
-		content: '',
-		parent: null,
 		children: [],
+		content: '',
+		convId: 'perf-conv',
+		id: `m${msgSeq++}`,
+		parent: null,
+		role: MessageRole.ASSISTANT,
+		timestamp: 0,
+		type: 'text',
 		...overrides
 	} as DatabaseMessage;
 }
@@ -92,18 +92,18 @@ function buildFixture(opts: FixtureOpts): {
 		const id = `call_${i}`;
 
 		toolCalls.push({
-			id,
-			type: 'function',
 			function: {
-				name: 'exec_shell_command',
-				arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` })
-			}
+				arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` }),
+				name: 'exec_shell_command'
+			},
+			id,
+			type: 'function'
 		});
 		toolMessages.push(
 			baseMessage({
+				content: `${blob(opts.toolResultBytes, `t${i}`)}\n[exit code: 0]`,
 				role: MessageRole.TOOL,
-				toolCallId: id,
-				content: `${blob(opts.toolResultBytes, `t${i}`)}\n[exit code: 0]`
+				toolCallId: id
 			})
 		);
 	}
@@ -112,28 +112,28 @@ function buildFixture(opts: FixtureOpts): {
 		const id = `edit_${i}`;
 
 		toolCalls.push({
-			id,
-			type: 'function',
 			function: {
-				name: 'edit_file',
 				arguments: JSON.stringify({
-					path: `/src/file_${i}.ts`,
-					edits: [{ old_text: diffLines(400, 'old'), new_text: diffLines(400, 'new') }]
-				})
-			}
+					edits: [{ new_text: diffLines(400, 'new'), old_text: diffLines(400, 'old') }],
+					path: `/src/file_${i}.ts`
+				}),
+				name: 'edit_file'
+			},
+			id,
+			type: 'function'
 		});
 		toolMessages.push(
 			baseMessage({
+				content: JSON.stringify({ edits_applied: 1, result: 'ok' }),
 				role: MessageRole.TOOL,
-				toolCallId: id,
-				content: JSON.stringify({ result: 'ok', edits_applied: 1 })
+				toolCallId: id
 			})
 		);
 	}
 
 	const message = baseMessage({
-		toolCalls: toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
-		content: ''
+		content: '',
+		toolCalls: toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined
 	});
 
 	return { message, toolMessages };
@@ -220,10 +220,10 @@ async function measure(label: string, partial: Partial<FixtureOpts>, tokens = 60
 
 	results.push({
 		label,
-		tokens,
+		max: durations[durations.length - 1],
 		mean: total / durations.length,
 		p95: durations[Math.floor(durations.length * 0.95)],
-		max: durations[durations.length - 1],
+		tokens,
 		total,
 		wall
 	});
@@ -285,25 +285,25 @@ async function measureConversation(
 
 			history.push(
 				baseMessage({
-					role: MessageRole.ASSISTANT,
 					content: `Message ${i}`,
+					role: MessageRole.ASSISTANT,
 					toolCalls: JSON.stringify([
 						{
-							id,
-							type: 'function',
 							function: {
-								name: 'exec_shell_command',
-								arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` })
-							}
+								arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` }),
+								name: 'exec_shell_command'
+							},
+							id,
+							type: 'function'
 						}
 					])
 				})
 			);
 			history.push(
 				baseMessage({
+					content: `${blob(1024, `r${i}`)}\n[exit code: 0]`,
 					role: MessageRole.TOOL,
-					toolCallId: id,
-					content: `${blob(1024, `r${i}`)}\n[exit code: 0]`
+					toolCallId: id
 				})
 			);
 
@@ -312,13 +312,13 @@ async function measureConversation(
 
 		history.push(
 			baseMessage({
-				role: isAssistant ? MessageRole.ASSISTANT : MessageRole.USER,
-				content: `Message ${i}: ${blob(512, `m${i}`)}`
+				content: `Message ${i}: ${blob(512, `m${i}`)}`,
+				role: isAssistant ? MessageRole.ASSISTANT : MessageRole.USER
 			})
 		);
 	}
 
-	const streaming = baseMessage({ role: MessageRole.ASSISTANT, content: '' });
+	const streaming = baseMessage({ content: '', role: MessageRole.ASSISTANT });
 
 	history.push(streaming);
 
@@ -362,10 +362,10 @@ async function measureConversation(
 
 	results.push({
 		label,
-		tokens,
+		max: durations[durations.length - 1],
 		mean: total / durations.length,
 		p95: durations[Math.floor(durations.length * 0.95)],
-		max: durations[durations.length - 1],
+		tokens,
 		total,
 		wall
 	});

@@ -4,9 +4,9 @@
 	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
 		portalProps,
+		ref = $bindable(null),
 		...restProps
 	}: WithoutChild<AlertDialogPrimitive.ContentProps> & {
 		portalProps?: WithoutChildrenOrChild<AlertDialogPrimitive.PortalProps>;

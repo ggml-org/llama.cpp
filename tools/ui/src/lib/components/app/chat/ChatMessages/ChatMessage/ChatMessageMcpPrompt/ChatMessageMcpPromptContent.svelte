@@ -22,10 +22,10 @@
 
 	let {
 		class: className = '',
-		prompt,
-		variant = McpPromptVariant.MESSAGE,
 		isLoading = false,
-		loadError
+		loadError,
+		prompt,
+		variant = McpPromptVariant.MESSAGE
 	}: Props = $props();
 
 	let hoveredArgKey = $state<string | null>(null);
@@ -35,7 +35,7 @@
 
 	let contentParts = $derived.by((): ContentPart[] => {
 		if (!prompt.content || !hasArguments) {
-			return [{ text: prompt.content || '', argKey: null }];
+			return [{ argKey: null, text: prompt.content || '' }];
 		}
 
 		const parts: ContentPart[] = [];
@@ -59,19 +59,19 @@
 				const index = remaining.indexOf(value);
 
 				if (index !== -1 && (earliestMatch === null || index < earliestMatch.index)) {
-					earliestMatch = { index, value, key: valueToKey.get(value)! };
+					earliestMatch = { index, key: valueToKey.get(value)!, value };
 				}
 			}
 
 			if (earliestMatch) {
 				if (earliestMatch.index > 0) {
-					parts.push({ text: remaining.slice(0, earliestMatch.index), argKey: null });
+					parts.push({ argKey: null, text: remaining.slice(0, earliestMatch.index) });
 				}
 
-				parts.push({ text: earliestMatch.value, argKey: earliestMatch.key });
+				parts.push({ argKey: earliestMatch.key, text: earliestMatch.value });
 				remaining = remaining.slice(earliestMatch.index + earliestMatch.value.length);
 			} else {
-				parts.push({ text: remaining, argKey: null });
+				parts.push({ argKey: null, text: remaining });
 
 				break;
 			}

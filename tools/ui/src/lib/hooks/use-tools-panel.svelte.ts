@@ -105,25 +105,25 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	}
 
 	return {
-		expandedGroups,
-		get groups() {
-			return groups;
-		},
 		get activeGroups() {
 			return activeGroups;
 		},
-		get totalToolCount() {
-			return totalToolCount;
+		expandedGroups,
+		getEnabledToolCount,
+		getFavicon,
+		get groups() {
+			return groups;
 		},
+		handleOpen,
+		isGroupChecked,
+		isGroupDisabled,
 		get noToolsInfoMessage() {
 			return noToolsInfoMessage;
 		},
-		isGroupChecked,
-		getEnabledToolCount,
-		getFavicon,
-		isGroupDisabled,
-		toggleGroupExpanded,
 		toggleGroupByKey,
-		handleOpen
+		toggleGroupExpanded,
+		get totalToolCount() {
+			return totalToolCount;
+		}
 	};
 }

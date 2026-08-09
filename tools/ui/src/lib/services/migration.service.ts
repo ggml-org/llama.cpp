@@ -119,8 +119,8 @@ function markMigrationFailed(id: string): void {
 
 const LOCALSTORAGE_MIGRATION_ID = 'localstorage-prefix-v1';
 const localStorageMigration: Migration = {
-	id: LOCALSTORAGE_MIGRATION_ID,
 	description: 'Copy localStorage keys from LlamaCppWebui to LlamaUi prefix (non-destructive)',
+	id: LOCALSTORAGE_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		// Non-destructive: copy to new key, but KEEP the old key
@@ -156,8 +156,8 @@ const localStorageMigration: Migration = {
 // eslint-disable-next-line padding-line-between-statements -- comment header separates this const group
 const IDXDB_MIGRATION_ID = 'idxdb-database-v1';
 const idxdbMigration: Migration = {
-	id: IDXDB_MIGRATION_ID,
 	description: 'Copy IndexedDB from LlamacppWebui to LlamaUi database (non-destructive)',
+	id: IDXDB_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		const oldDbNames = await Dexie.getDatabaseNames();
@@ -241,8 +241,8 @@ function parseLegacyToolCalls(content: string): ParsedTurn[] {
 		}
 
 		currentTurn.toolCalls.push({
-			name: match[1],
 			args: match[2],
+			name: match[1],
 			result: match[3].replace(/^\n+|\n+$/g, '')
 		});
 
@@ -288,7 +288,7 @@ function extractLegacyReasoning(content: string): { reasoning: string; cleanCont
 		.replace(new RegExp(LEGACY_AGENTIC_REGEX.REASONING_BLOCK.source, 'g'), '')
 		.replace(LEGACY_AGENTIC_REGEX.REASONING_OPEN, '');
 
-	return { reasoning, cleanContent };
+	return { cleanContent, reasoning };
 }
 
 function hasLegacyMarkers(content: string): boolean {
@@ -308,8 +308,8 @@ async function getDatabaseService() {
 }
 
 const legacyMessageMigration: Migration = {
-	id: LEGACY_MESSAGE_MIGRATION_ID,
 	description: 'Migrate legacy marker-based messages to structured format',
+	id: LEGACY_MESSAGE_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		const db = await getDatabaseService();
@@ -323,7 +323,7 @@ const legacyMessageMigration: Migration = {
 			for (const message of allMessages) {
 				if (message.role !== MessageRole.ASSISTANT) {
 					if (message.content?.includes(LEGACY_REASONING_TAGS.START)) {
-						const { reasoning, cleanContent } = extractLegacyReasoning(message.content);
+						const { cleanContent, reasoning } = extractLegacyReasoning(message.content);
 
 						await db.updateMessage(message.id, {
 							content: cleanContent.trim(),
@@ -337,7 +337,7 @@ const legacyMessageMigration: Migration = {
 
 				if (!hasLegacyMarkers(message.content ?? '')) continue;
 
-				const { reasoning, cleanContent } = extractLegacyReasoning(message.content);
+				const { cleanContent, reasoning } = extractLegacyReasoning(message.content);
 				const turns = parseLegacyToolCalls(cleanContent);
 
 				let existingToolCalls: Array<{
@@ -362,9 +362,9 @@ const legacyMessageMigration: Migration = {
 						existingToolCalls.find((e) => e.function?.name === tc.name) || existingToolCalls[i];
 
 					return {
+						function: { arguments: tc.args, name: tc.name },
 						id: existing?.id || `legacy_tool_${i}`,
-						type: 'function' as const,
-						function: { name: tc.name, arguments: tc.args }
+						type: 'function' as const
 					};
 				});
 
@@ -382,14 +382,14 @@ const legacyMessageMigration: Migration = {
 					const toolCallId = firstTurnToolCalls[i]?.id || `legacy_tool_${i}`;
 					const toolMsg = await db.createMessageBranch(
 						{
-							convId: conv.id,
-							type: 'text',
-							role: MessageRole.TOOL,
+							children: [],
 							content: tc.result,
-							toolCallId,
+							convId: conv.id,
+							role: MessageRole.TOOL,
 							timestamp: message.timestamp + i + 1,
+							toolCallId,
 							toolCalls: '',
-							children: []
+							type: 'text'
 						},
 						currentParentId
 					);
@@ -404,9 +404,9 @@ const legacyMessageMigration: Migration = {
 						const existing = existingToolCalls[idx];
 
 						return {
+							function: { arguments: tc.args, name: tc.name },
 							id: existing?.id || `legacy_tool_${idx}`,
-							type: 'function' as const,
-							function: { name: tc.name, arguments: tc.args }
+							type: 'function' as const
 						};
 					});
 
@@ -414,14 +414,14 @@ const legacyMessageMigration: Migration = {
 
 					const assistantMsg = await db.createMessageBranch(
 						{
-							convId: conv.id,
-							type: 'text',
-							role: MessageRole.ASSISTANT,
+							children: [],
 							content: turn.textBefore,
+							convId: conv.id,
+							model: message.model,
+							role: MessageRole.ASSISTANT,
 							timestamp: message.timestamp + turnIdx * 100,
 							toolCalls: turnToolCalls.length > 0 ? JSON.stringify(turnToolCalls) : '',
-							children: [],
-							model: message.model
+							type: 'text'
 						},
 						currentParentId
 					);
@@ -433,14 +433,14 @@ const legacyMessageMigration: Migration = {
 						const toolCallId = turnToolCalls[i]?.id || `legacy_tool_${toolCallIdCounter + i}`;
 						const toolMsg = await db.createMessageBranch(
 							{
-								convId: conv.id,
-								type: 'text',
-								role: MessageRole.TOOL,
+								children: [],
 								content: tc.result,
-								toolCallId,
+								convId: conv.id,
+								role: MessageRole.TOOL,
 								timestamp: message.timestamp + turnIdx * 100 + i + 1,
+								toolCallId,
 								toolCalls: '',
-								children: []
+								type: 'text'
 							},
 							currentParentId
 						);
@@ -476,8 +476,8 @@ const legacyMessageMigration: Migration = {
 // eslint-disable-next-line padding-line-between-statements -- comment header separates this const group
 const THEME_MIGRATION_ID = 'theme-key-v1';
 const themeMigration: Migration = {
-	id: THEME_MIGRATION_ID,
 	description: 'Copy standalone theme key to config object (non-destructive)',
+	id: THEME_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		const legacyTheme = localStorage.getItem('theme');
@@ -514,8 +514,8 @@ const themeMigration: Migration = {
 // eslint-disable-next-line padding-line-between-statements -- comment header separates this const group
 const CUSTOM_JSON_MIGRATION_ID = 'custom-json-key-v1';
 const customJsonKeyMigration: Migration = {
-	id: CUSTOM_JSON_MIGRATION_ID,
 	description: 'Copy legacy custom config key to customJson (non-destructive)',
+	id: CUSTOM_JSON_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
@@ -540,9 +540,9 @@ const MCP_DEFAULT_ENABLED_MIGRATION_ID = 'mcp-default-enabled-to-config-v1';
 const LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME}.mcpDefaultEnabled`;
 const DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME_DEPRECATED}.mcpDefaultEnabled`;
 const mcpDefaultEnabledMigration: Migration = {
-	id: MCP_DEFAULT_ENABLED_MIGRATION_ID,
 	description:
 		'Copy mcpDefaultEnabled localStorage key into settings config (preserves legacy keys)',
+	id: MCP_DEFAULT_ENABLED_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		const raw =
@@ -596,8 +596,8 @@ const mcpDefaultEnabledMigration: Migration = {
 };
 const CONFIG_TYPES_MIGRATION_ID = 'config-type-normalization-v1';
 const configTypesMigration: Migration = {
-	id: CONFIG_TYPES_MIGRATION_ID,
 	description: 'Coerce legacy string-encoded booleans in persisted config to real booleans',
+	id: CONFIG_TYPES_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
@@ -639,9 +639,9 @@ const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1
  * standalone overrides are already inside the config.
  */
 const mcpDefaultOverridesMergeMigration: Migration = {
-	id: MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID,
 	description:
 		'Merge mcpDefaultServerOverrides entries onto mcpServers[i].enabled (preserves legacy key)',
+	id: MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID,
 
 	async run(): Promise<void> {
 		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
@@ -734,17 +734,17 @@ export const MigrationService = {
 	},
 
 	/**
-	 * Check if a specific migration has been completed
-	 */
-	isCompleted(id: string): boolean {
-		return isMigrationCompleted(id);
-	},
-
-	/**
 	 * Get current migration state
 	 */
 	getState(): MigrationState {
 		return getMigrationState();
+	},
+
+	/**
+	 * Check if a specific migration has been completed
+	 */
+	isCompleted(id: string): boolean {
+		return isMigrationCompleted(id);
 	},
 
 	/**

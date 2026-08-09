@@ -48,7 +48,6 @@
 		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
-		toolMessages = [],
 		onConfirmDelete,
 		onContinue,
 		onCopy,
@@ -60,7 +59,8 @@
 		onShowDeleteDialogChange,
 		showDeleteDialog,
 		siblingInfo = null,
-		textareaElement = $bindable()
+		textareaElement = $bindable(),
+		toolMessages = []
 	}: Props = $props();
 
 	// Get edit context

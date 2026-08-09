@@ -81,8 +81,8 @@ class ModelsStore {
 	 * TTL: 10 minutes — props don't change frequently.
 	 */
 	private modelPropsCache = new TTLCache<string, ApiLlamaCppServerProps>({
-		ttlMs: MODEL_PROPS_CACHE_TTL_MS,
-		maxEntries: MODEL_PROPS_CACHE_MAX_ENTRIES
+		maxEntries: MODEL_PROPS_CACHE_MAX_ENTRIES,
+		ttlMs: MODEL_PROPS_CACHE_TTL_MS
 	});
 	private modelPropsFetching = $state<Set<string>>(new Set());
 
@@ -314,7 +314,7 @@ class ModelsStore {
 		const modelId = this.selectedModelName;
 
 		if (!modelId) {
-			return { supported: false, reason: 'No model selected' };
+			return { reason: 'No model selected', supported: false };
 		}
 
 		if (!this.modelPropsCache.get(modelId)) {
@@ -411,16 +411,16 @@ class ModelsStore {
 			const modelId = details?.model || item.id;
 
 			return {
-				id: item.id,
-				name: this.toDisplayName(displayNameSource),
-				model: modelId,
-				description: details?.description,
-				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
-				modalities: this.buildArchitectureModalities(item.architecture),
-				details: details?.details,
-				meta: item.meta ?? null,
-				parsedId: ModelsService.parseModelId(modelId),
 				aliases: item.aliases ?? [],
+				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+				description: details?.description,
+				details: details?.details,
+				id: item.id,
+				meta: item.meta ?? null,
+				modalities: this.buildArchitectureModalities(item.architecture),
+				model: modelId,
+				name: this.toDisplayName(displayNameSource),
+				parsedId: ModelsService.parseModelId(modelId),
 				tags: item.tags ?? []
 			};
 		});
@@ -768,7 +768,7 @@ class ModelsStore {
 					let buffer = '';
 
 					while (!signal.aborted) {
-						const { value, done } = await reader.read();
+						const { done, value } = await reader.read();
 
 						if (done) break;
 
@@ -915,7 +915,7 @@ class ModelsStore {
 	 */
 	private waitForStatus(modelId: string, target: ServerModelStatus): Promise<void> {
 		return new Promise((resolve, reject) => {
-			this.statusWaiters.set(modelId, { target, resolve, reject });
+			this.statusWaiters.set(modelId, { reject, resolve, target });
 		});
 	}
 
@@ -1069,9 +1069,9 @@ class ModelsStore {
 		modalities: NonNullable<ApiLlamaCppServerProps['modalities']>
 	): ModelModalities {
 		return {
-			vision: modalities.vision ?? false,
 			audio: modalities.audio ?? false,
-			video: modalities.video ?? false
+			video: modalities.video ?? false,
+			vision: modalities.vision ?? false
 		};
 	}
 
@@ -1084,9 +1084,9 @@ class ModelsStore {
 		const inputs = architecture.input_modalities;
 
 		return {
-			vision: inputs.includes(FileTypeCategory.IMAGE),
 			audio: inputs.includes(FileTypeCategory.AUDIO),
-			video: inputs.includes(FileTypeCategory.VIDEO)
+			video: inputs.includes(FileTypeCategory.VIDEO),
+			vision: inputs.includes(FileTypeCategory.IMAGE)
 		};
 	}
 

@@ -25,19 +25,19 @@
 	}
 
 	let {
+		activeModelId,
+		audioSrc,
 		currentItem,
-		isImage,
-		isAudio,
-		isVideo,
-		isPdf,
-		isText,
 		displayPreview,
 		displayTextContent,
-		audioSrc,
-		videoSrc,
-		language,
 		hasVisionModality,
-		activeModelId
+		isAudio,
+		isImage,
+		isPdf,
+		isText,
+		isVideo,
+		language,
+		videoSrc
 	}: Props = $props();
 
 	let IconComponent = $derived(

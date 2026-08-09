@@ -20,18 +20,18 @@
 	}
 
 	let {
-		icon,
-		tooltip,
-		variant = 'ghost',
-		href = '',
-		size = 'sm',
+		ariaLabel,
 		class: className = '',
 		disabled = false,
+		href = '',
+		icon,
 		iconSize = 'h-3 w-3',
-		tooltipSide = TooltipSide.TOP,
-		stopPropagationOnClick = false,
 		onclick,
-		ariaLabel
+		size = 'sm',
+		stopPropagationOnClick = false,
+		tooltip,
+		tooltipSide = TooltipSide.TOP,
+		variant = 'ghost'
 	}: Props = $props();
 
 	let innerWidth = $state(0);

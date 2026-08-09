@@ -87,7 +87,7 @@ function expandBrTags(value: string): ElementContent[] {
 			result.push({ type: 'text', value: value.slice(cursor, m.index) } as Text);
 		}
 
-		result.push({ type: 'element', tagName: 'br', properties: {}, children: [] } as Element);
+		result.push({ children: [], properties: {}, tagName: 'br', type: 'element' } as Element);
 		cursor = m.index! + m[0].length;
 	}
 
@@ -117,10 +117,10 @@ function parseList(value: string): Element | null {
 		if (body.slice(cursor, liMatch.index!).trim()) return null;
 
 		items.push({
-			type: 'element',
-			tagName: 'li',
+			children: expandBrTags(liMatch[1] ?? ''),
 			properties: {},
-			children: expandBrTags(liMatch[1] ?? '')
+			tagName: 'li',
+			type: 'element'
 		} as Element);
 
 		cursor = liMatch.index! + liMatch[0].length;
@@ -129,7 +129,7 @@ function parseList(value: string): Element | null {
 	// Reject if no items found or trailing garbage exists
 	if (!items.length || body.slice(cursor).trim()) return null;
 
-	return { type: 'element', tagName: 'ul', properties: {}, children: items } as Element;
+	return { children: items, properties: {}, tagName: 'ul', type: 'element' } as Element;
 }
 
 /**

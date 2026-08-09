@@ -29,8 +29,8 @@ export function parseExecShellCommandExitStatus(
 
 	return {
 		code: Number.parseInt(match[1], 10),
-		timedOut: match[0].includes('exit due to timed out'),
-		rawText: match[0]
+		rawText: match[0],
+		timedOut: match[0].includes('exit due to timed out')
 	};
 }
 

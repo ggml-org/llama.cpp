@@ -14,14 +14,14 @@ import { describe, expect, it } from 'vitest';
 
 function makeMessage(id: string): DatabaseMessage {
 	return {
-		id,
-		convId: 'c1',
-		type: 'text',
-		timestamp: 0,
-		role: MessageRole.ASSISTANT,
+		children: [],
 		content: '',
+		convId: 'c1',
+		id,
 		parent: null,
-		children: []
+		role: MessageRole.ASSISTANT,
+		timestamp: 0,
+		type: 'text'
 	} as DatabaseMessage;
 }
 

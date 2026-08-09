@@ -76,15 +76,15 @@ export function createPreTransform(
 				if (contentGuard && !contentGuard(text)) return;
 
 				const pre: Element = {
-					type: 'element',
-					tagName: 'pre',
-					properties: {
-						className: [targetClass]
-					},
 					children: [{ type: 'text', value: text } as Text],
 					// Keep the highlighted code element so the block can offer a source
 					// view that matches the app code blocks without re highlighting.
-					data: { sourceCode: codeElement } satisfies DiagramPreData
+					data: { sourceCode: codeElement } satisfies DiagramPreData,
+					properties: {
+						className: [targetClass]
+					},
+					tagName: 'pre',
+					type: 'element'
 				};
 
 				(parent.children as ElementContent[])[index] = pre;

@@ -6,29 +6,29 @@ import { describe, expect, it } from 'vitest';
 
 function makeAssistant(overrides: Partial<DatabaseMessage> = {}): DatabaseMessage {
 	return {
-		id: overrides.id ?? 'ast-1',
-		convId: 'conv-1',
-		type: 'text',
-		timestamp: Date.now(),
-		role: MessageRole.ASSISTANT,
-		content: overrides.content ?? '',
-		parent: null,
 		children: [],
+		content: overrides.content ?? '',
+		convId: 'conv-1',
+		id: overrides.id ?? 'ast-1',
+		parent: null,
+		role: MessageRole.ASSISTANT,
+		timestamp: Date.now(),
+		type: 'text',
 		...overrides
 	} as DatabaseMessage;
 }
 
 function makeToolMsg(overrides: Partial<DatabaseMessage> = {}): DatabaseMessage {
 	return {
-		id: overrides.id ?? 'tool-1',
-		convId: 'conv-1',
-		type: 'text',
-		timestamp: Date.now(),
-		role: MessageRole.TOOL,
-		content: overrides.content ?? 'tool result',
-		parent: null,
 		children: [],
+		content: overrides.content ?? 'tool result',
+		convId: 'conv-1',
+		id: overrides.id ?? 'tool-1',
+		parent: null,
+		role: MessageRole.TOOL,
+		timestamp: Date.now(),
 		toolCallId: overrides.toolCallId ?? 'call_1',
+		type: 'text',
 		...overrides
 	} as DatabaseMessage;
 }
@@ -68,15 +68,15 @@ describe('deriveAgenticSections', () => {
 			content: 'Let me check.',
 			toolCalls: JSON.stringify([
 				{
+					function: { arguments: '{"q":"test"}', name: 'search' },
 					id: 'call_1',
-					type: 'function',
-					function: { name: 'search', arguments: '{"q":"test"}' }
+					type: 'function'
 				}
 			])
 		});
 		const toolResult = makeToolMsg({
-			toolCallId: 'call_1',
-			content: 'Found 3 results'
+			content: 'Found 3 results',
+			toolCallId: 'call_1'
 		});
 		const sections = deriveAgenticSections(msg, [toolResult]);
 
@@ -90,7 +90,7 @@ describe('deriveAgenticSections', () => {
 	it('single turn: pending tool call without result', () => {
 		const msg = makeAssistant({
 			toolCalls: JSON.stringify([
-				{ id: 'call_1', type: 'function', function: { name: 'bash', arguments: '{}' } }
+				{ function: { arguments: '{}', name: 'bash' }, id: 'call_1', type: 'function' }
 			])
 		});
 		const sections = deriveAgenticSections(msg, [], [], true);
@@ -112,7 +112,7 @@ describe('deriveAgenticSections', () => {
 		const partialArgs = '{"path":"/Users/fifa2026.html","content":"<!DOCTYPE h';
 		const msg = makeAssistant({
 			toolCalls: JSON.stringify([
-				{ id: 'call_1', type: 'function', function: { name: 'write_file', arguments: partialArgs } }
+				{ function: { arguments: partialArgs, name: 'write_file' }, id: 'call_1', type: 'function' }
 			])
 		});
 		const sections = deriveAgenticSections(msg, [], [], true);
@@ -126,20 +126,20 @@ describe('deriveAgenticSections', () => {
 
 	it('multi-turn: two assistant turns grouped as one session', () => {
 		const assistant1 = makeAssistant({
-			id: 'ast-1',
 			content: 'Turn 1 text',
+			id: 'ast-1',
 			toolCalls: JSON.stringify([
 				{
+					function: { arguments: '{"q":"foo"}', name: 'search' },
 					id: 'call_1',
-					type: 'function',
-					function: { name: 'search', arguments: '{"q":"foo"}' }
+					type: 'function'
 				}
 			])
 		});
-		const tool1 = makeToolMsg({ id: 'tool-1', toolCallId: 'call_1', content: 'result 1' });
+		const tool1 = makeToolMsg({ content: 'result 1', id: 'tool-1', toolCallId: 'call_1' });
 		const assistant2 = makeAssistant({
-			id: 'ast-2',
-			content: 'Final answer based on results.'
+			content: 'Final answer based on results.',
+			id: 'ast-2'
 		});
 		// toolMessages contains both tool result and continuation assistant
 		const sections = deriveAgenticSections(assistant1, [tool1, assistant2]);
@@ -158,36 +158,36 @@ describe('deriveAgenticSections', () => {
 
 	it('multi-turn: three turns with tool calls', () => {
 		const assistant1 = makeAssistant({
-			id: 'ast-1',
 			content: '',
+			id: 'ast-1',
 			toolCalls: JSON.stringify([
 				{
+					function: { arguments: '{}', name: 'list_files' },
 					id: 'call_1',
-					type: 'function',
-					function: { name: 'list_files', arguments: '{}' }
+					type: 'function'
 				}
 			])
 		});
-		const tool1 = makeToolMsg({ id: 'tool-1', toolCallId: 'call_1', content: 'file1 file2' });
+		const tool1 = makeToolMsg({ content: 'file1 file2', id: 'tool-1', toolCallId: 'call_1' });
 		const assistant2 = makeAssistant({
-			id: 'ast-2',
 			content: 'Reading file1...',
+			id: 'ast-2',
 			toolCalls: JSON.stringify([
 				{
+					function: { arguments: '{"path":"file1"}', name: 'read_file' },
 					id: 'call_2',
-					type: 'function',
-					function: { name: 'read_file', arguments: '{"path":"file1"}' }
+					type: 'function'
 				}
 			])
 		});
 		const tool2 = makeToolMsg({
+			content: 'contents of file1',
 			id: 'tool-2',
-			toolCallId: 'call_2',
-			content: 'contents of file1'
+			toolCallId: 'call_2'
 		});
 		const assistant3 = makeAssistant({
-			id: 'ast-3',
 			content: 'Here is the analysis.',
+			id: 'ast-3',
 			reasoningContent: 'The file contains...'
 		});
 		const sections = deriveAgenticSections(assistant1, [tool1, assistant2, tool2, assistant3]);
@@ -243,13 +243,13 @@ describe('deriveAgenticSections', () => {
 	it('multi-turn: streaming tool calls on last turn', () => {
 		const assistant1 = makeAssistant({
 			toolCalls: JSON.stringify([
-				{ id: 'call_1', type: 'function', function: { name: 'search', arguments: '{}' } }
+				{ function: { arguments: '{}', name: 'search' }, id: 'call_1', type: 'function' }
 			])
 		});
-		const tool1 = makeToolMsg({ toolCallId: 'call_1', content: 'result' });
-		const assistant2 = makeAssistant({ id: 'ast-2', content: '' });
+		const tool1 = makeToolMsg({ content: 'result', toolCallId: 'call_1' });
+		const assistant2 = makeAssistant({ content: '', id: 'ast-2' });
 		const streamingToolCalls: ApiChatCompletionToolCall[] = [
-			{ id: 'call_2', type: 'function', function: { name: 'write_file', arguments: '{"pa' } }
+			{ function: { arguments: '{"pa', name: 'write_file' }, id: 'call_2', type: 'function' }
 		];
 		const sections = deriveAgenticSections(assistant1, [tool1, assistant2], streamingToolCalls);
 
@@ -270,7 +270,7 @@ describe('hasAgenticContent', () => {
 	it('returns true when message has toolCalls', () => {
 		const msg = makeAssistant({
 			toolCalls: JSON.stringify([
-				{ id: 'call_1', type: 'function', function: { name: 'test', arguments: '{}' } }
+				{ function: { arguments: '{}', name: 'test' }, id: 'call_1', type: 'function' }
 			])
 		});
 

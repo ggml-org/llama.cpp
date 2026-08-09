@@ -10,11 +10,11 @@
 	>;
 
 	let {
-		ref = $bindable(null),
-		value = $bindable(),
-		type,
-		files = $bindable(),
 		class: className,
+		files = $bindable(),
+		ref = $bindable(null),
+		type,
+		value = $bindable(),
 		...restProps
 	}: Props = $props();
 </script>

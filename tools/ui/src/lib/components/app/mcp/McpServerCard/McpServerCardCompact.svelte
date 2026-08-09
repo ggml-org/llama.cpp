@@ -10,7 +10,7 @@
 		dimmed?: boolean;
 	}
 
-	let { server, onClick, selected = false, dimmed = false }: Props = $props();
+	let { dimmed = false, onClick, selected = false, server }: Props = $props();
 
 	let activeIconUrl = $derived.by(() => {
 		const isDark = mode.current === 'dark';

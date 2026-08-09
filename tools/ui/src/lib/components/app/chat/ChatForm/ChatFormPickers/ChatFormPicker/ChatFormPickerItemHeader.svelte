@@ -12,7 +12,7 @@
 		subtitle?: Snippet;
 	}
 
-	let { server, serverLabel, title, description, titleExtra, subtitle }: Props = $props();
+	let { description, server, serverLabel, subtitle, title, titleExtra }: Props = $props();
 
 	let faviconUrl = $derived(server ? mcpStore.getServerFavicon(server.id) : null);
 </script>

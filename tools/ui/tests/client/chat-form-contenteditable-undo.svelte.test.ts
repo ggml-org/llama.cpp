@@ -43,13 +43,13 @@ describe('ChatFormContenteditable undo/redo', () => {
 		await tick();
 		expect(screen.component.getValue()).toBe(`${SOURCE} more`);
 
-		const undoEvent = keydown(root, { key: 'z', ctrlKey: true });
+		const undoEvent = keydown(root, { ctrlKey: true, key: 'z' });
 
 		await tick();
 		expect(undoEvent.defaultPrevented).toBe(true);
 		expect(screen.component.getValue()).toBe(SOURCE);
 
-		const redoEvent = keydown(root, { key: 'z', ctrlKey: true, shiftKey: true });
+		const redoEvent = keydown(root, { ctrlKey: true, key: 'z', shiftKey: true });
 
 		await tick();
 		expect(redoEvent.defaultPrevented).toBe(true);
@@ -69,7 +69,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 		await tick();
 		expect(screen.component.getValue()).toBe(SOURCE);
 
-		keydown(root, { key: 'y', ctrlKey: true });
+		keydown(root, { ctrlKey: true, key: 'y' });
 		await tick();
 		expect(screen.component.getValue()).toBe(`${SOURCE} more`);
 	});
@@ -86,7 +86,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 		await tick();
 		expect(screen.component.getValue()).toBe('abcde');
 
-		keydown(root, { key: 'z', ctrlKey: true });
+		keydown(root, { ctrlKey: true, key: 'z' });
 		await tick();
 		expect(screen.component.getValue()).toBe('abc');
 	});
@@ -103,11 +103,11 @@ describe('ChatFormContenteditable undo/redo', () => {
 		await tick();
 		expect(screen.component.getValue()).toBe('abcd\n');
 
-		keydown(root, { key: 'z', ctrlKey: true });
+		keydown(root, { ctrlKey: true, key: 'z' });
 		await tick();
 		expect(screen.component.getValue()).toBe('abcd');
 
-		keydown(root, { key: 'z', ctrlKey: true });
+		keydown(root, { ctrlKey: true, key: 'z' });
 		await tick();
 		expect(screen.component.getValue()).toBe('abc');
 	});
@@ -118,7 +118,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 		await tick();
 
 		const root = editableIn(screen.container);
-		const event = keydown(root, { key: 'z', ctrlKey: true });
+		const event = keydown(root, { ctrlKey: true, key: 'z' });
 
 		await tick();
 
@@ -135,13 +135,13 @@ describe('ChatFormContenteditable undo/redo', () => {
 
 		type(root, 'd');
 		await tick();
-		keydown(root, { key: 'z', ctrlKey: true });
+		keydown(root, { ctrlKey: true, key: 'z' });
 		await tick();
 		expect(screen.component.getValue()).toBe('abc');
 
 		type(root, 'e');
 		await tick();
-		keydown(root, { key: 'z', ctrlKey: true, shiftKey: true });
+		keydown(root, { ctrlKey: true, key: 'z', shiftKey: true });
 		await tick();
 		expect(screen.component.getValue()).toBe('abce');
 	});

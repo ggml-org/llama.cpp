@@ -24,12 +24,12 @@
 		onSelect: (command: ChatFormCommand) => void;
 	}
 
-	let { class: className = '', isOpen, query, commands, onClose, onSelect }: Props = $props();
+	let { class: className = '', commands, isOpen, onClose, onSelect, query }: Props = $props();
 
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
-		[ChatFormCommandAction.PROMPT]: Sparkles,
 		[ChatFormCommandAction.CWD]: FolderOpen,
-		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON
+		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON,
+		[ChatFormCommandAction.PROMPT]: Sparkles
 	};
 
 	const trimmedQuery = $derived((query ?? '').trim().toLowerCase());
@@ -64,11 +64,11 @@
 	}
 
 	const nav = usePickerNavigation({
-		isOpen: () => isOpen,
 		count: () => filteredCommands.length,
-		step: (from, dir) => (from < 0 ? firstEnabledIndex() : stepEnabled(from, dir)),
+		isOpen: () => isOpen,
 		onClose: () => onClose(),
-		onSelect: (index) => handleSelect(filteredCommands[index])
+		onSelect: (index) => handleSelect(filteredCommands[index]),
+		step: (from, dir) => (from < 0 ? firstEnabledIndex() : stepEnabled(from, dir))
 	});
 
 	$effect(() => {

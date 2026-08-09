@@ -25,17 +25,17 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 		const [w, h] = dims.split('x').map(Number);
 
 		// logical-point dimensions
-		dimMap.set(`${w}x${h}`, { deviceW: spec.width, deviceH: spec.height, dpr: spec.dpr });
-		dimMap.set(`${h}x${w}`, { deviceW: spec.width, deviceH: spec.height, dpr: spec.dpr });
+		dimMap.set(`${w}x${h}`, { deviceH: spec.height, deviceW: spec.width, dpr: spec.dpr });
+		dimMap.set(`${h}x${w}`, { deviceH: spec.height, deviceW: spec.width, dpr: spec.dpr });
 		// pixel dimensions (used by actual generated splash files)
 		dimMap.set(`${w * spec.dpr}x${h * spec.dpr}`, {
-			deviceW: spec.width,
 			deviceH: spec.height,
+			deviceW: spec.width,
 			dpr: spec.dpr
 		});
 		dimMap.set(`${h * spec.dpr}x${w * spec.dpr}`, {
-			deviceW: spec.width,
 			deviceH: spec.height,
+			deviceW: spec.width,
 			dpr: spec.dpr
 		});
 	}
@@ -61,7 +61,7 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 			continue;
 		}
 
-		const { deviceW, deviceH, dpr } = spec;
+		const { deviceH, deviceW, dpr } = spec;
 		const media = `screen and (device-width: ${deviceW}px) and (device-height: ${deviceH}px) and (-webkit-device-pixel-ratio: ${dpr}) and (orientation: ${orientation})`;
 		const href = `./${file}`;
 
@@ -79,7 +79,6 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 
 export function splashScreenPlugin(): Plugin {
 	return {
-		name: 'llamacpp:splash-screen',
 		apply: 'build',
 		closeBundle() {
 			setTimeout(() => {
@@ -120,6 +119,7 @@ export function splashScreenPlugin(): Plugin {
 					console.error('Failed to process build output:', error);
 				}
 			}, 100);
-		}
+		},
+		name: 'llamacpp:splash-screen'
 	};
 }

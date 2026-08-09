@@ -180,8 +180,8 @@ export function detectIncompleteCodeBlock(markdown: string): IncompleteCodeBlock
 	const code = markdown.slice(codeStartIndex);
 
 	return {
-		language,
 		code,
+		language,
 		openingIndex
 	};
 }

@@ -28,7 +28,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, attachments, open, isStreaming, isExecuting, onToggle }: Props = $props();
+	let { attachments, isExecuting, isStreaming, onToggle, open, section }: Props = $props();
 
 	const searchResults = $derived(extractSearchResults(section.toolResult));
 	const searchQuery = $derived(extractSearchQuery(section.toolArgs));

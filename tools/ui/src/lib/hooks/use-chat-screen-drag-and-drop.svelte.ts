@@ -63,14 +63,14 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 	}
 
 	return {
-		get isDragOver() {
-			return isDragOver;
-		},
 		dragHandlers: {
 			dragenter: handleDragEnter,
 			dragleave: handleDragLeave,
 			dragover: handleDragOver,
 			drop: handleDrop
+		},
+		get isDragOver() {
+			return isDragOver;
 		}
 	};
 }

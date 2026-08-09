@@ -9,7 +9,7 @@
 		isStreaming?: boolean;
 	}
 
-	let { section, isStreaming = false }: Props = $props();
+	let { isStreaming = false, section }: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
@@ -33,8 +33,8 @@
 				if (typeof obj.error === 'string') return { errorMessage: obj.error };
 
 				return {
-					os: typeof obj.os === 'string' ? obj.os : undefined,
-					cwd: typeof obj.cwd === 'string' ? obj.cwd : undefined
+					cwd: typeof obj.cwd === 'string' ? obj.cwd : undefined,
+					os: typeof obj.os === 'string' ? obj.os : undefined
 				};
 			}
 		} catch {

@@ -76,7 +76,7 @@ export function parseCwdMessage(content: string): CwdMessageInfo | null {
 	const trimmed = content.trim();
 
 	if (trimmed === CWD_CLEARED_TEXT) {
-		return { path: null, display: '' };
+		return { display: '', path: null };
 	}
 
 	if (trimmed.startsWith(CWD_CHANGED_PREFIX)) {
@@ -84,9 +84,9 @@ export function parseCwdMessage(content: string): CwdMessageInfo | null {
 		// not anchored to the end: guidance may follow the link
 		const link = rest.match(CWD_LINK_REGEX);
 
-		if (link) return { path: link[1], display: link[2] };
+		if (link) return { display: link[2], path: link[1] };
 
-		return { path: rest, display: rest };
+		return { display: rest, path: rest };
 	}
 
 	return null;

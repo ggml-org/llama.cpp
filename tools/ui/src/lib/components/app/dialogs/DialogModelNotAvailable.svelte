@@ -13,7 +13,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), modelName, availableModels = [], onOpenChange }: Props = $props();
+	let { availableModels = [], modelName, onOpenChange, open = $bindable() }: Props = $props();
 
 	function handleOpenChange(newOpen: boolean) {
 		open = newOpen;

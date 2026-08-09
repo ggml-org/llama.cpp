@@ -53,17 +53,17 @@ export function useDebouncedSearch(opts: UseDebouncedSearchOptions) {
 	}
 
 	return {
+		cancel,
 		get isSearching() {
 			return isSearching;
-		},
-		/** Bump the loading flag synchronously (e.g. before the debounce fires). */
-		setLoading(value: boolean) {
-			isSearching = value;
 		},
 		run(query: string) {
 			schedule(query);
 		},
-		cancel
+		/** Bump the loading flag synchronously (e.g. before the debounce fires). */
+		setLoading(value: boolean) {
+			isSearching = value;
+		}
 	};
 }
 

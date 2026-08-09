@@ -44,18 +44,18 @@ function labelFromFileUrl(href: string): string {
 // icon, matching the convention the mention picker inserts with.
 function iconElement(href: string): Element {
 	return {
-		type: 'element',
-		tagName: 'svg',
+		children: getMentionBadgeIconPaths(href).map((d) => ({
+			children: [],
+			properties: { d },
+			tagName: 'path',
+			type: 'element'
+		})),
 		properties: {
 			...MENTION_BADGE_SVG_ATTRIBUTES,
 			className: MENTION_BADGE_ICON_CLASSNAME.split(' ').filter(Boolean)
 		},
-		children: getMentionBadgeIconPaths(href).map((d) => ({
-			type: 'element',
-			tagName: 'path',
-			properties: { d },
-			children: []
-		}))
+		tagName: 'svg',
+		type: 'element'
 	};
 }
 
@@ -81,9 +81,6 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 			node.children = [
 				iconElement(href),
 				{
-					type: 'element',
-					tagName: 'span',
-					properties: { className: ['shrink-0', 'truncate'] },
 					children: [
 						{
 							type: 'text',
@@ -94,7 +91,10 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 								toolsStore.serverHome
 							)
 						}
-					]
+					],
+					properties: { className: ['shrink-0', 'truncate'] },
+					tagName: 'span',
+					type: 'element'
 				}
 			];
 		});

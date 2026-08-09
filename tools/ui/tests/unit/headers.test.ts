@@ -72,7 +72,7 @@ describe('serializeHeaders', () => {
 
 		// Object key order follows insertion order in modern JS engines, so
 		// the serialized JSON writes keys in our input order.
-		expect(JSON.parse(serialized)).toEqual({ 'X-C': '3', 'X-A': '1', 'X-B': '2' });
+		expect(JSON.parse(serialized)).toEqual({ 'X-A': '1', 'X-B': '2', 'X-C': '3' });
 	});
 });
 

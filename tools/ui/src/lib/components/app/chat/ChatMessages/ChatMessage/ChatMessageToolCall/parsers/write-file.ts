@@ -44,12 +44,12 @@ export function parseWriteFileMeta(section: AgenticSection): WriteFileMeta | nul
 	const errorMessage = typeof resultObj?.error === 'string' ? resultObj.error : undefined;
 
 	return {
+		bytesWritten,
+		content,
+		errorMessage,
 		fileName,
 		filePath: rawPath,
 		language,
-		content,
-		bytesWritten,
-		resultMessage,
-		errorMessage
+		resultMessage
 	};
 }

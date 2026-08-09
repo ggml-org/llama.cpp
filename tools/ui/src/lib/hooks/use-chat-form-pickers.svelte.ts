@@ -58,9 +58,9 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	const mentionScopePath = $derived(opts.getCwd() ?? opts.getServerHome() ?? null);
 	const availableCommands = $derived(
 		getChatCommands({
-			showModelSelector: opts.getShowModelSelector(),
+			hasCwdTools: opts.hasCwdTools,
 			hasPrompts: opts.hasPrompts,
-			hasCwdTools: opts.hasCwdTools
+			showModelSelector: opts.getShowModelSelector()
 		})
 	);
 
@@ -300,11 +300,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	});
 
 	return {
-		get isCommandPickerOpen() {
-			return isCommandPickerOpen;
+		get availableCommands() {
+			return availableCommands;
 		},
-		set isCommandPickerOpen(v: boolean) {
-			isCommandPickerOpen = v;
+		closePromptPicker() {
+			isPromptPickerOpen = false;
+			promptSearchQuery = '';
 		},
 		get commandQuery() {
 			return commandQuery;
@@ -312,17 +313,21 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		set commandQuery(v: string) {
 			commandQuery = v;
 		},
-		get isPromptPickerOpen() {
-			return isPromptPickerOpen;
+		dispatchCommand,
+		handleCommandPickerClose,
+		handleCommandSelect,
+		handleInput,
+		// True when a picker consumed the event, so the form skips submit.
+		handleKeydown,
+		handleMentionPickerClose,
+		handlePromptPickerClose,
+		handleWorkingDirectoryClose,
+		handleWorkingDirectoryOpen,
+		get isCommandPickerOpen() {
+			return isCommandPickerOpen;
 		},
-		set isPromptPickerOpen(v: boolean) {
-			isPromptPickerOpen = v;
-		},
-		get promptSearchQuery() {
-			return promptSearchQuery;
-		},
-		set promptSearchQuery(v: string) {
-			promptSearchQuery = v;
+		set isCommandPickerOpen(v: boolean) {
+			isCommandPickerOpen = v;
 		},
 		get isMentionPickerOpen() {
 			return isMentionPickerOpen;
@@ -330,11 +335,11 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		set isMentionPickerOpen(v: boolean) {
 			isMentionPickerOpen = v;
 		},
-		get mentionQuery() {
-			return mentionQuery;
+		get isPromptPickerOpen() {
+			return isPromptPickerOpen;
 		},
-		set mentionQuery(v: string) {
-			mentionQuery = v;
+		set isPromptPickerOpen(v: boolean) {
+			isPromptPickerOpen = v;
 		},
 		get isWorkingDirectoryPickerOpen() {
 			return isWorkingDirectoryPickerOpen;
@@ -342,34 +347,29 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		set isWorkingDirectoryPickerOpen(v: boolean) {
 			isWorkingDirectoryPickerOpen = v;
 		},
+		get mentionQuery() {
+			return mentionQuery;
+		},
+		set mentionQuery(v: string) {
+			mentionQuery = v;
+		},
+		get mentionScopePath() {
+			return mentionScopePath;
+		},
+		openPromptPicker() {
+			isPromptPickerOpen = true;
+		},
+		get promptSearchQuery() {
+			return promptSearchQuery;
+		},
+		set promptSearchQuery(v: string) {
+			promptSearchQuery = v;
+		},
 		get workingDirectoryQuery() {
 			return workingDirectoryQuery;
 		},
 		set workingDirectoryQuery(v: string) {
 			workingDirectoryQuery = v;
-		},
-		get availableCommands() {
-			return availableCommands;
-		},
-		get mentionScopePath() {
-			return mentionScopePath;
-		},
-		handleInput,
-		// True when a picker consumed the event, so the form skips submit.
-		handleKeydown,
-		dispatchCommand,
-		handleCommandSelect,
-		handleCommandPickerClose,
-		handleMentionPickerClose,
-		handlePromptPickerClose,
-		handleWorkingDirectoryOpen,
-		handleWorkingDirectoryClose,
-		openPromptPicker() {
-			isPromptPickerOpen = true;
-		},
-		closePromptPicker() {
-			isPromptPickerOpen = false;
-			promptSearchQuery = '';
 		}
 	};
 }

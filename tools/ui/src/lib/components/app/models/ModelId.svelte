@@ -15,14 +15,14 @@
 	}
 
 	let {
-		modelId,
+		aliases,
+		class: className = '',
 		hideOrgName = false,
-		showRaw = undefined,
 		hideQuantization,
 		hideTags,
-		aliases,
+		modelId,
+		showRaw = undefined,
 		tags,
-		class: className = '',
 		...rest
 	}: Props = $props();
 

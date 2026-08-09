@@ -28,9 +28,9 @@ describe('formatMessageForClipboard', () => {
 	it('returns plain content when extras has only non-text attachments', () => {
 		const extras = [
 			{
-				type: AttachmentType.IMAGE as const,
+				base64Url: 'data:image/png;base64,...',
 				name: 'image.png',
-				base64Url: 'data:image/png;base64,...'
+				type: AttachmentType.IMAGE as const
 			}
 		];
 		const result = formatMessageForClipboard('Hello world', extras);
@@ -41,21 +41,21 @@ describe('formatMessageForClipboard', () => {
 	it('filters non-text attachments and keeps only text ones', () => {
 		const extras = [
 			{
-				type: AttachmentType.IMAGE as const,
+				base64Url: 'data:image/png;base64,...',
 				name: 'image.png',
-				base64Url: 'data:image/png;base64,...'
+				type: AttachmentType.IMAGE as const
 			},
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'Text content',
 				name: 'file.txt',
-				content: 'Text content'
+				type: AttachmentType.TEXT as const
 			},
 			{
-				type: AttachmentType.PDF as const,
-				name: 'doc.pdf',
 				base64Data: 'data:application/pdf;base64,...',
 				content: 'PDF content',
-				processedAsImages: false
+				name: 'doc.pdf',
+				processedAsImages: false,
+				type: AttachmentType.PDF as const
 			}
 		];
 		const result = formatMessageForClipboard('Hello', extras);
@@ -68,14 +68,14 @@ describe('formatMessageForClipboard', () => {
 	it('formats message with text attachments', () => {
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'File 1 content',
 				name: 'file1.txt',
-				content: 'File 1 content'
+				type: AttachmentType.TEXT as const
 			},
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'File 2 content',
 				name: 'file2.txt',
-				content: 'File 2 content'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const result = formatMessageForClipboard('Hello world', extras);
@@ -91,9 +91,9 @@ describe('formatMessageForClipboard', () => {
 		const content = 'Hello "world" with\nnewline';
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'Test content',
 				name: 'test.txt',
-				content: 'Test content'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const result = formatMessageForClipboard(content, extras);
@@ -109,9 +109,9 @@ describe('formatMessageForClipboard', () => {
 	it('converts legacy context type to TEXT type', () => {
 		const extras = [
 			{
-				type: AttachmentType.LEGACY_CONTEXT as const,
+				content: 'Legacy content',
 				name: 'legacy.txt',
-				content: 'Legacy content'
+				type: AttachmentType.LEGACY_CONTEXT as const
 			}
 		];
 		const result = formatMessageForClipboard('Hello', extras);
@@ -123,9 +123,9 @@ describe('formatMessageForClipboard', () => {
 	it('handles attachment content with special characters', () => {
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'const x = "hello\\nworld";\nconst y = `template ${var}`;',
 				name: 'code.js',
-				content: 'const x = "hello\\nworld";\nconst y = `template ${var}`;'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const formatted = formatMessageForClipboard('Check this code', extras);
@@ -139,9 +139,9 @@ describe('formatMessageForClipboard', () => {
 	it('handles unicode characters in content and attachments', () => {
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: '日本語テスト 🎉 émojis',
 				name: 'unicode.txt',
-				content: '日本語テスト 🎉 émojis'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const formatted = formatMessageForClipboard('Привет мир 👋', extras);
@@ -154,14 +154,14 @@ describe('formatMessageForClipboard', () => {
 	it('formats as plain text when asPlainText is true', () => {
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'File 1 content',
 				name: 'file1.txt',
-				content: 'File 1 content'
+				type: AttachmentType.TEXT as const
 			},
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'File 2 content',
 				name: 'file2.txt',
-				content: 'File 2 content'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const result = formatMessageForClipboard('Hello world', extras, true);
@@ -178,9 +178,9 @@ describe('formatMessageForClipboard', () => {
 	it('plain text mode does not use JSON format', () => {
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'Test content',
 				name: 'test.txt',
-				content: 'Test content'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const result = formatMessageForClipboard('Hello', extras, true);
@@ -301,14 +301,14 @@ describe('parseClipboardContent', () => {
 		const originalContent = 'Hello "world" with\nspecial characters';
 		const originalExtras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'Content with\nnewlines and "quotes"',
 				name: 'file1.txt',
-				content: 'Content with\nnewlines and "quotes"'
+				type: AttachmentType.TEXT as const
 			},
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'Another file',
 				name: 'file2.txt',
-				content: 'Another file'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const formatted = formatMessageForClipboard(originalContent, originalExtras);
@@ -358,9 +358,9 @@ describe('roundtrip edge cases', () => {
 	it('preserves empty message with attachments', () => {
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'Content only',
 				name: 'file.txt',
-				content: 'Content only'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const formatted = formatMessageForClipboard('', extras);
@@ -374,9 +374,9 @@ describe('roundtrip edge cases', () => {
 	it('preserves attachment with empty content', () => {
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: '',
 				name: 'empty.txt',
-				content: ''
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const formatted = formatMessageForClipboard('Message', extras);
@@ -391,9 +391,9 @@ describe('roundtrip edge cases', () => {
 		const content = 'Path: C:\\\\Users\\\\test\\\\file.txt';
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: 'D:\\\\Data\\\\file',
 				name: 'path.txt',
-				content: 'D:\\\\Data\\\\file'
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const formatted = formatMessageForClipboard(content, extras);
@@ -407,9 +407,9 @@ describe('roundtrip edge cases', () => {
 		const content = 'Line1\t\tTabbed\n  Spaced\r\nCRLF';
 		const extras = [
 			{
-				type: AttachmentType.TEXT as const,
+				content: '\t\t\n\n   ',
 				name: 'whitespace.txt',
-				content: '\t\t\n\n   '
+				type: AttachmentType.TEXT as const
 			}
 		];
 		const formatted = formatMessageForClipboard(content, extras);

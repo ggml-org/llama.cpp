@@ -21,7 +21,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open = $bindable(false), isStreaming = false, onToggle }: Props = $props();
+	let { isStreaming = false, onToggle, open = $bindable(false), section }: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
@@ -60,9 +60,9 @@
 			if (Number.isNaN(date.getTime())) return iso;
 
 			return date.toLocaleDateString(undefined, {
-				year: 'numeric',
+				day: 'numeric',
 				month: 'short',
-				day: 'numeric'
+				year: 'numeric'
 			});
 		} catch {
 			return iso;

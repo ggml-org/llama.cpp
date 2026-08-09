@@ -13,8 +13,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
 const FILE_SEARCH_DEF: OpenAIToolDefinition = {
-	type: 'function',
-	function: { name: BuiltInTool.FILE_GLOB_SEARCH, description: '', parameters: {} }
+	function: { description: '', name: BuiltInTool.FILE_GLOB_SEARCH, parameters: {} },
+	type: 'function'
 };
 const FILE_SEARCH_KEY = `builtin:${BuiltInTool.FILE_GLOB_SEARCH}`;
 
@@ -27,9 +27,9 @@ function setBuiltinTools(defs: OpenAIToolDefinition[]) {
 function renderPicker() {
 	return render(ChatFormMentionPicker, {
 		isOpen: true,
-		query: 'main',
 		onClose: () => {},
-		onSelect: () => {}
+		onSelect: () => {},
+		query: 'main'
 	});
 }
 

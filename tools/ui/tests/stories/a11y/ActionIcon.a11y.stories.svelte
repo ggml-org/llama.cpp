@@ -5,12 +5,12 @@
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/ActionIcon/Accessibility',
 		component: ActionIcon,
 		parameters: {
 			layout: 'centered'
 		},
-		tags: ['!dev']
+		tags: ['!dev'],
+		title: 'Components/ActionIcon/Accessibility'
 	});
 </script>
 

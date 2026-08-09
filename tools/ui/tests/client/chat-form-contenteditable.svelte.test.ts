@@ -38,9 +38,9 @@ function clipboardEvent(type: 'copy' | 'cut' | 'paste', text = '') {
 
 	if (text) data.setData('text/plain', text);
 
-	const event = new ClipboardEvent(type, { clipboardData: data, bubbles: true, cancelable: true });
+	const event = new ClipboardEvent(type, { bubbles: true, cancelable: true, clipboardData: data });
 
-	return { event, data };
+	return { data, event };
 }
 
 describe('ChatFormContenteditable clipboard', () => {
@@ -53,7 +53,7 @@ describe('ChatFormContenteditable clipboard', () => {
 
 		setSelection(root, (range) => range.selectNodeContents(root));
 
-		const { event, data } = clipboardEvent('copy');
+		const { data, event } = clipboardEvent('copy');
 
 		root.dispatchEvent(event);
 
@@ -77,7 +77,7 @@ describe('ChatFormContenteditable clipboard', () => {
 			range.setEndAfter(badge);
 		});
 
-		const { event, data } = clipboardEvent('cut');
+		const { data, event } = clipboardEvent('cut');
 
 		root.dispatchEvent(event);
 
@@ -174,7 +174,7 @@ describe('ChatFormContenteditable code spans', () => {
 
 		setSelection(root, (range) => range.selectNodeContents(root));
 
-		const { event, data } = clipboardEvent('copy');
+		const { data, event } = clipboardEvent('copy');
 
 		root.dispatchEvent(event);
 
@@ -284,7 +284,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 		expect(root.lastChild?.nodeName).toBe('BR');
 
 		setSelection(root, (range) => range.selectNodeContents(root));
-		const { event, data } = clipboardEvent('copy');
+		const { data, event } = clipboardEvent('copy');
 
 		root.dispatchEvent(event);
 
@@ -457,7 +457,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 			range.collapse(true);
 		});
 
-		root.dispatchEvent(new InputEvent('input', { inputType: 'insertLineBreak', bubbles: true }));
+		root.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertLineBreak' }));
 		await tick();
 
 		const selection = window.getSelection();
@@ -489,7 +489,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 			range.collapse(true);
 		});
 
-		root.dispatchEvent(new InputEvent('input', { inputType: 'insertLineBreak', bubbles: true }));
+		root.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertLineBreak' }));
 		await tick();
 
 		const selection = window.getSelection();
@@ -645,8 +645,8 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 	it('adds a line instead of submitting on plain Enter inside a block', async () => {
 		const onKeydown = vi.fn();
 		const { container } = render(ChatFormContenteditable, {
-			value: BLOCK_SOURCE,
-			onKeydown
+			onKeydown,
+			value: BLOCK_SOURCE
 		});
 
 		await tick();
@@ -680,8 +680,8 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 	it('adds a line after a still-open fence (no closing ``` yet)', async () => {
 		const onKeydown = vi.fn();
 		const { container } = render(ChatFormContenteditable, {
-			value: '```js\nconst a = 1;',
-			onKeydown
+			onKeydown,
+			value: '```js\nconst a = 1;'
 		});
 
 		await tick();
@@ -708,8 +708,8 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 	it('forwards plain Enter to the parent when the caret is outside a block', async () => {
 		const onKeydown = vi.fn();
 		const { container } = render(ChatFormContenteditable, {
-			value: BLOCK_SOURCE + '\nafter',
-			onKeydown
+			onKeydown,
+			value: BLOCK_SOURCE + '\nafter'
 		});
 
 		await tick();
@@ -731,8 +731,8 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 	it('forwards plain Enter on the trailing hatch line after a block', async () => {
 		const onKeydown = vi.fn();
 		const { container } = render(ChatFormContenteditable, {
-			value: BLOCK_SOURCE,
-			onKeydown
+			onKeydown,
+			value: BLOCK_SOURCE
 		});
 
 		await tick();
@@ -754,8 +754,8 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 	it('forwards Ctrl+Enter inside a block so explicit submit survives', async () => {
 		const onKeydown = vi.fn();
 		const { container } = render(ChatFormContenteditable, {
-			value: BLOCK_SOURCE,
-			onKeydown
+			onKeydown,
+			value: BLOCK_SOURCE
 		});
 
 		await tick();
@@ -773,7 +773,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 		await userEvent.keyboard('{Control>}{Enter}{/Control}');
 
 		expect(onKeydown).toHaveBeenCalledWith(
-			expect.objectContaining({ key: 'Enter', ctrlKey: true })
+			expect.objectContaining({ ctrlKey: true, key: 'Enter' })
 		);
 		expect(serializeContent(root)).toBe(BLOCK_SOURCE);
 	});
@@ -781,8 +781,8 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 	it('forwards Enter inside an inline code span', async () => {
 		const onKeydown = vi.fn();
 		const { container } = render(ChatFormContenteditable, {
-			value: 'run `npm test` now',
-			onKeydown
+			onKeydown,
+			value: 'run `npm test` now'
 		});
 
 		await tick();

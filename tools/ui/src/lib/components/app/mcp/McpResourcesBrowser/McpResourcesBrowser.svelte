@@ -19,13 +19,13 @@
 	}
 
 	let {
-		onSelect,
-		onToggle,
-		onTemplateSelect,
-		selectedUris = new Set(),
-		selectedTemplateUri,
+		class: className,
 		expandToUri,
-		class: className
+		onSelect,
+		onTemplateSelect,
+		onToggle,
+		selectedTemplateUri,
+		selectedUris = new Set()
 	}: Props = $props();
 
 	let expandedServers = new SvelteSet<string>();

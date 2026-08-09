@@ -78,10 +78,10 @@ export function usePwa() {
 		get needRefresh() {
 			return pwaNeedRefresh;
 		},
-		updateServiceWorker,
 		/** Version mismatch detected via localStorage (non-PWA users) */
 		get needRefreshByStorage() {
 			return needRefreshByStorage;
-		}
+		},
+		updateServiceWorker
 	};
 }

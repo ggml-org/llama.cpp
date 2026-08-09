@@ -53,9 +53,9 @@ export function findMentionToken(
 	}
 
 	return {
-		start: atIndex,
 		end,
-		query: value.slice(atIndex + 1, end)
+		query: value.slice(atIndex + 1, end),
+		start: atIndex
 	};
 }
 
@@ -77,5 +77,5 @@ export function takeMentionDismissSnapshot(
 
 	if (!token) return null;
 
-	return { start: token.start, query: token.query };
+	return { query: token.query, start: token.start };
 }

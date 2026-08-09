@@ -24,7 +24,7 @@
 		onDelete: () => void;
 	}
 
-	let { server, enabled, onToggle, onUpdate, onDelete }: Props = $props();
+	let { enabled, onDelete, onToggle, onUpdate, server }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(mcpStore.getServerLabel(server));
@@ -88,11 +88,11 @@
 
 	function saveEditing(url: string, headers: string, useProxy: boolean, name?: string) {
 		onUpdate({
-			url: url,
 			// undefined = prefill untouched, keep any existing custom name;
 			// empty string = field cleared, back to the automatic label
 			displayName: name === undefined ? server.displayName : name.trim() || undefined,
 			headers: headers || undefined,
+			url: url,
 			useProxy: useProxy
 		});
 		isEditing = false;

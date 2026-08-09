@@ -14,7 +14,7 @@ export function useSettingsNavigation() {
 	});
 	const isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
 
-	beforeNavigate(({ to, from }) => {
+	beforeNavigate(({ from, to }) => {
 		if (to?.route?.id?.startsWith('/settings') && !from?.route?.id?.startsWith('/settings')) {
 			settingsReferrer.url = window.location.hash || ROUTES.START;
 		}
@@ -34,12 +34,12 @@ export function useSettingsNavigation() {
 	});
 
 	return {
-		get panel() {
-			return subroute;
-		},
-
 		get isSettingsRoute() {
 			return isSettingsRoute;
+		},
+
+		get panel() {
+			return subroute;
 		}
 	};
 }

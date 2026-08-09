@@ -4,11 +4,11 @@
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/PwaRefreshAlert',
 		component: PwaRefreshAlert,
 		parameters: {
 			layout: 'centered'
-		}
+		},
+		title: 'Components/PwaRefreshAlert'
 	});
 </script>
 

@@ -109,10 +109,10 @@ function parseChunk(chunk: string): SearchResult | null {
 
 	const lines = chunk.split(LINE_BREAK_RE);
 	const fields: Record<FieldKey, string | undefined> = {
-		[FieldKey.TITLE]: undefined,
-		[FieldKey.URL]: undefined,
+		[FieldKey.AUTHOR]: undefined,
 		[FieldKey.PUBLISHED]: undefined,
-		[FieldKey.AUTHOR]: undefined
+		[FieldKey.TITLE]: undefined,
+		[FieldKey.URL]: undefined
 	};
 	const highlightLines: string[] = [];
 

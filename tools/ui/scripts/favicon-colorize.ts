@@ -37,8 +37,8 @@ export function colorizeFaviconSvg(
 	darkColor: string
 ): ColorizedFavicon {
 	return {
-		light: svg.replaceAll(CURRENT_COLOR, lightColor),
-		dark: svg.replaceAll(CURRENT_COLOR, darkColor)
+		dark: svg.replaceAll(CURRENT_COLOR, darkColor),
+		light: svg.replaceAll(CURRENT_COLOR, lightColor)
 	};
 }
 
@@ -98,14 +98,14 @@ export function writeThemeFavicons(
 	lightColor: string,
 	darkColor: string,
 	{
-		sourcePath = DEFAULT_LOGO,
-		lightOutPath = DEFAULT_OUT_LIGHT,
 		darkOutPath = DEFAULT_OUT_DARK,
-		padding = 0
+		lightOutPath = DEFAULT_OUT_LIGHT,
+		padding = 0,
+		sourcePath = DEFAULT_LOGO
 	}: WriteThemeFaviconsOptions = {}
 ): void {
 	const source = readFileSync(sourcePath, 'utf-8');
-	const { light, dark } = colorizeFaviconSvg(source, lightColor, darkColor);
+	const { dark, light } = colorizeFaviconSvg(source, lightColor, darkColor);
 
 	mkdirSync(dirname(lightOutPath), { recursive: true });
 	writeFileSync(lightOutPath, padFaviconSvg(light, padding));

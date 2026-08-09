@@ -28,10 +28,10 @@ export interface BlockIdGenerator {
  */
 export function createIconElement(svg: string): Element {
 	return {
-		type: 'element',
-		tagName: 'span',
+		children: [{ type: 'raw', value: svg } as unknown as ElementContent],
 		properties: {},
-		children: [{ type: 'raw', value: svg } as unknown as ElementContent]
+		tagName: 'span',
+		type: 'element'
 	};
 }
 
@@ -48,8 +48,7 @@ export function createButton(
 	extraProperties: Record<string, string> = {}
 ): Element {
 	return {
-		type: 'element',
-		tagName: 'button',
+		children: [createIconElement(iconSvg)],
 		properties: {
 			className: [className],
 			[idAttribute]: id,
@@ -57,7 +56,8 @@ export function createButton(
 			type: 'button',
 			...extraProperties
 		},
-		children: [createIconElement(iconSvg)]
+		tagName: 'button',
+		type: 'element'
 	};
 }
 
@@ -105,24 +105,24 @@ export function createSourceView(
 	language: string
 ): Element {
 	const code: Element = codeElement ?? {
-		type: 'element',
-		tagName: 'code',
+		children: [{ type: 'text', value: source }],
 		properties: { className: ['hljs', `language-${language}`] },
-		children: [{ type: 'text', value: source }]
+		tagName: 'code',
+		type: 'element'
 	};
 
 	return {
-		type: 'element',
-		tagName: 'div',
-		properties: { className: [DIAGRAM_SOURCE_CLASS, CODE_BLOCK_SCROLL_CONTAINER_CLASS] },
 		children: [
 			{
-				type: 'element',
-				tagName: 'pre',
+				children: [code],
 				properties: {},
-				children: [code]
+				tagName: 'pre',
+				type: 'element'
 			}
-		]
+		],
+		properties: { className: [DIAGRAM_SOURCE_CLASS, CODE_BLOCK_SCROLL_CONTAINER_CLASS] },
+		tagName: 'div',
+		type: 'element'
 	};
 }
 
@@ -137,23 +137,23 @@ export function createBlockHeader(
 	languageClassName: string = CODE_LANGUAGE_CLASS
 ): Element {
 	return {
-		type: 'element',
-		tagName: 'div',
-		properties: { className: [CODE_BLOCK_HEADER_CLASS] },
 		children: [
 			{
-				type: 'element',
-				tagName: 'span',
+				children: [{ type: 'text', value: language }],
 				properties: { className: [languageClassName] },
-				children: [{ type: 'text', value: language }]
+				tagName: 'span',
+				type: 'element'
 			},
 			{
-				type: 'element',
-				tagName: 'div',
+				children: actions,
 				properties: { className: [CODE_BLOCK_ACTIONS_CLASS] },
-				children: actions
+				tagName: 'div',
+				type: 'element'
 			}
-		]
+		],
+		properties: { className: [CODE_BLOCK_HEADER_CLASS] },
+		tagName: 'div',
+		type: 'element'
 	};
 }
 
@@ -162,10 +162,10 @@ export function createBlockHeader(
  */
 export function createScrollContainer(preElement: Element, scrollContainerClass: string): Element {
 	return {
-		type: 'element',
-		tagName: 'div',
+		children: [preElement],
 		properties: { className: [scrollContainerClass] },
-		children: [preElement]
+		tagName: 'div',
+		type: 'element'
 	};
 }
 
@@ -183,13 +183,13 @@ export function createWrapper(
 	extraChildren: Element[] = []
 ): Element {
 	return {
-		type: 'element',
-		tagName: 'div',
+		children: [header, createScrollContainer(preElement, scrollContainerClass), ...extraChildren],
 		properties: {
 			className: [wrapperClass, RELATIVE_CLASS],
 			...additionalAttributes
 		} as Element['properties'],
-		children: [header, createScrollContainer(preElement, scrollContainerClass), ...extraChildren]
+		tagName: 'div',
+		type: 'element'
 	};
 }
 

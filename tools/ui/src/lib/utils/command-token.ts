@@ -11,7 +11,7 @@ export function findCommandToken(
 	const name = spaceIdx === -1 ? rest : rest.slice(0, spaceIdx);
 	const args = spaceIdx === -1 ? '' : rest.slice(spaceIdx + 1);
 
-	return { name, args, end: value.length };
+	return { args, end: value.length, name };
 }
 
 /**
@@ -29,5 +29,5 @@ export function takeCommandDismissSnapshot(value: string): CommandDismissSnapsho
 
 	if (!token) return null;
 
-	return { name: token.name, args: token.args };
+	return { args: token.args, name: token.name };
 }

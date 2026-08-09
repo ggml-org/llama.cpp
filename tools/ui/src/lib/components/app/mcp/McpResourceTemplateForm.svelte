@@ -18,7 +18,7 @@
 		onCancel: () => void;
 	}
 
-	let { template, onResolve, onCancel }: Props = $props();
+	let { onCancel, onResolve, template }: Props = $props();
 
 	const variables = $derived(extractTemplateVariables(template.uriTemplate));
 

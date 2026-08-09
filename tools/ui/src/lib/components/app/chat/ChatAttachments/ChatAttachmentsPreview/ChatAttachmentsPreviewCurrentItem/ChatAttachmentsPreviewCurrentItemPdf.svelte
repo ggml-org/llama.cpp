@@ -17,7 +17,7 @@
 		activeModelId?: string;
 	}
 
-	let { currentItem, displayName, displayTextContent, hasVisionModality, activeModelId }: Props =
+	let { activeModelId, currentItem, displayName, displayTextContent, hasVisionModality }: Props =
 		$props();
 
 	let pdfViewMode = $state<PdfViewMode>(PdfViewMode.PAGES);

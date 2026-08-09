@@ -8,7 +8,7 @@
 		isStreaming?: boolean;
 	}
 
-	let { section, isStreaming = false }: Props = $props();
+	let { isStreaming = false, section }: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);

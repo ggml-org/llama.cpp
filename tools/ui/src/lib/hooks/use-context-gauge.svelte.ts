@@ -73,10 +73,10 @@ function deriveLiveStats(
 	const cacheTokens = state.cacheTokens ?? 0;
 
 	return {
-		freshTokens: promptTokens,
-		promptTokens: promptTokens + cacheTokens,
 		cacheTokens,
-		outputTokens: state.outputTokensUsed ?? 0
+		freshTokens: promptTokens,
+		outputTokens: state.outputTokensUsed ?? 0,
+		promptTokens: promptTokens + cacheTokens
 	};
 }
 
@@ -192,10 +192,10 @@ export function useContextGauge(): UseContextGaugeReturn {
 			const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
 
 			return {
-				read: llm.prompt_n ?? 0,
-				output,
+				averageTokensPerSecond,
 				cacheTotal: 0,
-				averageTokensPerSecond
+				output,
+				read: llm.prompt_n ?? 0
 			};
 		}
 
@@ -214,7 +214,7 @@ export function useContextGauge(): UseContextGaugeReturn {
 		}
 		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
 
-		return { read, output, cacheTotal, averageTokensPerSecond };
+		return { averageTokensPerSecond, cacheTotal, output, read };
 	});
 	const contextPercent = $derived.by(() => {
 		if (contextTotal === null || contextTotal <= 0) return null;
@@ -247,11 +247,14 @@ export function useContextGauge(): UseContextGaugeReturn {
 		get activeModelId() {
 			return activeModelId;
 		},
-		get isActiveModelLoaded() {
-			return isActiveModelLoaded;
+		get averageTokensPerSecond() {
+			return cumulative.averageTokensPerSecond;
 		},
-		get isActiveModelLoading() {
-			return isActiveModelLoading;
+		get colorLevel() {
+			return colorLevel;
+		},
+		get contextPercent() {
+			return contextPercent;
 		},
 		get contextTotal() {
 			return contextTotal;
@@ -259,46 +262,43 @@ export function useContextGauge(): UseContextGaugeReturn {
 		get contextUsed() {
 			return contextUsed;
 		},
-		get currentRead() {
-			return currentRead;
-		},
-		get currentFresh() {
-			return currentFresh;
-		},
-		get currentCache() {
-			return currentCache;
-		},
-		get currentOutput() {
-			return currentOutput;
-		},
-		get kvTotal() {
-			return kvTotal;
-		},
-		get cumulativeRead() {
-			return cumulative.read;
+		get cumulativeCacheTotal() {
+			return cumulative.cacheTotal;
 		},
 		get cumulativeOutput() {
 			return cumulative.output;
 		},
-		get cumulativeCacheTotal() {
-			return cumulative.cacheTotal;
+		get cumulativeRead() {
+			return cumulative.read;
 		},
-		get averageTokensPerSecond() {
-			return cumulative.averageTokensPerSecond;
+		get currentCache() {
+			return currentCache;
 		},
-		get contextPercent() {
-			return contextPercent;
+		get currentFresh() {
+			return currentFresh;
 		},
-		get colorLevel() {
-			return colorLevel;
+		get currentOutput() {
+			return currentOutput;
 		},
-		get transientDetails() {
-			return transientDetails;
+		get currentRead() {
+			return currentRead;
 		},
 		get hasAnyUsage() {
 			return hasAnyUsage;
 		},
+		get isActiveModelLoaded() {
+			return isActiveModelLoaded;
+		},
+		get isActiveModelLoading() {
+			return isActiveModelLoading;
+		},
+		get kvTotal() {
+			return kvTotal;
+		},
 		loadModel,
-		startMonitoring: () => processingState.startMonitoring()
+		startMonitoring: () => processingState.startMonitoring(),
+		get transientDetails() {
+			return transientDetails;
+		}
 	};
 }

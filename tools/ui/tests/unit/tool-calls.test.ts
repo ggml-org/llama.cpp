@@ -19,11 +19,11 @@ function makeSection(
 	toolName = BuiltInTool.READ_FILE
 ): AgenticSection {
 	return {
-		type: AgenticSectionType.TOOL_CALL,
 		content: '',
-		toolName,
 		toolArgs: JSON.stringify({ path: '/foo.txt' }),
+		toolName,
 		toolResult: undefined,
+		type: AgenticSectionType.TOOL_CALL,
 		...overrides
 	};
 }
@@ -101,11 +101,11 @@ describe('formatCwdMessage / parseCwdMessage', () => {
 			parseCwdMessage(
 				'Set working directory to [file:///a/b](~/b). Tool calls run with this as their working directory.'
 			)
-		).toEqual({ path: '/a/b', display: '~/b' });
+		).toEqual({ display: '~/b', path: '/a/b' });
 	});
 
 	it('parses the cleared marker', () => {
-		expect(parseCwdMessage('Working directory cleared')).toEqual({ path: null, display: '' });
+		expect(parseCwdMessage('Working directory cleared')).toEqual({ display: '', path: null });
 	});
 
 	it('returns null for non-cwd content', () => {
@@ -162,7 +162,7 @@ describe('parseWriteFileMeta', () => {
 	it('returns null for sections with a different tool name', () => {
 		expect(
 			parseWriteFileMeta(
-				makeSection({ toolName: BuiltInTool.READ_FILE, toolArgs: '{"path":"/x","content":"y"}' })
+				makeSection({ toolArgs: '{"path":"/x","content":"y"}', toolName: BuiltInTool.READ_FILE })
 			)
 		).toBeNull();
 	});
@@ -170,14 +170,14 @@ describe('parseWriteFileMeta', () => {
 	it('returns null when args have no path-like field', () => {
 		expect(
 			parseWriteFileMeta(
-				makeSection({ toolName: BuiltInTool.WRITE_FILE, toolArgs: '{"content":"x"}' })
+				makeSection({ toolArgs: '{"content":"x"}', toolName: BuiltInTool.WRITE_FILE })
 			)
 		).toBeNull();
 	});
 
 	it('accepts partial args (renders incrementally as content streams in)', () => {
 		const meta = parseWriteFileMeta(
-			makeSection({ toolName: BuiltInTool.WRITE_FILE, toolArgs: '{"path":"/foo.t' })
+			makeSection({ toolArgs: '{"path":"/foo.t', toolName: BuiltInTool.WRITE_FILE })
 		);
 
 		expect(meta?.filePath).toBe('/foo.t');
@@ -187,8 +187,8 @@ describe('parseWriteFileMeta', () => {
 		const meta = parseWriteFileMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.WRITE_FILE,
 					toolArgs: '{"path":"/foo.ts","content":"x"}',
+					toolName: BuiltInTool.WRITE_FILE,
 					toolResult: '{"result":"wrote","bytes":42}'
 				},
 				BuiltInTool.WRITE_FILE
@@ -196,10 +196,10 @@ describe('parseWriteFileMeta', () => {
 		);
 
 		expect(meta).toMatchObject<Partial<WriteFileMeta>>({
+			bytesWritten: 42,
+			content: 'x',
 			filePath: '/foo.ts',
 			language: expect.any(String),
-			content: 'x',
-			bytesWritten: 42,
 			resultMessage: 'wrote'
 		});
 	});
@@ -207,8 +207,8 @@ describe('parseWriteFileMeta', () => {
 	it('surfaces errorMessage from the result blob', () => {
 		const meta = parseWriteFileMeta(
 			makeSection({
-				toolName: BuiltInTool.WRITE_FILE,
 				toolArgs: '{"path":"/foo","content":"x"}',
+				toolName: BuiltInTool.WRITE_FILE,
 				toolResult: '{"error":"permission denied"}'
 			})
 		);
@@ -221,9 +221,9 @@ describe('parseEditFileMeta', () => {
 	it('parses edits array and applies editsApplied from the result', () => {
 		const section = makeSection(
 			{
-				toolName: BuiltInTool.EDIT_FILE,
 				toolArgs:
 					'{"path":"/foo.ts","edits":[{"old_text":"a","new_text":"b"},{"old_text":"c","new_text":"d"}]}',
+				toolName: BuiltInTool.EDIT_FILE,
 				toolResult: '{"result":"ok","edits_applied":2}'
 			},
 			BuiltInTool.EDIT_FILE
@@ -231,8 +231,8 @@ describe('parseEditFileMeta', () => {
 		const meta = parseEditFileMeta(section);
 
 		expect(meta?.edits).toEqual([
-			{ oldText: 'a', newText: 'b' },
-			{ oldText: 'c', newText: 'd' }
+			{ newText: 'b', oldText: 'a' },
+			{ newText: 'd', oldText: 'c' }
 		]);
 		expect(meta?.editsApplied).toBe(2);
 		expect(meta?.resultMessage).toBe('ok');
@@ -241,8 +241,8 @@ describe('parseEditFileMeta', () => {
 	it('drops edits with empty old_text', () => {
 		const section = makeSection(
 			{
-				toolName: BuiltInTool.EDIT_FILE,
-				toolArgs: '{"path":"/foo","edits":[{"old_text":""},{"old_text":"a","new_text":""}]}'
+				toolArgs: '{"path":"/foo","edits":[{"old_text":""},{"old_text":"a","new_text":""}]}',
+				toolName: BuiltInTool.EDIT_FILE
 			},
 			BuiltInTool.EDIT_FILE
 		);
@@ -250,14 +250,14 @@ describe('parseEditFileMeta', () => {
 
 		// First entry is dropped (empty old_text). Second is kept
 		// (empty new_text is fine - it's the "delete" case).
-		expect(meta?.edits).toEqual([{ oldText: 'a', newText: '' }]);
+		expect(meta?.edits).toEqual([{ newText: '', oldText: 'a' }]);
 	});
 
 	it('errorMessage wins over result message', () => {
 		const section = makeSection(
 			{
-				toolName: BuiltInTool.EDIT_FILE,
 				toolArgs: '{"path":"/foo"}',
+				toolName: BuiltInTool.EDIT_FILE,
 				toolResult: '{"error":"bad path","result":"ok"}'
 			},
 			BuiltInTool.EDIT_FILE
@@ -287,7 +287,7 @@ describe('parseReadFileMeta', () => {
 			)
 		);
 
-		expect(meta?.lineRange).toEqual({ start: 10, end: 20 });
+		expect(meta?.lineRange).toEqual({ end: 20, start: 10 });
 	});
 
 	it('parses start_line + line_count into a range', () => {
@@ -298,7 +298,7 @@ describe('parseReadFileMeta', () => {
 			)
 		);
 
-		expect(meta?.lineRange).toEqual({ start: 10, end: 14 });
+		expect(meta?.lineRange).toEqual({ end: 14, start: 10 });
 	});
 
 	it('returns null when args cannot be parsed', () => {
@@ -310,12 +310,12 @@ describe('parseGrepSearchMeta', () => {
 	it('returns null when path or pattern is missing', () => {
 		expect(
 			parseGrepSearchMeta(
-				makeSection({ toolName: BuiltInTool.GREP_SEARCH, toolArgs: '{"pattern":"foo"}' })
+				makeSection({ toolArgs: '{"pattern":"foo"}', toolName: BuiltInTool.GREP_SEARCH })
 			)
 		).toBeNull();
 		expect(
 			parseGrepSearchMeta(
-				makeSection({ toolName: BuiltInTool.GREP_SEARCH, toolArgs: '{"path":"/x"}' })
+				makeSection({ toolArgs: '{"path":"/x"}', toolName: BuiltInTool.GREP_SEARCH })
 			)
 		).toBeNull();
 	});
@@ -324,8 +324,8 @@ describe('parseGrepSearchMeta', () => {
 		const meta = parseGrepSearchMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.GREP_SEARCH,
 					toolArgs: '{"path":"/x","pattern":"foo"}',
+					toolName: BuiltInTool.GREP_SEARCH,
 					toolResult: JSON.stringify({ plain_text_response: 'a.ts:hello\nb.ts:world' })
 				},
 				BuiltInTool.GREP_SEARCH
@@ -333,15 +333,15 @@ describe('parseGrepSearchMeta', () => {
 		);
 
 		expect(meta?.matches).toHaveLength(2);
-		expect(meta?.matches[0]).toEqual({ file: 'a.ts', content: 'hello' });
+		expect(meta?.matches[0]).toEqual({ content: 'hello', file: 'a.ts' });
 	});
 
 	it('falls back to raw-text parsing when result is not JSON', () => {
 		const meta = parseGrepSearchMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.GREP_SEARCH,
 					toolArgs: '{"path":"/x","pattern":"foo"}',
+					toolName: BuiltInTool.GREP_SEARCH,
 					toolResult: 'a.ts:hello\nb.ts:world'
 				},
 				BuiltInTool.GREP_SEARCH
@@ -355,15 +355,15 @@ describe('parseGrepSearchMeta', () => {
 		const meta = parseGrepSearchMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.GREP_SEARCH,
 					toolArgs: '{"path":"/x","pattern":"foo","return_line_numbers":true}',
+					toolName: BuiltInTool.GREP_SEARCH,
 					toolResult: 'a.ts:12:hello'
 				},
 				BuiltInTool.GREP_SEARCH
 			)
 		);
 
-		expect(meta?.matches[0]).toEqual({ file: 'a.ts', line: 12, content: 'hello' });
+		expect(meta?.matches[0]).toEqual({ content: 'hello', file: 'a.ts', line: 12 });
 		expect(meta?.showLineNumbers).toBe(true);
 	});
 });
@@ -373,8 +373,8 @@ describe('parseFileGlobSearchMeta', () => {
 		const meta = parseFileGlobSearchMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.FILE_GLOB_SEARCH,
 					toolArgs: '{"path":"/x"}',
+					toolName: BuiltInTool.FILE_GLOB_SEARCH,
 					toolResult: 'a.ts\nb.ts'
 				},
 				BuiltInTool.FILE_GLOB_SEARCH
@@ -388,8 +388,8 @@ describe('parseFileGlobSearchMeta', () => {
 		const meta = parseFileGlobSearchMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.FILE_GLOB_SEARCH,
 					toolArgs: '{"path":"/x"}',
+					toolName: BuiltInTool.FILE_GLOB_SEARCH,
 					toolResult: JSON.stringify({ plain_text_response: 'a.ts\nb.ts' })
 				},
 				BuiltInTool.FILE_GLOB_SEARCH
@@ -403,8 +403,8 @@ describe('parseFileGlobSearchMeta', () => {
 		const meta = parseFileGlobSearchMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.FILE_GLOB_SEARCH,
 					toolArgs: '{"path":"/x"}',
+					toolName: BuiltInTool.FILE_GLOB_SEARCH,
 					toolResult: JSON.stringify({ error: 'permission denied' })
 				},
 				BuiltInTool.FILE_GLOB_SEARCH
@@ -418,14 +418,14 @@ describe('parseFileGlobSearchMeta', () => {
 describe('parseRunJavascriptMeta', () => {
 	it('returns null when code is missing', () => {
 		expect(
-			parseRunJavascriptMeta(makeSection({ toolName: BuiltInTool.RUN_JAVASCRIPT, toolArgs: '{}' }))
+			parseRunJavascriptMeta(makeSection({ toolArgs: '{}', toolName: BuiltInTool.RUN_JAVASCRIPT }))
 		).toBeNull();
 	});
 
 	it('reads code and timeout', () => {
 		const meta = parseRunJavascriptMeta(
 			makeSection(
-				{ toolName: BuiltInTool.RUN_JAVASCRIPT, toolArgs: '{"code":"Math.PI","timeout_ms":5000}' },
+				{ toolArgs: '{"code":"Math.PI","timeout_ms":5000}', toolName: BuiltInTool.RUN_JAVASCRIPT },
 				BuiltInTool.RUN_JAVASCRIPT
 			)
 		);
@@ -438,8 +438,8 @@ describe('parseRunJavascriptMeta', () => {
 		const meta = parseRunJavascriptMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.RUN_JAVASCRIPT,
 					toolArgs: '{"code":"throw new Error()"}',
+					toolName: BuiltInTool.RUN_JAVASCRIPT,
 					toolResult: JSON.stringify({ error: 'undefined is not a function' })
 				},
 				BuiltInTool.RUN_JAVASCRIPT
@@ -456,8 +456,8 @@ describe('parseRunJavascriptMeta', () => {
 		const meta = parseRunJavascriptMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.RUN_JAVASCRIPT,
 					toolArgs: '{"code":"[1,2,3]"}',
+					toolName: BuiltInTool.RUN_JAVASCRIPT,
 					toolResult: '[1,2,3]'
 				},
 				BuiltInTool.RUN_JAVASCRIPT
@@ -471,8 +471,8 @@ describe('parseRunJavascriptMeta', () => {
 		const meta = parseRunJavascriptMeta(
 			makeSection(
 				{
-					toolName: BuiltInTool.RUN_JAVASCRIPT,
 					toolArgs: '{"code":"foo"}',
+					toolName: BuiltInTool.RUN_JAVASCRIPT,
 					toolResult: 'Error: undefined is not a function\n  at <anonymous>:1:1'
 				},
 				BuiltInTool.RUN_JAVASCRIPT
@@ -487,7 +487,7 @@ describe('parseExecShellCommandMeta', () => {
 	it('reads command from the args', () => {
 		const meta = parseExecShellCommandMeta(
 			makeSection(
-				{ toolName: BuiltInTool.EXEC_SHELL_COMMAND, toolArgs: '{"command":"ls -la"}' },
+				{ toolArgs: '{"command":"ls -la"}', toolName: BuiltInTool.EXEC_SHELL_COMMAND },
 				BuiltInTool.EXEC_SHELL_COMMAND
 			)
 		);
@@ -499,7 +499,7 @@ describe('parseExecShellCommandMeta', () => {
 		expect(
 			parseExecShellCommandMeta(
 				makeSection(
-					{ toolName: BuiltInTool.EXEC_SHELL_COMMAND, toolArgs: '{"cmd":"ls"}' },
+					{ toolArgs: '{"cmd":"ls"}', toolName: BuiltInTool.EXEC_SHELL_COMMAND },
 					BuiltInTool.EXEC_SHELL_COMMAND
 				)
 			)?.command
@@ -507,7 +507,7 @@ describe('parseExecShellCommandMeta', () => {
 		expect(
 			parseExecShellCommandMeta(
 				makeSection(
-					{ toolName: BuiltInTool.EXEC_SHELL_COMMAND, toolArgs: '{"shell_command":"ls"}' },
+					{ toolArgs: '{"shell_command":"ls"}', toolName: BuiltInTool.EXEC_SHELL_COMMAND },
 					BuiltInTool.EXEC_SHELL_COMMAND
 				)
 			)?.command
@@ -518,7 +518,7 @@ describe('parseExecShellCommandMeta', () => {
 		expect(
 			parseExecShellCommandMeta(
 				makeSection(
-					{ toolName: BuiltInTool.EXEC_SHELL_COMMAND, toolArgs: '{"cwd":"/x"}' },
+					{ toolArgs: '{"cwd":"/x"}', toolName: BuiltInTool.EXEC_SHELL_COMMAND },
 					BuiltInTool.EXEC_SHELL_COMMAND
 				)
 			)

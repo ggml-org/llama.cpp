@@ -34,14 +34,14 @@ describe('colorizeFaviconSvg', () => {
 	});
 
 	it('leaves non-currentColor colors untouched in both variants', () => {
-		const { light, dark } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
+		const { dark, light } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
 
 		expect(light).toContain('fill="#ff00aa"');
 		expect(dark).toContain('fill="#ff00aa"');
 	});
 
 	it('does not alter any other part of the SVG', () => {
-		const { light, dark } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
+		const { dark, light } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
 		const stripColors = (s: string) =>
 			s.replaceAll('#111111', '').replaceAll('#fafafa', '').replaceAll('currentColor', '');
 		const expected = stripColors(SOURCE_SVG);
@@ -58,7 +58,7 @@ describe('colorizeFaviconSvg', () => {
 
 	it('returns the source unchanged when given a color that does not appear (no currentColor in source)', () => {
 		const plain = '<svg><path fill="#000"/></svg>';
-		const { light, dark } = colorizeFaviconSvg(plain, '#111111', '#fafafa');
+		const { dark, light } = colorizeFaviconSvg(plain, '#111111', '#fafafa');
 
 		expect(light).toBe(plain);
 		expect(dark).toBe(plain);
@@ -132,7 +132,7 @@ describe('writeThemeFavicons', () => {
 	});
 
 	afterEach(() => {
-		rmSync(tmpDir, { recursive: true, force: true });
+		rmSync(tmpDir, { force: true, recursive: true });
 	});
 
 	function setupSource() {
@@ -141,20 +141,20 @@ describe('writeThemeFavicons', () => {
 		writeFileSync(sourcePath, LOGO);
 
 		return {
-			sourcePath,
+			darkPath: join(tmpDir, 'favicon-dark.svg'),
 			lightPath: join(tmpDir, 'favicon.svg'),
-			darkPath: join(tmpDir, 'favicon-dark.svg')
+			sourcePath
 		};
 	}
 
 	it('writes colorized, un-padded favicons without modifying the source', () => {
-		const { sourcePath, lightPath, darkPath } = setupSource();
+		const { darkPath, lightPath, sourcePath } = setupSource();
 		const before = readFileSync(sourcePath, 'utf-8');
 
 		writeThemeFavicons('#abcdef', '#012345', {
-			sourcePath,
+			darkOutPath: darkPath,
 			lightOutPath: lightPath,
-			darkOutPath: darkPath
+			sourcePath
 		});
 
 		const lightOut = readFileSync(lightPath, 'utf-8');
@@ -175,17 +175,17 @@ describe('writeThemeFavicons', () => {
 	});
 
 	it('writes colorized favicons wrapped in a padding <g transform>...</g>', () => {
-		const { sourcePath, lightPath, darkPath } = setupSource();
+		const { darkPath, lightPath, sourcePath } = setupSource();
 		// mirror the production wiring: PWA_ASSET_GENERATOR.FAVICON_PADDING
 		const padding = 0.04;
 		// scale = 1 - 0.04 = 0.96; translate = (0.04 * 512) / 2 = 10.24
 		const expectedTransform = 'transform="translate(10.24 10.24) scale(0.96)"';
 
 		writeThemeFavicons('#111111', '#fafafa', {
-			sourcePath,
-			lightOutPath: lightPath,
 			darkOutPath: darkPath,
-			padding
+			lightOutPath: lightPath,
+			padding,
+			sourcePath
 		});
 
 		const lightOut = readFileSync(lightPath, 'utf-8');

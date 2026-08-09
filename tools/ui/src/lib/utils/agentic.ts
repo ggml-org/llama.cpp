@@ -80,8 +80,8 @@ function deriveSingleTurnSections(
 		const isPending = isStreaming && !hasContentAfterReasoning;
 
 		sections.push({
-			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
 			content: message.reasoningContent,
+			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
 			wasInterrupted: !isStreaming && !hasContentAfterReasoning
 		});
 	}
@@ -89,8 +89,8 @@ function deriveSingleTurnSections(
 	// 2. Text content
 	if (message.content?.trim()) {
 		sections.push({
-			type: AgenticSectionType.TEXT,
-			content: message.content
+			content: message.content,
+			type: AgenticSectionType.TEXT
 		});
 	}
 
@@ -115,14 +115,14 @@ function deriveSingleTurnSections(
 				: AgenticSectionType.TOOL_CALL;
 
 		sections.push({
-			type,
 			content: resultMsg?.content || '',
-			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
+			toolCallId: tc.id,
+			toolCwd: resultMsg?.toolCwd,
+			toolName: tc.function?.name,
 			toolResult: resultMsg?.content,
 			toolResultExtras: resultMsg?.extra,
-			toolCwd: resultMsg?.toolCwd,
-			toolCallId: tc.id
+			type
 		});
 	}
 
@@ -134,11 +134,11 @@ function deriveSingleTurnSections(
 		if (tc.id && persistedIds.has(tc.id)) continue;
 
 		sections.push({
-			type: AgenticSectionType.TOOL_CALL_STREAMING,
 			content: '',
-			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
-			toolCallId: tc.id
+			toolCallId: tc.id,
+			toolName: tc.function?.name,
+			type: AgenticSectionType.TOOL_CALL_STREAMING
 		});
 	}
 
@@ -337,7 +337,7 @@ export function parseToolResultWithImages(
 				e.type === AttachmentType.IMAGE && e.name === attachmentName
 		);
 
-		return { text: line, image };
+		return { image, text: line };
 	});
 
 	if (toolResultLinesCache.size >= TOOL_RESULT_LINES_CACHE_MAX_SIZE) {

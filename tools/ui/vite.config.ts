@@ -17,21 +17,15 @@ const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://loca
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
 	enabled: true,
+	instances: [{ browser: 'chromium' }],
 	provider: playwright({
 		launchOptions: {
 			args: ['--no-sandbox']
 		}
-	}),
-	instances: [{ browser: 'chromium' }]
+	})
 };
 
 export default defineConfig({
-	resolve: {
-		alias: {
-			'katex-fonts': resolve('node_modules/katex/dist/fonts')
-		}
-	},
-
 	build: {
 		assetsInlineLimit: 32000,
 		chunkSizeWarningLimit: 3072,
@@ -48,14 +42,38 @@ export default defineConfig({
 		relativizeBasePlugin()
 	],
 
+	resolve: {
+		alias: {
+			'katex-fonts': resolve('node_modules/katex/dist/fonts')
+		}
+	},
+
+	server: {
+		fs: {
+			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
+		},
+		headers: {
+			'Cross-Origin-Embedder-Policy': 'require-corp',
+			'Cross-Origin-Opener-Policy': 'same-origin'
+		},
+		proxy: {
+			'/cors-proxy': SERVER_ORIGIN,
+			'/models': SERVER_ORIGIN,
+			'/props': SERVER_ORIGIN,
+			'/slots': SERVER_ORIGIN,
+			'/tools': SERVER_ORIGIN,
+			'/v1': SERVER_ORIGIN
+		}
+	},
+
 	test: {
 		projects: [
 			{
 				extends: './vite.config.ts',
 				test: {
-					name: 'client',
 					browser: browserBaseConfig,
 					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
+					name: 'client',
 					setupFiles: ['./vitest-setup-client.ts']
 				}
 			},
@@ -63,42 +81,24 @@ export default defineConfig({
 			{
 				extends: './vite.config.ts',
 				test: {
-					name: 'unit',
 					environment: 'node',
-					include: ['tests/unit/**/*.{test,spec}.{js,ts}']
+					include: ['tests/unit/**/*.{test,spec}.{js,ts}'],
+					name: 'unit'
 				}
 			},
 
 			{
 				extends: './vite.config.ts',
-				test: {
-					name: 'ui',
-					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] }
-				},
 				plugins: [
 					storybookTest({
 						storybookScript: 'pnpm run storybook --no-open'
 					})
-				]
+				],
+				test: {
+					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
+					name: 'ui'
+				}
 			}
 		]
-	},
-
-	server: {
-		proxy: {
-			'/v1': SERVER_ORIGIN,
-			'/props': SERVER_ORIGIN,
-			'/models': SERVER_ORIGIN,
-			'/tools': SERVER_ORIGIN,
-			'/slots': SERVER_ORIGIN,
-			'/cors-proxy': SERVER_ORIGIN
-		},
-		headers: {
-			'Cross-Origin-Embedder-Policy': 'require-corp',
-			'Cross-Origin-Opener-Policy': 'same-origin'
-		},
-		fs: {
-			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
-		}
 	}
 });

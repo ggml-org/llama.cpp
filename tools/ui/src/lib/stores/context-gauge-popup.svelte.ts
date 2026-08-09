@@ -16,7 +16,7 @@ import {
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let lastPointerType = '';
 
-export const gaugePopup = $state({ open: false, centerX: 0, bottom: 0 });
+export const gaugePopup = $state({ bottom: 0, centerX: 0, open: false });
 
 function openFrom(trigger: HTMLElement): void {
 	clearTimeout(closeTimer);

@@ -155,8 +155,8 @@ export async function apiPost<T, B = unknown>(
 	options: ApiFetchOptions = {}
 ): Promise<T> {
 	return apiFetch<T>(path, {
-		method: 'POST',
 		body: JSON.stringify(body),
+		method: 'POST',
 		...options
 	});
 }

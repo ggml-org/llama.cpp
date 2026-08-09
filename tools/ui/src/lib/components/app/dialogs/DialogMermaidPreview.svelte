@@ -8,7 +8,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), svgHtml, onOpenChange }: Props = $props();
+	let { onOpenChange, open = $bindable(), svgHtml }: Props = $props();
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>

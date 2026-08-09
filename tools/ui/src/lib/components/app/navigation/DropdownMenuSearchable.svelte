@@ -15,14 +15,14 @@
 	}
 
 	let {
-		placeholder = 'Search...',
-		searchValue = $bindable(''),
+		children,
+		emptyMessage = 'No items found',
+		footer,
+		isEmpty = false,
 		onSearchChange,
 		onSearchKeyDown,
-		emptyMessage = 'No items found',
-		isEmpty = false,
-		children,
-		footer
+		placeholder = 'Search...',
+		searchValue = $bindable('')
 	}: Props = $props();
 </script>
 

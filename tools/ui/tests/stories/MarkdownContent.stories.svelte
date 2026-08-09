@@ -11,49 +11,50 @@
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/MarkdownContent',
 		component: MarkdownContent,
 		parameters: {
 			layout: 'centered'
-		}
+		},
+		title: 'Components/MarkdownContent'
 	});
 </script>
 
-<Story name="Empty" args={{ content: EMPTY_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }} />
+<Story name="Empty" args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: EMPTY_MD }} />
 
 <Story
 	name="AI Tutorial"
-	args={{ content: AI_TUTORIAL_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: AI_TUTORIAL_MD }}
 />
 
 <Story
 	name="API Documentation"
-	args={{ content: API_DOCS_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: API_DOCS_MD }}
 />
 
 <Story
 	name="Technical Blog"
-	args={{ content: BLOG_POST_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: BLOG_POST_MD }}
 />
 
 <Story
 	name="Data Analysis"
-	args={{ content: DATA_ANALYSIS_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: DATA_ANALYSIS_MD }}
 />
 
 <Story
 	name="README file"
-	args={{ content: README_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: README_MD }}
 />
 
 <Story
 	name="Math Formulas"
-	args={{ content: MATH_FORMULAS_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: MATH_FORMULAS_MD }}
 />
 
 <Story
 	name="URL Links"
 	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		content: `# URL Links Test
 
 Here are some example URLs that should open in new tabs:
@@ -65,8 +66,7 @@ Here are some example URLs that should open in new tabs:
 
 You can also test inline links like https://example.com or https://docs.python.org.
 
-All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attributes for security.`,
-		class: 'max-w-[56rem] w-[calc(100vw-2rem)]'
+All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attributes for security.`
 	}}
 	play={async (context) => {
 		const { canvasElement } = context;

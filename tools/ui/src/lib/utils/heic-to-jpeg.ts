@@ -32,8 +32,8 @@ export async function heicFileToJpegDataURL(file: File | Blob): Promise<string> 
 	const { heicTo } = await getHeicTo();
 	const jpegBlob = await heicTo({
 		blob: file,
-		type: MimeTypeImage.JPEG,
-		quality: HEIC_JPEG_QUALITY
+		quality: HEIC_JPEG_QUALITY,
+		type: MimeTypeImage.JPEG
 	});
 
 	return new Promise((resolve, reject) => {

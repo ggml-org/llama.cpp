@@ -60,5 +60,5 @@ export function parseRunJavascriptMeta(section: AgenticSection): RunJavascriptMe
 		}
 	}
 
-	return { code, timeoutMs, errorMessage };
+	return { code, errorMessage, timeoutMs };
 }

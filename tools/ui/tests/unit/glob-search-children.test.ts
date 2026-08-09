@@ -55,7 +55,7 @@ describe('runGlobSearchWithChildren', () => {
 			3,
 			50,
 			new AbortController().signal,
-			{ type: GlobSearchType.ALL, descendOnTrailingSeparator: true }
+			{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
 		);
 
 		expect(res.error).toBeUndefined();
@@ -79,7 +79,7 @@ describe('runGlobSearchWithChildren', () => {
 			3,
 			50,
 			new AbortController().signal,
-			{ type: GlobSearchType.ALL, descendOnTrailingSeparator: true }
+			{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
 		);
 
 		expect(res.exactDir).toBeUndefined();

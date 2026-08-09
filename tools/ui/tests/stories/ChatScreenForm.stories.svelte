@@ -7,36 +7,36 @@
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/ChatScreen/ChatScreenForm',
 		component: ChatScreenForm,
 		parameters: {
 			layout: 'centered'
-		}
+		},
+		title: 'Components/ChatScreen/ChatScreenForm'
 	});
 
 	let fileAttachments = $state([
 		{
+			file: new File([''], '1.jpg', { type: 'image/jpeg' }),
 			id: '1',
 			name: '1.jpg',
-			type: 'image/jpeg',
-			size: 44891,
 			preview: jpgAsset,
-			file: new File([''], '1.jpg', { type: 'image/jpeg' })
+			size: 44891,
+			type: 'image/jpeg'
 		},
 		{
+			file: new File([''], 'hf-logo.svg', { type: 'image/svg+xml' }),
 			id: '2',
 			name: 'hf-logo.svg',
-			type: 'image/svg+xml',
-			size: 1234,
 			preview: svgAsset,
-			file: new File([''], 'hf-logo.svg', { type: 'image/svg+xml' })
+			size: 1234,
+			type: 'image/svg+xml'
 		},
 		{
+			file: new File([pdfAsset], 'example.pdf', { type: 'application/pdf' }),
 			id: '3',
 			name: 'example.pdf',
-			type: 'application/pdf',
 			size: 351048,
-			file: new File([pdfAsset], 'example.pdf', { type: 'application/pdf' })
+			type: 'application/pdf'
 		}
 	]);
 </script>

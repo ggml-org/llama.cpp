@@ -30,9 +30,9 @@ export class ToolsService {
 		cwd?: string
 	): Promise<ToolExecutionResult> {
 		const result = await apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
-			method: 'POST',
-			body: JSON.stringify({ tool: toolName, params }),
+			body: JSON.stringify({ params, tool: toolName }),
 			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
+			method: 'POST',
 			signal
 		});
 
@@ -59,9 +59,9 @@ export class ToolsService {
 		cwd?: string
 	): Promise<Record<string, unknown>> {
 		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
-			method: 'POST',
-			body: JSON.stringify({ tool: toolName, params }),
+			body: JSON.stringify({ params, tool: toolName }),
 			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
+			method: 'POST',
 			signal
 		});
 	}
@@ -92,9 +92,9 @@ export class ToolsService {
 		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
 
 		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
-			method: 'POST',
+			body: JSON.stringify({ params, stream: true, tool: toolName }),
 			headers,
-			body: JSON.stringify({ tool: toolName, params, stream: true }),
+			method: 'POST',
 			signal
 		});
 

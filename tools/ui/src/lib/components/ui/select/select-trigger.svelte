@@ -4,9 +4,9 @@
 	import { Select as SelectPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
-		class: className,
 		children,
+		class: className,
+		ref = $bindable(null),
 		size = 'default',
 		variant = 'default',
 		...restProps

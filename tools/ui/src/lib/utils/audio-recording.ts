@@ -23,9 +23,9 @@ export class AudioRecorder {
 		try {
 			this.stream = await navigator.mediaDevices.getUserMedia({
 				audio: {
+					autoGainControl: true,
 					echoCancellation: true,
-					noiseSuppression: true,
-					autoGainControl: true
+					noiseSuppression: true
 				}
 			});
 
@@ -243,8 +243,8 @@ export function createAudioFile(audioBlob: Blob, filename?: string): File {
 	const defaultFilename = `recording-${timestamp}.${extension}`;
 
 	return new File([audioBlob], filename || defaultFilename, {
-		type: audioBlob.type,
-		lastModified: Date.now()
+		lastModified: Date.now(),
+		type: audioBlob.type
 	});
 }
 

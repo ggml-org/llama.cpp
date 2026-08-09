@@ -75,8 +75,8 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 			// Store the mermaid syntax in data attribute for copy functionality
 			node.properties = {
 				...node.properties,
-				[MERMAID_SYNTAX_ATTR]: diagramText,
-				[MERMAID_ID_ATTR]: mermaidId
+				[MERMAID_ID_ATTR]: mermaidId,
+				[MERMAID_SYNTAX_ATTR]: diagramText
 			};
 
 			const actions = [
@@ -93,8 +93,8 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 				MERMAID_WRAPPER_CLASS,
 				MERMAID_SCROLL_CONTAINER_CLASS,
 				{
-					[MERMAID_ID_ATTR]: mermaidId,
-					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED
+					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED,
+					[MERMAID_ID_ATTR]: mermaidId
 				},
 				[sourceView]
 			);

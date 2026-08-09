@@ -15,10 +15,10 @@
 
 	let {
 		directory = null,
-		homeBase = null,
 		disabled = false,
-		showTooltip = false,
-		onClear
+		homeBase = null,
+		onClear,
+		showTooltip = false
 	}: Props = $props();
 
 	const displayLabel = $derived(

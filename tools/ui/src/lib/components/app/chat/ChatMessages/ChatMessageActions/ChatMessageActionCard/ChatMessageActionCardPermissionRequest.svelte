@@ -15,7 +15,7 @@
 		onDecision: (decision: ToolPermissionDecision) => void;
 	}
 
-	let { toolName, serverLabel, onDecision }: Props = $props();
+	let { onDecision, serverLabel, toolName }: Props = $props();
 </script>
 
 <ChatMessageActionCard icon={ShieldQuestion}>
@@ -40,7 +40,7 @@
 
 				<DropdownMenu.Trigger
 					class={cn(
-						buttonVariants({ variant: 'secondary', size: 'sm' }),
+						buttonVariants({ size: 'sm', variant: 'secondary' }),
 						'inline-flex cursor-pointer items-center !rounded-l-none !shadow-none !px-2'
 					)}
 					aria-label="More allow options"

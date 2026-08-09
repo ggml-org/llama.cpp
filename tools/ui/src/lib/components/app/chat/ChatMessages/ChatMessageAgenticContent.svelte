@@ -32,10 +32,10 @@
 	}
 
 	let {
-		message,
-		toolMessages = [],
+		isLastAssistantMessage = false,
 		isStreaming = false,
-		isLastAssistantMessage = false
+		message,
+		toolMessages = []
 	}: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
@@ -119,7 +119,7 @@
 				section.type === AgenticSectionType.TOOL_CALL_STREAMING;
 
 			if (!isTool && prevWasTool && currentTurn.length > 0) {
-				groups.push({ sections: currentTurn, flatIndices: currentIndices });
+				groups.push({ flatIndices: currentIndices, sections: currentTurn });
 				currentTurn = [];
 				currentIndices = [];
 			}
@@ -130,7 +130,7 @@
 		}
 
 		if (currentTurn.length > 0) {
-			groups.push({ sections: currentTurn, flatIndices: currentIndices });
+			groups.push({ flatIndices: currentIndices, sections: currentTurn });
 		}
 
 		return groups;
@@ -168,11 +168,11 @@
 
 	function buildTurnAgenticTimings(stats: ChatMessageAgenticTurnStats): ChatMessageAgenticTimings {
 		return {
-			turns: 1,
+			llm: stats.llm,
+			toolCalls: stats.toolCalls,
 			toolCallsCount: stats.toolCalls.length,
 			toolsMs: stats.toolsMs,
-			toolCalls: stats.toolCalls,
-			llm: stats.llm
+			turns: 1
 		};
 	}
 </script>

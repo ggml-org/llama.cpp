@@ -21,7 +21,7 @@
 		class?: string;
 	}
 
-	let { resource, preloadedContent, class: className }: Props = $props();
+	let { class: className, preloadedContent, resource }: Props = $props();
 
 	let content = $state<MCPResourceContent[] | null>(null);
 	let isLoading = $state(false);

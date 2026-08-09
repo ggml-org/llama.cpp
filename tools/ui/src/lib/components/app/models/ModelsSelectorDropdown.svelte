@@ -40,12 +40,12 @@
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
-		useGlobalSelection: () => useGlobalSelection,
 		onModelChange: () => onModelChange,
 		onOpenChange: (open) => {
 			isOpen = open;
 			highlightedId = null;
-		}
+		},
+		useGlobalSelection: () => useGlobalSelection
 	});
 
 	$effect(() => {

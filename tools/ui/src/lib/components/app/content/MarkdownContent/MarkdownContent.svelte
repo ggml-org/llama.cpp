@@ -94,7 +94,7 @@
 		contentHash?: string;
 	}
 
-	let { content, attachments, class: className = '', disableMath = false }: Props = $props();
+	let { attachments, class: className = '', content, disableMath = false }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -175,8 +175,8 @@
 
 		return proc
 			.use(rehypeHighlight, {
-				languages: lowlightAll,
-				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] }
+				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] },
+				languages: lowlightAll
 			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
@@ -264,16 +264,16 @@
 		const cached = transformCache.get(hash);
 
 		if (cached) {
-			return { html: cached, hash };
+			return { hash, html: cached };
 		}
 
-		const singleNodeRoot = { type: 'root', children: [node] };
+		const singleNodeRoot = { children: [node], type: 'root' };
 		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
 		const html = processorInstance.stringify(transformedRoot);
 
 		transformCache.set(hash, html);
 
-		return { html, hash };
+		return { hash, html };
 	}
 
 	/**
@@ -403,13 +403,13 @@
 					}
 
 					// Transform this block (with caching)
-					const { html, hash } = await transformMdastNode(processorInstance, child, index);
+					const { hash, html } = await transformMdastNode(processorInstance, child, index);
 					const id = getHastNodeId(
 						{ position: (child as { position?: unknown }).position } as HastRootContent,
 						index
 					);
 
-					nextBlocks.push({ id, html, contentHash: hash });
+					nextBlocks.push({ contentHash: hash, html, id });
 				}
 
 				renderedBlocks = nextBlocks;
@@ -453,20 +453,20 @@
 			}
 
 			// Transform this block (with caching)
-			const { html, hash } = await transformMdastNode(processorInstance, child, index);
+			const { hash, html } = await transformMdastNode(processorInstance, child, index);
 			const id = getHastNodeId(
 				{ position: (child as { position?: unknown }).position } as HastRootContent,
 				index
 			);
 
-			nextBlocks.push({ id, html, contentHash: hash });
+			nextBlocks.push({ contentHash: hash, html, id });
 		}
 
 		let unstableHtml = '';
 
 		if (mdastChildren.length > stableCount) {
 			const unstableChild = mdastChildren[stableCount];
-			const singleNodeRoot = { type: 'root', children: [unstableChild] };
+			const singleNodeRoot = { children: [unstableChild], type: 'root' };
 			const transformedRoot = (await processorInstance.run(
 				singleNodeRoot as MdastRoot
 			)) as HastRoot;
@@ -706,19 +706,19 @@
 		const { default: mermaid } = await import('mermaid');
 
 		mermaid.initialize({
-			startOnLoad: false,
-			theme: isDark ? 'dark' : 'default',
-			securityLevel: 'strict',
 			flowchart: {
-				useMaxWidth: false,
-				htmlLabels: true
-			},
-			sequence: {
+				htmlLabels: true,
 				useMaxWidth: false
 			},
 			gantt: {
 				useMaxWidth: false
-			}
+			},
+			securityLevel: 'strict',
+			sequence: {
+				useMaxWidth: false
+			},
+			startOnLoad: false,
+			theme: isDark ? 'dark' : 'default'
 		});
 
 		try {

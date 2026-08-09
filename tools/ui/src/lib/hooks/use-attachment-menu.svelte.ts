@@ -49,9 +49,9 @@ export function useAttachmentMenu(
 
 		return {
 			[AttachmentAction.FILE_UPLOAD]: wrap(cbs.onFileUpload),
-			[AttachmentAction.SYSTEM_PROMPT_CLICK]: wrap(cbs.onSystemPromptClick),
 			[AttachmentAction.MCP_PROMPT_CLICK]: wrap(cbs.onMcpPromptClick),
-			[AttachmentAction.MCP_RESOURCES_CLICK]: wrap(cbs.onMcpResourcesClick)
+			[AttachmentAction.MCP_RESOURCES_CLICK]: wrap(cbs.onMcpResourcesClick),
+			[AttachmentAction.SYSTEM_PROMPT_CLICK]: wrap(cbs.onSystemPromptClick)
 		};
 	});
 
@@ -77,8 +77,8 @@ export function useAttachmentMenu(
 		get callbacks() {
 			return callbacks;
 		},
+		getSystemMessageTooltip,
 		isItemEnabled,
-		isItemVisible,
-		getSystemMessageTooltip
+		isItemVisible
 	};
 }

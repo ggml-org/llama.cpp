@@ -9,7 +9,7 @@
 		onDelete: () => void;
 	}
 
-	let { isHealthChecking, onEdit, onRefresh, onDelete }: Props = $props();
+	let { isHealthChecking, onDelete, onEdit, onRefresh }: Props = $props();
 </script>
 
 <div class="flex shrink-0 items-center gap-1">

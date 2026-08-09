@@ -24,12 +24,12 @@
 	}
 
 	let {
-		triggerIcon,
-		triggerTooltip,
-		triggerClass = '',
 		actions,
 		align = 'end',
-		open = $bindable(false)
+		open = $bindable(false),
+		triggerClass = '',
+		triggerIcon,
+		triggerTooltip
 	}: Props = $props();
 </script>
 

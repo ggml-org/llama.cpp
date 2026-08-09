@@ -14,7 +14,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const runJsMeta = $derived(parseRunJavascriptMeta(section));
 	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');

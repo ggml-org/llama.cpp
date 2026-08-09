@@ -32,7 +32,7 @@
 		getSectionHref?: (section: SettingsSection) => string;
 	}
 
-	let { initialSection, getSectionHref }: Props = $props();
+	let { getSectionHref, initialSection }: Props = $props();
 
 	let activeSlug = $derived(
 		initialSection ?? (page.params as Record<string, string | undefined>).section ?? 'general'
@@ -127,11 +127,11 @@
 	}
 
 	setChatSettingsConfigContext({
+		handleConfigChange,
+		handleThemeChange,
 		get localConfig() {
 			return localConfig;
-		},
-		handleConfigChange,
-		handleThemeChange
+		}
 	});
 </script>
 

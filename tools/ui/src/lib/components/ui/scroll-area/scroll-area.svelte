@@ -4,12 +4,12 @@
 	import { ScrollArea as ScrollAreaPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
+		children,
 		class: className,
 		orientation = 'vertical',
+		ref = $bindable(null),
 		scrollbarXClasses = '',
 		scrollbarYClasses = '',
-		children,
 		...restProps
 	}: WithoutChild<ScrollAreaPrimitive.RootProps> & {
 		orientation?: 'vertical' | 'horizontal' | 'both' | undefined;

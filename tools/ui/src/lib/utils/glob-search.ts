@@ -52,7 +52,7 @@ export async function runGlobSearch(
 
 	const res = await ToolsService.executeToolRaw(
 		BuiltInTool.FILE_GLOB_SEARCH,
-		{ path: args.path, type, include: args.include, max_depth: args.maxDepth, limit },
+		{ include: args.include, limit, max_depth: args.maxDepth, path: args.path, type },
 		signal
 	);
 
@@ -66,7 +66,7 @@ export async function runGlobSearch(
 	for (const [k, v] of searchCache) {
 		if (now - v.at >= SEARCH_CACHE_TTL_MS) searchCache.delete(k);
 	}
-	searchCache.set(key, { results: entries, base, at: now });
+	searchCache.set(key, { at: now, base, results: entries });
 
 	return { base, entries };
 }
@@ -96,7 +96,7 @@ export interface GlobSearchChildResult {
 }
 
 function toEntryResult(e: GlobEntry, base: string): GlobEntryResult {
-	return { path: joinPath(base, e.path), name: lastPathSegment(e.path), type: e.type };
+	return { name: lastPathSegment(e.path), path: joinPath(base, e.path), type: e.type };
 }
 
 /**
@@ -113,14 +113,14 @@ export async function runGlobSearchWithChildren(
 	options: GlobSearchChildOptions = {}
 ): Promise<GlobSearchChildResult> {
 	const {
-		type = GlobSearchType.ALL,
+		childMaxDepth = PATH_NAV_MAX_DEPTH,
 		descendOnTrailingSeparator = false,
-		childMaxDepth = PATH_NAV_MAX_DEPTH
+		type = GlobSearchType.ALL
 	} = options;
 	const args = buildGlobSearchArgs(query, scopePath, searchDepth);
 	const res = await runGlobSearch(args, type, limit, signal);
 
-	if (res.error) return { base: res.base, args, entries: [], error: res.error };
+	if (res.error) return { args, base: res.base, entries: [], error: res.error };
 
 	const ranked = rankEntries(res.entries, args.rankQuery);
 	const entries = ranked.map((e) => toEntryResult(e, res.base));
@@ -137,7 +137,7 @@ export async function runGlobSearchWithChildren(
 		if (wantsDescend && exact) {
 			const exactDir = joinPath(res.base, exact.path);
 			const childRes = await runGlobSearch(
-				{ path: exactDir, include: GLOB_WILDCARD, maxDepth: childMaxDepth, rankQuery: '' },
+				{ include: GLOB_WILDCARD, maxDepth: childMaxDepth, path: exactDir, rankQuery: '' },
 				type,
 				limit,
 				signal
@@ -148,10 +148,10 @@ export async function runGlobSearchWithChildren(
 					.map((e) => toEntryResult(e, childRes.base))
 					.sort((a, b) => a.path.localeCompare(b.path));
 
-				return { base: res.base, args, entries: [...entries, ...children], exactDir };
+				return { args, base: res.base, entries: [...entries, ...children], exactDir };
 			}
 		}
 	}
 
-	return { base: res.base, args, entries };
+	return { args, base: res.base, entries };
 }

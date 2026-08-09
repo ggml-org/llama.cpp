@@ -18,15 +18,15 @@
 
 	let {
 		autofocus,
-		value = $bindable(''),
-		placeholder = 'Search...',
-		onInput,
-		onClose,
-		onKeyDown,
 		class: className,
 		id,
+		isCancelAlwaysVisible = false,
+		onClose,
+		onInput,
+		onKeyDown,
+		placeholder = 'Search...',
 		ref = $bindable(null),
-		isCancelAlwaysVisible = false
+		value = $bindable('')
 	}: Props = $props();
 
 	let showClearButton = $derived(isCancelAlwaysVisible || !!value || !!onClose);

@@ -14,11 +14,11 @@
 	}
 
 	let {
-		open = $bindable(false),
-		uploadedFiles = [],
-		attachments = [],
 		activeModelId,
-		previewFocusIndex = 0
+		attachments = [],
+		open = $bindable(false),
+		previewFocusIndex = 0,
+		uploadedFiles = []
 	}: Props = $props();
 
 	function handleClose() {

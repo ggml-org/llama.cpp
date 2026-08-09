@@ -86,8 +86,8 @@ export function formatJsonPretty(jsonString: string): string {
  */
 export function formatTime(date: Date): string {
 	return date.toLocaleTimeString('en-US', {
-		hour12: false,
 		hour: '2-digit',
+		hour12: false,
 		minute: '2-digit',
 		second: '2-digit'
 	});

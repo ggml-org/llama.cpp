@@ -9,8 +9,8 @@ describe('tryParseToolResultObject', () => {
 
 	it('returns the parsed object when the result is JSON', () => {
 		expect(tryParseToolResultObject('{"result":"ok","bytes":42}')).toEqual({
-			result: 'ok',
-			bytes: 42
+			bytes: 42,
+			result: 'ok'
 		});
 	});
 

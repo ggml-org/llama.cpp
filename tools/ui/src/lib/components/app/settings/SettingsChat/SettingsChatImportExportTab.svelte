@@ -269,7 +269,7 @@
 			IconComponent={Download}
 			buttonText="Export conversations"
 			onclick={handleExportClick}
-			summary={{ show: showExportSummary, verb: 'Exported', items: exportedConversations }}
+			summary={{ items: exportedConversations, show: showExportSummary, verb: 'Exported' }}
 		/>
 
 		<SettingsChatImportExportSection
@@ -278,7 +278,7 @@
 			IconComponent={Upload}
 			buttonText="Import conversations"
 			onclick={handleImportClick}
-			summary={{ show: showImportSummary, verb: 'Imported', items: importedConversations }}
+			summary={{ items: importedConversations, show: showImportSummary, verb: 'Imported' }}
 		/>
 
 		<SettingsChatImportExportSection
@@ -300,7 +300,7 @@
 			IconComponent={Download}
 			buttonText="Export settings"
 			onclick={handleSettingsExport}
-			summary={{ show: showSettingsExportSummary, verb: 'Exported', items: [] }}
+			summary={{ items: [], show: showSettingsExportSummary, verb: 'Exported' }}
 		/>
 
 		<SettingsChatImportExportSection
@@ -309,7 +309,7 @@
 			IconComponent={Upload}
 			buttonText="Import settings"
 			onclick={handleSettingsImport}
-			summary={{ show: showSettingsImportSummary, verb: 'Imported', items: [] }}
+			summary={{ items: [], show: showSettingsImportSummary, verb: 'Imported' }}
 		/>
 	</SettingsGroup>
 </div>

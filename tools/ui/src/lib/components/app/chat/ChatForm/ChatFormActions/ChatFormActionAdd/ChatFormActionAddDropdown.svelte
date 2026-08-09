@@ -36,15 +36,15 @@
 		class: className = '',
 		disabled = false,
 		hasAudioModality = false,
-		hasVideoModality = false,
-		hasVisionModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
+		hasVideoModality = false,
+		hasVisionModality = false,
 		onFileUpload,
-		onSystemPromptClick,
 		onMcpPromptClick,
+		onMcpResourcesClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick
+		onSystemPromptClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
@@ -59,13 +59,13 @@
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
-			hasVisionModality,
 			hasAudioModality,
-			hasVideoModality,
 			hasMcpPromptsSupport,
-			hasMcpResourcesSupport
+			hasMcpResourcesSupport,
+			hasVideoModality,
+			hasVisionModality
 		}),
-		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => ({ onFileUpload, onMcpPromptClick, onMcpResourcesClick, onSystemPromptClick }),
 		() => {
 			dropdownOpen = false;
 		}

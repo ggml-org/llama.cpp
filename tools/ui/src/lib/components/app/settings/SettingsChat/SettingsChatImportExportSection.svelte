@@ -4,16 +4,16 @@
 	import type { Component } from 'svelte';
 
 	let {
-		title,
+		buttonClass,
+		buttonText,
+		buttonVariant,
 		description,
 		IconComponent,
-		buttonText,
 		onclick,
+		summary,
+		title,
 		titleClass,
-		buttonVariant,
-		buttonClass,
-		wrapperClass,
-		summary
+		wrapperClass
 	}: {
 		title: string;
 		description: string;

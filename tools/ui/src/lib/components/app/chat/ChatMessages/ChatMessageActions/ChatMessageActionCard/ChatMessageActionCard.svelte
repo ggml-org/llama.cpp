@@ -8,7 +8,7 @@
 		actions: Snippet;
 	}
 
-	let { icon: IconComponent, message, actions }: Props = $props();
+	let { actions, icon: IconComponent, message }: Props = $props();
 </script>
 
 <div class="my-2 rounded-lg border border-border bg-card p-3">

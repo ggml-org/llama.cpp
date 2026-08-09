@@ -64,17 +64,17 @@
 	}
 
 	let {
-		section,
-		open,
+		children,
+		extraLiveStreaming = false,
 		isStreaming,
 		meta,
-		extraLiveStreaming = false,
+		onToggle,
+		open,
+		section,
 		spinIconWhenActive = false,
-		wrapper: Wrapper = CollapsibleContentBlock,
 		title,
 		titleSnippet,
-		onToggle,
-		children
+		wrapper: Wrapper = CollapsibleContentBlock
 	}: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
@@ -125,9 +125,9 @@
 	{onToggle}
 >
 	{@render children(meta, {
-		isStreaming,
+		isCodeStreaming,
 		isPending,
-		isStreamingCall,
-		isCodeStreaming
+		isStreaming,
+		isStreamingCall
 	})}
 </Wrapper>

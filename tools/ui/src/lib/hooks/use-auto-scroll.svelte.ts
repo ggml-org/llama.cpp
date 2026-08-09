@@ -69,7 +69,7 @@ export class AutoScrollController {
 	handleScroll(): void {
 		if (this._disabled || !this._container) return;
 
-		const { scrollTop, scrollHeight, clientHeight } = this._container;
+		const { clientHeight, scrollHeight, scrollTop } = this._container;
 		const distanceFromBottom = scrollHeight - clientHeight - scrollTop;
 		const isScrollingUp = scrollTop < this._lastScrollTop;
 		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
@@ -202,9 +202,9 @@ export class AutoScrollController {
 		});
 
 		this._mutationObserver.observe(this._container, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 	}
 

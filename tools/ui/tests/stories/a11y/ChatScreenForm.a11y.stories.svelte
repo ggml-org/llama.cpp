@@ -5,12 +5,12 @@
 	import { expect, screen, waitFor } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/ChatScreen/ChatScreenForm/Accessibility',
 		component: ChatScreenForm,
 		parameters: {
 			layout: 'centered'
 		},
-		tags: ['!dev']
+		tags: ['!dev'],
+		title: 'Components/ChatScreen/ChatScreenForm/Accessibility'
 	});
 </script>
 

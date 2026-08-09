@@ -51,15 +51,15 @@
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
-		showAddButton = true,
-		showModelSelector = true,
-		uploadedFiles = [],
 		onFileUpload,
+		onMcpPromptClick,
+		onMcpResourcesClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpResourcesClick
+		showAddButton = true,
+		showModelSelector = true,
+		uploadedFiles = []
 	}: Props = $props();
 
 	let currentConfig = $derived(config());

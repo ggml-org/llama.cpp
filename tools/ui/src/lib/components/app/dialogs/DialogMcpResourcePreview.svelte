@@ -20,7 +20,7 @@
 		extra: DatabaseMessageExtraMcpResource;
 	}
 
-	let { open = $bindable(), onOpenChange, extra }: Props = $props();
+	let { extra, onOpenChange, open = $bindable() }: Props = $props();
 
 	const serverName = $derived(mcpStore.getServerDisplayName(extra.serverName));
 	const favicon = $derived(mcpStore.getServerFavicon(extra.serverName));

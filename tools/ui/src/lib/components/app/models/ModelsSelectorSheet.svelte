@@ -27,9 +27,9 @@
 	let {
 		class: className = '',
 		currentModel = null,
-		onModelChange,
 		disabled = false,
 		forceForegroundText = false,
+		onModelChange,
 		useGlobalSelection = false
 	}: Props = $props();
 
@@ -37,11 +37,11 @@
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
-		useGlobalSelection: () => useGlobalSelection,
 		onModelChange: () => onModelChange,
 		onOpenChange: (open) => {
 			sheetOpen = open;
-		}
+		},
+		useGlobalSelection: () => useGlobalSelection
 	});
 
 	export function open() {

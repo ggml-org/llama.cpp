@@ -96,12 +96,6 @@
 		class: className = '',
 		disabled = false,
 		isLoading = false,
-		placeholder = 'Type a message...',
-		showMcpPromptButton = false,
-		showAddButton = true,
-		showModelSelector = true,
-		uploadedFiles = $bindable([]),
-		value = $bindable(''),
 		onAttachmentRemove,
 		onFilesAdd,
 		onStop,
@@ -109,7 +103,13 @@
 		onSystemPromptClick,
 		onUploadedFileRemove,
 		onUploadedFilesChange,
-		onValueChange
+		onValueChange,
+		placeholder = 'Type a message...',
+		showAddButton = true,
+		showMcpPromptButton = false,
+		showModelSelector = true,
+		uploadedFiles = $bindable([]),
+		value = $bindable('')
 	}: Props = $props();
 
 	// Component References
@@ -146,21 +146,21 @@
 	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
 
 	const pickers = useChatFormPickers({
+		focusInput: refocusInput,
+		getCaretOffset: () => inputRef?.getCaretOffset(),
+		getCwd: () => cwd,
+		getPickersRef: () => pickersRef,
+		getServerHome: () => toolsStore.serverHome ?? null,
+		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
+		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
+		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
+		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
+		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
 			value = v;
 			onValueChange?.(v);
-		},
-		getCaretOffset: () => inputRef?.getCaretOffset(),
-		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
-		focusInput: refocusInput,
-		getShowModelSelector: () => showModelSelector,
-		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
-		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		getCwd: () => cwd,
-		getServerHome: () => toolsStore.serverHome ?? null,
-		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
-		getPickersRef: () => pickersRef
+		}
 	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
@@ -373,20 +373,20 @@
 				// Handle MCP prompt attachments as ChatUploadedFile with mcpPrompt data
 				if (parsed.mcpPromptAttachments.length > 0) {
 					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map((att) => ({
-						id: uuid(),
-						name: att.name,
-						size: att.content.length,
-						type: SpecialFileType.MCP_PROMPT,
 						file: new File([att.content], `${att.name}${FileExtensionText.TXT}`, {
 							type: MimeTypeText.PLAIN
 						}),
+						id: uuid(),
 						isLoading: false,
-						textContent: att.content,
 						mcpPrompt: {
-							serverName: att.serverName,
+							arguments: att.arguments,
 							promptName: att.promptName,
-							arguments: att.arguments
-						}
+							serverName: att.serverName
+						},
+						name: att.name,
+						size: att.content.length,
+						textContent: att.content,
+						type: SpecialFileType.MCP_PROMPT
 					}));
 
 					uploadedFiles = [...uploadedFiles, ...mcpPromptFiles];
@@ -425,17 +425,17 @@
 
 		const promptName = promptInfo.title || promptInfo.name;
 		const placeholder: ChatUploadedFile = {
-			id: placeholderId,
-			name: promptName,
-			size: INITIAL_FILE_SIZE,
-			type: SpecialFileType.MCP_PROMPT,
 			file: new File([], 'loading'),
+			id: placeholderId,
 			isLoading: true,
 			mcpPrompt: {
-				serverName: promptInfo.serverName,
+				arguments: args ? { ...args } : undefined,
 				promptName: promptInfo.name,
-				arguments: args ? { ...args } : undefined
-			}
+				serverName: promptInfo.serverName
+			},
+			name: promptName,
+			size: INITIAL_FILE_SIZE,
+			type: SpecialFileType.MCP_PROMPT
 		};
 
 		uploadedFiles = [...uploadedFiles, placeholder];
@@ -463,12 +463,12 @@
 			f.id === placeholderId
 				? {
 						...f,
-						isLoading: false,
-						textContent: promptText,
-						size: promptText.length,
 						file: new File([promptText], `${f.name}${FileExtensionText.TXT}`, {
 							type: MimeTypeText.PLAIN
-						})
+						}),
+						isLoading: false,
+						size: promptText.length,
+						textContent: promptText
 					}
 				: f
 		);
@@ -658,7 +658,7 @@
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}
-				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
+				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
 				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>

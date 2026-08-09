@@ -18,17 +18,17 @@
 	}
 
 	let {
+		cancelText = 'Cancel',
+		children,
+		confirmText = 'Confirm',
+		description,
+		icon,
+		onCancel,
+		onConfirm,
+		onKeydown,
 		open = $bindable(),
 		title,
-		description,
-		confirmText = 'Confirm',
-		cancelText = 'Cancel',
-		variant = 'default',
-		icon,
-		onConfirm,
-		onCancel,
-		onKeydown,
-		children
+		variant = 'default'
 	}: Props = $props();
 
 	function handleKeydown(event: KeyboardEvent) {

@@ -91,8 +91,8 @@
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
-		navigateToPrevConversation: () => navigateToConversation(-1),
-		navigateToNextConversation: () => navigateToConversation(1)
+		navigateToNextConversation: () => navigateToConversation(1),
+		navigateToPrevConversation: () => navigateToConversation(-1)
 	});
 
 	function checkApiKey() {
@@ -112,8 +112,8 @@
 				page.status !== 403
 			) {
 				const headers: Record<string, string> = {
-					'Content-Type': 'application/json',
-					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`
+					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`,
+					'Content-Type': 'application/json'
 				};
 
 				fetch(`${base}/props`, { headers })

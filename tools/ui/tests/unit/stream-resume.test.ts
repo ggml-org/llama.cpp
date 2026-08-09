@@ -4,12 +4,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 beforeAll(() => {
 	const store = new Map<string, string>();
 	const polyfill: Storage = {
-		get length() {
-			return store.size;
-		},
 		clear: () => store.clear(),
 		getItem: (k) => (store.has(k) ? store.get(k)! : null),
 		key: (i) => Array.from(store.keys())[i] ?? null,
+		get length() {
+			return store.size;
+		},
 		removeItem: (k) => {
 			store.delete(k);
 		},

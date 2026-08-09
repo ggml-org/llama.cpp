@@ -74,9 +74,9 @@ export class TTLCache<K extends string, V> {
 		const now = Date.now();
 
 		this.cache.set(key, {
-			value,
 			expiresAt: now + ttl,
-			lastAccessed: now
+			lastAccessed: now,
+			value
 		});
 	}
 
@@ -246,9 +246,9 @@ export class ReactiveTTLMap<K extends string, V> {
 		const now = Date.now();
 
 		this.entries.set(key, {
-			value,
 			expiresAt: now + ttl,
-			lastAccessed: now
+			lastAccessed: now,
+			value
 		});
 	}
 

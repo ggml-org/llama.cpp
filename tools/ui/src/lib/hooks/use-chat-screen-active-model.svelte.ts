@@ -85,14 +85,11 @@ export function useChatScreenActiveModel() {
 	});
 
 	return {
-		get isRouter() {
-			return isRouter;
+		get activeModelId() {
+			return activeModelId;
 		},
 		get conversationModel() {
 			return conversationModel;
-		},
-		get activeModelId() {
-			return activeModelId;
 		},
 		get hasAudioModality() {
 			return hasAudioModality;
@@ -102,6 +99,9 @@ export function useChatScreenActiveModel() {
 		},
 		get hasVisionModality() {
 			return hasVisionModality;
+		},
+		get isRouter() {
+			return isRouter;
 		}
 	};
 }

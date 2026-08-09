@@ -52,14 +52,14 @@
 
 	let {
 		class: className = '',
-		disabled = false,
-		directory = null,
-		isOpen,
-		query = $bindable(''),
 		customAnchor = null,
+		directory = null,
+		disabled = false,
+		isOpen,
 		onChange,
 		onClose,
-		onOpen
+		onOpen,
+		query = $bindable('')
 	}: Props = $props();
 
 	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
@@ -88,8 +88,8 @@
 	let listContainer = $state<HTMLDivElement | null>(null);
 
 	const nav = usePickerNavigation({
-		isOpen: () => isOpen,
 		count: () => queryResults.length,
+		isOpen: () => isOpen,
 		onClose: closePicker,
 		onSelect: (index) => commit(queryResults[index])
 	});
@@ -129,11 +129,11 @@
 	});
 
 	useScrollActiveRow({
-		getTrigger: () => nav.scrollTrigger,
+		dataIndex: 'result',
 		getContainer: () => listContainer,
-		getIndex: () => nav.hoveredIndex,
 		getCount: () => queryResults.length,
-		dataIndex: 'result'
+		getIndex: () => nav.hoveredIndex,
+		getTrigger: () => nav.scrollTrigger
 	});
 
 	let searchScope = $state(HOME_TILDE);
@@ -141,8 +141,8 @@
 	// An exactly-typed directory is "entered": the shared search lists its
 	// children too, so path navigation does not require a trailing slash.
 	const search = useDebouncedSearch({
-		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen && fileSearchEnabled,
+		debounceMs: SEARCH_DEBOUNCE_MS,
 		getQuery: () => query.trim(),
 		run: async (q, signal, isCurrent) => {
 			const trimmed = q.trim();
@@ -222,11 +222,11 @@
 	async function resolveNativeName(name: string): Promise<string | null> {
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
-				path: homeBase ?? HOME_TILDE,
-				type: GlobSearchType.DIR,
 				include: buildCaseInsensitiveGlob(name),
+				limit: NATIVE_LIMIT,
 				max_depth: NATIVE_MAX_DEPTH,
-				limit: NATIVE_LIMIT
+				path: homeBase ?? HOME_TILDE,
+				type: GlobSearchType.DIR
 			});
 			const base = typeof res.base === 'string' ? res.base : '';
 			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];

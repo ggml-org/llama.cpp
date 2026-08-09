@@ -7,12 +7,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 beforeAll(() => {
 	const store = new Map<string, string>();
 	const polyfill: Storage = {
-		get length() {
-			return store.size;
-		},
 		clear: () => store.clear(),
 		getItem: (k) => (store.has(k) ? store.get(k)! : null),
 		key: (i) => Array.from(store.keys())[i] ?? null,
+		get length() {
+			return store.size;
+		},
 		removeItem: (k) => {
 			store.delete(k);
 		},
@@ -38,8 +38,8 @@ describe('conversationsStore MCP override resolution', () => {
 			CONFIG_LOCALSTORAGE_KEY,
 			JSON.stringify({
 				[SETTINGS_KEYS.MCP_SERVERS]: JSON.stringify([
-					{ id: 'alpha', enabled: false, url: 'https://alpha.example.com/mcp' },
-					{ id: 'bravo', enabled: true, url: 'https://bravo.example.com/mcp' }
+					{ enabled: false, id: 'alpha', url: 'https://alpha.example.com/mcp' },
+					{ enabled: true, id: 'bravo', url: 'https://bravo.example.com/mcp' }
 				])
 			})
 		);
@@ -65,11 +65,11 @@ describe('conversationsStore MCP override resolution', () => {
 		overrides?: { serverId: string; enabled: boolean }[]
 	): DatabaseConversation {
 		return {
-			id: 'conv-1',
 			currNode: null,
+			id: 'conv-1',
 			lastModified: 0,
-			name: 'Test chat',
-			mcpServerOverrides: overrides
+			mcpServerOverrides: overrides,
+			name: 'Test chat'
 		};
 	}
 
@@ -106,7 +106,7 @@ describe('conversationsStore MCP override resolution', () => {
 
 		// Override flips bravo off for this chat, alpha keeps its global default.
 		conversationsStore.activeConversation = makeConversation([
-			{ serverId: 'bravo', enabled: false }
+			{ enabled: false, serverId: 'bravo' }
 		]);
 
 		expect(conversationsStore.isMcpServerEnabledForChat('alpha')).toBe(false);
@@ -117,12 +117,12 @@ describe('conversationsStore MCP override resolution', () => {
 		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
 
 		conversationsStore.activeConversation = makeConversation([
-			{ serverId: 'alpha', enabled: true }
+			{ enabled: true, serverId: 'alpha' }
 		]);
 
 		expect(conversationsStore.getAllMcpServerOverrides()).toEqual([
-			{ serverId: 'alpha', enabled: true },
-			{ serverId: 'bravo', enabled: true }
+			{ enabled: true, serverId: 'alpha' },
+			{ enabled: true, serverId: 'bravo' }
 		]);
 	});
 
@@ -132,8 +132,8 @@ describe('conversationsStore MCP override resolution', () => {
 		conversationsStore.activeConversation = makeConversation();
 
 		expect(conversationsStore.getAllMcpServerOverrides()).toEqual([
-			{ serverId: 'alpha', enabled: false },
-			{ serverId: 'bravo', enabled: true }
+			{ enabled: false, serverId: 'alpha' },
+			{ enabled: true, serverId: 'bravo' }
 		]);
 	});
 
@@ -141,12 +141,12 @@ describe('conversationsStore MCP override resolution', () => {
 		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
 
 		conversationsStore.activeConversation = makeConversation([
-			{ serverId: 'alpha', enabled: true }
+			{ enabled: true, serverId: 'alpha' }
 		]);
 
 		expect(conversationsStore.getMcpServerOverride('bravo')).toEqual({
-			serverId: 'bravo',
-			enabled: true
+			enabled: true,
+			serverId: 'bravo'
 		});
 	});
 });

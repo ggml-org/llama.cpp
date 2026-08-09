@@ -6,10 +6,10 @@
 	import type { Snippet } from 'svelte';
 
 	let {
-		ref = $bindable(null),
+		children,
 		class: className,
 		portalProps,
-		children,
+		ref = $bindable(null),
 		showCloseButton = true,
 		...restProps
 	}: WithoutChildrenOrChild<DialogPrimitive.ContentProps> & {

@@ -98,12 +98,12 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 				: `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 
 		return {
-			id,
-			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
-			url,
-			name: (entry as { name?: string })?.name,
 			displayName: (entry as { displayName?: string })?.displayName,
+			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			headers: headers || undefined,
+			id,
+			name: (entry as { name?: string })?.name,
+			url,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
 	});

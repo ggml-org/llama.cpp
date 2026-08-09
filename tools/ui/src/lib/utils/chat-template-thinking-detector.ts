@@ -65,7 +65,7 @@ export function detectThinkingSupport(t: string): boolean {
 }
 
 export function detectThinkingSupportWithReason(t: string): { supported: boolean; reason: string } {
-	if (!t) return { supported: false, reason: 'No chat template available' };
+	if (!t) return { reason: 'No chat template available', supported: false };
 
 	for (const kwarg of THINKING_KWARG_VARS) {
 		const regex = new RegExp(
@@ -74,17 +74,17 @@ export function detectThinkingSupportWithReason(t: string): { supported: boolean
 		);
 
 		if (regex.test(t)) {
-			return { supported: true, reason: 'Found: ' + kwarg };
+			return { reason: 'Found: ' + kwarg, supported: true };
 		}
 	}
 	for (const p of JINJA_THINKING_CONDITIONALS) {
-		if (p.test(t)) return { supported: true, reason: 'Found: thinking conditional' };
+		if (p.test(t)) return { reason: 'Found: thinking conditional', supported: true };
 	}
 	for (const [s, e] of THINKING_TAG_PATTERNS) {
 		if (t.includes(s) && (!e || t.includes(e))) {
-			return { supported: true, reason: 'Found: ' + s + (e ? ' .. ' + e : ' (self)') };
+			return { reason: 'Found: ' + s + (e ? ' .. ' + e : ' (self)'), supported: true };
 		}
 	}
 
-	return { supported: false, reason: 'No thinking patterns found' };
+	return { reason: 'No thinking patterns found', supported: false };
 }

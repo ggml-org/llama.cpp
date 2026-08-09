@@ -14,12 +14,12 @@
 	}
 
 	let {
-		serverId,
-		serverUrl,
-		serverUseProxy = false,
-		serverLabel = '',
+		onCancel,
 		onSave,
-		onCancel
+		serverId,
+		serverLabel = '',
+		serverUrl,
+		serverUseProxy = false
 	}: Props = $props();
 
 	let editUrl = $derived(serverUrl);

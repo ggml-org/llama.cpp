@@ -101,7 +101,7 @@ describe('formatDiagnosticErrorMessage', () => {
 describe('extractJsonRpcMethods', () => {
 	it('extracts methods from a JSON-RPC array', () => {
 		const body = JSON.stringify([
-			{ jsonrpc: '2.0', id: 1, method: 'initialize' },
+			{ id: 1, jsonrpc: '2.0', method: 'initialize' },
 			{ jsonrpc: '2.0', method: 'notifications/initialized' }
 		]);
 
@@ -109,7 +109,7 @@ describe('extractJsonRpcMethods', () => {
 	});
 
 	it('extracts method from a single JSON-RPC message', () => {
-		const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+		const body = JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
 
 		expect(extractJsonRpcMethods(body)).toEqual(['tools/list']);
 	});

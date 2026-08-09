@@ -27,8 +27,8 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 	let showFileErrorDialog = $state(false);
 	let fileErrorData = $state<FileErrorData>({
 		generallyUnsupported: [],
-		modalityUnsupported: [],
 		modalityReasons: {},
+		modalityUnsupported: [],
 		supportedTypes: []
 	});
 
@@ -44,7 +44,7 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 			}
 		}
 
-		const { supportedFiles, unsupportedFiles, modalityReasons } = filterFilesByModalities(
+		const { modalityReasons, supportedFiles, unsupportedFiles } = filterFilesByModalities(
 			generallySupported,
 			options.capabilities()
 		);
@@ -62,8 +62,8 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 
 			fileErrorData = {
 				generallyUnsupported,
-				modalityUnsupported: unsupportedFiles,
 				modalityReasons,
+				modalityUnsupported: unsupportedFiles,
 				supportedTypes
 			};
 			showFileErrorDialog = true;
@@ -88,20 +88,20 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 	}
 
 	return {
-		get uploadedFiles() {
-			return uploadedFiles;
-		},
-		set uploadedFiles(value) {
-			uploadedFiles = value;
-		},
+		fileErrorData,
+		handleFileRemove,
+		handleFileUpload,
 		get showFileErrorDialog() {
 			return showFileErrorDialog;
 		},
 		set showFileErrorDialog(value) {
 			showFileErrorDialog = value;
 		},
-		fileErrorData,
-		handleFileUpload,
-		handleFileRemove
+		get uploadedFiles() {
+			return uploadedFiles;
+		},
+		set uploadedFiles(value) {
+			uploadedFiles = value;
+		}
 	};
 }

@@ -153,8 +153,8 @@
 		}
 
 		return {
-			visibleCount: visibleIds.length,
-			selectedVisibleCount: selectedVisible
+			selectedVisibleCount: selectedVisible,
+			visibleCount: visibleIds.length
 		};
 	});
 
@@ -216,9 +216,9 @@
 	}
 
 	const marquee = useMarqueeSelection({
-		selectedIds: () => selectedIds,
+		enabled: () => isSelectionMode,
 		orderedIds: () => renderedOrderIds,
-		enabled: () => isSelectionMode
+		selectedIds: () => selectedIds
 	});
 
 	function handleRowMouseDown(id: string, event: MouseEvent) {
@@ -364,7 +364,7 @@
 					!isExpandedMode
 						? 'opacity-0 h-0!'
 						: ''}"
-					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+					in:fade={{ delay: 50, duration: 150, easing: circIn }}
 					out:fade={{ duration: 100 }}
 				>
 					<ActionIcon

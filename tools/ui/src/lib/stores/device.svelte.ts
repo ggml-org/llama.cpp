@@ -32,8 +32,8 @@ interface DeviceContext {
 const SERVER_DEFAULT: DeviceContext = {
 	isIOSDevice: false,
 	isIOSSafari: false,
-	isWKWebView: false,
-	isStandalone: false
+	isStandalone: false,
+	isWKWebView: false
 };
 
 function detect(): DeviceContext {
@@ -53,7 +53,7 @@ function detect(): DeviceContext {
 		window.matchMedia(MEDIA_QUERIES.DISPLAY_MODE_STANDALONE).matches ||
 		(navigator as Navigator & { standalone?: boolean }).standalone === true;
 
-	return { isIOSDevice, isIOSSafari, isWKWebView, isStandalone };
+	return { isIOSDevice, isIOSSafari, isStandalone, isWKWebView };
 }
 
 export const device = $state<DeviceContext>(detect());

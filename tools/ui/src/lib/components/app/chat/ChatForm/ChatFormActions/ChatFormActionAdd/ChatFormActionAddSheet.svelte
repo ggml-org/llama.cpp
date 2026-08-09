@@ -45,14 +45,14 @@
 		class: className = '',
 		disabled = false,
 		hasAudioModality = false,
-		hasVisionModality = false,
-		hasVideoModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
+		hasVideoModality = false,
+		hasVisionModality = false,
 		onFileUpload,
-		onSystemPromptClick,
 		onMcpPromptClick,
 		onMcpResourcesClick,
+		onSystemPromptClick,
 		trigger
 	}: Props = $props();
 
@@ -64,13 +64,13 @@
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
-			hasVisionModality,
 			hasAudioModality,
-			hasVideoModality,
 			hasMcpPromptsSupport,
-			hasMcpResourcesSupport
+			hasMcpResourcesSupport,
+			hasVideoModality,
+			hasVisionModality
 		}),
-		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => ({ onFileUpload, onMcpPromptClick, onMcpResourcesClick, onSystemPromptClick }),
 		() => {
 			sheetOpen = false;
 		}

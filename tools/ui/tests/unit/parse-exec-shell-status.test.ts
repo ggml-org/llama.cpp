@@ -12,8 +12,8 @@ describe('parseExecShellCommandExitStatus', () => {
 
 		expect(status).toEqual({
 			code: 0,
-			timedOut: false,
-			rawText: '[exit code: 0]'
+			rawText: '[exit code: 0]',
+			timedOut: false
 		});
 	});
 
