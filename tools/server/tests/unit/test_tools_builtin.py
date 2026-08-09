@@ -223,7 +223,6 @@ def test_tools_builtin_runtime_header_rejects_ssh_option_injection():
     server.start()
 
     # ssh reads options from its argv, so a target starting with '-' must be rejected
-    # before it reaches the command line, not passed through to run on the host
     res = server.make_request("POST", "/tools",
                               data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
                               headers={"x-tool-runtime": "ssh:-oProxyCommand=touch /tmp/pwned"})
@@ -236,8 +235,8 @@ def test_tools_builtin_runtime_header_rejects_container_option_injection(engine:
     global server
     server.start()
 
-    # the container id lands on the `<engine> exec` command line, so an id shaped like an
-    # option, e.g. --privileged, must be rejected before it reaches the engine
+    # the container id lands on the `<engine> exec` command line, so an id that looks
+    # like an option must be rejected
     res = server.make_request("POST", "/tools",
                               data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
                               headers={"x-tool-runtime": f"{engine}-container:--privileged"})
@@ -246,9 +245,8 @@ def test_tools_builtin_runtime_header_rejects_container_option_injection(engine:
 
 
 def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
-    # docker-only: the check reads the container hostname to recover the spawned id, which docker
-    # sets to the short id; podman rootless does not guarantee this, so the spawn lifecycle is
-    # exercised on docker while podman is covered through the attach path above
+    # docker-only: this reads the container hostname to get the spawned id, which only docker
+    # sets to the short id. podman is covered by the attach path above
     reason = _container_engine_unavailable_reason("docker")
     if reason is not None:
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]

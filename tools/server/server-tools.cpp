@@ -223,17 +223,15 @@ static tools_io::exec_result run_subprocess(
         }
     });
 
-    // feed the child before reading it back: it drains stdin as it goes, and closing stdin is
-    // what tells it the input is over. the watchdog above bounds a transport that stalls here.
-    // stdin is always closed: a transport client blocks as long as its stdin pipe stays open,
-    // and the child reads a deterministic EOF
+    // write stdin before reading stdout, the child drains stdin as it goes
+    // always close stdin, a transport client waits forever if its stdin pipe stays open
     if (FILE * in = proc.stdin_file()) {
         if (stdin_data != nullptr && !stdin_data->empty()) {
 #if defined(_WIN32)
             // pipe fds default to CRT text mode: binary keeps the bytes untranslated
             _setmode(_fileno(in), _O_BINARY);
 #endif
-            // a short write is not an error in itself, the exit code below is what decides
+            // a short write is not an error by itself, the exit code below decides
             fwrite(stdin_data->data(), 1, stdin_data->size(), in);
         }
         fflush(in);
@@ -248,9 +246,8 @@ static tools_io::exec_result run_subprocess(
         // pipe fds default to CRT text mode: binary keeps the bytes untranslated
         _setmode(_fileno(f), _O_BINARY);
 #endif
-        // read the pipe directly: a chunk arrives as soon as data is available and can hold
-        // any byte, including NUL. past the size cap the pipe is still drained, so the child
-        // never blocks on a full pipe
+        // read raw bytes, not lines: the output can hold NUL and must arrive as soon as it is ready
+        // keep draining past the size cap, else the child blocks on a full pipe
         char buf[4096];
         for (;;) {
 #if defined(_WIN32)
@@ -567,8 +564,7 @@ public:
     }
 
     bool write_file(const std::string & path, const std::string & content) const override {
-        // one round trip: the parent directory is created and the content is taken from stdin, so
-        // it never goes through an argv the far side would re-parse, and never lands on the host
+        // the content travels on stdin: no argv for the far side to re-parse, no temp file on the host
         auto res = run_subprocess(
             build_argv({"sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", "_", resolve(path)},
                        /*needs_stdin=*/true),
@@ -717,8 +713,8 @@ private:
     }
 };
 
-// an already-running container, driven through `<engine> exec`. docker and podman expose the
-// same verbs and the same argument order, so one implementation drives both
+// an already-running container, driven through `<engine> exec`
+// docker and podman take the same verbs and the same argument order, so one class drives both
 class tools_io_container : public tools_io_isolate {
 public:
     tools_io_container(std::string bin, std::string container_id, std::string cwd = "")
@@ -740,8 +736,8 @@ private:
     std::string container_id;
 };
 
-// a remote host reached over ssh. this is remoting, not isolation: the tools can do whatever
-// the target account can do, so the isolation is whatever the far side runs them in
+// a remote host reached over ssh
+// this is remoting, not isolation: the tools can do anything the target account can do
 class tools_io_ssh : public tools_io_isolate {
 public:
     tools_io_ssh(std::string target, std::string cwd = "")
@@ -762,8 +758,8 @@ protected:
 private:
     std::string target;
 
-    // the tools run without a console, so any prompt would hang them: authentication is
-    // key-based only and the host key must already be trusted, which is the admin's job
+    // there is no console here, so a prompt would hang the tool call
+    // key-based auth only, and the admin must trust the host key beforehand
     static std::vector<std::string> ssh_argv() {
         return {
             "ssh",
@@ -775,8 +771,8 @@ private:
     }
 };
 
-// the spec reaches us from a client header, and ssh reads options from its argv: a target
-// starting with '-' would become one, e.g. -o ProxyCommand=<anything> runs on the host
+// the target can come from a client header, and ssh reads options from its argv
+// a target starting with '-' would become one, e.g. -oProxyCommand=<anything> runs on the host
 static bool is_valid_ssh_target(const std::string & target) {
     if (target.empty() || target[0] == '-') {
         return false;
@@ -786,8 +782,8 @@ static bool is_valid_ssh_target(const std::string & target) {
     });
 }
 
-// same exposure as the ssh target: the id reaches `<engine> exec` from a client header, and an
-// id starting with '-' would be parsed as an option, e.g. --privileged
+// same risk as the ssh target: an id starting with '-' would become an engine option,
+// e.g. --privileged
 static bool is_valid_container_id(const std::string & id) {
     if (id.empty() || !std::isalnum((unsigned char) id[0])) {
         return false;
@@ -800,7 +796,7 @@ static bool is_valid_container_id(const std::string & id) {
 // runtime specs used by --tools-runtime and the x-tool-runtime header
 static const std::string SERVER_TOOL_RUNTIME_SSH = "ssh:";
 
-// container engines sharing the run/exec/inspect verbs, hence a single implementation
+// container engines that share the same run and exec verbs, hence a single implementation
 static const char * SERVER_TOOL_CONTAINER_ENGINES[] = {"docker", "podman"};
 
 // "<engine>:<image>" spawns a container and owns it, "<engine>-container:<id>" attaches to one
@@ -1881,15 +1877,15 @@ struct server_mcp_tool : server_tool {
     }
 };
 
-// resolves --tools-runtime into the isolate that every tool call runs through. spec() returns the
-// runtime string make_tools_io() understands, and is called once per tool call
+// resolves --tools-runtime into the isolate that every tool call runs through
+// spec() returns the runtime string make_tools_io() takes, and runs once per tool call
 struct server_tools_runtime {
     virtual ~server_tools_runtime() = default;
     virtual std::string spec() = 0;
 };
 
-// a target that already exists and needs no lifecycle: the spec is passed straight through, and was
-// validated once at startup
+// a target that already exists and needs no lifecycle
+// the spec is validated once at startup, then passed straight through
 struct server_tools_static_runtime : server_tools_runtime {
     explicit server_tools_static_runtime(std::string spec) : runtime_spec(std::move(spec)) {}
     std::string spec() override { return runtime_spec; }
@@ -1898,7 +1894,7 @@ private:
     std::string runtime_spec;
 };
 
-// owns the container the tools run in, as configured by --tools-runtime "<engine>:<image>":
+// owns the container the tools run in, as set by --tools-runtime "<engine>:<image>"
 // it is spawned here and stopped when the server exits
 struct server_tools_container_runtime : server_tools_runtime {
     server_tools_container_runtime(const server_tools_container_runtime &) = delete;
@@ -1923,8 +1919,7 @@ struct server_tools_container_runtime : server_tools_runtime {
         proc.join();
     }
 
-    // respawns a container that died on its own, so the returned spec always names a container
-    // that was running a moment ago
+    // respawns a container that died on its own, so the returned spec always names a running one
     std::string spec() override {
         std::lock_guard<std::mutex> lock(mutex);
         if (!proc.alive()) {
@@ -2023,9 +2018,8 @@ static std::string get_header(const std::map<std::string, std::string> & headers
 server_tools::server_tools() = default;
 server_tools::~server_tools() = default;
 
-// builds the runtime backing --tools-runtime: the "<engine>:<image>" form owns a container
-// lifecycle, anything else names a target that already exists and only needs its spec
-// validated once, here at startup
+// the "<engine>:<image>" form owns a container lifecycle
+// anything else names an existing target, so only its spec is validated here at startup
 static std::unique_ptr<server_tools_runtime> make_tools_runtime(const std::string & spec) {
     container_runtime_spec parsed;
     if (parse_container_runtime(spec, parsed) && !parsed.attach) {
