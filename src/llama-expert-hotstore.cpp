@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <regex>
+#include <unistd.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -102,6 +103,27 @@ llama_expert_hotstore::llama_expert_hotstore(
     entries_by_layer.assign(n_layers, {});
     for (auto & e : entries) {
         entries_by_layer[e.layer_idx].push_back(&e);
+    }
+
+    // auto copy/move: copy keeps the RAM copy of promoted experts (needs the
+    // full exps set resident); move frees it (RAM-tight). pick copy only when
+    // the exps comfortably fit in available RAM.
+    if (!copy_mode) {
+        int64_t exps_bytes = 0;
+        for (int il = 0; il < n_layers; il++) {
+            exps_bytes += bytes_per_slot[il];
+        }
+        exps_bytes *= n_experts; // full exps set: per-slot bytes x experts per layer
+        const long page = sysconf(_SC_PAGESIZE);
+        const int64_t free_ram = (int64_t) sysconf(_SC_AVPHYS_PAGES) * page;
+        if (exps_bytes > 0 && free_ram > exps_bytes * 2) {
+            copy_mode = true;
+            fprintf(stderr, "hotstore: copy mode: exps (%d MiB) fit in RAM (%d MiB free)\n",
+                (int) (exps_bytes / (1024*1024)), (int) (free_ram / (1024*1024)));
+        } else if (exps_bytes > 0) {
+            fprintf(stderr, "hotstore: move mode: exps (%d MiB) need more RAM than free (%d MiB)\n",
+                (int) (exps_bytes / (1024*1024)), (int) (free_ram / (1024*1024)));
+        }
     }
 
     if (this->hot_s > 0) {

@@ -813,7 +813,9 @@ static void common_params_fit_impl(
         // account for; subtract an 8 MiB per offloaded layer estimate so S
         // does not overshoot and OOM at graph capture.
         const int64_t vulkan_padding = is_vulkan ? int64_t(hp_ngl) * 8 * MiB : 0;
-        const int64_t moe_on_gpu = final_gpu_model - dense_model_gpu - vulkan_padding;
+        // D2D scratch: one largest-expert-slice buffer per device-pair
+        const int64_t d2d_scratch = nd > 1 ? int64_t(nd * nd) * (total_moe_bytes / (int64_t) hp_ngl / (int64_t) hp_nex) : 0;
+        const int64_t moe_on_gpu = final_gpu_model - dense_model_gpu - vulkan_padding - d2d_scratch;
         const int64_t s = moe_on_gpu > 0 ? int64_t(hp_nex) * moe_on_gpu / total_moe_bytes : 0;
         *n_expert_hot_s = s > 1 ? (int) (s - 1) : 0;
     }
