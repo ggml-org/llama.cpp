@@ -170,6 +170,17 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
                                   cudaStream_t stream, std::index_sequence<I...>) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
+    // [MAGE_VL_DIAG] 仅在会触发 binbcast.cu:293 断言时打印，用于定位真凶 op（修复后可删）
+    if (nb10 % sizeof(src1_t) != 0) {
+        fprintf(stderr, "[MAGE_VL_BINBCAST] nb10=%zu sizeof(src1_t)=%zu -> would assert at binbcast.cu:293\n",
+                (size_t)nb10, (size_t)sizeof(src1_t));
+        fprintf(stderr, "[MAGE_VL_BINBCAST]   dst->op=%d  src0: contig=%d perm=%d   src1: contig=%d perm=%d   ne0=%lld ne1=%lld ne10=%lld ne11=%lld\n",
+                (int)dst->op,
+                (int)ggml_is_contiguous(src0), (int)ggml_is_permuted(src0),
+                (int)ggml_is_contiguous(src1), (int)ggml_is_permuted(src1),
+                (long long)ne0, (long long)ne1, (long long)ne10, (long long)ne11);
+    }
+
     int nr0 = ne10 / ne0;
     int nr1 = ne11 / ne1;
     int nr2 = ne12 / ne2;
@@ -415,13 +426,18 @@ static void ggml_cuda_op_bin_bcast(
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
 
-    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         op()(src0, src1, dst, (const float *)src0_dd, (const float *)src1_dd, (float *)dst_dd, stream);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
+        // [MAGE_VL_PATCH] 反向 upcast: f32 主操作数 + f16 操作数 -> f32 结果。
+        // 必须把 src1 按 half 读, 否则按 float 读 f16 张量会导致 nb10(=2) % sizeof(float)(4)
+        // 不整除而触发 binbcast.cu 的 GGML_ASSERT(nb10 % sizeof(src1_t) == 0)。
+        op()(src0, src1, dst, (const float *)src0_dd, (const half *) src1_dd, (float *)dst_dd, stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
         op()(src0, src1, dst, (const half *) src0_dd, (const half *)src1_dd, (half *) dst_dd, stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
         op()(src0, src1, dst, (const half *) src0_dd, (const float *)src1_dd, (half *) dst_dd, stream);
-    } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         op()(src0, src1, dst, (const half *) src0_dd, (const float *)src1_dd, (float *)dst_dd, stream);
     } else {
         fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
@@ -457,9 +473,14 @@ static void ggml_cuda_op_fused_binbcast_impl(ggml_backend_cuda_context & ctx, gg
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         launch_bin_bcast_pack<op, float, float, float>(src0, src1, dst,
             (const float *) src0->data, (const float *) src1->data, (float *) dst->data,
+            stream, std::make_index_sequence<n_fuse>{});
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
+        // [MAGE_VL_PATCH] 反向 upcast (f32 + f16 -> f32)，融合路径同非融合，src1 按 half 读。
+        launch_bin_bcast_pack<op, float, half, float>(src0, src1, dst,
+            (const float *) src0->data, (const half *) src1->data, (float *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
         launch_bin_bcast_pack<op, half, half, half>(src0, src1, dst,
@@ -469,7 +490,7 @@ static void ggml_cuda_op_fused_binbcast_impl(ggml_backend_cuda_context & ctx, gg
         launch_bin_bcast_pack<op, half, float, half>(src0, src1, dst,
             (const half *) src0->data, (const float *) src1->data, (half *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
-    } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         launch_bin_bcast_pack<op, half, float, float>(src0, src1, dst,
             (const half *) src0->data, (const float *) src1->data, (float *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});

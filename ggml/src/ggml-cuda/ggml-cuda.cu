@@ -4961,9 +4961,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             } break;
         case GGML_OP_REPEAT:
             {
-                // the CUDA REPEAT path only implements F32/F16; other types assert at runtime
+                // the CUDA REPEAT path only implements F32/F16 and requires contiguous input;
+                // non-contiguous src0 would hit the same binbcast nb[1] alignment assert, so
+                // fall back to CPU for those cases.
                 ggml_type src0_type = op->src[0]->type;
-                return src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16;
+                return (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16) &&
+                       ggml_is_contiguous(op->src[0]);
             } break;
         case GGML_OP_REPEAT_BACK:
                 return op->type == GGML_TYPE_F32 && (op->src[0]->ne[2]*op->src[0]->ne[3]) <= (1 << 15);
@@ -5048,9 +5051,36 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
-            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
-                   (op->type         == GGML_TYPE_F32 || op->type         == GGML_TYPE_F16);
+            {
+                // ggml-cuda 的 binbcast 内核支持 5 种类型组合(见 binbcast.cu 的
+                // ggml_cuda_op_bin_bcast / ggml_cuda_op_fused_binbcast_impl)，且要求操作数连续；
+                // 否则会触发 binbcast.cu 的 nb10 % sizeof(src1_t) 断言或 GGML_ABORT。这里拒绝不支持的
+                // 情况，由调度器卸载到 CPU 参考实现(CPU 侧 binary-ops.cpp 已补反向 upcast 分支，结果正确)。
+                // 关键：原代码只要"F32 或 F16"就返回 true，会放行内核不支持的组合(例如
+                // src0=F32 且 src1=F16 却按 float 读 src1)，导致 nb10(=2) % 4 不整除而断言。现按三类型精确匹配。
+                // 注：融合路径(fused_add/fused_mul)把后续节点的 src[1] 填进 dst->src[2..]，但
+                // ggml_are_same_layout 已强制它们与首个 src1 同类型同 nb，不会引入不匹配的张量。
+                const bool supported =
+                    (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
+                    (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F32) ||
+                    (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16) ||
+                    (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F16) ||
+                    (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32);
+                const bool contig = ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+                static bool mage_guard_logged = false;
+                if (!mage_guard_logged) {
+                    fprintf(stderr, "[MAGE_VL_PATCH] device_supports_op: guard ACTIVE for ADD/SUB/MUL/DIV (this is the patched ggml-cuda binary)\n");
+                    mage_guard_logged = true;
+                }
+                if (!supported || !contig) {
+                    static bool mage_cpu_logged = false;
+                    if (!mage_cpu_logged) {
+                        fprintf(stderr, "[MAGE_VL_PATCH] ADD/SUB/MUL/DIV rejected -> returning false (supported=%d contig=%d, routed to CPU)\n", (int)supported, (int)contig);
+                        mage_cpu_logged = true;
+                    }
+                }
+                return supported && contig;
+            }
         case GGML_OP_SSM_SCAN: {
             if (op->src[3]->ne[0] == 1) {
                 // Mamba2
