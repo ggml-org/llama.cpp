@@ -3,6 +3,7 @@
 	import { CollapsibleContentBlock, MarkdownContent } from '$lib/components/app';
 	import { AgenticSectionType } from '$lib/enums';
 	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import type { AgenticSection } from '$lib/utils';
 
@@ -10,7 +11,6 @@
 		section: AgenticSection;
 		open: boolean;
 		isStreaming: boolean;
-		renderThinkingAsMarkdown: boolean;
 		hasReasoningError?: boolean;
 		attachments?: DatabaseMessageExtra[];
 		onToggle?: () => void;
@@ -20,11 +20,12 @@
 		section,
 		open,
 		isStreaming,
-		renderThinkingAsMarkdown,
 		hasReasoningError = false,
 		attachments,
 		onToggle
 	}: Props = $props();
+
+	const currentConfig = config();
 
 	const REASONING_HEADER = 'Reasoning';
 	const REASONING_HEADER_PENDING = 'Reasoning...';
@@ -128,7 +129,7 @@
 		class:is-streaming={isPending}
 		onscroll={handleScrollEvent}
 	>
-		{#if renderThinkingAsMarkdown}
+		{#if !currentConfig.renderContentAsRawText}
 			<MarkdownContent content={section.content} class="text-muted-foreground" {attachments} />
 		{:else}
 			<div

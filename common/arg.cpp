@@ -3309,6 +3309,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
     add_opt(common_arg(
+        {"--tools-runtime"}, "OPTION",
+        "experimental: run tools in a separate runtime environment (default: none, use host environment)\n"
+        "available options:\n"
+        "  'docker:<image>': spin up a new Docker container and reuse it for all invocations, clean up on server exit\n"
+        "  'docker-container:<id>': use an existing Docker container by ID, won't stop on server exit\n",
+        [](common_params & params, const std::string & value) {
+            params.server_tools_runtime = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS_RUNTIME"));
+    add_opt(common_arg(
         {"--mcp-servers-config"}, "PATH",
         "experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
