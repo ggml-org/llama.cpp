@@ -1,14 +1,14 @@
 // For more info, see https://github.com/storybookjs/eslint-plugin-storybook#configuration-flat-config-format
-import storybook from 'eslint-plugin-storybook';
-
-import prettier from 'eslint-config-prettier';
+import svelteConfig from './svelte.config.js';
 import { includeIgnoreFile } from '@eslint/compat';
 import js from '@eslint/js';
+import prettier from 'eslint-config-prettier';
+import simpleImportSort from 'eslint-plugin-simple-import-sort';
+import storybook from 'eslint-plugin-storybook';
 import svelte from 'eslint-plugin-svelte';
 import globals from 'globals';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript-eslint';
-import svelteConfig from './svelte.config.js';
 
 const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
 
@@ -21,6 +21,7 @@ export default ts.config(
 	...svelte.configs.prettier,
 	{
 		languageOptions: { globals: { ...globals.browser, ...globals.node } },
+		plugins: { 'simple-import-sort': simpleImportSort },
 		rules: {
 			// typescript-eslint strongly recommend that you do not use the no-undef lint rule on TypeScript projects.
 			// see: https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-get-errors-from-the-no-undef-rule-about-global-variables-not-being-defined-even-though-there-are-no-typescript-errors
@@ -37,7 +38,37 @@ export default ts.config(
 			],
 
 			// Enforce empty line at end of file
-			'eol-last': 'error'
+			'eol-last': 'error',
+
+			// Sort imports alphabetically by module path, and sort named members within
+			// each statement. A single catch-all group keeps the list flat (no blank-line
+			// grouping); Prettier normalizes comma spacing afterwards.
+			'simple-import-sort/imports': ['error', { groups: [['.*']] }],
+
+			'padding-line-between-statements': [
+				'error',
+				// Blank line between function/class declarations.
+				{ blankLine: 'always', prev: ['function', 'class'], next: ['function', 'class'] },
+				// Blank line around if blocks (if/else and else if stay one statement).
+				{ blankLine: 'always', prev: 'if', next: '*' },
+				{ blankLine: 'always', prev: '*', next: 'if' },
+				// Blank line after the last declaration in a group. Because the 'never'
+				// rules below are scoped per declaration kind, a const group and a let
+				// group get separated by a blank line, while same-kind declarations stay
+				// together.
+				{ blankLine: 'always', prev: ['const', 'let', 'var'], next: '*' },
+				// No blank line between consecutive declarations of the same kind (kept
+				// last so each takes precedence over the always rule above for matching
+				// declaration pairs).
+				{ blankLine: 'never', prev: 'const', next: 'const' },
+				{ blankLine: 'never', prev: 'let', next: 'let' },
+				{ blankLine: 'never', prev: 'var', next: 'var' },
+				// Blank line before a statement that follows another statement in the block
+				// (works for return/throw/break/continue). A blank line for a terminal
+				// statement that opens a block body can't be enforced here: Prettier removes
+				// the leading blank line of a block, so the two formatters would fight.
+				{ blankLine: 'always', prev: '*', next: ['return', 'throw', 'break', 'continue'] }
+			]
 		}
 	},
 	{
