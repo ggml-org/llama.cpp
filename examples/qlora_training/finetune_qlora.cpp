@@ -63,9 +63,14 @@
 #include <atomic>
 #include <clocale>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
+#include <exception>
 #include <fstream>
+#include <functional>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <set>
 #include <sstream>
@@ -242,6 +247,136 @@ struct jsonl_load_result {
     bool                 valid = false;
 };
 
+struct jsonl_line_state {
+    nlohmann::json data;
+    std::vector<const nlohmann::json *> message_data;
+    std::vector<common_chat_msg> messages;
+    std::vector<common_chat_msg> prompt_messages;
+    std::vector<std::string> chatml_messages;
+    std::vector<llama_token> prompt_tokens;
+    std::vector<llama_token> response_tokens;
+    std::string last_assistant_content;
+    std::string prompt_text;
+    std::string full_text;
+    std::string response_text;
+    size_t last_assistant_index = std::numeric_limits<size_t>::max();
+    float reward = 1.0f;
+    int lineno = 0;
+    bool json_valid = false;
+    bool is_chat = false;
+    bool parallel_messages = false;
+    bool prepared = false;
+    std::atomic<bool> failed { false };
+};
+
+class dataset_worker_pool {
+public:
+    explicit dataset_worker_pool(size_t n_workers) {
+        if (n_workers <= 1) {
+            return;
+        }
+
+        workers.reserve(n_workers);
+        for (size_t i = 0; i < n_workers; ++i) {
+            workers.emplace_back([this, i] { worker_loop(i); });
+        }
+    }
+
+    ~dataset_worker_pool() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            stop = true;
+        }
+        work_ready.notify_all();
+        for (std::thread & worker : workers) {
+            worker.join();
+        }
+    }
+
+    void parallel_for(size_t n_tasks, const std::function<void(size_t, size_t)> & fn) {
+        if (n_tasks == 0) {
+            return;
+        }
+        if (workers.empty()) {
+            for (size_t i = 0; i < n_tasks; ++i) {
+                fn(i, 0);
+            }
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            task = fn;
+            task_count = n_tasks;
+            next_task.store(0);
+            workers_pending = workers.size();
+            exception = nullptr;
+            ++generation;
+        }
+        work_ready.notify_all();
+
+        std::unique_lock<std::mutex> lock(mutex);
+        work_done.wait(lock, [this] { return workers_pending == 0; });
+        if (exception) {
+            std::rethrow_exception(exception);
+        }
+    }
+
+private:
+    void worker_loop(size_t worker_index) {
+        size_t worker_generation = 0;
+        for (;;) {
+            std::function<void(size_t, size_t)> current_task;
+            size_t current_task_count = 0;
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                work_ready.wait(lock, [&] { return stop || generation != worker_generation; });
+                if (stop) {
+                    return;
+                }
+                worker_generation = generation;
+                current_task = task;
+                current_task_count = task_count;
+            }
+
+            for (;;) {
+                const size_t i = next_task.fetch_add(1);
+                if (i >= current_task_count) {
+                    break;
+                }
+                try {
+                    current_task(i, worker_index);
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    if (!exception) {
+                        exception = std::current_exception();
+                    }
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (--workers_pending == 0) {
+                    task = {};
+                    work_done.notify_one();
+                }
+            }
+        }
+    }
+
+    std::vector<std::thread> workers;
+    std::mutex mutex;
+    std::condition_variable work_ready;
+    std::condition_variable work_done;
+    std::function<void(size_t, size_t)> task;
+    std::atomic<size_t> next_task { 0 };
+    size_t task_count = 0;
+    size_t workers_pending = 0;
+    size_t generation = 0;
+    std::exception_ptr exception;
+    bool stop = false;
+};
+
 static size_t physical_core_count() {
 #ifdef __linux__
     std::ifstream cpuinfo("/proc/cpuinfo");
@@ -285,9 +420,12 @@ static size_t physical_core_count() {
     return std::max(1u, std::thread::hardware_concurrency());
 }
 
-static size_t dataset_worker_count(int32_t requested, size_t n_lines) {
-    const size_t n_workers = requested > 0 ? (size_t) requested : physical_core_count();
-    return std::min(n_lines, n_workers);
+static size_t dataset_worker_limit(int32_t requested) {
+    return requested > 0 ? (size_t) requested : physical_core_count();
+}
+
+static size_t dataset_worker_count(int32_t requested, size_t n_tasks) {
+    return std::min(n_tasks, dataset_worker_limit(requested));
 }
 
 static bool critical_mode_uses_spans(const std::string & mode) {
@@ -350,25 +488,56 @@ static bool response_token_ranges(
     return true;
 }
 
-// Apply a very simple ChatML fallback template when the model has no template.
-static std::string apply_chatml(const std::vector<common_chat_msg> & msgs) {
-    std::string out;
-    for (const auto & m : msgs) {
-        out += "<|im_start|>" + m.role + "\n";
-        // content_parts is a vector; build a plain text string
-        std::string text;
-        if (!m.content_parts.empty()) {
-            for (const auto & p : m.content_parts) {
-                text += p.text;
-            }
-        }
-        out += text + "<|im_end|>\n";
+static std::string apply_chatml_message(const common_chat_msg & msg) {
+    size_t content_size = 0;
+    for (const common_chat_msg_content_part & part : msg.content_parts) {
+        content_size += part.text.size();
     }
+
+    std::string out;
+    out.reserve(13 + msg.role.size() + 1 + content_size + 11);
+    out += "<|im_start|>";
+    out += msg.role;
+    out += '\n';
+    for (const common_chat_msg_content_part & part : msg.content_parts) {
+        out += part.text;
+    }
+    out += "<|im_end|>\n";
     return out;
 }
 
+static std::string apply_qlora_chat_template(
+        common_chat_templates              * tmpls,
+        const std::vector<common_chat_msg> & messages,
+        bool                                  add_generation_prompt) {
+    common_chat_templates_inputs inputs;
+    inputs.messages = messages;
+    inputs.add_generation_prompt = add_generation_prompt;
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    inputs.enable_thinking = false;
+    return common_chat_templates_apply(tmpls, inputs).prompt;
+}
+
+struct jsonl_message_task {
+    size_t line_index;
+    size_t first_message;
+    size_t message_count;
+};
+
+struct jsonl_render_task {
+    size_t line_index;
+    bool render_prompt;
+};
+
+struct jsonl_token_task {
+    size_t line_index;
+    int part;
+};
+
 static std::vector<training_sample> load_jsonl(
         const std::string & path,
+        const llama_model  * model,
         const llama_vocab  * vocab,
         common_chat_templates * tmpls,
         int32_t              n_threads,
@@ -395,193 +564,356 @@ static std::vector<training_sample> load_jsonl(
     }
 
     std::vector<jsonl_load_result> results(lines.size());
-    std::atomic<size_t> next_line { 0 };
-    const size_t n_workers = dataset_worker_count(n_threads, lines.size());
-    std::vector<std::thread> workers;
-    workers.reserve(n_workers);
+    std::vector<std::unique_ptr<jsonl_line_state>> states;
+    states.reserve(lines.size());
+    for (const jsonl_input_line & input : lines) {
+        auto state = std::make_unique<jsonl_line_state>();
+        state->lineno = input.lineno;
+        states.push_back(std::move(state));
+    }
 
-    for (size_t worker = 0; worker < n_workers; ++worker) {
-        workers.emplace_back([&] {
-            for (;;) {
-                const size_t i = next_line.fetch_add(1);
-                if (i >= lines.size()) break;
+    const size_t worker_limit = dataset_worker_limit(n_threads);
+    const size_t n_json_workers = dataset_worker_count(n_threads, lines.size());
+    auto parse_json_line = [&](size_t i) {
+        jsonl_line_state & state = *states[i];
+        try {
+            state.data = nlohmann::json::parse(lines[i].text);
+            state.json_valid = true;
+        } catch (...) {
+            LOG_WRN("%s: skipping invalid JSON on line %d\n", __func__, state.lineno);
+        }
+    };
 
-                const jsonl_input_line & input = lines[i];
-                jsonl_load_result & result = results[i];
-
-                nlohmann::json j;
-                try { j = nlohmann::json::parse(input.text); }
-                catch (...) {
-                    LOG_WRN("%s: skipping invalid JSON on line %d\n", __func__, input.lineno);
-                    continue;
+    if (n_json_workers <= 1) {
+        for (size_t i = 0; i < lines.size(); ++i) {
+            parse_json_line(i);
+        }
+    } else {
+        std::atomic<size_t> next_line { 0 };
+        std::vector<std::thread> workers;
+        workers.reserve(n_json_workers);
+        for (size_t worker = 0; worker < n_json_workers; ++worker) {
+            workers.emplace_back([&] {
+                for (;;) {
+                    const size_t i = next_line.fetch_add(1);
+                    if (i >= lines.size()) {
+                        break;
+                    }
+                    parse_json_line(i);
                 }
+            });
+        }
+        for (std::thread & worker : workers) {
+            worker.join();
+        }
+    }
 
-                float reward = 1.0f;
-                if      (j.contains("reward")) reward = j["reward"].get<float>();
-                else if (j.contains("score"))  reward = j["score"].get<float>();
+    const size_t message_parallel_min = 8;
+    size_t n_valid_json = 0;
+    size_t message_task_hint = 0;
+    for (std::unique_ptr<jsonl_line_state> & state_ptr : states) {
+        jsonl_line_state & state = *state_ptr;
+        if (!state.json_valid) {
+            continue;
+        }
+        ++n_valid_json;
 
-                std::string prompt_text;
-                std::string response_text;
-                std::string annotated_response;
+        const nlohmann::json & data = state.data;
+        if (!data.contains("messages")) {
+            continue;
+        }
 
-                if (j.contains("messages")) {
-            // chat format — apply template
-            std::vector<common_chat_msg> msgs;
-            for (const auto & m : j["messages"]) {
-                common_chat_msg msg;
-                msg.role = m.value("role", "user");
-                common_chat_msg_content_part part;
-                part.type = "text";
-                part.text = m.value("content", "");
-                msg.content_parts.push_back(part);
-                msgs.push_back(msg);
-            }
+        state.is_chat = true;
+        const nlohmann::json & messages = data.at("messages");
+        state.message_data.reserve(messages.size());
+        for (const nlohmann::json & message : messages) {
+            state.message_data.push_back(&message);
+        }
+        state.messages.resize(state.message_data.size());
+        if (!tmpls) {
+            state.chatml_messages.resize(state.message_data.size());
+        }
+        state.parallel_messages = worker_limit > 1 && state.message_data.size() >= message_parallel_min;
+        message_task_hint += state.parallel_messages ? state.message_data.size() : 1;
+    }
 
-            // Split into prompt (no loss) + last assistant response (loss).
-            // Render all messages except the last assistant turn as the prompt
-            // (with add_generation_prompt=true so the template adds the assistant
-            // prefix). Then render the full chat and train on the suffix, including
-            // the template's end-of-turn marker when it has one.
-            if (msgs.empty()) continue;
-            std::string last_assistant_content;
-            std::vector<common_chat_msg> prompt_msgs;
-            // Find the last assistant message
-            int last_asst_idx = -1;
-            for (int mi = (int)msgs.size() - 1; mi >= 0; --mi) {
-                if (msgs[mi].role == "assistant") { last_asst_idx = mi; break; }
-            }
-            if (last_asst_idx < 0) {
-                // No assistant turn: nothing to train on.
-                LOG_DBG("%s: skipping line %d: no assistant turn\n", __func__, input.lineno);
+    const size_t n_workers = std::min(worker_limit, std::max(n_valid_json, message_task_hint));
+    std::vector<common_chat_templates_ptr> template_copies;
+    std::vector<common_chat_templates *> worker_templates(n_workers, tmpls);
+    if (tmpls && n_workers > 1) {
+        GGML_ASSERT(model != nullptr);
+        template_copies.reserve(n_workers - 1);
+        for (size_t i = 1; i < n_workers; ++i) {
+            template_copies.push_back(common_chat_templates_init(model, ""));
+            worker_templates[i] = template_copies.back().get();
+        }
+    }
+
+    {
+        dataset_worker_pool worker_pool(n_workers);
+        std::vector<jsonl_message_task> message_tasks;
+        message_tasks.reserve(message_task_hint);
+        for (size_t i = 0; i < states.size(); ++i) {
+            const jsonl_line_state & state = *states[i];
+            if (!state.json_valid || !state.is_chat || state.message_data.empty()) {
                 continue;
             }
-            last_assistant_content = msgs[last_asst_idx].content_parts.empty()
-                ? "" : msgs[last_asst_idx].content_parts[0].text;
-            annotated_response = last_assistant_content;
-            for (int mi = 0; mi < last_asst_idx; ++mi) prompt_msgs.push_back(msgs[mi]);
-
-            if (tmpls) {
-                common_chat_templates_inputs inp;
-                inp.messages = prompt_msgs;
-                inp.add_generation_prompt = true;
-                inp.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
-                inp.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-                inp.enable_thinking = false;
-                prompt_text   = common_chat_templates_apply(tmpls, inp).prompt;
-
-                std::vector<common_chat_msg> all_msgs = prompt_msgs;
-                all_msgs.push_back(msgs[last_asst_idx]);
-
-                common_chat_templates_inputs full_inp;
-                full_inp.messages = all_msgs;
-                full_inp.add_generation_prompt = false;
-                full_inp.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
-                full_inp.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-                full_inp.enable_thinking = false;
-                const std::string full_text = common_chat_templates_apply(tmpls, full_inp).prompt;
-
-                if (full_text.rfind(prompt_text, 0) == 0) {
-                    response_text = full_text.substr(prompt_text.size());
-                } else {
-                    std::string marker = "__LLAMA_QLORA_RESPONSE_MARKER__";
-                    while (last_assistant_content.find(marker) != std::string::npos) {
-                        marker += "_";
-                    }
-
-                    common_chat_msg marked_msg = msgs[last_asst_idx];
-                    marked_msg.content_parts.clear();
-                    common_chat_msg_content_part marker_part;
-                    marker_part.type = "text";
-                    marker_part.text = marker;
-                    marked_msg.content_parts.push_back(marker_part);
-
-                    std::vector<common_chat_msg> marked_msgs = prompt_msgs;
-                    marked_msgs.push_back(marked_msg);
-
-                    common_chat_templates_inputs marker_inp;
-                    marker_inp.messages = marked_msgs;
-                    marker_inp.add_generation_prompt = false;
-                    marker_inp.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
-                    marker_inp.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-                    marker_inp.enable_thinking = false;
-
-                    const std::string marked_text = common_chat_templates_apply(tmpls, marker_inp).prompt;
-                    const size_t marker_pos = marked_text.find(marker);
-                    if (marker_pos != std::string::npos) {
-                        response_text = last_assistant_content + marked_text.substr(marker_pos + marker.size());
-                        LOG_WRN("%s: line %d full chat render is not prefixed by prompt render; using marker-derived response suffix\n",
-                                __func__, input.lineno);
-                    } else {
-                        LOG_WRN("%s: line %d could not derive template response suffix; using raw assistant content\n",
-                                __func__, input.lineno);
-                        response_text = last_assistant_content;
-                    }
+            if (state.parallel_messages) {
+                for (size_t mi = 0; mi < state.message_data.size(); ++mi) {
+                    message_tasks.push_back({ i, mi, 1 });
                 }
             } else {
-                // Fallback: render everything as ChatML, use full text as response
-                std::vector<common_chat_msg> all_msgs = prompt_msgs;
-                all_msgs.push_back(msgs[last_asst_idx]);
-                prompt_text   = "";
-                response_text = apply_chatml(all_msgs);
+                message_tasks.push_back({ i, 0, state.message_data.size() });
             }
-                } else if (j.contains("prompt") && j.contains("response")) {
-            response_text = j["response"].get<std::string>();
-            prompt_text = j["prompt"].get<std::string>();
-            annotated_response = response_text;
-                } else if (j.contains("text")) {
-            response_text = j["text"].get<std::string>();
-            annotated_response = response_text;
+        }
+
+        worker_pool.parallel_for(message_tasks.size(), [&](size_t task_index, size_t) {
+            const jsonl_message_task & task = message_tasks[task_index];
+            jsonl_line_state & state = *states[task.line_index];
+            try {
+                for (size_t mi = task.first_message; mi < task.first_message + task.message_count; ++mi) {
+                    const nlohmann::json & data = *state.message_data[mi];
+                    common_chat_msg msg;
+                    msg.role = data.value("role", "user");
+                    common_chat_msg_content_part part;
+                    part.type = "text";
+                    part.text = data.value("content", "");
+                    msg.content_parts.push_back(std::move(part));
+                    state.messages[mi] = std::move(msg);
+                    if (!tmpls) {
+                        state.chatml_messages[mi] = apply_chatml_message(state.messages[mi]);
+                    }
+                }
+            } catch (const std::exception & e) {
+                state.failed.store(true);
+                LOG_WRN("%s: skipping invalid message on line %d: %s\n", __func__, state.lineno, e.what());
+            }
+        });
+
+        worker_pool.parallel_for(states.size(), [&](size_t i, size_t worker_index) {
+            jsonl_line_state & state = *states[i];
+            if (!state.json_valid || state.failed.load()) {
+                return;
+            }
+
+            try {
+                const nlohmann::json & data = state.data;
+                common_chat_templates * task_templates = tmpls ? worker_templates[worker_index] : nullptr;
+                if (data.contains("reward")) {
+                    state.reward = data.at("reward").get<float>();
+                } else if (data.contains("score")) {
+                    state.reward = data.at("score").get<float>();
+                }
+
+                if (state.is_chat) {
+                    if (state.messages.empty()) {
+                        return;
+                    }
+                    for (size_t mi = state.messages.size(); mi-- > 0;) {
+                        if (state.messages[mi].role == "assistant") {
+                            state.last_assistant_index = mi;
+                            break;
+                        }
+                    }
+                    if (state.last_assistant_index == std::numeric_limits<size_t>::max()) {
+                        LOG_DBG("%s: skipping line %d: no assistant turn\n", __func__, state.lineno);
+                        return;
+                    }
+
+                    const common_chat_msg & assistant = state.messages[state.last_assistant_index];
+                    state.last_assistant_content = assistant.content_parts.empty() ? "" : assistant.content_parts[0].text;
+                    state.prompt_messages.assign(state.messages.begin(), state.messages.begin() + state.last_assistant_index);
+
+                    if (!task_templates) {
+                        size_t total_size = 0;
+                        for (size_t mi = 0; mi <= state.last_assistant_index; ++mi) {
+                            total_size += state.chatml_messages[mi].size();
+                        }
+                        state.response_text.reserve(total_size);
+                        for (size_t mi = 0; mi <= state.last_assistant_index; ++mi) {
+                            state.response_text += state.chatml_messages[mi];
+                        }
+                    } else if (!state.parallel_messages) {
+                        state.prompt_text = apply_qlora_chat_template(task_templates, state.prompt_messages, true);
+                        std::vector<common_chat_msg> all_messages = state.prompt_messages;
+                        all_messages.push_back(assistant);
+                        state.full_text = apply_qlora_chat_template(task_templates, all_messages, false);
+                    }
+                } else if (data.contains("prompt") && data.contains("response")) {
+                    state.response_text = data.at("response").get<std::string>();
+                    state.prompt_text = data.at("prompt").get<std::string>();
+                    state.last_assistant_content = state.response_text;
+                } else if (data.contains("text")) {
+                    state.response_text = data.at("text").get<std::string>();
+                    state.last_assistant_content = state.response_text;
                 } else {
-                    LOG_WRN("%s: unknown format on line %d, skipping\n", __func__, input.lineno);
-                    continue;
+                    LOG_WRN("%s: unknown format on line %d, skipping\n", __func__, state.lineno);
+                    return;
+                }
+                state.prepared = true;
+            } catch (const std::exception & e) {
+                state.failed.store(true);
+                LOG_WRN("%s: skipping invalid data on line %d: %s\n", __func__, state.lineno, e.what());
+            }
+        });
+
+        std::vector<jsonl_render_task> render_tasks;
+        for (size_t i = 0; i < states.size(); ++i) {
+            const jsonl_line_state & state = *states[i];
+            if (state.prepared && state.is_chat && state.parallel_messages && tmpls) {
+                render_tasks.push_back({ i, true });
+                render_tasks.push_back({ i, false });
+            }
+        }
+
+        worker_pool.parallel_for(render_tasks.size(), [&](size_t task_index, size_t worker_index) {
+            const jsonl_render_task & task = render_tasks[task_index];
+            jsonl_line_state & state = *states[task.line_index];
+            common_chat_templates * task_templates = worker_templates[worker_index];
+            try {
+                if (task.render_prompt) {
+                    state.prompt_text = apply_qlora_chat_template(task_templates, state.prompt_messages, true);
+                } else {
+                    std::vector<common_chat_msg> all_messages = state.prompt_messages;
+                    all_messages.push_back(state.messages[state.last_assistant_index]);
+                    state.full_text = apply_qlora_chat_template(task_templates, all_messages, false);
+                }
+            } catch (const std::exception & e) {
+                state.failed.store(true);
+                LOG_WRN("%s: chat template failed on line %d: %s\n", __func__, state.lineno, e.what());
+            }
+        });
+
+        worker_pool.parallel_for(states.size(), [&](size_t i, size_t worker_index) {
+            jsonl_line_state & state = *states[i];
+            jsonl_load_result & result = results[i];
+            if (!state.prepared || state.failed.load()) {
+                return;
+            }
+
+            try {
+                if (state.is_chat && tmpls) {
+                    if (state.full_text.rfind(state.prompt_text, 0) == 0) {
+                        state.response_text = state.full_text.substr(state.prompt_text.size());
+                    } else {
+                        std::string marker = "__LLAMA_QLORA_RESPONSE_MARKER__";
+                        while (state.last_assistant_content.find(marker) != std::string::npos) {
+                            marker += "_";
+                        }
+
+                        common_chat_msg marked_message = state.messages[state.last_assistant_index];
+                        marked_message.content_parts.clear();
+                        common_chat_msg_content_part marker_part;
+                        marker_part.type = "text";
+                        marker_part.text = marker;
+                        marked_message.content_parts.push_back(std::move(marker_part));
+
+                        std::vector<common_chat_msg> marked_messages = state.prompt_messages;
+                        marked_messages.push_back(std::move(marked_message));
+                        const std::string marked_text = apply_qlora_chat_template(worker_templates[worker_index], marked_messages, false);
+                        const size_t marker_pos = marked_text.find(marker);
+                        if (marker_pos != std::string::npos) {
+                            const std::string suffix = marked_text.substr(marker_pos + marker.size());
+                            state.response_text.reserve(state.last_assistant_content.size() + suffix.size());
+                            state.response_text = state.last_assistant_content;
+                            state.response_text += suffix;
+                            LOG_WRN("%s: line %d full chat render is not prefixed by prompt render; using marker-derived response suffix\n",
+                                    __func__, state.lineno);
+                        } else {
+                            LOG_WRN("%s: line %d could not derive template response suffix; using raw assistant content\n",
+                                    __func__, state.lineno);
+                            state.response_text = state.last_assistant_content;
+                        }
+                    }
                 }
 
                 std::vector<critical_span> spans;
                 if (critical_mode_uses_spans(critical_mode)) {
                     std::string span_error;
-                    if (!critical_token_parse_spans(j, annotated_response, critical_default_weight, spans, span_error)) {
+                    if (!critical_token_parse_spans(state.data, state.last_assistant_content, critical_default_weight, spans, span_error)) {
                         LOG_WRN("%s: invalid critical_spans on line %d: %s; expected [{\"start\":BYTE,\"end\":BYTE,\"weight\":FLOAT?}]\n",
-                                __func__, input.lineno, span_error.c_str());
-                        continue;
+                                __func__, state.lineno, span_error.c_str());
+                        return;
                     }
                 }
 
                 result.parsed = true;
-                result.request = {std::move(prompt_text), std::move(response_text), std::move(annotated_response), std::move(spans), reward};
-
-                const tokenization_request & request = result.request;
-                auto tok_prompt = common_tokenize(vocab, request.prompt, /*add_special=*/true, /*parse_special=*/true);
-                auto tok_response = common_tokenize(vocab, request.response, /*add_special=*/false, /*parse_special=*/true);
-                if (tok_prompt.empty() && tok_response.empty()) continue;
-
-                training_sample & sample = result.sample;
-                sample.reward = request.reward;
-                sample.tokens.insert(sample.tokens.end(), tok_prompt.begin(), tok_prompt.end());
-                sample.tokens.insert(sample.tokens.end(), tok_response.begin(), tok_response.end());
-                sample.is_label.resize(sample.tokens.size(), false);
-                if (critical_mode != "none") {
-                    sample.critical_weights.resize(sample.tokens.size(), 1.0f);
-                }
-                for (size_t j = tok_prompt.size(); j < sample.tokens.size(); ++j) {
-                    sample.is_label[j] = true;
-                }
-                if (critical_mode_uses_spans(critical_mode) && !request.critical_spans.empty()) {
-                    std::vector<critical_token_range> ranges;
-                    std::vector<float> response_weights;
-                    std::string alignment_error;
-                    if (!response_token_ranges(vocab, tok_response, request.response, request.annotated_response, ranges, alignment_error) ||
-                        !critical_token_apply_spans(request.annotated_response.size(), request.critical_spans, ranges, response_weights, alignment_error)) {
-                        LOG_WRN("%s: invalid critical_spans alignment on line %d: %s\n",
-                                __func__, input.lineno, alignment_error.c_str());
-                        continue;
-                    }
-                    std::copy(response_weights.begin(), response_weights.end(), sample.critical_weights.begin() + tok_prompt.size());
-                }
-                result.valid = true;
+                result.request = { std::move(state.prompt_text), std::move(state.response_text),
+                                   std::move(state.last_assistant_content), std::move(spans), state.reward };
+            } catch (const std::exception & e) {
+                state.failed.store(true);
+                LOG_WRN("%s: formatting failed on line %d: %s\n", __func__, state.lineno, e.what());
             }
         });
+
+        std::vector<jsonl_token_task> token_tasks;
+        token_tasks.reserve(results.size() * 2);
+        for (size_t i = 0; i < results.size(); ++i) {
+            if (!results[i].parsed || states[i]->failed.load()) {
+                continue;
+            }
+            if (states[i]->parallel_messages) {
+                token_tasks.push_back({ i, 0 });
+                token_tasks.push_back({ i, 1 });
+            } else {
+                token_tasks.push_back({ i, 2 });
+            }
+        }
+
+        worker_pool.parallel_for(token_tasks.size(), [&](size_t task_index, size_t) {
+            const jsonl_token_task & task = token_tasks[task_index];
+            jsonl_line_state & state = *states[task.line_index];
+            const tokenization_request & request = results[task.line_index].request;
+            try {
+                if (task.part == 0 || task.part == 2) {
+                    state.prompt_tokens = common_tokenize(vocab, request.prompt, /*add_special=*/true, /*parse_special=*/true);
+                }
+                if (task.part == 1 || task.part == 2) {
+                    state.response_tokens = common_tokenize(vocab, request.response, /*add_special=*/false, /*parse_special=*/true);
+                }
+            } catch (const std::exception & e) {
+                state.failed.store(true);
+                LOG_WRN("%s: tokenization failed on line %d: %s\n", __func__, state.lineno, e.what());
+            }
+        });
+
+        worker_pool.parallel_for(results.size(), [&](size_t i, size_t) {
+            jsonl_line_state & state = *states[i];
+            jsonl_load_result & result = results[i];
+            if (!result.parsed || state.failed.load()) {
+                return;
+            }
+            if (state.prompt_tokens.empty() && state.response_tokens.empty()) {
+                return;
+            }
+
+            training_sample & sample = result.sample;
+            sample.reward = result.request.reward;
+            sample.tokens.reserve(state.prompt_tokens.size() + state.response_tokens.size());
+            sample.tokens.insert(sample.tokens.end(), state.prompt_tokens.begin(), state.prompt_tokens.end());
+            sample.tokens.insert(sample.tokens.end(), state.response_tokens.begin(), state.response_tokens.end());
+            sample.is_label.resize(sample.tokens.size(), false);
+            if (critical_mode != "none") {
+                sample.critical_weights.resize(sample.tokens.size(), 1.0f);
+            }
+            for (size_t j = state.prompt_tokens.size(); j < sample.tokens.size(); ++j) {
+                sample.is_label[j] = true;
+            }
+            if (critical_mode_uses_spans(critical_mode) && !result.request.critical_spans.empty()) {
+                std::vector<critical_token_range> ranges;
+                std::vector<float> response_weights;
+                std::string alignment_error;
+                if (!response_token_ranges(vocab, state.response_tokens, result.request.response, result.request.annotated_response, ranges, alignment_error) ||
+                    !critical_token_apply_spans(result.request.annotated_response.size(), result.request.critical_spans, ranges, response_weights, alignment_error)) {
+                    LOG_WRN("%s: invalid critical_spans alignment on line %d: %s\n",
+                            __func__, state.lineno, alignment_error.c_str());
+                    return;
+                }
+                std::copy(response_weights.begin(), response_weights.end(), sample.critical_weights.begin() + state.prompt_tokens.size());
+            }
+            result.valid = true;
+        });
     }
-    for (std::thread & worker : workers) worker.join();
 
     samples.reserve(results.size());
     size_t n_requests = 0;
@@ -1826,7 +2158,7 @@ int main(int argc, char ** argv) {
         return rc;
     }
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    auto samples = load_jsonl(params.train_file, vocab, tmpls.get(), params.dataset_threads,
+    auto samples = load_jsonl(params.train_file, model, vocab, tmpls.get(), params.dataset_threads,
                               params.critical_token_mode, params.critical_token_weight);
     if (samples.empty()) {
         LOG_ERR("%s: no training samples loaded\n", __func__);
