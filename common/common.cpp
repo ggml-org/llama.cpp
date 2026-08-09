@@ -1712,6 +1712,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.expert_pin_pct         = params.expert_pin_pct;
     cparams.expert_copy            = params.expert_copy;
     cparams.expert_sidecar         = params.expert_sidecar;
+    cparams.expert_gpu             = params.expert_gpu;
     cparams.model_path             = params.model.path.c_str();
 
     return cparams;

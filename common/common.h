@@ -533,6 +533,7 @@ struct common_params {
     int   expert_pin_pct         = -1;   // percent of cold experts to keep pinned (madvise); -1 = auto
     bool  expert_copy            = false; // copy experts to GPU (keep RAM copy); default move
     bool  expert_sidecar         = false; // load/save the expert heatmap sidecar (<model>.tier)
+    int   expert_gpu             = -1;   // expert store GPU index (-1 = all GPUs)
     bool    offline                    = false;
 
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.

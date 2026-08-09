@@ -2773,6 +2773,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.expert_sidecar = value;
         }
     ).set_env("LLAMA_ARG_EXPERT_SIDECAR"));
+    add_opt(common_arg(
+        {"--expert-gpu"}, "N",
+        "put the expert store on this GPU index (default: -1 = all GPUs)",
+        [](common_params & params, int value) {
+            params.expert_gpu = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_GPU"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

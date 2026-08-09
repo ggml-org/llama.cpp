@@ -11,6 +11,9 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <io.h>
 #include <fcntl.h>
@@ -230,7 +233,7 @@ bool read_expert(size_t idx, int expert, void * out, size_t n) {
 bool write_cold(size_t idx, const uint8_t * data, size_t nbytes) {
     if (idx >= g_entries.size() || !g_cpu_buf || !data) {
         fprintf(stderr, "write_cold: FAIL idx=%zu cpu_buf=%p data=%p nbytes=%zu\n",
-            idx, (void *) g_cpu_buf, (void *) data, nbytes);
+            idx, (void *) g_cpu_buf, (const void *) data, nbytes);
         return false;
     }
     const entry & e = g_entries[idx];

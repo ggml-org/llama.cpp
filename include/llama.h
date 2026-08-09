@@ -415,6 +415,7 @@ extern "C" {
         int   expert_pin_pct;         // percent of cold experts to keep pinned (madvise); -1 = auto
         bool  expert_copy;            // copy experts to GPU (keep RAM copy); default move
         bool  expert_sidecar;         // load/save the expert heatmap sidecar (<model>.tier)
+        int   expert_gpu;             // put the expert store on this GPU index (-1 = all GPUs)
 
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts

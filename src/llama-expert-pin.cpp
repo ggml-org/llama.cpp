@@ -8,6 +8,7 @@
 #include "ggml-backend.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdlib>
 #include <regex>
 #include <string>
@@ -17,6 +18,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -109,9 +113,9 @@ static void hint_experts(const llama_model * model,
     if (f) {
         char line[256];
         while (fgets(line, sizeof(line), f)) {
-            if (sscanf(line, "MemTotal: %lld kB", &mem_total) == 1) {
+            if (sscanf(line, "MemTotal: %" PRId64 " kB", &mem_total) == 1) {
                 mem_total *= 1024;
-            } else if (sscanf(line, "MemAvailable: %lld kB", &mem_avail) == 1) {
+            } else if (sscanf(line, "MemAvailable: %" PRId64 " kB", &mem_avail) == 1) {
                 mem_avail *= 1024;
             }
         }

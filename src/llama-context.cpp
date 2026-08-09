@@ -502,6 +502,9 @@ llama_context::llama_context(
             if (type == GGML_BACKEND_DEVICE_TYPE_CPU || type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
                 continue;
             }
+            if (params.expert_gpu >= 0 && (int) gpu_bufts.size() != params.expert_gpu) {
+                continue; // store pinned to a specific GPU: skip the others
+            }
             gpu_bufts.push_back(ggml_backend_get_default_buffer_type(backend.get()));
         }
         if (!gpu_bufts.empty()) {
@@ -3647,6 +3650,7 @@ llama_context_params llama_context_default_params() {
         /*.expert_pin_pct              =*/ -1,
         /*.expert_copy                 =*/ false,
         /*.expert_sidecar              =*/ false,
+        /*.expert_gpu                  =*/ -1,
         /*.ctx_other                   =*/ nullptr,
     };
 

@@ -10,6 +10,7 @@
 #include "ggml-cpu.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <regex>
@@ -19,6 +20,9 @@
 #endif
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -136,7 +140,7 @@ llama_expert_hotstore::llama_expert_hotstore(
             if (f) {
                 char line[256];
                 while (fgets(line, sizeof(line), f)) {
-                    if (sscanf(line, "MemAvailable: %lld kB", &free_ram) == 1) {
+                    if (sscanf(line, "MemAvailable: %" PRId64 " kB", &free_ram) == 1) {
                         free_ram *= 1024;
                         break;
                     }
@@ -419,7 +423,6 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
 
         for (entry * e : entries_by_layer[il]) {
             const size_t slot = ggml_nbytes(e->src) / (size_t) e->src->ne[2];
-            const int pidx = llama_expert_preload::index_of(e->src);
             if (preloaded) {
                 // the startup slices were streamed into the store at load
                 // (write_entry), so the GPU store is already sound.
@@ -672,7 +675,6 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                     if (pidx < 0) {
                         continue; // mmap: data stays in the file
                     }
-                    const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
                     llama_expert_preload::set_cpu_slice(pidx, it->expert, &stg[stg_off + staging_slot_off(entries_by_layer[il], ent)]);
                 }
                 rout[it->expert] = 0; // the CPU output counts now
