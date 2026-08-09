@@ -501,6 +501,43 @@ static std::vector<std::string> extract_html_matches(
     return matches;
 }
 
+// Simple HTML-to-text converter that preserves basic formatting
+static std::string html2text(const std::string &html) {
+    std::string text = html;
+
+    // Replace <br>, <p>, <div>, etc. with newlines
+    text = std::regex_replace(text, std::regex("<(br|p|div|li|/li|/p|/div)[^>]*>"), "\n");
+
+    // Replace headers with newline + uppercase (e.g., <h1>Title</h1> -> "\nTITLE\n")
+    text = std::regex_replace(text, std::regex("<h1[^>]*>(.*?)</h1>"), "\n\\1\n");
+    text = std::regex_replace(text, std::regex("<h2[^>]*>(.*?)</h2>"), "\n\\1\n");
+    text = std::regex_replace(text, std::regex("<h3[^>]*>(.*?)</h3>"), "\n\\1\n");
+    text = std::regex_replace(text, std::regex("<h4[^>]*>(.*?)</h4>"), "\n\\1\n");
+
+    // Replace bold/italic tags with asterisks/underscores (Markdown-style)
+    text = std::regex_replace(text, std::regex("<(b|strong)[^>]*>(.*?)</\\1>"), "*\\2*");
+    text = std::regex_replace(text, std::regex("<(i|em)[^>]*>(.*?)</\\1>"), "_\\2_");
+    text = std::regex_replace(text, std::regex("<u[^>]*>(.*?)</u>"), "__\\1__");
+
+    // Replace links with their text (or URL if no text)
+    text = std::regex_replace(text, std::regex("<a[^>]*href=\"[^\"]*\"[^>]*>(.*?)</a>"), "\\1");
+
+    // Remove all remaining HTML tags
+    text = std::regex_replace(text, std::regex("<[^>]*>"), "");
+
+    // Collapse multiple newlines into one
+    text = std::regex_replace(text, std::regex("\n+"), "\n");
+
+    // Collapse multiple spaces into one
+    text = std::regex_replace(text, std::regex("[ \t]+"), " ");
+
+    // Trim leading/trailing whitespace
+    text = std::regex_replace(text, std::regex("^\\s+"), "");
+    text = std::regex_replace(text, std::regex("\\s+$"), "");
+
+    return text;
+}
+
 //
 // read_file: read a file with optional line range and line-number prefix
 //
@@ -1569,32 +1606,16 @@ struct server_tool_web_search : server_tool {
         }
         
         if (res.output.empty()) {
-            return {{"error", "Failed to fetch search results." + engine + encoded_query }};
+            return {{"error", "Failed to fetch search results."}};
         }
-        
-        // Regex patterns for extracting titles, URLs, and snippets
-        // Updated regex patterns for DuckDuckGo's HTML
-        std::string title_pattern   = "<h2 class=\"result__title\">\\s*<a[^>]*>(.*?)</a>\\s*</h2>";
-        std::string url_pattern     = "<a class=\"result__url\"[^>]*href=\"(.*?)\"";
-        std::string snippet_pattern = "<a class=\"result__snippet\"[^>]*>(.*?)</a>";
-
-        // Extract titles, URLs, and snippets
-        std::vector<std::string> titles   = extract_html_matches(res.output, title_pattern);
-        std::vector<std::string> urls     = extract_html_matches(res.output, url_pattern);
-        std::vector<std::string> snippets = extract_html_matches(res.output, snippet_pattern);
-
-        // Ensure all vectors have the same size
-        size_t result_count = std::min({titles.size(), urls.size(), snippets.size(), (size_t)max_results});
         
         json results = json::array();
 
-        for (size_t i = 0; i < result_count; ++i) {
-            results.push_back({
-                {"title",   titles[i]},
-                {"url",     urls[i]},
-                {"snippet", snippets[i]},
-            });
-        }
+        results.push_back({
+            {"title",   query},
+            {"url",     engine + encoded_query},
+            {"content", html2text(res.output)},
+        });
 
         return {{"results", results}};
     }
