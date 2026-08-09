@@ -23,9 +23,9 @@ def _unpermute_for_rope(tensor: "Tensor", n_heads: int) -> "Tensor":
     raise ValueError(f"_unpermute_for_rope: unexpected shape {tuple(tensor.shape)}")
 
 
-@ModelBase.register("OnyxForConditionalGeneration")
-class OnyxModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.ONYX
+@ModelBase.register("MuseGlimmerForConditionalGeneration")
+class MuseGlimmerModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MUSE_GLIMMER
 
     def norm_shift(self, name: str) -> float:
         # All four layer norms use 1, the final norm uses 0.
@@ -61,7 +61,7 @@ class OnyxModel(TextModel):
             data_torch = _unpermute_for_rope(data_torch, int(self.hparams["num_key_value_heads"]))
 
         # Synthesize QK-norm weights to absorb qk_scale_factor.
-        # Onyx implementation: scaleless RMSNorm followed by qk_scale_factor..
+        # MuseGlimmer implementation: scaleless RMSNorm followed by qk_scale_factor..
         if bid is not None and name.endswith(f"model.layers.{bid}.self_attn.q_proj.weight"):
             head_dim = self.hparams["head_dim"]
             q_scale = float(self.hparams["qk_scale_factor"])
@@ -77,13 +77,13 @@ class OnyxModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("OnyxForConditionalGeneration")
-class OnyxVisionModel(MmprojModel):
+@ModelBase.register("MuseGlimmerForConditionalGeneration")
+class MuseGlimmerVisionModel(MmprojModel):
     def get_vision_config(self) -> dict[str, Any] | None:
         c = self.global_config.get("vision_config")
         if not c:
             return None
-        # Onyx actually uses dynamic size, initialize with nominal size
+        # MuseGlimmer actually uses dynamic size, initialize with nominal size
         image_size = c["pos_emb_height"] * c["patch_size"] * c["merge_size"]
         return {**c, "image_size": image_size}
 
@@ -91,7 +91,7 @@ class OnyxVisionModel(MmprojModel):
         super().set_gguf_parameters()
         c = self.hparams_vision  # enriched vision_config from get_vision_config()
 
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ONYX)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MUSE_GLIMMER)
         self.gguf_writer.add_vision_attention_layernorm_eps(float(c["layer_norm_eps"]))
         self.gguf_writer.add_vision_spatial_merge_size(int(c["merge_size"]))
 
@@ -128,15 +128,15 @@ class OnyxVisionModel(MmprojModel):
         yield (self.map_tensor_name(name), data_torch)
 
 
-@ModelBase.register("OnyxAssistantModel")
-class OnyxAssistantModel(TextModel):
+@ModelBase.register("MuseGlimmerAssistantModel")
+class MuseGlimmerAssistantModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DFLASH
 
     def set_vocab(self):
         if self.target_model_dir is None:
             raise ValueError(
-                "OnyxAssistant (DFlash drafter) requires --target-model-dir pointing to the "
-                "target Onyx HF directory"
+                "MuseGlimmerAssistant (DFlash drafter) requires --target-model-dir pointing to the "
+                "target MuseGlimmer HF directory"
             )
 
         original_dir = self.dir_model

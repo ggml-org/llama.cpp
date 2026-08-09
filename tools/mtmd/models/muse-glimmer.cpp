@@ -1,19 +1,19 @@
 #include "models.h"
 
-// Onyx vision encoder: 50-layer ViT with 2D RoPE, sparse block-diagonal
+// MuseGlimmer vision encoder: 50-layer ViT with 2D RoPE, sparse block-diagonal
 // window attention (every 4th + last layer global), pixel-shuffle downsample, then
 // adapter MLP + LLM's vision_projection.
 //
 // Several quantities are precomputed on host and fed as named graph inputs (filled in
-// clip.cpp set_input, PROJECTOR_TYPE_ONYX branch):
-//   onyx_pos_w/_h [n_tok] i32         : 1-indexed RoPE positions (sparse-permuted order)
-//   onyx_sp_perm  [n_tok] i32         : window grouping permutation (applied after ln_pre)
-//   onyx_inv_perm [n_tok] i32         : inverse of sp_perm (applied after blocks)
-//   onyx_ds_perm  [n_tok] i32         : pixel-shuffle gather (original order)
-//   onyx_sp_mask  [n_tok, n_tok] f32  : block-diagonal window mask (sparse layers)
-ggml_cgraph * clip_graph_onyx::build() {
+// clip.cpp set_input, PROJECTOR_TYPE_MUSE_GLIMMER branch):
+//   muse_glimmer_pos_w/_h [n_tok] i32         : 1-indexed RoPE positions (sparse-permuted order)
+//   muse_glimmer_sp_perm  [n_tok] i32         : window grouping permutation (applied after ln_pre)
+//   muse_glimmer_inv_perm [n_tok] i32         : inverse of sp_perm (applied after blocks)
+//   muse_glimmer_ds_perm  [n_tok] i32         : pixel-shuffle gather (original order)
+//   muse_glimmer_sp_mask  [n_tok, n_tok] f32  : block-diagonal window mask (sparse layers)
+ggml_cgraph * clip_graph_muse_glimmer::build() {
     const int ds = hparams.n_merge;              // downsample factor (2)
-    const int sf = hparams.onyx_sparse_factor;   // 4
+    const int sf = hparams.muse_glimmer_sparse_factor;   // 4
     const int n_tok     = n_patches;
     const int n_out     = (n_patches_x / ds) * (n_patches_y / ds);
     const float rope_base = hparams.rope_theta;  // 10000
@@ -25,14 +25,14 @@ ggml_cgraph * clip_graph_onyx::build() {
         return t;
     };
 
-    ggml_tensor * pos_w    = inp_i32("onyx_pos_w",    n_tok);
-    ggml_tensor * pos_h    = inp_i32("onyx_pos_h",    n_tok);
-    ggml_tensor * sp_perm  = inp_i32("onyx_sp_perm",  n_tok);
-    ggml_tensor * inv_perm = inp_i32("onyx_inv_perm", n_tok);
-    ggml_tensor * ds_perm  = inp_i32("onyx_ds_perm",  n_tok);
+    ggml_tensor * pos_w    = inp_i32("muse_glimmer_pos_w",    n_tok);
+    ggml_tensor * pos_h    = inp_i32("muse_glimmer_pos_h",    n_tok);
+    ggml_tensor * sp_perm  = inp_i32("muse_glimmer_sp_perm",  n_tok);
+    ggml_tensor * inv_perm = inp_i32("muse_glimmer_inv_perm", n_tok);
+    ggml_tensor * ds_perm  = inp_i32("muse_glimmer_ds_perm",  n_tok);
 
     ggml_tensor * sp_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tok, n_tok);
-    ggml_set_name(sp_mask, "onyx_sp_mask");
+    ggml_set_name(sp_mask, "muse_glimmer_sp_mask");
     ggml_set_input(sp_mask);
 
     // patchify via build_inp (conv2d over raw pixels) + bilinear-resized learned pos-emb

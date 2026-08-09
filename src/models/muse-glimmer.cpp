@@ -1,6 +1,6 @@
 #include "models.h"
 
-void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_muse_glimmer::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
@@ -23,7 +23,7 @@ void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_onyx::load_arch_tensors(llama_model_loader &) {
+void llama_model_muse_glimmer::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
@@ -33,7 +33,7 @@ void llama_model_onyx::load_arch_tensors(llama_model_loader &) {
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
-        // Pre/post-attention norms (Onyx's `weight + 1` applied at conversion time).
+        // Pre/post-attention norms (Muse Glimmer's `weight + 1` applied at conversion time).
         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
 
@@ -59,7 +59,7 @@ void llama_model_onyx::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params & params)
+llama_model_muse_glimmer::graph::graph(const llama_model & model, const llm_graph_params & params)
     : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -203,6 +203,6 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
     ggml_build_forward_expand(gf, cur);
 }
 
-std::unique_ptr<llm_graph_context> llama_model_onyx::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_muse_glimmer::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
 }

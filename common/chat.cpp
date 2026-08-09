@@ -2902,16 +2902,11 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
 //   - final answer:     to=user, terminated by <|eot|>
 // The generation prompt is just "<|start|>assistant"; the model emits its own
 // " to=...<|message|>".
-static common_chat_params common_chat_params_init_onyx(const common_chat_template &          tmpl,
-                                                       const autoparser::generation_params & inputs) {
+static common_chat_params common_chat_params_init_muse_glimmer(const common_chat_template &          tmpl,
+                                                               const autoparser::generation_params & inputs) {
     common_chat_params data;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
-    // generation_prompt is the exact assistant-turn prefix the server strips when recovering
-    // the model's output from the full decoded text. Hardcode it to "<|start|>assistant" (the
-    // model emits its own " to=<recipient><|message|>" after it). Re-rendering the template
-    // with add_generation_prompt would also inject a default system message, which must not
-    // become part of this stripped prefix.
     data.generation_prompt = "<|start|>assistant";
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
@@ -2944,27 +2939,16 @@ static common_chat_params common_chat_params_init_onyx(const common_chat_templat
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
     auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
-    // Constrained grammar whenever tools are offered. For tool_choice=REQUIRED the grammar is
-    // non-lazy (forces a valid ATEM tool call from the first token). For the auto path it is lazy
-    // and only activates once the model commits to a tool recipient (" to=<tool><|message|>"), so
-    // the free-text reasoning (to=self) and final (to=user) turns generate unconstrained. See the
-    // grammar_triggers below.
+    // Constrained grammar whenever tools are offered.
     auto include_grammar = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start = p.rule("start", p.literal("<|start|>assistant"));
 
-        // No reasoning to split out and no tools: emit the raw stream as content.
-        // Tool parsing does not depend on reasoning_format. include_grammar (above) forces a tool
-        // call whenever tools are offered, so the parser runs the tool rules even under NONE.
-        // reasoning_format only decides whether the to=self block is tagged reasoning or content.
         if (!extract_reasoning && !include_grammar) {
             return start + p.content(p.rest());
         }
 
-        // chain-of-thought message: " to=self<|message|>{body}<|eom|>". The literals stay
-        // structural so a partial " to=" prefix does not emit a content delta before it resolves
-        // to a tool recipient. Under NONE the body is tagged content instead of reasoning.
         if (extract_reasoning) {
             p.rule("analysis", p.literal(" to=self<|message|>") + p.reasoning(p.until("<|eom|>")) + p.literal("<|eom|>"));
         } else {
@@ -2972,29 +2956,10 @@ static common_chat_params common_chat_params_init_onyx(const common_chat_templat
         }
         auto analysis = p.ref("analysis");
 
-        // final answer: "[ to=user]<|message|>{content}<|eot|>". The recipient is kept fixed
-        // (not a wildcard) so a partial chain-of-thought (" to=self...") never matches this
-        // branch and leaks into content before its <|eom|> terminator arrives.
         auto recipient  = p.optional(p.literal(" to=user"));
         auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") + p.content(p.until("<|eot|>")));
 
-        // Tool-call turn: " to=<tool><|message|><atem:function_calls>...</atem:function_calls>{term}".
-        // Ported from the ATEM tool-call parser. Only added when tools are offered; otherwise the
-        // grammar and top-level rule are exactly the reasoning/final structure above.
-        //
-        // These tool-call rules assume grammar-constrained input, which is what the
-        // server produces during generation: canonical whitespace and in-schema params,
-        // with no inline preamble because onyx puts preamble in the to=self message.
-        // Parsing unconstrained or historical assistant text is strict on purpose and
-        // will reject the whole tool call rather than guess.
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
-            // A tool-call message closes with "</atem:function_calls>", terminated by <|eom|>
-            // (more calls this turn) or <|eot|> (end of turn). We do NOT consume the trailing
-            // <|eot|> -- it fires as the server's end-of-turn EOG stop; the <|eom|> between
-            // parallel calls IS consumed (see tool_calls below).
-
-            // Schema-declared string args are captured verbatim up to the closing tag; anything
-            // else is parsed as JSON (via the per-arg schema rule) before its closing tag.
             auto string_value = p.ac(
                 p.tool_arg_string_value(p.until("</atem:parameter>")) + p.tool_arg_close(p.literal("</atem:parameter>")),
                 "</atem:parameter>");
@@ -3030,13 +2995,6 @@ static common_chat_params common_chat_params_init_onyx(const common_chat_templat
                     args = p.zero_or_more(arg_choice + p.space());
                 }
 
-                // The tool identity is keyed on the <atem:invoke name="..."> (the
-                // actual call), NOT the " to=<recipient>". Onyx models sometimes emit
-                // a recipient that disagrees with the invoke name (e.g. " to=
-                // container.exec" with <atem:invoke name="bash.exec">); accept any
-                // recipient here so such calls are parsed rather than dropped. The
-                // "<atem:function_calls>" literal disambiguates this from the to=user
-                // final turn.
                 auto tool_parser = p.tool(
                     p.tool_open(p.literal(" to=") + p.until("<|message|>") +
                                 p.literal("<|message|><atem:function_calls>") + p.space() +
@@ -3047,12 +3005,6 @@ static common_chat_params common_chat_params_init_onyx(const common_chat_templat
                 tool_choice |= p.rule("tool-" + name, tool_parser);
             });
 
-            // Parallel tool calls are consecutive assistant messages separated by <|eom|>, the turn
-            // ending with <|eot|> after the last. Gate the loop on parallel_tool_calls like the other
-            // formats: disabled -> single call; enabled -> multiple. NOTE: this model is unreliable at
-            // single-turn parallel (it often ends the turn after the first call), so
-            // parallel_tool_calls=false (sequential, driven by the agent loop) is recommended; true is
-            // honored but may under-emit.
             auto tool_calls = inputs.parallel_tool_calls
                 ? p.trigger_rule("tool-call", tool_choice + p.zero_or_more(p.literal("<|eom|>") + start + tool_choice))
                 : p.trigger_rule("tool-call", tool_choice);
@@ -3079,11 +3031,6 @@ static common_chat_params common_chat_params_init_onyx(const common_chat_templat
             });
             parser.build_grammar(builder, data.grammar_lazy);
         });
-        // Trigger only on a TOOL recipient, not the to=self (reasoning) or to=user (final) turns,
-        // which are free text and would empty the grammar stack. The capture group starts at " to="
-        // (matching where the grammar's tool rule begins) so the replayed input lines up with the
-        // grammar; requiring the trailing "<|message|>" (and excluding self/user before it) means
-        // the pattern only fires once the full tool recipient is known.
         data.grammar_triggers = {
             { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
               "<\\|start\\|>assistant( to=(?!self<\\|message\\|>)(?!user<\\|message\\|>)[^<]*?<\\|message\\|>)" },
@@ -3121,12 +3068,10 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_gpt_oss(tmpl, params);
     }
 
-    // Onyx format using " to=<recipient>" recipients and <|eom|>/<|eot|> message
-    // terminators. The ATEM tool-call markup "<atem:function_calls>" is unique to
-    // this template.
+    // Muse Glimmer format using " to=<recipient>" recipients and <|eom|>/<|eot|> message terminators.
     if (src.find("<atem:function_calls>") != std::string::npos && src.find("<|eom|>") != std::string::npos) {
-        LOG_DBG("Using specialized template: Onyx\n");
-        return common_chat_params_init_onyx(tmpl, params);
+        LOG_DBG("Using specialized template: Muse Glimmer\n");
+        return common_chat_params_init_muse_glimmer(tmpl, params);
     }
 
     // Functionary v3.2 - uses recipient-based format with >>>recipient\n{content}

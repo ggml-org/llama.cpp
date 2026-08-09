@@ -1023,8 +1023,8 @@ struct llama_model_olmoe : public llama_model_base {
 };
 
 
-struct llama_model_onyx : public llama_model_base {
-    llama_model_onyx(const struct llama_model_params & params) : llama_model_base(params) {}
+struct llama_model_muse_glimmer : public llama_model_base {
+    llama_model_muse_glimmer(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 

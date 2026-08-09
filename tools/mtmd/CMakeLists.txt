@@ -41,7 +41,7 @@ add_library(mtmd
             models/kimivl.cpp
             models/kimik25.cpp
             models/nemotron-v2-vl.cpp
-            models/onyx.cpp
+            models/muse-glimmer.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp

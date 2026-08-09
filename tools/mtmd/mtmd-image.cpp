@@ -1593,11 +1593,11 @@ mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_im
 }
 
 //
-// mtmd_image_preprocessor_onyx
+// mtmd_image_preprocessor_muse_glimmer
 //
 
-// Replicates transformers' get_aspect_ratio_preserving_size (image_processing_onyx.py)
-static clip_image_size onyx_grid_size(int img_w, int img_h, int patch_hw, int max_tokens) {
+// Replicates transformers' get_aspect_ratio_preserving_size
+static clip_image_size muse_glimmer_grid_size(int img_w, int img_h, int patch_hw, int max_tokens) {
     double i_nph = (double) img_h / patch_hw;
     double i_npw = (double) img_w / patch_hw;
     const double ratio = i_nph > 0.0 ? i_npw / i_nph : 1.0;
@@ -1635,14 +1635,14 @@ static clip_image_size onyx_grid_size(int img_w, int img_h, int patch_hw, int ma
     return clip_image_size{ best_npw * patch_hw, best_nph * patch_hw };
 }
 
-mtmd_image_preproc_out mtmd_image_preprocessor_onyx::preprocess(const clip_image_u8 & img) {
+mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const clip_image_u8 & img) {
     const int patch_hw   = hparams.patch_size * hparams.n_merge;
     const int patch_area = hparams.patch_size * hparams.patch_size * hparams.n_merge * hparams.n_merge;
     GGML_ASSERT(patch_area > 0 && hparams.image_max_pixels > 0);
     const int max_tokens = hparams.image_max_pixels / patch_area;
 
     const clip_image_size original_size = img.get_size();
-    const clip_image_size target_size   = onyx_grid_size(
+    const clip_image_size target_size   = muse_glimmer_grid_size(
         original_size.width, original_size.height, patch_hw, max_tokens);
 
     // PIL resizes directly to (target_w, target_h) -- a stretch, no padding.
