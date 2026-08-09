@@ -5,25 +5,22 @@ void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
-    ml.get_key(LLM_KV_ATTENTION_POST_NORM_RMS_EPS, hparams.f_post_norm_rms_eps);
 
-    // SWA layers share the model rope theta; they are also the only layers that use rope
-    // here (global layers are NoPE), so the 10000.0 default would apply to all of them.
     hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
-    // SWA + NoPE: [SW, SW, SW, Full], NoPE used on Full layers.
-    if (hparams.n_swa > 0) {
-        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-        uint32_t swa_period = 4;
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+    uint32_t swa_period = 4;
+    if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false)) {
         hparams.set_swa_pattern(swa_period);
-        hparams.n_no_rope_layer_step = swa_period;
     } else {
-        hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
     }
 
-    type = LLM_TYPE_UNKNOWN;
+    switch (hparams.n_layer()) {
+        case 52: type = LLM_TYPE_30B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
 }
 
 void llama_model_onyx::load_arch_tensors(llama_model_loader &) {
@@ -67,6 +64,9 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
+    // Different to f_norm_rms_eps for post-attn / post-FFN norms
+    const float post_norm_eps = 1e-8f;
+
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -89,8 +89,8 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
 
         ggml_tensor * inpSA = inpL;
 
-        const bool use_rope = hparams.n_no_rope_layer_step > 0 &&
-                              (il + 1) % hparams.n_no_rope_layer_step != 0;
+        // RoPE runs on the SWA layers, NoPE on full ones.
+        const bool use_rope = hparams.is_swa(il);
 
         // pre-attention norm (weight+1 folded at conversion time)
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
@@ -143,8 +143,7 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
             cb(cur, "attn_o_proj", il);
         }
 
-        // post-attention norm (uses f_post_norm_rms_eps, not the general f_norm_rms_eps).
-        cur = ggml_rms_norm(ctx0, cur, hparams.f_post_norm_rms_eps);
+        cur = ggml_rms_norm(ctx0, cur, post_norm_eps);
         cur = ggml_mul(ctx0, cur, model.layers[il].attn_post_norm);
         cb(cur, "attn_post_norm", il);
 
@@ -169,8 +168,7 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
-        // post-FFN norm (uses f_post_norm_rms_eps, not the general f_norm_rms_eps).
-        cur = ggml_rms_norm(ctx0, cur, hparams.f_post_norm_rms_eps);
+        cur = ggml_rms_norm(ctx0, cur, post_norm_eps);
         cur = ggml_mul(ctx0, cur, model.layers[il].ffn_post_norm);
         cb(cur, "ffn_post_norm", il);
 

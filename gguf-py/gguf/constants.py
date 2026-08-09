@@ -172,7 +172,6 @@ class Keys:
         VALUE_LENGTH                 = "{arch}.attention.value_length"
         LAYERNORM_EPS                = "{arch}.attention.layer_norm_epsilon"
         LAYERNORM_RMS_EPS            = "{arch}.attention.layer_norm_rms_epsilon"
-        POST_NORM_RMS_EPS            = "{arch}.attention.post_norm_rms_epsilon"
         GROUPNORM_EPS                = "{arch}.attention.group_norm_epsilon"
         GROUPNORM_GROUPS             = "{arch}.attention.group_norm_groups"
         CAUSAL                       = "{arch}.attention.causal"
@@ -1481,8 +1480,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_UP:                   "mm.up",
     MODEL_TENSOR.V_MM_DOWN:                 "mm.down",
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
-    MODEL_TENSOR.V_MM_MERGER_FC1:            "mm.merger.fc1",
-    MODEL_TENSOR.V_MM_MERGER_FC2:            "mm.merger.fc2",
+    MODEL_TENSOR.V_MM_MERGER_FC1:           "mm.merger.fc1",
+    MODEL_TENSOR.V_MM_MERGER_FC2:           "mm.merger.fc2",
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
     MODEL_TENSOR.V_MM_PRE_NORM:             "mm.pre_norm",
@@ -4907,6 +4906,7 @@ class VisionProjectorType:
     MIMOVL         = "mimovl"
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
+    ONYX           = "onyx"
 
 
 # Items here are (block size, type size)
