@@ -2756,6 +2756,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             llama_expert_preload::set_no_evict(value);
         }
     ));
+    add_opt(common_arg(
+        {"--expert-copy"},
+        {},
+        "copy experts to the GPU store (keep the RAM copy). default: move "
+        "(GPU store replaces the RAM copy; frees RAM)",
+        [](common_params & params, bool value) {
+            params.expert_copy = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_COPY"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

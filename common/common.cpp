@@ -1707,6 +1707,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.expert_hyst            = params.expert_hyst;
     cparams.expert_dwell           = params.expert_dwell;
     cparams.expert_pin_pct         = params.expert_pin_pct;
+    cparams.expert_copy            = params.expert_copy;
 
     return cparams;
 }

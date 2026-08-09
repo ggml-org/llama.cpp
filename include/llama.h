@@ -410,6 +410,7 @@ extern "C" {
         float expert_hyst;            // hysteresis ratio for slot swaps
         int   expert_dwell;           // min updates a resident slot keeps before swap
         int   expert_pin_pct;         // percent of cold experts to keep pinned (madvise); -1 = auto
+        bool  expert_copy;            // copy experts to GPU (keep RAM copy); default move
 
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts

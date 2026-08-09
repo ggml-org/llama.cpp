@@ -68,14 +68,15 @@ static const std::regex g_re_exps_weight("blk\\.(\\d+)\\.ffn_(up|down|gate|gate_
 
 llama_expert_hotstore::llama_expert_hotstore(
         const llama_model * model, int n_layers, int n_experts, int hot_s, int sync_period,
-        float hyst, int dwell) :
+        float hyst, int dwell, bool copy_mode) :
     n_layers(n_layers),
     n_experts(n_experts),
     hot_s(hot_s),
     bytes_per_slot(n_layers, 0),
     sync_period(sync_period),
     hyst(hyst),
-    dwell(dwell) {
+    dwell(dwell),
+    copy_mode(copy_mode) {
     if (n_layers <= 0) {
         return;
     }
@@ -696,10 +697,13 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
         for (auto it = pin.begin(); it != pin.end();) {
             if (it->verified && --it->countdown <= 0) {
                 rout[it->expert] = 1; // the GPU output counts now
-                for (entry * ent : entries_by_layer[il]) {
-                    const int pidx = llama_expert_preload::index_of(ent->src);
-                    if (pidx >= 0) {
-                        llama_expert_preload::free_cpu_slice(pidx, it->expert);
+                if (!copy_mode) {
+                    // move: the expert now lives on the GPU, free its RAM copy
+                    for (entry * ent : entries_by_layer[il]) {
+                        const int pidx = llama_expert_preload::index_of(ent->src);
+                        if (pidx >= 0) {
+                            llama_expert_preload::free_cpu_slice(pidx, it->expert);
+                        }
                     }
                 }
                 dirty[il] = 1;
@@ -855,10 +859,9 @@ bool llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap, b
     }
     // continuous adaptive cadence: the sync period grows with the hit rate
     // relative to the target. floor of 10 tokens (never resync more often),
-    // growing up to 32 as the hit rate climbs far above the target. no hard
-    // disable thresholds - the period just keeps growing.
+    // stretching to 32 as the hit rate climbs toward 6x the target.
     float ratio = hit_rate_valid ? hit_rate / target_hit_rate() : 0.0f;
-    const int eff_period = std::max(10, std::min(32, 1 + (int) (4.0f * ratio)));
+    const int eff_period = std::max(10, std::min(32, 10 + (int) (22.0f * (ratio - 1.0f) / 5.0f)));
     if (heatmap.tokens_total / eff_period > last_sync_tokens / eff_period) {
         if (getenv("LLAMA_EXPERT_FULL_SYNC")) {
             // test: mirror the whole store to the top-S on each sync instead of

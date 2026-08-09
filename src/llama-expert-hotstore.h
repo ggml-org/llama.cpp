@@ -97,6 +97,7 @@ struct llama_expert_hotstore {
     // expert scores >= hyst * the incumbent AND the slot has dwelled long enough
     float hyst  = 0.0f; // 0 = gate off (swap freely)
     int   dwell = 0;    // minimum syncs a resident must keep; 0 = off
+    bool  copy_mode = false; // keep the RAM copy of promoted experts (copy), else move
     // max concurrent transfers in flight per layer, per direction (eviction
     // queue + promotion queue). higher = faster store adaptation, at the cost
     // of more slots temporarily in transition (not counted).
@@ -137,7 +138,7 @@ struct llama_expert_hotstore {
 
 llama_expert_hotstore(const llama_model * model, int n_layers,
                       int n_experts, int hot_s, int sync_period = 0,
-                      float hyst = 0.0f, int dwell = 0);
+                      float hyst = 0.0f, int dwell = 0, bool copy_mode = false);
 
     ~llama_expert_hotstore();
 
