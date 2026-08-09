@@ -2858,6 +2858,100 @@ int32_t llama_model_n_expert(const struct llama_model * model) {
     return model->hparams.n_expert;
 }
 
+int32_t llama_model_n_expert_used(const struct llama_model * model) {
+    return model->hparams.n_expert_used;
+}
+
+static bool llama_model_moe_prune_error(char * error, size_t error_size, const std::string & message) {
+    if (error != nullptr && error_size > 0) {
+        snprintf(error, error_size, "%s", message.c_str());
+    }
+    return false;
+}
+
+bool llama_model_set_moe_prune(
+              struct llama_model * model,
+    const struct llama_moe_prune_layer * layers,
+                              size_t n_layers,
+                                char * error,
+                              size_t error_size) {
+    if (model == nullptr) {
+        return llama_model_moe_prune_error(error, error_size, "model is null");
+    }
+    if (model->arch != LLM_ARCH_GEMMA4 || model->type != LLM_TYPE_26B_A4B) {
+        return llama_model_moe_prune_error(error, error_size, "unsupported architecture: MoE pruning supports Gemma 4 26B A4B only");
+    }
+    if (model->hparams.moe_prune_active) {
+        return llama_model_moe_prune_error(error, error_size, "MoE pruning profile is already set for this model");
+    }
+    if (layers == nullptr || n_layers == 0) {
+        return llama_model_moe_prune_error(error, error_size, "MoE pruning profile has no layers");
+    }
+
+    const int32_t n_expert = model->hparams.n_expert;
+    const int32_t n_expert_used = model->hparams.n_expert_used;
+    auto disabled_by_layer = model->hparams.moe_disabled_experts;
+    std::vector<bool> seen_layer(model->hparams.n_layer(), false);
+    size_t n_disabled_expected = SIZE_MAX;
+    size_t n_moe_layers = 0;
+    for (int32_t il = 0; il < (int32_t) model->hparams.n_layer(); ++il) {
+        if (model->layers[il].ffn_gate_inp != nullptr) {
+            ++n_moe_layers;
+        }
+    }
+    if (n_layers != n_moe_layers) {
+        return llama_model_moe_prune_error(error, error_size, format("profile contains %zu layers, model has %zu routed MoE layers", n_layers, n_moe_layers));
+    }
+
+    for (size_t i = 0; i < n_layers; ++i) {
+        const llama_moe_prune_layer & entry = layers[i];
+        if (entry.layer < 0 || entry.layer >= (int32_t) model->hparams.n_layer()) {
+            return llama_model_moe_prune_error(error, error_size, format("invalid MoE layer ID %d", entry.layer));
+        }
+        if (seen_layer[entry.layer]) {
+            return llama_model_moe_prune_error(error, error_size, format("duplicate MoE layer ID %d", entry.layer));
+        }
+        if (model->layers[entry.layer].ffn_gate_inp == nullptr) {
+            return llama_model_moe_prune_error(error, error_size, format("layer %d is not a routed MoE layer", entry.layer));
+        }
+        seen_layer[entry.layer] = true;
+        if (n_disabled_expected == SIZE_MAX) {
+            n_disabled_expected = entry.n_disabled_experts;
+        } else if (entry.n_disabled_experts != n_disabled_expected) {
+            return llama_model_moe_prune_error(error, error_size, "heterogeneous surviving expert counts are unsupported");
+        }
+        if (entry.n_disabled_experts == 0 || entry.n_disabled_experts >= (size_t) n_expert) {
+            return llama_model_moe_prune_error(error, error_size, format("layer %d has an invalid disabled expert count", entry.layer));
+        }
+        if ((size_t) n_expert - entry.n_disabled_experts < (size_t) n_expert_used) {
+            return llama_model_moe_prune_error(error, error_size, format("layer %d leaves fewer experts than router Top-K", entry.layer));
+        }
+
+        std::vector<bool> seen_expert(n_expert, false);
+        std::vector<int32_t> disabled(entry.disabled_experts, entry.disabled_experts + entry.n_disabled_experts);
+        for (int32_t expert : disabled) {
+            if (expert < 0 || expert >= n_expert) {
+                return llama_model_moe_prune_error(error, error_size, format("layer %d has invalid expert ID %d", entry.layer, expert));
+            }
+            if (seen_expert[expert]) {
+                return llama_model_moe_prune_error(error, error_size, format("layer %d has duplicate expert ID %d", entry.layer, expert));
+            }
+            seen_expert[expert] = true;
+        }
+        std::sort(disabled.begin(), disabled.end());
+        for (int32_t expert : disabled) {
+            disabled_by_layer[entry.layer].set(expert);
+        }
+    }
+
+    model->hparams.moe_disabled_experts = disabled_by_layer;
+    model->hparams.moe_prune_active = true;
+    if (error != nullptr && error_size > 0) {
+        error[0] = '\0';
+    }
+    return true;
+}
+
 int32_t llama_model_n_devices(const struct llama_model * model) {
     return (int32_t)model->devices.size();
 }

@@ -50,6 +50,15 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_dataset_data  (ggml_opt_dataset_t dataset); // shape = [ne_datapoint, ndata]
     GGML_API struct ggml_tensor * ggml_opt_dataset_labels(ggml_opt_dataset_t dataset); // shape = [nd_label,     ndata]
 
+    // Optional caller-defined metadata stored and shuffled with each datapoint.
+    GGML_API void   ggml_opt_dataset_set_aux(ggml_opt_dataset_t dataset, const void * data, size_t nbytes_per_datapoint);
+    GGML_API size_t ggml_opt_dataset_aux_size(ggml_opt_dataset_t dataset);
+    GGML_API void   ggml_opt_dataset_get_batch_host_aux(
+            ggml_opt_dataset_t dataset,
+            void             * data_batch,
+            size_t             nb_data_batch,
+            int64_t            ibatch);
+
     // shuffle idata first datapoints from dataset with RNG from opt_ctx, shuffle all datapoints if idata is negative
     GGML_API void ggml_opt_dataset_shuffle(ggml_opt_context_t opt_ctx, ggml_opt_dataset_t dataset, int64_t idata);
 
@@ -137,6 +146,12 @@ extern "C" {
         // Set to 0 (default) to disable.  A value of ~32–64 cuts activation VRAM by ~50%.
         int32_t grad_checkpoint_interval;
 
+        bool    critical_token_weighting;
+        bool    critical_confidence_weighting;
+        float   critical_token_weight;
+        float   critical_confidence_threshold;
+        bool    critical_weight_linear;
+
         // only GGML_OPT_OPTIMIZER_TYPE_ADAMW needs m, v momenta per parameter tensor
         enum ggml_opt_optimizer_type optimizer;
     };
@@ -163,6 +178,13 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_loss(    ggml_opt_context_t opt_ctx); // scalar tensor that contains the loss
     GGML_API struct ggml_tensor * ggml_opt_pred(    ggml_opt_context_t opt_ctx); // predictions made by outputs
     GGML_API struct ggml_tensor * ggml_opt_ncorrect(ggml_opt_context_t opt_ctx); // number of matching predictions between outputs and labels
+    GGML_API struct ggml_tensor * ggml_opt_critical_span_weights(ggml_opt_context_t opt_ctx);
+    GGML_API struct ggml_tensor * ggml_opt_critical_reward_weights(ggml_opt_context_t opt_ctx);
+    GGML_API struct ggml_tensor * ggml_opt_critical_warmup_scale(ggml_opt_context_t opt_ctx);
+    GGML_API struct ggml_tensor * ggml_opt_critical_selected(ggml_opt_context_t opt_ctx);
+    GGML_API struct ggml_tensor * ggml_opt_critical_effective_weights(ggml_opt_context_t opt_ctx);
+    GGML_API struct ggml_tensor * ggml_opt_critical_unweighted_loss(ggml_opt_context_t opt_ctx);
+    GGML_API void ggml_opt_set_critical_max_tokens(ggml_opt_context_t opt_ctx, int32_t max_tokens);
 
     // get the gradient accumulator for a node from the forward graph
     GGML_API struct ggml_tensor * ggml_opt_grad_acc(ggml_opt_context_t opt_ctx, struct ggml_tensor * node);

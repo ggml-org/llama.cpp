@@ -119,6 +119,20 @@ protected:
     int debug = 0;
 };
 
+class llm_graph_input_moe_mask : public llm_graph_input_i {
+public:
+    llm_graph_input_moe_mask(int64_t n_expert, const std::vector<int32_t> & disabled_experts)
+        : n_expert(n_expert), disabled_experts(disabled_experts) {}
+
+    void set_input(const llama_ubatch * ubatch) override;
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * mask = nullptr;
+
+    const int64_t n_expert;
+    const std::vector<int32_t> disabled_experts;
+};
+
 using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
 
 class llm_graph_input_embd : public llm_graph_input_i {

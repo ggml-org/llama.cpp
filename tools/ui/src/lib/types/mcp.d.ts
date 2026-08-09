@@ -292,6 +292,7 @@ export interface ServerBuiltinToolInfo {
 	permissions: {
 		write: boolean;
 	};
+	uses_cwd: boolean;
 	definition: OpenAIToolDefinition;
 }
 

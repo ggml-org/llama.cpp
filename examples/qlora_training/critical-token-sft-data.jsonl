@@ -1,0 +1,4 @@
+{"prompt":"대한민국의 수도는 어디인가?","response":"대한민국의 수도는 서울입니다.","critical_spans":[{"start":26,"end":32,"weight":4.0}]}
+{"prompt":"2 + 2는?","response":"정답은 4입니다.","critical_spans":[{"start":10,"end":11}]}
+{"prompt":"Select the important phrase.","response":"alpha beta gamma","critical_spans":[{"start":6,"end":10,"weight":2.0},{"start":8,"end":14,"weight":4.0}]}
+{"prompt":"No annotation here.","response":"ordinary response"}

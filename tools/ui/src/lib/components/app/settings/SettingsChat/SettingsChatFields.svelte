@@ -83,12 +83,18 @@
 					<Input
 						id={field.key}
 						type={field.isPositiveInteger ? 'number' : 'text'}
-						{...field.isPositiveInteger ? { min: '1', step: '1' } : {}}
+						{...field.isPositiveInteger
+							? {
+									min: String(field.min ?? 1),
+									step: '1',
+									...(field.max != null ? { max: String(field.max) } : {})
+								}
+							: {}}
 						value={currentValue}
 						oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
 						placeholder={currentModelParams[field.key] != null
 							? `Default: ${normalizeFloatingPoint(currentModelParams[field.key])}`
-							: ''}
+							: (field.placeholder ?? '')}
 						class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 					/>
 					{#if isCustomRealTime}

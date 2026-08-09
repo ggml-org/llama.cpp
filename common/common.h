@@ -493,6 +493,7 @@ struct common_params {
     struct common_params_diffusion   diffusion;
 
     struct common_params_model model;
+    std::string moe_prune_profile; // immutable MoE pruning profile loaded with the model
 
     std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
     std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT
@@ -612,6 +613,13 @@ struct common_params {
     bool    verbose_loss           = false; // print one structured loss line per SFT window
     bool    train_on_prompt        = false; // include prompt tokens in training loss (default: response tokens only)
     bool    shuffle_dataset        = false; // shuffle dataset windows at the start of each epoch
+    std::string critical_token_mode = "none"; // none, spans, confidence, hybrid
+    float   critical_token_weight = 3.0f;
+    float   critical_confidence_threshold = 0.25f;
+    std::string critical_weight_shape = "constant"; // constant, linear
+    int32_t critical_warmup_steps = 0;
+    float   critical_max_fraction = 1.0f;
+    int32_t critical_stats_every = 10;
 
     // grpo training
     bool    grpo_mode              = false; // enable GRPO IPC training loop
@@ -683,6 +691,7 @@ struct common_params {
 
     // enable built-in tools
     std::vector<std::string> server_tools;
+    std::string server_tools_runtime;
 
     // MCP server configs (Cursor-compatible JSON)
     std::string mcp_servers_config;   // path to JSON file with MCP server definitions
