@@ -15,6 +15,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
+	import { rehypeFileBadge } from './plugins/rehype/file-badge';
 	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
 	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
@@ -33,7 +34,8 @@
 		preprocessLaTeX,
 		getImageErrorFallbackHtml,
 		copyCodeToClipboard,
-		copyToClipboard
+		copyToClipboard,
+		splitGluedClosingCodeFences
 	} from '$lib/utils';
 	import {
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
@@ -174,6 +176,7 @@
 			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
+			.use(rehypeFileBadge) // Render file:// anchors as inline badge chips
 			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
 			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-block">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
@@ -340,7 +343,11 @@
 	 * Incomplete code blocks are rendered using SyntaxHighlightedCode to maintain interactivity.
 	 * @param markdown - The raw markdown string to process
 	 */
-	async function processMarkdown(markdown: string) {
+	async function processMarkdown(rawMarkdown: string) {
+		// Text glued to a closing code fence is not a fence to the parser -
+		// the block would swallow it. Split it onto its own line first.
+		const markdown = splitGluedClosingCodeFences(rawMarkdown);
+
 		// Early exit if content unchanged (can happen with rapid coalescing)
 		if (markdown === previousContent) {
 			return;

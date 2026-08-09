@@ -1,13 +1,8 @@
 /**
- * Pure helpers for the working-directory picker search.
- *
- * The picker is backed by the server's `file_glob_search` built-in tool.
- * Queries that start from a root (`/`, `C:\`, `\\host\share`) or from `~`
- * navigate the directory tree (search the parent for the last segment);
- * anything else glob-matches home-relative entries. Paths are carried with
- * `/` separators, which is what the server returns and what Windows accepts.
- * These helpers build the glob, normalize results and rank them
- * client-side; the component owns the network/state plumbing.
+ * Pure helpers for the working-directory picker search, backed by the
+ * server's `file_glob_search` tool. Queries starting from a root (`/`,
+ * `C:\`, `\\host\share`) or `~` navigate the tree (search the parent for
+ * the last segment); anything else glob-matches home-relative entries.
  */
 
 import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
@@ -21,6 +16,7 @@ import {
 	GLOB_WILDCARD,
 	HOME_TILDE,
 	LEADING_SLASHES_REGEX,
+	PATH_NAV_MAX_DEPTH,
 	UNC_ROOT_REGEX,
 	WINDOWS_SEPARATOR
 } from '$lib/constants';
@@ -45,10 +41,6 @@ function toPosixSeparators(query: string): string {
 	return query.split(WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
 }
 
-/**
- * Length of the root prefix of `path`, or 0 when it has none. Covers the
- * POSIX root, a Windows drive (`C:/`) and a UNC share (`//host/share/`).
- */
 export function rootPrefixLength(path: string): number {
 	const unc = path.match(UNC_ROOT_REGEX);
 	if (unc) return unc[0].length;
@@ -84,7 +76,6 @@ export function splitPathQuery(query: string): PathQuery | null {
 	return { parent: parentOf(rest.slice(0, idx)), last: rest.slice(idx + 1) };
 }
 
-/** Build a case-insensitive glob that matches `query` anywhere within a name. */
 export function buildCaseInsensitiveGlob(query: string): string {
 	let out = GLOB_WILDCARD;
 	for (const c of query) {
@@ -99,7 +90,33 @@ export function buildCaseInsensitiveGlob(query: string): string {
 	return out + GLOB_WILDCARD;
 }
 
-/** Exact basename first, then prefix, then substring; lower is better. */
+export interface GlobSearchArgs {
+	path: string;
+	include: string;
+	maxDepth: number;
+	rankQuery: string;
+	/** Last segment of a path-navigation query (`~/dir/sub`), undefined for
+	 * a plain home-relative glob. Lets callers act on the exact targeted
+	 * segment (e.g. the WD picker "entering" a directory). */
+	last?: string;
+}
+
+export function buildGlobSearchArgs(
+	query: string,
+	scopePath: string,
+	searchDepth: number
+): GlobSearchArgs {
+	const pathQuery = splitPathQuery(query);
+	const path = pathQuery ? pathQuery.parent : scopePath;
+	const include = pathQuery
+		? pathQuery.last
+			? buildCaseInsensitiveGlob(pathQuery.last)
+			: GLOB_WILDCARD
+		: buildCaseInsensitiveGlob(query);
+	const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : searchDepth;
+	return { path, include, maxDepth, rankQuery: pathQuery?.last ?? query, last: pathQuery?.last };
+}
+
 const RANK_EXACT = 0;
 const RANK_PREFIX = 1;
 const RANK_SUBSTRING = 2;
@@ -114,7 +131,6 @@ function rankScore(path: string, query: string): number {
 	return RANK_OTHER;
 }
 
-/** Sort entries by relevance, then shorter path, then alphabetically. */
 export function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
 	return [...entries].sort(
 		(a, b) =>
@@ -124,13 +140,11 @@ export function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
 	);
 }
 
-/** Join a base path and a relative segment, avoiding duplicate slashes. */
 export function joinPath(base: string, rel: string): string {
 	if (!base) return rel;
 	return base.replace(TRAILING_SLASHES_REGEX, '') + PATH_SEPARATOR + rel;
 }
 
-/** Split `text` into alternating segments at each case-insensitive `query` match. */
 export function highlightMatch(text: string, query: string): { text: string; match: boolean }[] {
 	if (!query) return [{ text, match: false }];
 	const segments: { text: string; match: boolean }[] = [];
