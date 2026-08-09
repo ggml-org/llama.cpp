@@ -10,6 +10,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "preset.h"
+#include "gguf.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -571,6 +572,29 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
             plan_spec.eagle3 = {};
         } else if (!plan_spec.eagle3.local_path.empty()) {
             params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 };
+        }
+    }
+
+    // infer spec type from draft GGUF metadata when no sidecar or explicit type was given
+    if (spec_types_is_default(params) && !params.speculative.draft.mparams.path.empty()) {
+        struct gguf_init_params meta_params = {
+            /*.no_alloc =*/ true,
+            /*.ctx      =*/ nullptr,
+        };
+        struct gguf_context * gguf_ctx = gguf_init_from_file(params.speculative.draft.mparams.path.c_str(), meta_params);
+        if (gguf_ctx) {
+            int64_t arch_idx = gguf_find_key(gguf_ctx, "general.architecture");
+            if (arch_idx >= 0) {
+                std::string arch = gguf_get_val_str(gguf_ctx, arch_idx);
+                if (arch == "dflash") {
+                    if (gguf_find_tensor(gguf_ctx, "markov_w1.weight") >= 0) {
+                        params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK };
+                    } else {
+                        params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH };
+                    }
+                }
+            }
+            gguf_free(gguf_ctx);
         }
     }
 
