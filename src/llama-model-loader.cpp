@@ -14,8 +14,6 @@
 #include <cstring>
 #include <future>
 #include <regex>
-#include <sys/mman.h>
-#include <unistd.h>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;

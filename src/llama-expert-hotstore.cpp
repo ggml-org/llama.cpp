@@ -131,11 +131,14 @@ llama_expert_hotstore::llama_expert_hotstore(
             // _SC_AVPHYS_PAGES only counts truly-free pages and underreports
             int64_t free_ram = 0;
 #if defined(_WIN32)
-            MEMORYSTATUSEX ms = { sizeof(ms) };
+            MEMORYSTATUSEX ms;
+            memset(&ms, 0, sizeof(ms));
+            ms.dwLength = sizeof(ms);
             if (GlobalMemoryStatusEx(&ms)) {
                 free_ram = (int64_t) ms.ullAvailPhys;
             }
 #else
+#if defined(__linux__)
             FILE * f = fopen("/proc/meminfo", "r");
             if (f) {
                 char line[256];
@@ -147,9 +150,16 @@ llama_expert_hotstore::llama_expert_hotstore(
                 }
                 fclose(f);
             }
+#endif
             if (free_ram <= 0) {
+                // fallback: total pages (Linux AVPHYS is the available count;
+                // other POSIX lack it, so use PHYS as a coarse bound)
                 const long page = sysconf(_SC_PAGESIZE);
+#if defined(_SC_AVPHYS_PAGES)
                 free_ram = (int64_t) sysconf(_SC_AVPHYS_PAGES) * page;
+#else
+                free_ram = (int64_t) sysconf(_SC_PHYS_PAGES) * page;
+#endif
             }
 #endif
             if (exps_bytes > 0 && free_ram > exps_bytes * 2) {

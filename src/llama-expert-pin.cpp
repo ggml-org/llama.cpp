@@ -109,6 +109,7 @@ static void hint_experts(const llama_model * model,
     // tight (MemAvailable under 10% of total).
     bool ram_tight = false;
     int64_t mem_total = 0, mem_avail = 0;
+#if defined(__linux__)
     FILE * f = fopen("/proc/meminfo", "r");
     if (f) {
         char line[256];
@@ -121,6 +122,7 @@ static void hint_experts(const llama_model * model,
         }
         fclose(f);
     }
+#endif
     ram_tight = mem_total > 0 && mem_avail * 10 < mem_total;
 
     // group the exps tensors by layer
