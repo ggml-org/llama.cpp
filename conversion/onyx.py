@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Any, Iterable, TYPE_CHECKING
 
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import MmprojModel, ModelBase, TextModel, gguf
 
 
 def _unpermute_for_rope(tensor: "Tensor", n_heads: int) -> "Tensor":
@@ -74,3 +74,54 @@ class OnyxModel(TextModel):
             )
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("OnyxForConditionalGeneration")
+class OnyxVisionModel(MmprojModel):
+    def get_vision_config(self) -> dict[str, Any] | None:
+        c = self.global_config.get("vision_config")
+        if not c:
+            return None
+        # Onyx actually uses dynamic size, initialize with nominal size
+        image_size = c["pos_emb_height"] * c["patch_size"] * c["merge_size"]
+        return {**c, "image_size": image_size}
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        c = self.hparams_vision  # enriched vision_config from get_vision_config()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ONYX)
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(c["layer_norm_eps"]))
+        self.gguf_writer.add_vision_spatial_merge_size(int(c["merge_size"]))
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, gen = item
+        keep = ("model.vision_tower.", "model.vision_adapter.", "model.vision_projection.")
+        if not any(name.startswith(k) for k in keep):
+            return None
+        return super().filter_tensors((name, gen))
+
+    # 3-layer projector MLP
+    _MM_MLP_MAP = {
+        "model.vision_adapter.fc1": (gguf.MODEL_TENSOR.V_MMPROJ, 0),
+        "model.vision_adapter.fc2": (gguf.MODEL_TENSOR.V_MMPROJ, 1),
+        "model.vision_projection":  (gguf.MODEL_TENSOR.V_MMPROJ, 2),
+    }
+
+    def modify_tensors(self, data_torch, name, bid):
+        if ".attn.q_proj." in name or ".attn.k_proj." in name:
+            n_heads = int(self.hparams_vision["num_attention_heads"])
+            data_torch = _unpermute_for_rope(data_torch, n_heads)
+        # Lay out the pt=2 temporal slabs of the patch embedding as a conv2d for build_inp()
+        if name.endswith("patch_embedder.patch_embedding.weight"):
+            n_embd = data_torch.shape[0]
+            pt = int(self.hparams_vision["patch_temporal"])
+            ps = int(self.hparams_vision["patch_size"])
+            data_torch = data_torch.view(n_embd, pt, 3, ps, ps).sum(dim=1)  # (n_embd, 3, ps, ps)
+        stem, _, suffix = name.rpartition(".")
+        if stem in self._MM_MLP_MAP:
+            tensor_key, idx = self._MM_MLP_MAP[stem]
+            yield (self.format_tensor_name(tensor_key, bid=idx, suffix="." + suffix), data_torch)
+            return
+        yield (self.map_tensor_name(name), data_torch)

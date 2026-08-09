@@ -470,6 +470,12 @@ struct mtmd_context {
                     img_end = "]<]end of image[>[";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_ONYX:
+                {
+                    img_beg = "<|image_start|>";
+                    img_end = "<|image_end|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_onyx>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_YOUTUVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>

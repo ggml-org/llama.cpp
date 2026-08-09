@@ -109,6 +109,10 @@ struct clip_hparams {
     int32_t downsample_query_side;
     int32_t downsample_window_side;
 
+    // Onyx vision (per-block sparse-window pattern, learned pos-emb, patch-temporal)
+    int32_t onyx_patch_temporal = 0;
+    int32_t onyx_sparse_factor  = 0;
+
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
