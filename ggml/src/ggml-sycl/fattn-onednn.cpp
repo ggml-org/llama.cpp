@@ -56,6 +56,7 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     // This is the improved SPDA gate. Rather than gating Alchemist GPUs from all SPDA features, we instead target only the failing shapes.
     // If the GPU being assessed isn't in the grouping below, it has full access to all SPDA shapes. Otherwise, if it's an Alchemist GPU, we block only the shapes with head sizes that fail.
     // It is much easier to compare the device to a small list of failing cases than to define all the passing ones.
+    const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
     bool support_spda = !(arch == gpu_arch::intel_gpu_dg2_g10 ||
                          arch == gpu_arch::intel_gpu_dg2_g11 ||
                          arch == gpu_arch::intel_gpu_dg2_g12);
