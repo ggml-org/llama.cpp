@@ -483,6 +483,24 @@ static std::string url_encode(const std::string& value) {
     return escaped;
 }
 
+static std::vector<std::string> extract_html_matches(
+    const std::string &html,
+    const std::string &pattern) {
+    std::vector<std::string> matches;
+    std::regex regex_pattern(pattern);
+    std::smatch match;
+
+    std::string::const_iterator search_start(html.cbegin());
+    while (std::regex_search(search_start, html.cend(), match, regex_pattern)) {
+        if (match.size() > 1) {
+            matches.push_back(match[1].str());
+        }
+        search_start = match[0].second;
+    }
+
+    return matches;
+}
+
 //
 // read_file: read a file with optional line range and line-number prefix
 //
@@ -1513,6 +1531,7 @@ struct server_tool_web_search : server_tool {
                         {"engine", {{"type", "string"}, {"description", "The search engine (default: https://ddg.gg/html/?q=)"}}},
                         {"timeout",         {{"type", "integer"}, {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}}},
                         {"max_output_size", {{"type", "integer"}, {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}}},
+                        {"max_results",     {{"type", "integer"}, {"description", "Maximum number of results to return (default: 10)"}}},
                     }},
                     {"required", json::array({"query"})},
                 }},
@@ -1522,52 +1541,59 @@ struct server_tool_web_search : server_tool {
 
     json invoke(json params, server_tool::stream *) const override {
         std::string query = params.at("query").get<std::string>();
-        std::string engine= json_value(params, "engine", std::string("https://ddg.gg/html/?q="));
+        std::string engine= json_value(params, "engine", std::string("https://html.duckduckgo.com/html/?q="));
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
+        int    max_results    = json_value(params, "max_results", 10);
 
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
         auto io = make_tools_io(params);
 
-        // 1. Encode query to prevent URL breakage
+        // Encode query to prevent URL breakage
         std::string encoded_query = url_encode(query);
 
-        // 2. Download HTML using wget2 (outputting directly to stdout)
-        // We use -qO- to avoid creating temporary files and to pipe directly to our C++ string
-        std::vector<std::string> args = {"wget2", "-qO-", engine + encoded_query};
+        // Download HTML using wget2 (outputting directly to stdout)
+        // We use -qO- to avoid creating temporary files and to pipe directly to the C++ string
+        std::vector<std::string> args = {"wget2", "-qO-", 
+          "--header=User-Agent: Mozilla/5.0 (compatible; WebSearch/1.0)",
+          "--max-redirect=5",
+          engine + encoded_query};
         auto res = io->run(args, max_output, timeout);
-
+        
         if (res.exit_code != 0) {
             return {{"error", "download failed: " + res.output}};
         }
         if (res.timed_out) {
             return {{"error", "search request timed out"}};
         }
-
-        // 3. Parse the HTML using regex
-        json results = json::array();
         
-        // This regex looks for the common DDG HTML result block structure:
-        std::regex result_regex(
-            "<a class=\"result__a\" href=\"([^\"]+)\"[^>]*>([^<]+)</a>.*?<div class=\"result__snippet\">([^<]+)</div>"
-        );
-
-        auto words_begin = std::sregex_iterator(res.output.begin(), res.output.end(), result_regex);
-        auto words_end = std::sregex_iterator();
-
-        for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
-            std::smatch match = *i;
-            results.push_back({
-                {"url",     match[1].str()},
-                {"title",   match[2].str()},
-                {"snippet", match[3].str()}
-            });
+        if (res.output.empty()) {
+            return {{"error", "Failed to fetch search results." + engine + encoded_query }};
         }
+        
+        // Regex patterns for extracting titles, URLs, and snippets
+        // Updated regex patterns for DuckDuckGo's HTML
+        std::string title_pattern   = "<h2 class=\"result__title\">\\s*<a[^>]*>(.*?)</a>\\s*</h2>";
+        std::string url_pattern     = "<a class=\"result__url\"[^>]*href=\"(.*?)\"";
+        std::string snippet_pattern = "<a class=\"result__snippet\"[^>]*>(.*?)</a>";
 
-        if (results.empty()) {
-            // If regex failed but download succeeded, it might be a different HTML structure or no results
-            return {{"results", json::array()}, {"info", "No results found or parsing error. Raw output length: " + std::to_string(res.output.size())}};
+        // Extract titles, URLs, and snippets
+        std::vector<std::string> titles   = extract_html_matches(res.output, title_pattern);
+        std::vector<std::string> urls     = extract_html_matches(res.output, url_pattern);
+        std::vector<std::string> snippets = extract_html_matches(res.output, snippet_pattern);
+
+        // Ensure all vectors have the same size
+        size_t result_count = std::min({titles.size(), urls.size(), snippets.size(), (size_t)max_results});
+        
+        json results = json::array();
+
+        for (size_t i = 0; i < result_count; ++i) {
+            results.push_back({
+                {"title",   titles[i]},
+                {"url",     urls[i]},
+                {"snippet", snippets[i]},
+            });
         }
 
         return {{"results", results}};
