@@ -31,6 +31,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/ggml-cpu.cpp
         ggml-cpu/ggml-cpu-mul-mat-id-cold.c
         ggml-cpu/ggml-cpu-mul-mat-id-cold.h
+        ggml-cpu/ggml-cpu-moe-cold.c
+        ggml-cpu/ggml-cpu-moe-cold.h
         ggml-cpu/repack.cpp
         ggml-cpu/repack.h
         ggml-cpu/hbm.cpp

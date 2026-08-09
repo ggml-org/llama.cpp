@@ -1426,6 +1426,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         expert_hotstore->copy_top_s(*expert_heatmap);
     }
 
+    if (expert_hotstore) {
+        expert_hotstore->reset_counts(); // zero the cold-op tallies for this token
+    }
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
@@ -1433,19 +1437,21 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    if (expert_heatmap && (ubatch.n_tokens == 1 || !expert_hotstore || !expert_hotstore->is_filled)) {
-        synchronize();
-        expert_heatmap->update_from_graph(res->moe_sel_experts);
+    // the cold op tallied the selected experts into host counts during the
+    // compute; feed them into the heatmap directly (no D2H readback, no sync)
+    if (expert_heatmap && expert_hotstore && expert_hotstore->is_filled) {
+        expert_hotstore->read_counts(*expert_heatmap, ubatch.n_tokens);
     }
     if (expert_heatmap && expert_hotstore) {
         if (!expert_hotstore->is_filled) {
             // fill happens pre-graph on the first ubatch (see above)
         } else {
             expert_hotstore->maybe_resync(*expert_heatmap, ubatch.n_tokens > 1);
-            // sync the moved store data into the graph's stream before the next
-            // graph launch, so the resync's copies never contend with the next
-            // token's generation
-            synchronize();
+            // the post-resync sync is removed (default): the resync's store
+            // writes on the default stream race the graph's stream
+            if (getenv("LLAMA_EXPERT_SYNC_RESYNC")) {
+                synchronize();
+            }
             if (ubatch.n_tokens == 1 && getenv("LLAMA_EXPERT_HITRATE")) {
                 expert_hotstore->log_hit_rate(res->moe_sel_experts);
             }

@@ -41,6 +41,10 @@ void ggml_compute_forward_mul_mat_id_cold(
     const struct ggml_compute_params * params,
           struct ggml_tensor * dst);
 
+// resolve an expert slice through the registered hook (nullptr = fall back to
+// the tensor's own data); shared by the MUL_MAT_ID_COLD and MOE_COLD kernels
+const uint8_t * ggml_mmid_cold_get_slice(const struct ggml_tensor * src0, int expert);
+
 #ifdef __cplusplus
 }
 #endif

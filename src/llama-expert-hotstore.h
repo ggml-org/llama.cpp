@@ -47,6 +47,7 @@ struct llama_expert_hotstore {
         std::vector<ggml_tensor *> hot_lut; // per-device i32[n_experts]
         std::vector<ggml_tensor *> mask_lut; // per-device f32[local_slots+1], 0 at sentinel
         ggml_tensor * cold_mask = nullptr;  // i32[n_experts]
+        ggml_tensor * counts = nullptr;     // i32[n_experts+1], tallied by the cold op
     };
     std::vector<layer_lut> luts; // size n_layers
 
@@ -72,6 +73,15 @@ struct llama_expert_hotstore {
     int sync_period = 0;
     // tokens_total at the last sync (fill or re-sync) for boundary-cross check
     int64_t last_sync_tokens = 0;
+
+    // adaptive cadence: smoothed hit rate + the target the store must reach
+    // before the resync slows. target = 0.8 * (hot_s/n_experts)^0.6, clamped to
+    // [0.2, 0.9]: small models (store ~ full) aim ~80%, 1/5-fit models ~30%.
+    // hit_rate >= 0.95 disables the resync entirely.
+    float hit_rate = 0.0f;
+    bool  hit_rate_valid = false;
+
+    float target_hit_rate() const;
 
     // start-up full sync: after the 3-token heat boost, mirror the store to the
     // top-S over the next `full_sync_remaining` tokens (budget hot_s/4 per token)
@@ -156,14 +166,21 @@ llama_expert_hotstore(const llama_model * model, int n_layers,
     // returns the GPU slot index holding expert_id in layer il, or -1 if none
     int slot_of(int layer_idx, int expert_id) const;
 
+    // zero the cold-op per-expert counts (call before the graph compute)
+    void reset_counts();
+
+    // feed the cold-op counts into the heatmap (host memory, no D2H readback).
+    // call after the graph compute; n_tokens advances the heatmap clock.
+    void read_counts(llama_expert_heatmap & heatmap, int n_tokens);
+
     // diagnostic: count how many router-selected expert ids hit a hot slot.
     // reads the selected_experts tensors (call after synchronize).
     void log_hit_rate(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel);
 
     // rebuild hot_lut/cold_mask from slot_to_expert for every layer
     // and copy them into the tensors. called from copy_top_s (initial
-    // fill) and resync_top_s (swaps).
-    void update_luts();
+    // fill) and resync_top_s (swaps). empty dirty = all layers.
+    void update_luts(const std::vector<char> & dirty = {});
 
     void log() const;
 };

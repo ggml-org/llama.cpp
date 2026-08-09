@@ -1099,9 +1099,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "GLU",
     "MUL_MAT_ID_COLD",
+    "MOE_COLD",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1215,9 +1216,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "glu(x)",
     "mul_mat_id_cold(x,x,x,x)",
+    "moe_cold(x,x,x,x,x,x)",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3393,6 +3395,54 @@ struct ggml_tensor * ggml_mul_mat_id_cold(
     result->src[3] = cold_mask;
     result->src[4] = counts;
     result->src[5] = ptrs;
+
+    return result;
+}
+
+// ggml_moe_cold
+
+struct ggml_tensor * ggml_moe_cold(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * gate,
+        struct ggml_tensor  * up,
+        struct ggml_tensor  * down,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * cold_mask,
+        struct ggml_tensor  * counts,
+        int32_t               act) {
+    GGML_ASSERT(!ggml_is_transposed(gate) && !ggml_is_transposed(up) && !ggml_is_transposed(down));
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(act == 0 || act == 1);
+
+    GGML_ASSERT(gate->ne[3] == 1 && up->ne[3] == 1 && down->ne[3] == 1);
+    GGML_ASSERT(x->ne[3] == 1 && x->ne[1] == 1);
+    GGML_ASSERT(ids->ne[2] == 1 && ids->ne[3] == 1);
+    GGML_ASSERT(ids->ne[1] == x->ne[2]);
+    GGML_ASSERT(gate->ne[0] == x->ne[0] && up->ne[0] == x->ne[0]);
+    GGML_ASSERT(gate->ne[1] == up->ne[1]);
+    GGML_ASSERT(down->ne[0] == (gate == up ? gate->ne[1] / 2 : gate->ne[1]));
+    GGML_ASSERT(gate->ne[2] == up->ne[2] && up->ne[2] == down->ne[2]);
+    GGML_ASSERT(ids->ne[0] % x->ne[1] == 0);
+    GGML_ASSERT(cold_mask->type == GGML_TYPE_I32);
+    GGML_ASSERT(cold_mask->ne[0] == gate->ne[2]);
+    if (counts) {
+        GGML_ASSERT(counts->type == GGML_TYPE_I32);
+        GGML_ASSERT(counts->ne[0] >= gate->ne[2] + 1);
+    }
+
+    const int64_t ne[4] = { down->ne[1], ids->ne[0], x->ne[2], 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_MOE_COLD;
+    result->src[0] = gate;
+    result->src[1] = up;
+    result->src[2] = down;
+    result->src[3] = x;
+    result->src[4] = ids;
+    result->src[5] = cold_mask;
+    result->src[6] = counts;
+    ggml_set_op_params_i32(result, 0, act);
 
     return result;
 }

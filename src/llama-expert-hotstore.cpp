@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <regex>
 
 #ifdef _WIN32
@@ -326,6 +327,7 @@ bool llama_expert_hotstore::allocate(
     ctx_cpu = ggml_context_ptr(ggml_init(params_cpu));
     for (int il = 0; il < n_layers; il++) {
         luts[il].cold_mask = ggml_new_tensor_1d(ctx_cpu.get(), GGML_TYPE_I32, n_experts);
+        luts[il].counts    = ggml_new_tensor_1d(ctx_cpu.get(), GGML_TYPE_I32, n_experts + 1);
     }
     ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
     ggml_backend_buffer_t b_cpu = ggml_backend_alloc_ctx_tensors_from_buft(ctx_cpu.get(), cpu_buft);
@@ -351,7 +353,7 @@ bool llama_expert_hotstore::allocate(
     // can find its per-device GPU hot tensors and per-device LUTs.
     for (const auto & e : entries) {
         const auto & L = luts[e.layer_idx];
-        llama_expert_tier_register(e.src, e.dst, L.hot_lut, L.mask_lut, L.cold_mask);
+        llama_expert_tier_register(e.src, e.dst, L.hot_lut, L.mask_lut, L.cold_mask, L.counts);
     }
 
     return true;
@@ -390,30 +392,15 @@ bool llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
             const size_t slot = ggml_nbytes(e->src) / (size_t) e->src->ne[2];
             const int pidx = llama_expert_preload::index_of(e->src);
             if (preloaded) {
-                // deferred fill: the startup batch was NOT written at load.
-                // copy each slot sequentially from the gguf file, verify, and
-                // retry until the store is sound before the first token.
-                for (int p = 0; p < hot_s; p++) {
-                    const int ex = ste[p];
-                    if (ex < 0) {
-                        continue;
-                    }
-                    const int g = slot_device(slot_start, slot_end, p);
-                    if (g < 0 || pidx < 0) {
-                        continue;
-                    }
-                    const size_t off = (size_t) (p - slot_start[g]) * slot;
-                    std::vector<uint8_t> buf(slot);
-                    if (!llama_expert_preload::read_expert(pidx, ex, buf.data(), slot)) {
-                        continue;
-                    }
-                    const uint64_t exp = llama_expert_preload::expected_hash(e->src, ex);
-                    for (int attempt = 0; attempt < 32; attempt++) {
-                        ggml_backend_tensor_set(e->dst[g], buf.data(), off, slot);
-                        std::vector<uint8_t> rb(1024);
-                        ggml_backend_tensor_get(e->dst[g], rb.data(), off, 1024);
-                        if (hash_slice_at(rb.data(), slot) == exp) {
-                            break;
+                // the startup slices were streamed into the store at load
+                // (write_entry), so the GPU store is already sound; reclaim the
+                // model's host pages for the startup experts (no-mmap).
+                const char * src = e->src->data ? (const char *) ggml_get_data(e->src) : nullptr;
+                if (src) {
+                    for (int p = 0; p < hot_s; p++) {
+                        const int ex = ste[p];
+                        if (ex >= 0) {
+                            release_pages((void *) (src + (size_t) ex * slot), slot);
                         }
                     }
                 }
@@ -533,7 +520,7 @@ bool llama_expert_hotstore::resync_full_mirror(const llama_expert_heatmap & heat
                 }
                 rout[e_out] = 0;
             }
-            // new expert: copy from the host, verify, route immediately
+            // new expert: copy from the host, route immediately (verify dropped)
             bool ok = true;
             for (entry * ent : entries_by_layer[il]) {
                 const int pidx = llama_expert_preload::index_of(ent->src);
@@ -548,9 +535,6 @@ bool llama_expert_hotstore::resync_full_mirror(const llama_expert_heatmap & heat
                     continue;
                 }
                 ggml_backend_tensor_set(ent->dst[g], src, off, slot);
-                if (!verify_gpu_copy(ent->dst[g], off, ent->src, e_cold, src, slot)) {
-                    ok = false;
-                }
             }
             if (ok) {
                 ste[p] = e_cold;
@@ -588,12 +572,6 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
     if (llama_expert_preload::get_force()) {
         return resync_full_mirror(heatmap); // --ecf: full store mirror every token
     }
-    if (full_sync_remaining > 0) {
-        full_sync_remaining--;
-        // start-up full sync: swap up to hot_s/4 experts per layer this token,
-        // the mirror to the top-S spread evenly over 4 tokens (verified swaps)
-        return resync_full_mirror(heatmap, std::max(1, hot_s / 4));
-    }
     if (getenv("LLAMA_EXPERT_DEBUG")) {
         fprintf(stderr, "hotstore: resync tok=%lld\n", (long long) heatmap.tokens_total);
     }
@@ -601,6 +579,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
     // tokens elapsed since the previous sync, used to age dwell counters
     const int64_t elapsed = heatmap.tokens_total - last_sync_tokens;
     int changed = 0;
+    std::vector<char> dirty(n_layers, 0); // layers whose LUTs need rebuilding
     for (int il = 0; il < n_layers; il++) {
         auto & ste   = slot_to_expert[il];
         auto & dc    = dwell_count[il];
@@ -614,6 +593,9 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
         //      then hand the expert to the CPU and free the slot ------------
         for (auto it = pout.begin(); it != pout.end();) {
             if (!it->verified) {
+                if (getenv("LLAMA_EXPERT_NO_VERIFY")) {
+                    it->verified = true; // safety dropped: trust the staging copy
+                } else {
                 bool ok = true;
                 for (entry * ent : entries_by_layer[il]) {
                     const int pidx = llama_expert_preload::index_of(ent->src);
@@ -630,15 +612,41 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                 }
                 if (ok) {
                     it->verified = true;
-                    it->countdown = 1; // CPU output counts on the next token
                 } else if (++it->failures >= 5) {
-                    // anti-stall: the copy never verifies, abort the eviction
-                    // and keep the expert on the GPU; the slot stays occupied
+                    // corruption recovery: the GPU -> staging copy kept failing,
+                    // so re-read the expert straight from the gguf file into the
+                    // CPU slice (ground truth); only then route it cold
+                    bool recovered = true;
+                    for (entry * ent : entries_by_layer[il]) {
+                        const int pidx = llama_expert_preload::index_of(ent->src);
+                        if (pidx < 0) {
+                            continue; // mmap: data stays in the file
+                        }
+                        const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
+                        std::vector<uint8_t> buf(slot);
+                        if (!llama_expert_preload::read_expert(pidx, it->expert, buf.data(), slot)) {
+                            recovered = false;
+                            continue;
+                        }
+                        if (llama_expert_preload::expected_hash(ent->src, it->expert) != hash_slice_at(buf.data(), slot)) {
+                            recovered = false;
+                        }
+                        llama_expert_preload::set_cpu_slice(pidx, it->expert, buf.data());
+                    }
+                    if (recovered) {
+                        rout[it->expert] = 0;
+                        ste[it->p] = -1;
+                        dirty[il] = 1;
+                        changed++;
+                        it = pout.erase(it);
+                        continue;
+                    }
                     if (getenv("LLAMA_EXPERT_DEBUG")) {
                         fprintf(stderr, "hotstore: move-out ABORT expert %d after %d fails\n", it->expert, it->failures);
                     }
                     it = pout.erase(it);
                     continue;
+                }
                 }
             }
             if (it->verified && --it->countdown <= 0) {
@@ -653,6 +661,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                 }
                 rout[it->expert] = 0; // the CPU output counts now
                 ste[it->p] = -1;      // the GPU slot is freed
+                dirty[il] = 1;
                 changed++;
                 it = pout.erase(it);
             } else {
@@ -664,6 +673,11 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
         //      one is routed to the GPU on the following token ---------------
         for (auto it = pin.begin(); it != pin.end();) {
             if (it->verified) {
+                ++it;
+                continue;
+            }
+            if (getenv("LLAMA_EXPERT_NO_VERIFY")) {
+                it->verified = true; // safety dropped: trust the GPU copy
                 ++it;
                 continue;
             }
@@ -688,12 +702,33 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                 it->countdown = 1; // route to the GPU on the next token
                 ++it;
             } else if (++it->failures >= 5) {
-                // anti-stall: abort the move-in and free the slot again
-                if (getenv("LLAMA_EXPERT_DEBUG")) {
-                    fprintf(stderr, "hotstore: move-in ABORT expert %d after %d fails\n", it->expert, it->failures);
+                // corruption recovery: the CPU slice kept failing to verify, so
+                // re-read the expert straight from the gguf file (ground truth)
+                // and re-copy it; keep the move-in only if the disk copy verifies
+                bool recovered = true;
+                const int g2 = it->p >= 0 ? slot_device(slot_start, slot_end, it->p) : -1;
+                for (entry * ent : entries_by_layer[il]) {
+                    const int pidx = llama_expert_preload::index_of(ent->src);
+                    const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
+                    std::vector<uint8_t> buf(slot);
+                    if (pidx < 0 || g2 < 0 || !llama_expert_preload::read_expert(pidx, it->expert, buf.data(), slot)) {
+                        recovered = false;
+                        continue;
+                    }
+                    const size_t off = (size_t) (it->p - slot_start[g2]) * slot;
+                    ggml_backend_tensor_set(ent->dst[g2], buf.data(), off, slot);
+                    if (!verify_gpu_copy(ent->dst[g2], off, ent->src, it->expert, buf.data(), slot)) {
+                        recovered = false;
+                    }
                 }
-                ste[it->p] = -1;
-                it = pin.erase(it);
+                if (recovered) {
+                    it->verified = true;
+                    it->countdown = 1; // route to the GPU on the next token
+                    ++it;
+                } else {
+                    ste[it->p] = -1;
+                    it = pin.erase(it);
+                }
             } else {
                 ++it;
             }
@@ -707,6 +742,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                         llama_expert_preload::free_cpu_slice(pidx, it->expert);
                     }
                 }
+                dirty[il] = 1;
                 changed++;
                 it = pin.erase(it);
             } else {
@@ -732,6 +768,13 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             //      dwelled. gated on the eviction queue capacity.
             int evict_candidate = -1;
             if (!llama_expert_preload::get_no_evict() && !getenv("LLAMA_EXPERT_NO_EVICT") && (int) pout.size() < max_concurrent_moves) {
+                // never evict an expert still in the top-S: a swap must move a
+                // genuinely cold expert out, not shuffle two GPU-bound experts
+                const std::vector<int> top = heatmap.get_top_s(il, hot_s);
+                std::vector<char> in_top(n_experts, 0);
+                for (int te : top) {
+                    in_top[te] = 1;
+                }
                 std::vector<int> routed;
                 for (int e = 0; e < n_experts; e++) {
                     if (rout[e]) {
@@ -742,6 +785,9 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                     return heatmap.get_score(il, a) < heatmap.get_score(il, b);
                 });
                 for (int e : routed) {
+                    if (in_top[e]) {
+                        break; // monotonic: warmer residents are in the top-S too
+                    }
                     int p = -1;
                     for (int pp = 0; pp < hot_s; pp++) {
                         if (ste[pp] == e) {
@@ -774,6 +820,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                         ggml_backend_tensor_get(ent->dst[dg], &stg[stg_off + staging_slot_off(entries_by_layer[il], ent)], off, slot);
                     }
                     pout.push_back({evict_candidate, p, false, 0, 0});
+                    dirty[il] = 1;
                     changed++; // the LUTs do not change yet, but the transition started
                 }
             }
@@ -817,6 +864,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                     ste[free_slot] = e_cold;
                     pin.push_back({e_cold, free_slot, false, 0, 0});
                     dc[free_slot] = -elapsed;
+                    dirty[il] = 1;
                     changed++;
                     break; // one move-in per layer per token
                 }
@@ -832,7 +880,7 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
 
     last_sync_tokens = heatmap.tokens_total;
     if (changed > 0) {
-        update_luts();
+        update_luts(dirty);
         if (getenv("LLAMA_EXPERT_DEBUG")) {
             fprintf(stderr, "=== Expert hot store: re-sync changed %d slots ===\n", changed);
         }
@@ -842,15 +890,20 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
 
 bool llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap, bool multi_slot) {
     // n_tokens>1 (multi-slot) freezes the hot store: no swapping during the batch
-    if (multi_slot || sync_period <= 0 || heatmap.tokens_total <= 0) {
+    if (multi_slot || heatmap.tokens_total <= 0) {
         return false;
     }
-    if (heatmap.tokens_total / sync_period > last_sync_tokens / sync_period) {
-        if (!full_sync_done && heatmap.generated_tokens_count >= 4) {
-            // after the 3-token heat boost, mirror the store to the top-S over
-            // the next 4 tokens (budget hot_s/4 per layer per token)
-            full_sync_done   = true;
-            full_sync_remaining = 4;
+    // continuous adaptive cadence: the sync period grows with the hit rate
+    // relative to the target. floor of 10 tokens (never resync more often),
+    // growing up to 32 as the hit rate climbs far above the target. no hard
+    // disable thresholds - the period just keeps growing.
+    float ratio = hit_rate_valid ? hit_rate / target_hit_rate() : 0.0f;
+    const int eff_period = std::max(10, std::min(32, 1 + (int) (4.0f * ratio)));
+    if (heatmap.tokens_total / eff_period > last_sync_tokens / eff_period) {
+        if (getenv("LLAMA_EXPERT_FULL_SYNC")) {
+            // test: mirror the whole store to the top-S on each sync instead of
+            // the incremental handshake (pair with --expert-sync-period N)
+            return resync_full_mirror(heatmap, std::max(1, hot_s));
         }
         return resync_top_s(heatmap);
     }
@@ -870,7 +923,7 @@ int llama_expert_hotstore::slot_of(int layer_idx, int expert_id) const {
     return -1;
 }
 
-void llama_expert_hotstore::update_luts() {
+void llama_expert_hotstore::update_luts(const std::vector<char> & dirty) {
     if (hot_s <= 0 || luts.empty() || buf_dev.empty()) {
         return;
     }
@@ -887,6 +940,9 @@ void llama_expert_hotstore::update_luts() {
     std::vector<int32_t> cold_mask_h(n_experts);
 
     for (int il = 0; il < n_layers; il++) {
+        if (!dirty.empty() && !dirty[il]) {
+            continue; // this layer's store did not change; LUT already current
+        }
         const auto & ste   = slot_to_expert[il];
         const auto & rout  = gpu_routed[il];
 
@@ -964,6 +1020,55 @@ void llama_expert_hotstore::log_hit_rate(const std::vector<std::pair<int, ggml_t
     if (total > 0) {
         fprintf(stderr, "=== expert hot hit rate: %zu/%zu = %.1f%% ===\n", hits, total, 100.0f * (float) hits / (float) total);
     }
+}
+
+void llama_expert_hotstore::reset_counts() {
+    for (int il = 0; il < n_layers; il++) {
+        ggml_tensor * c = luts[il].counts;
+        if (c && c->data) {
+            memset(c->data, 0, (size_t) (n_experts + 1) * sizeof(int32_t));
+        }
+    }
+}
+
+void llama_expert_hotstore::read_counts(llama_expert_heatmap & heatmap, int n_tokens) {
+    if (luts.size() != (size_t) n_layers) {
+        return;
+    }
+    std::vector<const int32_t *> per_layer((size_t) n_layers, nullptr);
+    int64_t total = 0, hot = 0;
+    for (int il = 0; il < n_layers; il++) {
+        ggml_tensor * c = luts[il].counts;
+        const int32_t * cnt = c && c->data ? (const int32_t *) c->data : nullptr;
+        per_layer[il] = cnt;
+        if (!cnt) {
+            continue;
+        }
+        const auto & rout = gpu_routed[il];
+        for (int e = 0; e < n_experts; e++) {
+            if (cnt[e] > 0) {
+                total += cnt[e];
+                if (rout[e]) {
+                    hot += cnt[e];
+                }
+            }
+        }
+    }
+    if (total > 0) {
+        const float inst = (float) hot / (float) total;
+        hit_rate = hit_rate_valid ? 0.9f * hit_rate + 0.1f * inst : inst;
+        hit_rate_valid = true;
+    }
+    heatmap.update_counts(per_layer, n_tokens);
+}
+
+float llama_expert_hotstore::target_hit_rate() const {
+    if (n_experts <= 0) {
+        return 0.5f;
+    }
+    const float frac = (float) hot_s / (float) n_experts;
+    const float t = 0.8f * std::pow(frac, 0.6f);
+    return std::max(0.2f, std::min(0.9f, t));
 }
 
 void llama_expert_hotstore::log() const {

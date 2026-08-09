@@ -186,9 +186,24 @@ bool write_entry(size_t idx, const uint8_t * data, size_t nbytes) {
     if (nbytes < (size_t) e.startup * e.plane_bytes) {
         return false;
     }
-    // the startup store copy is deferred to the first token (copy_top_s fills
-    // it from the file, sequentially, each slot hash-verified). here we only
-    // record the ground-truth hashes for the startup experts.
+    // stream the startup slices into the store buffer at load (fast startup,
+    // no token-1 file reads). the store adopts this buffer and re-allocates
+    // its dst tensors at the same gpu_offset; the scratch tensor below dies
+    // with g_ctx at take_buffer(). the cold op's slice callback ignores the
+    // startup experts (they are GPU-counted), so no host copy is needed.
+    if (g_gpu_buf && g_ctx) {
+        ggml_tensor * t = ggml_new_tensor_1d(g_ctx, GGML_TYPE_I8, e.plane_bytes);
+        uint8_t * base = (uint8_t *) ggml_backend_buffer_get_base(g_gpu_buf);
+        for (int ex = 0; ex < e.startup; ex++) {
+            uint8_t * dst = base + e.gpu_offset + (size_t) ex * e.plane_bytes;
+            if (ex == 0) {
+                ggml_backend_tensor_alloc(g_gpu_buf, t, dst);
+            } else {
+                t->data = dst; // manual view into the adopted store buffer
+            }
+            ggml_backend_tensor_set(t, data + (size_t) ex * e.plane_bytes, 0, e.plane_bytes);
+        }
+    }
     const size_t chunk = e.plane_bytes < 1024 ? e.plane_bytes : 1024;
     for (int ex = 0; ex < e.startup; ex++) {
         g_hashes[idx][ex] = fnv1a(data + (size_t) ex * e.plane_bytes, chunk);

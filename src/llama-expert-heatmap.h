@@ -24,6 +24,9 @@ struct llama_expert_heatmap {
 
     void update(int layer_idx, const int32_t * expert_ids, int n_expert_used, int n_tokens, float multiplier = 1.0f);
     void update_from_graph(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel_experts);
+    // cold-op counts path: per-layer tallies of the selected experts (host
+    // memory). advances tokens_total; the first-3-token boost lives in get_score.
+    void update_counts(const std::vector<const int32_t *> & per_layer, int n_tokens);
     void decay_all();
     void log() const;
 

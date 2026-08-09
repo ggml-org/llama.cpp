@@ -2097,6 +2097,25 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(cur, "ffn_moe_weighted", il);
     }
 
+    // expert tiering: fused cold path. when active, build_lora_mm_id returns
+    // hot-only results and the fused op (built after the down matmul so the
+    // CPU cold work overlaps the GPU hot work) covers the cold experts.
+    ggml_tensor * gw = gate_exps ? gate_exps : gate_up_exps;
+    ggml_tensor * uw = up_exps   ? up_exps   : gate_up_exps;
+    constexpr float clamp_eps = 1e-6f;
+    const bool swiglu_clamped = (type_op == LLM_FFN_SILU) && gate_exps && il >= 0 &&
+        hparams.swiglu_clamp_exp[il] > clamp_eps;
+    const bool cold_ok = !weight_before_ffn && gw && uw && down_exps &&
+        !up_exps_b && !gate_exps_b && !down_exps_b && !gate_up_exps_b &&
+        !up_exps_s && !gate_exps_s &&
+        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU) &&
+        arch != LLM_ARCH_STEP35 &&
+        loras->empty() && !swiglu_clamped;
+    const int32_t act = type_op == LLM_FFN_GELU ? 1 : 0;
+    const bool moe_cold = cold_ok &&
+        llama_expert_tier_begin_fused(gw, uw, down_exps, selected_experts);
+    ggml_tensor * x_in = cur;
+
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
@@ -2228,6 +2247,20 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (down_exps_s) {
         cb(experts, "ffn_moe_down_scaled", il);
+    }
+
+    if (moe_cold) {
+        ggml_tensor * cold = llama_expert_tier_end_fused(ctx0, gw, uw, down_exps, x_in, selected_experts, act);
+        if (cold) {
+            if (down_exps_s) {
+                ggml_tensor * s = ggml_reshape_3d(ctx0, down_exps_s, 1, down_exps_s->ne[0], 1);
+                s = ggml_repeat_4d(ctx0, s, 1, down_exps_s->ne[0], cold->ne[2], 1);
+                s = ggml_get_rows(ctx0, s, selected_experts);
+                cold = ggml_mul(ctx0, cold, s);
+            }
+            experts = ggml_add(ctx0, experts, cold);
+            cb(experts, "ffn_moe_down_cold", il);
+        }
     }
 
     if (down_exps_b) {

@@ -33,7 +33,8 @@ void llama_expert_tier_register(ggml_tensor * src,
                                 const std::vector<ggml_tensor *> & dst_hot,
                                 const std::vector<ggml_tensor *> & hot_lut,
                                 const std::vector<ggml_tensor *> & mask_lut,
-                                ggml_tensor * cold_mask);
+                                ggml_tensor * cold_mask,
+                                ggml_tensor * counts);
 
 // drop the entire table (called by hotstore destructor)
 void llama_expert_tier_clear();
@@ -55,3 +56,22 @@ ggml_tensor * llama_expert_tier_build(ggml_context * ctx,
                                       ggml_tensor * cur,
                                       ggml_tensor * ids,
                                       ggml_tensor * w_s);
+
+// fused cold path (GGML_OP_MOE_COLD), one call pair per MoE layer:
+// begin_fused is called before the layer's expert matmuls and makes
+// llama_expert_tier_build return hot-only results; end_fused (after the down
+// matmul) returns the cold contribution tensor to add to the down result, or
+// nullptr when the fused path is not active. gate/up/down must all be
+// registered. act = 0 (silu, separate gate/up) or 1 (gelu, fused gate_up).
+bool llama_expert_tier_begin_fused(ggml_tensor * gate_w,
+                                   ggml_tensor * up_w,
+                                   ggml_tensor * down_w,
+                                   ggml_tensor * ids);
+
+ggml_tensor * llama_expert_tier_end_fused(ggml_context * ctx,
+                                          ggml_tensor * gate_w,
+                                          ggml_tensor * up_w,
+                                          ggml_tensor * down_w,
+                                          ggml_tensor * x,
+                                          ggml_tensor * ids,
+                                          int32_t        act);

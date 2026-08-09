@@ -591,6 +591,7 @@ extern "C" {
         GGML_OP_GLU,
 
         GGML_OP_MUL_MAT_ID_COLD,
+        GGML_OP_MOE_COLD,
 
         GGML_OP_COUNT,
     };
@@ -1463,6 +1464,22 @@ extern "C" {
             struct ggml_tensor  * cold_mask,
             struct ggml_tensor  * counts,
             struct ggml_tensor  * ptrs);
+
+    // fused cold-expert MoE for one layer: down(act(gate(x)) * up(x)) computed
+    // on the CPU for cold experts only (cold_mask[i] == 1); hot slots zeroed.
+    // act is 0 = silu (separate gate/up), 1 = gelu (fused gate_up tensor).
+    // counts (optional) accumulates per-expert routed hits, index [n_expert] = total.
+    // x must be [n_embd, 1, n_tokens]; result is [down->ne[1], ids->ne[0], n_tokens]
+    GGML_API struct ggml_tensor * ggml_moe_cold(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * gate,
+            struct ggml_tensor  * up,
+            struct ggml_tensor  * down,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * cold_mask,
+            struct ggml_tensor  * counts,
+            int32_t               act);
 
     // A: m columns, n rows,
     // B: p columns, n rows,

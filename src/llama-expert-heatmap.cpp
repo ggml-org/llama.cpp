@@ -34,6 +34,39 @@ void llama_expert_heatmap::update(int layer_idx, const int32_t * expert_ids, int
         }
     }
 }
+void llama_expert_heatmap::update_counts(const std::vector<const int32_t *> & per_layer, int n_tokens) {
+    // batched decay: apply decay_rate^2 every two updates instead of
+    // decay_rate every update (identical long-run weighting, half the work)
+    ++update_counter;
+    if (update_counter % 2 == 0) {
+        const float rate = decay_rate * decay_rate;
+        for (int i = 0; i < n_layers * n_experts; i++) {
+            heat[i] *= rate;
+        }
+    }
+
+    if (n_tokens == 1) {
+        generated_tokens_count++;
+    }
+    for (int il = 0; il < n_layers && il < (int) per_layer.size(); il++) {
+        const int32_t * cnt = per_layer[il];
+        if (!cnt) {
+            continue;
+        }
+        float * layer_heat = &heat[il * n_experts];
+        for (int e = 0; e < n_experts; e++) {
+            if (cnt[e] > 0) {
+                layer_heat[e] += (float) cnt[e];
+            }
+        }
+    }
+
+    tokens_total += n_tokens;
+    if (log_period > 0 && tokens_total / log_period > (tokens_total - n_tokens) / log_period) {
+        log();
+    }
+}
+
 void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel_experts) {
     if (moe_sel_experts.empty()) {
         return;

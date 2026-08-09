@@ -26,6 +26,10 @@ void ggml_mmid_cold_set_slice_fn(ggml_mmid_cold_slice_fn fn) {
     g_slice_fn = fn;
 }
 
+const uint8_t * ggml_mmid_cold_get_slice(const struct ggml_tensor * src0, int expert) {
+    return g_slice_fn ? g_slice_fn(src0, expert) : NULL;
+}
+
 void ggml_mmid_cold_set_hash_fn(ggml_mmid_cold_hash_fn fn) {
     g_hash_fn = fn;
 }
