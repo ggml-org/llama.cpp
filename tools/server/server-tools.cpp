@@ -743,6 +743,17 @@ public:
     tools_io_ssh(std::string target, std::string cwd = "")
         : tools_io_isolate(std::move(cwd)), target(std::move(target)) {}
 
+    // the target can come from a client header, and ssh reads options from its argv
+    // a target starting with '-' would become one, e.g. -oProxyCommand=<anything> runs on the host
+    static bool is_valid_target(const std::string & target) {
+        if (target.empty() || target[0] == '-') {
+            return false;
+        }
+        return std::all_of(target.begin(), target.end(), [](unsigned char c) {
+            return std::isalnum(c) || c == '.' || c == '-' || c == '_' || c == '@';
+        });
+    }
+
 protected:
     std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
         // the remote shell re-parses the command line, so `inner` travels as one quoted word
@@ -771,78 +782,64 @@ private:
     }
 };
 
-// the target can come from a client header, and ssh reads options from its argv
-// a target starting with '-' would become one, e.g. -oProxyCommand=<anything> runs on the host
-static bool is_valid_ssh_target(const std::string & target) {
-    if (target.empty() || target[0] == '-') {
-        return false;
-    }
-    return std::all_of(target.begin(), target.end(), [](unsigned char c) {
-        return std::isalnum(c) || c == '.' || c == '-' || c == '_' || c == '@';
-    });
-}
-
-// same risk as the ssh target: an id starting with '-' would become an engine option,
-// e.g. --privileged
-static bool is_valid_container_id(const std::string & id) {
-    if (id.empty() || !std::isalnum((unsigned char) id[0])) {
-        return false;
-    }
-    return std::all_of(id.begin(), id.end(), [](unsigned char c) {
-        return std::isalnum(c) || c == '.' || c == '-' || c == '_';
-    });
-}
-
-// runtime specs used by --tools-runtime and the x-tool-runtime header
-static const std::string SERVER_TOOL_RUNTIME_SSH = "ssh:";
-
-// container engines that share the same run and exec verbs, hence a single implementation
-static const char * SERVER_TOOL_CONTAINER_ENGINES[] = {"docker", "podman"};
-
 // "<engine>:<image>" spawns a container and owns it, "<engine>-container:<id>" attaches to one
 struct container_runtime_spec {
     std::string bin;
     std::string arg; // image name when spawning, container id when attaching
     bool attach = false;
+
+    static bool parse(const std::string & spec, container_runtime_spec & out) {
+        // docker and podman take the same verbs, hence a single implementation
+        static const char * engines[] = {"docker", "podman"};
+        for (const char * bin : engines) {
+            const std::string attach_prefix = std::string(bin) + "-container:";
+            if (spec.rfind(attach_prefix, 0) == 0) {
+                out = {bin, spec.substr(attach_prefix.size()), true};
+                return true;
+            }
+            const std::string spawn_prefix = std::string(bin) + ":";
+            if (spec.rfind(spawn_prefix, 0) == 0) {
+                out = {bin, spec.substr(spawn_prefix.size()), false};
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // same risk as the ssh target: an id starting with '-' would become an engine option,
+    // e.g. --privileged
+    static bool is_valid_id(const std::string & id) {
+        if (id.empty() || !std::isalnum((unsigned char) id[0])) {
+            return false;
+        }
+        return std::all_of(id.begin(), id.end(), [](unsigned char c) {
+            return std::isalnum(c) || c == '.' || c == '-' || c == '_';
+        });
+    }
 };
 
-static bool parse_container_runtime(const std::string & spec, container_runtime_spec & out) {
-    for (const char * bin : SERVER_TOOL_CONTAINER_ENGINES) {
-        const std::string attach_prefix = std::string(bin) + "-container:";
-        if (spec.rfind(attach_prefix, 0) == 0) {
-            out = {bin, spec.substr(attach_prefix.size()), true};
-            return true;
-        }
-        const std::string spawn_prefix = std::string(bin) + ":";
-        if (spec.rfind(spawn_prefix, 0) == 0) {
-            out = {bin, spec.substr(spawn_prefix.size()), false};
-            return true;
-        }
-    }
-    return false;
-}
-
-// an empty runtime runs the tools on the host
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
     std::string cwd     = json_value(params, "cwd", std::string());
     std::string runtime = json_value(params, "runtime", std::string());
     if (runtime.empty()) {
+        // an empty runtime runs the tools on the host
         return std::make_unique<tools_io_basic>(cwd);
     }
     container_runtime_spec container;
-    if (parse_container_runtime(runtime, container)) {
+    if (container_runtime_spec::parse(runtime, container)) {
         // spawning belongs to the runtime that owns the container, a tool call only attaches
         if (!container.attach) {
             throw std::runtime_error("tool runtime must name a running container: " + runtime);
         }
-        if (!is_valid_container_id(container.arg)) {
+        if (!container_runtime_spec::is_valid_id(container.arg)) {
             throw std::runtime_error("invalid container id: " + container.arg);
         }
         return std::make_unique<tools_io_container>(container.bin, container.arg, cwd);
     }
-    if (runtime.rfind(SERVER_TOOL_RUNTIME_SSH, 0) == 0) {
-        std::string target = runtime.substr(SERVER_TOOL_RUNTIME_SSH.size());
-        if (!is_valid_ssh_target(target)) {
+    const std::string ssh_prefix = "ssh:";
+    if (runtime.rfind(ssh_prefix, 0) == 0) {
+        std::string target = runtime.substr(ssh_prefix.size());
+        if (!tools_io_ssh::is_valid_target(target)) {
             throw std::runtime_error("invalid ssh target: " + target);
         }
         return std::make_unique<tools_io_ssh>(target, cwd);
@@ -1901,7 +1898,7 @@ struct server_tools_container_runtime : server_tools_runtime {
 
     explicit server_tools_container_runtime(const std::string & spec) {
         container_runtime_spec parsed;
-        if (!parse_container_runtime(spec, parsed)) {
+        if (!container_runtime_spec::parse(spec, parsed)) {
             throw std::runtime_error("unknown --tools-runtime option: " + spec);
         }
 
@@ -2022,7 +2019,7 @@ server_tools::~server_tools() = default;
 // anything else names an existing target, so only its spec is validated here at startup
 static std::unique_ptr<server_tools_runtime> make_tools_runtime(const std::string & spec) {
     container_runtime_spec parsed;
-    if (parse_container_runtime(spec, parsed) && !parsed.attach) {
+    if (container_runtime_spec::parse(spec, parsed) && !parsed.attach) {
         return std::make_unique<server_tools_container_runtime>(spec);
     }
     make_tools_io({{"runtime", spec}}); // nothing to own, just reject a bad spec now
