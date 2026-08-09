@@ -1261,8 +1261,17 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                         break;
                     }
                 }
+            } else {
+                LOG_WRN("%s: --expert-hot-s -1 autofit found no free VRAM for expert slots; expert cache is OFF\n",
+                    __func__);
             }
         }
+    } else if (params.expert_hot_s == -1) {
+        // autofit only runs inside --fit; without it -1 is meaningless
+        params.expert_hot_s = 0;
+        cparams.expert_hot_s = params.expert_hot_s;
+        LOG_WRN("%s: --expert-hot-s -1 requires --fit (disabled by -fit off or explicit -ngl/-ncmoe); expert cache is OFF\n",
+            __func__);
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
