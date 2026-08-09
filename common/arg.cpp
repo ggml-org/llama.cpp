@@ -3314,7 +3314,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "available options:\n"
         "  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit\n"
         "  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit\n"
-        "  'ssh:<target>': run tools on a remote host over SSH, key-based auth and a trusted host key are required\n",
+        "  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required\n",
         [](common_params & params, const std::string & value) {
             params.server_tools_runtime = value;
         }
