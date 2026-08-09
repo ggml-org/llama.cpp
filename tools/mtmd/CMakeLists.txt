@@ -40,6 +40,7 @@ add_library(mtmd
             models/internvl.cpp
             models/kimivl.cpp
             models/kimik25.cpp
+            models/locateanything.cpp
             models/nemotron-v2-vl.cpp
             models/llama4.cpp
             models/llava.cpp
@@ -47,6 +48,7 @@ add_library(mtmd
             models/paddleocr.cpp
             models/pixtral.cpp
             models/qwen2vl.cpp
+            models/magevl.cpp
             models/minimax-m3.cpp
             models/qwen3vl.cpp
             models/mimovl.cpp

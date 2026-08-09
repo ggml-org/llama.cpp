@@ -35,6 +35,11 @@ struct clip_graph_qwen2vl : clip_graph {
     ggml_tensor * build_inp_with_temporal_merge();
 };
 
+struct clip_graph_magevl : clip_graph {
+    clip_graph_magevl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_qwen3vl : clip_graph_qwen2vl {
     clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen2vl(ctx, img) {}
     ggml_cgraph * build() override;
@@ -212,6 +217,13 @@ struct clip_graph_qwen3a : clip_graph {
 
 struct clip_graph_kimik25 : clip_graph {
     clip_graph_kimik25(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode);
+};
+
+struct clip_graph_locateanything : clip_graph {
+    clip_graph_locateanything(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 
     ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode);

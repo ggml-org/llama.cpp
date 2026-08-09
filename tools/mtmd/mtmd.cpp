@@ -34,6 +34,7 @@ struct mtmd_bitmap {
     uint32_t ny = 0;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
+    int temporal_idx = 0; // frame index within a video segment (used by magevl vision RoPE)
 
     // lazy-loaded bitmap
     mtmd_bitmap_lazy_callback lazy_callback = nullptr;
@@ -456,6 +457,7 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
+            case PROJECTOR_TYPE_MAGEVL:
             case PROJECTOR_TYPE_MIMOVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
@@ -573,6 +575,13 @@ struct mtmd_context {
                         img_beg = "<|media_begin|>";
                         img_end = "<|media_end|>";
                     }
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_LOCATEANYTHING:
+                {
+                    // <img> ... (image embeddings) ... </img>  per processor_config.json
+                    img_beg = "<img>";
+                    img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_LIGHTONOCR:
@@ -1094,6 +1103,7 @@ struct mtmd_tokenizer {
 
                 // move entries and grid dimensions to the "global" preproc_out
                 for (auto & entry : tmp_preproc_out.entries) {
+                    entry.temporal_idx = bmp->temporal_idx; // for magevl vision RoPE t-axis
                     preproc_out.entries.emplace_back(std::move(entry));
                 }
 
@@ -1768,6 +1778,14 @@ void mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id) {
     } else {
         bitmap->id.clear();
     }
+}
+
+void mtmd_bitmap_set_temporal_idx(mtmd_bitmap * bitmap, int temporal_idx) {
+    bitmap->temporal_idx = temporal_idx;
+}
+
+int mtmd_bitmap_get_temporal_idx(const mtmd_bitmap * bitmap) {
+    return bitmap->temporal_idx;
 }
 
 mtmd_bitmap * mtmd_bitmap_init_lazy(mtmd_context * ctx,

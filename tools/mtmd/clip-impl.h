@@ -366,6 +366,7 @@ enum projector_type {
     PROJECTOR_TYPE_YOUTUVL,
     PROJECTOR_TYPE_YASA2,
     PROJECTOR_TYPE_KIMIK25,
+    PROJECTOR_TYPE_LOCATEANYTHING,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANVL,
     PROJECTOR_TYPE_EXAONE4_5,
@@ -374,6 +375,7 @@ enum projector_type {
     PROJECTOR_TYPE_MIMOVL,
     PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
+    PROJECTOR_TYPE_MAGEVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -421,6 +423,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
     { PROJECTOR_TYPE_YASA2,             "yasa2"},
     { PROJECTOR_TYPE_KIMIK25,           "kimik25"},
+    { PROJECTOR_TYPE_LOCATEANYTHING,    "locateanything"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL,    "nemotron_v2_vl"},
     { PROJECTOR_TYPE_EXAONE4_5,         "exaone4_5"},
     { PROJECTOR_TYPE_HUNYUANVL,         "hunyuanvl"},
@@ -429,6 +432,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
+    { PROJECTOR_TYPE_MAGEVL,            "magevl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -517,6 +521,9 @@ struct clip_image_f32 {
     bool add_viewsep = false;
     // whether a learned newline (or EOI) token should be appended after the image (eg Granite4 Vision)
     bool add_newline = false;
+    // temporal (frame) index within the current video segment; used by magevl
+    // to build the t-axis of its 3D RoPE. 0 for plain images.
+    int temporal_idx = 0;
 
     clip_image_size get_size() const {
         return { nx_, ny_ };

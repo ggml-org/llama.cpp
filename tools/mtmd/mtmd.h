@@ -175,6 +175,12 @@ MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
 MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 
+// temporal (frame) index within a video segment; only used by models whose
+// vision tower has a time axis in its positional encoding (e.g. magevl).
+// default is 0; has no effect for other models.
+MTMD_API void mtmd_bitmap_set_temporal_idx(mtmd_bitmap * bitmap, int temporal_idx);
+MTMD_API int  mtmd_bitmap_get_temporal_idx(const mtmd_bitmap * bitmap);
+
 // mtmd_bitmap lazy
 //
 // this is a special bitmap that:

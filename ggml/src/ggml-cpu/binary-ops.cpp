@@ -131,6 +131,18 @@ static void binary_op(const ggml_compute_params * params, ggml_tensor * dst) {
         apply_binary_op<op, ggml_fp16_t, float, ggml_fp16_t>(params, dst);
     } else if (src0->type == GGML_TYPE_F16  && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) {
         apply_binary_op<op, ggml_fp16_t, float, float>(params, dst);
+    // [MAGE_VL_PATCH] 反向 upcast: src0 为 f32/bf16 主操作数, src1 为 f16/bf16, 结果保持 src0 精度。
+    // 模板 vec_binary_op_* 已通过 type_conversion_table 泛型处理任意类型, 这里只是补上分发器漏列的组合。
+    // 典型场景: f32 激活 + f16/f32 偏置/权重 -> f32 结果; 原 CUDA binbcast 内核不支持该组合
+    // (会把 src1 当 float 读导致 nb10 断言), 故由 device_supports_op 拒绝并卸载到 CPU 参考实现。
+    } else if (src0->type == GGML_TYPE_F32  && src1->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F32) {
+        apply_binary_op<op, float, ggml_fp16_t, float>(params, dst);
+    } else if (src0->type == GGML_TYPE_F32  && src1->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F16) {
+        apply_binary_op<op, float, ggml_fp16_t, ggml_fp16_t>(params, dst);
+    } else if (src0->type == GGML_TYPE_F32  && src1->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
+        apply_binary_op<op, float, ggml_bf16_t, float>(params, dst);
+    } else if (src0->type == GGML_TYPE_F32  && src1->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
+        apply_binary_op<op, float, ggml_bf16_t, ggml_bf16_t>(params, dst);
     } else {
         GGML_ABORT("%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
             ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));

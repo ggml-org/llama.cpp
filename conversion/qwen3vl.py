@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import torch
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -221,6 +222,85 @@ class Qwen3ASRMmprojModel(Qwen3OmniMmprojModel):
     has_audio_encoder = True
     has_vision_encoder = False
 
+    # Qwen3-ASR (standalone, e.g. Qwen3-ASR-0.6B) stores the audio config as a
+    # TOP-LEVEL field (`audio_config`), unlike Qwen3-Omni which nests it under
+    # `thinker_config`. The inherited get_audio_config() reads thinker_config and
+    # would raise KeyError, so we override it here.
+    def get_audio_config(self) -> dict[str, Any] | None:
+        if self.has_audio_encoder:
+            return self.global_config.get("audio_config")
+        else:
+            return None
+
+    # Standalone Qwen3-ASR weights live under `model.audio_tower.*` (flat layout),
+    # not `thinker.audio_tower.*`. Strip the `model.` prefix so the tensor map
+    # (which keys on `audio_tower.*`) can match them. The MLP projector lives
+    # under `model.multi_modal_projector.*` and must be kept as well.
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.startswith("lm_head."):
+            return None
+        if name.startswith("mtp."):
+            return None
+
+        if name.startswith("model.visual."):
+            name = name.replace("model.visual.", "visual.", 1)
+
+        if name.startswith("model.audio_tower."):
+            name = name.replace("model.audio_tower.", "audio_tower.", 1)
+        elif name.startswith("thinker.audio_tower."):
+            name = name.replace("thinker.audio_tower.", "audio_tower.", 1)
+
+        if name.startswith("model.multi_modal_projector."):
+            name = name.replace("model.multi_modal_projector.", "multi_modal_projector.", 1)
+
+        if "visual." not in name and "audio_tower." not in name and "multi_modal_projector." not in name:
+            return None
+
+        return MmprojModel.filter_tensors((name, gen))
+
+    # The C++ side (qwen3a.cpp) loads a learnable/additive positional embedding
+    # named `a.position_embd.weight` and adds it per-chunk to the CNN output.
+    # The standalone HF model instead uses a *dynamic* SinusoidsPositionEmbedding
+    # (no stored weight), computed as:
+    #     pos[t, c] = sin/cos(t * exp(-log(10000)/(C/2-1) * (c//2)))
+    # with length = max_position_embeddings (=13) and channels = d_model (=896).
+    # We generate it during conversion and write it under the exact GGUF name the
+    # C++ loader expects, so no stored weight is required from the checkpoint.
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        assert self.hparams_audio is not None
+        max_timescale = 10000
+        length = self.hparams_audio.get("max_position_embeddings", 13)
+        channels = self.hparams_audio["d_model"]
+        import numpy as np  # local import; np already available via qwenvl
+        log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+        inv_timescales = np.exp(-log_timescale_increment * np.arange(channels // 2).astype(np.float32))
+        scaled_time = np.arange(length).astype(np.float32)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+        pos_embd = np.concatenate([np.sin(scaled_time), np.cos(scaled_time)], axis=1).astype(np.float32)
+        # GGUF name must match TN_POS_EMBD ("%s.position_embd.weight") with prefix "a"
+        yield ("a.position_embd.weight", torch.from_numpy(pos_embd))
+
+    # Ensure the generated `a.position_embd.weight` is written verbatim and is NOT
+    # passed through map_tensor_name (there is no A_ENC_POS_EMBD mapping entry),
+    # which would otherwise raise "Can not map tensor". Also remap the MLP
+    # projector (`multi_modal_projector.linear_{bid}`) to the GGUF name the C++
+    # loader expects (`mm.a.mlp.{bid}.weight/bias`); there is no gguf mapping
+    # entry for that name, so we yield it directly as well.
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "a.position_embd.weight":
+            yield (name, data_torch)
+            return
+        if name.startswith("multi_modal_projector.linear_"):
+            # linear_1 -> mm.a.mlp.1, linear_2 -> mm.a.mlp.2
+            idx = name.split(".")[1].split("_")[1]
+            suffix = name.split(".")[-1]  # weight / bias
+            new_name = f"mm.a.mlp.{idx}.{suffix}"
+            yield (new_name, data_torch)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
 
 @ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration", "GlmOcrForConditionalGeneration")
 class Glm4VVisionModel(Qwen3VLVisionModel):
@@ -338,12 +418,15 @@ class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
 
 
 @ModelBase.register("Qwen3ASRForConditionalGeneration")
-class Qwen3ASRTextModel(Qwen3VLTextModel):
-    model_arch = gguf.MODEL_ARCH.QWEN3VL
+# Qwen3-ASR's text decoder is a *standard Qwen3* causal LM (text_config.model_type
+# == "qwen3"), NOT Qwen3-VL. Using the QWEN3VL arch makes the loader require
+# qwen3vl.rope.dimension_sections (mrope), which the checkpoint does not provide.
+# Inherit from Qwen3Model (plain Qwen3) instead.
+class Qwen3ASRTextModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_num_deepstack_layers(0)
 
     def set_vocab(self):
         super().set_vocab()
