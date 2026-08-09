@@ -1548,6 +1548,7 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 //
 // web_search: search the web using DuckDuckGo via HTML interface
 //
+
 struct server_tool_web_search : server_tool {
     server_tool_web_search() {
         name = "web_search";
@@ -1560,15 +1561,14 @@ struct server_tool_web_search : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Search the web using search engine. Returns a list of results containing titles, URLs, and snippets."},
+                {"description", "Search the web using search engine or URL. Returns request contents."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
-                        {"query", {{"type", "string"}, {"description", "The search query"}}},
-                        {"engine", {{"type", "string"}, {"description", "The search engine (default: https://ddg.gg/html/?q=)"}}},
+                        {"query", {{"type", "string"}, {"description", "The search query or a full URL."}}},
+                        {"engine", {{"type", "string"}, {"description", "The search engine (default: https://ddg.gg/html/?q=, ignored when given a URL query)"}}},
                         {"timeout",         {{"type", "integer"}, {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}}},
                         {"max_output_size", {{"type", "integer"}, {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}}},
-                        {"max_results",     {{"type", "integer"}, {"description", "Maximum number of results to return (default: 10)"}}},
                     }},
                     {"required", json::array({"query"})},
                 }},
@@ -1581,14 +1581,21 @@ struct server_tool_web_search : server_tool {
         std::string engine= json_value(params, "engine", std::string("https://html.duckduckgo.com/html/?q="));
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
-        int    max_results    = json_value(params, "max_results", 10);
 
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
-        auto io = make_tools_io(params);
+        
+        // Check if the query is a URL (starts with http://, https://, or //)
+        bool is_url = (query.rfind("http://", 0) == 0) ||
+                      (query.rfind("https://", 0) == 0) ||
+                      (query.rfind("//", 0) == 0);
 
         // Encode query to prevent URL breakage
         std::string encoded_query = url_encode(query);
+        if (is_url) {
+          engine       = "";
+          encoded_query= query;
+        }
 
         // Download HTML using wget2 (outputting directly to stdout)
         // We use -qO- to avoid creating temporary files and to pipe directly to the C++ string
@@ -1596,6 +1603,7 @@ struct server_tool_web_search : server_tool {
           "--header=User-Agent: Mozilla/5.0 (compatible; WebSearch/1.0)",
           "--max-redirect=5",
           engine + encoded_query};
+        auto io  = make_tools_io(params);
         auto res = io->run(args, max_output, timeout);
         
         if (res.exit_code != 0) {
