@@ -808,8 +808,11 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
                     worst_slot  = p;
                 }
             }
-            if (worst_slot < 0 || dc[worst_slot] < dwell) {
-                continue;
+            if (worst_slot < 0 || worst_bound <= 0.0f) {
+                continue; // dead resident (no heat yet); eviction will clear it
+            }
+            if (dc[worst_slot] < dwell + 2) {
+                continue; // not aged enough since its last change
             }
             int   best_slot  = -1;
             float best_score = -INFINITY;
@@ -840,10 +843,15 @@ bool llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
             }
             ste[worst_slot] = e_promote;
             ste[best_slot]  = e_demote;
-            dc[worst_slot] = -elapsed;
-            dc[best_slot]  = -elapsed;
+            // dwell is in resyncs; the counter ages by elapsed tokens per resync
+            dc[worst_slot] = -elapsed * (dwell + 2);
+            dc[best_slot]  = -elapsed * (dwell + 2);
             dirty[il] = 1;
             changed++;
+            if (getenv("LLAMA_EXPERT_DEBUG")) {
+                fprintf(stderr, "hotstore: d2d swap promote=%d demote=%d (dev %d -> %d) promote_s=%.2f worst=%.2f hyst=%.2f\n",
+                    e_promote, e_demote, g+1, g, best_score, worst_bound, hyst * worst_bound);
+            }
             break; // one D2D swap per layer per tick
         }
 
