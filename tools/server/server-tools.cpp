@@ -26,6 +26,11 @@
 #       define NOMINMAX
 #   endif
 #   include <windows.h>
+#   include <fcntl.h>
+#   include <io.h>
+#else
+#   include <cerrno>
+#   include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -219,38 +224,61 @@ static tools_io::exec_result run_subprocess(
     });
 
     // feed the child before reading it back: it drains stdin as it goes, and closing stdin is
-    // what tells it the input is over. the watchdog above bounds a transport that stalls here
-    if (stdin_data != nullptr) {
-        if (FILE * in = proc.stdin_file()) {
+    // what tells it the input is over. the watchdog above bounds a transport that stalls here.
+    // stdin is always closed: a transport client blocks as long as its stdin pipe stays open,
+    // and the child reads a deterministic EOF
+    if (FILE * in = proc.stdin_file()) {
+        if (stdin_data != nullptr && !stdin_data->empty()) {
+#if defined(_WIN32)
+            // pipe fds default to CRT text mode: binary keeps the bytes untranslated
+            _setmode(_fileno(in), _O_BINARY);
+#endif
             // a short write is not an error in itself, the exit code below is what decides
-            if (!stdin_data->empty()) {
-                fwrite(stdin_data->data(), 1, stdin_data->size(), in);
-            }
-            fflush(in);
+            fwrite(stdin_data->data(), 1, stdin_data->size(), in);
         }
-        proc.close_stdin();
+        fflush(in);
     }
+    proc.close_stdin();
 
     FILE * f = proc.stdout_file();
     std::string output;
     bool truncated = false;
     if (f) {
+#if defined(_WIN32)
+        // pipe fds default to CRT text mode: binary keeps the bytes untranslated
+        _setmode(_fileno(f), _O_BINARY);
+#endif
+        // read the pipe directly: a chunk arrives as soon as data is available and can hold
+        // any byte, including NUL. past the size cap the pipe is still drained, so the child
+        // never blocks on a full pipe
         char buf[4096];
-        while (fgets(buf, sizeof(buf), f) != nullptr) {
-            if (!truncated) {
-                size_t len = strlen(buf);
-                if (output.size() + len <= max_output) {
-                    output.append(buf, len);
-                    if (on_chunk && !on_chunk(console_output_to_utf8(std::string(buf, len)))) {
-                        proc.terminate();
-                        break;
-                    }
-                } else {
-                    size_t remaining = max_output - output.size();
-                    output.append(buf, remaining);
-                    if (on_chunk && remaining > 0) on_chunk(console_output_to_utf8(std::string(buf, remaining)));
-                    truncated = true;
+        for (;;) {
+#if defined(_WIN32)
+            const int n = _read(_fileno(f), buf, (unsigned) sizeof(buf));
+#else
+            ssize_t n = read(fileno(f), buf, sizeof(buf));
+            while (n < 0 && errno == EINTR) {
+                n = read(fileno(f), buf, sizeof(buf));
+            }
+#endif
+            if (n <= 0) {
+                break;
+            }
+            if (truncated) {
+                continue;
+            }
+            const size_t len = (size_t) n;
+            if (output.size() + len <= max_output) {
+                output.append(buf, len);
+                if (on_chunk && !on_chunk(console_output_to_utf8(std::string(buf, len)))) {
+                    proc.terminate();
+                    break;
                 }
+            } else {
+                size_t remaining = max_output - output.size();
+                output.append(buf, remaining);
+                if (on_chunk && remaining > 0) on_chunk(console_output_to_utf8(std::string(buf, remaining)));
+                truncated = true;
             }
         }
     }
@@ -1870,8 +1898,8 @@ private:
     std::string runtime_spec;
 };
 
-// owns the container the tools run in, as configured by --tools-runtime: the spawned mode starts
-// and stops it, the attach mode reuses a running one and never stops it
+// owns the container the tools run in, as configured by --tools-runtime "<engine>:<image>":
+// it is spawned here and stopped when the server exits
 struct server_tools_container_runtime : server_tools_runtime {
     server_tools_container_runtime(const server_tools_container_runtime &) = delete;
 
@@ -1881,67 +1909,37 @@ struct server_tools_container_runtime : server_tools_runtime {
             throw std::runtime_error("unknown --tools-runtime option: " + spec);
         }
 
-        bin     = parsed.bin;
-        spawned = !parsed.attach;
-
-        if (spawned) {
-            image = parsed.arg;
-            if (image.empty()) {
-                throw std::runtime_error("--tools-runtime " + bin + ":<image> requires an image name");
-            }
-            spawn();
-        } else {
-            container_id = parsed.arg;
-            if (container_id.empty()) {
-                throw std::runtime_error("--tools-runtime " + bin + "-container:<id> requires a container id");
-            }
-            if (!is_valid_container_id(container_id)) {
-                throw std::runtime_error("invalid container id: " + container_id);
-            }
+        bin   = parsed.bin;
+        image = parsed.arg;
+        if (image.empty()) {
+            throw std::runtime_error("--tools-runtime " + bin + ":<image> requires an image name");
         }
+        spawn();
     }
 
     ~server_tools_container_runtime() override {
-        if (spawned && !container_id.empty()) {
-            // closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
-            proc.close_stdin();
-            proc.join();
-        }
+        // closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
+        proc.close_stdin();
+        proc.join();
     }
 
-    // re-checks the target and respawns a spawned container that died on its own, so the returned
-    // spec always names a container that was running a moment ago
+    // respawns a container that died on its own, so the returned spec always names a container
+    // that was running a moment ago
     std::string spec() override {
-        return bin + "-container:" + live_container_id();
-    }
-
-private:
-    std::string bin;
-    bool spawned = false;
-    std::string image; // spawned mode only
-    std::string container_id;
-    common_subproc proc; // spawned mode only: `<engine> run` client that keeps the container alive
-    std::mutex mutex;
-
-    // container id to use for the next tool call; respawns a spawned container that died on its own,
-    // or throws if an externally-managed one is no longer reachable
-    std::string live_container_id() {
         std::lock_guard<std::mutex> lock(mutex);
-        if (!spawned) {
-            if (!is_running(container_id)) {
-                throw std::runtime_error(string_format(
-                    "%s container \"%s\" is no longer running, restart it to keep using tools",
-                    bin.c_str(), container_id.c_str()));
-            }
-            return container_id;
-        }
-
         if (!proc.alive()) {
             SRV_WRN("%s tools runtime container \"%s\" died, respawning\n", bin.c_str(), container_id.c_str());
             spawn();
         }
-        return container_id;
+        return bin + "-container:" + container_id;
     }
+
+private:
+    std::string bin;
+    std::string image;
+    std::string container_id;
+    common_subproc proc; // `<engine> run` client that keeps the container alive
+    std::mutex mutex;
 
     // spawns "<engine> run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
     // so the container stays alive until we close it (see destructor) or it is killed from the outside
@@ -1954,7 +1952,7 @@ private:
             "llama-tools-runtime-cid-%zu.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
         fs::remove(cidfile, ec);
 
-        std::vector<std::string> args = {bin, "run", "--rm", "-i", "--cidfile", cidfile.string(), image, "sh"};
+        std::vector<std::string> args = {bin, "run", "--rm", "-i", "--cidfile", path_to_utf8(cidfile), image, "sh"};
         int options = subprocess_option_no_window
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
@@ -1974,11 +1972,6 @@ private:
             throw std::runtime_error("timed out waiting for " + bin + " container to start (image: " + image + ")");
         }
         container_id = cid;
-    }
-
-    bool is_running(const std::string & id) const {
-        auto res = run_subprocess({bin, "inspect", "-f", "{{.State.Running}}", id}, 16, 5, nullptr, true);
-        return res.exit_code == 0 && !res.timed_out && res.output.rfind("true", 0) == 0;
     }
 };
 
@@ -2030,11 +2023,12 @@ static std::string get_header(const std::map<std::string, std::string> & headers
 server_tools::server_tools() = default;
 server_tools::~server_tools() = default;
 
-// builds the runtime backing --tools-runtime: a container engine owns a lifecycle, anything else is
-// a static target that only needs its spec validated once, here at startup
+// builds the runtime backing --tools-runtime: the "<engine>:<image>" form owns a container
+// lifecycle, anything else names a target that already exists and only needs its spec
+// validated once, here at startup
 static std::unique_ptr<server_tools_runtime> make_tools_runtime(const std::string & spec) {
     container_runtime_spec parsed;
-    if (parse_container_runtime(spec, parsed)) {
+    if (parse_container_runtime(spec, parsed) && !parsed.attach) {
         return std::make_unique<server_tools_container_runtime>(spec);
     }
     make_tools_io({{"runtime", spec}}); // nothing to own, just reject a bad spec now
