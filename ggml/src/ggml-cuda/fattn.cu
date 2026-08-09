@@ -548,7 +548,14 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     bool need_f16_V = false;
 
     switch (kernel) {
-        case BEST_FATTN_KERNEL_TILE:
+        case BEST_FATTN_KERNEL_TILE: {
+            // The tile kernel reads F16 and BF16 K/V natively; the launcher converts
+            // the remaining types to F16. BF16 K/V needs native BF16 support.
+            const bool use_bf16 = K->type == GGML_TYPE_BF16 && V->type == GGML_TYPE_BF16 &&
+                bf16_mma_hardware_available(ggml_cuda_info().devices[device].cc);
+            need_f16_K = use_bf16 ? false : K->type != GGML_TYPE_F16;
+            need_f16_V = use_bf16 ? false : V->type != GGML_TYPE_F16;
+        } break;
         case BEST_FATTN_KERNEL_MMA_F16:
             need_f16_K = true;
             need_f16_V = true;
