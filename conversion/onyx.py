@@ -77,55 +77,6 @@ class OnyxModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("OnyxAssistantModel")
-class OnyxAssistantModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.DFLASH
-
-    def set_vocab(self):
-        if self.target_model_dir is None:
-            raise ValueError(
-                "OnyxAssistant (DFlash drafter) requires --target-model-dir pointing to the "
-                "target Onyx HF directory"
-            )
-
-        original_dir = self.dir_model
-        self.dir_model = self.target_model_dir
-
-        from . import get_model_class
-        with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
-            target_arch = json.load(f)["architectures"][0]
-        target_cls = get_model_class(target_arch)
-        if target_cls is not type(self):
-            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
-        else:
-            super().set_vocab()
-
-        self.dir_model = original_dir
-
-        mask_token_id = self.hparams.get("mask_token_id")
-        if mask_token_id is not None:
-            self.gguf_writer.add_mask_token_id(int(mask_token_id))
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        h = self.hparams
-
-        self.gguf_writer.add_block_size(int(h["block_size"]))
-
-        # dflash.target_layers[k] refers to the inputs going into the ith layer, which come from the (i-1)th layer's output.
-        # The transformers configuration refers to the outputs being recorded.
-        self.gguf_writer.add_target_layers([int(x) + 1 for x in h["target_layer_ids"]])
-
-        if h.get("sliding_window") and h.get("layer_types"):
-            self.gguf_writer.add_sliding_window(int(h["sliding_window"]))
-            self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in h["layer_types"]])
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # DFlash defaults to NEOX (rotate_half) rope, matching transformers HF layout for Q/K, QK-norms
-        # no permutation needed.
-        yield (self.map_tensor_name(name), data_torch)
-
-
 @ModelBase.register("OnyxForConditionalGeneration")
 class OnyxVisionModel(MmprojModel):
     def get_vision_config(self) -> dict[str, Any] | None:
@@ -174,4 +125,53 @@ class OnyxVisionModel(MmprojModel):
             tensor_key, idx = self._MM_MLP_MAP[stem]
             yield (self.format_tensor_name(tensor_key, bid=idx, suffix="." + suffix), data_torch)
             return
+        yield (self.map_tensor_name(name), data_torch)
+
+
+@ModelBase.register("OnyxAssistantModel")
+class OnyxAssistantModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def set_vocab(self):
+        if self.target_model_dir is None:
+            raise ValueError(
+                "OnyxAssistant (DFlash drafter) requires --target-model-dir pointing to the "
+                "target Onyx HF directory"
+            )
+
+        original_dir = self.dir_model
+        self.dir_model = self.target_model_dir
+
+        from . import get_model_class
+        with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
+            target_arch = json.load(f)["architectures"][0]
+        target_cls = get_model_class(target_arch)
+        if target_cls is not type(self):
+            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+        else:
+            super().set_vocab()
+
+        self.dir_model = original_dir
+
+        mask_token_id = self.hparams.get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(int(mask_token_id))
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        h = self.hparams
+
+        self.gguf_writer.add_block_size(int(h["block_size"]))
+
+        # dflash.target_layers[k] refers to the inputs going into the ith layer, which come from the (i-1)th layer's output.
+        # The transformers configuration refers to the outputs being recorded.
+        self.gguf_writer.add_target_layers([int(x) + 1 for x in h["target_layer_ids"]])
+
+        if h.get("sliding_window") and h.get("layer_types"):
+            self.gguf_writer.add_sliding_window(int(h["sliding_window"]))
+            self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in h["layer_types"]])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # DFlash defaults to NEOX (rotate_half) rope, matching transformers HF layout for Q/K, QK-norms
+        # no permutation needed.
         yield (self.map_tensor_name(name), data_torch)
