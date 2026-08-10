@@ -1,10 +1,10 @@
 import { CLI_FLAGS } from '$lib/constants';
-import { SvelteSet } from 'svelte/reactivity';
 import { ToolSource } from '$lib/enums';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type { ToolGroup } from '$lib/types';
+import { SvelteSet } from 'svelte/reactivity';
 
 export interface UseToolsPanelReturn {
 	readonly expandedGroups: SvelteSet<string>;
@@ -31,7 +31,6 @@ export interface UseToolsPanelReturn {
  */
 export function useToolsPanel(): UseToolsPanelReturn {
 	const expandedGroups = new SvelteSet<string>();
-
 	const groups = $derived(toolsStore.toolGroups);
 	const activeGroups = $derived(
 		groups.filter(
@@ -44,13 +43,17 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	const totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
 	const noToolsInfoMessage = $derived.by(() => {
 		if (toolsStore.loading) return null;
+
 		if (toolsStore.toolGroups.length > 0) return null;
+
 		// Tools endpoint is unreachable (404) — server started without --tools
 		if (toolsStore.isToolsEndpointUnreachable) {
 			return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 		}
+
 		// Other errors — return null so UI shows "Failed to load tools"
 		if (toolsStore.error) return null;
+
 		return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 	});
 
@@ -87,7 +90,9 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	function toggleGroupByKey(key: string): void {
 		// Find current group by key to get up-to-date tool references
 		const group = activeGroups.find((g) => g.key === key);
+
 		if (!group) return;
+
 		toolsStore.toggleGroup(group);
 	}
 
@@ -95,29 +100,30 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
 			toolsStore.fetchBuiltinTools();
 		}
+
 		mcpStore.runHealthChecksForServers(mcpStore.getServers().filter((s) => s.enabled));
 	}
 
 	return {
-		expandedGroups,
-		get groups() {
-			return groups;
-		},
 		get activeGroups() {
 			return activeGroups;
 		},
-		get totalToolCount() {
-			return totalToolCount;
+		expandedGroups,
+		getEnabledToolCount,
+		getFavicon,
+		get groups() {
+			return groups;
 		},
+		handleOpen,
+		isGroupChecked,
+		isGroupDisabled,
 		get noToolsInfoMessage() {
 			return noToolsInfoMessage;
 		},
-		isGroupChecked,
-		getEnabledToolCount,
-		getFavicon,
-		isGroupDisabled,
-		toggleGroupExpanded,
 		toggleGroupByKey,
-		handleOpen
+		toggleGroupExpanded,
+		get totalToolCount() {
+			return totalToolCount;
+		}
 	};
 }

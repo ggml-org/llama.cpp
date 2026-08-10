@@ -93,13 +93,13 @@ jobs:
           - build: 'arm64'
             arch: 'arm64'
             os: macos-26
-            defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON"
+            defines: "-DGGML_METAL_EMBED_LIBRARY=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3"
           # TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23780)
           #       in order to enable it again, we have to provision dedicated runners  to run it
           #- build: 'arm64-kleidiai'
           #  arch: 'arm64'
           #  os: macos-14
-          #  defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_CPU_KLEIDIAI=ON"
+          #  defines: "-DGGML_METAL_EMBED_LIBRARY=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 -DGGML_CPU_KLEIDIAI=ON"
           - build: 'x64'
             arch: 'x64'
             os: macos-15-intel
@@ -759,7 +759,7 @@ jobs:
 
     env:
       OPENBLAS_VERSION: 0.3.23
-      VULKAN_VERSION: 1.4.313.2
+      VULKAN_VERSION: 1.4.357.0
 
     strategy:
       matrix:
@@ -1229,7 +1229,6 @@ jobs:
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
@@ -1353,7 +1352,6 @@ jobs:
             -DGGML_NATIVE=OFF `
             -DGGML_CPU=OFF `
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" `
-            -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} `
             -DLLAMA_BUILD_BORINGSSL=ON
@@ -1402,7 +1400,6 @@ jobs:
         run: |
           sysctl -a
           cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_OPENSSL=OFF \
             -DLLAMA_BUILD_APP=OFF \

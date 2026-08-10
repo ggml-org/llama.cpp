@@ -1,20 +1,20 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { File, FolderOpen, MessageSquare, Plus, Zap } from '@lucide/svelte';
+	import {
+		ChatFormActionAddMcpServersSubmenu,
+		ChatFormActionAddReasoningSubmenu,
+		ChatFormActionAddToolsSubmenu
+	} from '$lib/components/app';
+	import { buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_TOOLTIP_TEXT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
-	import {
-		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu,
-		ChatFormActionAddReasoningSubmenu
-	} from '$lib/components/app';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
 	interface Props {
@@ -36,18 +36,21 @@
 		class: className = '',
 		disabled = false,
 		hasAudioModality = false,
-		hasVideoModality = false,
-		hasVisionModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
+		hasVideoModality = false,
+		hasVisionModality = false,
 		onFileUpload,
-		onSystemPromptClick,
 		onMcpPromptClick,
+		onMcpResourcesClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick
+		onSystemPromptClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
+	// The system message action moves focus to the message editor, so the menu
+	// must not restore focus to the trigger on close
+	let suppressCloseAutoFocus = false;
 
 	function handleMcpSettingsClick() {
 		dropdownOpen = false;
@@ -56,13 +59,13 @@
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
-			hasVisionModality,
 			hasAudioModality,
-			hasVideoModality,
 			hasMcpPromptsSupport,
-			hasMcpResourcesSupport
+			hasMcpResourcesSupport,
+			hasVideoModality,
+			hasVisionModality
 		}),
-		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => ({ onFileUpload, onMcpPromptClick, onMcpResourcesClick, onSystemPromptClick }),
 		() => {
 			dropdownOpen = false;
 		}
@@ -96,7 +99,16 @@
 			</Tooltip.Content>
 		</Tooltip.Root>
 
-		<DropdownMenu.Content align="start" class="w-52">
+		<DropdownMenu.Content
+			align="start"
+			class="w-52"
+			onCloseAutoFocus={(e) => {
+				if (suppressCloseAutoFocus) {
+					suppressCloseAutoFocus = false;
+					e.preventDefault();
+				}
+			}}
+		>
 			<ChatFormActionAddReasoningSubmenu />
 
 			<DropdownMenu.Separator />
@@ -148,7 +160,10 @@
 
 			<DropdownMenu.Item
 				class="flex cursor-pointer items-center gap-2"
-				onclick={onSystemPromptClick}
+				onclick={() => {
+					suppressCloseAutoFocus = true;
+					onSystemPromptClick?.();
+				}}
 			>
 				<MessageSquare class={ICON_CLASS_DEFAULT} />
 

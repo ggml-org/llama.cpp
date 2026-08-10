@@ -1,15 +1,8 @@
 import {
-	AgenticSectionType,
-	AttachmentType,
-	ContinueIntentKind,
-	MessageRole,
-	ToolResultKind
-} from '$lib/enums';
-import {
 	ATTACHMENT_SAVED_REGEX,
 	MARKDOWN_ATX_HEADING_REGEX,
-	MARKDOWN_BOLD_REGEX,
 	MARKDOWN_BLOCKQUOTE_REGEX,
+	MARKDOWN_BOLD_REGEX,
 	MARKDOWN_CODE_FENCE_REGEX,
 	MARKDOWN_LINK_REGEX,
 	MARKDOWN_LIST_BULLET_REGEX,
@@ -21,6 +14,13 @@ import {
 	SEARCH_SUMMARY_TOTAL_REGEX,
 	TOOL_RESULT_JSON_OPEN_REGEX
 } from '$lib/constants';
+import {
+	AgenticSectionType,
+	AttachmentType,
+	ContinueIntentKind,
+	MessageRole,
+	ToolResultKind
+} from '$lib/enums';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
@@ -38,6 +38,9 @@ export interface AgenticSection {
 	toolArgs?: string;
 	toolResult?: string;
 	toolResultExtras?: DatabaseMessageExtra[];
+	/** Working directory the tool call ran with (from the tool result
+	 *  message), shown by the exec_shell_command renderer. */
+	toolCwd?: string;
 	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
 	 *  downstream consumers correlate a section with the agentic loop's
 	 *  currently-executing tool, e.g. to drive live-streaming UI state
@@ -75,9 +78,10 @@ function deriveSingleTurnSections(
 		const hasContentAfterReasoning =
 			!!message.content?.trim() || toolCalls.length > 0 || streamingToolCalls.length > 0;
 		const isPending = isStreaming && !hasContentAfterReasoning;
+
 		sections.push({
-			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
 			content: message.reasoningContent,
+			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
 			wasInterrupted: !isStreaming && !hasContentAfterReasoning
 		});
 	}
@@ -85,42 +89,56 @@ function deriveSingleTurnSections(
 	// 2. Text content
 	if (message.content?.trim()) {
 		sections.push({
-			type: AgenticSectionType.TEXT,
-			content: message.content
+			content: message.content,
+			type: AgenticSectionType.TEXT
 		});
 	}
 
 	// 3. Persisted tool calls (from message.toolCalls field)
 	const toolCalls = parseToolCalls(message.toolCalls);
+	// Index tool messages by toolCallId for O(1) lookup instead of O(n) find()
+	const toolMsgById = new Map<string, DatabaseMessage>();
+
+	for (const tm of toolMessages) {
+		if (tm.toolCallId && !toolMsgById.has(tm.toolCallId)) {
+			toolMsgById.set(tm.toolCallId, tm);
+		}
+	}
+
 	for (const tc of toolCalls) {
-		const resultMsg = toolMessages.find((m) => m.toolCallId === tc.id);
+		const resultMsg = tc.id ? toolMsgById.get(tc.id) : undefined;
 		// Only show as pending/loading if we're actively streaming; otherwise it's just a tool call without result
 		const type = resultMsg
 			? AgenticSectionType.TOOL_CALL
 			: isStreaming
 				? AgenticSectionType.TOOL_CALL_PENDING
 				: AgenticSectionType.TOOL_CALL;
+
 		sections.push({
-			type,
 			content: resultMsg?.content || '',
-			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
+			toolCallId: tc.id,
+			toolCwd: resultMsg?.toolCwd,
+			toolName: tc.function?.name,
 			toolResult: resultMsg?.content,
 			toolResultExtras: resultMsg?.extra,
-			toolCallId: tc.id
+			type
 		});
 	}
 
 	// 4. Streaming tool calls (not yet persisted - currently being received)
+	const persistedIds = new Set(toolCalls.map((t) => t.id).filter(Boolean));
+
 	for (const tc of streamingToolCalls) {
 		// Skip if already in persisted tool calls
-		if (tc.id && toolCalls.find((t) => t.id === tc.id)) continue;
+		if (tc.id && persistedIds.has(tc.id)) continue;
+
 		sections.push({
-			type: AgenticSectionType.TOOL_CALL_STREAMING,
 			content: '',
-			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
-			toolCallId: tc.id
+			toolCallId: tc.id,
+			toolName: tc.function?.name,
+			type: AgenticSectionType.TOOL_CALL_STREAMING
 		});
 	}
 
@@ -154,8 +172,8 @@ export function deriveAgenticSections(
 	}
 
 	const sections: AgenticSection[] = [];
-
 	const firstTurnToolMsgs = collectToolMessages(toolMessages, 0);
+
 	sections.push(...deriveSingleTurnSections(message, firstTurnToolMsgs));
 
 	let i = firstTurnToolMsgs.length;
@@ -198,10 +216,12 @@ export function buildAssistantRawOutput(sections: AgenticSection[]): string {
 			case AgenticSectionType.REASONING:
 			case AgenticSectionType.REASONING_PENDING:
 				parts.push(`${REASONING_TAGS.START}${NEWLINE}${section.content}${REASONING_TAGS.END}`);
+
 				break;
 
 			case AgenticSectionType.TEXT:
 				parts.push(section.content);
+
 				break;
 
 			case AgenticSectionType.TOOL_CALL:
@@ -267,8 +287,8 @@ export function splitSearchSummaryList(
 	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
 	const summaryText =
 		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY_SEPARATOR.length);
-
 	const totalMatch = summaryText.match(SEARCH_SUMMARY_TOTAL_REGEX);
+
 	if (totalMatch) {
 		captureTotal(parseInt(totalMatch[1], 10));
 	}
@@ -281,16 +301,34 @@ export function splitSearchSummaryList(
 	return { lines };
 }
 
+/** Bounded cache for parseToolResultWithImages results. */
+const TOOL_RESULT_LINES_CACHE_MAX_SIZE = 32;
+const toolResultLinesCache = new Map<string, ToolResultLine[]>();
+
 /**
  * Parse tool result text into lines, matching image attachments by name.
+ * Memoized: called per render during streaming on unchanged tool result
+ * strings with unchanged extras.
  */
 export function parseToolResultWithImages(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
+	// Cache key includes image attachment names so we recompute when
+	// attachments change, even if the count stays the same.
+	const imageNames = (extras ?? [])
+		.filter((e): e is DatabaseMessageExtraImageFile => e.type === AttachmentType.IMAGE)
+		.map((e) => e.name)
+		.join(NEWLINE);
+	const cacheKey = `${imageNames}:${toolResult}`;
+	const cached = toolResultLinesCache.get(cacheKey);
+
+	if (cached !== undefined) return cached;
+
 	const lines = toolResult.split(NEWLINE);
-	return lines.map((line) => {
+	const result = lines.map((line) => {
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
+
 		if (!match || !extras) return { text: line };
 
 		const attachmentName = match[1];
@@ -299,9 +337,21 @@ export function parseToolResultWithImages(
 				e.type === AttachmentType.IMAGE && e.name === attachmentName
 		);
 
-		return { text: line, image };
+		return { image, text: line };
 	});
+
+	if (toolResultLinesCache.size >= TOOL_RESULT_LINES_CACHE_MAX_SIZE) {
+		toolResultLinesCache.delete(toolResultLinesCache.keys().next().value!);
+	}
+
+	toolResultLinesCache.set(cacheKey, result);
+
+	return result;
 }
+
+/** Bounded cache for classifyToolResult results. */
+const CLASSIFY_CACHE_MAX_SIZE = 32;
+const classifyCache = new Map<string, ToolResultKind>();
 
 /**
  * Pick a renderer tier for a tool's result content.
@@ -312,25 +362,42 @@ export function parseToolResultWithImages(
  *              through MarkdownContent for proper formatting.
  *   text     - everything else, rendered as plain text lines (with image
  *              attachment resolution as a side effect).
+ * Memoized: called per render during streaming on unchanged content.
  */
 export function classifyToolResult(content: string | undefined): ToolResultKind {
 	if (!content) return ToolResultKind.TEXT;
+
+	const cached = classifyCache.get(content);
+
+	if (cached !== undefined) return cached;
+
 	const trimmed = content.trim();
+
 	if (!trimmed) return ToolResultKind.TEXT;
+
+	let result: ToolResultKind = ToolResultKind.TEXT;
 
 	// Strongest signal: JSON object/array round-trips through JSON.parse.
 	if (TOOL_RESULT_JSON_OPEN_REGEX.test(trimmed)) {
 		try {
 			JSON.parse(trimmed);
-			return ToolResultKind.JSON;
+			result = ToolResultKind.JSON;
 		} catch (error) {
 			console.error('[agentic] tool result looked like JSON but failed to parse:', error);
 		}
 	}
 
-	if (looksLikeMarkdown(trimmed)) return ToolResultKind.MARKDOWN;
+	if (result === ToolResultKind.TEXT && looksLikeMarkdown(trimmed)) {
+		result = ToolResultKind.MARKDOWN;
+	}
 
-	return ToolResultKind.TEXT;
+	if (classifyCache.size >= CLASSIFY_CACHE_MAX_SIZE) {
+		classifyCache.delete(classifyCache.keys().next().value!);
+	}
+
+	classifyCache.set(content, result);
+
+	return result;
 }
 
 /**
@@ -350,13 +417,17 @@ function looksLikeMarkdown(content: string): boolean {
 
 	for (const line of lines) {
 		if (MARKDOWN_ATX_HEADING_REGEX.test(line)) return true;
+
 		if (MARKDOWN_BLOCKQUOTE_REGEX.test(line)) return true;
+
 		if (MARKDOWN_LIST_BULLET_REGEX.test(line)) return true;
+
 		if (MARKDOWN_LIST_NUMBERED_REGEX.test(line)) return true;
 	}
 
 	// Inline structural markers anywhere in the body.
 	if (MARKDOWN_LINK_REGEX.test(content)) return true;
+
 	if (MARKDOWN_BOLD_REGEX.test(content)) return true;
 
 	// Tables: a pipe-bearing header line followed by a separator row.
@@ -370,19 +441,39 @@ function looksLikeMarkdown(content: string): boolean {
 	return false;
 }
 
+/** Bounded cache for parsed tool-call JSON blobs. */
+const TOOL_CALLS_CACHE_MAX_SIZE = 64;
+const toolCallsParseCache = new Map<string, ApiChatCompletionToolCall[]>();
+
 /**
  * Safely parse the toolCalls JSON string from a DatabaseMessage.
+ * Memoized: the same JSON string is re-parsed on every render during
+ * streaming, which is wasted CPU since tool calls don't change mid-stream.
  */
 function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {
 	if (!toolCallsJson) return [];
 
+	const cached = toolCallsParseCache.get(toolCallsJson);
+
+	if (cached) return cached;
+
+	let result: ApiChatCompletionToolCall[];
+
 	try {
 		const parsed = JSON.parse(toolCallsJson);
 
-		return Array.isArray(parsed) ? parsed : [];
+		result = Array.isArray(parsed) ? parsed : [];
 	} catch {
-		return [];
+		result = [];
 	}
+
+	if (toolCallsParseCache.size >= TOOL_CALLS_CACHE_MAX_SIZE) {
+		toolCallsParseCache.delete(toolCallsParseCache.keys().next().value!);
+	}
+
+	toolCallsParseCache.set(toolCallsJson, result);
+
+	return result;
 }
 
 /**
@@ -437,6 +528,7 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	}
 
 	const hasToolCalls = parseToolCalls(target.toolCalls).length > 0;
+
 	if (!hasToolCalls) {
 		return { kind: ContinueIntentKind.APPEND_TEXT };
 	}
@@ -445,6 +537,7 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	// messages directly after the assistant turn that owns them, so the first
 	// non tool message marks the boundary.
 	let lastTrailingTool = idx;
+
 	for (let i = idx + 1; i < messages.length; i++) {
 		if (messages[i].role === MessageRole.TOOL) {
 			lastTrailingTool = i;

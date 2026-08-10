@@ -130,6 +130,7 @@ enum llm_type {
     LLM_TYPE_100B_A6B,
     LLM_TYPE_102B_A12B, // Solar-Open
     LLM_TYPE_106B_A12B, // GLM-4.5-Air
+    LLM_TYPE_118B_A8B,  // Laguna-S-2
     LLM_TYPE_120B_A12B, // Nemotron 3 Super
     LLM_TYPE_122B_A10B, // Qwen3.5
     LLM_TYPE_196B_A11B, // Step3.5-Flash
@@ -220,6 +221,24 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_head_s    = nullptr;
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
+};
+
+struct llama_layer_switch_lora {
+    struct ggml_tensor * a_q    = nullptr;
+    struct ggml_tensor * b_q    = nullptr;
+    struct ggml_tensor * a_k    = nullptr;
+    struct ggml_tensor * b_k    = nullptr;
+    struct ggml_tensor * a_v    = nullptr;
+    struct ggml_tensor * b_v    = nullptr;
+    struct ggml_tensor * a_o    = nullptr;
+    struct ggml_tensor * b_o    = nullptr;
+
+    struct ggml_tensor * a_gate = nullptr;
+    struct ggml_tensor * b_gate = nullptr;
+    struct ggml_tensor * a_up   = nullptr;
+    struct ggml_tensor * b_up   = nullptr;
+    struct ggml_tensor * a_down = nullptr;
+    struct ggml_tensor * b_down = nullptr;
 };
 
 struct llama_layer {
@@ -532,6 +551,8 @@ struct llama_layer {
     struct llama_layer_shortconv shortconv;
 
     struct llama_layer_nextn nextn;
+
+    struct llama_layer_switch_lora switch_lora;
 };
 
 struct llama_device {
@@ -718,6 +739,7 @@ struct llama_model_base : public llama_model {
     const int TENSOR_NOT_REQUIRED;
     const int TENSOR_SKIP;
     const int TENSOR_SKIP_IF_VIRTUAL;
+    const int TENSOR_ALLOW_RESHAPE;
 
     explicit llama_model_base(const llama_model_params & params);
     virtual ~llama_model_base() = default;

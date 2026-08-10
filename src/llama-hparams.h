@@ -53,6 +53,10 @@ struct llama_hparams {
     uint32_t n_embd;
     uint32_t n_layer_all;
     uint32_t n_layer_nextn = 0;
+
+    // granite-switch: index of the single-head "router" KV layer that encodes
+    // per-token adapter selection. -1 when the model has no such layer.
+    int32_t  router_layer = -1;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
@@ -230,8 +234,6 @@ struct llama_hparams {
     // MSA
     uint32_t indexer_block_size  = 0;
     uint32_t indexer_local_blocks = 0;
-    // MSA stores its indexer keys in the main KV cache (k_idx tensors);
-    bool indexer_kv = false;
 
     // Indexer is "full" (1) or "shared" (0)
     // Shared indexers reuse top-k from previous full layer
@@ -356,9 +358,6 @@ struct llama_hparams {
     uint32_t n_embd_k_gqa_max() const;
     uint32_t n_embd_v_gqa_max() const;
 
-    // dimension of the single-head MSA indexer key stream
-    uint32_t n_embd_k_idx(uint32_t il = 0) const;
-
     // dimension of the rolling state embeddings
     // corresponds to Mamba's conv_states size or RWKV's token_shift states size
     uint32_t n_embd_r() const;
@@ -375,6 +374,8 @@ struct llama_hparams {
     uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
+
+    bool has_rope(uint32_t il) const;
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;

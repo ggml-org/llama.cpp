@@ -1,8 +1,8 @@
 <script lang="ts">
+	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
 	import { ChevronDown } from '@lucide/svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { STATS_UNITS } from '$lib/constants';
-	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
 
 	interface Props {
 		currentRead: number;
@@ -18,15 +18,15 @@
 	}
 
 	let {
-		currentRead,
-		currentFresh,
-		currentCache,
-		currentOutput,
-		kvTotal,
-		cumulativeRead,
-		cumulativeOutput,
-		cumulativeCacheTotal,
 		averageTokensPerSecond,
+		cumulativeCacheTotal,
+		cumulativeOutput,
+		cumulativeRead,
+		currentCache,
+		currentFresh,
+		currentOutput,
+		currentRead,
+		kvTotal,
 		transientDetails
 	}: Props = $props();
 
