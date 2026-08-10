@@ -57,6 +57,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_SQR",             op::translate_sqr                              },
         {"GGML_OP_SQRT",            op::translate_sqrt                             },
         {"GGML_OP_SOFT_MAX",        op::translate_soft_max                         },
+        {"GGML_OP_ARGMAX",          op::translate_argmax                           },
         {"GGML_OP_ARGSORT",         op::translate_argsort                          },
         {"GGML_OP_SUB",             op::translate_1to1_match_2_inputs<v1::Subtract>},
         {"GGML_OP_TRANSPOSE",       op::translate_transpose                        },
