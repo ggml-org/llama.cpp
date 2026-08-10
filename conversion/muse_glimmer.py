@@ -89,6 +89,7 @@ class MuseGlimmerVisionModel(MmprojModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        assert self.hparams_vision is not None
         c = self.hparams_vision  # enriched vision_config from get_vision_config()
 
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MUSE_GLIMMER)
@@ -111,6 +112,7 @@ class MuseGlimmerVisionModel(MmprojModel):
     }
 
     def modify_tensors(self, data_torch, name, bid):
+        assert self.hparams_vision is not None
         if ".attn.q_proj." in name or ".attn.k_proj." in name:
             n_heads = int(self.hparams_vision["num_attention_heads"])
             data_torch = _unpermute_for_rope(data_torch, n_heads)
