@@ -10,7 +10,7 @@
 		showMessageStats: boolean;
 	}
 
-	let { message, isLoading, processingState, showMessageStats }: Props = $props();
+	let { isLoading, message, processingState, showMessageStats }: Props = $props();
 </script>
 
 {#if showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}

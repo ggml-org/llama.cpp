@@ -954,6 +954,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_minimax_m3>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_MUSE_GLIMMER:
+            {
+                builder = std::make_unique<clip_graph_muse_glimmer>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_STEP3VL:
             {
                 builder = std::make_unique<clip_graph_step3vl>(ctx, img);
@@ -1571,6 +1575,17 @@ struct clip_model_loader {
                         // MiniMax-M3: max_pixels 451584 (=672^2) -> 576 merged tokens (image_seq_length)
                         hparams.set_limit_image_tokens(8, 576);
                         hparams.set_warmup_n_tokens(16*16);
+                    } break;
+                case PROJECTOR_TYPE_MUSE_GLIMMER:
+                    {
+                        hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
+                        hparams.image_resize_algo = RESIZE_ALGO_LANCZOS;
+                        hparams.rope_theta = 10000.0f;
+                        hparams.muse_glimmer_patch_temporal = 2;
+                        hparams.muse_glimmer_sparse_factor  = 4; // 3 sparse layers + 1 global, repeating
+                        get_u32(KEY_SPATIAL_MERGE_SIZE,  hparams.n_merge,             false);
+                        hparams.set_limit_image_tokens(1, 4096);
+                        hparams.set_warmup_n_tokens(32*32);
                     } break;
                 case PROJECTOR_TYPE_MIMOVL:
                     {
@@ -2316,6 +2331,13 @@ struct clip_model_loader {
                     model.mm_merger_fc1_b = get_tensor(string_format(TN_MM_MERGER_FC1, "bias"));
                     model.mm_merger_fc2_w = get_tensor(string_format(TN_MM_MERGER_FC2, "weight"));
                     model.mm_merger_fc2_b = get_tensor(string_format(TN_MM_MERGER_FC2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_MUSE_GLIMMER:
+                {
+                    // 3-linear MLP: fc -> erf-GELU -> proj -> erf-GELU -> vision_proj (into LLM residual dim)
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_STEP3VL:
                 {
@@ -3745,6 +3767,7 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_MUSE_GLIMMER:
             return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
             return img->nx() / (params.patch_size * params.n_merge);
@@ -3770,6 +3793,7 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_MUSE_GLIMMER:
             return (img->ny() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
             return img->ny() / (params.patch_size * params.n_merge);
@@ -3848,6 +3872,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_MINIMAX_M3:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_MUSE_GLIMMER:
             {
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx() / (params.patch_size * 2);
@@ -4193,6 +4218,70 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
     // set input per projector
     switch (ctx->model.proj_type) {
+        case PROJECTOR_TYPE_MUSE_GLIMMER:
+            {
+                const int grid_w = pos_w;            // image_size_width  / patch_size
+                const int grid_h = pos_h;            // image_size_height / patch_size
+                const int n_tok  = grid_w * grid_h;
+                const int pgrid  = (int) std::sqrt((double) ctx->model.position_embeddings->ne[1]); // 32
+                const int f      = hparams.n_merge;  // downsample 2
+
+                // pixel patchify runs inside the graph via build_inp() (ggml_conv_2d);
+                // pos-emb bilinear interp via resize_position_embeddings().
+
+                // --- sparse window grouping (pgrid x pgrid windows) ---
+                const int win = pgrid;
+                const int nwin_h = (grid_h + win - 1) / win;
+                const int nwin_w = (grid_w + win - 1) / win;
+                std::vector<int32_t> sp_perm; sp_perm.reserve(n_tok);
+                std::vector<int>     sp_slens;
+                for (int wy = 0; wy < nwin_h; wy++) {
+                    for (int wx = 0; wx < nwin_w; wx++) {
+                        int cnt = 0;
+                        for (int hh = 0; hh < win; hh++) {
+                            for (int ww = 0; ww < win; ww++) {
+                                const int gy = wy * win + hh;
+                                const int gx = wx * win + ww;
+                                if (gy < grid_h && gx < grid_w) { sp_perm.push_back(gy * grid_w + gx); cnt++; }
+                            }
+                        }
+                        if (cnt > 0) sp_slens.push_back(cnt);
+                    }
+                }
+                std::vector<int32_t> rpos_w(n_tok), rpos_h(n_tok), inv_perm(n_tok);
+                for (int i = 0; i < n_tok; i++) {
+                    const int orig = sp_perm[i];
+                    rpos_w[i] = (orig % grid_w) + 1; // 1-indexed
+                    rpos_h[i] = (orig / grid_w) + 1;
+                    inv_perm[orig] = i;
+                }
+                set_input_i32("muse_glimmer_sp_perm",  sp_perm);
+                set_input_i32("muse_glimmer_inv_perm", inv_perm);
+                set_input_i32("muse_glimmer_pos_w",    rpos_w);
+                set_input_i32("muse_glimmer_pos_h",    rpos_h);
+
+                // block-diagonal window mask (permuted order)
+                std::vector<float> sp_mask((size_t) n_tok * n_tok, -INFINITY);
+                {
+                    int off = 0;
+                    for (int s : sp_slens) {
+                        for (int a = 0; a < s; a++)
+                            for (int b = 0; b < s; b++)
+                                sp_mask[(size_t) (off + a) * n_tok + (off + b)] = 0.0f;
+                        off += s;
+                    }
+                }
+                set_input_f32("muse_glimmer_sp_mask", sp_mask);
+
+                // pixel-shuffle gather (original order): f*f spatial neighbours grouped
+                std::vector<int32_t> dsp; dsp.reserve(n_tok);
+                for (int oy = 0; oy < grid_h / f; oy++)
+                    for (int ox = 0; ox < grid_w / f; ox++)
+                        for (int ry = 0; ry < f; ry++)
+                            for (int rx = 0; rx < f; rx++)
+                                dsp.push_back((oy * f + ry) * grid_w + (ox * f + rx));
+                set_input_i32("muse_glimmer_ds_perm", dsp);
+            } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
                 // inspired from siglip:
@@ -5369,6 +5458,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_MINIMAX_M3:
             return ctx->model.mm_merger_fc2_b->ne[0];
+        case PROJECTOR_TYPE_MUSE_GLIMMER:
+            return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_EXAONE4_5:

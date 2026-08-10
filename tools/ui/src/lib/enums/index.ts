@@ -25,6 +25,7 @@ export {
 	MessageType,
 	PdfViewMode,
 	ReasoningFormat,
+	ChatFormCommandAction,
 	FileMentionEntryType
 } from './chat.enums';
 

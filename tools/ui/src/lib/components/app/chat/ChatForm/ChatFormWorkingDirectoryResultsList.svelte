@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Folder } from '@lucide/svelte';
-	import { fly } from 'svelte/transition';
-	import { highlightMatch } from '$lib/utils';
 	import { cn } from '$lib/components/ui/utils';
+	import { highlightMatch } from '$lib/utils';
+	import { fly } from 'svelte/transition';
 
 	// Fly-in transition for the results list.
 	const FLY_Y_PX = -4;
@@ -20,21 +20,21 @@
 	}
 
 	let {
-		results,
+		container = $bindable(null),
+		error,
 		hoveredIndex,
 		isSearching,
-		error,
-		rawQuery,
-		container = $bindable(null),
 		onCommit,
-		onHover
+		onHover,
+		rawQuery,
+		results
 	}: Props = $props();
 </script>
 
 <div
 	bind:this={container}
 	class="max-h-48 overflow-y-auto py-2"
-	transition:fly={{ y: FLY_Y_PX, duration: FLY_DURATION_MS }}
+	transition:fly={{ duration: FLY_DURATION_MS, y: FLY_Y_PX }}
 >
 	{#if isSearching && results.length === 0}
 		<div class="px-2 py-1.5 text-sm text-muted-foreground">Searching...</div>

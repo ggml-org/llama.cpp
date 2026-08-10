@@ -28,13 +28,17 @@ export function usePickerNavigation(opts: UsePickerNavigationOptions) {
 
 	function resolve(from: number, dir: 1 | -1): number {
 		const n = opts.count();
+
 		if (n === 0) return -1;
+
 		if (opts.step) return opts.step(from, dir);
+
 		return wrapStep(from, dir, n);
 	}
 
 	function move(dir: 1 | -1) {
 		const next = resolve(hoveredIndex, dir);
+
 		if (next >= 0) {
 			hoveredIndex = next;
 			scrollTrigger++;
@@ -62,18 +66,21 @@ export function usePickerNavigation(opts: UsePickerNavigationOptions) {
 		if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 			opts.onClose();
+
 			return true;
 		}
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			move(1);
+
 			return true;
 		}
 
 		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 			move(-1);
+
 			return true;
 		}
 
@@ -81,8 +88,10 @@ export function usePickerNavigation(opts: UsePickerNavigationOptions) {
 			if (hoveredIndex >= 0 && hoveredIndex < opts.count()) {
 				event.preventDefault();
 				opts.onSelect(hoveredIndex);
+
 				return true;
 			}
+
 			// No selectable row - let the caller's Enter-to-submit run.
 			return false;
 		}
@@ -91,17 +100,17 @@ export function usePickerNavigation(opts: UsePickerNavigationOptions) {
 	}
 
 	return {
+		bumpScroll,
+		handleKeydown,
 		get hoveredIndex() {
 			return hoveredIndex;
 		},
+		move,
+		reset,
 		get scrollTrigger() {
 			return scrollTrigger;
 		},
-		reset,
-		setHover,
-		move,
-		bumpScroll,
-		handleKeydown
+		setHover
 	};
 }
 

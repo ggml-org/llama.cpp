@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Folder, FolderX } from '@lucide/svelte';
-	import { parseCwdMessage } from '$lib/utils';
 	import type { DatabaseMessage } from '$lib/types';
+	import { parseCwdMessage } from '$lib/utils';
 
 	interface Props {
 		class?: string;

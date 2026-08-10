@@ -1,20 +1,20 @@
 <script lang="ts">
-	import { X, Plus } from '@lucide/svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import * as Empty from '$lib/components/ui/empty';
+	import McpLogo from '../mcp/McpLogo.svelte';
+	import { Plus, X } from '@lucide/svelte';
+	import { browser } from '$app/environment';
+	import { goto, replaceState } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ActionIcon, McpServerCard, McpServerCardSkeleton } from '$lib/components/app';
 	import { DialogMcpServerAddNew } from '$lib/components/app/dialogs';
-	import { HealthCheckStatus } from '$lib/enums';
+	import { Button } from '$lib/components/ui/button';
+	import * as Empty from '$lib/components/ui/empty';
 	import { ROUTES } from '$lib/constants';
-	import { fade } from 'svelte/transition';
+	import { HealthCheckStatus } from '$lib/enums';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { onMount } from 'svelte';
-	import McpLogo from '../mcp/McpLogo.svelte';
-	import { browser } from '$app/environment';
-	import { page } from '$app/state';
-	import { goto, replaceState } from '$app/navigation';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		class?: string;
@@ -30,6 +30,7 @@
 
 	$effect(() => {
 		const currentId = page.route.id;
+
 		return () => {
 			previousRouteId = currentId;
 		};
@@ -37,6 +38,7 @@
 
 	function handleClose() {
 		const prevIsMcpServers = previousRouteId === '/mcp-servers';
+
 		if (browser && window.history.length > 1 && !prevIsMcpServers) {
 			history.back();
 		} else {
@@ -49,6 +51,7 @@
 			isAddingServer = true;
 
 			const newUrl = new URL(page.url);
+
 			newUrl.searchParams.delete('add');
 
 			replaceState(newUrl, {});
@@ -63,6 +66,7 @@
 	// renders and keeps the enable toggle reachable.
 	function isServerPending(serverId: string, enabled: boolean): boolean {
 		const status = mcpStore.getHealthCheckState(serverId).status;
+
 		return (
 			status === HealthCheckStatus.CONNECTING || (status === HealthCheckStatus.IDLE && enabled)
 		);
@@ -122,7 +126,9 @@
 						enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
 						onToggle={async () => {
 							const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
+
 							await conversationsStore.toggleMcpServerForChat(server.id);
+
 							if (!wasEnabled) {
 								// Promote the connection so tools/prompts/resources become
 								// available right away instead of waiting for the next chat-init.

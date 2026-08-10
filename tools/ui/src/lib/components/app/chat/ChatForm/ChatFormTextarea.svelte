@@ -28,11 +28,10 @@
 	onMount(() => {
 		if (textareaElement) {
 			autoResizeTextarea(textareaElement);
-			textareaElement.focus();
+			textareaElement.focus({ preventScroll: true });
 		}
 	});
 
-	// Expose the textarea element for external access
 	export function getElement() {
 		return textareaElement;
 	}
@@ -49,9 +48,11 @@
 		}
 	}
 
-	// Plain-text caret offsets for the mention-splice flow.
+	// Plain-text caret offsets, shared with the contenteditable variant so
+	// the picker/paste flows can address either renderer through one handle.
 	export function getCaretOffset(): number {
 		if (!textareaElement) return 0;
+
 		return textareaElement.selectionStart ?? textareaElement.value.length;
 	}
 

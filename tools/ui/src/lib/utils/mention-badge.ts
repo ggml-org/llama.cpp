@@ -1,9 +1,10 @@
 import { abbreviateHome, lastPathSegment } from './path-display';
+import { DIRECTORY_PATH_SUFFIX, FILE_URI_PREFIX } from '$lib/constants';
 import {
 	MENTION_BADGE_FILE_ICON_PATHS,
-	MENTION_BADGE_FOLDER_ICON_PATHS
+	MENTION_BADGE_FOLDER_ICON_PATHS,
+	MENTION_LINK_SCAN_FLAGS
 } from '$lib/constants/mention-badge';
-import { FILE_URI_PREFIX } from '$lib/constants';
 import { FileMentionEntryType } from '$lib/enums';
 import type { FileMentionEntry } from '$lib/types';
 
@@ -21,6 +22,10 @@ const FILE_MENTION_LINK_SOURCE = String.raw`\[([^\]\n]+?)\]\(file:\/\/((?:[^)\n]
 
 export function fileMentionLinkRe(flags = ''): RegExp {
 	return new RegExp(FILE_MENTION_LINK_SOURCE, flags);
+}
+
+export function containsFileMentionLink(value: string): boolean {
+	return fileMentionLinkRe().test(value);
 }
 
 // Escape each path segment for a markdown link destination (spaces/parens
@@ -44,8 +49,45 @@ export function decodeFileLinkPath(path: string): string {
 	}
 }
 
+export interface MentionTextSegment {
+	text: string;
+	mention: { name: string; path: string } | null;
+}
+
+/**
+ * Split raw text into plain runs and `[name](file://path)` mentions.
+ * The raw-text renderers walk these segments to draw badges without
+ * handing the message to the markdown parser, so a `#` stays a `#`.
+ */
+export function splitMentionSegments(value: string): MentionTextSegment[] {
+	const linkRe = fileMentionLinkRe(MENTION_LINK_SCAN_FLAGS);
+	const segments: MentionTextSegment[] = [];
+
+	let cursor = 0;
+	let match: RegExpExecArray | null;
+
+	while ((match = linkRe.exec(value)) !== null) {
+		if (match.index > cursor) {
+			segments.push({ mention: null, text: value.slice(cursor, match.index) });
+		}
+
+		segments.push({
+			mention: { name: match[1], path: decodeFileLinkPath(match[2]) },
+			text: match[0]
+		});
+
+		cursor = match.index + match[0].length;
+	}
+
+	if (cursor < value.length) segments.push({ mention: null, text: value.slice(cursor) });
+
+	return segments;
+}
+
 export function getMentionBadgeIconPaths(path: string): readonly string[] {
-	return path.endsWith('/') ? MENTION_BADGE_FOLDER_ICON_PATHS : MENTION_BADGE_FILE_ICON_PATHS;
+	return path.endsWith(DIRECTORY_PATH_SUFFIX)
+		? MENTION_BADGE_FOLDER_ICON_PATHS
+		: MENTION_BADGE_FILE_ICON_PATHS;
 }
 
 export function getMentionBadgeLabel(
@@ -55,28 +97,12 @@ export function getMentionBadgeLabel(
 	home?: string | null
 ): string {
 	if (!showFullPath) return name;
-	const decoded = decodeFileLinkPath(path.replace(/\/+$/, ''));
-	if (!decoded) return name;
-	return abbreviateHome(decoded, home);
-}
 
-/**
- * Extent of the mention link ending exactly at `caret`, so Backspace there
- * deletes the whole `[name](file://...)` token in one keystroke instead of
- * unraveling it character by character. Null when no link ends at `caret`.
- */
-export function mentionLinkEndingAt(
-	value: string,
-	caret: number
-): { start: number; end: number } | null {
-	const re = fileMentionLinkRe('g');
-	let match: RegExpExecArray | null;
-	while ((match = re.exec(value)) !== null) {
-		const end = match.index + match[0].length;
-		if (end === caret) return { start: match.index, end };
-		if (end > caret) break;
-	}
-	return null;
+	const decoded = decodeFileLinkPath(path.replace(/\/+$/, ''));
+
+	if (!decoded) return name;
+
+	return abbreviateHome(decoded, home);
 }
 
 /**
@@ -90,6 +116,7 @@ export function buildMentionInsertion(
 	token: { start: number; end: number }
 ): { newValue: string; caretOffset: number } | null {
 	if (token.start < 0 || token.end > value.length || token.start > token.end) return null;
+
 	// Strip the entry's directory marker so it is not doubled below.
 	const cleanedPath = entry.path.replace(/\/+$/, '');
 	const pathWithSeparator =
@@ -97,5 +124,6 @@ export function buildMentionInsertion(
 	const basename = lastPathSegment(cleanedPath) || entry.name;
 	const insertion = `[${basename}](${FILE_URI_PREFIX}${encodeFileLinkPath(pathWithSeparator)}) `;
 	const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);
-	return { newValue, caretOffset: token.start + insertion.length };
+
+	return { caretOffset: token.start + insertion.length, newValue };
 }

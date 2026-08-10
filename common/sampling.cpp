@@ -518,6 +518,26 @@ struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
     };
 }
 
+void common_sampler_copy(const common_sampler * src, common_sampler * dst) {
+    if (!src || !dst || src == dst) {
+        return;
+    }
+
+    GGML_ASSERT((src->grmr == nullptr) == (dst->grmr == nullptr));
+    GGML_ASSERT((src->rbudget == nullptr) == (dst->rbudget == nullptr));
+
+    llama_sampler_copy(src->grmr,    dst->grmr);
+    llama_sampler_copy(src->rbudget, dst->rbudget);
+    llama_sampler_copy(src->chain,   dst->chain);
+
+    dst->params     = src->params;
+    dst->prev       = src->prev;
+    dst->cur        = src->cur;
+    dst->cur_p      = src->cur_p;
+    dst->cur_p.data = src->cur_p.data ? dst->cur.data() : nullptr; // re-point to dst's buffer
+    dst->t_total_us = src->t_total_us;
+}
+
 void common_perf_print(const struct llama_context * ctx, const struct common_sampler * gsmpl) {
     // TODO: measure grammar performance
 

@@ -3,19 +3,21 @@
 // scrollIntoView on the initial mount, before the popover was positioned,
 // so the browser scrolled every scrollable ancestor to reveal the row.
 
-import { describe, it, expect } from 'vitest';
-import { render } from 'vitest-browser-svelte';
-import { tick } from 'svelte';
 import PickerListScrollHarness from './components/PickerListScrollHarness.svelte';
+import { tick } from 'svelte';
+import { describe, expect, it } from 'vitest';
+import { render } from 'vitest-browser-svelte';
 
 describe('ChatFormPickerList mount scroll', () => {
 	it('does not scroll documentElement when the picker mounts', async () => {
 		const screen = render(PickerListScrollHarness);
+
 		await tick();
 
 		document.documentElement.scrollTop = document.documentElement.scrollHeight;
 		await tick();
 		const before = document.documentElement.scrollTop;
+
 		expect(before).toBeGreaterThan(0);
 
 		screen.component.openPicker();
@@ -24,6 +26,7 @@ describe('ChatFormPickerList mount scroll', () => {
 		await tick();
 
 		const after = document.documentElement.scrollTop;
+
 		expect(after).toBe(before);
 	});
 });
