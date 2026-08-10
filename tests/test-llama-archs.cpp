@@ -9,6 +9,7 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
+#include "../src/llama-model.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -262,6 +263,62 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
 static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/) {
     return true;
+}
+
+static int check_exaone4_swa(const size_t seed, const uint32_t block_count, const uint32_t nextn,
+        const uint32_t n_layer_expected, const llama_swa_type swa_expected) {
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_EXAONE4, false);
+
+    // Applied here rather than in get_gguf_ctx because that fixture is shared with the backend tests.
+    llama_model_saver ms(LLM_ARCH_EXAONE4, gguf_ctx.get());
+    ms.add_kv(LLM_KV_BLOCK_COUNT,          block_count);
+    ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, nextn);
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
+
+    size_t tmp = seed;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    if (!model) {
+        printf("%s: failed to create model with block_count %u\n", __func__, block_count);
+        return 1;
+    }
+
+    const auto & hparams = model->hparams;
+    int nfail = 0;
+
+    if (hparams.n_layer_nextn != nextn) {
+        printf("%s: block_count %u: n_layer_nextn is %u, expected %u\n",
+                __func__, block_count, hparams.n_layer_nextn, nextn);
+        nfail++;
+    }
+    if (hparams.n_layer() != n_layer_expected) {
+        printf("%s: block_count %u: n_layer() is %u, expected %u\n",
+                __func__, block_count, hparams.n_layer(), n_layer_expected);
+        nfail++;
+    }
+    if (hparams.swa_type != swa_expected) {
+        printf("%s: block_count %u: swa_type is %d, expected %d\n",
+                __func__, block_count, hparams.swa_type, swa_expected);
+        nfail++;
+    }
+
+    return nfail;
+}
+
+// exaone4 enables SWA only when n_layer() reads 64, and n_layer() subtracts the nextn layers.
+// Shipped EXAONE 4.5 GGUFs carry an MTP head, so block_count is n_layer + 1.
+static int test_exaone4_mtp_swa(const size_t seed) {
+    int nfail = 0;
+
+    nfail += check_exaone4_swa(seed, 65, 1, 64, LLAMA_SWA_TYPE_STANDARD); // 32B
+    nfail += check_exaone4_swa(seed, 64, 0, 64, LLAMA_SWA_TYPE_STANDARD); // 32B without an MTP head
+    nfail += check_exaone4_swa(seed, 31, 1, 30, LLAMA_SWA_TYPE_NONE);     // 1.2B
+
+    if (nfail != 0) {
+        printf("%s: FAIL\n", __func__);
+    }
+    return nfail;
 }
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
@@ -717,6 +774,9 @@ int main(int argc, char ** argv) {
     try {
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
+        }
+        if (test_exaone4_mtp_swa(seed) != 0) {
+            return 1;
         }
         return test_backends(arch, seed, log_level);
     } catch (const std::exception & err) {
