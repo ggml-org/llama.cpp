@@ -39,15 +39,17 @@ struct common_moe_prune_model_info {
     uint64_t expert_bytes = 0;
 };
 
+// Per-expert calibration accumulators for the REAP saliency criterion
+// (arXiv:2510.13999, Equation 9). See common/moe-prune.cpp for provenance.
 struct common_moe_prune_expert_stats {
-    uint64_t selection_count = 0;
-    double probability_sum = 0.0;
-    double output_norm_sum = 0.0;
-    double weighted_output_sum = 0.0;
+    uint64_t selection_count = 0;     // tokens routed to this expert
+    double probability_sum = 0.0;     // sum of router probabilities g_j(t)
+    double output_norm_sum = 0.0;     // sum of ||f_j(t)||_2                 (EAN, ungated)
+    double weighted_output_sum = 0.0; // sum of g_j(t) * ||f_j(t)||_2        (REAP)
 
     double mean_probability() const;
     double mean_output_norm() const;
-    double importance() const;
+    double importance() const; // REAP score: the `router-output` metric
 };
 
 using common_moe_prune_stats = std::map<int32_t, std::vector<common_moe_prune_expert_stats>>;

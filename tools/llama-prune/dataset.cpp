@@ -31,7 +31,7 @@ struct dataset_line_state {
     json data;
     std::vector<const json *> message_data;
     std::vector<common_chat_msg> messages;
-    aikar_dataset_record record;
+    llama_prune_dataset_record record;
     std::string error;
     std::mutex error_mutex;
     std::atomic<bool> failed { false };
@@ -56,34 +56,34 @@ void set_error(dataset_line_state & state, const std::string & error) {
 
 }
 
-aikar_ppl_mask aikar_ppl_mask_parse(const std::string & value) {
-    if (value == "all") return aikar_ppl_mask::ALL;
-    if (value == "assistant") return aikar_ppl_mask::ASSISTANT;
-    if (value == "reasoning") return aikar_ppl_mask::REASONING;
-    if (value == "content") return aikar_ppl_mask::CONTENT;
+llama_prune_ppl_mask llama_prune_ppl_mask_parse(const std::string & value) {
+    if (value == "all") return llama_prune_ppl_mask::ALL;
+    if (value == "assistant") return llama_prune_ppl_mask::ASSISTANT;
+    if (value == "reasoning") return llama_prune_ppl_mask::REASONING;
+    if (value == "content") return llama_prune_ppl_mask::CONTENT;
     throw std::runtime_error("invalid perplexity mask: " + value);
 }
 
-const char * aikar_ppl_mask_name(aikar_ppl_mask value) {
+const char * llama_prune_ppl_mask_name(llama_prune_ppl_mask value) {
     switch (value) {
-        case aikar_ppl_mask::ALL:       return "all";
-        case aikar_ppl_mask::ASSISTANT: return "assistant";
-        case aikar_ppl_mask::REASONING: return "reasoning";
-        case aikar_ppl_mask::CONTENT:   return "content";
+        case llama_prune_ppl_mask::ALL:       return "all";
+        case llama_prune_ppl_mask::ASSISTANT: return "assistant";
+        case llama_prune_ppl_mask::REASONING: return "reasoning";
+        case llama_prune_ppl_mask::CONTENT:   return "content";
     }
     return "unknown";
 }
 
-bool aikar_token_is_evaluated(const aikar_dataset_record & record, size_t token_index, aikar_ppl_mask mask) {
+bool llama_prune_token_is_evaluated(const llama_prune_dataset_record & record, size_t token_index, llama_prune_ppl_mask mask) {
     if (token_index == 0 || token_index >= record.tokens.size()) return false;
-    if (mask == aikar_ppl_mask::ALL) return true;
+    if (mask == llama_prune_ppl_mask::ALL) return true;
     const uint8_t field = record.token_fields[token_index];
-    if (mask == aikar_ppl_mask::ASSISTANT) return (field & TOKEN_FIELD_ASSISTANT) != 0;
-    if (mask == aikar_ppl_mask::REASONING) return (field & TOKEN_FIELD_REASONING) != 0;
+    if (mask == llama_prune_ppl_mask::ASSISTANT) return (field & TOKEN_FIELD_ASSISTANT) != 0;
+    if (mask == llama_prune_ppl_mask::REASONING) return (field & TOKEN_FIELD_REASONING) != 0;
     return (field & TOKEN_FIELD_CONTENT) != 0;
 }
 
-aikar_dataset aikar_dataset_load(
+llama_prune_dataset llama_prune_dataset_load(
         const std::string & path,
         const llama_model * model,
         const common_chat_templates * templates,
@@ -178,7 +178,7 @@ aikar_dataset aikar_dataset_load(
                         const std::string id = std::to_string(marker_id++);
                         const std::string prefix(1, '\x1e');
                         const std::string suffix(1, '\x1f');
-                        field_marker marker { prefix + "AIKAR_FIELD_" + id + "_BEGIN" + suffix, prefix + "AIKAR_FIELD_" + id + "_END" + suffix, field };
+                        field_marker marker { prefix + "LLAMA_PRUNE_FIELD_" + id + "_BEGIN" + suffix, prefix + "LLAMA_PRUNE_FIELD_" + id + "_END" + suffix, field };
                         text = marker.begin + text + marker.end;
                         markers.push_back(std::move(marker));
                     };
@@ -216,7 +216,7 @@ aikar_dataset aikar_dataset_load(
                     spans.push_back({ begin_marker, end_marker, marker.field });
                 }
 
-                aikar_dataset_record & record = state.record;
+                llama_prune_dataset_record & record = state.record;
                 record.line = lines[line_index].number;
                 record.tokens = common_tokenize(vocab, prompt, false, true);
                 if (record.tokens.size() < 2) throw std::runtime_error("rendered conversation has fewer than two tokens");
@@ -243,7 +243,7 @@ aikar_dataset aikar_dataset_load(
         });
     }
 
-    aikar_dataset result;
+    llama_prune_dataset result;
     result.records.reserve(states.size());
     for (size_t i = 0; i < states.size(); ++i) {
         dataset_line_state & state = *states[i];

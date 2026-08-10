@@ -41,7 +41,7 @@ struct options {
     std::string output_dir;
     std::string importance_cache;
     std::string metric = "router-output";
-    aikar_ppl_mask mask = aikar_ppl_mask::ASSISTANT;
+    llama_prune_ppl_mask mask = llama_prune_ppl_mask::ASSISTANT;
     std::vector<double> ratios;
     double max_layer_ratio = 0.25;
     int32_t seed = 42;
@@ -82,7 +82,7 @@ struct evaluation_result {
     double router_entropy = 0.0;
     uint64_t invalid_routing = 0;
 
-    double ppl(aikar_ppl_mask mask) const {
+    double ppl(llama_prune_ppl_mask mask) const {
         const size_t i = (size_t) mask;
         return evaluated[i] == 0 ? INFINITY : std::exp(nll[i] / evaluated[i]);
     }
@@ -155,7 +155,7 @@ options parse_options(int argc, char ** argv) {
         else if (arg == "--importance-cache") result.importance_cache = value(i);
         else if (arg == "--ratios") result.ratios = parse_ratios(value(i));
         else if (arg == "--metric") result.metric = value(i);
-        else if (arg == "--ppl-mask") result.mask = aikar_ppl_mask_parse(value(i));
+        else if (arg == "--ppl-mask") result.mask = llama_prune_ppl_mask_parse(value(i));
         else if (arg == "--max-layer-ratio") result.max_layer_ratio = std::stod(value(i));
         else if (arg == "--seed") result.seed = std::stoi(value(i));
         else if (arg == "--ctx-size") result.n_ctx = std::stoi(value(i));
@@ -221,6 +221,15 @@ float tensor_float(const std::vector<uint8_t> & data, ggml_type type, size_t ind
     throw std::runtime_error(std::string("unsupported calibration tensor type: ") + ggml_type_name(type));
 }
 
+// Collects REAP calibration statistics (arXiv:2510.13999) by intercepting three tensors
+// per MoE layer through the ggml eval callback:
+//
+//   ffn_moe_topk-{il}         [n_expert_used, n_tokens]          I32 - selected experts
+//   ffn_moe_weights_norm-{il} [1, n_expert_used, n_tokens]       F32 - router probabilities g_j
+//   ffn_moe_down-{il}         [n_embd, n_expert_used, n_tokens]  F32 - expert outputs f_j (pre-gate)
+//
+// Interception scheme adapted from tools/expert-profile on the `feat/moe-expert-profiling`
+// branch by Salvatore Rossitto; see common/moe-prune.cpp for full provenance.
 bool route_callback(ggml_tensor * tensor, bool ask, void * user_data) {
     route_collector & collector = *static_cast<route_collector *>(user_data);
     const std::string name = tensor->name;
@@ -330,7 +339,7 @@ double token_nll(const float * logits, int32_t n_vocab, llama_token target) {
 
 evaluation_result evaluate(
         llama_context * context,
-        const aikar_dataset & dataset,
+        const llama_prune_dataset & dataset,
         route_collector & collector,
         const options & opts,
         const std::string & label) {
@@ -341,7 +350,7 @@ evaluation_result evaluate(
     auto last_progress = started;
     llama_batch batch = llama_batch_init(opts.n_batch, 0, 1);
     for (size_t record_index = 0; record_index < dataset.records.size(); ++record_index) {
-        const aikar_dataset_record & record = dataset.records[record_index];
+        const llama_prune_dataset_record & record = dataset.records[record_index];
         for (size_t window_start = 0; window_start + 1 < record.tokens.size(); window_start += opts.n_ctx) {
             const size_t window_end = std::min(record.tokens.size(), window_start + (size_t) opts.n_ctx);
             llama_memory_clear(llama_get_memory(context), true);
@@ -351,7 +360,7 @@ evaluation_result evaluate(
                 std::vector<size_t> targets;
                 for (size_t i = batch_start; i < batch_end; ++i) {
                     bool need_logits = false;
-                    for (size_t mask = 0; mask < 4; ++mask) need_logits |= aikar_token_is_evaluated(record, i + 1, (aikar_ppl_mask) mask);
+                    for (size_t mask = 0; mask < 4; ++mask) need_logits |= llama_prune_token_is_evaluated(record, i + 1, (llama_prune_ppl_mask) mask);
                     common_batch_add(batch, record.tokens[i], (llama_pos) (i - window_start), { 0 }, need_logits);
                     if (need_logits) targets.push_back(i + 1);
                 }
@@ -364,7 +373,7 @@ evaluation_result evaluate(
                     const size_t target_index = targets[output];
                     const double nll = token_nll(logits + output * n_vocab, n_vocab, record.tokens[target_index]);
                     for (size_t mask = 0; mask < 4; ++mask) {
-                        if (aikar_token_is_evaluated(record, target_index, (aikar_ppl_mask) mask)) {
+                        if (llama_prune_token_is_evaluated(record, target_index, (llama_prune_ppl_mask) mask)) {
                             result.nll[mask] += nll;
                             ++result.evaluated[mask];
                         }
@@ -405,13 +414,13 @@ evaluation_result evaluate(
     return result;
 }
 
-json result_json(const evaluation_result & result, aikar_ppl_mask primary) {
+json result_json(const evaluation_result & result, llama_prune_ppl_mask primary) {
     return {
         { "ppl", result.ppl(primary) },
-        { "ppl_all", result.ppl(aikar_ppl_mask::ALL) },
-        { "ppl_assistant", result.ppl(aikar_ppl_mask::ASSISTANT) },
-        { "ppl_reasoning", result.ppl(aikar_ppl_mask::REASONING) },
-        { "ppl_content", result.ppl(aikar_ppl_mask::CONTENT) },
+        { "ppl_all", result.ppl(llama_prune_ppl_mask::ALL) },
+        { "ppl_assistant", result.ppl(llama_prune_ppl_mask::ASSISTANT) },
+        { "ppl_reasoning", result.ppl(llama_prune_ppl_mask::REASONING) },
+        { "ppl_content", result.ppl(llama_prune_ppl_mask::CONTENT) },
         { "evaluated_token_count", result.evaluated[(size_t) primary] },
         { "total_token_count", result.total_tokens },
         { "elapsed_seconds", result.elapsed_seconds },
@@ -457,7 +466,7 @@ std::string importance_cache_path(const options & opts) {
     return opts.importance_cache.empty() ? opts.output_dir + "/importance-cache.json" : opts.importance_cache;
 }
 
-json importance_cache_json(const importance_cache_data & cache, aikar_ppl_mask primary) {
+json importance_cache_json(const importance_cache_data & cache, llama_prune_ppl_mask primary) {
     return {
         { "format", "llama-moe-prune-importance-cache" },
         { "version", 1 },
@@ -475,7 +484,7 @@ json importance_cache_json(const importance_cache_data & cache, aikar_ppl_mask p
             { "dataset_hash", cache.dataset_hash },
             { "metric", cache.metric },
             { "ctx_size", cache.n_ctx },
-            { "primary_ppl_mask", aikar_ppl_mask_name(primary) },
+            { "primary_ppl_mask", llama_prune_ppl_mask_name(primary) },
         } },
         { "baseline", {
             { "nll", cache.baseline.nll },
@@ -539,7 +548,7 @@ std::optional<importance_cache_data> load_legacy_baseline_checkpoint(
         in >> root;
         if (root.value("format", "") != "llama-moe-prune-baseline-checkpoint" || root.value("version", 0) != 1 ||
             root.value("model_hash", "") != model.model_hash || root.value("expert_tensor_hash", "") != model.expert_tensor_hash ||
-            root.value("dataset_hash", "") != dataset_hash || root.value("ppl_mask", "") != aikar_ppl_mask_name(opts.mask) ||
+            root.value("dataset_hash", "") != dataset_hash || root.value("ppl_mask", "") != llama_prune_ppl_mask_name(opts.mask) ||
             root.value("ctx_size", 0) != opts.n_ctx) return std::nullopt;
         importance_cache_data result;
         result.model = model;
@@ -622,7 +631,7 @@ std::vector<common_moe_prune_profile> make_and_write_profiles(
     if (evaluated_tokens == 0) throw std::runtime_error("the selected perplexity mask evaluates zero tokens");
     std::vector<common_moe_prune_profile> profiles = common_moe_prune_make_profiles(
         cache.model, cache.stats, opts.ratios, opts.max_layer_ratio, cache.dataset_hash,
-        aikar_ppl_mask_name(opts.mask), cache.metric, evaluated_tokens);
+        llama_prune_ppl_mask_name(opts.mask), cache.metric, evaluated_tokens);
     for (const common_moe_prune_profile & profile : profiles) {
         common_moe_prune_profile_write(profile, opts.output_dir + "/" + profile_name(profile.requested_ratio));
     }
@@ -640,7 +649,7 @@ void run_profiles(const options & opts) {
         { "model_hash", cache.model.model_hash },
         { "expert_tensor_hash", cache.model.expert_tensor_hash },
         { "dataset_hash", cache.dataset_hash },
-        { "ppl_mask", aikar_ppl_mask_name(opts.mask) },
+        { "ppl_mask", llama_prune_ppl_mask_name(opts.mask) },
         { "profiles", json::array() },
     };
     for (const common_moe_prune_profile & profile : profiles) {
@@ -658,7 +667,7 @@ void run_analyze(const options & opts) {
     std::filesystem::create_directories(opts.output_dir);
     std::cerr << "llama-prune: inspecting model and hashing GGUF\n";
     const common_moe_prune_model_info model_info = common_moe_prune_inspect_model(opts.model);
-    aikar_dataset dataset;
+    llama_prune_dataset dataset;
     const std::string dataset_hash = common_moe_prune_sha256_file(opts.dataset);
     const std::string cache_path = importance_cache_path(opts);
     std::optional<importance_cache_data> cache;
@@ -688,7 +697,7 @@ void run_analyze(const options & opts) {
         loaded_model baseline_model = load_model(opts, &baseline_collector, nullptr);
         common_chat_templates_ptr templates = common_chat_templates_init(baseline_model.init->model(), "");
         std::cerr << "llama-prune: loading and tokenizing dataset\n";
-        dataset = aikar_dataset_load(opts.dataset, baseline_model.init->model(), templates.get(), opts.dataset_threads);
+        dataset = llama_prune_dataset_load(opts.dataset, baseline_model.init->model(), templates.get(), opts.dataset_threads);
         std::cerr << "llama-prune: dataset contains " << dataset.records.size() << " records and " << dataset.total_tokens << " tokens\n";
         importance_cache_data created;
         created.model = model_info;
@@ -769,7 +778,7 @@ void run_analyze(const options & opts) {
         if (dataset.records.empty()) {
             std::cerr << "llama-prune: loading and tokenizing dataset\n";
             common_chat_templates_ptr templates = common_chat_templates_init(pruned_model.init->model(), "");
-            dataset = aikar_dataset_load(opts.dataset, pruned_model.init->model(), templates.get(), opts.dataset_threads);
+            dataset = llama_prune_dataset_load(opts.dataset, pruned_model.init->model(), templates.get(), opts.dataset_threads);
             std::cerr << "llama-prune: dataset contains " << dataset.records.size() << " records and " << dataset.total_tokens << " tokens\n";
         }
         const evaluation_result pruned = evaluate(
@@ -800,7 +809,7 @@ void run_analyze(const options & opts) {
     std::ofstream out(opts.output_dir + "/analysis.json", std::ios::trunc);
     out << analysis.dump(2) << '\n';
     std::ofstream summary(opts.output_dir + "/README.txt", std::ios::trunc);
-    summary << "Gemma 4 26B A4B static MoE pruning analysis\nBaseline perplexity (" << aikar_ppl_mask_name(opts.mask) << "): " << baseline.ppl(opts.mask) << "\n";
+    summary << "Gemma 4 26B A4B static MoE pruning analysis\nBaseline perplexity (" << llama_prune_ppl_mask_name(opts.mask) << "): " << baseline.ppl(opts.mask) << "\n";
     for (const auto & row : analysis["ratios"]) {
         summary << "ratio " << row["requested_ratio"];
         if (row["evaluated"].get<bool>()) summary << ": ppl " << row["ppl"] << ", delta " << row["absolute_perplexity_delta"];
@@ -824,7 +833,7 @@ void run_hard(const options & opts) {
             }
         }
     } guard { staging_output };
-    const aikar_hard_prune_report report = aikar_hard_prune_gemma4_q4_0(opts.model, profile, model, staging_output);
+    const llama_prune_hard_prune_report report = llama_prune_hard_prune_gemma4_q4_0(opts.model, profile, model, staging_output);
 
     options validation_opts = opts;
     validation_opts.model = staging_output;
@@ -844,7 +853,7 @@ void run_hard(const options & opts) {
         }
         if (!opts.dataset.empty()) {
             common_chat_templates_ptr templates = common_chat_templates_init(validation.init->model(), "");
-            const aikar_dataset dataset = aikar_dataset_load(opts.dataset, validation.init->model(), templates.get(), opts.dataset_threads);
+            const llama_prune_dataset dataset = llama_prune_dataset_load(opts.dataset, validation.init->model(), templates.get(), opts.dataset_threads);
             hard_evaluation = evaluate(validation.context.get(), dataset, collector, opts, "hard validation");
         }
     }
@@ -853,7 +862,7 @@ void run_hard(const options & opts) {
         soft_collector.n_expert = model.expert_count;
         loaded_model soft_model = load_model(opts, &soft_collector, &profile);
         common_chat_templates_ptr templates = common_chat_templates_init(soft_model.init->model(), "");
-        const aikar_dataset dataset = aikar_dataset_load(opts.dataset, soft_model.init->model(), templates.get(), opts.dataset_threads);
+        const llama_prune_dataset dataset = llama_prune_dataset_load(opts.dataset, soft_model.init->model(), templates.get(), opts.dataset_threads);
         const evaluation_result soft_evaluation = evaluate(soft_model.context.get(), dataset, soft_collector, opts, "soft validation");
         if (soft_evaluation.evaluated[(size_t) opts.mask] != hard_evaluation->evaluated[(size_t) opts.mask]) {
             throw std::runtime_error("soft and hard evaluations used different token counts");
@@ -867,7 +876,7 @@ void run_hard(const options & opts) {
         report_in >> report_json_value;
         report_json_value["validation"] = {
             { "dataset_hash", common_moe_prune_sha256_file(opts.dataset) },
-            { "ppl_mask", aikar_ppl_mask_name(opts.mask) },
+            { "ppl_mask", llama_prune_ppl_mask_name(opts.mask) },
             { "soft_perplexity", soft_ppl },
             { "hard_perplexity", hard_ppl },
             { "absolute_difference", difference },

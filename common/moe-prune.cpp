@@ -1,3 +1,22 @@
+/**
+ * Static MoE expert pruning: importance statistics, profile I/O, and profile application.
+ *
+ * The expert importance criterion implemented here is REAP (Router-weighted Expert
+ * Activation Pruning):
+ *
+ *   REAP(j) = mean over tokens routed to expert j of:  g_j(t) * ||f_j(t)||_2
+ *
+ * where f_j is the routed expert output before gate weighting (`ffn_moe_down`) and
+ * g_j is the post-normalization router probability (`ffn_moe_weights_norm`). This is
+ * Equation 9 of "REAP: Router-weighted Expert Activation Pruning" (arXiv:2510.13999),
+ * exposed as the `router-output` metric.
+ *
+ * Provenance: the profiling engine and REAP/EAN statistics originate from the
+ * `feat/moe-expert-profiling` branch by Salvatore Rossitto (`tools/expert-profile` and
+ * `tools/moe-pruning`, March 2026), ported to C++ here. The soft-pruning graph mask,
+ * profile format, dataset perplexity masks, and importance cache are additions on top.
+ */
+
 #include "moe-prune.h"
 
 #include "ggml.h"

@@ -44,7 +44,7 @@ build/bin/llama-prune analyze \
   --output-dir pruning-results
 ```
 
-Calibration collects selection count and frequency, router probability sum and mean, routed expert output L2 norm, and `mean(router_probability * output_norm)`. Experts are ranked once per layer by the final metric with original expert ID as the deterministic tie-breaker. Every larger ratio takes a longer prefix of the same ranking, so pruning sets are nested.
+Calibration collects selection count and frequency, router probability sum and mean, routed expert output L2 norm, and `mean(router_probability * output_norm)`. That last quantity is the `router-output` metric and is the REAP saliency score — see [Importance metric](#importance-metric) below. Experts are ranked once per layer by the final metric with original expert ID as the deterministic tie-breaker. Every larger ratio takes a longer prefix of the same ranking, so pruning sets are nested.
 
 The first calibration writes `pruning-results/importance-cache.json`. The cache contains model and dataset identities, context size, baseline token/NLL aggregates, and the raw per-layer expert statistics. It does not contain a ratio-specific ranking. A later `analyze` command with compatible inputs loads this cache instead of running baseline calibration again. Use `--importance-cache FILE` to share one cache across output directories.
 
@@ -113,6 +113,24 @@ build/bin/llama-prune hard \
 The hard converter accepts routed expert weights only when they are Q4_0 tensors with the original expert axis at GGML dimension 2, dimension 0 divisible by the Q4_0 block size of 32, and a tensor size equal to `row_size(ne0) * ne1 * ne2`. Each surviving expert slice is copied byte-for-byte. Router rows and optional per-expert scales are compacted without dequantization.
 
 After conversion, the command reopens the output with the normal model loader and runs a short inference smoke test. When `--dataset` is present, it evaluates the hard model and the source model with the static soft profile, then records both perplexities and their absolute difference. The mapping, byte counts, and optional validation results are written to `<output>.report.json`.
+
+## Importance metric
+
+`--metric router-output` implements REAP (Router-weighted Expert Activation Pruning). The saliency score for expert `j` is the mean, over tokens routed to `j`, of the router probability times the L2 norm of that expert's output:
+
+```
+REAP(j) = mean_{t in X_j} [ g_j(t) * ||f_j(t)||_2 ]
+```
+
+`f_j` is the routed expert output *before* gate weighting (`ffn_moe_down`) and `g_j` is the post-normalization router probability (`ffn_moe_weights_norm`). Calibration also accumulates the ungated mean `||f_j||_2` (the EAN criterion) and the mean router probability, both recorded in the importance cache for comparison but not currently selectable as ranking metrics.
+
+Reference: "REAP: Router-weighted Expert Activation Pruning", [arXiv:2510.13999](https://arxiv.org/abs/2510.13999) — the score above is Equation 9.
+
+## Provenance
+
+The expert profiling engine — the REAP/EAN accumulators and the ggml eval-callback interception of `ffn_moe_topk`, `ffn_moe_weights_norm`, and `ffn_moe_down` — derives from the `feat/moe-expert-profiling` branch by Salvatore Rossitto (`tools/expert-profile/expert-profile.cpp` and the `tools/moe-pruning` scripts, March 2026), reimplemented in C++ for this tool. GGUF expert compaction follows the approach of that branch's `gguf_prune.py`.
+
+Built on top of that here: the soft-pruning graph mask (`llama_model_set_moe_prune` and `llm_graph_input_moe_mask`, which disable experts at inference time without touching weights), the hashed and validated JSON profile format, the ChatML dataset and per-field perplexity masks, and the reusable importance cache.
 
 ## Limitations
 

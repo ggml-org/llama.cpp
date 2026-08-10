@@ -60,7 +60,7 @@ static void require(bool value) {
 static void test_dataset() {
     llama_model_params params = llama_model_default_params();
     params.vocab_only = true;
-    llama_model * model = llama_model_load_from_file(AIKAR_TEST_GEMMA_VOCAB, params);
+    llama_model * model = llama_model_load_from_file(LLAMA_PRUNE_TEST_GEMMA_VOCAB, params);
     require(model != nullptr);
     common_chat_templates_ptr templates = common_chat_templates_init(model, "");
 
@@ -73,8 +73,8 @@ static void test_dataset() {
         fputs("{\"messages\":[{\"role\":\"user\",\"content\":\"Q1\"},{\"role\":\"assistant\",\"content\":\"A1\"},{\"role\":\"user\",\"content\":\"Q2\"},{\"role\":\"assistant\",\"content\":\"A2\"},{\"role\":\"user\",\"content\":\"Q3\"},{\"role\":\"assistant\",\"content\":\"A3\"},{\"role\":\"user\",\"content\":\"Q4\"},{\"role\":\"assistant\",\"content\":\"A4\"},{\"role\":\"user\",\"content\":\"Q5\"},{\"role\":\"assistant\",\"content\":\"A5\"}]}\n", file);
         fclose(file);
     }
-    const aikar_dataset dataset = aikar_dataset_load(path, model, templates.get(), 1);
-    const aikar_dataset parallel_dataset = aikar_dataset_load(path, model, templates.get(), 4);
+    const llama_prune_dataset dataset = llama_prune_dataset_load(path, model, templates.get(), 1);
+    const llama_prune_dataset parallel_dataset = llama_prune_dataset_load(path, model, templates.get(), 4);
     require(dataset.records.size() == 3);
     require(parallel_dataset.records.size() == dataset.records.size());
     require(parallel_dataset.total_tokens == dataset.total_tokens);
@@ -86,11 +86,11 @@ static void test_dataset() {
     size_t assistant = 0;
     size_t reasoning = 0;
     size_t content = 0;
-    for (const aikar_dataset_record & record : dataset.records) {
+    for (const llama_prune_dataset_record & record : dataset.records) {
         for (size_t i = 0; i < record.tokens.size(); ++i) {
-            assistant += aikar_token_is_evaluated(record, i, aikar_ppl_mask::ASSISTANT);
-            reasoning += aikar_token_is_evaluated(record, i, aikar_ppl_mask::REASONING);
-            content += aikar_token_is_evaluated(record, i, aikar_ppl_mask::CONTENT);
+            assistant += llama_prune_token_is_evaluated(record, i, llama_prune_ppl_mask::ASSISTANT);
+            reasoning += llama_prune_token_is_evaluated(record, i, llama_prune_ppl_mask::REASONING);
+            content += llama_prune_token_is_evaluated(record, i, llama_prune_ppl_mask::CONTENT);
         }
     }
     require(assistant > 0 && reasoning > 0 && content > 0);
@@ -104,7 +104,7 @@ static void test_dataset() {
     }
     bool line_error = false;
     try {
-        (void) aikar_dataset_load(path, model, templates.get());
+        (void) llama_prune_dataset_load(path, model, templates.get());
     } catch (const std::exception & e) {
         line_error = std::string(e.what()).find("line 2") != std::string::npos;
     }
@@ -184,7 +184,7 @@ int main() {
     fixture_profile.expert_count = fixture_info.expert_count;
     fixture_profile.experts_used = fixture_info.experts_used;
     fixture_profile.layers[0].disabled_experts = { 1, 3 };
-    const aikar_hard_prune_report report = aikar_hard_prune_gemma4_q4_0(source_path, fixture_profile, fixture_info, output_path);
+    const llama_prune_hard_prune_report report = llama_prune_hard_prune_gemma4_q4_0(source_path, fixture_profile, fixture_info, output_path);
     require(report.original_to_new.at(0).at(0) == 0);
     require(report.original_to_new.at(0).at(2) == 1);
     require(report.expert_bytes_removed > 0);

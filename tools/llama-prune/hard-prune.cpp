@@ -79,7 +79,7 @@ uint64_t file_size(const std::string & path) {
     return (uint64_t) in.tellg();
 }
 
-void write_report(const aikar_hard_prune_report & report, const std::string & output_path) {
+void write_report(const llama_prune_hard_prune_report & report, const std::string & output_path) {
     json mappings = json::array();
     for (const auto & layer : report.original_to_new) {
         json mapping = json::object();
@@ -109,7 +109,7 @@ void write_report(const aikar_hard_prune_report & report, const std::string & ou
 
 }
 
-aikar_hard_prune_report aikar_hard_prune_gemma4_q4_0(
+llama_prune_hard_prune_report llama_prune_hard_prune_gemma4_q4_0(
         const std::string & model_path,
         const common_moe_prune_profile & profile,
         const common_moe_prune_model_info & model_info,
@@ -145,7 +145,7 @@ aikar_hard_prune_report aikar_hard_prune_gemma4_q4_0(
     std::vector<tensor_plan> plans;
     plans.reserve(tensor_count);
     bool saw_fused_or_separate_experts = false;
-    aikar_hard_prune_report report;
+    llama_prune_hard_prune_report report;
 
     for (int64_t i = 0; i < (int64_t) tensor_count; ++i) {
         const std::string name = gguf_get_tensor_name(source.get(), i);
