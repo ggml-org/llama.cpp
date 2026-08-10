@@ -770,6 +770,57 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v,
 #endif // V_DOT2_F32_F16_AVAILABLE
 }
 
+#if defined(GGML_USE_HIP) && (defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || \
+    defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__) || defined(__gfx1200__) || defined(__gfx1201__))
+#define V_DOT2_F32_BF16_AVAILABLE
+#endif // defined(GGML_USE_HIP) && RDNA3/RDNA3.5/RDNA4 targets
+
+// Two BF16 products plus an FP32 add per instruction on RDNA3+; scalar FP32 math otherwise.
+static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const nv_bfloat162 v, const nv_bfloat162 u) {
+#ifdef V_DOT2_F32_BF16_AVAILABLE
+    asm volatile("v_dot2_f32_bf16 %0, %1, %2, %0" : "+v"(acc) : "v"(v), "v"(u));
+#else
+    const float2 tmpv = make_float2(__bfloat162float(__low2bfloat16(v)), __bfloat162float(__high2bfloat16(v)));
+    const float2 tmpu = make_float2(__bfloat162float(__low2bfloat16(u)), __bfloat162float(__high2bfloat16(u)));
+    acc += tmpv.x * tmpu.x;
+    acc += tmpv.y * tmpu.y;
+#endif // V_DOT2_F32_BF16_AVAILABLE
+}
+
+// Pack the low (ll) or high (hh) 16 bits of two nv_bfloat162 into one nv_bfloat162.
+// Used to pair BF16 values from two consecutive KV rows for v_dot2_f32_bf16 in the PV phase.
+static __device__ __forceinline__ nv_bfloat162 ggml_cuda_bf16_perm_ll(const nv_bfloat162 v0, const nv_bfloat162 v1) {
+#ifdef V_DOT2_F32_BF16_AVAILABLE
+    nv_bfloat162 dst;
+    asm volatile("v_perm_b32 %0, %2, %1, 0x05040100" : "=v"(dst) : "v"(v0), "v"(v1));
+    return dst;
+#else
+    uint32_t a, b, r;
+    memcpy(&a, &v0, sizeof(a));
+    memcpy(&b, &v1, sizeof(b));
+    r = (a & 0xFFFF) | (b << 16);
+    nv_bfloat162 dst;
+    memcpy(&dst, &r, sizeof(r));
+    return dst;
+#endif // V_DOT2_F32_BF16_AVAILABLE
+}
+
+static __device__ __forceinline__ nv_bfloat162 ggml_cuda_bf16_perm_hh(const nv_bfloat162 v0, const nv_bfloat162 v1) {
+#ifdef V_DOT2_F32_BF16_AVAILABLE
+    nv_bfloat162 dst;
+    asm volatile("v_perm_b32 %0, %2, %1, 0x07060302" : "=v"(dst) : "v"(v0), "v"(v1));
+    return dst;
+#else
+    uint32_t a, b, r;
+    memcpy(&a, &v0, sizeof(a));
+    memcpy(&b, &v1, sizeof(b));
+    r = ((a >> 16) & 0xFFFF) | (b & 0xFFFF0000);
+    nv_bfloat162 dst;
+    memcpy(&dst, &r, sizeof(r));
+    return dst;
+#endif // V_DOT2_F32_BF16_AVAILABLE
+}
+
 static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v, const half2 u) {
 #ifdef FAST_FP16_AVAILABLE
     acc += v*u;
