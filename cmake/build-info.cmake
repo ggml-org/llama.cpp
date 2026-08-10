@@ -15,6 +15,8 @@ if(NOT Git_FOUND)
     endif()
 endif()
 
+set(BUILD_RELEASE_TAG "")
+
 # Get the commit count and hash
 if(Git_FOUND)
     execute_process(
@@ -36,6 +38,18 @@ if(Git_FOUND)
     )
     if (RES EQUAL 0)
         set(BUILD_NUMBER ${COUNT})
+    endif()
+    # Check if HEAD is tagged with a semver release tag (e.g. v0.0.1)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --exact-match --tags --match "v[0-9]*" HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE BUILD_RELEASE_TAG
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE RES
+        ERROR_QUIET
+    )
+    if (NOT RES EQUAL 0)
+        set(BUILD_RELEASE_TAG "")
     endif()
 endif()
 
