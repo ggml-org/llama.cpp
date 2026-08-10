@@ -2,6 +2,7 @@
 
 #include "ggml-common.h"
 #include "ggml-impl.h"
+#include "ggml-openvino-extra.h"
 #include "ggml.h"
 
 #include <algorithm>
@@ -702,28 +703,93 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
                                                 ov::Tensor & scales,
                                                 ov::Tensor & zp) {
     int64_t n_elements = ggml_nelements(tensor);
-
-    // First dequantize to F32
-    std::vector<float> weights_f32(n_elements);
-    ggml_get_type_traits(tensor->type)->to_float(data, weights_f32.data(), n_elements);
-
-    // Handle F16 case - just convert and create constant
-    if (requant_type == ExtraQuantType::F16) {
-        ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), n_elements);
-        auto result = std::make_shared<ov::op::v0::Constant>(weights);
-        result->set_friendly_name(tensor->name);
-        return result;
-    }
+    const int64_t ne0 = tensor->ne[0];
+    const int64_t n_rows = ne0 > 0 ? n_elements / ne0 : 0;
 
     // Requantize to target quantized format
     bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128);
 
-    if (is_u4) {
-        quantize_q4_0(weights_f32.data(), weights, scales, zp, n_elements, block_size);
-    } else if (requant_type == ExtraQuantType::Q8_1_C) {
-        quantize_q8_1(weights_f32.data(), weights, scales, zp, n_elements, block_size);
+    // Dequantizing the whole tensor at once needs a transient F32 array of n_elements floats. For a
+    // large embedding or output matrix that dominates peak host memory during compile: a
+    // large embedding table costs several GiB, on top of the source weights and the requantized output.
+    //
+    // GGML_OPENVINO_REDUCE_COMPILE_MEM instead walks complete rows in chunks, dequantizing into a
+    // small scratch buffer and quantizing straight into a row-slice of the destination, which bounds
+    // the transient at CHUNK_ROWS*ne0 floats (a few MiB at typical row widths) regardless of tensor size. Only
+    // whole rows are processed, so each chunk's groups are exactly the groups of those rows.
+    //
+    // u4 targets are excluded: make_int4_weights() packs two values per byte across row boundaries,
+    // so a chunk's output is not byte-aligned with the destination. With the flag off, or for u4,
+    // the original full-materialization path runs unchanged.
+    const bool stream_requant = ggml_openvino_getenv_int("GGML_OPENVINO_REDUCE_COMPILE_MEM") != 0 && !is_u4 &&
+                                n_rows > 0 && ne0 > 0 && (block_size <= 0 || ne0 % block_size == 0);
+
+    if (!stream_requant) {
+        // First dequantize to F32
+        std::vector<float> weights_f32(n_elements);
+        ggml_get_type_traits(tensor->type)->to_float(data, weights_f32.data(), n_elements);
+
+        // Handle F16 case - just convert and create constant
+        if (requant_type == ExtraQuantType::F16) {
+            ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), n_elements);
+            auto result = std::make_shared<ov::op::v0::Constant>(weights);
+            result->set_friendly_name(tensor->name);
+            return result;
+        }
+
+        if (is_u4) {
+            quantize_q4_0(weights_f32.data(), weights, scales, zp, n_elements, block_size);
+        } else if (requant_type == ExtraQuantType::Q8_1_C) {
+            quantize_q8_1(weights_f32.data(), weights, scales, zp, n_elements, block_size);
+        } else {
+            quantize_q8_0(weights_f32.data(), weights, scales, zp, n_elements, block_size);
+        }
     } else {
-        quantize_q8_0(weights_f32.data(), weights, scales, zp, n_elements, block_size);
+        const int64_t CHUNK_ROWS = std::min<int64_t>(n_rows, 256);
+        const size_t row_bytes = ggml_row_size(tensor->type, ne0);
+        std::vector<float> scratch(static_cast<size_t>(CHUNK_ROWS) * ne0);
+        const auto * tt = ggml_get_type_traits(tensor->type);
+
+        for (int64_t r0 = 0; r0 < n_rows; r0 += CHUNK_ROWS) {
+            const int64_t rows = std::min<int64_t>(CHUNK_ROWS, n_rows - r0);
+            const int64_t cnt = rows * ne0;
+            const auto * src = static_cast<const uint8_t *>(data) + static_cast<size_t>(r0) * row_bytes;
+            tt->to_float(src, scratch.data(), cnt);
+
+            if (requant_type == ExtraQuantType::F16) {
+                auto * dst = static_cast<ggml_fp16_t *>(weights.data()) + static_cast<size_t>(r0) * ne0;
+                ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(scratch.data(), dst, cnt);
+                continue;
+            }
+
+            // Row-chunked views over the destination buffers, so each chunk quantizes into its own
+            // slice without touching the rest.
+            ov::Tensor w_chunk(weights.get_element_type(), ov::Shape{(size_t) rows, (size_t) ne0},
+                               static_cast<uint8_t *>(weights.data()) + static_cast<size_t>(r0) * ne0);
+            const size_t groups_per_row = block_size > 0 ? (size_t) (ne0 / block_size) : 1;
+            ov::Tensor s_chunk(scales.get_element_type(), ov::Shape{(size_t) rows, groups_per_row},
+                               static_cast<uint8_t *>(scales.data()) +
+                                   static_cast<size_t>(r0) * groups_per_row * scales.get_element_type().size());
+            // Symmetric targets leave `zp` unallocated; quantize_q8_* only touches it in the
+            // asymmetric branch, so pass the empty tensor straight through.
+            ov::Tensor z_chunk;
+            if (zp) {
+                z_chunk = ov::Tensor(zp.get_element_type(), ov::Shape{(size_t) rows, groups_per_row},
+                                     static_cast<uint8_t *>(zp.data()) +
+                                         static_cast<size_t>(r0) * groups_per_row * zp.get_element_type().size());
+            }
+            if (requant_type == ExtraQuantType::Q8_1_C) {
+                quantize_q8_1(scratch.data(), w_chunk, s_chunk, z_chunk, cnt, block_size);
+            } else {
+                quantize_q8_0(scratch.data(), w_chunk, s_chunk, z_chunk, cnt, block_size);
+            }
+        }
+
+        if (requant_type == ExtraQuantType::F16) {
+            auto result = std::make_shared<ov::op::v0::Constant>(weights);
+            result->set_friendly_name(tensor->name);
+            return result;
+        }
     }
 
     // Create the OpenVINO weight subgraph
