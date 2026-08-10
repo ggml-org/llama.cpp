@@ -186,7 +186,7 @@ class ServerProcess:
             server_args.extend(["--ubatch-size", self.n_ubatch])
         if self.n_threads:
             server_args.extend(["--threads", self.n_threads])
-        if self.n_gpu_layer:
+        if self.n_gpu_layer is not None:
             server_args.extend(["--n-gpu-layers", self.n_gpu_layer])
         if self.server_continuous_batching:
             server_args.append("--cont-batching")

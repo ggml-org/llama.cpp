@@ -4,6 +4,7 @@
 
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <vector>
 #include <unordered_set>
@@ -21,13 +22,14 @@ private:
     // queues
     std::deque<server_task> queue_tasks;
     std::deque<server_task> queue_tasks_deferred;
+    std::deque<std::function<void()>> queue_updates;
 
     std::mutex mutex_tasks;
     std::condition_variable condition_tasks;
 
     // callback functions
     std::function<void(server_task &&)> callback_new_task;
-    std::function<void(void)>           callback_update_slots;
+    std::function<bool(void)>           callback_update_slots;
     std::function<void(bool)>           callback_sleeping_state;
 
 public:
@@ -39,6 +41,9 @@ public:
 
     // Add a new task, but defer until one slot is available
     void defer(server_task && task);
+
+    // Apply an update on the server thread
+    void post_update(std::function<void()> && update);
 
     // Get the next id for creating a new task
     int get_new_id();
@@ -90,8 +95,8 @@ public:
         callback_new_task = std::move(callback);
     }
 
-    // Register the function to be called when all slots data is ready to be processed
-    void on_update_slots(std::function<void(void)> callback) {
+    // Register the function to update slots. It returns true while slots have active work.
+    void on_update_slots(std::function<bool(void)> callback) {
         callback_update_slots = std::move(callback);
     }
 

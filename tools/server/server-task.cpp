@@ -10,6 +10,8 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <sstream>
+
 using json = nlohmann::ordered_json;
 
 //
@@ -1543,30 +1545,122 @@ json server_task_result_metrics::to_json() {
         { "idle",                            n_idle_slots },
         { "processing",                      n_processing_slots },
         { "deferred",                        n_tasks_deferred },
-        { "t_start",                         t_start },
+        { "t_start",                         data.t_start },
 
-        { "n_prompt_tokens_processed_total", n_prompt_tokens_processed_total },
-        { "t_tokens_generation_total",       t_tokens_generation_total },
-        { "n_tokens_predicted_total",        n_tokens_predicted_total },
-        { "t_prompt_processing_total",       t_prompt_processing_total },
+        { "n_prompt_tokens_processed_total", data.n_prompt_tokens_processed_total },
+        { "t_tokens_generation_total",       data.t_tokens_generation_total },
+        { "n_tokens_predicted_total",        data.n_tokens_predicted_total },
+        { "t_prompt_processing_total",       data.t_prompt_processing_total },
 
-        { "n_tokens_max",                    n_tokens_max },
+        { "n_tokens_max",                    data.n_tokens_max },
 
-        { "n_prompt_tokens_processed",       n_prompt_tokens_processed },
-        { "t_prompt_processing",             t_prompt_processing },
-        { "n_tokens_predicted",              n_tokens_predicted },
-        { "t_tokens_generation",             t_tokens_generation },
+        { "n_prompt_tokens_processed",       data.n_prompt_tokens_processed },
+        { "t_prompt_processing",             data.t_prompt_processing },
+        { "n_tokens_predicted",              data.n_tokens_predicted },
+        { "t_tokens_generation",             data.t_tokens_generation },
 
-        { "n_decode_total",                  n_decode_total },
-        { "n_busy_slots_total",              n_busy_slots_total },
+        { "n_decode_total",                  data.n_decode_total },
+        { "n_busy_slots_total",              data.n_busy_slots_total },
 
-        { "n_draft_tokens_total",            n_draft_tokens_total },
-        { "n_draft_accepted_total",          n_draft_accepted_total },
-        { "n_draft_verif_steps_total",       n_draft_verif_steps_total },
-        { "n_accepted_per_pos_total",        n_accepted_per_pos_total },
+        { "n_draft_tokens_total",            data.n_draft_tokens_total },
+        { "n_draft_accepted_total",          data.n_draft_accepted_total },
+        { "n_draft_verif_steps_total",       data.n_draft_verif_steps_total },
+        { "n_accepted_per_pos_total",        data.n_accepted_per_pos_total },
 
         { "slots",                           slots_data },
     };
+}
+
+std::string server_task_result_metrics::render_prometheus() const {
+    json all_metrics_def = json {
+        {"counter", {{
+                {"name",  "prompt_tokens_total"},
+                {"help",  "Number of prompt tokens processed."},
+                {"value",  (uint64_t) data.n_prompt_tokens_processed_total}
+        }, {
+                {"name",  "prompt_seconds_total"},
+                {"help",  "Prompt process time"},
+                {"value",  (uint64_t) data.t_prompt_processing_total / 1.e3}
+        }, {
+                {"name",  "tokens_predicted_total"},
+                {"help",  "Number of generation tokens processed."},
+                {"value",  (uint64_t) data.n_tokens_predicted_total}
+        }, {
+                {"name",  "tokens_predicted_seconds_total"},
+                {"help",  "Predict process time"},
+                {"value",  (uint64_t) data.t_tokens_generation_total / 1.e3}
+        }, {
+                {"name",  "n_decode_total"},
+                {"help",  "Total number of llama_decode() calls"},
+                {"value",  data.n_decode_total}
+        }, {
+                {"name",  "n_tokens_max"},
+                {"help",  "Largest observed n_tokens."},
+                {"value",  data.n_tokens_max}
+        }, {
+                {"name",  "spec_decode_num_draft_tokens_total"},
+                {"help",  "Total draft tokens generated"},
+                {"value",  data.n_draft_tokens_total}
+        }, {
+                {"name",  "spec_decode_num_accepted_tokens_total"},
+                {"help",  "Total draft tokens accepted by the target model"},
+                {"value",  data.n_draft_accepted_total}
+        }, {
+                {"name",  "spec_decode_num_drafts_total"},
+                {"help",  "Total speculative decoding verification steps"},
+                {"value",  data.n_draft_verif_steps_total}
+        }}},
+        {"gauge", {{
+                {"name",  "prompt_tokens_seconds"},
+                {"help",  "Average prompt throughput in tokens/s."},
+                {"value",  data.n_prompt_tokens_processed ? 1.e3 / data.t_prompt_processing * data.n_prompt_tokens_processed : 0.}
+        },{
+                {"name",  "predicted_tokens_seconds"},
+                {"help",  "Average generation throughput in tokens/s."},
+                {"value",  data.n_tokens_predicted ? 1.e3 / data.t_tokens_generation * data.n_tokens_predicted : 0.}
+        },{
+                {"name",  "requests_processing"},
+                {"help",  "Number of requests processing."},
+                {"value",  (uint64_t) n_processing_slots}
+        },{
+                {"name",  "requests_deferred"},
+                {"help",  "Number of requests deferred."},
+                {"value",  (uint64_t) n_tasks_deferred}
+        },{
+                {"name",  "n_busy_slots_per_decode"},
+                {"help",  "Average number of busy slots per llama_decode() call"},
+                {"value",  (float) data.n_busy_slots_total / std::max((float) data.n_decode_total, 1.f)}
+        }}}
+    };
+
+    std::stringstream prometheus;
+
+    for (const auto & el : all_metrics_def.items()) {
+        const auto & type        = el.key();
+        const auto & metrics_def = el.value();
+
+        for (const auto & metric_def : metrics_def) {
+            const std::string name = metric_def.at("name");
+            const std::string help = metric_def.at("help");
+
+            auto value = json_value(metric_def, "value", 0.);
+            prometheus << "# HELP llamacpp:" << name << " " << help  << "\n"
+                       << "# TYPE llamacpp:" << name << " " << type  << "\n"
+                       << "llamacpp:"        << name << " " << value << "\n";
+        }
+    }
+
+    if (!data.n_accepted_per_pos_total.empty()) {
+        prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
+                      " Accepted tokens per draft position\n"
+                   << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos_total counter\n";
+        for (size_t i = 0; i < data.n_accepted_per_pos_total.size(); i++) {
+            prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\""
+                       << i << "\"} " << data.n_accepted_per_pos_total[i] << "\n";
+        }
+    }
+
+    return prometheus.str();
 }
 
 //

@@ -63,6 +63,52 @@ def test_server_slots():
     assert "params" not in res.body[0]
 
 
+def test_server_metrics_during_decode():
+    global server
+    server.server_metrics = True
+    server.server_slots = True
+    server.n_ctx = 2048
+    server.n_batch = 2048
+    server.n_slots = 1
+    server.n_predict = 1
+    server.n_threads = 1
+    server.n_gpu_layer = 0
+    server.start()
+
+    res = server.make_request("GET", "/metrics")
+    match = re.search(r"^llamacpp:n_decode_total (\d+)$", res.body, re.MULTILINE)
+    assert match is not None
+    n_decode_start = int(match.group(1))
+
+    prompt = "Once upon a time " * 350
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        completion = executor.submit(server.make_request, "POST", "/completion", {
+            "prompt": prompt,
+            "n_predict": 1,
+        })
+
+        saw_processing_during_decode = False
+        while not completion.done():
+            res = server.make_request("GET", "/metrics", timeout=5)
+            assert res.status_code == 200
+            if "llamacpp:requests_processing 1\n" in res.body:
+                match = re.search(r"^llamacpp:n_decode_total (\d+)$", res.body, re.MULTILINE)
+                assert match is not None
+                if int(match.group(1)) == n_decode_start:
+                    saw_processing_during_decode = True
+                    break
+
+        assert saw_processing_during_decode
+        assert not completion.done()
+
+        res = server.make_request("GET", "/slots", timeout=5)
+        assert res.status_code == 200
+        assert res.body[0]["is_processing"]
+        assert not completion.done()
+
+        assert completion.result().status_code == 200
+
+
 def test_load_split_model():
     global server
     server.offline = False

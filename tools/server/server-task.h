@@ -509,13 +509,9 @@ struct server_task_result_error : server_task_result {
     virtual json to_json() override;
 };
 
-struct server_task_result_metrics : server_task_result {
-    int n_idle_slots;
-    int n_processing_slots;
-    int n_tasks_deferred;
-    int64_t t_start;
+struct server_metrics_data {
+    int64_t t_start = 0;
 
-    // TODO: somehow reuse server_metrics in the future, instead of duplicating the fields
     uint64_t n_prompt_tokens_processed_total = 0;
     uint64_t t_prompt_processing_total       = 0;
     uint64_t n_tokens_predicted_total        = 0;
@@ -536,12 +532,21 @@ struct server_task_result_metrics : server_task_result {
     uint64_t n_draft_accepted_total    = 0;
     uint64_t n_draft_verif_steps_total = 0;
     std::vector<uint64_t> n_accepted_per_pos_total;
+};
+
+struct server_task_result_metrics : server_task_result {
+    int n_idle_slots;
+    int n_processing_slots;
+    size_t n_tasks_deferred;
+    server_metrics_data data;
 
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
 
     virtual json to_json() override;
+
+    std::string render_prometheus() const;
 };
 
 struct server_task_result_slot_save_load : server_task_result {

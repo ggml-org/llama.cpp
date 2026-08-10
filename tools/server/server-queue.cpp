@@ -68,6 +68,12 @@ void server_queue::defer(server_task && task) {
     condition_tasks.notify_one();
 }
 
+void server_queue::post_update(std::function<void()> && update) {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    queue_updates.push_back(std::move(update));
+    condition_tasks.notify_one();
+}
+
 int server_queue::get_new_id() {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     int new_id = id++;
@@ -125,6 +131,7 @@ void server_queue::terminate() {
 void server_queue::start_loop(int64_t idle_sleep_ms) {
     running = true;
     time_last_task = ggml_time_ms();
+    bool slots_active = false;
 
     constexpr auto max_wait_time = std::chrono::seconds(1);
     auto should_sleep = [&]() -> bool {
@@ -133,10 +140,29 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
             return false;
         }
         int64_t now = ggml_time_ms();
-        return (now - time_last_task) >= idle_sleep_ms;
+        return !slots_active && (now - time_last_task) >= idle_sleep_ms;
     };
 
     while (true) {
+        QUE_DBG("%s", "processing updates\n");
+
+        while (true) {
+            std::unique_lock<std::mutex> lock(mutex_tasks);
+            if (!running) {
+                QUE_DBG("%s", "terminate\n");
+                return;
+            }
+            if (queue_updates.empty()) {
+                lock.unlock();
+                break;
+            }
+            auto update = std::move(queue_updates.front());
+            queue_updates.pop_front();
+            lock.unlock();
+
+            update();
+        }
+
         QUE_DBG("%s", "processing new tasks\n");
 
         while (true) {
@@ -160,7 +186,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
         QUE_DBG("%s", "update slots\n");
 
         // this will run the main inference process for all slots
-        callback_update_slots();
+        slots_active = callback_update_slots();
         {
             // update_slots() may take a while to finish, we need to make sure it's not counted as idle
             std::unique_lock<std::mutex> lock(mutex_tasks);
@@ -170,7 +196,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
         QUE_DBG("%s", "waiting for new tasks\n");
         while (true) {
             std::unique_lock<std::mutex> lock(mutex_tasks);
-            if (!running || !queue_tasks.empty()) {
+            if (!running || !queue_tasks.empty() || !queue_updates.empty()) {
                 break; // go back to process new tasks or terminate
             }
 
@@ -197,7 +223,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
             } else {
                 // wait for new tasks or timeout for checking sleeping condition
                 bool res = condition_tasks.wait_for(lock, max_wait_time, [&]{
-                    return (!queue_tasks.empty() || !running);
+                    return (!queue_tasks.empty() || !queue_updates.empty() || !running);
                 });
                 if (res) {
                     break; // new task arrived or terminate
