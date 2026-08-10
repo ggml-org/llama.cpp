@@ -89,7 +89,7 @@ int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32
-    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to its stdin
+    // Ignore SIGPIPE so the server does not crash if a child (MCP server, tools runtime) exits while we are writing to its stdin
     signal(SIGPIPE, SIG_IGN);
 #endif
 
