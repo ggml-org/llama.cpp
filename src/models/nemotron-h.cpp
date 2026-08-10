@@ -215,7 +215,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     if (extract_final_inp) {
         res->t_layer_inp[n_layer] = cur;
 
-        if (inp_out_ids) {
+        if (inp_out_ids && cparams.embeddings_nextn_masked) {
             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
         }
     }
