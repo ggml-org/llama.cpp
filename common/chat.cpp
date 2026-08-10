@@ -3148,7 +3148,13 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
         auto analysis = p.ref("analysis");
 
         auto recipient  = p.optional(p.literal(" to=user"));
-        auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") + p.content(p.until("<|eot|>")));
+        // A user-facing turn nominally ends at <|eot|>. In practice the model also ends
+        // it with <|eom|> and continues into a tool call, or simply appends the tool
+        // markup to the prose with no delimiter at all. Stopping only at <|eot|> makes
+        // this greedy: the tool call is swallowed into content and never parsed.
+        auto final_msg  = p.rule("final",
+                                 recipient + p.literal("<|message|>") +
+                                     p.content(p.until_one_of({ "<|eot|>", "<|eom|>", "<atem:function_calls>" })));
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto string_value = p.ac(
@@ -3186,12 +3192,19 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
                     args = p.zero_or_more(arg_choice + p.space());
                 }
 
+                // The recipient header is emitted inconsistently: canonically the call is
+                // " to=<tool><|message|><atem:function_calls>", but the model also appends
+                // the markup straight onto a user-facing message with no header at all.
+                // Accept either so the call is parsed rather than left in content.
+                auto call_header = p.optional(p.literal(" to=") + p.until("<|message|>") + p.literal("<|message|>"));
+
                 auto tool_parser = p.tool(
-                    p.tool_open(p.literal(" to=") + p.until("<|message|>") +
-                                p.literal("<|message|><atem:function_calls>") + p.space() +
+                    p.tool_open(call_header +
+                                p.literal("<atem:function_calls>") + p.space() +
                                 p.literal("<atem:invoke name=\"") + p.tool_name(p.literal(name)) + p.literal("\">") + p.space())
                     << p.tool_args(args)
                     << p.tool_close(p.literal("</atem:invoke>") + p.space() + p.literal("</atem:function_calls>")));
+
 
                 tool_choice |= p.rule("tool-" + name, tool_parser);
             });
@@ -3204,7 +3217,12 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
                 return p.zero_or_more(start + analysis) + start + tool_calls;
             }
-            return p.zero_or_more(start + analysis) + start + (tool_calls | final_msg);
+            // A turn may be content, tool calls, or content followed by tool calls. The
+            // delimiters between the two halves are unreliable — sometimes <|eom|> and a
+            // fresh <|start|>assistant header, sometimes nothing at all — so treat both
+            // as optional rather than dropping the call.
+            auto trailing_calls = p.optional(p.optional(p.literal("<|eom|>")) + p.optional(start) + tool_calls);
+            return p.zero_or_more(start + analysis) + start + (tool_calls | (final_msg + trailing_calls));
         }
 
         return p.zero_or_more(start + analysis) + start + final_msg;
