@@ -2270,12 +2270,9 @@ struct test_get_rows : public test_case {
             // Allocate a larger tensor and view into it with a non-zero row offset
             // to produce view_offs > 0, which triggers misaligned storage buffer offsets
             // (mimics KV cache view scenarios in Qwen3-TTS and Qwen3-VL).
-            const int padded_m = m + 3; // extra rows so view_offs is non-trivial
+            const int padded_m = m + 3;
             ggml_tensor * in_padded = ggml_new_tensor_4d(ctx, type, n, padded_m, be1, be2);
             ggml_set_name(in_padded, "in_padded");
-            // View starting at row 3 (non-zero offset)
-            // Note: ggml_view_4d takes (ctx, a, ne0, ne1, ne2, ne3, nb1, nb2, nb3, offset)
-            //   nb0 is implicit (= ggml_type_size * ne0 elem), so do not pass nb[0]
             in = ggml_view_4d(ctx, in_padded, n, m, be1, be2,
                               in_padded->nb[1], in_padded->nb[2], in_padded->nb[3],
                               3 * in_padded->nb[1]);
@@ -8155,9 +8152,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_get_rows(GGML_TYPE_I32, 256, 5, 4, b, 1, v));
         }
     }
-    // Tests with view_src0=true: non-zero view_offs on src0 triggers misaligned storage
-    // buffer offsets (mimics KV cache view patterns in Qwen3-TTS / Qwen3-VL).
-    // Covers both non-quantized (get_rows.comp path) and quantized (get_rows_quant.comp path) types.
+    // view_src0=true cases: exercise non-zero view_offs on src0 to cover misaligned
+    // storage buffer offsets in both get_rows.comp and get_rows_quant.comp paths.
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_I32}) {
         for (bool v : {false, true}) {
             test_cases.emplace_back(new test_get_rows(type, 256, 5, 4, 1, 1, v, /*vs0=*/true));
