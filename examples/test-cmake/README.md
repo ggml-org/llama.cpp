@@ -96,7 +96,7 @@ a versioned directory but I'm not sure how well that would work for projects
 integrating ggml into their projects. The might be building with a specific
 ggml backends directory (GGML_BACKEND_DIR) and I don't think we can force this
 upon them. I'll look into this but in the ggml repo as that is where the semver
-changes for ggml are taking place. 
+changes for ggml are taking place.
 
 
 _wip_
