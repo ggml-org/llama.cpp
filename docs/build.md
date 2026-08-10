@@ -458,6 +458,13 @@ pacman -S git \
     mingw-w64-ucrt-x86_64-spirv-headers
 ```
 
+(Optional) Install the ccache package to speed up recompilation.
+WARNING: Certain build-time issues stem from a bad cache state.
+
+```sh
+pacman -S mingw-w64-ucrt-x86_64-ccache
+```
+
 Switch into the `llama.cpp` directory and build using CMake.
 ```sh
 cmake -B build -DGGML_VULKAN=ON
