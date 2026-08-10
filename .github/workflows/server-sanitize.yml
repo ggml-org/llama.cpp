@@ -25,6 +25,12 @@ on:
       'tools/server/**.*'
     ]
 
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/server-sanitize.yml'
+    ]
+
 env:
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
