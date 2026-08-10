@@ -230,10 +230,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: false,
-				help: 'Display user, system and thinking content as plain text instead of formatted Markdown. Markdown is the default so that @-mention badges render in sent messages.',
-				key: SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT,
-				label: 'Render content as raw text',
+				defaultValue: true,
+				help: 'Render user messages using markdown formatting in the chat. Turn this off to keep a message exactly as typed; @-mention badges show either way.',
+				key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
+				label: 'Render user content as Markdown',
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Render the reasoning/thinking block content as formatted Markdown instead of plain text.',
+				key: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
+				label: 'Render thinking as Markdown',
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				type: SettingsFieldType.CHECKBOX
 			},

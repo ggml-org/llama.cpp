@@ -240,6 +240,7 @@ export {
 	MENTION_BADGE_FOLDER_ICON_PATHS,
 	getMentionBadgeIconPaths,
 	getMentionBadgeLabel,
+	splitMentionSegments,
 	buildMentionInsertion
 } from './mention-badge';
 

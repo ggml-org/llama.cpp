@@ -140,7 +140,7 @@
 		class:is-streaming={isPending}
 		onscroll={handleScrollEvent}
 	>
-		{#if !currentConfig.renderContentAsRawText}
+		{#if currentConfig.renderThinkingAsMarkdown}
 			<MarkdownContent content={section.content} class="text-muted-foreground" {attachments} />
 		{:else}
 			<div

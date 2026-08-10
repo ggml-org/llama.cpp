@@ -135,32 +135,6 @@ class SettingsStore {
 				...savedVal
 			};
 
-			// Migrate the legacy render keys into `renderContentAsRawText`
-			// (inverted semantics: the old keys opted INTO markdown). Any
-			// explicit raw-text preference wins when the legacy keys disagree.
-			const LEGACY_MARKDOWN_KEYS = ['renderUserContentAsMarkdown', 'renderThinkingAsMarkdown'];
-			const LEGACY_RAW_TEXT_KEY = 'renderUserContentAsRawText'; // this branch's intermediate key
-			const legacyKeys = [...LEGACY_MARKDOWN_KEYS, LEGACY_RAW_TEXT_KEY].filter(
-				(key) => key in savedVal
-			);
-
-			if (legacyKeys.length > 0) {
-				if (!(SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT in savedVal)) {
-					if (LEGACY_RAW_TEXT_KEY in savedVal) {
-						this.config[SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT] = savedVal[LEGACY_RAW_TEXT_KEY];
-					} else {
-						this.config[SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT] = LEGACY_MARKDOWN_KEYS.filter(
-							(key) => key in savedVal
-						).some((key) => savedVal[key] === false);
-					}
-				}
-
-				for (const key of legacyKeys) {
-					delete (this.config as Record<string, unknown>)[key];
-				}
-				this.saveConfig();
-			}
-
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
 				if (isMobile.current) {

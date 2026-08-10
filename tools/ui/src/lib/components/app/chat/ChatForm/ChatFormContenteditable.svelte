@@ -797,7 +797,7 @@
 		data-placeholder={placeholder}
 		tabindex={disabled ? -1 : 0}
 		class={[
-			'chat-form-contenteditable text-md min-h-12 w-full whitespace-pre-wrap wrap-break-word border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
+			'chat-form-contenteditable text-md min-h-12 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
 			disabled && 'cursor-not-allowed'
 		]}
 		style="max-height: var(--max-message-height);"

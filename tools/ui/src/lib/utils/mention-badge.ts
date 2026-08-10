@@ -1,8 +1,9 @@
 import { abbreviateHome, lastPathSegment } from './path-display';
-import { FILE_URI_PREFIX } from '$lib/constants';
+import { DIRECTORY_PATH_SUFFIX, FILE_URI_PREFIX } from '$lib/constants';
 import {
 	MENTION_BADGE_FILE_ICON_PATHS,
-	MENTION_BADGE_FOLDER_ICON_PATHS
+	MENTION_BADGE_FOLDER_ICON_PATHS,
+	MENTION_LINK_SCAN_FLAGS
 } from '$lib/constants/mention-badge';
 import { FileMentionEntryType } from '$lib/enums';
 import type { FileMentionEntry } from '$lib/types';
@@ -48,8 +49,45 @@ export function decodeFileLinkPath(path: string): string {
 	}
 }
 
+export interface MentionTextSegment {
+	text: string;
+	mention: { name: string; path: string } | null;
+}
+
+/**
+ * Split raw text into plain runs and `[name](file://path)` mentions.
+ * The raw-text renderers walk these segments to draw badges without
+ * handing the message to the markdown parser, so a `#` stays a `#`.
+ */
+export function splitMentionSegments(value: string): MentionTextSegment[] {
+	const linkRe = fileMentionLinkRe(MENTION_LINK_SCAN_FLAGS);
+	const segments: MentionTextSegment[] = [];
+
+	let cursor = 0;
+	let match: RegExpExecArray | null;
+
+	while ((match = linkRe.exec(value)) !== null) {
+		if (match.index > cursor) {
+			segments.push({ mention: null, text: value.slice(cursor, match.index) });
+		}
+
+		segments.push({
+			mention: { name: match[1], path: decodeFileLinkPath(match[2]) },
+			text: match[0]
+		});
+
+		cursor = match.index + match[0].length;
+	}
+
+	if (cursor < value.length) segments.push({ mention: null, text: value.slice(cursor) });
+
+	return segments;
+}
+
 export function getMentionBadgeIconPaths(path: string): readonly string[] {
-	return path.endsWith('/') ? MENTION_BADGE_FOLDER_ICON_PATHS : MENTION_BADGE_FILE_ICON_PATHS;
+	return path.endsWith(DIRECTORY_PATH_SUFFIX)
+		? MENTION_BADGE_FOLDER_ICON_PATHS
+		: MENTION_BADGE_FILE_ICON_PATHS;
 }
 
 export function getMentionBadgeLabel(
