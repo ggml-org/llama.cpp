@@ -14,7 +14,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 GREP_MARKER = "llama_cpp_test_tools_builtin_marker_grep_search"
 
 # image the container runtime tests run their shell in
-DOCKER_IMAGE = "busybox"
+CONTAINER_IMAGE = "busybox"
 
 
 @pytest.fixture(autouse=True)
@@ -159,9 +159,9 @@ def _container_engine_unavailable_reason(engine: str) -> str | None:
     try:
         # a daemon that answers `info` still cannot run a linux image when it serves windows
         # containers, so probe the image itself, which also pulls it before the tests
-        subprocess.run([engine_bin, "run", "--rm", DOCKER_IMAGE, "true"], capture_output=True, timeout=60, check=True)
+        subprocess.run([engine_bin, "run", "--rm", CONTAINER_IMAGE, "true"], capture_output=True, timeout=60, check=True)
     except Exception as e:
-        return f"{engine} cannot run {DOCKER_IMAGE}: {e}"
+        return f"{engine} cannot run {CONTAINER_IMAGE}: {e}"
     return None
 
 
@@ -177,7 +177,7 @@ def container_engine(request):
 @pytest.fixture
 def container_id(container_engine: str):
     proc = subprocess.run(
-        [container_engine, "run", "-d", "--rm", DOCKER_IMAGE, "sleep", "300"],
+        [container_engine, "run", "-d", "--rm", CONTAINER_IMAGE, "sleep", "300"],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
@@ -252,7 +252,7 @@ def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     global server
-    server.server_tools_runtime = f"docker:{DOCKER_IMAGE}"
+    server.server_tools_runtime = f"docker:{CONTAINER_IMAGE}"
     server.start()
 
     # exec_shell_command runs inside the container spawned for --tools-runtime; docker sets
