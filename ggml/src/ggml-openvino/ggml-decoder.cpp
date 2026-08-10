@@ -777,6 +777,30 @@ void GgmlOvDecoder::compute_model_outputs() {
         if (cur_node->op == GGML_OP_NONE || cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
             continue;
         }
+        // A node explicitly marked by ggml_set_output() must be a model output even when it is
+        // fully consumed inside the graph, because the host reads it back afterwards. The
+        // use-count analysis below cannot see that: it only asks whether anything still in the
+        // graph needs the value.
+        //
+        // Mid-graph taps break that assumption. A model that exposes its residual stream at a few
+        // layers (llm_graph_result marks each such tensor with ggml_set_output()) has tensors that
+        // are read by the host AND feed the next layer, so use-count logic dropped them, the OV
+        // model never produced them, and the host read an unwritten buffer -- whatever consumes
+        // those features saw zeros. This affects any consumer of a mid-graph tensor, not one
+        // particular feature.
+        if (cur_node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            // in-place ops publish their result through view_src, as in the use_count == 0 path
+            auto * flagged_node = cur_node;
+            if (flagged_node->op == GGML_OP_SET_ROWS && flagged_node->view_src != nullptr) {
+                flagged_node = flagged_node->view_src;
+            }
+            std::string flagged_name(flagged_node->name);
+            if (m_model_outputs.find(flagged_name) == m_model_outputs.end()) {
+                m_model_outputs[flagged_name] = flagged_node;
+                m_model_output_names.push_back(flagged_name);
+            }
+            continue;
+        }
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
         if (cur_node_use_count == 0) {
             // The output of SET_ROWS is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
