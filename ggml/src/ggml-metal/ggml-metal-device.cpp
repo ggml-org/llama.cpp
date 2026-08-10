@@ -17,12 +17,17 @@ struct ggml_metal_device_deleter {
 
 typedef std::unique_ptr<ggml_metal_device, ggml_metal_device_deleter> ggml_metal_device_ptr;
 
+// Use a heap-allocated vector that is intentionally never destroyed.
+// This prevents __cxa_finalize_ranges from invoking ggml_metal_device_free
+// during process exit while background GCD dispatch blocks (residency set
+// heartbeat) may still be in flight. The OS reclaims all process memory on
+// exit regardless; explicit cleanup is handled by llama_bridge_free_model().
 ggml_metal_device_t ggml_metal_device_get(int device) {
-    static std::vector<ggml_metal_device_ptr> devs;
+    static auto * devs = new std::vector<ggml_metal_device_ptr>();
 
-    devs.emplace_back(ggml_metal_device_init(device));
+    devs->emplace_back(ggml_metal_device_init(device));
 
-    return devs.back().get();
+    return devs->back().get();
 }
 
 struct ggml_metal_pipelines {
