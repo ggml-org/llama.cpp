@@ -1,0 +1,118 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) buffer ACC_FP32 {float acc_f32[];};
+layout (binding = 1) buffer SUM_FP32 {float sum_f32[];};
+layout (binding = 2) buffer HIS_MAX_FP32 {float his_max_f32[];};
+layout (binding = 3) buffer SINK_FP32 {float sink_f32[];};
+layout (binding = 4) buffer OUT_FP32 {float out_f32[];};
+
+layout (push_constant) uniform parameter
+{
+  uint kvSeqLen;
+  uint activationLength;
+  uint qHead;
+  uint kvHead;
+  uint qkRatio;
+  uint qkSubGroups;
+  uint flag;
+  uint kvStride;
+  uint batchStrideQ;
+  uint batchStrideK;
+  uint batchStrideV;
+  uint batchStrideM;
+  uint batchStrideO;
+  float softMaxScale;
+} p;
+
+layout (constant_id = 0) const uint GROUPSIZE = 16;
+layout (constant_id = 1) const uint GQA_RATIO = 16;
+layout (constant_id = 2) const uint HEAD_DIM = 128;
+layout (constant_id = 3) const uint WARPSIZE = 16;
+
+#define P_PER_WG 2048
+#define LONGEST_LOOP 256
+
+void main() {
+  const uint lane = gl_SubgroupInvocationID;
+  const uint h = gl_WorkGroupID.x;
+  const uint v = gl_WorkGroupID.y;
+  const uint d = gl_WorkGroupID.z;
+  const uint localLinearId = gl_SubgroupID;
+  const uint oDim = p.qHead * HEAD_DIM;
+  const uint totalPi = (p.kvSeqLen + P_PER_WG - 1) / P_PER_WG;
+  const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
+  uint offsetBaseAcc = (d * oDim + v * HEAD_DIM + h * GROUPSIZE + localLinearId * WARPSIZE + lane) * totalPi;
+  uint offsetBaseSumMax = (d * p.qHead + v) * totalPi + lane;
+  uint offsetBoundarySumMax = (d * p.qHead + v) * totalPi + totalPi;
+  uint offsetOut = d * p.batchStrideQ + v * HEAD_DIM + h * GROUPSIZE + localLinearId * WARPSIZE + lane;
+  float fp32SinkCoeff;
+  float globalMax = fp32Min;
+  float groupMax;
+  float softmaxAcc = 0;
+
+  float accOut = 0;
+  uint offsetTemp = offsetBaseSumMax;
+
+  if (0x1 == (p.flag & 0x1)) {
+    fp32SinkCoeff = sink_f32[v];
+  }
+
+  const uint loopCount = (totalPi + WARPSIZE - 1) / WARPSIZE;
+  for (uint maxIt = 0; maxIt < loopCount; maxIt++) {
+    if (offsetTemp < offsetBoundarySumMax) {
+      globalMax = max(globalMax, his_max_f32[offsetTemp]);
+    }
+    offsetTemp = offsetTemp + WARPSIZE;
+  }
+
+  globalMax = subgroupMax(globalMax);
+  offsetTemp = offsetBaseSumMax;
+  for (uint maxIt = 0; maxIt < loopCount; maxIt++) {
+    float sumTemp = 0;
+    groupMax = fp32Min;
+    if (offsetTemp < offsetBoundarySumMax) {
+      groupMax = his_max_f32[offsetTemp];
+      sumTemp = sum_f32[offsetTemp];
+    }
+    offsetTemp = offsetTemp + WARPSIZE;
+    float compensation = exp(groupMax - globalMax);
+    softmaxAcc = softmaxAcc + sumTemp * compensation;
+
+    [[unroll]] for (uint pi = 0; pi < WARPSIZE; pi++) {
+      if (maxIt * WARPSIZE + pi < totalPi) {
+        accOut = accOut + acc_f32[offsetBaseAcc] * subgroupBroadcast(compensation, pi);
+      }
+      offsetBaseAcc = offsetBaseAcc + 1;
+    }
+  }
+
+  softmaxAcc = subgroupAdd(softmaxAcc);
+  float softmaxMul;
+  if (0x1 == (p.flag & 0x1)) {
+    float sinkCompensation;
+    float softmaxSumTemp;
+    fp32SinkCoeff = globalMax - fp32SinkCoeff;
+    sinkCompensation = exp(sinkCompensation);
+    softmaxSumTemp = softmaxAcc * sinkCompensation;
+    softmaxMul = softmaxAcc + 1.0f / sinkCompensation;
+    softmaxMul = 1.0f / softmaxMul;
+    sinkCompensation = sinkCompensation / (1.0f + softmaxSumTemp);
+    softmaxMul = globalMax < fp32SinkCoeff ? sinkCompensation : softmaxMul;
+  } else {
+    softmaxMul = 1.0f / softmaxAcc;
+  }
+
+  accOut = accOut * softmaxMul;
+  out_f32[offsetOut] = accOut;
+}
