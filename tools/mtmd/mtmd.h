@@ -55,6 +55,7 @@ enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_TEXT,
     MTMD_INPUT_CHUNK_TYPE_IMAGE,
     MTMD_INPUT_CHUNK_TYPE_AUDIO,
+    MTMD_INPUT_CHUNK_TYPE_COUNT, // for validation
 };
 
 // opaque types
@@ -231,6 +232,15 @@ MTMD_API llama_pos                  mtmd_input_chunk_get_n_pos       (const mtmd
 // remember to free the chunk when you are done with it
 MTMD_API mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk);
 MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
+
+// save/load an input chunk to/from a buffer (useful for KV save/load)
+// important: only chunk's metadata will be saved, the actual image/audio data will not be saved
+// the loaded chunk will always be a placeholder, cannot be used for mtmd_encode() or mtmd_batch_encode()
+// out_buf can be nullptr (to query expected_out_len)
+// returns 0 on success, non-zero on failure
+MTMD_API int32_t            mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len);
+// returns nullptr on failure
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len);
 
 
 // mtmd_image_tokens

@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { Folder, X } from '@lucide/svelte';
-	import { abbreviateWorkingDir } from '$lib/utils';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ActionIcon } from '$lib/components/app/actions';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
+	import { abbreviateWorkingDir } from '$lib/utils';
 
 	interface Props {
 		directory?: string | null;
@@ -14,14 +15,14 @@
 
 	let {
 		directory = null,
-		homeBase = null,
 		disabled = false,
-		showTooltip = false,
-		onClear
+		homeBase = null,
+		onClear,
+		showTooltip = false
 	}: Props = $props();
 
 	const displayLabel = $derived(
-		directory ? abbreviateWorkingDir(directory, homeBase) : 'Select working directory'
+		directory ? abbreviateWorkingDir(directory, homeBase) : SET_WORKING_DIRECTORY_LABEL
 	);
 	// Full path surface: hover the abbreviated label to recall the exact directory.
 	const displayLabelTitle = $derived(directory ?? '');

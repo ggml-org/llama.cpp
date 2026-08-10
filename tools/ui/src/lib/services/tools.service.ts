@@ -1,10 +1,10 @@
 import { base } from '$app/paths';
-import { getJsonHeaders } from '$lib/utils/api-headers';
-import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
-import { apiFetch } from '$lib/utils';
 import { API_TOOLS, X_TOOL_CWD_HEADER } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
-import type { ToolExecutionResult, ServerBuiltinToolInfo } from '$lib/types';
+import type { ServerBuiltinToolInfo, ToolExecutionResult } from '$lib/types';
+import { apiFetch } from '$lib/utils';
+import { getJsonHeaders } from '$lib/utils/api-headers';
+import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 
 export class ToolsService {
 	/**
@@ -30,9 +30,9 @@ export class ToolsService {
 		cwd?: string
 	): Promise<ToolExecutionResult> {
 		const result = await apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
-			method: 'POST',
-			body: JSON.stringify({ tool: toolName, params }),
+			body: JSON.stringify({ params, tool: toolName }),
 			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
+			method: 'POST',
 			signal
 		});
 
@@ -59,9 +59,9 @@ export class ToolsService {
 		cwd?: string
 	): Promise<Record<string, unknown>> {
 		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
-			method: 'POST',
-			body: JSON.stringify({ tool: toolName, params }),
+			body: JSON.stringify({ params, tool: toolName }),
 			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
+			method: 'POST',
 			signal
 		});
 	}
@@ -88,16 +88,19 @@ export class ToolsService {
 		cwd?: string
 	): AsyncGenerator<ToolStreamEvent> {
 		const headers = getJsonHeaders();
+
 		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
+
 		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
-			method: 'POST',
+			body: JSON.stringify({ params, stream: true, tool: toolName }),
 			headers,
-			body: JSON.stringify({ tool: toolName, params, stream: true }),
+			method: 'POST',
 			signal
 		});
 
 		if (!response.ok || !response.body) {
 			const detail = await formatNonOkResponse(response);
+
 			throw new Error(detail);
 		}
 
@@ -105,14 +108,18 @@ export class ToolsService {
 
 		while (true) {
 			const next: IteratorResult<SseJsonEvent<ToolServerEvent>> = await iterator.next();
+
 			if (next.done) return;
+
 			const event = next.value.data;
 
 			if (event.chunk !== undefined) {
 				yield { chunk: event.chunk, done: false };
 			}
+
 			if (event.done) {
 				yield { chunk: null, done: true, error: event.error };
+
 				return;
 			}
 		}
@@ -140,18 +147,23 @@ interface ToolServerEvent {
 
 async function formatNonOkResponse(response: Response): Promise<string> {
 	const status = `${response.status} ${response.statusText}`.trim();
+
 	try {
 		const errBody = (await response.clone().json()) as { error?: string; message?: string };
+
 		if (errBody?.error) return `${status}: ${errBody.error}`;
+
 		if (errBody?.message) return `${status}: ${errBody.message}`;
 	} catch (error) {
 		console.error('[tools] Non-JSON error response, falling back to raw text:', error);
 		try {
 			const text = await response.text();
+
 			if (text.trim()) return `${status}: ${text.trim()}`;
 		} catch (error) {
 			console.error('[tools] Failed to read error response as text:', error);
 		}
 	}
+
 	return status || `HTTP ${response.status}`;
 }

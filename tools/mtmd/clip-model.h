@@ -109,6 +109,11 @@ struct clip_hparams {
     int32_t downsample_query_side;
     int32_t downsample_window_side;
 
+    // Muse Glimmer vision (per-block sparse-window pattern, learned pos-emb, patch-temporal)
+    // NOTE: these perhaps shouldn't have the architecture prefix
+    int32_t muse_glimmer_patch_temporal = 0;
+    int32_t muse_glimmer_sparse_factor  = 0;
+
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
@@ -168,6 +173,17 @@ struct clip_hparams {
         image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
         image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
+    }
+
+    // used by longest_edge preprocessor (no model-specific value for min/max tokens)
+    void set_limit_image_tokens() {
+        const int patch_area = patch_size * patch_size * n_merge * n_merge;
+        if (custom_image_min_tokens > 0) {
+            image_min_pixels = custom_image_min_tokens * patch_area;
+        }
+        if (custom_image_max_tokens > 0) {
+            image_max_pixels = custom_image_max_tokens * patch_area;
+        }
     }
 
     void set_warmup_n_tokens(int n_tokens) {
