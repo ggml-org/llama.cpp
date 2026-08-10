@@ -112,7 +112,6 @@ public:
         c2w_state.clear();
         audio_pcm.clear();
         overlay.clear();
-        overlay_idx = 0;
         h_state_buf.clear();
         out_buf.clear();
         prompt_embd_buf.clear();
@@ -205,11 +204,9 @@ public:
         top_p = inp->top_p > 0 ? inp->top_p : 1.0f;
         out_type = inp->out_type;
 
-        // the text stream keeps flowing during generation: after frame k, the input adds
-        // trailing text row k on top of the codes embedding, then tts_eos, then tts_pad
-        for (int i = 3; i < n_ids - 5; i++) overlay.push_back(row(ids[(size_t) i]));
-        overlay.push_back(row(tts_eos));
-        overlay.push_back(row(tts_pad));
+        // the prompt above holds the whole text stream up to tts_eos, so every generated
+        // frame adds tts_pad on top of the codes embedding
+        overlay = row(tts_pad);
 
         return 0;
     }
@@ -265,9 +262,7 @@ public:
         }
 
         std::vector<float> fb(out.embd, out.embd + n_embd);
-        const auto & ov = overlay[std::min(overlay_idx, overlay.size() - 1)];
-        for (int i = 0; i < n_embd; i++) fb[(size_t) i] += ov[(size_t) i];
-        overlay_idx++;
+        for (int i = 0; i < n_embd; i++) fb[(size_t) i] += overlay[(size_t) i];
 
         const int n_pos_per_embd = mrope ? 4 : 1;
         decode_embd_batch batch_embd(fb.data(), 1, n_pos_per_embd, n_embd);
@@ -437,8 +432,7 @@ private:
     std::vector<int32_t> codes_buf;
     std::vector<uint8_t> c2w_state;
     std::vector<float>   audio_pcm;
-    std::vector<std::vector<float>> overlay;
-    size_t overlay_idx = 0;
+    std::vector<float> overlay;
     std::vector<float> h_state_buf;
     mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     std::vector<char> out_buf;
