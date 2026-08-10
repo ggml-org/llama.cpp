@@ -47,6 +47,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_MANUAL_GQA_ATTN",
         "GGML_OPENVINO_REDUCE_COMPILE_MEM",
         "GGML_OPENVINO_REQUANT_KQUANT",
+        "GGML_OPENVINO_ROPE_F32_ANGLE",
         "GGML_OPENVINO_LOG_SWA_LAYERS",
     };
 
