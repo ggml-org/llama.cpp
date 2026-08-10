@@ -64,6 +64,14 @@ struct llama_mlock {
     void init(void * ptr);
     void grow_to(size_t target_size);
 
+    // bytes actually locked so far (may be less than the last grow_to() target
+    // if locking failed partway through -- see failed_already in the impl)
+    size_t size() const;
+
+    // explicitly unlock the pages (NOT called by the destructor -- the default
+    // behavior is to leave pages locked until process exit, matching mlock(2))
+    void unlock();
+
     static const bool SUPPORTED;
 
 private:
