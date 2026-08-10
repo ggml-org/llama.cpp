@@ -424,6 +424,8 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
     ggml_cuda_unroll<7>{}(load);
 }
 
+// BF16->F16 converting tile load for the F16-math fallback (BF16 K/V on targets without
+// v_dot2_f32_bf16, and the host pass). Compile-only on native-BF16 targets.
 template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
 static __device__ __forceinline__ void flash_attn_tile_load_tile(
         const nv_bfloat162 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
@@ -520,9 +522,11 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
     ggml_cuda_unroll<7>{}(load);
 }
 
-template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
+// Conversion-only tile load (2-byte KV element -> 4-byte float tile) for the non-FAST kernel path.
+// The nv_bfloat162 instantiation is compile-only (native-BF16 targets always build the FAST path).
+template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check, typename T_in>
 static __device__ __forceinline__ void flash_attn_tile_load_tile(
-        const nv_bfloat162 * const __restrict__ KV, float * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
+        const T_in * const __restrict__ KV, float * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
     constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
     constexpr int cpy_ne = cpy_nb / 4;
 
@@ -550,70 +554,19 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                 for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
                     const int j = j0*(cpy_ne/2) + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*(cpy_ne/2);
 
-                    const nv_bfloat162 zero[cpy_ne/2] = {{0.0f, 0.0f}};
-                    __align__(16) nv_bfloat162 tmp_bf[cpy_ne/2];
-                    ggml_cuda_memcpy_1<sizeof(tmp_bf)>(
-                        tmp_bf, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
+                    const T_in zero[cpy_ne/2] = {{0.0f, 0.0f}};
+                    __align__(16) T_in tmp_in[cpy_ne/2];
+                    ggml_cuda_memcpy_1<sizeof(tmp_in)>(
+                        tmp_in, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
 
                     __align__(16) float2 tmp_f2[cpy_ne/2];
 #pragma unroll
                     for (int l = 0; l < cpy_ne/2; ++l) {
-                        tmp_f2[l] = ggml_cuda_cast<float2>(tmp_bf[l]);
-                    }
-                    ggml_cuda_memcpy_1<sizeof(tmp_f2)>(tile_KV + i*(J + J_padding) + 2*j, tmp_f2);
-                }
-            }
-        }
-    };
-    // 1: max 32*16=512 bytes, 128 float
-    // 2: max 16*16=256 bytes,  64 float
-    // 3: max  8*16=128 bytes,  32 float
-    // 4: max  4*16= 64 bytes,  16 float
-    // 5: max  2*16= 32 bytes,   8 float
-    static_assert(J % 8 == 0, "bad J");
-    static_assert(J % cpy_ne == 0, "bad J");
-    ggml_cuda_unroll<5>{}(load);
-}
-
-template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
-static __device__ __forceinline__ void flash_attn_tile_load_tile(
-        const half2 * const __restrict__ KV, float * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
-    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
-    constexpr int cpy_ne = cpy_nb / 4;
-
-    auto load = [&] __device__ (const int n) {
-        const int stride_j = warp_size >> n;
-
-        if (stride_j == 0) {
-            return;
-        }
-
-        const int j0_start = stride_j == warp_size ? 0 : (J/cpy_ne) - (J/cpy_ne) % (2*stride_j);
-        const int j0_stop  =                             (J/cpy_ne) - (J/cpy_ne) % (1*stride_j);
-        const int stride_i = warp_size / stride_j;
-
-        if (j0_start == j0_stop) {
-            return;
-        }
-
-#pragma unroll
-        for (int i0 = 0; i0 < I; i0 += nwarps*stride_i) {
-            const int i = i0 + threadIdx.y*stride_i + (stride_j == warp_size ? 0 : threadIdx.x / stride_j);
-
-            if (i0 + nwarps*stride_i <= I || i < I) {
-#pragma unroll
-                for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
-                    const int j = j0*(cpy_ne/2) + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*(cpy_ne/2);
-
-                    const half2 zero[cpy_ne/2] = {{0.0f, 0.0f}};
-                    __align__(16) half2 tmp_h2[cpy_ne/2];
-                    ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
-                        tmp_h2, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
-
-                    __align__(16) float2 tmp_f2[cpy_ne/2];
-#pragma unroll
-                    for (int l = 0; l < cpy_ne/2; ++l) {
-                        tmp_f2[l] = __half22float2(tmp_h2[l]);
+                        if constexpr (std::is_same_v<T_in, half2>) {
+                            tmp_f2[l] = __half22float2(tmp_in[l]);
+                        } else {
+                            tmp_f2[l] = ggml_cuda_cast<float2>(tmp_in[l]);
+                        }
                     }
                     ggml_cuda_memcpy_1<sizeof(tmp_f2)>(tile_KV + i*(J + J_padding) + 2*j, tmp_f2);
                 }
@@ -639,6 +592,25 @@ static constexpr __host__ __device__ bool ggml_cuda_fattn_tile_use_bf16() {
 #else
     return false;
 #endif // V_DOT2_F32_BF16_AVAILABLE
+}
+
+// Rescale the VKQ accumulators by the softmax max scale: half2 multiply (F16 kernel) or
+// per-element float multiply (BF16/non-FAST kernels).
+template <typename T_acc>
+static __device__ __forceinline__ void flash_attn_tile_rescale_VKQ(T_acc * const VKQ, const float scale, const int count) {
+    if constexpr (std::is_same_v<T_acc, half2>) {
+        const half2 scale_h2 = make_half2(scale, scale);
+#pragma unroll
+        for (int i = 0; i < count; ++i) {
+            VKQ[i] *= scale_h2;
+        }
+    } else {
+#pragma unroll
+        for (int i = 0; i < count; ++i) {
+            VKQ[i].x *= scale;
+            VKQ[i].y *= scale;
+        }
+    }
 }
 
 // Function that performs a single iteration in for the KQ matrix multiplication:
@@ -755,7 +727,8 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
 #ifdef FAST_FP16_AVAILABLE
     // BF16 K/V keeps packed BF16 registers and uses v_dot2_f32_bf16; F16 K/V uses the half2 (FAST) path.
     constexpr bool use_bf16 = ggml_cuda_fattn_tile_use_bf16<T_KV>();
-    constexpr int KQ_cs = use_bf16 ? (cpw < 1*cpy_ne ? cpw : 1*cpy_ne) : (cpw < 2*cpy_ne ? cpw : 2*cpy_ne);
+    // The packed BF16 PV reads the P pair (two rows) as two 16-byte chunks, so KQ_cs matches the F16 kernel.
+    constexpr int KQ_cs = cpw < 2*cpy_ne ? cpw : 2*cpy_ne;
 #else
     constexpr bool use_bf16 = false;
     constexpr int KQ_cs = cpw < 1*cpy_ne ? cpw : 1*cpy_ne;
@@ -854,22 +827,7 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
             }
             KQ_sum[jc] = KQ_sum[jc]*KQ_max_scale + KQ_sum_add;
 
-#ifdef FAST_FP16_AVAILABLE
-            if constexpr (!use_bf16) {
-                const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
-#pragma unroll
-                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
-                    VKQ[jc*((DVp/2)/warp_size) + i0/warp_size] *= KQ_max_scale_h2;
-                }
-            } else
-#endif // FAST_FP16_AVAILABLE
-            {
-#pragma unroll
-                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
-                    VKQ[jc*((DVp/2)/warp_size) + i0/warp_size].x *= KQ_max_scale;
-                    VKQ[jc*((DVp/2)/warp_size) + i0/warp_size].y *= KQ_max_scale;
-                }
-            }
+            flash_attn_tile_rescale_VKQ(&VKQ[jc*((DVp/2)/warp_size)], KQ_max_scale, (DVp/2)/warp_size);
         }
 
 #pragma unroll
@@ -908,6 +866,7 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
         if constexpr (use_bf16) {
             // Packed BF16 PV: P rounded to BF16, V rows paired across consecutive KV rows via
             // v_perm_b32, one v_dot2_f32_bf16 per head pair with FP32 accumulation.
+            // The two-row pairing assumes np == 1; np > 1 would process overlapping row ranges.
             static_assert(np == 1, "bad np for packed bf16 PV");
             static_assert(nbatch_V % 2 == 0, "bad nbatch_V for packed bf16 PV");
 #pragma unroll
@@ -1124,18 +1083,18 @@ static __global__ void flash_attn_tile(
     // VKQ == Accumulators in registers for the final VKQ result.
 #ifdef FAST_FP16_AVAILABLE
     // Native BF16 tiles with FP32 math need v_dot2_f32_bf16 (RDNA3+, device pass only).
-    constexpr bool bf16 = ggml_cuda_fattn_tile_use_bf16<T_KV>();
+    constexpr bool use_bf16 = ggml_cuda_fattn_tile_use_bf16<T_KV>();
     constexpr int Q_tmp_count   = ncols*DKQ/2;
     constexpr int KV_tmp_stride = nbatch_K/2 + cpy_ne;
     constexpr int KV_tmp_count  = nbatch_fa*KV_tmp_stride + DVp-DV;
     constexpr int KQ_count      = ncols*nbatch_fa;
     constexpr int VKQ_count     = cpw * ((DVp/2)/warp_size);
-    using T_Q   = std::conditional_t<bf16, nv_bfloat162, half2>;
+    using T_Q   = std::conditional_t<use_bf16, nv_bfloat162, half2>;
     using T_KVt = T_Q;
-    using T_KQ  = std::conditional_t<bf16, nv_bfloat16, half>;
-    using T_acc = std::conditional_t<bf16, float2, half2>;
+    using T_KQ  = std::conditional_t<use_bf16, nv_bfloat16, half>;
+    using T_acc = std::conditional_t<use_bf16, float2, half2>;
 #else
-    constexpr bool bf16 = false;
+    constexpr bool use_bf16 = false;
     constexpr int Q_tmp_count   = ncols*DKQ;
     constexpr int KV_tmp_stride = nbatch_K + cpy_ne;
     constexpr int KV_tmp_count  = nbatch_fa*KV_tmp_stride + DVp-DV;
@@ -1185,7 +1144,7 @@ static __global__ void flash_attn_tile(
                 }
 
 #ifdef FAST_FP16_AVAILABLE
-                if constexpr (bf16) {
+                if constexpr (use_bf16) {
                     __align__(16) nv_bfloat162 tmp_bf[cpy_ne_D/2];
 #pragma unroll
                     for (int i1 = 0; i1 < cpy_ne_D; i1 += 2) {
@@ -1194,27 +1153,28 @@ static __global__ void flash_attn_tile(
                     ggml_cuda_memcpy_1<sizeof(tmp_bf)>(
                         &Q_tmp[jc*(DKQ/2) + i0/2 + (threadIdx.y % np)*(warp_size*cpy_ne_D/2) + threadIdx.x*(cpy_ne_D/2)],
                         tmp_bf);
-                } else if constexpr (!bf16) {
+                } else {
                     __align__(16) half2 tmp_h2[cpy_ne_D/2];
 #pragma unroll
                     for (int i1 = 0; i1 < cpy_ne_D; i1 += 2) {
                         tmp_h2[i1/2] = make_half2(tmp_f[i1 + 0], tmp_f[i1 + 1]);
-#if defined(FAST_FP16_AVAILABLE) && !defined(V_DOT2_F32_F16_AVAILABLE)
+#if !defined(V_DOT2_F32_F16_AVAILABLE)
                         // Without the v_dot2_f32_f16 instruction there is a higher risk of numerical overflow in the KQ calculation.
                         // Therefore, scale down Q values and apply the inverse scale the FP32 KQ values afterwards again.
                         tmp_h2[i1/2] *= make_half2(0.25f, 0.25f);
-#endif // defined(FAST_FP16_AVAILABLE) && !defined(V_DOT2_F32_F16_AVAILABLE)
+#endif // !defined(V_DOT2_F32_F16_AVAILABLE)
                     }
                     ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
                         &Q_tmp[jc*(DKQ/2) + i0/2 + (threadIdx.y % np)*(warp_size*cpy_ne_D/2) + threadIdx.x*(cpy_ne_D/2)],
                         tmp_h2);
-                } else
-#endif // FAST_FP16_AVAILABLE
+                }
+#else
                 {
                     ggml_cuda_memcpy_1<sizeof(tmp_f)>(
                         &Q_tmp[jc*DKQ + i0 + (threadIdx.y % np)*(warp_size*cpy_ne_D) + threadIdx.x*cpy_ne_D],
                         tmp_f);
                 }
+#endif // FAST_FP16_AVAILABLE
             }
         }
     }
@@ -1259,7 +1219,7 @@ static __global__ void flash_attn_tile(
         static_assert(nbatch_fa*nbatch_K >= nwarps*DVp, "KV_tmp too small");
 
 #ifdef FAST_FP16_AVAILABLE
-        using T_VKQ_combine = std::conditional_t<bf16, float, half2>;
+        using T_VKQ_combine = std::conditional_t<use_bf16, float, half2>;
 #else
         using T_VKQ_combine = float;
 #endif // FAST_FP16_AVAILABLE
@@ -1268,7 +1228,7 @@ static __global__ void flash_attn_tile(
 
         if (threadIdx.y % np != 0) {
 #ifdef FAST_FP16_AVAILABLE
-            if constexpr (!bf16) {
+            if constexpr (!use_bf16) {
                 constexpr int cpy_ne_D = cpy_ne < (DVp/2)/warp_size ? cpy_ne : (DVp/2)/warp_size;
 #pragma unroll
                 for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
@@ -1297,7 +1257,7 @@ static __global__ void flash_attn_tile(
 #pragma unroll
         for (int ip = 1; ip < np; ++ip) {
 #ifdef FAST_FP16_AVAILABLE
-            if constexpr (!bf16) {
+            if constexpr (!use_bf16) {
                 constexpr int cpy_ne_D = cpy_ne < (DVp/2)/warp_size ? cpy_ne : (DVp/2)/warp_size;
 #pragma unroll
                 for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
@@ -1341,22 +1301,7 @@ static __global__ void flash_attn_tile(
             const float val = expf(sink - KQ_max[jc0]);
             KQ_sum[jc0] = KQ_sum[jc0]*KQ_max_scale + val;
 
-#ifdef FAST_FP16_AVAILABLE
-            if constexpr (!bf16) {
-                const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
-#pragma unroll
-                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
-                    VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size] *= KQ_max_scale_h2;
-                }
-            } else
-#endif // FAST_FP16_AVAILABLE
-            {
-#pragma unroll
-                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
-                    VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size].x *= KQ_max_scale;
-                    VKQ[jc0*((DVp/2)/warp_size) + i0/warp_size].y *= KQ_max_scale;
-                }
-            }
+            flash_attn_tile_rescale_VKQ(&VKQ[jc0*((DVp/2)/warp_size)], KQ_max_scale, (DVp/2)/warp_size);
         }
     }
 
@@ -1377,7 +1322,7 @@ static __global__ void flash_attn_tile(
         const int j_dst_unrolled = ((sequence*int(ne01.z) + col_Q_0 + j)*ne02 + head0 + c)*gridDim.y + blockIdx.y;
 
 #ifdef FAST_FP16_AVAILABLE
-        if constexpr (!bf16) {
+        if constexpr (!use_bf16) {
             constexpr int cpy_ne_D = cpy_ne/2 < (DVp/2)/warp_size ? cpy_ne/2 : (DVp/2)/warp_size;
 #pragma unroll
             for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {

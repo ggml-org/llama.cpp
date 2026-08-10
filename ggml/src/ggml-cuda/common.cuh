@@ -775,7 +775,8 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v,
 #define V_DOT2_F32_BF16_AVAILABLE
 #endif // defined(GGML_USE_HIP) && RDNA3/RDNA3.5/RDNA4 targets
 
-// Two BF16 products plus an FP32 add per instruction on RDNA3+; scalar FP32 math otherwise.
+// Two BF16 products plus an FP32 add per instruction on RDNA3+; scalar FP32 math otherwise
+// (compile-only fallback: the native-BF16 path is never instantiated without the instruction).
 static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const nv_bfloat162 v, const nv_bfloat162 u) {
 #ifdef V_DOT2_F32_BF16_AVAILABLE
     asm volatile("v_dot2_f32_bf16 %0, %1, %2, %0" : "+v"(acc) : "v"(v), "v"(u));
@@ -789,6 +790,7 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const nv_bfloa
 
 // Pack the low (ll) or high (hh) 16 bits of two nv_bfloat162 into one nv_bfloat162.
 // Used to pair BF16 values from two consecutive KV rows for v_dot2_f32_bf16 in the PV phase.
+// The %2, %1 operand order was verified on RDNA3.5; re-verify on RDNA4 (gfx120x) before relying on it.
 static __device__ __forceinline__ nv_bfloat162 ggml_cuda_bf16_perm_ll(const nv_bfloat162 v0, const nv_bfloat162 v1) {
 #ifdef V_DOT2_F32_BF16_AVAILABLE
     nv_bfloat162 dst;
