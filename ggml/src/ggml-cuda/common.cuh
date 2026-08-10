@@ -790,7 +790,7 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const nv_bfloa
 
 // Pack the low (ll) or high (hh) 16 bits of two nv_bfloat162 into one nv_bfloat162.
 // Used to pair BF16 values from two consecutive KV rows for v_dot2_f32_bf16 in the PV phase.
-// The %2, %1 operand order was verified on RDNA3.5; re-verify on RDNA4 (gfx120x) before relying on it.
+// The %2, %1 operand order was verified on RDNA3 (gfx1100), RDNA3.5 (gfx1151), and RDNA4 (gfx120x).
 static __device__ __forceinline__ nv_bfloat162 ggml_cuda_bf16_perm_ll(const nv_bfloat162 v0, const nv_bfloat162 v1) {
 #ifdef V_DOT2_F32_BF16_AVAILABLE
     nv_bfloat162 dst;
