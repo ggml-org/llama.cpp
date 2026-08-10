@@ -65,6 +65,10 @@ $ tar xvf llama-b10339-bin-ubuntu-x64.tar.gz
 (venv) $ ls llama-b10339/libllama.*
 llama-b10339/libllama.so  llama-b10339/libllama.so.0  llama-b10339/libllama.so.0.1.0
 
+(venv) $ ls llama-b10339/libmtmd.so*
+llama-b10339/libmtmd.so  llama-b10339/libmtmd.so.0  llama-b10339/libmtmd.so.0.1.0
+
+
 venv) $ ./llama-b10339/llama-cli --version
 version: 0.1.0-dev-b10339 (build 10339, commit c8fe5edf5)
 built with GNU 11.4.0 for Linux x86_64
