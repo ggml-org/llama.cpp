@@ -288,7 +288,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_grovemoe(params);
         case LLM_ARCH_APERTUS:
             return new llama_model_apertus(params);
-        case LLM_ARCH_MINIMAX01:
+        case LLM_ARCH_MINIMAX_01:
             return new llama_model_minimax_01(params);
         case LLM_ARCH_MINIMAX_M2:
             return new llama_model_minimax_m2(params);
@@ -2263,7 +2263,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_recr = [&](uint32_t il) {
                             return il < hparams.n_layer() && hparams.is_recr(il);
                         };
-                    } else if (arch == LLM_ARCH_MINIMAX01) {
+                    } else if (arch == LLM_ARCH_MINIMAX_01) {
                         filter_attn = [&](uint32_t il) {
                             return il < hparams.n_layer() && il % 8 == 7;
                         };
@@ -2681,7 +2681,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_GROVEMOE:
         case LLM_ARCH_APERTUS:
-        case LLM_ARCH_MINIMAX01:
+        case LLM_ARCH_MINIMAX_01:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_COGVLM:

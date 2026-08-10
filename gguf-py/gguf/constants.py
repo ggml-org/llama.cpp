@@ -1226,7 +1226,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.SEED_OSS:         "seed_oss",
     MODEL_ARCH.GROVEMOE:         "grovemoe",
     MODEL_ARCH.APERTUS:          "apertus",
-    MODEL_ARCH.MINIMAX01:        "minimax01",
+    MODEL_ARCH.MINIMAX01:        "minimax-01",
     MODEL_ARCH.MINIMAXM2:        "minimax-m2",
     MODEL_ARCH.MINIMAXM3:        "minimax-m3",
     MODEL_ARCH.COGVLM:           "cogvlm",
