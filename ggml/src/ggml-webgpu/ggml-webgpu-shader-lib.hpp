@@ -3221,17 +3221,17 @@ class ggml_webgpu_shader_lib {
         auto push_type_defines = [&](const char * prefix, ggml_type type) {
             std::string s_prefix = prefix;
             if (type == GGML_TYPE_F32) {
-                defines.push_back(s_prefix + "_F32");
+                defines.push_back(s_prefix + "=f32");
             } else if (type == GGML_TYPE_F16) {
-                defines.push_back(s_prefix + "_F16");
+                defines.push_back(s_prefix + "=f16");
             } else {
                 GGML_ABORT("Unsupported type for CONV_2D shader");
             }
         };
 
-        push_type_defines("WEIGHT", key.weight_type);
-        push_type_defines("INPUT", key.input_type);
-        push_type_defines("OUTPUT", key.output_type);
+        push_type_defines("WEIGHT_TYPE", key.weight_type);
+        push_type_defines("INPUT_TYPE", key.input_type);
+        push_type_defines("OUTPUT_TYPE", key.output_type);
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
@@ -3263,17 +3263,18 @@ class ggml_webgpu_shader_lib {
         auto push_type_defines = [&](const char * prefix, ggml_type type) {
             std::string s_prefix = prefix;
             if (type == GGML_TYPE_F32) {
-                defines.push_back(s_prefix + "_F32");
+                defines.push_back(s_prefix + "=f32");
             } else if (type == GGML_TYPE_F16) {
-                defines.push_back(s_prefix + "_F16");
+                defines.push_back(s_prefix + "=f16");
             } else {
-                GGML_ABORT("Unsupported type for CONV_2D_DW shader");
+                GGML_ABORT("Unsupported type for CONV_2D shader");
             }
         };
 
-        push_type_defines("WEIGHT", key.weight_type);
-        push_type_defines("INPUT", key.input_type);
-        push_type_defines("OUTPUT", key.output_type);
+        push_type_defines("WEIGHT_TYPE", key.weight_type);
+        push_type_defines("INPUT_TYPE", key.input_type);
+        push_type_defines("OUTPUT_TYPE", key.output_type);
+
         if (whcn) {
             defines.push_back("WHCN");
         }
@@ -3304,16 +3305,16 @@ class ggml_webgpu_shader_lib {
         auto push_type_defines = [&](const char * prefix, ggml_type type) {
             std::string s_prefix = prefix;
             if (type == GGML_TYPE_F32) {
-                defines.push_back(s_prefix + "_F32");
+                defines.push_back(s_prefix + "=f32");
             } else if (type == GGML_TYPE_F16) {
-                defines.push_back(s_prefix + "_F16");
+                defines.push_back(s_prefix + "=f16");
             } else {
                 GGML_ABORT("Unsupported type for IM2COL shader");
             }
         };
 
-        push_type_defines("INPUT", key.input_type);
-        push_type_defines("OUTPUT", key.output_type);
+        push_type_defines("INPUT_TYPE", key.input_type);
+        push_type_defines("OUTPUT_TYPE", key.output_type);
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
