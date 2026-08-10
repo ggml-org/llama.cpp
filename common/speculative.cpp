@@ -1036,6 +1036,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         // produce the target-layer features used to seed the draft KV cache, so
         // skipping the embedding batches leaves a hole in the draft's cache and
         // the next injection fails to initialize.
+        // TODO: revisit after https://github.com/ggml-org/llama.cpp/pull/24669 is merged
         const bool has_tokens     = batch_in.token != nullptr;
         const bool has_embeddings = batch_in.embd  != nullptr;
         if (has_tokens == has_embeddings) {
