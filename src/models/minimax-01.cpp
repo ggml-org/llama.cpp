@@ -8,6 +8,15 @@ void llama_model_minimax_01::load_arch_hparams(llama_model_loader & ml) {
     // we use n_embd_head_la to set recurrent memory n_embd_s
     hparams.n_embd_head_la = hparams.n_embd_head_k_full;
 
+    // Mark recurrent layers (lightning attention layers).
+    if (!ml.get_key_or_arr(LLM_KV_ATTENTION_RECURRENT_LAYERS, hparams.is_recr_impl, hparams.n_layer_all, false)) {
+        uint32_t full_attn_interval = 8;
+        ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+        for (uint32_t i = 0; i < hparams.n_layer_all; ++i) {
+            hparams.is_recr_impl[i] = (i < hparams.n_layer()) && ((i + 1) % full_attn_interval != 0);
+        }
+    }
+
     switch (hparams.n_layer()) {
         case 80: type = LLM_TYPE_456B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -33,7 +42,7 @@ void llama_model_minimax_01::load_arch_tensors(llama_model_loader &) {
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-        if (i % 8 == 7) {
+        if (!hparams.is_recr(i)) {
             layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
             layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
@@ -252,7 +261,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
         struct ggml_tensor * residual = cur;
 
         // self_attention
-        if (il % 8 == 7) {
+        if (!hparams.is_recr(il)) {
             // compute Q and K and RoPE them
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
             cb(Qcur, "Qcur", il);

@@ -2256,19 +2256,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_recr = [&](uint32_t il) {
                             return hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
-                    } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) {
+                    } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_MINIMAX_01) {
                         filter_attn = [&](uint32_t il) {
                             return il < hparams.n_layer() && !hparams.is_recr(il);
                         };
                         filter_recr = [&](uint32_t il) {
                             return il < hparams.n_layer() && hparams.is_recr(il);
-                        };
-                    } else if (arch == LLM_ARCH_MINIMAX_01) {
-                        filter_attn = [&](uint32_t il) {
-                            return il < hparams.n_layer() && il % 8 == 7;
-                        };
-                        filter_recr = [&](uint32_t il) {
-                            return il < hparams.n_layer() && il % 8 != 7;
                         };
                     }
 
