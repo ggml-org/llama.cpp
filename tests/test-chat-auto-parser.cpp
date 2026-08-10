@@ -63,6 +63,7 @@ static void test_laguna_tool_format(testing & t);
 static void test_laguna_s_analysis(testing & t);
 static void test_laguna_s_reasoning_detection(testing & t);
 static void test_laguna_s_tool_format(testing & t);
+static void test_laguna_s_preserve_reasoning(testing & t);
 static void test_laguna_xs2_analysis(testing & t);
 static void test_laguna_xs2_reasoning_detection(testing & t);
 static void test_laguna_xs2_tool_format(testing & t);
@@ -1451,9 +1452,14 @@ static void test_laguna_s_tool_format(testing & t) {
     analysis.analyze_template(tmpl);
     t.assert_equal("Laguna-S(v8) arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
 }
+static void test_laguna_s_preserve_reasoning(testing & t) {
+    common_chat_template tmpl = load_laguna_s_template(t);
+    t.assert_true("Laguna-S(v8) supports preserving reasoning", tmpl.original_caps().supports_preserve_reasoning);
+}
 static void test_laguna_s_analysis(testing & t) {
     t.test("Laguna-S(v8) reasoning detection", test_laguna_s_reasoning_detection);
     t.test("Laguna-S(v8) tool format", test_laguna_s_tool_format);
+    t.test("Laguna-S(v8) preserve reasoning", test_laguna_s_preserve_reasoning);
 }
 
 static common_chat_template load_laguna_xs2_template(testing & t) {
