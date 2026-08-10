@@ -1,15 +1,15 @@
 <script lang="ts">
+	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { activeMessages } from '$lib/stores/conversations.svelte';
 	import {
-		modelsStore,
 		modelOptions,
+		modelsStore,
 		selectedModelId,
 		selectedModelName
 	} from '$lib/stores/models.svelte';
 	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
-	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
 	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { activeMessages } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		disabled?: boolean;
@@ -27,9 +27,9 @@
 		disabled = false,
 		forceForegroundText = false,
 		hasAudioModality = $bindable(false),
+		hasModelSelected = $bindable(false),
 		hasVideoModality = $bindable(false),
 		hasVisionModality = $bindable(false),
-		hasModelSelected = $bindable(false),
 		isSelectedModelInCache = $bindable(true),
 		submitTooltip = $bindable(''),
 		useGlobalSelection = false
@@ -46,6 +46,7 @@
 
 	let selectorModel = $derived.by(() => {
 		const storeModel = selectedModelName();
+
 		if (storeModel && storeModel !== conversationModel) {
 			return storeModel;
 		}
@@ -66,6 +67,7 @@
 				modelsStore.selectedModelName = null;
 				modelsStore.clearSelection();
 			}
+
 			lastSyncedConversationModel = conversationModel;
 		} else if (
 			isRouter &&
@@ -76,6 +78,7 @@
 		) {
 			lastSyncedConversationModel = null;
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+
 			if (first) modelsStore.selectModelById(first.id);
 		}
 	});

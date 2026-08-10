@@ -8,7 +8,7 @@
 		show: boolean;
 	}
 
-	let { onPrev, onNext, show }: Props = $props();
+	let { onNext, onPrev, show }: Props = $props();
 </script>
 
 {#if show}

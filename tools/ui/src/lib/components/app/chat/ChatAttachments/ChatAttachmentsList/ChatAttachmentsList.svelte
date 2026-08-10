@@ -28,18 +28,18 @@
 	}
 
 	let {
-		class: className = '',
-		style = '',
+		activeModelId,
 		attachments = [],
-		readonly = false,
-		onFileRemove,
-		uploadedFiles = $bindable([]),
+		class: className = '',
 		// Default to small size for form previews
 		imageClass = '',
 		imageHeight = 'h-24',
 		imageWidth = 'w-auto',
 		limitToSingleRow = false,
-		activeModelId
+		onFileRemove,
+		readonly = false,
+		style = '',
+		uploadedFiles = $bindable([])
 	}: Props = $props();
 
 	let carouselRef: HorizontalScrollCarousel | undefined = $state();
@@ -48,7 +48,7 @@
 	let previewFocusIndex = $state(0);
 	let viewAllDialogOpen = $state(false);
 
-	let displayItems = $derived(getAttachmentDisplayItems({ uploadedFiles, attachments }));
+	let displayItems = $derived(getAttachmentDisplayItems({ attachments, uploadedFiles }));
 
 	function openPreview(item: ChatAttachmentDisplayItem, event?: MouseEvent) {
 		event?.stopPropagation();

@@ -12,7 +12,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"reset": "rm -rf .svelte-kit node_modules",
-		"format": "prettier --write .",
+		"format": "eslint --fix . && prettier --write .",
 		"lint": "prettier --check . && eslint .",
 		"test": "npm run test:ui -- --run && npm run test:client -- --run && npm run test:unit -- --run && npm run test:e2e",
 		"test:e2e": "playwright test",
@@ -36,6 +36,7 @@
 		"@playwright/test": "1.56.1",
 		"@storybook/addon-a11y": "10.5.6",
 		"@storybook/addon-docs": "10.5.6",
+		"@storybook/addon-mcp": "0.7.0",
 		"@storybook/addon-svelte-csf": "5.1.2",
 		"@storybook/addon-vitest": "10.5.6",
 		"@storybook/sveltekit": "10.5.6",
@@ -57,6 +58,8 @@
 		"dompurify": "3.4.13",
 		"eslint": "9.39.4",
 		"eslint-config-prettier": "10.1.8",
+		"eslint-plugin-perfectionist": "^5.10.1",
+		"eslint-plugin-simple-import-sort": "^14.0.0",
 		"eslint-plugin-storybook": "10.5.6",
 		"eslint-plugin-svelte": "3.19.0",
 		"fflate": "0.8.3",
@@ -99,8 +102,7 @@
 		"vite-plugin-devtools-json": "0.2.1",
 		"vitest": "4.1.10",
 		"vitest-browser-svelte": "2.1.1",
-		"workbox-window": "7.4.1",
-		"@storybook/addon-mcp": "0.7.0"
+		"workbox-window": "7.4.1"
 	},
 	"overrides": {
 		"cookie": "1.1.1",

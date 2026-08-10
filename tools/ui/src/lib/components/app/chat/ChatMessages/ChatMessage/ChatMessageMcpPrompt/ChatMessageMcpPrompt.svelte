@@ -5,7 +5,7 @@
 		ChatMessageMcpPromptContent
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { MessageRole, McpPromptVariant } from '$lib/enums';
+	import { McpPromptVariant, MessageRole } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
@@ -30,17 +30,17 @@
 
 	let {
 		class: className = '',
-		message,
-		mcpPrompt,
-		siblingInfo = null,
-		showDeleteDialog,
 		deletionInfo,
-		onCopy,
-		onEdit,
-		onDelete,
+		mcpPrompt,
+		message,
 		onConfirmDelete,
+		onCopy,
+		onDelete,
+		onEdit,
 		onNavigateToSibling,
-		onShowDeleteDialogChange
+		onShowDeleteDialogChange,
+		showDeleteDialog,
+		siblingInfo = null
 	}: Props = $props();
 
 	// Get edit context

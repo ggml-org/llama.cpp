@@ -27,29 +27,35 @@ export function findMentionToken(
 	if (cursor <= 0 || cursor > value.length) return null;
 
 	let atIndex = -1;
+
 	for (let i = cursor - 1; i >= 0; i--) {
 		const ch = value[i];
+
 		if (ch === '@') {
 			const prev = i > 0 ? value[i - 1] : '';
+
 			if (i === 0 || TOKEN_BOUNDARY_CHARS.has(prev)) {
 				atIndex = i;
 			}
+
 			break;
 		}
+
 		if (TOKEN_BOUNDARY_CHARS.has(ch)) break;
 	}
 
 	if (atIndex === -1) return null;
 
 	let end = atIndex + 1;
+
 	while (end < value.length && !TOKEN_BOUNDARY_CHARS.has(value[end])) {
 		end++;
 	}
 
 	return {
-		start: atIndex,
 		end,
-		query: value.slice(atIndex + 1, end)
+		query: value.slice(atIndex + 1, end),
+		start: atIndex
 	};
 }
 
@@ -68,6 +74,8 @@ export function takeMentionDismissSnapshot(
 	cursor: number
 ): MentionDismissSnapshot | null {
 	const token = findMentionToken(value, cursor);
+
 	if (!token) return null;
-	return { start: token.start, query: token.query };
+
+	return { query: token.query, start: token.start };
 }

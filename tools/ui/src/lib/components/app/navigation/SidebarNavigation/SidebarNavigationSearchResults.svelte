@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { buildConversationTree } from '$lib/stores/conversations.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
+	import { buildConversationTree } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		class?: string;
@@ -21,19 +21,19 @@
 
 	let {
 		class: className = '',
-		searchQuery,
-		filteredConversations,
 		currentChatId,
+		filteredConversations,
 		isSelectionMode = false,
-		selectedIds = new Set<string>(),
-		onSelect,
-		onEdit,
 		onDelete,
+		onEdit,
+		onEnterSelectionMode,
+		onRowMouseDown,
+		onSelect,
+		onSelectionClick,
 		onStop,
 		onToggleSelect,
-		onEnterSelectionMode,
-		onSelectionClick,
-		onRowMouseDown
+		searchQuery,
+		selectedIds = new Set<string>()
 	}: Props = $props();
 
 	let tree = $derived(buildConversationTree(filteredConversations));
@@ -59,11 +59,11 @@
 				<li class="group/item relative mb-1 p-0">
 					<SidebarNavigationConversationItem
 						conversation={{
-							id: conversation.id,
-							name: conversation.name,
-							lastModified: conversation.lastModified,
 							currNode: conversation.currNode,
 							forkedFromConversationId: conversation.forkedFromConversationId,
+							id: conversation.id,
+							lastModified: conversation.lastModified,
+							name: conversation.name,
 							pinned: conversation.pinned
 						}}
 						{depth}

@@ -6,7 +6,7 @@
 		audioSrc: string | null;
 	}
 
-	let { currentItem, audioSrc }: Props = $props();
+	let { audioSrc, currentItem }: Props = $props();
 </script>
 
 <div class="flex flex-1 items-center justify-center p-8">

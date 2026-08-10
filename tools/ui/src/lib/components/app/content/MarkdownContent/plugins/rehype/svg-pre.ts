@@ -1,5 +1,5 @@
 import { createPreTransform } from './pre-transform';
-import { SVG_BLOCK_CLASS, SVG_LANGUAGE, XML_LANGUAGE, SVG_TAG_PREFIX } from '$lib/constants';
+import { SVG_BLOCK_CLASS, SVG_LANGUAGE, SVG_TAG_PREFIX, XML_LANGUAGE } from '$lib/constants';
 
 /**
  * Converts svg code blocks to <pre class="svg-block"> for client-side rendering.

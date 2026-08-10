@@ -52,6 +52,7 @@
 	// the picker/paste flows can address either renderer through one handle.
 	export function getCaretOffset(): number {
 		if (!textareaElement) return 0;
+
 		return textareaElement.selectionStart ?? textareaElement.value.length;
 	}
 

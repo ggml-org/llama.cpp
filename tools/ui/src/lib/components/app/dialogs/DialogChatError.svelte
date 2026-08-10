@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { AlertTriangle, TimerOff } from '@lucide/svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { ErrorDialogType } from '$lib/enums';
 
 	interface Props {
@@ -11,7 +11,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), type, message, contextInfo, onOpenChange }: Props = $props();
+	let { contextInfo, message, onOpenChange, open = $bindable(), type }: Props = $props();
 
 	const isTimeout = $derived(type === ErrorDialogType.TIMEOUT);
 	const title = $derived(isTimeout ? 'TCP Timeout' : 'Server Error');

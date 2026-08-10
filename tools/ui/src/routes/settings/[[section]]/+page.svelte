@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { SettingsChat } from '$lib/components/app/settings';
-	import { page } from '$app/state';
 	import { afterNavigate, replaceState } from '$app/navigation';
-	import { RouterService } from '$lib/services';
+	import { page } from '$app/state';
+	import { SettingsChat } from '$lib/components/app/settings';
 	import { SETTINGS_SECTION_SLUGS } from '$lib/constants';
+	import { RouterService } from '$lib/services';
 
 	afterNavigate(() => {
 		if (!page.params.section) {

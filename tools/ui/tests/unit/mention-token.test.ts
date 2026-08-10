@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { findMentionToken, takeMentionDismissSnapshot } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('findMentionToken', () => {
 	it('returns null for an empty/bare cursor', () => {
@@ -8,11 +8,11 @@ describe('findMentionToken', () => {
 	});
 
 	it('recognizes a mention at the start of the value', () => {
-		expect(findMentionToken('@pr', 3)).toEqual({ start: 0, end: 3, query: 'pr' });
+		expect(findMentionToken('@pr', 3)).toEqual({ end: 3, query: 'pr', start: 0 });
 	});
 
 	it('recognizes a mention after a word boundary', () => {
-		expect(findMentionToken('hello @pr', 9)).toEqual({ start: 6, end: 9, query: 'pr' });
+		expect(findMentionToken('hello @pr', 9)).toEqual({ end: 9, query: 'pr', start: 6 });
 	});
 
 	it('returns null when the @ is mid-identifier', () => {
@@ -25,9 +25,9 @@ describe('findMentionToken', () => {
 	});
 
 	it('treats boundary characters (parens, brackets, comma) as token starts', () => {
-		expect(findMentionToken('(@pr', 4)).toEqual({ start: 1, end: 4, query: 'pr' });
-		expect(findMentionToken('[@pr', 4)).toEqual({ start: 1, end: 4, query: 'pr' });
-		expect(findMentionToken('a,@pr', 5)).toEqual({ start: 2, end: 5, query: 'pr' });
+		expect(findMentionToken('(@pr', 4)).toEqual({ end: 4, query: 'pr', start: 1 });
+		expect(findMentionToken('[@pr', 4)).toEqual({ end: 4, query: 'pr', start: 1 });
+		expect(findMentionToken('a,@pr', 5)).toEqual({ end: 5, query: 'pr', start: 2 });
 	});
 
 	it('does not treat an identifier character as a boundary', () => {
@@ -35,17 +35,17 @@ describe('findMentionToken', () => {
 	});
 
 	it('extracts the whole token up to the trailing boundary as the query', () => {
-		expect(findMentionToken('@', 1)).toEqual({ start: 0, end: 1, query: '' });
-		expect(findMentionToken('@hello', 6)).toEqual({ start: 0, end: 6, query: 'hello' });
+		expect(findMentionToken('@', 1)).toEqual({ end: 1, query: '', start: 0 });
+		expect(findMentionToken('@hello', 6)).toEqual({ end: 6, query: 'hello', start: 0 });
 	});
 
 	it('keeps the whole token as the query when the caret is mid-token', () => {
-		expect(findMentionToken('@hello', 4)).toEqual({ start: 0, end: 6, query: 'hello' });
-		expect(findMentionToken('@hello world', 4)).toEqual({ start: 0, end: 6, query: 'hello' });
+		expect(findMentionToken('@hello', 4)).toEqual({ end: 6, query: 'hello', start: 0 });
+		expect(findMentionToken('@hello world', 4)).toEqual({ end: 6, query: 'hello', start: 0 });
 	});
 
 	it('ignores a boundary @ and keeps the most recent token', () => {
-		expect(findMentionToken('a @foo @bar', 11)).toEqual({ start: 7, end: 11, query: 'bar' });
+		expect(findMentionToken('a @foo @bar', 11)).toEqual({ end: 11, query: 'bar', start: 7 });
 	});
 });
 
@@ -57,8 +57,8 @@ describe('takeMentionDismissSnapshot', () => {
 
 	it('captures start and query of the current mention', () => {
 		expect(takeMentionDismissSnapshot('hello @proj', 11)).toEqual({
-			start: 6,
-			query: 'proj'
+			query: 'proj',
+			start: 6
 		});
 	});
 });

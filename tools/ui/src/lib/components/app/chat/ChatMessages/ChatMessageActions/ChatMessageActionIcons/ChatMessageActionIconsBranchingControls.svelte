@@ -8,7 +8,7 @@
 		onNavigateToSibling?: (siblingId: string) => void;
 	}
 
-	let { class: className = '', siblingInfo, onNavigateToSibling }: Props = $props();
+	let { class: className = '', onNavigateToSibling, siblingInfo }: Props = $props();
 
 	let hasPrevious = $derived(siblingInfo && siblingInfo.currentIndex > 0);
 	let hasNext = $derived(siblingInfo && siblingInfo.currentIndex < siblingInfo.totalSiblings - 1);

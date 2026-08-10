@@ -1,5 +1,5 @@
-import { getContext, setContext } from 'svelte';
 import { CONTEXT_KEY_CHAT_SETTINGS_CONFIG } from '$lib/constants';
+import { getContext, setContext } from 'svelte';
 
 export interface ChatSettingsConfigContext {
 	readonly localConfig: SettingsConfigType;

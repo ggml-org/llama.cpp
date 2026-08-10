@@ -1,13 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { GLOB_WILDCARD, PATH_NAV_MAX_DEPTH } from '$lib/constants';
 import {
-	splitPathQuery,
 	buildCaseInsensitiveGlob,
 	buildGlobSearchArgs,
-	rankEntries,
+	highlightMatch,
 	joinPath,
-	highlightMatch
+	rankEntries,
+	splitPathQuery
 } from '$lib/utils';
-import { GLOB_WILDCARD, PATH_NAV_MAX_DEPTH } from '$lib/constants';
+import { describe, expect, it } from 'vitest';
 
 describe('splitPathQuery', () => {
 	it('treats a plain query as a home-relative glob (not navigation)', () => {
@@ -15,54 +15,54 @@ describe('splitPathQuery', () => {
 	});
 
 	it('navigates the root for `/`', () => {
-		expect(splitPathQuery('/')).toEqual({ parent: '/', last: '' });
+		expect(splitPathQuery('/')).toEqual({ last: '', parent: '/' });
 	});
 
 	it('navigates home for `~`', () => {
-		expect(splitPathQuery('~')).toEqual({ parent: '~', last: '' });
+		expect(splitPathQuery('~')).toEqual({ last: '', parent: '~' });
 	});
 
 	it('splits an absolute path into parent and last segment', () => {
-		expect(splitPathQuery('/Users/al/proj')).toEqual({ parent: '/Users/al', last: 'proj' });
+		expect(splitPathQuery('/Users/al/proj')).toEqual({ last: 'proj', parent: '/Users/al' });
 	});
 
 	it('navigates a Windows drive path written with backslashes', () => {
 		expect(splitPathQuery('C:\\repos\\llama.cpp')).toEqual({
-			parent: 'C:/repos',
-			last: 'llama.cpp'
+			last: 'llama.cpp',
+			parent: 'C:/repos'
 		});
 	});
 
 	it('navigates a Windows drive path written with forward slashes', () => {
-		expect(splitPathQuery('D:/repos')).toEqual({ parent: 'D:/', last: 'repos' });
+		expect(splitPathQuery('D:/repos')).toEqual({ last: 'repos', parent: 'D:/' });
 	});
 
 	it('treats a bare drive as its root', () => {
-		expect(splitPathQuery('D:')).toEqual({ parent: 'D:/', last: '' });
-		expect(splitPathQuery('D:\\')).toEqual({ parent: 'D:/', last: '' });
+		expect(splitPathQuery('D:')).toEqual({ last: '', parent: 'D:/' });
+		expect(splitPathQuery('D:\\')).toEqual({ last: '', parent: 'D:/' });
 	});
 
 	it('navigates a UNC share', () => {
 		expect(splitPathQuery('\\\\host\\share\\proj')).toEqual({
-			parent: '//host/share/',
-			last: 'proj'
+			last: 'proj',
+			parent: '//host/share/'
 		});
 	});
 
 	it('keeps a backslash as a POSIX filename character', () => {
-		expect(splitPathQuery('/tmp/a\\b')).toEqual({ parent: '/tmp', last: 'a\\b' });
+		expect(splitPathQuery('/tmp/a\\b')).toEqual({ last: 'a\\b', parent: '/tmp' });
 	});
 
 	it('splits a home-relative path into parent and last segment', () => {
-		expect(splitPathQuery('~/Documents')).toEqual({ parent: '~', last: 'Documents' });
+		expect(splitPathQuery('~/Documents')).toEqual({ last: 'Documents', parent: '~' });
 	});
 
 	it('strips trailing slashes before splitting', () => {
-		expect(splitPathQuery('/Users/al/')).toEqual({ parent: '/Users', last: 'al' });
+		expect(splitPathQuery('/Users/al/')).toEqual({ last: 'al', parent: '/Users' });
 	});
 
 	it('handles a single-segment absolute path', () => {
-		expect(splitPathQuery('/opt')).toEqual({ parent: '/', last: 'opt' });
+		expect(splitPathQuery('/opt')).toEqual({ last: 'opt', parent: '/' });
 	});
 });
 
@@ -85,16 +85,19 @@ describe('rankEntries', () => {
 
 	it('ranks exact basename match first', () => {
 		const ranked = rankEntries(entries, 'read');
+
 		expect(ranked[0].path).toBe('/h/read');
 	});
 
 	it('breaks ties by shorter path, then alphabetically', () => {
 		const ranked = rankEntries(entries, 'read');
+
 		expect(ranked[ranked.length - 1].path).toBe('/h/readme.txt');
 	});
 
 	it('does not mutate the input', () => {
 		const snapshot = [...entries];
+
 		rankEntries(entries, 'read');
 		expect(entries).toEqual(snapshot);
 	});
@@ -112,18 +115,18 @@ describe('joinPath', () => {
 
 describe('highlightMatch', () => {
 	it('returns a single non-matching segment when query is empty', () => {
-		expect(highlightMatch('abc', '')).toEqual([{ text: 'abc', match: false }]);
+		expect(highlightMatch('abc', '')).toEqual([{ match: false, text: 'abc' }]);
 	});
 
 	it('marks every case-insensitive occurrence of the query', () => {
 		expect(highlightMatch('aXa', 'ax')).toEqual([
-			{ text: 'aX', match: true },
-			{ text: 'a', match: false }
+			{ match: true, text: 'aX' },
+			{ match: false, text: 'a' }
 		]);
 	});
 
 	it('returns non-matching text when the query is absent', () => {
-		expect(highlightMatch('abc', 'z')).toEqual([{ text: 'abc', match: false }]);
+		expect(highlightMatch('abc', 'z')).toEqual([{ match: false, text: 'abc' }]);
 	});
 });
 
@@ -132,6 +135,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('glob-matches home-relative within the scope path', () => {
 		const args = buildGlobSearchArgs('docs', '/home', DEPTH);
+
 		expect(args.path).toBe('/home');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('docs'));
 		expect(args.maxDepth).toBe(DEPTH);
@@ -141,6 +145,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('navigates home for a `~` path query', () => {
 		const args = buildGlobSearchArgs('~/proj', '/home', DEPTH);
+
 		expect(args.path).toBe('~');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('proj'));
 		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
@@ -150,6 +155,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('lists the scope root when a path query has no last segment', () => {
 		const args = buildGlobSearchArgs('~/', '/home', DEPTH);
+
 		expect(args.path).toBe('~');
 		expect(args.include).toBe(GLOB_WILDCARD);
 		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
@@ -157,6 +163,7 @@ describe('buildGlobSearchArgs', () => {
 
 	it('navigates an absolute path under its root', () => {
 		const args = buildGlobSearchArgs('/usr/local/bin', '/home', DEPTH);
+
 		expect(args.path).toBe('/usr/local');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('bin'));
 		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);

@@ -1,13 +1,13 @@
 <script lang="ts">
+	import { replaceState } from '$app/navigation';
+	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
+	import { APP_NAME, URL_PARAMS } from '$lib/constants';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
-	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
+	import { modelOptions, modelsStore } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { onMount } from 'svelte';
-	import { page } from '$app/state';
-	import { replaceState } from '$app/navigation';
-	import { APP_NAME, URL_PARAMS } from '$lib/constants';
 
 	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
 	let modelParam = $derived(page.url.searchParams.get(URL_PARAMS.MODEL));

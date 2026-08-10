@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { LEGACY_AGENTIC_REGEX } from '$lib/constants/agentic';
+import { describe, expect, it } from 'vitest';
 
 /**
  * Tests for legacy marker stripping (used in migration).
@@ -25,7 +25,6 @@ const COMPLETE_BLOCK =
 	'<<<TOOL_ARGS_END>>>\n' +
 	'file1.txt\nfile2.txt\n' +
 	'<<<AGENTIC_TOOL_CALL_END>>>\n';
-
 // Partial block: streaming was cut before END arrived.
 const OPEN_BLOCK =
 	'\n\n<<<AGENTIC_TOOL_CALL_START>>>\n' +
@@ -39,6 +38,7 @@ describe('legacy agentic marker stripping (for migration)', () => {
 	it('strips a complete tool call block, leaving surrounding text', () => {
 		const input = 'Before.' + COMPLETE_BLOCK + 'After.';
 		const result = stripLegacyContextMarkers(input);
+
 		expect(result).not.toContain('<<<');
 		expect(result).toContain('Before.');
 		expect(result).toContain('After.');
@@ -47,6 +47,7 @@ describe('legacy agentic marker stripping (for migration)', () => {
 	it('strips multiple complete tool call blocks', () => {
 		const input = 'A' + COMPLETE_BLOCK + 'B' + COMPLETE_BLOCK + 'C';
 		const result = stripLegacyContextMarkers(input);
+
 		expect(result).not.toContain('<<<');
 		expect(result).toContain('A');
 		expect(result).toContain('B');
@@ -56,17 +57,20 @@ describe('legacy agentic marker stripping (for migration)', () => {
 	it('strips an open/partial tool call block (no END marker)', () => {
 		const input = 'Lead text.' + OPEN_BLOCK;
 		const result = stripLegacyContextMarkers(input);
+
 		expect(result).toBe('Lead text.');
 		expect(result).not.toContain('<<<');
 	});
 
 	it('does not alter content with no markers', () => {
 		const input = 'Just a normal assistant response.';
+
 		expect(stripLegacyContextMarkers(input)).toBe(input);
 	});
 
 	it('strips reasoning block independently', () => {
 		const input = '<<<reasoning_content_start>>>think hard<<<reasoning_content_end>>>Answer.';
+
 		expect(stripLegacyContextMarkers(input)).toBe('Answer.');
 	});
 
@@ -75,6 +79,7 @@ describe('legacy agentic marker stripping (for migration)', () => {
 			'<<<reasoning_content_start>>>plan<<<reasoning_content_end>>>' +
 			'Some text.' +
 			COMPLETE_BLOCK;
+
 		expect(stripLegacyContextMarkers(input)).not.toContain('<<<');
 		expect(stripLegacyContextMarkers(input)).toContain('Some text.');
 	});

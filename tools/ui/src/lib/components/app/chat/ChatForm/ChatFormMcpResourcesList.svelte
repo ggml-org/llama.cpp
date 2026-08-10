@@ -1,13 +1,13 @@
 <script lang="ts">
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		mcpResourceAttachments,
-		mcpHasResourceAttachments
-	} from '$lib/stores/mcp-resources.svelte';
 	import {
 		ChatAttachmentsListItemMcpResource,
 		HorizontalScrollCarousel
 	} from '$lib/components/app';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import {
+		mcpHasResourceAttachments,
+		mcpResourceAttachments
+	} from '$lib/stores/mcp-resources.svelte';
 
 	interface Props {
 		class?: string;

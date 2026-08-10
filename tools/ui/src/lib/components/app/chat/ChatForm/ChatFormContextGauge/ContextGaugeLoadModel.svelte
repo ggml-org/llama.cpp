@@ -8,7 +8,7 @@
 		onLoad: () => void;
 	}
 
-	let { modelId, isLoading, onLoad }: Props = $props();
+	let { isLoading, modelId, onLoad }: Props = $props();
 </script>
 
 {#if modelId !== null && !isLoading}

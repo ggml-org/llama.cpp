@@ -31,16 +31,16 @@
 
 	let {
 		class: className = '',
-		message,
-		siblingInfo = null,
-		showDeleteDialog,
 		deletionInfo,
-		onCopy,
-		onEdit,
-		onDelete,
+		message,
 		onConfirmDelete,
+		onCopy,
+		onDelete,
+		onEdit,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
+		showDeleteDialog,
+		siblingInfo = null,
 		textareaElement = $bindable()
 	}: Props = $props();
 

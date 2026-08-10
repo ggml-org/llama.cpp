@@ -7,7 +7,7 @@
 		class?: string;
 	}
 
-	let { keys, variant = 'default', class: className = '' }: Props = $props();
+	let { class: className = '', keys, variant = 'default' }: Props = $props();
 
 	let baseClasses =
 		'px-1 pointer-events-none inline-flex select-none items-center gap-0.5 font-sans text-md font-medium opacity-0 transition-opacity -my-1';

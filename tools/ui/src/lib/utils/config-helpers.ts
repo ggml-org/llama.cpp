@@ -27,6 +27,7 @@ export function getConfigValue<T extends SettingsConfigType>(
 	key: string
 ): string | number | boolean | undefined {
 	const value = (config as Record<string, unknown>)[key];
+
 	return value as string | number | boolean | undefined;
 }
 
@@ -42,6 +43,7 @@ export function configToParameterRecord<T extends SettingsConfigType>(
 
 	for (const key of keys) {
 		const value = getConfigValue(config, key);
+
 		if (value !== undefined) {
 			record[key] = value;
 		}

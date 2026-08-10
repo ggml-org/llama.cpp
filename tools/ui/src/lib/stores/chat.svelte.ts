@@ -11,56 +11,15 @@
  * @see ChatService in services/chat.service.ts for API operations
  */
 
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import { DatabaseService } from '$lib/services/database.service';
-import { ChatService } from '$lib/services/chat.service';
-import { STREAM_RESUME_RETRY_MS } from '$lib/constants/api-endpoints';
-import { streamIdentity } from '$lib/utils/stream-identity';
-import { getAuthHeaders } from '$lib/utils/api-headers';
 import { CONTENT_TYPE_HEADER } from '$lib/constants';
-import { MimeTypeApplication } from '$lib/enums';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { config } from '$lib/stores/settings.svelte';
-import { agenticStore } from '$lib/stores/agentic.svelte';
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
-	selectedModelName,
-	modelsStore,
-	selectedModelContextSize
-} from '$lib/stores/models.svelte';
-import {
-	normalizeModelName,
-	filterByLeafNodeId,
-	findDescendantMessages,
-	findLeafNode,
-	findMessageById,
-	formatCwdMessage,
-	isAbortError,
-	generateConversationTitle,
-	CWD_CLEARED_TEXT
-} from '$lib/utils';
-import { toolsStore } from '$lib/stores/tools.svelte';
-import { classifyContinueIntent } from '$lib/utils/agentic';
-import {
-	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
+	MAX_INACTIVE_CONVERSATION_STATES,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
 } from '$lib/constants';
-import type {
-	ChatMessageTimings,
-	ChatMessagePromptProgress,
-	ChatStreamCallbacks,
-	ErrorDialogState
-} from '$lib/types/chat';
-import type {
-	ApiChatMessageData,
-	ApiProcessingState,
-	ApiStreamSession,
-	DatabaseMessage,
-	DatabaseMessageExtra
-} from '$lib/types';
+import { STREAM_RESUME_RETRY_MS } from '$lib/constants/api-endpoints';
+import { MimeTypeApplication } from '$lib/enums';
 import {
 	ContinueIntentKind,
 	ErrorDialogType,
@@ -69,6 +28,47 @@ import {
 	ReasoningEffort,
 	StreamConnectionState
 } from '$lib/enums';
+import { ChatService } from '$lib/services/chat.service';
+import { DatabaseService } from '$lib/services/database.service';
+import { agenticStore } from '$lib/stores/agentic.svelte';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
+import {
+	modelsStore,
+	selectedModelContextSize,
+	selectedModelName
+} from '$lib/stores/models.svelte';
+import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
+import { config } from '$lib/stores/settings.svelte';
+import { toolsStore } from '$lib/stores/tools.svelte';
+import type {
+	ApiChatMessageData,
+	ApiProcessingState,
+	ApiStreamSession,
+	DatabaseMessage,
+	DatabaseMessageExtra
+} from '$lib/types';
+import type {
+	ChatMessagePromptProgress,
+	ChatMessageTimings,
+	ChatStreamCallbacks,
+	ErrorDialogState
+} from '$lib/types/chat';
+import {
+	CWD_CLEARED_TEXT,
+	filterByLeafNodeId,
+	findDescendantMessages,
+	findLeafNode,
+	findMessageById,
+	formatCwdMessage,
+	generateConversationTitle,
+	isAbortError,
+	normalizeModelName
+} from '$lib/utils';
+import { classifyContinueIntent } from '$lib/utils/agentic';
+import { getAuthHeaders } from '$lib/utils/api-headers';
+import { streamIdentity } from '$lib/utils/stream-identity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -128,12 +128,16 @@ class ChatStore {
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
+
 		if (loading) {
 			this.chatLoadingStates.set(convId, true);
+
 			if (convId === conversationsStore.activeConversation?.id) this.isLoading = true;
 		} else {
 			this.chatLoadingStates.delete(convId);
+
 			if (convId === conversationsStore.activeConversation?.id) this.isLoading = false;
+
 			this.setChatReasoning(convId, false);
 			// the local pipe is the authoritative observer of session end: when it finishes (clean
 			// onComplete or explicit Stop), the backend session is finalized too, so we drop the
@@ -146,9 +150,11 @@ class ChatStore {
 	private setChatReasoning(convId: string, reasoning: boolean): void {
 		if (reasoning) {
 			this.chatReasoningStates.set(convId, true);
+
 			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = true;
 		} else {
 			this.chatReasoningStates.delete(convId);
+
 			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = false;
 		}
 	}
@@ -160,10 +166,11 @@ class ChatStore {
 	): void {
 		this.touchConversationState(convId);
 		this.chatStreamingStates.set(convId, {
-			response,
 			messageId,
-			model: model ?? this.chatStreamingStates.get(convId)?.model
+			model: model ?? this.chatStreamingStates.get(convId)?.model,
+			response
 		});
+
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
 	}
 	private clearChatStreaming(convId: string, messageId?: string): void {
@@ -171,9 +178,12 @@ class ChatStore {
 		// same conversation, that would drop the frozen stop identity and stop the wrong session
 		if (messageId !== undefined) {
 			const cur = this.chatStreamingStates.get(convId);
+
 			if (cur && cur.messageId !== messageId) return;
 		}
+
 		this.chatStreamingStates.delete(convId);
+
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
 	}
 	private getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
@@ -183,12 +193,15 @@ class ChatStore {
 		this.isLoading = this.chatLoadingStates.get(convId) || false;
 		this.isReasoning = this.chatReasoningStates.get(convId) || false;
 		const s = this.chatStreamingStates.get(convId);
+
 		this.currentResponse = s?.response || '';
 		this.isStreamingActive = s !== undefined;
 		this.setActiveProcessingConversation(convId);
+
 		// Sync streaming content to activeMessages so UI displays current content
 		if (s?.response && s?.messageId) {
 			const idx = conversationsStore.findMessageIndex(s.messageId);
+
 			if (idx !== -1) {
 				conversationsStore.updateMessageAtIndex(idx, { content: s.response });
 			}
@@ -214,34 +227,44 @@ class ChatStore {
 	 */
 	async probeServerStream(convId: string): Promise<ApiStreamSession | null> {
 		if (!convId) return null;
+
 		let listResp: Response;
+
 		try {
 			// POST the one conv id we are probing
 			listResp = await fetch(`./v1/streams/lookup`, {
-				method: 'POST',
+				body: JSON.stringify({ conversation_ids: [convId] }),
 				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
-				body: JSON.stringify({ conversation_ids: [convId] })
+				method: 'POST'
 			});
 		} catch (e) {
 			console.warn('probeServerStream fetch failed:', e);
+
 			return null;
 		}
+
 		if (!listResp.ok) {
 			console.warn(`probeServerStream got HTTP ${listResp.status} for conv ${convId}`);
+
 			return null;
 		}
+
 		let sessions: ApiStreamSession[];
+
 		try {
 			sessions = (await listResp.json()) as ApiStreamSession[];
 		} catch (e) {
 			console.warn('probeServerStream JSON parse failed:', e);
+
 			return null;
 		}
+
 		return ChatService.selectActiveStream(sessions);
 	}
 
 	async attachServerStream(convId: string, streamId?: string): Promise<void> {
 		if (!convId) return;
+
 		if (this.chatStreamingStates.has(convId)) return;
 
 		// flip the spinner immediately, the user sees activity as soon as the conv becomes active.
@@ -250,6 +273,7 @@ class ChatStore {
 		this.setChatLoading(convId, true);
 		this.attachingConvs.add(convId);
 		this.setStreamingActive(true);
+
 		// only set the active processing conv if we are looking at it, otherwise a background
 		// attach would steal the indicator from the conv the user is currently viewing
 		if (convId === conversationsStore.activeConversation?.id) {
@@ -258,19 +282,22 @@ class ChatStore {
 
 		const unlock = () => {
 			this.attachingConvs.delete(convId);
+
 			// flip the global flag off only when no other conv is still attaching
 			if (this.attachingConvs.size === 0) {
 				this.setStreamingActive(false);
 			}
+
 			this.setChatLoading(convId, false);
 			this.clearChatStreaming(convId);
 		};
-
 		// fetch the replay stream from byte 0, rebuild the assistant message from scratch.
 		// resolve the server side identity, fall back to streamIdentity when the caller does not
 		// pass a streamId. probeServerStream returns the full id (with ::model suffix when present)
 		const id = streamId || streamIdentity(convId, selectedModelName());
+
 		let response: Response;
+
 		try {
 			response = await fetch(`./v1/stream?conv_id=${encodeURIComponent(id)}&from=0`, {
 				headers: getAuthHeaders()
@@ -278,11 +305,14 @@ class ChatStore {
 		} catch (e) {
 			console.error('attachServerStream replay fetch failed:', e);
 			unlock();
+
 			return;
 		}
+
 		if (!response.ok) {
 			console.warn(`attachServerStream replay got HTTP ${response.status} for conv ${convId}`);
 			unlock();
+
 			return;
 		}
 
@@ -292,42 +322,50 @@ class ChatStore {
 		// DB we stay isolated, and only mirror into the active store when the attached conv is
 		// the one currently displayed
 		let messages: DatabaseMessage[];
+
 		try {
 			messages = await DatabaseService.getConversationMessages(convId);
 		} catch (e) {
 			console.error('attachServerStream load messages failed:', e);
 			unlock();
+
 			return;
 		}
 
 		// locate the slot to splice into, create a placeholder assistant message if there is none.
 		// we use the conv-scoped findLastAssistantIdx helpers, they only depend on the array
 		let targetIdx = this.findLastAssistantIdx(messages);
+
 		if (targetIdx === -1) {
 			const lastUserIdx = this.findLastUserIdx(messages);
+
 			if (lastUserIdx === -1) {
 				console.warn(
 					`attachServerStream: conv ${convId} has no user or assistant message, cannot splice`
 				);
 				unlock();
+
 				return;
 			}
+
 			try {
 				const placeholder = await DatabaseService.createMessageBranch(
 					{
-						convId,
-						role: MessageRole.ASSISTANT,
-						content: '',
-						type: MessageType.TEXT,
-						timestamp: Date.now(),
-						parent: messages[lastUserIdx].id,
 						children: [],
-						toolCalls: ''
+						content: '',
+						convId,
+						parent: messages[lastUserIdx].id,
+						role: MessageRole.ASSISTANT,
+						timestamp: Date.now(),
+						toolCalls: '',
+						type: MessageType.TEXT
 					} as Omit<DatabaseMessage, 'id'>,
 					messages[lastUserIdx].id
 				);
+
 				messages = [...messages, placeholder];
 				targetIdx = messages.length - 1;
+
 				// only push into the active store when this conv is the one displayed right now
 				if (convId === conversationsStore.activeConversation?.id) {
 					conversationsStore.addMessageToActive(placeholder);
@@ -335,13 +373,17 @@ class ChatStore {
 			} catch (e) {
 				console.error('attachServerStream placeholder creation failed:', e);
 				unlock();
+
 				return;
 			}
 		}
+
 		if (targetIdx === -1) {
 			unlock();
+
 			return;
 		}
+
 		const targetMessage = messages[targetIdx];
 		const targetMessageId = targetMessage.id;
 		// when the assistant slot already has content, the running session is a continue or
@@ -351,7 +393,6 @@ class ChatStore {
 		const existingContent = targetMessage.content ?? '';
 		const existingReasoning = targetMessage.reasoningContent ?? '';
 		const isAppendMode = existingContent.length > 0;
-
 		// helper: write to the active store only when the attached conv is currently displayed.
 		// the lookup by message id is robust to reordering of activeMessages, two parallel attaches
 		// can no longer step on each other's indices
@@ -359,8 +400,11 @@ class ChatStore {
 			if (convId !== conversationsStore.activeConversation?.id) {
 				return;
 			}
+
 			const liveIdx = conversationsStore.findMessageIndex(targetMessageId);
+
 			if (liveIdx === -1) return;
+
 			conversationsStore.updateMessageAtIndex(liveIdx, updates);
 		};
 
@@ -372,6 +416,7 @@ class ChatStore {
 		// the session was tagged with, not the live dropdown
 		const sepIdx = id.indexOf('::');
 		const attachedModel: string | null = sepIdx === -1 ? null : id.slice(sepIdx + 2);
+
 		this.setChatStreaming(convId, existingContent, targetMessageId, attachedModel);
 		const abortController = this.getOrCreateAbortController(convId);
 
@@ -389,6 +434,7 @@ class ChatStore {
 				(chunk: string) => {
 					streamedContent += chunk;
 					const displayed = isAppendMode ? existingContent + streamedContent : streamedContent;
+
 					writeActive({ content: displayed });
 					this.setChatStreaming(convId, displayed, targetMessageId);
 				},
@@ -402,13 +448,14 @@ class ChatStore {
 					const streamedR = streamedReasoningContent || reasoningContent || '';
 					const content = isAppendMode ? existingContent + streamed : streamed;
 					const reasoning = isAppendMode ? existingReasoning + streamedR : streamedR;
+
 					// the DB write is the source of truth, mirror to the active store only when
 					// the conv is currently displayed
 					await DatabaseService.updateMessage(targetMessageId, {
 						content,
 						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || '',
-						timings
+						timings,
+						toolCalls: toolCalls || ''
 					});
 					writeActive({
 						content,
@@ -426,6 +473,7 @@ class ChatStore {
 					const displayed = isAppendMode
 						? existingReasoning + streamedReasoningContent
 						: streamedReasoningContent;
+
 					writeActive({ reasoningContent: displayed });
 				},
 				undefined,
@@ -458,12 +506,16 @@ class ChatStore {
 
 	async discoverActiveStream(convId: string): Promise<void> {
 		if (!convId) return;
+
 		if (this.chatStreamingStates.has(convId)) return;
+
 		if (this.chatLoadingStates.get(convId) && !this.resumePendingConvs.has(convId)) return;
+
 		// concurrency guard: another discover may already be running for this conv (typical race
 		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
 		// /v1/stream would duplicate every byte into the DB message, this guard bounces it
 		if (this.discoveringConvs.has(convId)) return;
+
 		this.discoveringConvs.add(convId);
 
 		try {
@@ -472,13 +524,14 @@ class ChatStore {
 			// model conv with no ::suffix, only guess from the dropdown with no persisted state
 			const localState = ChatService.getStreamState(convId);
 			const streamId = ChatService.resumeStreamIdentity(convId, localState, selectedModelName());
-
 			// primary path: ask the server which sessions exist for this identity
 			const serverTarget = await this.probeServerStream(streamId);
+
 			if (serverTarget) {
 				// pass the full server side identity (may carry a ::model suffix) so the GET routes
 				// straight to the owning session, no probe or fan out
 				await this.attachServerStream(convId, serverTarget.conversation_id);
+
 				return;
 			}
 
@@ -488,14 +541,17 @@ class ChatStore {
 			if (!localState) {
 				return;
 			}
+
 			// quiet status probe first: a full attach flips the loading UI on every try, probing
 			// keeps the retry loop invisible while the owning model is still loading (503)
 			const status = await ChatService.probeResumeStatus(streamId);
+
 			if (status === 503) {
 				// make the wait visible: the empty assistant row persisted at send time renders
 				// the processing info, whose model load percentage flows from the models feed
 				this.resumePendingConvs.add(convId);
 				this.setChatLoading(convId, true);
+
 				if (!this.resumeRetryTimers.has(convId)) {
 					this.resumeRetryTimers.set(
 						convId,
@@ -505,22 +561,29 @@ class ChatStore {
 						}, STREAM_RESUME_RETRY_MS)
 					);
 				}
+
 				return;
 			}
+
 			if (this.resumePendingConvs.delete(convId) && status !== 200) {
 				// the wait is over without a session to attach, drop the visible loading state
 				this.setChatLoading(convId, false);
 			}
+
 			if (status === 0) {
 				// transient network failure, the next mount or visibility change retries
 				return;
 			}
+
 			if (status !== 200) {
 				// the session is gone (stopped, TTL expired), nothing to resume anymore
 				ChatService.clearStreamState(convId);
+
 				return;
 			}
+
 			await this.attachServerStream(convId, streamId);
+
 			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
 			if (!this.chatStreamingStates.has(convId) && !this.chatLoadingStates.get(convId)) {
 				ChatService.clearStreamState(convId);
@@ -534,6 +597,7 @@ class ChatStore {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			if (messages[i].role === MessageRole.ASSISTANT) return i;
 		}
+
 		return -1;
 	}
 
@@ -541,6 +605,7 @@ class ChatStore {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			if (messages[i].role === MessageRole.USER) return i;
 		}
+
 		return -1;
 	}
 
@@ -564,11 +629,13 @@ class ChatStore {
 	private setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
 		if (state === null) this.processingStates.delete(conversationId);
 		else this.processingStates.set(conversationId, state);
+
 		if (conversationId === this.activeConversationId) this.activeProcessingState = state;
 	}
 
 	clearProcessingState(conversationId: string): void {
 		this.processingStates.delete(conversationId);
+
 		if (conversationId === this.activeConversationId) this.activeProcessingState = null;
 	}
 
@@ -590,16 +657,19 @@ class ChatStore {
 
 	private getOrCreateAbortController(convId: string): AbortController {
 		let c = this.abortControllers.get(convId);
+
 		if (!c || c.signal.aborted) {
 			c = new AbortController();
 			this.abortControllers.set(convId, c);
 		}
+
 		return c;
 	}
 
 	private abortRequest(convId?: string): void {
 		if (convId) {
 			const c = this.abortControllers.get(convId);
+
 			if (c) {
 				c.abort();
 				this.abortControllers.delete(convId);
@@ -623,6 +693,7 @@ class ChatStore {
 	async abortCurrentFlow(convId: string): Promise<void> {
 		await this.savePartialResponseIfNeeded(convId);
 		const c = this.abortControllers.get(convId);
+
 		if (c) {
 			c.abort();
 			this.abortControllers.delete(convId);
@@ -666,9 +737,12 @@ class ChatStore {
 
 	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
 		if (!this._pendingDraftMessage && this._pendingDraftFiles.length === 0) return null;
-		const d = { message: this._pendingDraftMessage, files: [...this._pendingDraftFiles] };
+
+		const d = { files: [...this._pendingDraftFiles], message: this._pendingDraftMessage };
+
 		this._pendingDraftMessage = '';
 		this._pendingDraftFiles = [];
+
 		return d;
 	}
 
@@ -680,9 +754,11 @@ class ChatStore {
 		// union of local (this browser is piping) and remote (backend reports a running session
 		// for this conv but no local pipe yet) sources. the sidebar shows one spinner per entry
 		const out = new SvelteSet<string>(this.chatLoadingStates.keys());
+
 		for (const id of this.remoteRunningConvs) {
 			out.add(id);
 		}
+
 		return Array.from(out);
 	}
 
@@ -701,46 +777,61 @@ class ChatStore {
 		// on the store init race, and the sidebar spinners light up at first paint for every conv
 		// the user owns even if it has not been hydrated into the store yet
 		let ids: string[];
+
 		try {
 			const all = await DatabaseService.getAllConversations();
+
 			ids = all.map((c) => c.id).filter((id) => !!id);
 		} catch (e) {
 			console.warn('syncRemoteRunningStreams DB read failed:', e);
+
 			return;
 		}
+
 		// only ask about conv ids the user already owns
 		if (ids.length === 0) {
 			for (const id of Array.from(this.remoteRunningConvs)) {
 				this.remoteRunningConvs.delete(id);
 			}
+
 			return;
 		}
+
 		// rebuild the frozen conv::model identity per conv so a session started with a model still
 		// matches. the server response is mapped back to the bare id below for the sidebar set
 		const lookupIds = ids.map((id) =>
 			ChatService.resumeStreamIdentity(id, ChatService.getStreamState(id), null)
 		);
+
 		let sessions: ApiStreamSession[];
+
 		try {
 			const resp = await fetch('./v1/streams/lookup', {
-				method: 'POST',
+				body: JSON.stringify({ conversation_ids: lookupIds }),
 				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
-				body: JSON.stringify({ conversation_ids: lookupIds })
+				method: 'POST'
 			});
+
 			if (!resp.ok) return;
+
 			const body = (await resp.json()) as unknown;
+
 			if (!Array.isArray(body)) return;
+
 			sessions = body as ApiStreamSession[];
 		} catch (e) {
 			console.warn('syncRemoteRunningStreams fetch failed:', e);
+
 			return;
 		}
 		const running = new SvelteSet<string>();
+
 		for (const s of sessions) {
 			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
 				// strip the optional ::model suffix, the sidebar set is keyed by the bare conv id
 				const sepIdx = s.conversation_id.indexOf('::');
 				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
+
 				running.add(bareId);
 			}
 		}
@@ -794,8 +885,11 @@ class ChatStore {
 		convId: string
 	): { content: string; extras?: DatabaseMessageExtra[] } | null {
 		const msg = this._pendingMessages.get(convId);
+
 		if (!msg) return null;
+
 		this._pendingMessages.delete(convId);
+
 		return msg;
 	}
 
@@ -819,15 +913,21 @@ class ChatStore {
 			])
 		];
 		const cleanupCandidates: Array<{ convId: string; lastAccessed: number }> = [];
+
 		for (const convId of allConvIds) {
 			if (preserveIds.includes(convId)) continue;
+
 			if (this.chatLoadingStates.get(convId)) continue;
+
 			if (this.chatStreamingStates.has(convId)) continue;
+
 			const ts = this.conversationStateTimestamps.get(convId);
+
 			cleanupCandidates.push({ convId, lastAccessed: ts?.lastAccessed ?? 0 });
 		}
 		cleanupCandidates.sort((a, b) => a.lastAccessed - b.lastAccessed);
 		let cleanedUp = 0;
+
 		for (const { convId, lastAccessed } of cleanupCandidates) {
 			if (
 				cleanupCandidates.length - cleanedUp > MAX_INACTIVE_CONVERSATION_STATES ||
@@ -837,11 +937,14 @@ class ChatStore {
 				cleanedUp++;
 			}
 		}
+
 		return cleanedUp;
 	}
 	private cleanupConversationState(convId: string): void {
 		const c = this.abortControllers.get(convId);
+
 		if (c && !c.signal.aborted) c.abort();
+
 		this.chatLoadingStates.delete(convId);
 		this.chatStreamingStates.delete(convId);
 		this.abortControllers.delete(convId);
@@ -862,10 +965,14 @@ class ChatStore {
 		expectedRole?: MessageRole
 	): { message: DatabaseMessage; index: number } | null {
 		const index = conversationsStore.findMessageIndex(messageId);
+
 		if (index === -1) return null;
+
 		const message = conversationsStore.activeMessages[index];
+
 		if (expectedRole && message.role !== expectedRole) return null;
-		return { message, index };
+
+		return { index, message };
 	}
 
 	async addMessage(
@@ -877,34 +984,42 @@ class ChatStore {
 		isSynthetic?: boolean
 	): Promise<DatabaseMessage> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) throw new Error('No active conversation');
+
 		let parentId: string | null = null;
+
 		if (parent === '-1') {
 			const am = conversationsStore.activeMessages;
+
 			if (am.length > 0) parentId = am[am.length - 1].id;
 			else {
 				const all = await conversationsStore.getConversationMessages(activeConv.id);
 				const r = all.find((m) => m.parent === null && m.type === 'root');
+
 				parentId = r ? r.id : await DatabaseService.createRootMessage(activeConv.id);
 			}
 		} else parentId = parent;
+
 		const message = await DatabaseService.createMessageBranch(
 			{
-				convId: activeConv.id,
-				role,
+				children: [],
 				content,
-				type,
+				convId: activeConv.id,
+				extra: extras,
+				isSynthetic,
+				role,
 				timestamp: Date.now(),
 				toolCalls: '',
-				children: [],
-				extra: extras,
-				isSynthetic
+				type
 			},
 			parentId
 		);
+
 		conversationsStore.addMessageToActive(message);
 		await conversationsStore.updateCurrentNode(message.id);
 		conversationsStore.updateConversationTimestamp();
+
 		return message;
 	}
 
@@ -919,16 +1034,17 @@ class ChatStore {
 		const content = cwd
 			? formatCwdMessage(cwd, await toolsStore.resolveServerHome())
 			: CWD_CLEARED_TEXT;
-
 		// Reuse the trailing cwd row when it is already the last message, so
 		// repeated picks update it in place instead of stacking another row.
 		const last = conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
+
 		if (last && last.role === MessageRole.USER && last.isSynthetic === true) {
 			await DatabaseService.updateMessage(last.id, { content, isSynthetic: true });
 			conversationsStore.updateMessageAtIndex(conversationsStore.activeMessages.length - 1, {
 				content,
 				isSynthetic: true
 			});
+
 			return;
 		}
 
@@ -937,11 +1053,14 @@ class ChatStore {
 
 	async addSystemPrompt(): Promise<void> {
 		let activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) {
 			await conversationsStore.createConversation();
 			activeConv = conversationsStore.activeConversation;
 		}
+
 		if (!activeConv) return;
+
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
@@ -951,12 +1070,16 @@ class ChatStore {
 			const existingSystemMessage = allMessages.find(
 				(m) => m.role === MessageRole.SYSTEM && m.parent === rootId
 			);
+
 			if (existingSystemMessage) {
 				this.pendingEditMessageId = existingSystemMessage.id;
+
 				if (!conversationsStore.activeMessages.some((m) => m.id === existingSystemMessage.id))
 					conversationsStore.activeMessages.unshift(existingSystemMessage);
+
 				return;
 			}
+
 			const am = conversationsStore.activeMessages;
 			const firstActiveMessage = am.find((m) => m.parent === rootId);
 			const systemMessage = await DatabaseService.createSystemMessage(
@@ -964,6 +1087,7 @@ class ChatStore {
 				SYSTEM_MESSAGE_PLACEHOLDER,
 				rootId
 			);
+
 			if (firstActiveMessage) {
 				await DatabaseService.updateMessage(firstActiveMessage.id, {
 					parent: systemMessage.id
@@ -974,6 +1098,7 @@ class ChatStore {
 				const updatedRootChildren = rootMessage
 					? rootMessage.children.filter((id: string) => id !== firstActiveMessage.id)
 					: [];
+
 				await DatabaseService.updateMessage(rootId, {
 					children: [
 						...updatedRootChildren.filter((id: string) => id !== systemMessage.id),
@@ -981,11 +1106,13 @@ class ChatStore {
 					]
 				});
 				const firstMsgIndex = conversationsStore.findMessageIndex(firstActiveMessage.id);
+
 				if (firstMsgIndex !== -1)
 					conversationsStore.updateMessageAtIndex(firstMsgIndex, {
 						parent: systemMessage.id
 					});
 			}
+
 			conversationsStore.activeMessages.unshift(systemMessage);
 			this.pendingEditMessageId = systemMessage.id;
 			conversationsStore.updateConversationTimestamp();
@@ -996,20 +1123,29 @@ class ChatStore {
 
 	async removeSystemPromptPlaceholder(messageId: string): Promise<boolean> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return false;
+
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const systemMessage = findMessageById(allMessages, messageId);
+
 			if (!systemMessage || systemMessage.role !== MessageRole.SYSTEM) return false;
+
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+
 			if (!rootMessage) return false;
+
 			if (allMessages.length === 2 && systemMessage.children.length === 0) {
 				await conversationsStore.deleteConversation(activeConv.id);
+
 				return true;
 			}
+
 			for (const childId of systemMessage.children) {
 				await DatabaseService.updateMessage(childId, { parent: rootMessage.id });
 				const childIndex = conversationsStore.findMessageIndex(childId);
+
 				if (childIndex !== -1)
 					conversationsStore.updateMessageAtIndex(childIndex, { parent: rootMessage.id });
 			}
@@ -1021,28 +1157,34 @@ class ChatStore {
 			});
 			await DatabaseService.deleteMessage(messageId);
 			const systemIndex = conversationsStore.findMessageIndex(messageId);
+
 			if (systemIndex !== -1) conversationsStore.activeMessages.splice(systemIndex, 1);
+
 			conversationsStore.updateConversationTimestamp();
+
 			return false;
 		} catch (error) {
 			console.error('Failed to remove system prompt placeholder:', error);
+
 			return false;
 		}
 	}
 
 	private async createAssistantMessage(parentId?: string): Promise<DatabaseMessage> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) throw new Error('No active conversation');
+
 		return await DatabaseService.createMessageBranch(
 			{
-				convId: activeConv.id,
-				type: MessageType.TEXT,
-				role: MessageRole.ASSISTANT,
+				children: [],
 				content: '',
+				convId: activeConv.id,
+				model: null,
+				role: MessageRole.ASSISTANT,
 				timestamp: Date.now(),
 				toolCalls: '',
-				children: [],
-				model: null
+				type: MessageType.TEXT
 			},
 			parentId || null
 		);
@@ -1050,17 +1192,20 @@ class ChatStore {
 
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
+
 		const activeConv = conversationsStore.activeConversation;
 
 		// If agentic loop is running, inject as a steering message instead of starting a new flow
 		if (activeConv && agenticStore.isRunning(activeConv.id)) {
 			agenticStore.injectSteeringMessage(activeConv.id, content, extras);
+
 			return;
 		}
 
 		// If non-agentic streaming is active, queue as a pending message to send after completion
 		if (activeConv && this.isChatLoadingInternal(activeConv.id)) {
 			this.injectPendingMessage(activeConv.id, content, extras);
+
 			return;
 		}
 
@@ -1072,31 +1217,40 @@ class ChatStore {
 		const allExtras = resourceExtras.length > 0 ? [...(extras || []), ...resourceExtras] : extras;
 
 		let isNewConversation = false;
+
 		if (!activeConv) {
 			await conversationsStore.createConversation();
 			isNewConversation = true;
 		}
+
 		const currentConv = conversationsStore.activeConversation;
+
 		if (!currentConv) return;
+
 		this.showErrorDialog(null);
 		this.setChatLoading(currentConv.id, true);
 		this.clearChatStreaming(currentConv.id);
 		try {
 			let parentIdForUserMessage: string | undefined;
+
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
 				const currentConfig = config();
 				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+
 				let sysOrRootId = rootId;
+
 				if (systemPrompt) {
 					const systemMessage = await DatabaseService.createSystemMessage(
 						currentConv.id,
 						systemPrompt,
 						rootId
 					);
+
 					conversationsStore.addMessageToActive(systemMessage);
 					sysOrRootId = systemMessage.id;
 				}
+
 				// Reflect a working directory picked on the new-chat screen into
 				// chat history before the first user message, so the model sees
 				// it on its first turn. createConversation() has already threaded
@@ -1110,11 +1264,13 @@ class ChatStore {
 						undefined,
 						true
 					);
+
 					parentIdForUserMessage = cwdMessage.id;
 				} else {
 					parentIdForUserMessage = sysOrRootId;
 				}
 			}
+
 			const userMessage = await this.addMessage(
 				MessageRole.USER,
 				content,
@@ -1122,12 +1278,15 @@ class ChatStore {
 				parentIdForUserMessage ?? '-1',
 				allExtras
 			);
+
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(
 					currentConv.id,
 					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
 				);
+
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
+
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
@@ -1140,8 +1299,10 @@ class ChatStore {
 		} catch (error) {
 			if (isAbortError(error)) {
 				this.setChatLoading(currentConv.id, false);
+
 				return;
 			}
+
 			console.error('Failed to send message:', error);
 			this.setChatLoading(currentConv.id, false);
 			const dialogType =
@@ -1151,10 +1312,11 @@ class ChatStore {
 			const contextInfo = (
 				error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 			).contextInfo;
+
 			this.showErrorDialog({
-				type: dialogType,
+				contextInfo,
 				message: error instanceof Error ? error.message : 'Unknown error',
-				contextInfo
+				type: dialogType
 			});
 		}
 	}
@@ -1174,6 +1336,7 @@ class ChatStore {
 
 		if (isRouterMode()) {
 			const conversationModel = this.getConversationModel(allMessages);
+
 			effectiveModel = modelOverride || selectedModelName() || conversationModel;
 		}
 
@@ -1188,23 +1351,31 @@ class ChatStore {
 		let streamedReasoningContent = '';
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
+
 		const convId = assistantMessage.convId;
+
 		// Tracks the last message created in this flow. Used as the parent for the next
 		// turn's assistant message so createAssistantMessage does not have to read
 		// conversationsStore.activeMessages, which may belong to a different conversation
 		// after the user navigates while the loop is still running.
 		let lastCreatedInFlow = currentMessageId;
+
 		// freeze the POST identity from t0 so a stop cancels with the exact session key,
 		// never a stale or empty model resolved later
 		this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
+
 			const n = normalizeModelName(modelName);
+
 			if (!n || n === resolvedModel) return;
+
 			resolvedModel = n;
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
+
 			conversationsStore.updateMessageAtIndex(idx, { model: n });
+
 			if (persistImmediately && !modelPersisted) {
 				modelPersisted = true;
 				DatabaseService.updateMessage(currentMessageId, { model: n }).catch(() => {
@@ -1215,22 +1386,24 @@ class ChatStore {
 		};
 
 		let completionIdRecorded = false;
+
 		const recordCompletionId = (id: string): void => {
 			if (!id || completionIdRecorded) return;
+
 			completionIdRecorded = true;
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
+
 			conversationsStore.updateMessageAtIndex(idx, { completionId: id });
 			DatabaseService.updateMessage(currentMessageId, { completionId: id }).catch(() => {
 				completionIdRecorded = false;
 			});
 		};
-
 		const updateStreamingUI = () => {
 			this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
+
 			conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
 		};
-
 		const cleanupStreamingState = () => {
 			this.setStreamingActive(false);
 			this.setChatLoading(convId, false);
@@ -1241,61 +1414,70 @@ class ChatStore {
 		this.setStreamingActive(true);
 		this.setActiveProcessingConversation(convId);
 		const abortController = this.getOrCreateAbortController(convId);
-
 		const streamCallbacks: ChatStreamCallbacks = {
-			onChunk: (chunk: string) => {
-				streamedContent += chunk;
-				updateStreamingUI();
-				this.setChatReasoning(convId, false);
-			},
-			onReasoningChunk: (chunk: string) => {
-				streamedReasoningContent += chunk;
-				// mark streaming state so a stop mid-thinking can persist the partial reasoning
-				this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
-				const idx = conversationsStore.findMessageIndex(currentMessageId);
-				conversationsStore.updateMessageAtIndex(idx, {
-					reasoningContent: streamedReasoningContent
-				});
-				this.setChatReasoning(convId, true);
-			},
-			onToolCallsStreaming: (toolCalls) => {
-				const idx = conversationsStore.findMessageIndex(currentMessageId);
-				conversationsStore.updateMessageAtIndex(idx, {
-					toolCalls: JSON.stringify(toolCalls)
-				});
-			},
-			onAttachments: (messageId: string, extras: DatabaseMessageExtra[]) => {
-				if (!extras.length) return;
-				const idx = conversationsStore.findMessageIndex(messageId);
-				if (idx === -1) return;
-				const msg = conversationsStore.activeMessages[idx];
-				const updatedExtras = [...(msg.extra || []), ...extras];
-				conversationsStore.updateMessageAtIndex(idx, { extra: updatedExtras });
-				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
-			},
-			onModel: (modelName: string) => recordModel(modelName),
-			onCompletionId: (id: string) => recordCompletionId(id),
-			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
-				// Update the first assistant message with cumulative agentic timings
-				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-				conversationsStore.updateMessageAtIndex(idx, { timings: intermediateTimings });
-			},
-			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-				const tokensPerSecond =
-					timings?.predicted_ms && timings?.predicted_n
-						? (timings.predicted_n / timings.predicted_ms) * 1000
-						: 0;
-				this.updateProcessingStateFromTimings(
+			createAssistantMessage: async () => {
+				// Reset streaming state for new message
+				streamedContent = '';
+				streamedReasoningContent = '';
+
+				const msg = await DatabaseService.createMessageBranch(
 					{
-						prompt_n: timings?.prompt_n || 0,
-						prompt_ms: timings?.prompt_ms,
-						predicted_n: timings?.predicted_n || 0,
-						predicted_per_second: tokensPerSecond,
-						cache_n: timings?.cache_n || 0,
-						prompt_progress: promptProgress
+						children: [],
+						content: '',
+						convId,
+						model: resolvedModel,
+						role: MessageRole.ASSISTANT,
+						timestamp: Date.now(),
+						toolCalls: '',
+						type: MessageType.TEXT
 					},
-					convId
+					lastCreatedInFlow
 				);
+
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.addMessageToActive(msg);
+				}
+
+				currentMessageId = msg.id;
+				lastCreatedInFlow = msg.id;
+
+				return msg;
+			},
+			createToolResultMessage: async (
+				toolCallId: string,
+				content: string,
+				extras?: DatabaseMessageExtra[],
+				toolCwd?: string
+			) => {
+				const msg = await DatabaseService.createMessageBranch(
+					{
+						children: [],
+						content,
+						convId,
+						extra: extras,
+						role: MessageRole.TOOL,
+						timestamp: Date.now(),
+						toolCallId,
+						toolCalls: '',
+						toolCwd,
+						type: MessageType.TEXT
+					},
+					currentMessageId
+				);
+
+				// mirror into the active store and move the node pointer only when this
+				// conversation is displayed; otherwise persist the node move straight to
+				// the db for the owning conv so a foreign conv's currNode stays untouched
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.addMessageToActive(msg);
+					await conversationsStore.updateCurrentNode(msg.id);
+				} else {
+					await DatabaseService.updateCurrentNode(convId, msg.id);
+				}
+
+				lastCreatedInFlow = msg.id;
+
+				return msg;
 			},
 			onAssistantTurnComplete: async (
 				content: string,
@@ -1306,10 +1488,12 @@ class ChatStore {
 				const updateData: Record<string, unknown> = {
 					content,
 					reasoningContent: reasoningContent || undefined,
-					toolCalls: toolCalls ? JSON.stringify(toolCalls) : '',
-					timings
+					timings,
+					toolCalls: toolCalls ? JSON.stringify(toolCalls) : ''
 				};
+
 				if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
+
 				await DatabaseService.updateMessage(currentMessageId, updateData);
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
 				const uiUpdate: Partial<DatabaseMessage> = {
@@ -1317,8 +1501,11 @@ class ChatStore {
 					reasoningContent: reasoningContent || undefined,
 					toolCalls: toolCalls ? JSON.stringify(toolCalls) : ''
 				};
+
 				if (timings) uiUpdate.timings = timings;
+
 				if (resolvedModel) uiUpdate.model = resolvedModel;
+
 				// touch the active ui array and node pointer only when this conversation
 				// is displayed; otherwise persist the node move straight to the db so a
 				// foreign conv's currNode stays untouched
@@ -1329,85 +1516,57 @@ class ChatStore {
 					await DatabaseService.updateCurrentNode(convId, currentMessageId);
 				}
 			},
-			createToolResultMessage: async (
-				toolCallId: string,
-				content: string,
-				extras?: DatabaseMessageExtra[],
-				toolCwd?: string
-			) => {
-				const msg = await DatabaseService.createMessageBranch(
-					{
-						convId,
-						type: MessageType.TEXT,
-						role: MessageRole.TOOL,
-						content,
-						toolCallId,
-						toolCwd,
-						timestamp: Date.now(),
-						toolCalls: '',
-						children: [],
-						extra: extras
-					},
-					currentMessageId
-				);
-				// mirror into the active store and move the node pointer only when this
-				// conversation is displayed; otherwise persist the node move straight to
-				// the db for the owning conv so a foreign conv's currNode stays untouched
-				if (conversationsStore.activeConversation?.id === convId) {
-					conversationsStore.addMessageToActive(msg);
-					await conversationsStore.updateCurrentNode(msg.id);
-				} else {
-					await DatabaseService.updateCurrentNode(convId, msg.id);
-				}
-				lastCreatedInFlow = msg.id;
-				return msg;
-			},
-			updateToolResultMessage: async (
-				messageId: string,
-				content: string,
-				extras?: DatabaseMessageExtra[]
-			) => {
-				// Persist latest content + merged extras; mirror into the active
-				// store so the chat view sees live updates for streaming tools
-				// (e.g. exec_shell_command). The existing tool message node
-				// pointer stays put - the renderer is already scoped to it.
-				const updates: Partial<DatabaseMessage> = { content };
-				if (extras) {
-					const idx = conversationsStore.findMessageIndex(messageId);
-					const existing = idx >= 0 ? (conversationsStore.activeMessages[idx]?.extra ?? []) : [];
-					const merged = [...existing, ...extras];
-					updates.extra = merged;
-				}
-				if (conversationsStore.activeConversation?.id === convId) {
-					const idx = conversationsStore.findMessageIndex(messageId);
-					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
-				}
-				await DatabaseService.updateMessage(messageId, updates);
-			},
-			createAssistantMessage: async () => {
-				// Reset streaming state for new message
-				streamedContent = '';
-				streamedReasoningContent = '';
+			onAttachments: (messageId: string, extras: DatabaseMessageExtra[]) => {
+				if (!extras.length) return;
 
-				const msg = await DatabaseService.createMessageBranch(
-					{
-						convId,
-						type: MessageType.TEXT,
-						role: MessageRole.ASSISTANT,
-						content: '',
-						timestamp: Date.now(),
-						toolCalls: '',
-						children: [],
-						model: resolvedModel
-					},
-					lastCreatedInFlow
-				);
-				if (conversationsStore.activeConversation?.id === convId) {
-					conversationsStore.addMessageToActive(msg);
+				const idx = conversationsStore.findMessageIndex(messageId);
+
+				if (idx === -1) return;
+
+				const msg = conversationsStore.activeMessages[idx];
+				const updatedExtras = [...(msg.extra || []), ...extras];
+
+				conversationsStore.updateMessageAtIndex(idx, { extra: updatedExtras });
+				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
+			},
+			onChunk: (chunk: string) => {
+				streamedContent += chunk;
+				updateStreamingUI();
+				this.setChatReasoning(convId, false);
+			},
+			onCompletionId: (id: string) => recordCompletionId(id),
+			onError: async (error: Error) => {
+				this.setStreamingActive(false);
+
+				if (isAbortError(error)) {
+					cleanupStreamingState();
+					// If aborted with a pending message (e.g. "Send immediately"), re-send it
+					const pending = this.consumePendingMessage(convId);
+
+					if (pending) {
+						this.sendMessage(pending.content, pending.extras);
+					}
+
+					return;
 				}
-				currentMessageId = msg.id;
-				lastCreatedInFlow = msg.id;
-				return msg;
+
+				console.error('Streaming error:', error);
+				// keep whatever was streamed so far, the message stays in memory and in DB
+				await this.savePartialResponseIfNeeded(convId);
+				cleanupStreamingState();
+				this.clearPendingMessage(convId);
+
+				const contextInfo = (
+					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+				).contextInfo;
+
+				this.showErrorDialog({
+					contextInfo,
+					message: error.message,
+					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER
+				});
+
+				if (onError) onError(error);
 			},
 			onFlowComplete: (finalTimings?: ChatMessageTimings) => {
 				if (finalTimings) {
@@ -1422,7 +1581,9 @@ class ChatStore {
 				cleanupStreamingState();
 
 				if (onComplete) onComplete(streamedContent);
+
 				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+
 				// Pre-encode conversation in KV cache for faster next turn
 				if (config().preEncodeConversation) {
 					this.triggerPreEncode(
@@ -1434,59 +1595,105 @@ class ChatStore {
 					);
 				}
 			},
-			onError: async (error: Error) => {
-				this.setStreamingActive(false);
-				if (isAbortError(error)) {
-					cleanupStreamingState();
-					// If aborted with a pending message (e.g. "Send immediately"), re-send it
-					const pending = this.consumePendingMessage(convId);
-					if (pending) {
-						this.sendMessage(pending.content, pending.extras);
-					}
-					return;
-				}
-				console.error('Streaming error:', error);
-				// keep whatever was streamed so far, the message stays in memory and in DB
-				await this.savePartialResponseIfNeeded(convId);
-				cleanupStreamingState();
-				this.clearPendingMessage(convId);
+			onModel: (modelName: string) => recordModel(modelName),
+			onReasoningChunk: (chunk: string) => {
+				streamedReasoningContent += chunk;
+				// mark streaming state so a stop mid-thinking can persist the partial reasoning
+				this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
+				const idx = conversationsStore.findMessageIndex(currentMessageId);
 
-				const contextInfo = (
-					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
-				).contextInfo;
-				this.showErrorDialog({
-					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
-					message: error.message,
-					contextInfo
+				conversationsStore.updateMessageAtIndex(idx, {
+					reasoningContent: streamedReasoningContent
 				});
-				if (onError) onError(error);
+				this.setChatReasoning(convId, true);
+			},
+			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+				const tokensPerSecond =
+					timings?.predicted_ms && timings?.predicted_n
+						? (timings.predicted_n / timings.predicted_ms) * 1000
+						: 0;
+
+				this.updateProcessingStateFromTimings(
+					{
+						cache_n: timings?.cache_n || 0,
+						predicted_n: timings?.predicted_n || 0,
+						predicted_per_second: tokensPerSecond,
+						prompt_ms: timings?.prompt_ms,
+						prompt_n: timings?.prompt_n || 0,
+						prompt_progress: promptProgress
+					},
+					convId
+				);
+			},
+			onToolCallsStreaming: (toolCalls) => {
+				const idx = conversationsStore.findMessageIndex(currentMessageId);
+
+				conversationsStore.updateMessageAtIndex(idx, {
+					toolCalls: JSON.stringify(toolCalls)
+				});
+			},
+			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
+				// Update the first assistant message with cumulative agentic timings
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+
+				conversationsStore.updateMessageAtIndex(idx, { timings: intermediateTimings });
+			},
+			updateToolResultMessage: async (
+				messageId: string,
+				content: string,
+				extras?: DatabaseMessageExtra[]
+			) => {
+				// Persist latest content + merged extras; mirror into the active
+				// store so the chat view sees live updates for streaming tools
+				// (e.g. exec_shell_command). The existing tool message node
+				// pointer stays put - the renderer is already scoped to it.
+				const updates: Partial<DatabaseMessage> = { content };
+
+				if (extras) {
+					const idx = conversationsStore.findMessageIndex(messageId);
+					const existing = idx >= 0 ? (conversationsStore.activeMessages[idx]?.extra ?? []) : [];
+					const merged = [...existing, ...extras];
+
+					updates.extra = merged;
+				}
+
+				if (conversationsStore.activeConversation?.id === convId) {
+					const idx = conversationsStore.findMessageIndex(messageId);
+
+					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
+				}
+
+				await DatabaseService.updateMessage(messageId, updates);
 			}
 		};
-
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 
 		{
 			const agenticResult = await agenticStore.runAgenticFlow({
+				callbacks: streamCallbacks,
 				conversationId: convId,
 				messages: allMessages,
 				options: {
 					...this.getApiOptions(),
 					...(effectiveModel ? { model: effectiveModel } : {})
 				},
-				callbacks: streamCallbacks,
-				signal: abortController.signal,
-				perChatOverrides
+				perChatOverrides,
+				signal: abortController.signal
 			});
+
 			if (agenticResult.handled) {
 				// Generate LLM based title for new conversations after agentic flow completes
 				if (firstUserMessageContent) {
 					await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
 				}
+
 				// Check if there's a pending steering message to re-send
 				const pending = agenticStore.consumePendingSteeringMessage(convId);
+
 				if (pending) {
 					await this.sendMessage(pending.content, pending.extras);
 				}
+
 				return;
 			}
 		}
@@ -1496,17 +1703,7 @@ class ChatStore {
 			{
 				...this.getApiOptions(),
 				...(effectiveModel ? { model: effectiveModel } : {}),
-				stream: true,
 				onChunk: streamCallbacks.onChunk,
-				onReasoningChunk: streamCallbacks.onReasoningChunk,
-				onModel: streamCallbacks.onModel,
-				onCompletionId: streamCallbacks.onCompletionId,
-				onTimings: streamCallbacks.onTimings,
-				onConnectionState: (state: StreamConnectionState) => {
-					if (convId === conversationsStore.activeConversation?.id) {
-						this.streamConnectionState = state;
-					}
-				},
 				onComplete: async (
 					finalContent?: string,
 					reasoningContent?: string,
@@ -1518,10 +1715,12 @@ class ChatStore {
 					const updateData: Record<string, unknown> = {
 						content,
 						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || '',
-						timings
+						timings,
+						toolCalls: toolCalls || ''
 					};
+
 					if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
+
 					await DatabaseService.updateMessage(currentMessageId, updateData);
 					const idx = conversationsStore.findMessageIndex(currentMessageId);
 					const uiUpdate: Partial<DatabaseMessage> = {
@@ -1529,12 +1728,17 @@ class ChatStore {
 						reasoningContent: reasoning || undefined,
 						toolCalls: toolCalls || ''
 					};
+
 					if (timings) uiUpdate.timings = timings;
+
 					if (resolvedModel) uiUpdate.model = resolvedModel;
+
 					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
 					await conversationsStore.updateCurrentNode(currentMessageId);
 					cleanupStreamingState();
+
 					if (onComplete) await onComplete(content);
+
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 
 					// Generate LLM based title for new conversations (avoids stale reference
@@ -1545,11 +1749,22 @@ class ChatStore {
 
 					// Check if there's a pending message queued during streaming
 					const pending = this.consumePendingMessage(convId);
+
 					if (pending) {
 						await this.sendMessage(pending.content, pending.extras);
 					}
 				},
-				onError: streamCallbacks.onError
+				onCompletionId: streamCallbacks.onCompletionId,
+				onConnectionState: (state: StreamConnectionState) => {
+					if (convId === conversationsStore.activeConversation?.id) {
+						this.streamConnectionState = state;
+					}
+				},
+				onError: streamCallbacks.onError,
+				onModel: streamCallbacks.onModel,
+				onReasoningChunk: streamCallbacks.onReasoningChunk,
+				onTimings: streamCallbacks.onTimings,
+				stream: true
 			},
 			convId,
 			abortController.signal
@@ -1558,7 +1773,9 @@ class ChatStore {
 
 	async stopGeneration(): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
+
 		await this.stopGenerationForChat(activeConv.id);
 	}
 	async stopGenerationForChat(convId: string): Promise<void> {
@@ -1569,14 +1786,17 @@ class ChatStore {
 		// captured when the session started, not the live dropdown
 		const streamStateForStop = this.chatStreamingStates.get(convId);
 		const modelForStop = streamStateForStop?.model ?? ChatService.getStreamState(convId)?.model;
+
 		void ChatService.cancelServerStream(convId, modelForStop);
 		// an explicit stop leaves nothing to resume and kills a pending resume retry
 		ChatService.clearStreamState(convId);
 		const retryTimer = this.resumeRetryTimers.get(convId);
+
 		if (retryTimer !== undefined) {
 			clearTimeout(retryTimer);
 			this.resumeRetryTimers.delete(convId);
 		}
+
 		this.resumePendingConvs.delete(convId);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
@@ -1597,16 +1817,13 @@ class ChatStore {
 			configValue.titleGenerationPrompt.trim()
 				? configValue.titleGenerationPrompt
 				: TITLE_GENERATION.DEFAULT_PROMPT;
-
 		const titlePrompt = titlePromptTemplate
 			.replace('{{USER}}', String(userContent || ''))
 			.replace('{{ASSISTANT}}', String(assistantContent || ''));
-
 		const titleMessage: ApiChatMessageData = {
-			role: MessageRole.USER,
-			content: titlePrompt
+			content: titlePrompt,
+			role: MessageRole.USER
 		};
-
 		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
 
 		if (!titleResponse) {
@@ -1614,14 +1831,18 @@ class ChatStore {
 		}
 
 		let cleanTitle = titleResponse.trim();
+
 		cleanTitle = cleanTitle
 			.replace(TITLE_GENERATION.PREFIX_PATTERN, '')
 			.replace(TITLE_GENERATION.QUOTE_PATTERN, '')
 			.trim();
+
 		if (!cleanTitle || cleanTitle.length < TITLE_GENERATION.MIN_LENGTH) {
 			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
+
 			cleanTitle = firstLine ? firstLine.trim() : TITLE_GENERATION.FALLBACK;
 		}
+
 		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {
 			await conversationsStore.updateConversationName(convId, cleanTitle);
 		}
@@ -1629,15 +1850,22 @@ class ChatStore {
 
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
+
 		if (!conversationId) return;
+
 		const streamingState = this.getChatStreaming(conversationId);
+
 		if (!streamingState) return;
+
 		const messages =
 			conversationId === conversationsStore.activeConversation?.id
 				? conversationsStore.activeMessages
 				: await conversationsStore.getConversationMessages(conversationId);
+
 		if (!messages.length) return;
+
 		const lastMessage = messages[messages.length - 1];
+
 		if (lastMessage?.role !== MessageRole.ASSISTANT) return;
 
 		const partialContent = streamingState.response;
@@ -1661,27 +1889,33 @@ class ChatStore {
 			} = {
 				toolCalls: ''
 			};
+
 			if (partialContent.trim()) updateData.content = partialContent;
+
 			if (partialReasoning.trim()) updateData.reasoningContent = partialReasoning;
+
 			const lastKnownState = this.getProcessingState(conversationId);
+
 			if (lastKnownState) {
 				updateData.timings = {
-					prompt_n: lastKnownState.promptTokens || 0,
-					prompt_ms: lastKnownState.promptMs,
-					predicted_n: lastKnownState.tokensDecoded || 0,
 					cache_n: lastKnownState.cacheTokens || 0,
 					predicted_ms:
 						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
 							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-							: undefined
+							: undefined,
+					predicted_n: lastKnownState.tokensDecoded || 0,
+					prompt_ms: lastKnownState.promptMs,
+					prompt_n: lastKnownState.promptTokens || 0
 				};
 			}
+
 			await DatabaseService.updateMessage(lastMessage.id, updateData);
 			lastMessage.content = partialContent;
 			// mirror the drop into the in-memory message so the next request sent via
 			// sendMessage (queued pending, Send immediately, or manual follow-up) reads
 			// the cleared value, not whatever the streaming widget had been showing
 			lastMessage.toolCalls = '';
+
 			if (updateData.timings) lastMessage.timings = updateData.timings;
 		} catch (error) {
 			lastMessage.content = partialContent;
@@ -1692,31 +1926,43 @@ class ChatStore {
 
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
+
 		if (this.isChatLoadingInternal(activeConv.id)) await this.stopGeneration();
+
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
+
 		if (!result) return;
-		const { message: messageToUpdate, index: messageIndex } = result;
+
+		const { index: messageIndex, message: messageToUpdate } = result;
 		const originalContent = messageToUpdate.content;
+
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 			const isFirstUserMessage = rootMessage && messageToUpdate.parent === rootMessage.id;
+
 			conversationsStore.updateMessageAtIndex(messageIndex, { content: newContent });
 			await DatabaseService.updateMessage(messageId, { content: newContent });
+
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
+
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
+
 			if (messagesToRemove.length > 0)
 				await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
+
 			conversationsStore.sliceActiveMessages(messageIndex + 1);
 			conversationsStore.updateConversationTimestamp();
 			this.setChatLoading(activeConv.id, true);
 			this.clearChatStreaming(activeConv.id);
 			const assistantMessage = await this.createAssistantMessage();
+
 			conversationsStore.addMessageToActive(assistantMessage);
 			await conversationsStore.updateCurrentNode(assistantMessage.id);
 			await this.streamChatCompletion(
@@ -1736,13 +1982,19 @@ class ChatStore {
 
 	async regenerateMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+
 		this.cancelPreEncode();
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
+
 		if (!result) return;
+
 		const { index: messageIndex } = result;
+
 		try {
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex);
+
 			await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
 			conversationsStore.sliceActiveMessages(messageIndex);
 			conversationsStore.updateConversationTimestamp();
@@ -1753,6 +2005,7 @@ class ChatStore {
 					? conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1].id
 					: undefined;
 			const assistantMessage = await this.createAssistantMessage(parentMessageId);
+
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
@@ -1760,37 +2013,47 @@ class ChatStore {
 			);
 		} catch (error) {
 			if (!isAbortError(error)) console.error('Failed to regenerate message:', error);
+
 			this.setChatLoading(activeConv?.id || '', false);
 		}
 	}
 
 	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+
 		this.cancelPreEncode();
 		try {
 			const idx = conversationsStore.findMessageIndex(messageId);
+
 			if (idx === -1) return;
+
 			const msg = conversationsStore.activeMessages[idx];
+
 			if (msg.role !== MessageRole.ASSISTANT) return;
+
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const parentMessage = findMessageById(allMessages, msg.parent);
+
 			if (!parentMessage) return;
+
 			this.setChatLoading(activeConv.id, true);
 			this.clearChatStreaming(activeConv.id);
 			const newAssistantMessage = await DatabaseService.createMessageBranch(
 				{
-					convId: msg.convId,
-					type: msg.type,
-					timestamp: Date.now(),
-					role: msg.role,
-					content: '',
-					toolCalls: '',
 					children: [],
-					model: null
+					content: '',
+					convId: msg.convId,
+					model: null,
+					role: msg.role,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: msg.type
 				},
 				parentMessage.id
 			);
+
 			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
 			conversationsStore.updateConversationTimestamp();
 			await conversationsStore.refreshActiveMessages();
@@ -1800,6 +2063,7 @@ class ChatStore {
 				false
 			) as DatabaseMessage[];
 			const modelToUse = modelOverride || msg.model || undefined;
+
 			await this.streamChatCompletion(
 				conversationPath,
 				newAssistantMessage,
@@ -1810,6 +2074,7 @@ class ChatStore {
 		} catch (error) {
 			if (!isAbortError(error))
 				console.error('Failed to regenerate message with branching:', error);
+
 			this.setChatLoading(activeConv?.id || '', false);
 		}
 	}
@@ -1821,54 +2086,66 @@ class ChatStore {
 		messageTypes: string[];
 	}> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv)
-			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
+			return { assistantMessages: 0, messageTypes: [], totalCount: 0, userMessages: 0 };
+
 		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 		const messageToDelete = findMessageById(allMessages, messageId);
 
 		// For system messages, don't count descendants as they will be preserved (reparented to root)
 		if (messageToDelete?.role === MessageRole.SYSTEM) {
 			const messagesToDelete = allMessages.filter((m) => m.id === messageId);
-			let userMessages = 0,
-				assistantMessages = 0;
+
+			let assistantMessages = 0,
+				userMessages = 0;
+
 			const messageTypes: string[] = [];
 
 			for (const msg of messagesToDelete) {
 				if (msg.role === MessageRole.USER) {
 					userMessages++;
+
 					if (!messageTypes.includes('user message')) messageTypes.push('user message');
 				} else if (msg.role === MessageRole.ASSISTANT) {
 					assistantMessages++;
+
 					if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
 				}
 			}
 
-			return { totalCount: 1, userMessages, assistantMessages, messageTypes };
+			return { assistantMessages, messageTypes, totalCount: 1, userMessages };
 		}
 
 		const descendants = findDescendantMessages(allMessages, messageId);
 		const allToDelete = [messageId, ...descendants];
 		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
-		let userMessages = 0,
-			assistantMessages = 0;
+
+		let assistantMessages = 0,
+			userMessages = 0;
+
 		const messageTypes: string[] = [];
 
 		for (const msg of messagesToDelete) {
 			if (msg.role === MessageRole.USER) {
 				userMessages++;
+
 				if (!messageTypes.includes('user message')) messageTypes.push('user message');
 			} else if (msg.role === MessageRole.ASSISTANT) {
 				assistantMessages++;
+
 				if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
 			}
 		}
 
-		return { totalCount: allToDelete.length, userMessages, assistantMessages, messageTypes };
+		return { assistantMessages, messageTypes, totalCount: allToDelete.length, userMessages };
 	}
 
 	async deleteMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
+
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const messageToDelete = findMessageById(allMessages, messageId);
@@ -1915,32 +2192,40 @@ class ChatStore {
 	 */
 	private async continueAsNextAgenticTurn(anchorIndex: number): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
+
 		const anchor = conversationsStore.activeMessages[anchorIndex];
+
 		if (!anchor) return;
+
 		this.cancelPreEncode();
 		this.setChatLoading(activeConv.id, true);
 		this.clearChatStreaming(activeConv.id);
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const anchorMessage = findMessageById(allMessages, anchor.id);
+
 			if (!anchorMessage) {
 				this.setChatLoading(activeConv.id, false);
+
 				return;
 			}
+
 			const newAssistantMessage = await DatabaseService.createMessageBranch(
 				{
-					convId: activeConv.id,
-					type: MessageType.TEXT,
-					timestamp: Date.now(),
-					role: MessageRole.ASSISTANT,
-					content: '',
-					toolCalls: '',
 					children: [],
-					model: null
+					content: '',
+					convId: activeConv.id,
+					model: null,
+					role: MessageRole.ASSISTANT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: MessageType.TEXT
 				},
 				anchorMessage.id
 			);
+
 			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
 			conversationsStore.updateConversationTimestamp();
 			await conversationsStore.refreshActiveMessages();
@@ -1949,30 +2234,35 @@ class ChatStore {
 				anchorMessage.id,
 				false
 			) as DatabaseMessage[];
+
 			await this.streamChatCompletion(conversationPath, newAssistantMessage);
 		} catch (error) {
 			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
+
 			this.setChatLoading(activeConv.id, false);
 		}
 	}
 
 	async continueAssistantMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 
 		if (!result) return;
 
-		const { message: msg, index: idx } = result;
-
+		const { index: idx, message: msg } = result;
 		// Decide which resume path applies. tool_calls without tool results can
 		// not be resumed mid sequence by continue_final_message, branch instead.
 		// tool_calls already paired with tool results need a fresh next turn,
 		// not a token level continuation of the target assistant.
 		const intent = classifyContinueIntent(conversationsStore.activeMessages, idx);
+
 		if (intent.kind === ContinueIntentKind.RERUN_TURN) {
 			return this.regenerateMessageWithBranching(messageId);
 		}
+
 		if (intent.kind === ContinueIntentKind.NEXT_TURN) {
 			return this.continueAsNextAgenticTurn(intent.truncateAfter);
 		}
@@ -1987,6 +2277,7 @@ class ChatStore {
 
 			if (!dbMessage) {
 				this.setChatLoading(activeConv.id, false);
+
 				return;
 			}
 
@@ -2010,7 +2301,6 @@ class ChatStore {
 					content: fullContent
 				});
 			};
-
 			const abortController = this.getOrCreateAbortController(msg.convId);
 
 			await ChatService.sendMessage(
@@ -2018,51 +2308,11 @@ class ChatStore {
 				{
 					...this.getApiOptions(),
 					continueFinalMessage: true,
-					onConnectionState: (state: StreamConnectionState) => {
-						if (msg.convId === conversationsStore.activeConversation?.id) {
-							this.streamConnectionState = state;
-						}
-					},
 					onChunk: (chunk: string) => {
 						appendedContent += chunk;
 						hasReceivedContent = true;
 						updateStreamingContent(originalContent + appendedContent);
 						this.setChatReasoning(msg.convId, false);
-					},
-					onCompletionId: (id: string) => {
-						if (!id) return;
-						// refresh the message id so a later skip targets the live slot after a continue
-						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
-							completionId: id
-						});
-						DatabaseService.updateMessage(msg.id, { completionId: id }).catch(() => {});
-					},
-					onReasoningChunk: (chunk: string) => {
-						appendedReasoning += chunk;
-						hasReceivedContent = true;
-						// mark streaming state so a stop mid-thinking can persist the partial reasoning
-						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
-						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
-							reasoningContent: originalReasoning + appendedReasoning
-						});
-						this.setChatReasoning(msg.convId, true);
-					},
-					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-						const tokensPerSecond =
-							timings?.predicted_ms && timings?.predicted_n
-								? (timings.predicted_n / timings.predicted_ms) * 1000
-								: 0;
-						this.updateProcessingStateFromTimings(
-							{
-								prompt_n: timings?.prompt_n || 0,
-								prompt_ms: timings?.prompt_ms,
-								predicted_n: timings?.predicted_n || 0,
-								predicted_per_second: tokensPerSecond,
-								cache_n: timings?.cache_n || 0,
-								prompt_progress: promptProgress
-							},
-							msg.convId
-						);
 					},
 					onComplete: async (
 						finalContent?: string,
@@ -2095,6 +2345,20 @@ class ChatStore {
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
+					},
+					onCompletionId: (id: string) => {
+						if (!id) return;
+
+						// refresh the message id so a later skip targets the live slot after a continue
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
+							completionId: id
+						});
+						DatabaseService.updateMessage(msg.id, { completionId: id }).catch(() => {});
+					},
+					onConnectionState: (state: StreamConnectionState) => {
+						if (msg.convId === conversationsStore.activeConversation?.id) {
+							this.streamConnectionState = state;
+						}
 					},
 					onError: async (error: Error) => {
 						if (isAbortError(error)) {
@@ -2139,10 +2403,37 @@ class ChatStore {
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
 						this.showErrorDialog({
-							type:
-								error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
-							message: error.message
+							message: error.message,
+							type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER
 						});
+					},
+					onReasoningChunk: (chunk: string) => {
+						appendedReasoning += chunk;
+						hasReceivedContent = true;
+						// mark streaming state so a stop mid-thinking can persist the partial reasoning
+						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
+							reasoningContent: originalReasoning + appendedReasoning
+						});
+						this.setChatReasoning(msg.convId, true);
+					},
+					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+						const tokensPerSecond =
+							timings?.predicted_ms && timings?.predicted_n
+								? (timings.predicted_n / timings.predicted_ms) * 1000
+								: 0;
+
+						this.updateProcessingStateFromTimings(
+							{
+								cache_n: timings?.cache_n || 0,
+								predicted_n: timings?.predicted_n || 0,
+								predicted_per_second: tokensPerSecond,
+								prompt_ms: timings?.prompt_ms,
+								prompt_n: timings?.prompt_n || 0,
+								prompt_progress: promptProgress
+							},
+							msg.convId
+						);
 					}
 				},
 
@@ -2151,6 +2442,7 @@ class ChatStore {
 			);
 		} catch (error) {
 			if (!isAbortError(error)) console.error('Failed to continue message:', error);
+
 			if (activeConv) this.setChatLoading(activeConv.id, false);
 		}
 	}
@@ -2161,25 +2453,27 @@ class ChatStore {
 		shouldBranch: boolean
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
 
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
+
 		if (!result) return;
 
-		const { message: msg, index: idx } = result;
+		const { index: idx, message: msg } = result;
 
 		try {
 			if (shouldBranch) {
 				const newMessage = await DatabaseService.createMessageBranch(
 					{
-						convId: msg.convId,
-						type: msg.type,
-						timestamp: Date.now(),
-						role: msg.role,
-						content: newContent,
-						toolCalls: msg.toolCalls || '',
 						children: [],
-						model: msg.model
+						content: newContent,
+						convId: msg.convId,
+						model: msg.model,
+						role: msg.role,
+						timestamp: Date.now(),
+						toolCalls: msg.toolCalls || '',
+						type: msg.type
 					},
 					msg.parent!
 				);
@@ -2204,12 +2498,15 @@ class ChatStore {
 		newExtras?: DatabaseMessageExtra[]
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
 
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
+
 		if (!result) return;
 
-		const { message: msg, index: idx } = result;
+		const { index: idx, message: msg } = result;
+
 		try {
 			const updateData: Partial<DatabaseMessage> = { content: newContent };
 
@@ -2241,11 +2538,17 @@ class ChatStore {
 		newExtras?: DatabaseMessageExtra[]
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+
 		let result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
+
 		if (!result) result = this.getMessageByIdWithRole(messageId, MessageRole.SYSTEM);
+
 		if (!result) return;
-		const { message: msg, index: idx } = result;
+
+		const { index: idx, message: msg } = result;
+
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
@@ -2267,41 +2570,48 @@ class ChatStore {
 				// No responses after this message — update in place instead of branching
 				const updates: Partial<DatabaseMessage> = {
 					content: newContent,
-					timestamp: Date.now(),
-					extra: extrasToUse
+					extra: extrasToUse,
+					timestamp: Date.now()
 				};
+
 				await DatabaseService.updateMessage(msg.id, updates);
 				conversationsStore.updateMessageAtIndex(idx, updates);
 				messageIdForResponse = msg.id;
 			} else {
 				// Has children — create a new branch as sibling
 				const parentId = msg.parent || rootMessage?.id;
+
 				if (!parentId) return;
+
 				const newMessage = await DatabaseService.createMessageBranch(
 					{
-						convId: msg.convId,
-						type: msg.type,
-						timestamp: Date.now(),
-						role: msg.role,
-						content: newContent,
-						toolCalls: msg.toolCalls || '',
 						children: [],
+						content: newContent,
+						convId: msg.convId,
 						extra: extrasToUse,
-						model: msg.model
+						model: msg.model,
+						role: msg.role,
+						timestamp: Date.now(),
+						toolCalls: msg.toolCalls || '',
+						type: msg.type
 					},
 					parentId
 				);
+
 				await conversationsStore.updateCurrentNode(newMessage.id);
 				messageIdForResponse = newMessage.id;
 			}
 
 			conversationsStore.updateConversationTimestamp();
+
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
+
 			await conversationsStore.refreshActiveMessages();
+
 			if (msg.role === MessageRole.USER)
 				await this.generateResponseForMessage(messageIdForResponse);
 		} catch (error) {
@@ -2311,6 +2621,7 @@ class ChatStore {
 
 	private async generateResponseForMessage(userMessageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
 
 		this.showErrorDialog(null);
@@ -2326,14 +2637,14 @@ class ChatStore {
 			) as DatabaseMessage[];
 			const assistantMessage = await DatabaseService.createMessageBranch(
 				{
-					convId: activeConv.id,
-					type: MessageType.TEXT,
-					timestamp: Date.now(),
-					role: MessageRole.ASSISTANT,
-					content: '',
-					toolCalls: '',
 					children: [],
-					model: null
+					content: '',
+					convId: activeConv.id,
+					model: null,
+					role: MessageRole.ASSISTANT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: MessageType.TEXT
 				},
 				userMessageId
 			);
@@ -2386,21 +2697,23 @@ class ChatStore {
 
 		if (processingState === null) {
 			console.warn('Failed to parse timing data - skipping update');
+
 			return;
 		}
 
 		const targetId = conversationId || this.activeConversationId;
+
 		if (targetId) {
 			this.setProcessingState(targetId, processingState);
 		}
 	}
 
 	private parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
-		const promptTokens = (timingData.prompt_n as number) || 0,
-			promptMs = (timingData.prompt_ms as number) || undefined,
+		const cacheTokens = (timingData.cache_n as number) || 0,
 			predictedTokens = (timingData.predicted_n as number) || 0,
-			tokensPerSecond = (timingData.predicted_per_second as number) || 0,
-			cacheTokens = (timingData.cache_n as number) || 0;
+			promptMs = (timingData.prompt_ms as number) || undefined,
+			promptTokens = (timingData.prompt_n as number) || 0,
+			tokensPerSecond = (timingData.predicted_per_second as number) || 0;
 		const promptProgress = timingData.prompt_progress as
 			| { total: number; cache: number; processed: number; time_ms: number }
 			| undefined;
@@ -2415,43 +2728,47 @@ class ChatStore {
 		const progressPercent = promptProgress
 			? Math.round((progressActualDone / progressActualTotal) * 100)
 			: undefined;
+
 		return {
-			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
-			tokensDecoded: predictedTokens,
-			tokensRemaining: outputTokensMax - predictedTokens,
-			contextUsed,
+			cacheTokens,
 			contextTotal,
-			outputTokensUsed,
-			outputTokensMax,
+			contextUsed,
 			hasNextToken: predictedTokens > 0,
-			tokensPerSecond,
-			temperature: currentConfig.temperature ?? 0.8,
-			topP: currentConfig.top_p ?? 0.95,
-			speculative: false,
+			outputTokensMax,
+			outputTokensUsed,
 			progressPercent,
+			promptMs,
 			promptProgress,
 			promptTokens,
-			promptMs,
-			cacheTokens
+			speculative: false,
+			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
+			temperature: currentConfig.temperature ?? 0.8,
+			tokensDecoded: predictedTokens,
+			tokensPerSecond,
+			tokensRemaining: outputTokensMax - predictedTokens,
+			topP: currentConfig.top_p ?? 0.95
 		};
 	}
 
 	restoreProcessingStateFromMessages(messages: DatabaseMessage[], conversationId: string): void {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
+
 			if (message.role === MessageRole.ASSISTANT && message.timings) {
 				const restoredState = this.parseTimingData({
-					prompt_n: message.timings.prompt_n || 0,
-					prompt_ms: message.timings.prompt_ms,
+					cache_n: message.timings.cache_n || 0,
 					predicted_n: message.timings.predicted_n || 0,
 					predicted_per_second:
 						message.timings.predicted_n && message.timings.predicted_ms
 							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
 							: 0,
-					cache_n: message.timings.cache_n || 0
+					prompt_ms: message.timings.prompt_ms,
+					prompt_n: message.timings.prompt_n || 0
 				});
+
 				if (restoredState) {
 					this.setProcessingState(conversationId, restoredState);
+
 					return;
 				}
 			}
@@ -2461,8 +2778,10 @@ class ChatStore {
 	getConversationModel(messages: DatabaseMessage[]): string | null {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
+
 			if (message.role === MessageRole.ASSISTANT && message.model) return message.model;
 		}
+
 		return null;
 	}
 
@@ -2474,6 +2793,7 @@ class ChatStore {
 
 		if (isRouterMode()) {
 			const modelName = selectedModelName();
+
 			if (modelName) apiOptions.model = modelName;
 		}
 
@@ -2485,8 +2805,10 @@ class ChatStore {
 
 		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing
 		const effort = conversationsStore.getReasoningEffort();
+
 		if (effort !== ReasoningEffort.DEFAULT) {
 			apiOptions.enableThinking = effort !== ReasoningEffort.OFF;
+
 			if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
 		}
 
@@ -2570,6 +2892,7 @@ class ChatStore {
 
 		try {
 			const allIdle = await ChatService.areAllSlotsIdle(model, signal);
+
 			if (!allIdle || signal.aborted) return;
 
 			const messagesWithAssistant: DatabaseMessage[] = [

@@ -18,44 +18,43 @@
  * @see DatabaseService in services/database.ts for IndexedDB operations
  */
 
-import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
-import { toast } from 'svelte-sonner';
-import { DatabaseService } from '$lib/services/database.service';
-import { MigrationService } from '$lib/services/migration.service';
-import { config } from '$lib/stores/settings.svelte';
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
-import type { McpServerOverride } from '$lib/types/database';
-import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+import { goto } from '$app/navigation';
 import {
-	MessageRole,
-	FileExtensionText,
-	MimeTypeText,
-	MimeTypeApplication,
-	ReasoningEffort,
-	SessionRecordType
-} from '$lib/enums';
-import {
+	EXPORT_CONV_ID_TRIM_LENGTH,
+	EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH,
+	EXPORT_CONV_NONALNUM_REPLACEMENT,
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
-	ISO_TIMESTAMP_SLICE_LENGTH,
-	EXPORT_CONV_ID_TRIM_LENGTH,
-	EXPORT_CONV_NONALNUM_REPLACEMENT,
-	EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH,
 	ISO_TIME_SEPARATOR,
 	ISO_TIME_SEPARATOR_REPLACEMENT,
-	NON_ALPHANUMERIC_REGEX,
+	ISO_TIMESTAMP_SLICE_LENGTH,
 	MULTIPLE_UNDERSCORE_REGEX,
-	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
 	NEWLINE,
+	NON_ALPHANUMERIC_REGEX,
+	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
 	SESSION_HARNESS,
 	ZIP_MAGIC
 } from '$lib/constants';
-
 import { ROUTES } from '$lib/constants/routes';
+import {
+	FileExtensionText,
+	MessageRole,
+	MimeTypeApplication,
+	MimeTypeText,
+	ReasoningEffort,
+	SessionRecordType
+} from '$lib/enums';
+import { DatabaseService } from '$lib/services/database.service';
+import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
+import { mcpStore } from '$lib/stores/mcp.svelte';
+import { config } from '$lib/stores/settings.svelte';
+import type { McpServerOverride } from '$lib/types/database';
+import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { toast } from 'svelte-sonner';
 
 export interface ConversationTreeItem {
 	conversation: DatabaseConversation;
@@ -98,8 +97,10 @@ class ConversationsStore {
 	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
 	private static loadReasoningEffortDefault(): ReasoningEffort {
 		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
+
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
+
 			return (raw as ReasoningEffort) || ReasoningEffort.DEFAULT;
 		} catch {
 			return ReasoningEffort.DEFAULT;
@@ -109,6 +110,7 @@ class ConversationsStore {
 	/** Persist reasoning effort default to localStorage */
 	private saveReasoningEffortDefaults(): void {
 		if (typeof globalThis.localStorage === 'undefined') return;
+
 		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
 
@@ -138,6 +140,7 @@ class ConversationsStore {
 	 */
 	init(): Promise<void> {
 		if (!browser) return Promise.resolve();
+
 		if (this.initPromise) return this.initPromise;
 
 		this.initPromise = (async () => {
@@ -229,6 +232,7 @@ class ConversationsStore {
 		if (index !== -1) {
 			return this.activeMessages.splice(index, 1)[0];
 		}
+
 		return undefined;
 	}
 
@@ -245,6 +249,7 @@ class ConversationsStore {
 	 */
 	async loadConversations(): Promise<void> {
 		const conversations = await DatabaseService.getAllConversations();
+
 		this.conversations = conversations;
 	}
 
@@ -255,16 +260,16 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-
 		// No MCP override list is seeded: getAllMcpServerOverrides resolves
 		// servers without a per-conversation override to `mcpServers[i].enabled`,
 		// and only explicit toggles are stored on the conversation.
 		// Working directory picked on the new-chat screen gets threaded in
 		// here too, then cleared so it doesn't bleed onto subsequent new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
-			reasoningEffort: this.pendingReasoningEffort,
-			cwd: this.pendingCwd ?? undefined
+			cwd: this.pendingCwd ?? undefined,
+			reasoningEffort: this.pendingReasoningEffort
 		});
+
 		this.pendingCwd = null;
 
 		this.conversations = [conversation, ...this.conversations];
@@ -302,15 +307,18 @@ class ConversationsStore {
 					conversation.currNode,
 					false
 				) as DatabaseMessage[];
+
 				this.activeMessages = filteredMessages;
 			} else {
 				const messages = await DatabaseService.getConversationMessages(convId);
+
 				this.activeMessages = messages;
 			}
 
 			return true;
 		} catch (error) {
 			console.error('Failed to load conversation:', error);
+
 			return false;
 		}
 	}
@@ -338,8 +346,10 @@ class ConversationsStore {
 				// Collect all descendants recursively
 				const idsToRemove = new SvelteSet([convId]);
 				const queue = [convId];
+
 				while (queue.length > 0) {
 					const parentId = queue.pop()!;
+
 					for (const c of this.conversations) {
 						if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
 							idsToRemove.add(c.id);
@@ -357,6 +367,7 @@ class ConversationsStore {
 				// Reparent direct children to deleted conv's parent (or promote to top-level)
 				const deletedConv = this.conversations.find((c) => c.id === convId);
 				const newParent = deletedConv?.forkedFromConversationId;
+
 				this.conversations = this.conversations
 					.filter((c) => c.id !== convId)
 					.map((c) =>
@@ -381,6 +392,7 @@ class ConversationsStore {
 	async deleteAll(): Promise<void> {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
+
 			await DatabaseService.bulkDeleteConversations(allConversations.map((c) => c.id));
 
 			this.clearActiveConversation();
@@ -409,8 +421,10 @@ class ConversationsStore {
 			// Collect all descendants recursively so the local cache stays consistent
 			// even when deleteWithForks is omitted.
 			const queue = [...convIds];
+
 			while (queue.length > 0) {
 				const parentId = queue.pop()!;
+
 				for (const c of this.conversations) {
 					if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
 						idsToRemove.add(c.id);
@@ -453,16 +467,18 @@ class ConversationsStore {
 
 		try {
 			const updates = await DatabaseService.bulkToggleConversationPins(convIds);
-
 			const activeId = this.activeConversation?.id;
+
 			if (activeId && updates.has(activeId)) {
 				this.activeConversation = {
 					...this.activeConversation!,
 					pinned: updates.get(activeId)!
 				};
 			}
+
 			for (let i = 0; i < this.conversations.length; i++) {
 				const newPinned = updates.get(this.conversations[i].id);
+
 				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
 			}
 
@@ -487,16 +503,18 @@ class ConversationsStore {
 
 		try {
 			const fetched = await DatabaseService.getConversationsWithMessages(convIds);
-
 			const activeId = this.activeConversation?.id;
 			const overridden = fetched.get(activeId ?? '');
+
 			if (overridden && activeId) {
 				overridden.conv = { ...this.activeConversation! };
 			}
 
 			const exported = [...fetched.values()];
+
 			if (exported.length === 0) {
 				toast.error('No conversations to export');
+
 				return;
 			}
 
@@ -531,13 +549,13 @@ class ConversationsStore {
 
 		if (allMessages.length === 0) {
 			this.activeMessages = [];
+
 			return;
 		}
 
 		const leafNodeId =
 			this.activeConversation.currNode ||
 			allMessages.reduce((latest, msg) => (msg.timestamp > latest.timestamp ? msg : latest)).id;
-
 		const currentPath = filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
 
 		this.activeMessages = currentPath;
@@ -591,7 +609,6 @@ class ConversationsStore {
 	async toggleConversationPin(convId: string): Promise<boolean> {
 		try {
 			const newPinnedState = await DatabaseService.toggleConversationPin(convId);
-
 			const convIndex = this.conversations.findIndex((c) => c.id === convId);
 
 			if (convIndex !== -1) {
@@ -605,6 +622,7 @@ class ConversationsStore {
 			return newPinnedState;
 		} catch (error) {
 			console.error('Failed to toggle conversation pin:', error);
+
 			return false;
 		}
 	}
@@ -618,15 +636,16 @@ class ConversationsStore {
 	 */
 	updateConversationTimestamp(convId?: string): void {
 		const targetId = convId ?? this.activeConversation?.id;
+
 		if (!targetId) return;
 
 		const now = Date.now();
-
 		const chatIndex = this.conversations.findIndex((c) => c.id === targetId);
 
 		if (chatIndex !== -1) {
 			this.conversations[chatIndex].lastModified = now;
 			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
+
 			this.conversations = [updatedConv, ...this.conversations];
 		}
 
@@ -670,7 +689,6 @@ class ConversationsStore {
 		const currentFirstUserMessage = this.activeMessages.find(
 			(m) => m.role === MessageRole.USER && m.parent === rootMessage?.id
 		);
-
 		const currentLeafNodeId = findLeafNode(allMessages, siblingId);
 
 		await DatabaseService.updateCurrentNode(this.activeConversation.id, currentLeafNodeId);
@@ -714,8 +732,10 @@ class ConversationsStore {
 	 */
 	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
 		const server = mcpStore.getServers().find((s) => s.id === serverId);
+
 		if (!server) return undefined;
-		return { serverId, enabled: server.enabled };
+
+		return { enabled: server.enabled, serverId };
 	}
 
 	/**
@@ -729,7 +749,9 @@ class ConversationsStore {
 		const override = this.activeConversation?.mcpServerOverrides?.find(
 			(o: McpServerOverride) => o.serverId === serverId
 		);
+
 		if (override) return override;
+
 		return this.#getDefaultOverride(serverId);
 	}
 
@@ -740,9 +762,11 @@ class ConversationsStore {
 	 */
 	getAllMcpServerOverrides(): McpServerOverride[] {
 		const overrides = this.activeConversation?.mcpServerOverrides;
+
 		return mcpStore.getServers().map((s) => {
 			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
-			return { serverId: s.id, enabled: override?.enabled ?? s.enabled };
+
+			return { enabled: override?.enabled ?? s.enabled, serverId: s.id };
 		});
 	}
 
@@ -753,6 +777,7 @@ class ConversationsStore {
 	 */
 	isMcpServerEnabledForChat(serverId: string): boolean {
 		const override = this.getMcpServerOverride(serverId);
+
 		return override?.enabled ?? false;
 	}
 
@@ -768,16 +793,18 @@ class ConversationsStore {
 			if (enabled !== undefined) {
 				mcpStore.updateServer(serverId, { enabled });
 			}
+
 			return;
 		}
 
 		// Clone to plain objects to avoid Proxy serialization issues with IndexedDB
 		const currentOverrides = (this.activeConversation.mcpServerOverrides || []).map(
 			(o: McpServerOverride) => ({
-				serverId: o.serverId,
-				enabled: o.enabled
+				enabled: o.enabled,
+				serverId: o.serverId
 			})
 		);
+
 		let newOverrides: McpServerOverride[];
 
 		if (enabled === undefined) {
@@ -786,11 +813,12 @@ class ConversationsStore {
 			const existingIndex = currentOverrides.findIndex(
 				(o: McpServerOverride) => o.serverId === serverId
 			);
+
 			if (existingIndex >= 0) {
 				newOverrides = [...currentOverrides];
-				newOverrides[existingIndex] = { serverId, enabled };
+				newOverrides[existingIndex] = { enabled, serverId };
 			} else {
-				newOverrides = [...currentOverrides, { serverId, enabled }];
+				newOverrides = [...currentOverrides, { enabled, serverId }];
 			}
 		}
 
@@ -804,6 +832,7 @@ class ConversationsStore {
 		};
 
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+
 		if (convIndex !== -1) {
 			this.conversations[convIndex].mcpServerOverrides =
 				newOverrides.length > 0 ? newOverrides : undefined;
@@ -816,6 +845,7 @@ class ConversationsStore {
 	 */
 	async toggleMcpServerForChat(serverId: string): Promise<void> {
 		const currentEnabled = this.isMcpServerEnabledForChat(serverId);
+
 		await this.setMcpServerOverride(serverId, !currentEnabled);
 	}
 
@@ -837,12 +867,14 @@ class ConversationsStore {
 			if (this.activeConversation.reasoningEffort !== undefined) {
 				return this.activeConversation.reasoningEffort;
 			}
+
 			// conversations created before the tri-state store an explicit
 			// opt-out only as thinkingEnabled = false
 			if (this.activeConversation.thinkingEnabled === false) {
 				return ReasoningEffort.OFF;
 			}
 		}
+
 		return this.pendingReasoningEffort;
 	}
 
@@ -855,6 +887,7 @@ class ConversationsStore {
 		if (!this.activeConversation) {
 			this.pendingReasoningEffort = effort;
 			this.saveReasoningEffortDefaults();
+
 			return;
 		}
 
@@ -868,6 +901,7 @@ class ConversationsStore {
 		});
 
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+
 		if (convIndex !== -1) {
 			this.conversations[convIndex].reasoningEffort = effort;
 		}
@@ -889,6 +923,7 @@ class ConversationsStore {
 		// No chat yet - buffer for the first chat the user creates.
 		if (!this.activeConversation) {
 			this.pendingCwd = trimmed ?? null;
+
 			return;
 		}
 
@@ -902,10 +937,12 @@ class ConversationsStore {
 		});
 
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+
 		if (convIndex !== -1) {
 			this.conversations[convIndex].cwd = trimmed;
 			this.conversations = [...this.conversations];
 		}
+
 		this.pendingCwd = null;
 	}
 
@@ -964,22 +1001,20 @@ class ConversationsStore {
 		msgs?: DatabaseMessage[]
 	): string {
 		const conversationName = (conversation.name ?? '').trim().toLowerCase();
-
 		const sanitizedName = conversationName
 			.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT)
 			.replace(MULTIPLE_UNDERSCORE_REGEX, '_')
 			.substring(0, EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH);
-
 		// If we have messages, use the timestamp of the newest message
 		const referenceDate = msgs?.length
 			? new Date(Math.max(...msgs.map((m) => m.timestamp)))
 			: new Date();
-
 		const iso = referenceDate.toISOString().slice(0, ISO_TIMESTAMP_SLICE_LENGTH);
 		const formattedDate = iso
 			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
 			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
 		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
+
 		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
 	}
 
@@ -992,10 +1027,9 @@ class ConversationsStore {
 	 */
 	serializeSessionToJsonl(data: ExportedConversation): string {
 		const { conv, messages } = data;
-
 		const sessionLine = JSON.stringify({
-			type: SessionRecordType.SESSION,
 			harness: SESSION_HARNESS,
+			type: SessionRecordType.SESSION,
 			...conv
 		});
 		const messageLines = messages.map((message: DatabaseMessage) => {
@@ -1003,7 +1037,7 @@ class ConversationsStore {
 			const { toolCalls, ...rest } = message;
 			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
 
-			return JSON.stringify({ type: SessionRecordType.MESSAGE, message: normalized });
+			return JSON.stringify({ message: normalized, type: SessionRecordType.MESSAGE });
 		});
 
 		return [sessionLine, ...messageLines].join(NEWLINE);
@@ -1019,10 +1053,12 @@ class ConversationsStore {
 	 */
 	parseSessionsJsonl(text: string): ExportedConversation[] {
 		const sessions: ExportedConversation[] = [];
+
 		let current: ExportedConversation | null = null;
 
 		for (const line of text.split(NEWLINE)) {
 			const trimmed = line.trim();
+
 			if (!trimmed) continue;
 
 			const record = JSON.parse(trimmed);
@@ -1030,6 +1066,7 @@ class ConversationsStore {
 			if (record.type === SessionRecordType.SESSION) {
 				// Drop the discriminator and harness marker; the rest is the conversation.
 				const conv = { ...record };
+
 				delete conv.type;
 				delete conv.harness;
 				current = { conv: conv as DatabaseConversation, messages: [] };
@@ -1040,10 +1077,12 @@ class ConversationsStore {
 				}
 
 				const message = record.message as DatabaseMessage;
+
 				// `toolCalls` is parsed to an array on export; the DB stores it as a string.
 				if (message.toolCalls !== undefined && typeof message.toolCalls !== 'string') {
 					message.toolCalls = JSON.stringify(message.toolCalls);
 				}
+
 				current.messages.push(message);
 			}
 			// Ignore unknown record types for forward compatibility.
@@ -1084,10 +1123,13 @@ class ConversationsStore {
 		if (ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) {
 			const entries = unzipSync(bytes);
 			const sessions: ExportedConversation[] = [];
+
 			for (const [entryName, entryBytes] of Object.entries(entries)) {
 				if (!entryName.toLowerCase().endsWith(FileExtensionText.JSONL)) continue;
+
 				sessions.push(...this.parseSessionsJsonl(strFromU8(entryBytes)));
 			}
+
 			return sessions;
 		}
 
@@ -1099,12 +1141,15 @@ class ConversationsStore {
 
 		// Legacy JSON format: an array of conversations or a single conversation object.
 		const parsed = JSON.parse(text);
+
 		if (Array.isArray(parsed)) {
 			return parsed;
 		}
+
 		if (parsed && typeof parsed === 'object' && 'conv' in parsed && 'messages' in parsed) {
 			return [parsed];
 		}
+
 		throw new Error(
 			'Invalid file format: expected array of conversations or single conversation object'
 		);
@@ -1120,13 +1165,14 @@ class ConversationsStore {
 
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
+
 			return;
 		}
 
 		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
-
 		const jsonl = this.serializeSessionToJsonl(data);
 		const blob = new Blob([jsonl], { type: MimeTypeText.JSONL });
+
 		this.triggerDownload(blob, downloadFilename);
 	}
 
@@ -1138,6 +1184,7 @@ class ConversationsStore {
 	downloadConversationsArchive(data: ExportedConversation[]): void {
 		if (data.length === 0) {
 			console.error('Invalid data: no conversations to export');
+
 			return;
 		}
 
@@ -1150,6 +1197,7 @@ class ConversationsStore {
 			// Disambiguate any duplicate filenames within the archive.
 			let entryName = baseName;
 			let suffix = 1;
+
 			while (usedNames.has(entryName)) {
 				entryName = baseName.replace(
 					new RegExp(`${FileExtensionText.JSONL}$`),
@@ -1162,9 +1210,9 @@ class ConversationsStore {
 		}
 
 		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
-
 		const zipped = zipSync(files);
 		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
+
 		this.triggerDownload(blob, archiveName);
 	}
 
@@ -1174,6 +1222,7 @@ class ConversationsStore {
 	private triggerDownload(blob: Blob, filename: string): void {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
+
 		a.href = url;
 		a.download = filename;
 		document.body.appendChild(a);
@@ -1208,7 +1257,9 @@ class ConversationsStore {
 		data: ExportedConversations
 	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
 		const result = await DatabaseService.importConversations(data);
+
 		await this.loadConversations();
+
 		return result;
 	}
 }
@@ -1238,7 +1289,9 @@ export const isConversationsInitialized = () => conversationsStore.isInitialized
 // Pinned conversations first, then by lastModified descending
 const comparePinnedThenRecent = (a: DatabaseConversation, b: DatabaseConversation) => {
 	if (a.pinned && !b.pinned) return -1;
+
 	if (!a.pinned && b.pinned) return 1;
+
 	return b.lastModified - a.lastModified;
 };
 
@@ -1265,6 +1318,7 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 		result.push({ conversation: conv, depth });
 
 		const children = childrenByParent.get(conv.id);
+
 		if (children) {
 			children.sort(comparePinnedThenRecent);
 
@@ -1275,6 +1329,7 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 	}
 
 	const roots = convs.filter((c) => !forkIds.has(c.id)).sort(comparePinnedThenRecent);
+
 	for (const root of roots) {
 		walk(root, 0);
 	}

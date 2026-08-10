@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { parseReadFileMeta } from './parsers/read-file';
+	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { DEFAULT_LANGUAGE, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { type AgenticSection } from '$lib/utils';
-	import { parseReadFileMeta } from './parsers/read-file';
-	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;
@@ -12,7 +12,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const readFileMeta = $derived(parseReadFileMeta(section));
 </script>

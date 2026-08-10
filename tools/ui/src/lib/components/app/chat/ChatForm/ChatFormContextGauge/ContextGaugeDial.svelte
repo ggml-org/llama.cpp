@@ -8,7 +8,7 @@
 		size?: 'sm' | 'md';
 	}
 
-	let { percent, level, size = 'sm' }: Props = $props();
+	let { level, percent, size = 'sm' }: Props = $props();
 
 	const RADIUS = 11;
 	const CIRCUMFERENCE = 2 * Math.PI * RADIUS;

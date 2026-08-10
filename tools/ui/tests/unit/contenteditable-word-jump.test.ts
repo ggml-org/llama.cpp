@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { badgeAwareWordJump, leadingBadgeEdgeOffset } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 // Layout of `hello [docs](file:///a/b) world foo`:
 //   "hello" 0-4, " " 5, badge 6-24 (length 19), " " 25, "world" 26-30, " " 31, "foo" 32-34
@@ -42,6 +42,7 @@ describe('badgeAwareWordJump', () => {
 
 	it('treats a leading badge as one word in both directions', () => {
 		const source = `${BADGE} rest`;
+
 		expect(badgeAwareWordJump(source, 0, 'forward')).toBe(BADGE.length);
 		expect(badgeAwareWordJump(source, BADGE.length, 'backward')).toBe(0);
 	});
@@ -49,6 +50,7 @@ describe('badgeAwareWordJump', () => {
 	it('treats adjacent badges as separate words', () => {
 		// each badge is 14 chars: "[a](file:///x)" / "[b](file:///y)"
 		const source = '[a](file:///x)[b](file:///y)';
+
 		expect(badgeAwareWordJump(source, 0, 'forward')).toBe(14);
 		expect(badgeAwareWordJump(source, 14, 'forward')).toBe(28);
 		expect(badgeAwareWordJump(source, 28, 'backward')).toBe(14);
@@ -58,6 +60,7 @@ describe('badgeAwareWordJump', () => {
 	it('jumps over a badge following punctuation', () => {
 		// "foo," 0-3, " " 4, badge 5-23 (end 24), " bar" 24-27
 		const source = `foo, ${BADGE} bar`;
+
 		expect(badgeAwareWordJump(source, 0, 'forward')).toBeNull();
 		expect(badgeAwareWordJump(source, 3, 'forward')).toBe(24);
 	});

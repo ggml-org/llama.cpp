@@ -9,25 +9,25 @@
 	const calls: string[] = [];
 
 	const pickers = useChatFormPickers({
-		getValue: () => value,
-		setValue: (v) => {
-			value = v;
-			calls.push(`setValue:${v}`);
-		},
-		getCaretOffset: () => caretOffset,
-		setCaretOffset: (o) => {
-			caretOffset = o;
-		},
 		focusInput: () => {},
-		getShowModelSelector: () => true,
-		hasPrompts: () => true,
-		hasCwdTools: () => true,
+		getCaretOffset: () => caretOffset,
 		getCwd: () => null,
+		getPickersRef: () => undefined,
 		getServerHome: () => null,
+		getShowModelSelector: () => true,
+		getValue: () => value,
+		hasCwdTools: () => true,
+		hasPrompts: () => true,
 		openModelSelector: () => {
 			calls.push('openModelSelector');
 		},
-		getPickersRef: () => undefined
+		setCaretOffset: (o) => {
+			caretOffset = o;
+		},
+		setValue: (v) => {
+			value = v;
+			calls.push(`setValue:${v}`);
+		}
 	});
 
 	// Simulate the user typing: update the buffer and run the input flow.

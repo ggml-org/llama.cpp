@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import XIcon from '@lucide/svelte/icons/x';
+	import { Dialog as DialogPrimitive } from 'bits-ui';
 
 	interface Props {
 		open: boolean;
@@ -9,7 +9,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), code, language, onOpenChange }: Props = $props();
+	let { code, language, onOpenChange, open = $bindable() }: Props = $props();
 
 	let iframeRef = $state<HTMLIFrameElement | null>(null);
 

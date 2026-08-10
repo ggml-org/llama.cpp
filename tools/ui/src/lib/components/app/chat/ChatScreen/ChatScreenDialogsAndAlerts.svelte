@@ -1,21 +1,21 @@
 <script lang="ts">
 	import { Trash2 } from '@lucide/svelte';
-	import { ErrorDialogType } from '$lib/enums';
 	import {
 		DialogChatError,
 		DialogConfirmation,
 		DialogEmptyFileAlert,
 		DialogFileUploadError
 	} from '$lib/components/app';
+	import { ErrorDialogType } from '$lib/enums';
 
 	let {
-		showDeleteDialog,
-		handleDeleteConfirm,
-		showEmptyFileDialog,
-		emptyFileNames,
 		activeErrorDialog,
+		emptyFileNames,
+		fileUpload,
+		handleDeleteConfirm,
 		handleErrorDialogOpenChange,
-		fileUpload
+		showDeleteDialog,
+		showEmptyFileDialog
 	} = $props();
 </script>
 

@@ -5,17 +5,19 @@
 // The textarea path is covered here end-to-end (the contenteditable
 // consumes the same case locally; see chat-form-contenteditable).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from 'vitest-browser-svelte';
-import { userEvent } from 'vitest/browser';
-import { tick } from 'svelte';
+import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 import { settingsStore } from '$lib/stores/settings.svelte';
-import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
+import { tick } from 'svelte';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
+import { render } from 'vitest-browser-svelte';
 
 function textareaIn(container: HTMLElement): HTMLTextAreaElement {
 	const el = container.querySelector('textarea');
+
 	if (!(el instanceof HTMLTextAreaElement)) throw new Error('textarea not rendered');
+
 	return el;
 }
 
@@ -27,9 +29,11 @@ describe('ChatForm Enter in code blocks', () => {
 	it('adds a line after a still-open fence instead of submitting', async () => {
 		const onSubmit = vi.fn();
 		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
 		await tick();
 
 		const textarea = textareaIn(container);
+
 		await userEvent.click(textarea);
 		await userEvent.keyboard('```');
 		await tick();
@@ -44,9 +48,11 @@ describe('ChatForm Enter in code blocks', () => {
 	it('keeps adding lines while the block stays open', async () => {
 		const onSubmit = vi.fn();
 		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
 		await tick();
 
 		const textarea = textareaIn(container);
+
 		await userEvent.click(textarea);
 		await userEvent.keyboard('```js');
 		await tick();
@@ -63,9 +69,11 @@ describe('ChatForm Enter in code blocks', () => {
 	it('submits when the caret is before the opening fence', async () => {
 		const onSubmit = vi.fn();
 		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
 		await tick();
 
 		const textarea = textareaIn(container);
+
 		await userEvent.click(textarea);
 		await userEvent.keyboard('```');
 		await tick();
@@ -81,9 +89,11 @@ describe('ChatForm Enter in code blocks', () => {
 	it('submits on Enter outside a code block', async () => {
 		const onSubmit = vi.fn();
 		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
 		await tick();
 
 		const textarea = textareaIn(container);
+
 		await userEvent.click(textarea);
 		await userEvent.keyboard('hello');
 		await tick();
@@ -97,9 +107,11 @@ describe('ChatForm Enter in code blocks', () => {
 	it('submits on Ctrl+Enter even inside a code block', async () => {
 		const onSubmit = vi.fn();
 		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
 		await tick();
 
 		const textarea = textareaIn(container);
+
 		await userEvent.click(textarea);
 		await userEvent.keyboard('```');
 		await tick();

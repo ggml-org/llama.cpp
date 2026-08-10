@@ -1,9 +1,9 @@
-import Dexie, { type EntityTable } from 'dexie';
-import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
+import { IDXDB_STORES, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
+import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
+import Dexie, { type EntityTable } from 'dexie';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
@@ -39,14 +39,15 @@ export class DatabaseService {
 		fields?: Partial<Omit<DatabaseConversation, 'id' | 'name' | 'lastModified'>>
 	): Promise<DatabaseConversation> {
 		const conversation: DatabaseConversation = {
-			id: uuid(),
-			name,
-			lastModified: Date.now(),
 			currNode: '',
+			id: uuid(),
+			lastModified: Date.now(),
+			name,
 			...fields
 		};
 
 		await db[IDXDB_TABLES.conversations].add(conversation);
+
 		return conversation;
 	}
 
@@ -77,6 +78,7 @@ export class DatabaseService {
 				// Handle null parent (root message case)
 				if (parentId !== null) {
 					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+
 					if (!parentMessage) {
 						throw new Error(`Parent message ${parentId} not found`);
 					}
@@ -84,10 +86,10 @@ export class DatabaseService {
 
 				const newMessage: DatabaseMessage = {
 					...message,
+					children: [],
 					id: uuid(),
 					parent: parentId,
-					toolCalls: message.toolCalls ?? '',
-					children: []
+					toolCalls: message.toolCalls ?? ''
 				};
 
 				await db[IDXDB_TABLES.messages].add(newMessage);
@@ -95,6 +97,7 @@ export class DatabaseService {
 				// Update parent's children array if parent exists
 				if (parentId !== null) {
 					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+
 					if (parentMessage) {
 						await db[IDXDB_TABLES.messages].update(parentId, {
 							children: [...parentMessage.children, newMessage.id]
@@ -120,18 +123,19 @@ export class DatabaseService {
 	 */
 	static async createRootMessage(convId: string): Promise<string> {
 		const rootMessage: DatabaseMessage = {
-			id: uuid(),
-			convId,
-			type: 'root',
-			timestamp: Date.now(),
-			role: MessageRole.SYSTEM,
+			children: [],
 			content: '',
+			convId,
+			id: uuid(),
 			parent: null,
+			role: MessageRole.SYSTEM,
+			timestamp: Date.now(),
 			toolCalls: '',
-			children: []
+			type: 'root'
 		};
 
 		await db[IDXDB_TABLES.messages].add(rootMessage);
+
 		return rootMessage.id;
 	}
 
@@ -150,25 +154,27 @@ export class DatabaseService {
 		parentId: string
 	): Promise<DatabaseMessage> {
 		const trimmedPrompt = systemPrompt.trim();
+
 		if (!trimmedPrompt) {
 			throw new Error('Cannot create system message with empty content');
 		}
 
 		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
 			const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+
 			if (!parentMessage) {
 				throw new Error(`Parent message ${parentId} not found`);
 			}
 
 			const systemMessage: DatabaseMessage = {
-				id: uuid(),
-				convId,
-				type: MessageRole.SYSTEM,
-				timestamp: Date.now(),
-				role: MessageRole.SYSTEM,
+				children: [],
 				content: trimmedPrompt,
+				convId,
+				id: uuid(),
 				parent: parentId,
-				children: []
+				role: MessageRole.SYSTEM,
+				timestamp: Date.now(),
+				type: MessageRole.SYSTEM
 			};
 
 			await db[IDXDB_TABLES.messages].add(systemMessage);
@@ -240,35 +246,46 @@ export class DatabaseService {
 		prefetched?: ReadonlyMap<string, DatabaseConversation>
 	): Promise<void> {
 		const conv = prefetched?.get(parentId) ?? (await db[IDXDB_TABLES.conversations].get(parentId));
+
 		if (!conv) return;
 
 		let newParent = conv.forkedFromConversationId;
+
 		const visited = new Set<string>([parentId]);
+
 		while (newParent && excludeIds.has(newParent)) {
 			if (visited.has(newParent)) {
 				newParent = undefined;
+
 				break;
 			}
+
 			visited.add(newParent);
 			const next =
 				prefetched?.get(newParent) ?? (await db[IDXDB_TABLES.conversations].get(newParent));
+
 			if (!next) {
 				newParent = undefined;
+
 				break;
 			}
+
 			newParent = next.forkedFromConversationId;
 		}
 
 		const directChildren = await db[IDXDB_TABLES.conversations]
 			.filter((c) => c.forkedFromConversationId === parentId)
 			.toArray();
-
 		const updates: DatabaseConversation[] = [];
+
 		for (const child of directChildren) {
 			if (excludeIds.has(child.id)) continue;
+
 			updates.push({ ...child, forkedFromConversationId: newParent });
 		}
+
 		if (updates.length === 0) return;
+
 		await db[IDXDB_TABLES.conversations].bulkPut(updates);
 	}
 
@@ -282,7 +299,9 @@ export class DatabaseService {
 	 */
 	static async bulkDeleteConversations(ids: string[]): Promise<void> {
 		const cleanIds = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+
 		if (cleanIds.length === 0) return;
+
 		const idSet = new Set(cleanIds);
 
 		await db.transaction(
@@ -292,16 +311,23 @@ export class DatabaseService {
 				// Pre-load each to-delete conversation so the per-id reparent
 				// walk-up doesn't ping-pong the same ancestry chain.
 				const prefetched = new Map<string, DatabaseConversation>();
+
 				let frontier = [...cleanIds];
+
 				const requested = new Set<string>(frontier);
+
 				while (frontier.length > 0) {
 					const fetched = await db[IDXDB_TABLES.conversations].bulkGet(frontier);
+
 					frontier = [];
 					for (let i = 0; i < fetched.length; i++) {
 						const conv = fetched[i];
+
 						if (!conv || !conv.id) continue;
+
 						prefetched.set(conv.id, conv);
 						const ancestor = conv.forkedFromConversationId;
+
 						if (ancestor && !prefetched.has(ancestor) && !requested.has(ancestor)) {
 							frontier.push(ancestor);
 							requested.add(ancestor);
@@ -327,11 +353,13 @@ export class DatabaseService {
 	static async deleteMessage(messageId: string): Promise<void> {
 		await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
 			const message = await db[IDXDB_TABLES.messages].get(messageId);
+
 			if (!message) return;
 
 			// Remove this message from its parent's children array
 			if (message.parent) {
 				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
+
 				if (parent) {
 					parent.children = parent.children.filter((childId: string) => childId !== messageId);
 					await db[IDXDB_TABLES.messages].put(parent);
@@ -361,15 +389,15 @@ export class DatabaseService {
 				.where('convId')
 				.equals(conversationId)
 				.toArray();
-
 			// Find all descendant messages
 			const descendants = findDescendantMessages(allMessages, messageId);
 			const allToDelete = [messageId, ...descendants];
-
 			// Get the message to delete for parent cleanup
 			const message = await db[IDXDB_TABLES.messages].get(messageId);
+
 			if (message && message.parent) {
 				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
+
 				if (parent) {
 					parent.children = parent.children.filter((childId: string) => childId !== messageId);
 					await db[IDXDB_TABLES.messages].put(parent);
@@ -424,28 +452,34 @@ export class DatabaseService {
 	): Promise<Map<string, ExportedConversation>> {
 		const result = new Map<string, ExportedConversation>();
 		const cleanIds = convIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
+
 		if (cleanIds.length === 0) return result;
 
 		const [convs, allMessages] = await Promise.all([
 			db[IDXDB_TABLES.conversations].bulkGet(cleanIds),
 			db[IDXDB_TABLES.messages].where('convId').anyOf(cleanIds).toArray()
 		]);
-
 		const messagesByConv = new Map<string, DatabaseMessage[]>();
+
 		for (const msg of allMessages) {
 			const bucket = messagesByConv.get(msg.convId);
+
 			if (bucket) bucket.push(msg);
 			else messagesByConv.set(msg.convId, [msg]);
 		}
 
 		for (let i = 0; i < cleanIds.length; i++) {
 			const conv = convs[i];
+
 			if (!conv) continue;
+
 			const messages = (messagesByConv.get(conv.id) ?? []).sort(
 				(a, b) => a.timestamp - b.timestamp
 			);
+
 			result.set(conv.id, { conv, messages });
 		}
+
 		return result;
 	}
 
@@ -480,11 +514,15 @@ export class DatabaseService {
 	 */
 	static async toggleConversationPin(id: string): Promise<boolean> {
 		const conversation = await db[IDXDB_TABLES.conversations].get(id);
+
 		if (!conversation) {
 			throw new Error(`Conversation ${id} not found`);
 		}
+
 		const newPinnedState = !conversation.pinned;
+
 		await this.updateConversation(id, { pinned: newPinnedState });
+
 		return newPinnedState;
 	}
 
@@ -501,21 +539,29 @@ export class DatabaseService {
 	static async bulkToggleConversationPins(ids: string[]): Promise<Map<string, boolean>> {
 		const cleanIds = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
 		const result = new Map<string, boolean>();
+
 		if (cleanIds.length === 0) return result;
 
 		await db.transaction('rw', db[IDXDB_TABLES.conversations], async () => {
 			const convs = await db[IDXDB_TABLES.conversations].bulkGet(cleanIds);
 			const updates: DatabaseConversation[] = [];
+
 			for (let i = 0; i < cleanIds.length; i++) {
 				const conv = convs[i];
+
 				if (!conv) continue;
+
 				const newPinned = !conv.pinned;
+
 				updates.push({ ...conv, pinned: newPinned });
 				result.set(cleanIds[i], newPinned);
 			}
+
 			if (updates.length === 0) return;
+
 			await db[IDXDB_TABLES.conversations].bulkPut(updates);
 		});
+
 		return result;
 	}
 
@@ -573,10 +619,11 @@ export class DatabaseService {
 			async () => {
 				for (const item of data) {
 					const { conv, messages } = item;
-
 					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
+
 					if (existing) {
 						skipped.push(conv);
+
 						continue;
 					}
 
@@ -620,6 +667,7 @@ export class DatabaseService {
 			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
 			async () => {
 				const sourceConv = await db[IDXDB_TABLES.conversations].get(sourceConvId);
+
 				if (!sourceConv) {
 					throw new Error(`Source conversation ${sourceConvId} not found`);
 				}
@@ -628,12 +676,12 @@ export class DatabaseService {
 					.where('convId')
 					.equals(sourceConvId)
 					.toArray();
-
 				const pathMessages = filterByLeafNodeId(
 					allMessages,
 					atMessageId,
 					true
 				) as DatabaseMessage[];
+
 				if (pathMessages.length === 0) {
 					throw new Error(`Could not resolve message path to ${atMessageId}`);
 				}
@@ -654,28 +702,27 @@ export class DatabaseService {
 
 					return {
 						...msg,
-						id: newId,
-						convId: newConvId,
-						parent: newParent,
 						children: newChildren,
-						extra: options.includeAttachments ? msg.extra : undefined
+						convId: newConvId,
+						extra: options.includeAttachments ? msg.extra : undefined,
+						id: newId,
+						parent: newParent
 					};
 				});
-
 				const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
 				const newConv: DatabaseConversation = {
-					id: newConvId,
-					name: options.name,
-					lastModified: Date.now(),
 					currNode: lastClonedMessage.id,
+					cwd: sourceConv.cwd,
 					forkedFromConversationId: sourceConvId,
+					id: newConvId,
+					lastModified: Date.now(),
 					mcpServerOverrides: sourceConv.mcpServerOverrides
 						? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
-								serverId: o.serverId,
-								enabled: o.enabled
+								enabled: o.enabled,
+								serverId: o.serverId
 							}))
 						: undefined,
-					cwd: sourceConv.cwd
+					name: options.name
 				};
 
 				await db[IDXDB_TABLES.conversations].add(newConv);

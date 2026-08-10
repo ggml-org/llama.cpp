@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { ActionIconCopyToClipboard, BadgesModality } from '$lib/components/app';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
-	import { BadgesModality, ActionIconCopyToClipboard } from '$lib/components/app';
+	import { modelOptions, modelsLoading, modelsStore } from '$lib/stores/models.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
-	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
 	import type { ApiLlamaCppServerProps } from '$lib/types';
+	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils';
 
 	interface Props {
 		open?: boolean;
@@ -14,7 +14,7 @@
 		modelId?: string | null;
 	}
 
-	let { open = $bindable(), onOpenChange, modelId = null }: Props = $props();
+	let { modelId = null, onOpenChange, open = $bindable() }: Props = $props();
 
 	let isRouter = $derived(serverStore.isRouterMode);
 
@@ -35,12 +35,14 @@
 		if (isRouter && modelId) {
 			return models.find((m) => m.model === modelId) ?? null;
 		}
+
 		return models[0] ?? null;
 	});
 
 	// Get modalities from modelStore using the model ID from the first model
 	let modalities = $derived.by(() => {
 		if (!firstModel?.id) return [];
+
 		return modelsStore.getModelModalitiesArray(firstModel.id);
 	});
 
@@ -67,6 +69,7 @@
 					isLoadingRouterProps = false;
 				});
 		}
+
 		if (!open) {
 			routerModelProps = null;
 		}

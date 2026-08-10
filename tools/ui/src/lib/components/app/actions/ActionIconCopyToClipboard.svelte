@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Copy } from '@lucide/svelte';
-	import { copyToClipboard } from '$lib/utils';
 	import ActionIcon from './ActionIcon.svelte';
+	import { Copy } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { copyToClipboard } from '$lib/utils';
 
 	export let ariaLabel: string = 'Copy to clipboard';
 	export let canCopy: boolean = true;

@@ -21,6 +21,7 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
 		dragCounter++;
+
 		if (event.dataTransfer?.types.includes('Files')) {
 			isDragOver = true;
 		}
@@ -29,6 +30,7 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 	function handleDragLeave(event: DragEvent) {
 		event.preventDefault();
 		dragCounter--;
+
 		if (dragCounter === 0) {
 			isDragOver = false;
 		}
@@ -49,8 +51,10 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 
 		if (isEditing()) {
 			const handler = getAddFilesHandler();
+
 			if (handler) {
 				handler(files);
+
 				return;
 			}
 		}
@@ -59,14 +63,14 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 	}
 
 	return {
-		get isDragOver() {
-			return isDragOver;
-		},
 		dragHandlers: {
 			dragenter: handleDragEnter,
 			dragleave: handleDragLeave,
 			dragover: handleDragOver,
 			drop: handleDrop
+		},
+		get isDragOver() {
+			return isDragOver;
 		}
 	};
 }

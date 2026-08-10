@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { isAbortError } from '$lib/utils/abort';
+import { describe, expect, it } from 'vitest';
 
 describe('isAbortError', () => {
 	it('returns false for null, undefined and non-error values', () => {
@@ -12,11 +12,13 @@ describe('isAbortError', () => {
 
 	it('returns true for DOMException with AbortError name', () => {
 		const err = new DOMException('Operation was aborted', 'AbortError');
+
 		expect(isAbortError(err)).toBe(true);
 	});
 
 	it('returns true for plain Error with AbortError name', () => {
 		const err = new Error('aborted');
+
 		err.name = 'AbortError';
 		expect(isAbortError(err)).toBe(true);
 	});

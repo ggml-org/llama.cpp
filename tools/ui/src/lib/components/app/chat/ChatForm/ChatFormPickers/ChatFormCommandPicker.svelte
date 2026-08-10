@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { FolderOpen, Sparkles } from '@lucide/svelte';
-	import { MODEL_SELECTOR_ICON } from '$lib/constants';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { ChatFormCommandAction } from '$lib/enums';
-	import type { ChatFormCommand } from '$lib/types';
 	import {
 		ChatFormPickerList,
 		ChatFormPickerListItem,
 		ChatFormPickerPopover
 	} from '$lib/components/app/chat';
+	import { MODEL_SELECTOR_ICON } from '$lib/constants';
+	import { ChatFormCommandAction } from '$lib/enums';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
+	import type { ChatFormCommand } from '$lib/types';
 
 	/**
 	 * Slash-command picker; `query` (typed after `/`) filters the commands.
@@ -24,12 +24,12 @@
 		onSelect: (command: ChatFormCommand) => void;
 	}
 
-	let { class: className = '', isOpen, query, commands, onClose, onSelect }: Props = $props();
+	let { class: className = '', commands, isOpen, onClose, onSelect, query }: Props = $props();
 
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
-		[ChatFormCommandAction.PROMPT]: Sparkles,
 		[ChatFormCommandAction.CWD]: FolderOpen,
-		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON
+		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON,
+		[ChatFormCommandAction.PROMPT]: Sparkles
 	};
 
 	const trimmedQuery = $derived((query ?? '').trim().toLowerCase());
@@ -51,20 +51,24 @@
 
 	function stepEnabled(from: number, dir: number): number {
 		const n = filteredCommands.length;
+
 		if (n === 0) return -1;
+
 		for (let i = 1; i <= n; i++) {
 			const idx = (from + dir * i + n) % n;
+
 			if (!filteredCommands[idx].disabled) return idx;
 		}
+
 		return -1;
 	}
 
 	const nav = usePickerNavigation({
-		isOpen: () => isOpen,
 		count: () => filteredCommands.length,
-		step: (from, dir) => (from < 0 ? firstEnabledIndex() : stepEnabled(from, dir)),
+		isOpen: () => isOpen,
 		onClose: () => onClose(),
-		onSelect: (index) => handleSelect(filteredCommands[index])
+		onSelect: (index) => handleSelect(filteredCommands[index]),
+		step: (from, dir) => (from < 0 ? firstEnabledIndex() : stepEnabled(from, dir))
 	});
 
 	$effect(() => {
@@ -76,8 +80,10 @@
 	$effect(() => {
 		if (nav.hoveredIndex < 0 || nav.hoveredIndex >= filteredCommands.length) {
 			nav.reset(firstEnabledIndex());
+
 			return;
 		}
+
 		if (filteredCommands[nav.hoveredIndex].disabled) {
 			nav.reset(firstEnabledIndex());
 		}
@@ -85,6 +91,7 @@
 
 	function handleSelect(command: ChatFormCommand) {
 		if (command.disabled) return;
+
 		onSelect(command);
 		onClose();
 	}

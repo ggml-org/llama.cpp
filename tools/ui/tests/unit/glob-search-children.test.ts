@@ -4,8 +4,8 @@ vi.mock('$lib/services/tools.service', () => ({
 	ToolsService: { executeToolRaw: vi.fn() }
 }));
 
-import { ToolsService } from '$lib/services/tools.service';
 import { GlobSearchType } from '$lib/enums';
+import { ToolsService } from '$lib/services/tools.service';
 import { runGlobSearchWithChildren } from '$lib/utils';
 
 const mockExecute = vi.mocked(ToolsService.executeToolRaw);
@@ -32,6 +32,7 @@ describe('runGlobSearchWithChildren', () => {
 			50,
 			new AbortController().signal
 		);
+
 		expect(res.error).toBeUndefined();
 		expect(res.entries.map((e) => e.path)).toEqual(['/Users/rootA/note.md', '/Users/rootA/src']);
 		expect(res.exactDir).toBeUndefined();
@@ -54,8 +55,9 @@ describe('runGlobSearchWithChildren', () => {
 			3,
 			50,
 			new AbortController().signal,
-			{ type: GlobSearchType.ALL, descendOnTrailingSeparator: true }
+			{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
 		);
+
 		expect(res.error).toBeUndefined();
 		expect(res.exactDir).toBe('/Users/rootB/src');
 		expect(res.entries.map((e) => e.path)).toEqual([
@@ -77,8 +79,9 @@ describe('runGlobSearchWithChildren', () => {
 			3,
 			50,
 			new AbortController().signal,
-			{ type: GlobSearchType.ALL, descendOnTrailingSeparator: true }
+			{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
 		);
+
 		expect(res.exactDir).toBeUndefined();
 		expect(mockExecute).toHaveBeenCalledTimes(1);
 	});
@@ -98,6 +101,7 @@ describe('runGlobSearchWithChildren', () => {
 			new AbortController().signal,
 			{ type: GlobSearchType.DIR }
 		);
+
 		expect(res.exactDir).toBe('/Users/rootD/src');
 		expect(res.entries.map((e) => e.path)).toEqual(['/Users/rootD/src', '/Users/rootD/src/a.txt']);
 		expect(mockExecute).toHaveBeenCalledTimes(2);
@@ -112,6 +116,7 @@ describe('runGlobSearchWithChildren', () => {
 			50,
 			new AbortController().signal
 		);
+
 		expect(res.error).toBe('boom');
 		expect(res.entries).toEqual([]);
 		expect(mockExecute).toHaveBeenCalledTimes(1);

@@ -1,11 +1,8 @@
 <script lang="ts">
-	import { onDestroy, onMount, untrack } from 'svelte';
-	import { mode } from 'mode-watcher';
-	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { ColorMode } from '$lib/enums';
 	import { TRIM_LEADING_PADDING_REGEX, TRIM_TRAILING_PADDING_REGEX } from '$lib/constants';
+	import { ColorMode } from '$lib/enums';
+	import { isMobile } from '$lib/stores/viewport.svelte';
+	import type { ContentToken, SourceHistoryEntry } from '$lib/utils';
 	import {
 		badgeAwareWordJump,
 		buildFragment,
@@ -19,10 +16,13 @@
 		SourceHistory,
 		stripBlockBoundaryLineBreaks,
 		syncCodeBlockHatches,
-		tokenizeContent,
-		textOffsetToRange
+		textOffsetToRange,
+		tokenizeContent
 	} from '$lib/utils';
-	import type { ContentToken, SourceHistoryEntry } from '$lib/utils';
+	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import { mode } from 'mode-watcher';
+	import { onDestroy, onMount, untrack } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -57,7 +57,9 @@
 	// serialized source, not the DOM shape.
 	function syncEmptyState(serialized?: string) {
 		if (!rootElement) return;
+
 		const source = serialized ?? serializeContent(rootElement);
+
 		rootElement.dataset.empty = source.length === 0 ? 'true' : 'false';
 	}
 
@@ -93,23 +95,24 @@
 	 */
 	function highlightCodeBlockElement(el: HTMLElement): boolean {
 		const segment = el.textContent ?? '';
+
 		if (highlightedSegments.get(el) === segment) return false;
 
 		const open = CODE_BLOCK_OPEN_RE.exec(segment);
+
 		if (!open) return false;
 
 		const prefix = open[0];
 		const language = open[1].trim().split(/\s+/)[0] ?? '';
 		const content = segment.slice(prefix.length, -3);
-
 		const leading = content.match(TRIM_LEADING_PADDING_REGEX)?.[0] ?? '';
 		const trailing = content.match(TRIM_TRAILING_PADDING_REGEX)?.[0] ?? '';
 		const core = content.slice(leading.length, content.length - trailing.length);
-
 		// autoDetect off: re-guessing the language on every keystroke
 		// costs ~38ms a call and flickers while typing
 		const html = core ? highlightCode(core, language || 'text', false) : '';
 		const tpl = document.createElement('template');
+
 		tpl.innerHTML = html;
 
 		el.replaceChildren(
@@ -118,6 +121,7 @@
 			document.createTextNode(trailing + '```')
 		);
 		highlightedSegments.set(el, segment);
+
 		return true;
 	}
 
@@ -136,9 +140,11 @@
 		if (!rootElement) return;
 
 		const range = safeRange();
+
 		if (!range) return;
 
 		let node: Node | null = range.startContainer;
+
 		if (node === rootElement) {
 			node = rootElement.childNodes[range.startOffset - 1] ?? null;
 		}
@@ -146,11 +152,14 @@
 		while (node && node !== rootElement) {
 			if (node instanceof HTMLElement && node.dataset.codeToken === 'block') {
 				const caret = rangeToTextOffset(rootElement, range);
+
 				if (highlightCodeBlockElement(node)) {
 					restoreCaret(caret);
 				}
+
 				return;
 			}
+
 			node = node.parentNode;
 		}
 	}
@@ -182,6 +191,7 @@
 		document.querySelectorAll('style[data-highlight-theme-preview]').forEach((s) => s.remove());
 
 		const style = document.createElement('style');
+
 		style.setAttribute('data-highlight-theme-preview', 'true');
 		style.textContent = isDark ? githubDarkCss : githubLightCss;
 
@@ -196,6 +206,7 @@
 		if (!rootElement) return null;
 
 		const selection = window.getSelection();
+
 		if (!selection || selection.rangeCount === 0) return null;
 
 		const range = selection.getRangeAt(0);
@@ -212,6 +223,7 @@
 
 		const target = textOffsetToRange(rootElement, offset);
 		const selection = window.getSelection();
+
 		if (!selection) return;
 
 		if (extend && selection.anchorNode) {
@@ -221,6 +233,7 @@
 				target.startContainer,
 				target.startOffset
 			);
+
 			return;
 		}
 
@@ -230,14 +243,16 @@
 
 	function resizeHeight() {
 		if (!rootElement) return;
+
 		rootElement.style.height = 'auto';
 		rootElement.style.height = `${rootElement.scrollHeight}px`;
 	}
 
 	function recordHistory(newGroup: boolean) {
 		if (!rootElement) return;
+
 		history.push(
-			{ value: lastEmittedValue, caret: rangeToTextOffset(rootElement, safeRange()) },
+			{ caret: rangeToTextOffset(rootElement, safeRange()), value: lastEmittedValue },
 			Date.now(),
 			newGroup
 		);
@@ -262,10 +277,12 @@
 		// lands on the line directly below the block.
 		if (inputType === 'insertLineBreak' || inputType === 'insertParagraph') {
 			const caret = rangeToTextOffset(rootElement, safeRange());
+
 			if (stripBlockBoundaryLineBreaks(rootElement)) {
 				restoreCaret(caret);
 			} else {
 				const source = serializeContent(rootElement);
+
 				let end = caret;
 
 				// the caret must end up after the inserted \n; some browsers
@@ -284,7 +301,9 @@
 				// \n doubles as a block's separator line (source ends with
 				// \n\n) or sits inside a block element.
 				let last = rootElement.lastChild;
+
 				while (last && last.nodeName === 'BR') last = last.previousSibling;
+
 				if (
 					end === source.length &&
 					source.endsWith('\n') &&
@@ -302,7 +321,9 @@
 		syncCodeBlockHatches(rootElement);
 
 		const serialized = serializeContent(rootElement);
+
 		syncEmptyState(serialized);
+
 		if (serialized === lastEmittedValue) return;
 
 		// Plain typing/deletes coalesce per time window; structural edits
@@ -316,6 +337,7 @@
 		// completed or broken) - the browser-owned text nodes cannot
 		// restyle themselves across element boundaries.
 		const tokens = tokenizeContent(serialized);
+
 		if (!domMatchesTokens(rootElement, tokens)) {
 			renderTokens(tokens);
 
@@ -324,6 +346,7 @@
 			// block element and the rebuild splits it back out, which
 			// synthesizes the separator newline) - keep value in sync.
 			const reserialized = serializeContent(rootElement);
+
 			if (reserialized !== serialized) {
 				lastEmittedValue = reserialized;
 				value = reserialized;
@@ -361,6 +384,7 @@
 		if (!rootElement) return;
 
 		const range = safeRange();
+
 		if (!range) return;
 
 		if (!range.collapsed) {
@@ -374,16 +398,22 @@
 		// a break at the very end of a code block exits the block (the
 		// new line belongs below it, not inside)
 		let exitBlock: HTMLElement | null = null;
+
 		if (container.nodeType === Node.TEXT_NODE) {
 			let node: Node | null = container.parentNode;
+
 			while (node && node !== rootElement) {
 				if (node instanceof HTMLElement && node.dataset.codeToken === 'block') {
 					const tail = document.createRange();
+
 					tail.setStart(container, offset);
 					tail.setEnd(node, node.childNodes.length);
+
 					if (tail.toString().length === 0) exitBlock = node;
+
 					break;
 				}
+
 				node = node.parentNode;
 			}
 		}
@@ -392,6 +422,7 @@
 			exitBlock.after(nl);
 		} else if (container.nodeType === Node.TEXT_NODE) {
 			const text = container as Text;
+
 			if (offset === 0) {
 				text.before(nl);
 			} else if (offset === text.length) {
@@ -405,6 +436,7 @@
 
 		const selection = window.getSelection();
 		const after = document.createRange();
+
 		after.setStartAfter(nl);
 		after.collapse(true);
 		selection?.removeAllRanges();
@@ -428,9 +460,11 @@
 		if (rootElement.firstChild?.nodeName === 'BR') return false;
 
 		const first = rootElement.firstChild;
+
 		if (!(first instanceof HTMLElement) || first.dataset.codeToken !== 'block') return false;
 
 		const range = safeRange();
+
 		if (!range || !range.collapsed) return false;
 
 		// the caret must sit inside the block: on its very first
@@ -439,16 +473,19 @@
 		if (!first.contains(range.startContainer)) return false;
 
 		const caret = rangeToTextOffset(rootElement, range);
+
 		if (key === 'ArrowLeft') {
 			if (caret !== 0) return false;
 		} else {
 			const firstLineEnd = (first.textContent ?? '').indexOf('\n');
+
 			if (firstLineEnd !== -1 && caret > firstLineEnd) return false;
 		}
 
 		// eslint-disable-next-line svelte/no-dom-manipulating -- the token layer is owned imperatively; Svelte renders only the contenteditable host, never its children
 		rootElement.prepend(document.createElement('br'));
 		restoreCaret(0, extend);
+
 		return true;
 	}
 
@@ -464,14 +501,17 @@
 		if (!rootElement) return;
 
 		const first = rootElement.firstChild;
+
 		if (first?.nodeName !== 'BR') return;
 
 		const second = first.nextSibling;
+
 		if (!(second instanceof HTMLElement) || second.dataset.codeToken !== 'block') return;
 
 		const range = safeRange();
 		const onHatch =
 			range !== null && range.startContainer === rootElement && range.startOffset === 0;
+
 		if (!onHatch) {
 			first.remove();
 		}
@@ -491,6 +531,7 @@
 	 */
 	function handleKeydown(event: KeyboardEvent) {
 		const mod = event.ctrlKey || event.metaKey;
+
 		if (mod && !event.altKey && !isComposing && rootElement) {
 			const key = event.key.toLowerCase();
 			const isUndo = key === 'z' && !event.shiftKey;
@@ -499,11 +540,13 @@
 			if (isUndo || isRedo) {
 				event.preventDefault();
 				const current = {
-					value: lastEmittedValue,
-					caret: rangeToTextOffset(rootElement, safeRange())
+					caret: rangeToTextOffset(rootElement, safeRange()),
+					value: lastEmittedValue
 				};
 				const entry = isUndo ? history.undo(current) : history.redo(current);
+
 				if (entry) applyHistoryEntry(entry);
+
 				return;
 			}
 		}
@@ -524,6 +567,7 @@
 			// stuck on the old line (see insertLineBreak).
 			event.preventDefault();
 			insertLineBreak();
+
 			return;
 		}
 
@@ -543,6 +587,7 @@
 			// re-tokenize/re-highlight follows.
 			event.preventDefault();
 			document.execCommand('insertLineBreak');
+
 			return;
 		}
 
@@ -555,6 +600,7 @@
 		) {
 			if (moveCaretBeforeLeadingCodeBlock(event.key, event.shiftKey)) {
 				event.preventDefault();
+
 				return;
 			}
 		}
@@ -574,6 +620,7 @@
 				if (target !== null) {
 					event.preventDefault();
 					restoreCaret(target, event.shiftKey);
+
 					return;
 				}
 			}
@@ -586,6 +633,7 @@
 	// change as our own and does not re-render.
 	function applyHistoryEntry(entry: SourceHistoryEntry) {
 		if (!rootElement) return;
+
 		renderTokens(tokenizeContent(entry.value));
 		lastEmittedValue = entry.value;
 		value = entry.value;
@@ -602,6 +650,7 @@
 	 */
 	function handlePasteEvent(event: ClipboardEvent) {
 		const pasted = event.clipboardData?.getData('text/plain');
+
 		if (pasted && pasted.length > 0) {
 			event.preventDefault();
 
@@ -609,6 +658,7 @@
 			// element-boundary carets (e.g. right before a badge) Chromium's
 			// insertText can drop the preceding text node's trailing whitespace.
 			const range = safeRange();
+
 			if (rootElement && range && range.collapsed) {
 				restoreCaret(rangeToTextOffset(rootElement, range));
 			}
@@ -621,6 +671,7 @@
 	// consumes the event (files, quoted prompts, long text).
 	function handlePaste(event: ClipboardEvent) {
 		onPaste?.(event);
+
 		if (!event.defaultPrevented) {
 			handlePasteEvent(event);
 		}
@@ -634,20 +685,23 @@
 		if (!rootElement) return null;
 
 		const range = safeRange();
+
 		if (!range || range.collapsed) return null;
 
 		const startRange = range.cloneRange();
+
 		startRange.collapse(true);
 
 		const source = serializeContent(rootElement);
 		const start = rangeToTextOffset(rootElement, startRange);
 		const end = rangeToTextOffset(rootElement, range);
 
-		return { text: source.slice(start, end), range };
+		return { range, text: source.slice(start, end) };
 	}
 
 	function handleCopy(event: ClipboardEvent) {
 		const slice = selectionSourceSlice();
+
 		if (!slice) return;
 
 		event.clipboardData?.setData('text/plain', slice.text);
@@ -656,6 +710,7 @@
 
 	function handleCut(event: ClipboardEvent) {
 		const slice = selectionSourceSlice();
+
 		if (!slice) return;
 
 		event.clipboardData?.setData('text/plain', slice.text);
@@ -675,6 +730,7 @@
 		resizeHeight();
 		syncEmptyState();
 		document.addEventListener('selectionchange', handleSelectionChange);
+
 		if (!isMobile.current) {
 			rootElement?.focus({ preventScroll: true });
 		}
@@ -689,6 +745,7 @@
 	// browser already owns the right shape.
 	$effect(() => {
 		const incoming = value ?? '';
+
 		if (incoming === lastEmittedValue) return;
 
 		recordHistory(true); // external edit (mention insert, clear, ...): own undo step
@@ -702,6 +759,7 @@
 
 	export function getCaretOffset(): number {
 		if (!rootElement) return 0;
+
 		return rangeToTextOffset(rootElement, safeRange());
 	}
 
@@ -710,11 +768,13 @@
 		if (rootElement && rootElement !== document.activeElement) {
 			rootElement.focus({ preventScroll: true });
 		}
+
 		restoreCaret(offset);
 	}
 
 	export function focus() {
 		if (isMobile.current) return;
+
 		rootElement?.focus({ preventScroll: true });
 	}
 

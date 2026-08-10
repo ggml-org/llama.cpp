@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { ModelsSelectorOption } from '$lib/components/app';
 	import type { GroupedModelOptions, ModelItem } from './utils';
+	import { ModelsSelectorOption } from '$lib/components/app';
+	import { modelsStore } from '$lib/stores/models.svelte';
 
 	interface Props {
 		groups: GroupedModelOptions;
@@ -15,14 +15,14 @@
 	}
 
 	let {
-		groups,
-		currentModel,
 		activeId,
-		sectionHeaderClass = 'my-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
-		orgHeaderClass = 'px-2 py-2 text-[11px] font-semibold text-muted-foreground/50 select-none [&:not(:first-child)]:mt-1',
-		onSelect,
+		currentModel,
+		groups,
 		onInfoClick,
-		renderOption
+		onSelect,
+		orgHeaderClass = 'px-2 py-2 text-[11px] font-semibold text-muted-foreground/50 select-none [&:not(:first-child)]:mt-1',
+		renderOption,
+		sectionHeaderClass = 'my-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none'
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
 </script>

@@ -1,5 +1,4 @@
 import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
-
 import { SvelteSet } from 'svelte/reactivity';
 
 class PermissionsStore {
@@ -8,6 +7,7 @@ class PermissionsStore {
 	constructor() {
 		try {
 			const stored = localStorage.getItem(ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY);
+
 			if (stored) {
 				for (const name of JSON.parse(stored) as string[]) {
 					if (typeof name === 'string') this._tools.add(name);

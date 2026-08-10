@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { parseWriteFileMeta } from './parsers/write-file';
+	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
-	import { abbreviateHome, type AgenticSection } from '$lib/utils';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { parseWriteFileMeta } from './parsers/write-file';
-	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { abbreviateHome, type AgenticSection } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -14,7 +14,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const writeFileMeta = $derived(parseWriteFileMeta(section));
 	const home = $derived(toolsStore.serverHome);

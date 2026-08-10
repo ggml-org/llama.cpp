@@ -3,16 +3,18 @@
 // serialization must fold those back into `\n` so the emitted value never
 // diverges from what is on screen.
 
-import { describe, it, expect } from 'vitest';
-import { render } from 'vitest-browser-svelte';
-import { tick } from 'svelte';
 import ChatFormContenteditableHarness from './components/ChatFormContenteditableHarness.svelte';
+import { tick } from 'svelte';
+import { describe, expect, it } from 'vitest';
+import { render } from 'vitest-browser-svelte';
 
 const SOURCE = 'see [docs](file:///a/b) here';
 
 function editableIn(container: HTMLElement): HTMLElement {
 	const el = container.querySelector('[role="textbox"]');
+
 	if (!(el instanceof HTMLElement)) throw new Error('contenteditable not rendered');
+
 	return el;
 }
 
@@ -22,10 +24,13 @@ function fireInput(root: HTMLElement) {
 
 function setCaret(node: Node, offset: number) {
 	const range = document.createRange();
+
 	range.setStart(node, offset);
 	range.setEnd(node, offset);
 	const selection = window.getSelection();
+
 	if (!selection) throw new Error('no selection');
+
 	selection.removeAllRanges();
 	selection.addRange(range);
 }
@@ -33,10 +38,12 @@ function setCaret(node: Node, offset: number) {
 describe('ChatFormContenteditable browser newline shapes', () => {
 	it('serializes a Chromium Enter <div> wrapper as a newline', async () => {
 		const screen = render(ChatFormContenteditableHarness, { value: SOURCE });
+
 		await tick();
 
 		const root = editableIn(screen.container);
 		const div = document.createElement('div');
+
 		div.textContent = 'second line';
 		root.appendChild(div);
 		fireInput(root);
@@ -47,12 +54,15 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 
 	it('serializes a Firefox full <div> wrap as lines, badge included', async () => {
 		const screen = render(ChatFormContenteditableHarness, { value: SOURCE });
+
 		await tick();
 
 		const root = editableIn(screen.container);
 		const first = document.createElement('div');
+
 		while (root.firstChild) first.appendChild(root.firstChild);
 		const second = document.createElement('div');
+
 		second.textContent = 'second line';
 		root.appendChild(first);
 		root.appendChild(second);
@@ -64,9 +74,11 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 
 	it('serializes a <br> as a newline', async () => {
 		const screen = render(ChatFormContenteditableHarness, { value: 'here' });
+
 		await tick();
 
 		const root = editableIn(screen.container);
+
 		root.appendChild(document.createElement('br'));
 		root.appendChild(document.createTextNode('second line'));
 		fireInput(root);
@@ -77,9 +89,11 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 
 	it('ignores a trailing <br> (browser caret placeholder)', async () => {
 		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+
 		await tick();
 
 		const root = editableIn(screen.container);
+
 		root.appendChild(document.createElement('br'));
 		fireInput(root);
 		await tick();
@@ -89,11 +103,14 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 
 	it('serializes one newline per empty-line <div><br></div>', async () => {
 		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+
 		await tick();
 
 		const root = editableIn(screen.container);
+
 		for (let i = 0; i < 2; i++) {
 			const div = document.createElement('div');
+
 			div.appendChild(document.createElement('br'));
 			root.appendChild(div);
 		}
@@ -105,10 +122,12 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 
 	it('treats a <div><br></div>-only buffer as empty for the placeholder', async () => {
 		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+
 		await tick();
 
 		const root = editableIn(screen.container);
 		const div = document.createElement('div');
+
 		div.appendChild(document.createElement('br'));
 		root.replaceChildren(div);
 		fireInput(root);
@@ -120,12 +139,14 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 
 	it('maps the caret across block boundaries in both directions', async () => {
 		const screen = render(ChatFormContenteditableHarness, { value: 'abc\ndef' });
+
 		await tick();
 
 		// Rebuild into the Chromium block shape; the source is unchanged,
 		// so no re-render fires.
 		const root = editableIn(screen.container);
 		const div = document.createElement('div');
+
 		div.textContent = 'def';
 		root.replaceChildren(document.createTextNode('abc'), div);
 		fireInput(root);
@@ -133,6 +154,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 		expect(screen.component.getValue()).toBe('abc\ndef');
 
 		const divText = div.firstChild;
+
 		if (!divText) throw new Error('div text missing');
 
 		setCaret(divText, 2);
@@ -140,6 +162,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 
 		screen.component.setCaretOffset(6);
 		const selection = window.getSelection();
+
 		expect(selection?.anchorNode).toBe(divText);
 		expect(selection?.anchorOffset).toBe(2);
 

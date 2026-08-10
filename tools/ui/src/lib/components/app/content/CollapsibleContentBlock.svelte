@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { cn } from '$lib/components/ui/utils';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -21,17 +21,17 @@
 	}
 
 	let {
-		open = $bindable(false),
+		children,
 		class: className = '',
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
-		title = '',
-		titleSnippet,
-		subtitle,
-		shimmerTitle = false,
 		onToggle,
-		children
+		open = $bindable(false),
+		shimmerTitle = false,
+		subtitle,
+		title = '',
+		titleSnippet
 	}: Props = $props();
 
 	function hideBrokenIcon(event: Event) {

@@ -8,7 +8,6 @@
 
 // the standard DOMException name for a cancelled operation
 const ABORT_ERROR_NAME = 'AbortError';
-
 // browser specific TypeError messages emitted when a fetch reader is cut by page unload,
 // navigation, or a transient network drop. functionally aborts, not actionable errors
 const ABORT_LIKE_MESSAGE_PATTERNS = [
@@ -62,16 +61,20 @@ export function isAbortError(error: unknown): boolean {
 	if (error instanceof DOMException && error.name === ABORT_ERROR_NAME) {
 		return true;
 	}
+
 	if (error instanceof Error) {
 		if (error.name === ABORT_ERROR_NAME) {
 			return true;
 		}
+
 		// these patterns are functionally aborts, keep them out of the red console
 		if (error instanceof TypeError) {
 			const msg = error.message ?? '';
+
 			if (ABORT_LIKE_MESSAGE_PATTERNS.some((re) => re.test(msg))) return true;
 		}
 	}
+
 	return false;
 }
 
@@ -101,6 +104,7 @@ export function createLinkedController(...signals: (AbortSignal | undefined)[]):
 		// If already aborted, abort immediately
 		if (signal.aborted) {
 			controller.abort(signal.reason);
+
 			return controller;
 		}
 

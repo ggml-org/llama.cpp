@@ -6,33 +6,33 @@ import type { RecommendedMCPServer } from '$lib/types';
 // after the user clicks Add.
 export const RECOMMENDED_MCP_SERVERS: RecommendedMCPServer[] = [
 	{
+		description: 'Search the web and fetch full page content as clean markdown.',
+		iconUrl: '/recommended-mcp/exa.ico',
 		id: 'exa',
 		name: 'Exa',
-		description: 'Search the web and fetch full page content as clean markdown.',
-		url: 'https://mcp.exa.ai/mcp',
-		iconUrl: '/recommended-mcp/exa.ico'
+		url: 'https://mcp.exa.ai/mcp'
 	},
 	{
+		description: 'Search and browse AI models, datasets, spaces, and docs on the Hugging Face Hub.',
+		iconUrl: '/recommended-mcp/huggingface.ico',
 		id: 'huggingface',
 		name: 'Hugging Face',
-		description: 'Search and browse AI models, datasets, spaces, and docs on the Hugging Face Hub.',
-		url: 'https://huggingface.co/mcp',
-		iconUrl: '/recommended-mcp/huggingface.ico'
+		url: 'https://huggingface.co/mcp'
 	},
 	{
+		description: 'Search repositories, issues, pull requests and interact with code on GitHub.',
+		iconUrlDark: '/recommended-mcp/github-dark.png',
+		iconUrlLight: '/recommended-mcp/github-light.png',
 		id: 'github',
 		name: 'GitHub',
-		description: 'Search repositories, issues, pull requests and interact with code on GitHub.',
-		url: 'https://api.githubcopilot.com/mcp',
-		iconUrlLight: '/recommended-mcp/github-light.png',
-		iconUrlDark: '/recommended-mcp/github-dark.png',
-		needsAuthorization: true
+		needsAuthorization: true,
+		url: 'https://api.githubcopilot.com/mcp'
 	},
 	{
+		description: 'Browse up-to-date documentation and code examples for libraries and frameworks.',
+		iconUrl: '/recommended-mcp/context7.png',
 		id: 'context7',
 		name: 'Context7',
-		description: 'Browse up-to-date documentation and code examples for libraries and frameworks.',
-		url: 'https://mcp.context7.com/mcp',
-		iconUrl: '/recommended-mcp/context7.png'
+		url: 'https://mcp.context7.com/mcp'
 	}
 ];

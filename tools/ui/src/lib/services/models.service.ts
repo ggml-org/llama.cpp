@@ -1,19 +1,19 @@
-import { ServerModelStatus } from '$lib/enums';
-import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
-import type { ParsedModelId } from '$lib/types/models';
 import {
-	MODEL_QUANTIZATION_SEGMENT_RE,
-	MODEL_CUSTOM_QUANTIZATION_PREFIX_RE,
-	MODEL_PARAMS_RE,
+	API_MODELS,
 	MODEL_ACTIVATED_PARAMS_RE,
-	MODEL_IGNORED_SEGMENTS,
-	MODEL_WEIGHT_EXTENSION_RE,
+	MODEL_CUSTOM_QUANTIZATION_PREFIX_RE,
 	MODEL_ID_NOT_FOUND,
 	MODEL_ID_ORG_SEPARATOR,
-	MODEL_ID_SEGMENT_SEPARATOR,
 	MODEL_ID_QUANTIZATION_SEPARATOR,
-	API_MODELS
+	MODEL_ID_SEGMENT_SEPARATOR,
+	MODEL_IGNORED_SEGMENTS,
+	MODEL_PARAMS_RE,
+	MODEL_QUANTIZATION_SEGMENT_RE,
+	MODEL_WEIGHT_EXTENSION_RE
 } from '$lib/constants';
+import { ServerModelStatus } from '$lib/enums';
+import type { ParsedModelId } from '$lib/types/models';
+import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
 
 export class ModelsService {
 	/**
@@ -64,6 +64,7 @@ export class ModelsService {
 	 */
 	static async load(modelId: string, extraArgs?: string[]): Promise<ApiRouterModelsLoadResponse> {
 		const payload: { model: string; extra_args?: string[] } = { model: modelId };
+
 		if (extraArgs && extraArgs.length > 0) {
 			payload.extra_args = extraArgs;
 		}
@@ -131,21 +132,20 @@ export class ModelsService {
 	 */
 	static parseModelId(modelId: string): ParsedModelId {
 		const result: ParsedModelId = {
-			raw: modelId,
-			orgName: null,
-			modelName: null,
-			params: null,
 			activatedParams: null,
+			modelName: null,
+			orgName: null,
+			params: null,
 			quantization: null,
+			raw: modelId,
 			tags: []
 		};
-
 		// strip directory path and weight extension so a bare `-m /path/file.gguf`
 		// parses like a clean repo id; the HF `org/model` form is preserved
 		const source = normalizeModelName(modelId).replace(MODEL_WEIGHT_EXTENSION_RE, '');
-
 		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
 		const colonIdx = source.indexOf(MODEL_ID_QUANTIZATION_SEPARATOR);
+
 		let modelPath: string;
 
 		if (colonIdx !== MODEL_ID_NOT_FOUND) {
@@ -157,6 +157,7 @@ export class ModelsService {
 
 		// 2. Extract org name (e.g. `org/model` -> org = "org")
 		const slashIdx = modelPath.indexOf(MODEL_ID_ORG_SEPARATOR);
+
 		let modelStr: string;
 
 		if (slashIdx !== MODEL_ID_NOT_FOUND) {
@@ -222,6 +223,7 @@ export class ModelsService {
 		if (paramsIdx !== MODEL_ID_NOT_FOUND) {
 			result.tags = segments.slice(paramsIdx + 1).filter((_, relIdx) => {
 				const absIdx = paramsIdx + 1 + relIdx;
+
 				if (absIdx === activatedParamsIdx) return false;
 
 				return !MODEL_IGNORED_SEGMENTS.has(segments[absIdx].toUpperCase());

@@ -3,14 +3,14 @@
 // `start_line`+`line_count`). Args are parsed partially so a header
 // can render incrementally as the file path streams in.
 
-import { BuiltInTool } from '$lib/enums';
+import { parseToolArgs } from './_shared';
 import {
 	DEFAULT_LANGUAGE,
 	FILE_PATH_SEPARATOR_REGEX,
 	TEXT_LANGUAGE_PREFIX_REGEX
 } from '$lib/constants';
-import { getFileTypeByExtension, type AgenticSection } from '$lib/utils';
-import { parseToolArgs } from './_shared';
+import { BuiltInTool } from '$lib/enums';
+import { type AgenticSection, getFileTypeByExtension } from '$lib/utils';
 
 export type ReadFileMeta = {
 	fileName: string;
@@ -20,13 +20,14 @@ export type ReadFileMeta = {
 
 export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null {
 	const args = parseToolArgs(BuiltInTool.READ_FILE, section, { partial: true });
+
 	if (!args) return null;
 
 	const rawPath = args.path ?? args.file_path ?? args.filePath;
+
 	if (typeof rawPath !== 'string' || !rawPath) return null;
 
 	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
-
 	// Models emit range arguments under several aliases. Accept all to
 	// stay forgiving across prompt variations.
 	const startRaw = args.start_line ?? args.line_start ?? args.startLine ?? args.from_line;
@@ -34,19 +35,22 @@ export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null 
 	const countRaw = args.line_count ?? args.count ?? args.num_lines;
 
 	let lineRange: { start: number; end: number } | null = null;
+
 	const sNum = Number(startRaw);
 	const eNum = Number(endRaw);
+
 	if (startRaw != null && endRaw != null && Number.isFinite(sNum) && Number.isFinite(eNum)) {
-		lineRange = { start: sNum, end: eNum };
+		lineRange = { end: eNum, start: sNum };
 	} else if (startRaw != null && countRaw != null) {
 		const cNum = Number(countRaw);
+
 		if (Number.isFinite(sNum) && Number.isFinite(cNum)) {
-			lineRange = { start: sNum, end: sNum + cNum - 1 };
+			lineRange = { end: sNum + cNum - 1, start: sNum };
 		}
 	}
 
 	const fileType = getFileTypeByExtension(fileName);
 	const language = fileType ? fileType.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') : DEFAULT_LANGUAGE;
 
-	return { fileName, lineRange, language };
+	return { fileName, language, lineRange };
 }

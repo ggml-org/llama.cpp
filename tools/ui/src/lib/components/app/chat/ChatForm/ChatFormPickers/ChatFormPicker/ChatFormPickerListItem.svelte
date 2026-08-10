@@ -12,13 +12,13 @@
 	}
 
 	let {
+		children,
 		class: className = '',
-		isSelected = false,
-		disabled = false,
-		onclick,
-		onmouseenter,
 		dataIndex,
-		children
+		disabled = false,
+		isSelected = false,
+		onclick,
+		onmouseenter
 	}: Props = $props();
 </script>
 

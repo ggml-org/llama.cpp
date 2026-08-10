@@ -1,3 +1,4 @@
+import { buildSandboxHarness } from './sandbox-harness';
 import {
 	NEWLINE,
 	SANDBOX_EMPTY_OUTPUT,
@@ -7,7 +8,6 @@ import {
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
-import { buildSandboxHarness } from './sandbox-harness';
 import { config } from '$lib/stores/settings.svelte';
 import type { ToolExecutionResult } from '$lib/types';
 
@@ -22,14 +22,17 @@ const harnessCache: Record<string, string> = {};
 async function getHarness(): Promise<string> {
 	const enabled = !!config().symbolicMathEnabled;
 	const key = enabled ? 'nerdamer' : 'plain';
+
 	if (!harnessCache[key]) {
 		if (enabled) {
 			const { default: nerdamerJs } = await import('virtual:nerdamer');
+
 			harnessCache[key] = buildSandboxHarness(nerdamerJs);
 		} else {
 			harnessCache[key] = buildSandboxHarness('');
 		}
 	}
+
 	return harnessCache[key];
 }
 
@@ -53,7 +56,9 @@ function formatReply(reply: SandboxReply): ToolExecutionResult {
 	}
 
 	let content = lines.join(NEWLINE);
+
 	if (!content) content = SANDBOX_EMPTY_OUTPUT;
+
 	if (content.length > SANDBOX_OUTPUT_MAX_CHARS) {
 		content = `${content.slice(0, SANDBOX_OUTPUT_MAX_CHARS)}${NEWLINE}${SANDBOX_TRUNCATION_NOTICE}`;
 	}
@@ -78,12 +83,12 @@ export class SandboxService {
 		}
 
 		const code = typeof params.code === 'string' ? params.code : '';
+
 		if (!code) {
 			return { content: 'Missing required parameter: code', isError: true };
 		}
 
 		const harness = await getHarness();
-
 		const requested = Number(params.timeout_ms);
 		const timeoutMs =
 			Number.isFinite(requested) && requested > 0
@@ -92,6 +97,7 @@ export class SandboxService {
 
 		return new Promise<ToolExecutionResult>((resolve, reject) => {
 			const iframe = document.createElement('iframe');
+
 			iframe.setAttribute('sandbox', 'allow-scripts');
 			iframe.style.display = 'none';
 			iframe.srcdoc = harness;
@@ -105,24 +111,23 @@ export class SandboxService {
 				signal?.removeEventListener('abort', onAbort);
 				iframe.remove();
 			};
-
 			const finish = (result: ToolExecutionResult) => {
 				if (settled) return;
+
 				cleanup();
 				resolve(result);
 			};
-
 			const onAbort = () => {
 				if (settled) return;
+
 				cleanup();
 				reject(new DOMException('Sandbox execution aborted', 'AbortError'));
 			};
-
 			const onMessage = (event: MessageEvent) => {
 				if (event.source !== iframe.contentWindow) return;
+
 				finish(formatReply((event.data ?? {}) as SandboxReply));
 			};
-
 			const timer = setTimeout(
 				() => finish({ content: `Execution timed out after ${timeoutMs} ms`, isError: true }),
 				timeoutMs

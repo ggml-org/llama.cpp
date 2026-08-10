@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Input } from '$lib/components/ui/input';
 	import { Search, X } from '@lucide/svelte';
+	import { Input } from '$lib/components/ui/input';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 
 	interface Props {
 		autofocus?: boolean;
@@ -18,15 +18,15 @@
 
 	let {
 		autofocus,
-		value = $bindable(''),
-		placeholder = 'Search...',
-		onInput,
-		onClose,
-		onKeyDown,
 		class: className,
 		id,
+		isCancelAlwaysVisible = false,
+		onClose,
+		onInput,
+		onKeyDown,
+		placeholder = 'Search...',
 		ref = $bindable(null),
-		isCancelAlwaysVisible = false
+		value = $bindable('')
 	}: Props = $props();
 
 	let showClearButton = $derived(isCancelAlwaysVisible || !!value || !!onClose);

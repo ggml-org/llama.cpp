@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { MCPPromptInfo } from '$lib/types';
 	import ChatFormPromptPickerArgumentInput from './ChatFormPromptPickerArgumentInput.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		prompt: MCPPromptInfo;
@@ -21,20 +21,20 @@
 	}
 
 	let {
-		prompt,
-		promptArgs,
-		suggestions,
-		loadingSuggestions,
 		activeAutocomplete,
 		autocompleteIndex,
-		promptError,
-		onArgInput,
-		onArgKeydown,
+		loadingSuggestions,
 		onArgBlur,
 		onArgFocus,
+		onArgInput,
+		onArgKeydown,
+		onCancel,
 		onSelectSuggestion,
 		onSubmit,
-		onCancel
+		prompt,
+		promptArgs,
+		promptError,
+		suggestions
 	}: Props = $props();
 </script>
 

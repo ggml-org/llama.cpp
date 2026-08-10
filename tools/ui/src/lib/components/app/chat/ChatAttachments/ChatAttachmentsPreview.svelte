@@ -12,12 +12,12 @@
 		getAttachmentDisplayItems,
 		getLanguageFromFilename,
 		isAudioFile,
-		isVideoFile,
 		isImageFile,
 		isMcpPrompt,
 		isMcpResource,
 		isPdfFile,
-		isTextFile
+		isTextFile,
+		isVideoFile
 	} from '$lib/utils';
 
 	interface PreviewItem {
@@ -42,21 +42,21 @@
 	}
 
 	let {
-		uploadedFiles = [],
-		attachments = [],
 		activeModelId,
+		attachments = [],
 		class: className = '',
-		previewFocusIndex = 0
+		previewFocusIndex = 0,
+		uploadedFiles = []
 	}: Props = $props();
 
 	let allItems = $derived(
-		getAttachmentDisplayItems({ uploadedFiles, attachments })
+		getAttachmentDisplayItems({ attachments, uploadedFiles })
 			.filter((item) => !isMcpPrompt(item) && !isMcpResource(item))
 			.map(
 				(item): PreviewItem => ({
 					...item,
-					isImage: isImageFile(item.attachment, item.uploadedFile),
 					isAudio: isAudioFile(item.attachment, item.uploadedFile),
+					isImage: isImageFile(item.attachment, item.uploadedFile),
 					isVideo: isVideoFile(item.attachment, item.uploadedFile)
 				})
 			)
@@ -88,10 +88,11 @@
 
 	$effect(() => {
 		const index = currentIndex;
+
 		setTimeout(() => {
 			const thumbnail = document.querySelector(`[data-thumbnail-index="${index}"]`);
 
-			thumbnail?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+			thumbnail?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
 		}, 0);
 	});
 

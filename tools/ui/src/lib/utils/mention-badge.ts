@@ -1,9 +1,9 @@
 import { abbreviateHome, lastPathSegment } from './path-display';
+import { FILE_URI_PREFIX } from '$lib/constants';
 import {
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS
 } from '$lib/constants/mention-badge';
-import { FILE_URI_PREFIX } from '$lib/constants';
 import { FileMentionEntryType } from '$lib/enums';
 import type { FileMentionEntry } from '$lib/types';
 
@@ -59,8 +59,11 @@ export function getMentionBadgeLabel(
 	home?: string | null
 ): string {
 	if (!showFullPath) return name;
+
 	const decoded = decodeFileLinkPath(path.replace(/\/+$/, ''));
+
 	if (!decoded) return name;
+
 	return abbreviateHome(decoded, home);
 }
 
@@ -75,6 +78,7 @@ export function buildMentionInsertion(
 	token: { start: number; end: number }
 ): { newValue: string; caretOffset: number } | null {
 	if (token.start < 0 || token.end > value.length || token.start > token.end) return null;
+
 	// Strip the entry's directory marker so it is not doubled below.
 	const cleanedPath = entry.path.replace(/\/+$/, '');
 	const pathWithSeparator =
@@ -82,5 +86,6 @@ export function buildMentionInsertion(
 	const basename = lastPathSegment(cleanedPath) || entry.name;
 	const insertion = `[${basename}](${FILE_URI_PREFIX}${encodeFileLinkPath(pathWithSeparator)}) `;
 	const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);
-	return { newValue, caretOffset: token.start + insertion.length };
+
+	return { caretOffset: token.start + insertion.length, newValue };
 }

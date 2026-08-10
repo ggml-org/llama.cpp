@@ -8,28 +8,30 @@ export function useScrollCarousel() {
 
 		const containerRect = scrollContainer.getBoundingClientRect();
 		const elementRect = element.getBoundingClientRect();
-
 		const elementCenter = elementRect.left + elementRect.width / 2;
 		const containerCenter = containerRect.left + containerRect.width / 2;
 		const scrollOffset = elementCenter - containerCenter;
 
-		scrollContainer.scrollBy({ left: scrollOffset, behavior: 'smooth' });
+		scrollContainer.scrollBy({ behavior: 'smooth', left: scrollOffset });
 	}
 
 	function scrollLeft() {
 		if (!scrollContainer) return;
-		scrollContainer.scrollBy({ left: -250, behavior: 'smooth' });
+
+		scrollContainer.scrollBy({ behavior: 'smooth', left: -250 });
 	}
 
 	function scrollRight() {
 		if (!scrollContainer) return;
-		scrollContainer.scrollBy({ left: 250, behavior: 'smooth' });
+
+		scrollContainer.scrollBy({ behavior: 'smooth', left: 250 });
 	}
 
 	function updateScrollButtons() {
 		if (!scrollContainer) return;
 
-		const { scrollLeft: sl, scrollWidth, clientWidth } = scrollContainer;
+		const { clientWidth, scrollLeft: sl, scrollWidth } = scrollContainer;
+
 		canScrollLeft = sl > 0;
 		canScrollRight = sl < scrollWidth - clientWidth - 1;
 	}
@@ -53,9 +55,9 @@ export function useScrollCarousel() {
 		set scrollContainer(el: HTMLDivElement | undefined) {
 			scrollContainer = el;
 		},
-		scrollToCenter,
 		scrollLeft,
 		scrollRight,
+		scrollToCenter,
 		updateScrollButtons
 	};
 }

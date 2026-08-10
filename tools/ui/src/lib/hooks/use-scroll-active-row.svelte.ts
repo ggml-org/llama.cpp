@@ -20,6 +20,7 @@ export function useScrollActiveRow(opts: UseScrollActiveRowOptions) {
 
 	$effect(() => {
 		const trigger = opts.getTrigger();
+
 		if (trigger === undefined) return;
 
 		// Skip the initial run on mount: the list opens with the first row
@@ -27,18 +28,23 @@ export function useScrollActiveRow(opts: UseScrollActiveRowOptions) {
 		// positioned, which would scroll the whole page to the top.
 		if (lastTrigger === null) {
 			lastTrigger = trigger;
+
 			return;
 		}
 
 		if (trigger === lastTrigger) return;
+
 		lastTrigger = trigger;
 		untrack(() => {
 			const container = opts.getContainer();
 			const index = opts.getIndex();
+
 			if (!container || index < 0 || index >= opts.getCount()) return;
+
 			const row = container.querySelector(
 				`[data-${opts.dataIndex}-index="${index}"]`
 			) as HTMLElement | null;
+
 			row?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 		});
 	});

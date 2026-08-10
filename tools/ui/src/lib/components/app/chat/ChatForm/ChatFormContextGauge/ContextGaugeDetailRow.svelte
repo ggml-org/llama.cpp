@@ -5,7 +5,7 @@
 		subtitle?: string;
 	}
 
-	let { label, value, subtitle }: Props = $props();
+	let { label, subtitle, value }: Props = $props();
 </script>
 
 <div class="grid gap-1.5">

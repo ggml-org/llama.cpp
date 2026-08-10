@@ -47,9 +47,9 @@ export const BINARY_CONTENT_LABEL = 'Binary content';
  * Used for generating attachment filenames from MIME types.
  */
 export const IMAGE_MIME_TO_EXTENSION: Record<string, string> = {
+	[MimeTypeImage.GIF]: 'gif',
 	[MimeTypeImage.JPEG]: 'jpg',
 	[MimeTypeImage.JPG]: 'jpg',
 	[MimeTypeImage.PNG]: 'png',
-	[MimeTypeImage.GIF]: 'gif',
 	[MimeTypeImage.WEBP]: 'webp'
 } as const;
