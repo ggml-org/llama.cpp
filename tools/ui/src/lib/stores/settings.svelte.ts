@@ -135,22 +135,6 @@ class SettingsStore {
 				...savedVal
 			};
 
-			// User content and thinking render independently, so unfold the
-			// single `renderContentAsRawText` toggle back onto the user key
-			// and let thinking return to its own default. The toggle carried
-			// both surfaces at once and cannot say which one was chosen.
-			const RAW_TEXT_KEY = 'renderContentAsRawText';
-
-			if (RAW_TEXT_KEY in savedVal) {
-				if (!(SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN in savedVal)) {
-					this.config[SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN] =
-						savedVal[RAW_TEXT_KEY] !== true;
-				}
-
-				delete (this.config as Record<string, unknown>)[RAW_TEXT_KEY];
-				this.saveConfig();
-			}
-
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
 				if (isMobile.current) {

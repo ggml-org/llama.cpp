@@ -629,6 +629,37 @@ const configTypesMigration: Migration = {
 			console.log(`[Migration] Config types: coerced string booleans (changed=${changed})`);
 	}
 };
+const RENDER_KEYS_MIGRATION_ID = 'render-keys-unfold-v1';
+const LEGACY_RENDER_RAW_TEXT_KEY = 'renderContentAsRawText';
+const renderKeysMigration: Migration = {
+	description: 'Unfold the single raw text render toggle onto the per-surface render keys',
+	id: RENDER_KEYS_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!(LEGACY_RENDER_RAW_TEXT_KEY in config)) return;
+
+		// The toggle carried user content and thinking at once and cannot say which surface
+		// was chosen, so it only restores the user key and thinking keeps its own default.
+		if (!(SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN in config)) {
+			config[SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN] =
+				config[LEGACY_RENDER_RAW_TEXT_KEY] !== true;
+		}
+
+		// Dropped rather than preserved: the two render keys and the toggle describe the same
+		// surfaces, so leaving it behind would let a stale value fight the restored one.
+		delete config[LEGACY_RENDER_RAW_TEXT_KEY];
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] Render keys: unfolded the raw text toggle');
+	}
+};
 const MCP_DEFAULT_OVERRIDES_LEGACY_KEY = `${STORAGE_APP_NAME}.mcpDefaultServerOverrides`;
 const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1';
 /**
@@ -722,7 +753,8 @@ const migrations: Migration[] = [
 	customJsonKeyMigration,
 	mcpDefaultEnabledMigration,
 	mcpDefaultOverridesMergeMigration,
-	configTypesMigration
+	configTypesMigration,
+	renderKeysMigration
 ];
 
 export const MigrationService = {

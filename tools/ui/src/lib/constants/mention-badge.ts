@@ -10,6 +10,9 @@ export const MENTION_BADGE_CLASSNAME =
 
 export const MENTION_BADGE_ICON_CLASSNAME = 'h-3 w-3 shrink-0';
 
+/** Regex flag that makes the mention scanner walk every link in a message instead of the first. */
+export const MENTION_LINK_SCAN_FLAGS = 'g';
+
 /**
  * SVG attributes shared by the DOM-built and hast-built badge icons.
  * The tokenizer applies them via `setAttribute`, the rehype plugin
