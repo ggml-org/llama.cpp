@@ -2252,17 +2252,38 @@ struct test_get_rows : public test_case {
     const int be1; // batch size
     const int be2; // batch size
     const bool v; // view (non-contiguous src1)
+    const bool vs0; // view src0 (non-zero view_offs -> misaligned tensor offsets)
 
     std::string vars() override {
+        if (vs0) {
+            return VARS_TO_STR8(type, n, m, r, be1, be2, v, vs0);
+        }
         return VARS_TO_STR7(type, n, m, r, be1, be2, v);
     }
 
-    test_get_rows(ggml_type type = GGML_TYPE_F32, int n = 10, int m = 5, int r = 3, int be1 = 1, int be2 = 1, bool v = false)
-        : type(type), n(n), m(m), r(r), be1(be1), be2(be2), v(v) {}
+    test_get_rows(ggml_type type = GGML_TYPE_F32, int n = 10, int m = 5, int r = 3, int be1 = 1, int be2 = 1, bool v = false, bool vs0 = false)
+        : type(type), n(n), m(m), r(r), be1(be1), be2(be2), v(v), vs0(vs0) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * in = ggml_new_tensor_4d(ctx, type, n, m, be1, be2);
-        ggml_set_name(in, "in");
+        ggml_tensor * in;
+        if (vs0) {
+            // Allocate a larger tensor and view into it with a non-zero row offset
+            // to produce view_offs > 0, which triggers misaligned storage buffer offsets
+            // (mimics KV cache view scenarios in Qwen3-TTS and Qwen3-VL).
+            const int padded_m = m + 3; // extra rows so view_offs is non-trivial
+            ggml_tensor * in_padded = ggml_new_tensor_4d(ctx, type, n, padded_m, be1, be2);
+            ggml_set_name(in_padded, "in_padded");
+            // View starting at row 3 (non-zero offset)
+            // Note: ggml_view_4d takes (ctx, a, ne0, ne1, ne2, ne3, nb1, nb2, nb3, offset)
+            //   nb0 is implicit (= ggml_type_size * ne0 elem), so do not pass nb[0]
+            in = ggml_view_4d(ctx, in_padded, n, m, be1, be2,
+                              in_padded->nb[1], in_padded->nb[2], in_padded->nb[3],
+                              3 * in_padded->nb[1]);
+            ggml_set_name(in, "in_view");
+        } else {
+            in = ggml_new_tensor_4d(ctx, type, n, m, be1, be2);
+            ggml_set_name(in, "in");
+        }
 
         ggml_tensor * rows = ggml_new_tensor_3d(ctx, GGML_TYPE_I32, r, be1, be2);
         ggml_set_name(rows, "rows");
@@ -2285,6 +2306,9 @@ struct test_get_rows : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (vs0 && ggml_is_view_op(t->op) && std::string(ggml_get_name(t)) == "in_view") {
+                continue; // skip view, initialize in_padded instead
+            }
             if (t->type == GGML_TYPE_I32) {
                 if (ggml_is_view_op(t->op)) { continue; }
                 // rows
@@ -8129,6 +8153,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int b : {1, 7}) {
         for (bool v : {false, true}) {
             test_cases.emplace_back(new test_get_rows(GGML_TYPE_I32, 256, 5, 4, b, 1, v));
+        }
+    }
+    // Tests with view_src0=true: non-zero view_offs on src0 triggers misaligned storage
+    // buffer offsets (mimics KV cache view patterns in Qwen3-TTS / Qwen3-VL).
+    // Covers both non-quantized (get_rows.comp path) and quantized (get_rows_quant.comp path) types.
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_I32}) {
+        for (bool v : {false, true}) {
+            test_cases.emplace_back(new test_get_rows(type, 256, 5, 4, 1, 1, v, /*vs0=*/true));
         }
     }
 

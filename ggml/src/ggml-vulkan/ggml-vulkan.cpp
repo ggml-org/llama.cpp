@@ -11829,8 +11829,6 @@ template <> void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk
     const uint32_t b_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
     const uint32_t d_offset = get_misalign_bytes(ctx, dst) / ggml_type_size(dst->type);
 
-    GGML_ASSERT(dst->op != GGML_OP_GET_ROWS || (a_offset == 0 && b_offset == 0 && d_offset == 0));
-
     p.misalign_offsets = (a_offset << 16) | (b_offset << 8) | d_offset;
 
     GGML_UNUSED(src2);
@@ -18091,16 +18089,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_GET_ROWS:
             {
-                // GET_ROWS shader asserts on misaligned tensor offsets (see init_pushconst_tensor_offsets)
-                const auto misaligned = [&](const ggml_tensor * t) -> bool {
-                    if (!t) return false;
-                    const size_t align = device->properties.limits.minStorageBufferOffsetAlignment;
-                    if (align == 0) return false;
-                    return ((vk_tensor_offset(t) + t->view_offs) & (align - 1)) != 0;
-                };
-                if (misaligned(op->src[0]) || misaligned(op->src[1]) || misaligned(op)) {
-                    return false;
-                }
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
