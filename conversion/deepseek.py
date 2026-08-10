@@ -456,6 +456,87 @@ class DeepseekV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("LongcatFlashForCausalLM")
+class LongcatFlashModel(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.LONGCAT_FLASH
+    merge_expert = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 2 attention+dense-ffn sub-blocks per HF layer -> 2 llama.cpp blocks per HF layer,
+        # plus 1 extra block for the MTP head (loaded but unused until it has a graph)
+        self.block_count = self.hparams["num_layers"] * 2 + 1
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        # compat with the DeepseekV2Model hparam names this class reads from
+        self.hparams["num_hidden_layers"]     = self.block_count
+        self.hparams["intermediate_size"]     = self.hparams["ffn_hidden_size"]
+        self.hparams["moe_intermediate_size"] = self.hparams["expert_ffn_hidden_size"]
+        self.hparams["num_experts_per_tok"]   = self.hparams["moe_topk"]
+        # modify_tensors() needs this to split kv_b_proj; set_gguf_parameters() later
+        # overwrites it to 1 for the GGUF MLA metadata.
+        self.hparams["num_key_value_heads"]   = self.hparams["num_attention_heads"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # 1 MTP block
+        self.gguf_writer.add_nextn_predict_layers(1)
+
+        zero_expert_num  = self.hparams["zero_expert_num"]
+        zero_expert_type = self.hparams["zero_expert_type"]
+        assert zero_expert_type == "identity", "cpp implementation only supports the 'identity' zero expert type"
+        self.gguf_writer.add_n_zero_experts(zero_expert_num)
+
+        # fixed MLA lora-rank scale factors, applied at inference time.
+        # Not folded into the weights: the multiplier is large enough to hurt quantization.
+        if self.hparams.get("mla_scale_q_lora"):
+            self.gguf_writer.add_q_lora_scale((self.hparams["hidden_size"] / self.hparams["q_lora_rank"]) ** 0.5)
+        if self.hparams.get("mla_scale_kv_lora"):
+            self.gguf_writer.add_kv_lora_scale((self.hparams["hidden_size"] / self.hparams["kv_lora_rank"]) ** 0.5)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # the base class matches the router by bid, which block renumbering breaks
+        if new_name.endswith("ffn_gate_inp.weight"):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("model.mtp."):
+            nextn_bid = self.block_count - 1
+            rest = name.removeprefix("model.mtp.")
+            if rest.startswith("layers.0."):
+                rest = rest.removeprefix("layers.0.").removeprefix("transformer_layer.")
+                rest = rest.replace(".m.weight", ".weight")  # enorm.m / hnorm.m wrapper
+            elif rest == "norm.weight":
+                rest = "shared_head.norm.weight"
+            new_name = f"model.layers.{nextn_bid}.{rest}"
+            yield from super().modify_tensors(data_torch, new_name, nextn_bid)
+            return
+
+        if bid is not None:
+            # doubled sub-components, e.g. model.layers.{L}.self_attn.{0,1}.q_a_proj.weight
+            match = re.match(r"model\.layers\.\d+\.(mlps|self_attn|input_layernorm|post_attention_layernorm)\.(\d+)\.(.*)", name)
+            if match:
+                sub_idx = int(match.group(2))
+                new_bid = bid * 2 + sub_idx
+                mid = "mlp" if match.group(1) == "mlps" else match.group(1)
+                new_name = f"model.layers.{new_bid}.{mid}.{match.group(3)}"
+                yield from super().modify_tensors(data_torch, new_name, new_bid)
+                return
+
+            # shared MoE (mlp.router.*, mlp.experts.*), no sub-index, attaches to the even block
+            new_bid = bid * 2
+            new_name = name.replace(f"model.layers.{bid}.", f"model.layers.{new_bid}.", 1)
+            for out_name, out_tensor in super().modify_tensors(data_torch, new_name, new_bid):
+                if out_name.endswith("_exps.weight"):
+                    # append a dummy all-zero expert, zero-computation experts route to it
+                    out_tensor = torch.cat([out_tensor, torch.zeros_like(out_tensor[:1])], dim=0)
+                yield out_name, out_tensor
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("DeepseekV32ForCausalLM")
 class DeepseekV32Model(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK32
