@@ -1,3 +1,6 @@
+// TurboPrefill by Trykhlieb
+// Port target: ggml-org/llama.cpp b10335, commit 74ce15741b420b8d6f12e720398458b576c51c2c
+// TurboPrefill_b10335_v2.0.0.0.5
 #pragma once
 
 #include "llama.h"
@@ -344,6 +347,75 @@ private:
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;
+
+    struct llama_turboprefill_state {
+        bool enabled = false;
+        // 0 = regular scheduler path.
+        // Positive values defer ubatches; a negative value marks the final Turbo ubatch and triggers replay.
+        int stage = 0;
+        uint32_t ubatch_index = 0;
+        uint32_t n_turbo_ubatches = 0;
+        uint32_t turbo_start_ubatch = 0;
+
+        void begin_batch(bool is_enabled, uint32_t n_tokens, uint32_t n_ubatch, uint32_t n_rs_seq) {
+            enabled = is_enabled;
+            stage = 0;
+            ubatch_index = 0;
+            turbo_start_ubatch = 0;
+            n_turbo_ubatches = enabled ? n_tokens / n_ubatch : 0;
+
+            if (enabled && n_rs_seq > 0) {
+                n_turbo_ubatches = (n_tokens - n_rs_seq - 1) / n_ubatch;
+            }
+        }
+
+        int stage_for_ubatch(bool first_ubatch_requires_recurrent_init) {
+            stage = 0;
+
+            if (!enabled) {
+                return stage;
+            }
+
+            if (ubatch_index == 0 && first_ubatch_requires_recurrent_init && n_turbo_ubatches > 0) {
+                turbo_start_ubatch = 1;
+            }
+
+            if (ubatch_index < turbo_start_ubatch) {
+                return stage;
+            }
+
+            const uint32_t turbo_index = ubatch_index - turbo_start_ubatch;
+            const uint32_t turbo_count = n_turbo_ubatches - turbo_start_ubatch;
+
+            if (turbo_index < turbo_count) {
+                if (turbo_index + 1 == turbo_count) {
+                    stage = -((int) turbo_index + 1);
+                    if (stage == -1) {
+                        // A single Turbo ubatch goes through the standard path.
+                        stage = 0;
+                    }
+                } else {
+                    stage = turbo_index + 1;
+                }
+            }
+
+            return stage;
+        }
+
+        void finish_ubatch() {
+            ubatch_index++;
+        }
+
+        void finish_batch() {
+            enabled = false;
+            stage = 0;
+            ubatch_index = 0;
+            n_turbo_ubatches = 0;
+            turbo_start_ubatch = 0;
+        }
+    };
+
+    llama_turboprefill_state turboprefill;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;

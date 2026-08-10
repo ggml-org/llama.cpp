@@ -1,3 +1,7 @@
+// TurboPrefill by Trykhlieb
+// Port target: ggml-org/llama.cpp b10335, commit 74ce15741b420b8d6f12e720398458b576c51c2c
+// TurboPrefill_b10335_v2.0.0.0.5
+
 #include "server-context.h"
 #include "server-chat.h"
 #include "server-common.h"
@@ -18,11 +22,17 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cinttypes>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
+#include <functional>
+#include <iomanip>
 #include <memory>
 #include <filesystem>
+#include <sstream>
 #include <utility>
 #include <fstream>
 
@@ -820,7 +830,108 @@ struct server_slot {
     }
 };
 
+static uint64_t fnv1a64_bytes(const uint8_t * data, size_t size) {
+    uint64_t hash = 14695981039346656037ull;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= data[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
 
+static std::string format_hex_u64(uint64_t value) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::setfill('0') << std::setw(16) << value;
+    return out.str();
+}
+
+static uint64_t hash_prompt_tokens(const llama_tokens & tokens) {
+    return fnv1a64_bytes(reinterpret_cast<const uint8_t *>(tokens.data()), tokens.size() * sizeof(llama_token));
+}
+
+static std::string format_top_logits(const llama_vocab * vocab, const float * logits, int32_t n_vocab) {
+    static constexpr size_t n_top_max = 16;
+
+    if (vocab == nullptr || logits == nullptr || n_vocab <= 0) {
+        return "[]";
+    }
+
+    struct top_logit_entry {
+        llama_token token_id;
+        float logit;
+    };
+
+    const auto better_logit = [](const top_logit_entry & a, const top_logit_entry & b) {
+        return a.logit != b.logit ? a.logit > b.logit : a.token_id < b.token_id;
+    };
+
+    std::array<top_logit_entry, n_top_max> top_logits{};
+    const size_t n_top = std::min(n_top_max, (size_t) n_vocab);
+
+    for (size_t token_id = 0; token_id < n_top; ++token_id) {
+        top_logits[token_id] = { (llama_token) token_id, logits[token_id] };
+    }
+    std::make_heap(top_logits.begin(), top_logits.begin() + n_top, better_logit);
+
+    for (size_t token_id = n_top; token_id < (size_t) n_vocab; ++token_id) {
+        const top_logit_entry candidate = { (llama_token) token_id, logits[token_id] };
+        if (!better_logit(candidate, top_logits.front())) {
+            continue;
+        }
+
+        std::pop_heap(top_logits.begin(), top_logits.begin() + n_top, better_logit);
+        top_logits[n_top - 1] = candidate;
+        std::push_heap(top_logits.begin(), top_logits.begin() + n_top, better_logit);
+    }
+
+    std::sort(top_logits.begin(), top_logits.begin() + n_top, better_logit);
+
+    std::ostringstream out;
+    out << '[' << std::fixed << std::setprecision(9);
+    for (size_t i = 0; i < n_top; ++i) {
+        if (i > 0) {
+            out << ',';
+        }
+        const top_logit_entry & entry = top_logits[i];
+        const std::string piece = common_token_to_piece(vocab, entry.token_id, true);
+        const std::string piece_json = json(piece).dump(-1, ' ', false, json::error_handler_t::replace);
+        out << "{\"token_id\":" << entry.token_id
+            << ",\"piece\":" << piece_json
+            << ",\"logit\":" << entry.logit << '}';
+    }
+    out << ']';
+
+    return out.str();
+}
+
+static void log_first_token_debug(const server_slot & slot, int tok_idx) {
+    if (slot.ctx_tgt == nullptr || slot.task == nullptr || tok_idx < 0) {
+        return;
+    }
+
+    const llama_tokens prompt_text_tokens = slot.prompt.tokens.get_text_tokens();
+    const size_t prompt_token_count = prompt_text_tokens.size();
+    const uint64_t prompt_hash = hash_prompt_tokens(prompt_text_tokens);
+
+    const llama_model * model = llama_get_model(slot.ctx_tgt);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const int32_t n_vocab = vocab ? llama_vocab_n_tokens(vocab) : 0;
+    const float * logits = llama_get_logits_ith(slot.ctx_tgt, tok_idx);
+
+    if (logits == nullptr || n_vocab <= 0) {
+        return;
+    }
+
+    const uint64_t target_logits_hash = fnv1a64_bytes(
+            reinterpret_cast<const uint8_t *>(logits), (size_t) n_vocab * sizeof(*logits));
+    const std::string top16_logits = format_top_logits(vocab, logits, n_vocab);
+
+    SLT_INF(slot, "first-token-debug: prompt_tokens=%zu prompt_hash=%s target_logits_hash=%s top16_logits=%s\n",
+            prompt_token_count,
+            format_hex_u64(prompt_hash).c_str(),
+            format_hex_u64(target_logits_hash).c_str(),
+            top16_logits.c_str());
+}
 
 //
 // server_metrics
@@ -1071,6 +1182,27 @@ private:
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
         const bool has_spec = has_draft || spec_mtp;
+
+        const char * turboprefill_env = std::getenv("TURBOPREFILL");
+        const bool turboprefill_requested =
+                turboprefill_env != nullptr &&
+                std::strcmp(turboprefill_env, "0") != 0 &&
+                std::strcmp(turboprefill_env, "false") != 0 &&
+                std::strcmp(turboprefill_env, "off") != 0;
+
+        if (spec_mtp && turboprefill_requested) {
+#if defined(_WIN32)
+            const int env_status = _putenv_s("GGML_CUDA_DISABLE_GRAPHS", "1");
+#else
+            const int env_status = setenv("GGML_CUDA_DISABLE_GRAPHS", "1", 1);
+#endif
+            if (env_status != 0) {
+                SRV_ERR("%s", "failed to disable CUDA Graphs for TurboPrefill + MTP\n");
+                return false;
+            }
+
+            SRV_INF("%s", "TurboPrefill + MTP: CUDA Graphs disabled for target and draft\n");
+        }
 
         if (callback_state) {
             std::vector<std::string> stages = {"text_model"};
@@ -3837,6 +3969,7 @@ private:
                 slot.n_decoded_last = 0;
                 slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                 metrics.on_prompt_eval(slot);
+                log_first_token_debug(slot, tok_idx);
             }
 
             slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
