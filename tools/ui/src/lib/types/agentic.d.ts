@@ -1,13 +1,13 @@
-import type { MessageRole } from '$lib/enums';
-import { ToolCallType } from '$lib/enums';
 import type {
 	ApiChatCompletionRequest,
 	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,
 	ApiChatMessageData
 } from './api';
-import type { ChatMessageTimings, ChatMessagePromptProgress } from './chat';
+import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from './database';
+import type { MessageRole } from '$lib/enums';
+import { ToolCallType } from '$lib/enums';
 
 /**
  * Agentic orchestration configuration.

@@ -1,18 +1,18 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
 	import { Download } from '@lucide/svelte';
+	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { DEFAULT_RESOURCE_FILENAME } from '$lib/constants';
+	import { MimeTypeIncludes, MimeTypeText } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { SyntaxHighlightedCode, ActionIconCopyToClipboard } from '$lib/components/app';
+	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 	import {
+		downloadResourceContent,
 		getLanguageFromFilename,
 		isCodeResource,
-		isImageResource,
-		downloadResourceContent
+		isImageResource
 	} from '$lib/utils';
-	import { MimeTypeIncludes, MimeTypeText } from '$lib/enums';
-	import { DEFAULT_RESOURCE_FILENAME } from '$lib/constants';
-	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 
 	interface Props {
 		open: boolean;
@@ -20,14 +20,16 @@
 		extra: DatabaseMessageExtraMcpResource;
 	}
 
-	let { open = $bindable(), onOpenChange, extra }: Props = $props();
+	let { extra, onOpenChange, open = $bindable() }: Props = $props();
 
 	const serverName = $derived(mcpStore.getServerDisplayName(extra.serverName));
 	const favicon = $derived(mcpStore.getServerFavicon(extra.serverName));
 
 	function getLanguage(): string {
 		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return MimeTypeIncludes.JSON;
+
 		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return MimeTypeIncludes.JAVASCRIPT;
+
 		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return MimeTypeIncludes.TYPESCRIPT;
 
 		const name = extra.name || extra.uri || '';

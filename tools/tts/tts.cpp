@@ -179,17 +179,20 @@ int main(int argc, char ** argv) {
     const char * data        = nullptr;
     size_t       data_len    = 0;
     int64_t      n_samples   = 0;
+    const int64_t t_wav_start_us = ggml_time_us();
     if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
         LOG_ERR("get_output failed\n");
         return 1;
     }
+    const double t_wav_s = (ggml_time_us() - t_wav_start_us) / 1e6;
 
     LOG_INF("generated %d frames, %zu bytes of WAV audio (%d Hz)\n", n_frames, data_len, sample_rate);
 
     const double t_prompt_s = (t_gen_start_us - t_prompt_start_us) / 1e6;
-    const double t_total_s  = t_prompt_s + t_gen_s;
+    const double t_total_s  = t_prompt_s + t_gen_s + t_wav_s;
     const double audio_s    = sample_rate > 0 ? (double) n_samples / sample_rate : 0.0;
-    LOG_INF("timings: prompt eval %.2fs + generation %.2fs = total %.2fs\n", t_prompt_s, t_gen_s, t_total_s);
+    LOG_INF("timings: prompt eval %.2fs + generation %.2fs + vocoder %.2fs = total %.2fs\n",
+            t_prompt_s, t_gen_s, t_wav_s, t_total_s);
     LOG_INF("         output audio = %.2fs (audio time = %.2fx process time)\n", audio_s, t_total_s > 0 ? audio_s / t_total_s : 0.0);
     FILE * f = fopen(params.out_file.c_str(), "wb");
     if (!f) {

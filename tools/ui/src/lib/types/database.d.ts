@@ -1,5 +1,5 @@
-import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
 import { AttachmentType, ReasoningEffort } from '$lib/enums';
+import type { ChatMessageTimings, ChatMessageType, ChatRole } from '$lib/types/chat';
 
 export interface McpServerOverride {
 	serverId: string;

@@ -5,9 +5,9 @@
 // file only deals with what's strictly about *calling* the tool, since
 // the error / exit status elide from call-section to result-section.
 
+import { parseToolArgs } from './_shared';
 import { BuiltInTool } from '$lib/enums';
 import type { AgenticSection } from '$lib/utils';
-import { parseToolArgs } from './_shared';
 
 export type ExecShellCommandMeta = {
 	command: string;
@@ -15,9 +15,12 @@ export type ExecShellCommandMeta = {
 
 export function parseExecShellCommandMeta(section: AgenticSection): ExecShellCommandMeta | null {
 	const args = parseToolArgs(BuiltInTool.EXEC_SHELL_COMMAND, section);
+
 	if (!args) return null;
 
 	const commandRaw = args.command ?? args.cmd ?? args.shell_command;
+
 	if (typeof commandRaw !== 'string' || !commandRaw) return null;
+
 	return { command: commandRaw };
 }

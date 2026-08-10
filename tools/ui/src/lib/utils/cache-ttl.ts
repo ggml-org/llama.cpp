@@ -1,4 +1,4 @@
-import { DEFAULT_CACHE_TTL_MS, DEFAULT_CACHE_MAX_ENTRIES } from '$lib/constants';
+import { DEFAULT_CACHE_MAX_ENTRIES, DEFAULT_CACHE_TTL_MS } from '$lib/constants';
 
 /**
  * TTL Cache - Time-To-Live cache implementation for memory optimization
@@ -46,15 +46,18 @@ export class TTLCache<K extends string, V> {
 	 */
 	get(key: K): V | null {
 		const entry = this.cache.get(key);
+
 		if (!entry) return null;
 
 		if (Date.now() > entry.expiresAt) {
 			this.delete(key);
+
 			return null;
 		}
 
 		// Update last accessed time for LRU-like behavior
 		entry.lastAccessed = Date.now();
+
 		return entry.value;
 	}
 
@@ -71,9 +74,9 @@ export class TTLCache<K extends string, V> {
 		const now = Date.now();
 
 		this.cache.set(key, {
-			value,
 			expiresAt: now + ttl,
-			lastAccessed: now
+			lastAccessed: now,
+			value
 		});
 	}
 
@@ -82,10 +85,12 @@ export class TTLCache<K extends string, V> {
 	 */
 	has(key: K): boolean {
 		const entry = this.cache.get(key);
+
 		if (!entry) return false;
 
 		if (Date.now() > entry.expiresAt) {
 			this.delete(key);
+
 			return false;
 		}
 
@@ -97,9 +102,11 @@ export class TTLCache<K extends string, V> {
 	 */
 	delete(key: K): boolean {
 		const entry = this.cache.get(key);
+
 		if (entry && this.onEvict) {
 			this.onEvict(key, entry.value);
 		}
+
 		return this.cache.delete(key);
 	}
 
@@ -112,6 +119,7 @@ export class TTLCache<K extends string, V> {
 				this.onEvict(key, entry.value);
 			}
 		}
+
 		this.cache.clear();
 	}
 
@@ -128,6 +136,7 @@ export class TTLCache<K extends string, V> {
 	 */
 	prune(): number {
 		const now = Date.now();
+
 		let pruned = 0;
 
 		for (const [key, entry] of this.cache) {
@@ -180,16 +189,20 @@ export class TTLCache<K extends string, V> {
 	 */
 	touch(key: K): boolean {
 		const entry = this.cache.get(key);
+
 		if (!entry) return false;
 
 		const now = Date.now();
+
 		if (now > entry.expiresAt) {
 			this.delete(key);
+
 			return false;
 		}
 
 		entry.expiresAt = now + this.ttlMs;
 		entry.lastAccessed = now;
+
 		return true;
 	}
 }
@@ -210,14 +223,17 @@ export class ReactiveTTLMap<K extends string, V> {
 
 	get(key: K): V | null {
 		const entry = this.entries.get(key);
+
 		if (!entry) return null;
 
 		if (Date.now() > entry.expiresAt) {
 			this.entries.delete(key);
+
 			return null;
 		}
 
 		entry.lastAccessed = Date.now();
+
 		return entry.value;
 	}
 
@@ -230,18 +246,20 @@ export class ReactiveTTLMap<K extends string, V> {
 		const now = Date.now();
 
 		this.entries.set(key, {
-			value,
 			expiresAt: now + ttl,
-			lastAccessed: now
+			lastAccessed: now,
+			value
 		});
 	}
 
 	has(key: K): boolean {
 		const entry = this.entries.get(key);
+
 		if (!entry) return false;
 
 		if (Date.now() > entry.expiresAt) {
 			this.entries.delete(key);
+
 			return false;
 		}
 
@@ -262,6 +280,7 @@ export class ReactiveTTLMap<K extends string, V> {
 
 	prune(): number {
 		const now = Date.now();
+
 		let pruned = 0;
 
 		for (const [key, entry] of this.entries) {
