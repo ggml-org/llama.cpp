@@ -5,7 +5,7 @@
 
 static int ggml_backend_cpu_aarch64_score() {
     int score = 1;
-    ggml_aarch64_runtime_features_t af = ggml_get_aarch64_runtime_features();
+    ggml_feats_arch64_runtime_t af = ggml_get_aarch64_runtime_features();
 
 #ifdef GGML_USE_DOTPROD
     if (!af.has_dotprod) { return 0; }
