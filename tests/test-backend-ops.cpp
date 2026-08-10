@@ -2252,7 +2252,7 @@ struct test_get_rows : public test_case {
     const int be1; // batch size
     const int be2; // batch size
     const bool v; // view (non-contiguous src1)
-    const bool vs0; // view src0 (non-zero view_offs -> misaligned tensor offsets)
+    const bool vs0; // view src0
 
     std::string vars() override {
         if (vs0) {
@@ -2267,9 +2267,6 @@ struct test_get_rows : public test_case {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * in;
         if (vs0) {
-            // Allocate a larger tensor and view into it with a non-zero row offset
-            // to produce view_offs > 0, which triggers misaligned storage buffer offsets
-            // (mimics KV cache view scenarios in Qwen3-TTS and Qwen3-VL).
             const int padded_m = m + 3;
             ggml_tensor * in_padded = ggml_new_tensor_4d(ctx, type, n, padded_m, be1, be2);
             ggml_set_name(in_padded, "in_padded");
@@ -2304,7 +2301,7 @@ struct test_get_rows : public test_case {
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (vs0 && ggml_is_view_op(t->op) && std::string(ggml_get_name(t)) == "in_view") {
-                continue; // skip view, initialize in_padded instead
+                continue;
             }
             if (t->type == GGML_TYPE_I32) {
                 if (ggml_is_view_op(t->op)) { continue; }
@@ -8152,8 +8149,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_get_rows(GGML_TYPE_I32, 256, 5, 4, b, 1, v));
         }
     }
-    // view_src0=true cases: exercise non-zero view_offs on src0 to cover misaligned
-    // storage buffer offsets in both get_rows.comp and get_rows_quant.comp paths.
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_I32}) {
         for (bool v : {false, true}) {
             test_cases.emplace_back(new test_get_rows(type, 256, 5, 4, 1, 1, v, /*vs0=*/true));
