@@ -79,7 +79,7 @@ namespace {
     }
 }
 
-void set_model_path(const char * path) {
+LLAMA_API void set_model_path(const char * path) {
     g_path = path ? path : "";
     if (g_fd >= 0) {
         close(g_fd);
@@ -87,7 +87,7 @@ void set_model_path(const char * path) {
     }
     g_fd = open(g_path.c_str(), O_RDONLY);
 }
-void set_slots(int s) {
+LLAMA_API void set_slots(int s) {
     g_slots = s;
 }
 
@@ -97,7 +97,7 @@ int get_slots() {
 
 bool g_no_evict = false;
 
-void set_no_evict(bool no_evict) {
+LLAMA_API void set_no_evict(bool no_evict) {
     g_no_evict = no_evict;
 }
 
