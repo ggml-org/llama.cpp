@@ -195,6 +195,12 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
     llama_build_and_test(test-llama-archs.cpp)
+    llama_test(
+        test-llama-archs
+        NAME test-mtp-ubatch-sync
+        LABEL main
+        ARGS --test-mtp-ubatch-sync
+    )
 
     set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
     file(MAKE_DIRECTORY "${MODEL_DIR}")

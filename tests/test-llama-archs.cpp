@@ -65,7 +65,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-v/--verbose]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-v/--verbose] [--test-mtp-ubatch-sync]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -79,10 +79,10 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const bool mtp = false) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
-    const uint32_t n_ctx = 128;
+    const uint32_t n_ctx = mtp ? 256 : 128;
 
     uint32_t n_vocab = 128;
     uint32_t n_embd  = 256;
@@ -126,6 +126,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+    if (mtp) {
+        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
+    }
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         std::vector<uint32_t> n_ff_per_layer;
@@ -294,6 +297,99 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         throw std::runtime_error("failed to create llama context");
     }
     return std::make_pair(std::move(model), std::move(lctx));
+}
+
+struct mtp_sync_test_data {
+    llama_context * ctx;
+    int32_t         n_tokens;
+    bool            saw_sync;
+};
+
+static bool mtp_sync_test_abort(void * user_data) {
+    auto * data = (mtp_sync_test_data *) user_data;
+    // synchronize() accounts queued tokens before the next ubatch starts.
+    if (llama_perf_context(data->ctx).n_p_eval >= data->n_tokens) {
+        data->saw_sync = true;
+    }
+    return false;
+}
+
+static bool mtp_sync_test_decode(llama_model * model, uint32_t n_ubatch) {
+    const int32_t n_tokens = 4;
+    const int32_t n_embd   = llama_model_n_embd_out(model);
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 8;
+    ctx_params.n_batch = n_tokens;
+    ctx_params.n_ubatch = n_ubatch;
+    ctx_params.n_threads = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+
+    llama_context_ptr ctx(llama_init_from_model(model, ctx_params));
+    if (!ctx) {
+        throw std::runtime_error("failed to create MTP context");
+    }
+
+    std::vector<llama_token> token(n_tokens);
+    std::vector<float> embd((size_t) n_tokens * n_embd, 1.0e-2f);
+    std::vector<llama_pos> pos(n_tokens);
+    std::vector<int32_t> n_seq_id(n_tokens, 1);
+    std::vector<llama_seq_id> seq_id_data(n_tokens, 0);
+    std::vector<llama_seq_id *> seq_id(n_tokens);
+    std::vector<int8_t> logits(n_tokens, 0);
+
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        token[i] = i;
+        pos[i] = i;
+        seq_id[i] = &seq_id_data[i];
+    }
+    logits.back() = 1;
+
+    llama_batch batch = {
+        /*.n_tokens =*/ n_tokens,
+        /*.token    =*/ token.data(),
+        /*.embd     =*/ embd.data(),
+        /*.pos      =*/ pos.data(),
+        /*.n_seq_id =*/ n_seq_id.data(),
+        /*.seq_id   =*/ seq_id.data(),
+        /*.logits   =*/ logits.data(),
+    };
+
+    mtp_sync_test_data data = { ctx.get(), n_tokens, false };
+    llama_perf_context_reset(ctx.get());
+    llama_set_abort_callback(ctx.get(), mtp_sync_test_abort, &data);
+    const int32_t ret = llama_decode(ctx.get(), batch);
+    llama_set_abort_callback(ctx.get(), nullptr, nullptr);
+    if (ret != 0) {
+        throw std::runtime_error("failed to decode MTP batch");
+    }
+
+    return data.saw_sync;
+}
+
+static int test_mtp_ubatch_sync(const size_t seed) {
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_QWEN35, false, true);
+    llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
+    model_params.load_mtp = true;
+
+    size_t tmp = seed;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    if (!model) {
+        throw std::runtime_error("failed to create MTP model");
+    }
+
+    if (!mtp_sync_test_decode(model.get(), 2)) {
+        fprintf(stderr, "MTP ubatches were not synchronized\n");
+        return 1;
+    }
+    if (mtp_sync_test_decode(model.get(), 4)) {
+        fprintf(stderr, "single MTP ubatch was synchronized\n");
+        return 1;
+    }
+
+    return 0;
 }
 
 static std::vector<float> get_logits(
@@ -672,6 +768,7 @@ int main(int argc, char ** argv) {
     size_t seed = rd();
     ggml_log_level log_level = GGML_LOG_LEVEL_ERROR;
     std::string out;
+    bool test_mtp_sync = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
@@ -707,12 +804,18 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         }
+        if (strcmp(argv[i], "--test-mtp-ubatch-sync") == 0) {
+            test_mtp_sync = true;
+        }
     }
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
+        }
+        if (test_mtp_sync) {
+            return test_mtp_ubatch_sync(seed);
         }
         return test_backends(arch, seed, log_level);
     } catch (const std::exception & err) {

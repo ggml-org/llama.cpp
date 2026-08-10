@@ -1846,6 +1846,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
 
+    bool has_next_ubatch  = false;
+    bool mtp_multi_ubatch = false;
+
     do {
         const auto & ubatch = mctx->get_ubatch();
 
@@ -2024,7 +2027,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         n_outputs_prev += n_outputs;
         n_tokens_prev  += ubatch.n_tokens;
-    } while (mctx->next());
+
+        has_next_ubatch = mctx->next();
+        mtp_multi_ubatch |= has_next_ubatch;
+
+        // MTP ubatches update the same KV cache and must complete in order.
+        if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && mtp_multi_ubatch) {
+            synchronize();
+        }
+    } while (has_next_ubatch);
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
