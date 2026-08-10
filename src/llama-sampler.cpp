@@ -1121,6 +1121,8 @@ struct llama_sampler_dist : public llama_sampler_backend {
 
     std::mt19937 rng;
 
+    // TODO: refactor + fix naming
+    //       https://github.com/ggml-org/llama.cpp/pull/25532/changes#r3749906719
     // use a temporary RNG for multi-output sampling so rejected tokens do not advance rng
     bool backend_transactional;
     std::mt19937 rng_backend;
