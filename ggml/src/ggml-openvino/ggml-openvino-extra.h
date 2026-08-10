@@ -15,7 +15,10 @@
 #include <string>
 
 // ExtraQuantType enum - defines requantization target formats
-enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32 };
+// Q4_1_64: u4, group 64, *true* asymmetric (per-group scale and zero point). Note that
+// Q4_0_128/Q4_0_C are symmetric despite taking the unsigned branch of quantize_q4_0 -- that branch
+// pins zp to 8 with d = max/-8, which is algebraically symmetric.
+enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32, Q4_1_64 };
 
 ov::Core & ov_singleton_core();
 

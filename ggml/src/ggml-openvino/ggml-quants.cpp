@@ -707,7 +707,8 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
     const int64_t n_rows = ne0 > 0 ? n_elements / ne0 : 0;
 
     // Requantize to target quantized format
-    bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128);
+    bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128 ||
+                  requant_type == ExtraQuantType::Q4_1_64);
 
     // Dequantizing the whole tensor at once needs a transient F32 array of n_elements floats. For a
     // large embedding or output matrix that dominates peak host memory during compile: a
@@ -737,7 +738,9 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
             return result;
         }
 
-        if (is_u4) {
+        if (requant_type == ExtraQuantType::Q4_1_64) {
+            quantize_q4_1_asym(weights_f32.data(), weights, scales, zp, n_elements, block_size);
+        } else if (is_u4) {
             quantize_q4_0(weights_f32.data(), weights, scales, zp, n_elements, block_size);
         } else if (requant_type == ExtraQuantType::Q8_1_C) {
             quantize_q8_1(weights_f32.data(), weights, scales, zp, n_elements, block_size);
@@ -996,6 +999,71 @@ void quantize_q4_0(const float * x,
                 int8_t si1 = (int8_t) std::max(-8, std::min(7, (int) roundf(x1)));
                 weights[i * qk / 2 + j] = (si0 & 0x0F) | ((si1 & 0x0F) << 4);
             }
+        }
+    }
+}
+
+// Asymmetric u4 quantization with a per-group scale and zero point.
+//
+// Unlike quantize_q4_0's unsigned branch, which pins the zero point to 8 and is therefore
+// symmetric, this keeps a real per-group zero point, so a group whose values are not centred on
+// zero does not waste half its range.
+void quantize_q4_1_asym(const float * x,
+                        ov::Tensor & weights_arr,
+                        ov::Tensor & scales_arr,
+                        ov::Tensor & zp_arr,
+                        int64_t k,
+                        int64_t qk) {
+    assert(k % qk == 0);
+    const int nb = k / qk;
+
+    auto * weights = static_cast<uint8_t *>(weights_arr.data());
+    auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+    auto * zp = static_cast<uint8_t *>(zp_arr.data());
+
+    // u4 zero points are packed two per byte, low nibble first, indexed by group -- the same
+    // convention as the unsigned branch of quantize_q4_0.
+    auto store_zp = [zp](int i, uint8_t v) {
+        if (i % 2 == 0) {
+            zp[i / 2] = v & 0x0F;
+        } else {
+            zp[i / 2] |= (uint8_t) ((v & 0x0F) << 4);
+        }
+    };
+
+    for (int i = 0; i < nb; i++) {
+        float vmin = x[i * qk];
+        float vmax = x[i * qk];
+        for (int j = 1; j < qk; j++) {
+            const float v = x[i * qk + j];
+            vmin = std::min(vmin, v);
+            vmax = std::max(vmax, v);
+        }
+        // Include 0 in the range so an all-positive or all-negative group still represents zero
+        // exactly -- these are weights, so an exact zero matters.
+        vmin = std::min(vmin, 0.0f);
+        vmax = std::max(vmax, 0.0f);
+
+        const float d = (vmax - vmin) / 15.0f;
+        if (d == 0.0f) {
+            scales[i] = ov::float16(1.0f);
+            store_zp(i, 0);
+            memset(weights + i * qk / 2, 0, qk / 2);
+            continue;
+        }
+        const float id = 1.0f / d;
+
+        // The zero point is itself a 4-bit integer, so round it and dequantize as (q - zq) * d.
+        const int zq = std::max(0, std::min(15, (int) lroundf(-vmin * id)));
+        scales[i] = ov::float16(d);
+        store_zp(i, (uint8_t) zq);
+
+        for (int j = 0; j < qk / 2; ++j) {
+            const float x0 = x[i * qk + 2 * j] * id;
+            const float x1 = x[i * qk + 2 * j + 1] * id;
+            const uint8_t q0 = (uint8_t) std::max(0, std::min(15, (int) lroundf(x0) + zq));
+            const uint8_t q1 = (uint8_t) std::max(0, std::min(15, (int) lroundf(x1) + zq));
+            weights[i * qk / 2 + j] = (uint8_t) (q0 | (q1 << 4));
         }
     }
 }

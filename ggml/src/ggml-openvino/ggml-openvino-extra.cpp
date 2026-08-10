@@ -46,6 +46,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_KV_SLICE",
         "GGML_OPENVINO_MANUAL_GQA_ATTN",
         "GGML_OPENVINO_REDUCE_COMPILE_MEM",
+        "GGML_OPENVINO_REQUANT_KQUANT",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -232,9 +233,49 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     if (ggml_openvino_is_npu()) {
         return ExtraQuantType::Q4_0_128;
     }
+    // By default Q6_K/Q5_K are requantized to Q8_0_C, which *inflates* 6- and 5-bit weights to 8
+    // while the rest of the model stays at 4 bits, and Q4_K keeps its native group-32 layout
+    // (an f16 scale plus an f16 zero point per 32 weights = 0.125 B/weight of metadata).
+    // Decode of a large model is bandwidth-bound, so both cost throughput.
+    //
+    // GGML_OPENVINO_REQUANT_KQUANT selects a 4-bit target instead. Names are
+    // q4_<sym|asym><group>[_all]: <sym|asym> says whether a per-group zero point is kept, <group>
+    // is the group size, and the _all suffix sends Q4_K down the same path (without it only
+    // Q6_K/Q5_K are touched):
+    //   q4_sym128      Q6_K/Q5_K -> Q4_0_128 (u4, group 128, symmetric)
+    //   q4_sym128_all  and Q4_K too -- drops Q4_K's per-32 zero point, which costs some accuracy
+    //   q4_asym64      Q6_K/Q5_K -> Q4_1_64 (u4, group 64, asymmetric)
+    //   q4_asym64_all  and Q4_K too -- most of the metadata saving while keeping a real zero point
+    //   native         no requantization at all (keep Q6_K/Q5_K as they are)
+    const char * rq = ggml_openvino_getenv_str("GGML_OPENVINO_REQUANT_KQUANT");
+    auto is_opt = [rq](const char * name) {
+        return rq && strcmp(rq, name) == 0;
+    };
+    const bool sym128 = is_opt("q4_sym128");
+    const bool sym128_all = is_opt("q4_sym128_all");
+    const bool asym64 = is_opt("q4_asym64");
+    const bool asym64_all = is_opt("q4_asym64_all");
+
+    if (tensor->type == GGML_TYPE_Q4_K) {
+        if (sym128_all) {
+            return ExtraQuantType::Q4_0_128;
+        }
+        if (asym64_all) {
+            return ExtraQuantType::Q4_1_64;
+        }
+    }
     switch (tensor->type) {
     case GGML_TYPE_Q6_K:
     case GGML_TYPE_Q5_K:
+        if (sym128 || sym128_all) {
+            return ExtraQuantType::Q4_0_128;
+        }
+        if (asym64 || asym64_all) {
+            return ExtraQuantType::Q4_1_64;
+        }
+        if (is_opt("native")) {
+            return std::nullopt;
+        }
         return ExtraQuantType::Q8_0_C;
     default:
         return std::nullopt;
@@ -282,6 +323,11 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
             layout.is_u4 = true;
             layout.weights_per_block = 128;
             layout.is_symmetric = true;
+            break;
+        case ExtraQuantType::Q4_1_64:
+            layout.is_u4 = true;
+            layout.weights_per_block = 64;
+            layout.is_symmetric = false;
             break;
         case ExtraQuantType::Q4_0_C:
             layout.is_u4 = true;
