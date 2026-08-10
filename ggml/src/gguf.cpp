@@ -611,7 +611,15 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
         GGML_ASSERT(int64_t(ctx->kv.size()) == n_kv);
 
         const int alignment_idx = gguf_find_key(ctx, GGUF_KEY_GENERAL_ALIGNMENT);
-        ctx->alignment = alignment_idx == -1 ? GGUF_DEFAULT_ALIGNMENT : gguf_get_val_u32(ctx, alignment_idx);
+        if (alignment_idx == -1) {
+            ctx->alignment = GGUF_DEFAULT_ALIGNMENT;
+        } else if (ctx->kv[alignment_idx].type == GGUF_TYPE_UINT32) {
+            ctx->alignment = gguf_get_val_u32(ctx, alignment_idx);
+        } else {
+            GGML_LOG_WARN("%s: key '%s' has unexpected type %d, using default alignment %d\n",
+                    __func__, GGUF_KEY_GENERAL_ALIGNMENT, (int)ctx->kv[alignment_idx].type, GGUF_DEFAULT_ALIGNMENT);
+            ctx->alignment = GGUF_DEFAULT_ALIGNMENT;
+        }
 
         if (ctx->alignment == 0 || (ctx->alignment & (ctx->alignment - 1)) != 0) {
             GGML_LOG_ERROR("%s: alignment %zu is not a power of 2\n", __func__, ctx->alignment);
