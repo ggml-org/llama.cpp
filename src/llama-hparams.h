@@ -8,6 +8,7 @@
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
 #define LLAMA_MAX_EXPERTS 512 // Qwen3 Next
+#define LLAMA_MAX_NGRAM   32  // LongCat-Flash-Lite
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
@@ -95,6 +96,17 @@ struct llama_hparams {
     uint32_t n_expert_groups    = 0;
     uint32_t n_group_used       = 0;
     uint32_t n_group_experts    = 0;
+    uint32_t n_zero_experts     = 0; // longcat-flash
+
+    float    f_attn_q_lora_scale  = 0.0f; // longcat-flash
+    float    f_attn_kv_lora_scale = 0.0f; // longcat-flash
+
+    // hash-based n-gram input embeddings (longcat-ngram)
+    // n_ngram_neighbor is the n-gram order, n_ngram_split the number of independent hashes per order
+    uint32_t    n_ngram_neighbor = 0;
+    uint32_t    n_ngram_split    = 0;
+    llama_token ngram_eos_id     = -1; // the n-gram context restarts after this token
+    std::array<uint32_t, LLAMA_MAX_NGRAM> ngram_vocab_sizes = {}; // one hash modulus per table, n_ngram() entries
 
     float    expert_group_scale   = 0.05f;
     float    expert_weights_scale = 0.0f;
@@ -362,6 +374,12 @@ struct llama_hparams {
     uint32_t n_embd_s() const;
 
     uint32_t n_pos_per_embd() const;
+
+    // number of n-gram hash tables, 0 if the model has no n-gram input embeddings
+    uint32_t n_ngram() const;
+
+    // largest n-gram hash table, i.e. the row stride between two tables in the merged lookup table
+    uint32_t n_ngram_stride() const;
 
     // note: currently only support if either all or none of the layers are MLA
     bool is_mla() const;

@@ -105,7 +105,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
-            || arch == LLM_ARCH_MISTRAL4) {
+            || arch == LLM_ARCH_MISTRAL4
+            || arch == LLM_ARCH_LONGCAT_FLASH
+            || arch == LLM_ARCH_LONGCAT_NGRAM) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
@@ -164,12 +166,24 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
-            || arch == LLM_ARCH_MISTRAL4) {
+            || arch == LLM_ARCH_MISTRAL4
+            || arch == LLM_ARCH_LONGCAT_FLASH
+            || arch == LLM_ARCH_LONGCAT_NGRAM) {
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   uint32_t(192));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, uint32_t(128));
+        if (arch == LLM_ARCH_LONGCAT_FLASH || arch == LLM_ARCH_LONGCAT_NGRAM) {
+            ms.add_kv(LLM_KV_N_ZERO_EXPERTS, uint32_t(1));
+        }
+        if (arch == LLM_ARCH_LONGCAT_NGRAM) {
+            // 2 hash tables of 64 columns each, so that they add up to n_embd
+            ms.add_kv(LLM_KV_NGRAM_NEIGHBOR_COUNT, uint32_t(2));
+            ms.add_kv(LLM_KV_NGRAM_SPLIT_COUNT,    uint32_t(2));
+            ms.add_kv(LLM_KV_NGRAM_VOCAB_SIZES,    std::vector<uint32_t>({13, 15}));
+            ms.add_kv(LLM_KV_NGRAM_EOS_TOKEN_ID,   uint32_t(2));
+        }
     } else if (arch == LLM_ARCH_MINIMAX_M3) {
         // partial rotary: n_rot must not exceed the indexer key length (64)
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
@@ -373,6 +387,8 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_LAGUNA:
+        case LLM_ARCH_LONGCAT_FLASH:
+        case LLM_ARCH_LONGCAT_NGRAM:
             return true;
         default:
             return false;

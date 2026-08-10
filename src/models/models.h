@@ -1250,6 +1250,32 @@ struct llama_model_deepseek4 : public llama_model_base {
 };
 
 
+struct llama_model_longcat_flash : public llama_model_base {
+    llama_model_longcat_flash(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // shared MoE where the router also picks identity ("zero-computation") experts,
+        // so build_moe_ffn cannot be reused
+        ggml_tensor * build_moe_ffn_custom(ggml_tensor * cur, const llama_layer & layer, int il) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+// same as longcat-flash, but the input embeddings are enriched with hash-based n-gram features
+// the graph is shared, it branches on hparams.n_ngram()
+struct llama_model_longcat_ngram : public llama_model_longcat_flash {
+    llama_model_longcat_ngram(const struct llama_model_params & params) : llama_model_longcat_flash(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+};
+
+
 struct llama_model_deepseek2ocr : public llama_model_base {
     llama_model_deepseek2ocr(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

@@ -14,6 +14,7 @@
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -120,6 +121,82 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
     res &= (!params.ubatch.embd)  || (h      && h->ne[1]      == params.ubatch.n_tokens);
 
     return res;
+}
+
+llm_graph_input_ngram_embd::llm_graph_input_ngram_embd(
+        const llama_hparams & hparams,
+        int64_t n_vocab,
+        const llama_kv_cache_context * mctx) :
+    n_ngram     (hparams.n_ngram()),
+    n_prev      (hparams.n_ngram_neighbor - 1),
+    stride      (hparams.n_ngram_stride()),
+    eos_id      (hparams.ngram_eos_id),
+    vocab_sizes (hparams.ngram_vocab_sizes.begin(), hparams.ngram_vocab_sizes.begin() + n_ngram),
+    mctx        (mctx) {
+
+    // table t belongs to n-gram order (t/n_ngram_split) + 2, so it hashes that many tokens
+    pow_mods.resize(n_ngram);
+
+    for (uint32_t t = 0; t < n_ngram; ++t) {
+        const uint32_t n_terms = t/hparams.n_ngram_split + 1;
+        const int64_t  m       = vocab_sizes[t];
+
+        int64_t pow_mod = 1;
+        for (uint32_t s = 0; s < n_terms; ++s) {
+            pow_mod = (pow_mod*n_vocab) % m;
+            pow_mods[t].push_back(pow_mod);
+        }
+    }
+}
+
+void llm_graph_input_ngram_embd::set_input(const llama_ubatch * ubatch) {
+    GGML_ASSERT(ubatch->token && "n-gram input embeddings require token ids");
+
+    const uint32_t n_tokens = ubatch->n_tokens;
+
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        // the preceding tokens would be ambiguous, see get_prev_tokens()
+        GGML_ASSERT(ubatch->n_seq_id[i] == 1 && "n-gram input embeddings do not support tokens shared by multiple sequences");
+    }
+
+    mctx->get_prev_tokens(*ubatch, n_prev, prev);
+
+    std::vector<int32_t> data(n_ngram*n_tokens);
+
+    // the shifted token ids of the current token, shifted[s] is the token s positions back
+    std::vector<int64_t> shifted(n_prev + 1, 0);
+
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        // the n-gram context restarts after every EOS, so a shift that reaches across one (or
+        // across the start of the cached context) contributes nothing
+        // ref: _shift_right_ignore_eos() in the reference implementation
+        bool cut = false;
+
+        for (uint32_t s = 1; s <= n_prev; ++s) {
+            const llama_token tok = cut ? -1 : prev[i*n_prev + (n_prev - s)];
+
+            cut = cut || tok < 0 || tok == eos_id;
+
+            shifted[s] = cut ? 0 : tok;
+        }
+
+        for (uint32_t t = 0; t < n_ngram; ++t) {
+            const int64_t m = vocab_sizes[t];
+
+            int64_t hash = ubatch->token[i];
+            for (uint32_t s = 0; s < pow_mods[t].size(); ++s) {
+                hash += shifted[s + 1]*pow_mods[t][s];
+            }
+
+            data[i*n_ngram + t] = t*stride + hash%m;
+        }
+    }
+
+    ggml_backend_tensor_set(ids, data.data(), 0, data.size()*ggml_element_size(ids));
+}
+
+bool llm_graph_input_ngram_embd::can_reuse(const llm_graph_params & params) {
+    return ids && ids->ne[0] == n_ngram*params.ubatch.n_tokens;
 }
 
 void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
@@ -2374,6 +2451,32 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     cur = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens);
     ggml_set_input(cur);
     ggml_set_name(cur, "attn_scale");
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_ngram_embd(ggml_tensor * ngram_embd, ggml_tensor * ngram_proj, int64_t n_vocab) const {
+    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+
+    const int64_t n_ngram      = hparams.n_ngram();
+    const int64_t n_embd_ngram = ngram_embd->ne[0];
+
+    auto inp = std::make_unique<llm_graph_input_ngram_embd>(hparams, n_vocab, mctx_cur);
+
+    inp->ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ngram*n_tokens);
+    ggml_set_input(inp->ids);
+    cb(inp->ids, "inp_ngram_ids", -1);
+
+    // all tables share one lookup, the row index already carries the per-table offset
+    ggml_tensor * cur = ggml_get_rows(ctx0, ngram_embd, inp->ids);
+
+    // sum_t proj_t @ e_t == [proj_0 | ... | proj_{n_ngram-1}] @ concat(e_0, ..., e_{n_ngram-1}),
+    // and the lookups of a token are already adjacent in memory, so this is a plain reshape
+    cur = ggml_reshape_2d(ctx0, cur, n_embd_ngram*n_ngram, n_tokens);
+    cur = ggml_mul_mat(ctx0, ngram_proj, cur);
+    cb(cur, "inp_ngram_embd", -1);
 
     res->add_input(std::move(inp));
 

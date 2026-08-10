@@ -153,6 +153,38 @@ public:
     const int64_t n_embd = 0;
 };
 
+// row indices into the merged n-gram lookup table, one per (token, hash table) pair
+//
+// the hash of a token is a polynomial over the token and its n-1 predecessors, so the ids are
+// computed on the host: the predecessors come from the KV cache (see get_prev_tokens()) and the
+// arithmetic needs 64 bits, which would be awkward in the graph
+class llm_graph_input_ngram_embd : public llm_graph_input_i {
+public:
+    llm_graph_input_ngram_embd(const llama_hparams & hparams, int64_t n_vocab, const llama_kv_cache_context * mctx);
+    virtual ~llm_graph_input_ngram_embd() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * ids = nullptr; // I32 [n_ngram*n_batch]
+
+    const uint32_t    n_ngram;    // number of hash tables
+    const uint32_t    n_prev;     // number of preceding tokens each hash looks at
+    const uint32_t    stride;     // row stride between two tables in the merged lookup table
+    const llama_token eos_id;
+
+    // pow_mods[t][s] = n_vocab^(s + 1) mod vocab_sizes[t]
+    std::vector<std::vector<int64_t>> pow_mods;
+
+    const std::vector<uint32_t> vocab_sizes;
+
+    const llama_kv_cache_context * mctx;
+
+    // scratch, reused across set_input() calls
+    std::vector<llama_token> prev;
+};
+
 class llm_graph_input_pos : public llm_graph_input_i {
 public:
     llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
@@ -1116,6 +1148,11 @@ struct llm_graph_context {
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
+
+    // n-gram input embeddings: sum of the projected hash lookups of the token and its predecessors
+    // returns [n_embd, n_tokens], to be added to the regular token embeddings
+    ggml_tensor * build_inp_ngram_embd(ggml_tensor * ngram_embd, ggml_tensor * ngram_proj, int64_t n_vocab) const;
+
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
