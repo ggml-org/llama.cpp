@@ -119,4 +119,4 @@ jobs:
           source .venv/bin/activate
           cd tools/server/tests
           export ${{ matrix.extra_args }}
-          SLOW_TESTS=1 pytest -v -x
+          pytest -v -x
