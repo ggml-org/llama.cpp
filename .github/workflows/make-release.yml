@@ -31,79 +31,18 @@ jobs:
 
       - name: Determine version
         id: version
-        run: |
-          if [[ -n "${{ github.event.inputs.version }}" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" CMakeLists.txt | grep -oP '\d+')
-            MINOR=$(grep "set(LLAMA_VERSION_MINOR" CMakeLists.txt | grep -oP '\d+')
-            PATCH=$(grep "set(LLAMA_VERSION_PATCH" CMakeLists.txt | grep -oP '\d+')
-            VERSION="v${MAJOR}.${MINOR}.${PATCH}"
-          fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Determined version: ${VERSION}"
+        run: bash scripts/release-determine-version.sh "${{ github.event.inputs.version }}"
 
       - name: Check tag does not already exist
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          if git ls-remote --tags origin "${VERSION}" | grep -q "${VERSION}"; then
-            echo "Error: tag ${VERSION} already exists on remote"
-            exit 1
-          fi
+        run: bash scripts/release-check-tag.sh "${{ steps.version.outputs.version }}"
 
       - name: Check release.yml completed successfully for HEAD
-        run: |
-          SHA=$(git rev-parse HEAD)
-          echo "Checking release.yml status for commit ${SHA}..."
-          RUNS=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs" \
-            --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .conclusion == \"success\")] | length")
-          if [[ "$RUNS" -eq 0 ]]; then
-            if [[ "${{ github.event.inputs.dry_run }}" == "false" ]]; then
-              echo "Error: no successful release.yml run found for HEAD (${SHA})"
-              echo "The nightly build must complete successfully before making a release."
-              exit 1
-            else
-              echo "Warning: no successful release.yml run found for HEAD (${SHA}) (dry run, continuing)."
-            fi
-          else
-            echo "Found successful release.yml run for HEAD."
-          fi
+        run: bash scripts/release-check-ci.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Check local ggml matches upstream
-        run: |
-          MAJOR=$(grep "set(GGML_VERSION_MAJOR" ggml/CMakeLists.txt | grep -oP '\d+')
-          MINOR=$(grep "set(GGML_VERSION_MINOR" ggml/CMakeLists.txt | grep -oP '\d+')
-          PATCH=$(grep "set(GGML_VERSION_PATCH" ggml/CMakeLists.txt | grep -oP '\d+')
-          GGML_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
-          echo "Local ggml version: ${GGML_VERSION}"
-
-          if ! git clone --depth 1 --branch "${GGML_VERSION}" https://github.com/ggml-org/ggml.git upstream-ggml 2>/dev/null; then
-            echo "Error: tag ${GGML_VERSION} not found in upstream ggml - skipping comparison"
-            exit 1
-          fi
-
-          echo "Comparing local ggml/ src and include with upstream ${GGML_VERSION}..."
-          DIFF=$(diff -rq \
-            ggml/src upstream-ggml/src \
-            2>&1 || true)
-          DIFF+=$(diff -rq \
-            ggml/include upstream-ggml/include \
-            2>&1 || true)
-          DIFF+=$(diff \
-            ggml/CMakeLists.txt upstream-ggml/CMakeLists.txt \
-            2>&1 || true)
-          if [[ -n "$DIFF" ]]; then
-            echo "local ggml/ differs from upstream ${GGML_VERSION}:"
-            echo "$DIFF"
-            if [[ "${{ github.event.inputs.dry_run }}" == "false" ]]; then
-              echo "Error: ggml must match upstream before making a release."
-              exit 1
-            else
-              echo "Warning: would abort release due to ggml mismatch (dry run, continuing)."
-            fi
-          else
-            echo "local ggml/ matches upstream ${GGML_VERSION}"
-          fi
+        run: bash scripts/release-check-ggml.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
 
       - name: Create release tag
         if: ${{ github.event.inputs.dry_run == 'false' }}
