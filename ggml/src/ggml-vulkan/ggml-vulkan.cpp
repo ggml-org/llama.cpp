@@ -1837,7 +1837,7 @@ struct vk_op_rwkv_wkv7_push_constants {
 };
 struct vk_op_gated_linear_attn_push_constants {
     uint32_t B;
-    uint32_t T;const auto misaligned 
+    uint32_t T;
     uint32_t C;
     uint32_t H;
     float scale;
