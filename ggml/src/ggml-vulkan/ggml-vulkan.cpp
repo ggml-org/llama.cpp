@@ -1837,7 +1837,7 @@ struct vk_op_rwkv_wkv7_push_constants {
 };
 struct vk_op_gated_linear_attn_push_constants {
     uint32_t B;
-    uint32_t T;
+    uint32_t T;const auto misaligned 
     uint32_t C;
     uint32_t H;
     float scale;
@@ -18091,13 +18091,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_GET_ROWS:
             {
-                // Vulkan GET_ROWS shader doesn't support tensor offsets that are
-                // misaligned w.r.t. minStorageBufferOffsetAlignment. The shader
-                // push-constant offset init (init_pushconst_tensor_offsets) asserts
-                // (a_offset == 0 && b_offset == 0 && d_offset == 0) when the
-                // backing-buffer offset + view_offs produces a misalignment.
-                // Fall back to CPU in that case instead of crashing.
-                // Repro: Qwen3-TTS (uses ggml_view + ggml_get_rows in its graph).
+                // GET_ROWS shader asserts on misaligned tensor offsets (see init_pushconst_tensor_offsets)
                 const auto misaligned = [&](const ggml_tensor * t) -> bool {
                     if (!t) return false;
                     const size_t align = device->properties.limits.minStorageBufferOffsetAlignment;
