@@ -572,9 +572,23 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
         auto args = eps();
         if (params.contains("properties") && !params["properties"].empty()) {
             auto arg_choice = choice();
+            // Sort properties by name length descending before building the
+            // alternation. Without this, a shorter property name that is a
+            // literal prefix of a longer one (e.g. "password" vs
+            // "password_file") causes the incremental/streaming parser to
+            // greedily commit to the shorter match before the full token
+            // has arrived, breaking the diff-based streaming parser once
+            // generation continues past the shorter name ("Invalid diff").
+            // Trying the longest candidate name first avoids this ambiguity.
+            std::vector<std::pair<std::string, ordered_json>> sorted_props;
             for (const auto & el : params["properties"].items()) {
-                const std::string & prop_name = el.key();
-                const auto & prop_def = el.value();
+                sorted_props.emplace_back(el.key(), el.value());
+            }
+            std::sort(sorted_props.begin(), sorted_props.end(),
+                [](const auto & a, const auto & b) { return a.first.size() > b.first.size(); });
+            for (const auto & el : sorted_props) {
+                const std::string & prop_name = el.first;
+                const auto & prop_def = el.second;
                 bool is_string_type = (prop_def.contains("type") && prop_def["type"] == "string");
 
                 auto arg_name_parser = literal(prop_name);
