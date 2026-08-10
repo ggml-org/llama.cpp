@@ -11302,7 +11302,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t mtp_neq1_max = mtp_use_cm_shader ? 16 : mtp_old_neq1_max;
     bool mtp_decode_shape_supported = mtp_shape_ok && neq1 >= mtp_neq1_min && neq1 <= mtp_neq1_max;
     bool mtp_cm_shape_supported = mtp_use_cm_shader && mtp_decode_shape_supported;
-    bool xe_fa_supported_usage = supported_head_dim.find(neq0) != supported_head_dim.end() && (qk_ratio <= max_supported_gqa_ratio || mtp_decode_shape_supported) && q->nb[1] > q->nb[2] && mask != nullptr;
+    bool xe_fa_supported_usage = supported_head_dim.find(neq0) != supported_head_dim.end() && (qk_ratio <= max_supported_gqa_ratio || mtp_decode_shape_supported) && q->nb[1] > q->nb[2] && k->nb[1] > k->nb[2] && mask != nullptr;
     bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 && (mask != nullptr && mask->type == GGML_TYPE_F16);
     std::pair<vk_pipeline, vk_pipeline> xe_fa_pipeline_dual_phases;
     xe_fa_pipeline_dual_phases.first = xe_fa_pipeline_dual_phases.second = nullptr;
