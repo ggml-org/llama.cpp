@@ -10,8 +10,24 @@
 #define HWCAP2_SVE2 (1ULL << 1)
 #endif
 
+#if !defined(HWCAP_FPHP)
+#define HWCAP_FPHP (1 << 9)
+#endif
+
+#if !defined(HWCAP_ASIMDHP)
+#define HWCAP_ASIMDHP (1 << 10)
+#endif
+
 #if !defined(HWCAP2_I8MM)
 #define HWCAP2_I8MM (1ULL << 13)
+#endif
+
+#if !defined(HWCAP_ASIMDDP)
+#define HWCAP_ASIMDDP (1 << 20)
+#endif
+
+#if !defined(HWCAP_SVE)
+#define HWCAP_SVE (1 << 22)
 #endif
 
 #if !defined(HWCAP2_SME)
@@ -67,7 +83,7 @@
 
 typedef struct ggml_aarch64_runtime_features {
     bool has_dotprod;
-    bool has_fp16_va;
+    bool has_fp16;
     bool has_sve;
     bool has_sve2;
     bool has_i8mm;
@@ -84,7 +100,7 @@ static inline ggml_aarch64_runtime_features_t ggml_get_aarch64_runtime_features(
     const unsigned long hwcap2 = getauxval(AT_HWCAP2);
 
     runtime_feat.has_dotprod = !!(hwcap & HWCAP_ASIMDDP);
-    runtime_feat.has_fp16_va = !!(hwcap & HWCAP_FPHP);
+    runtime_feat.has_fp16    = !!(hwcap & HWCAP_FPHP) && !!(hwcap & HWCAP_ASIMDHP);;
     runtime_feat.has_sve     = !!(hwcap & HWCAP_SVE);
     runtime_feat.has_sve2    = !!(hwcap2 & HWCAP2_SVE2);
     runtime_feat.has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
@@ -106,7 +122,7 @@ static inline ggml_aarch64_runtime_features_t ggml_get_aarch64_runtime_features(
     }
 
     if (sysctlbyname("hw.optional.arm.FEAT_FP16", &oldp, &size, nullptr, 0) == 0) {
-        runtime_feat.has_fp16_va = static_cast<bool>(oldp);
+        runtime_feat.has_fp16 = static_cast<bool>(oldp);
     }
 
     if (sysctlbyname("hw.optional.arm.FEAT_SVE", &oldp, &size, nullptr, 0) == 0) {
@@ -133,7 +149,7 @@ static inline ggml_aarch64_runtime_features_t ggml_get_aarch64_runtime_features(
     runtime_feat.sve_cnt = 0;
 #elif defined (_WIN32)
     runtime_feat.has_dotprod = IsProcessorFeaturePresent(PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE) != 0;
-    runtime_feat.has_fp16_va = IsProcessorFeaturePresent(PF_ARM_V82_FP16_INSTRUCTIONS_AVAILABLE) != 0;
+    runtime_feat.has_fp16    = IsProcessorFeaturePresent(PF_ARM_V82_FP16_INSTRUCTIONS_AVAILABLE) != 0;
     runtime_feat.has_sve     = IsProcessorFeaturePresent(PF_ARM_SVE_INSTRUCTIONS_AVAILABLE) != 0;
     runtime_feat.has_sve2    = IsProcessorFeaturePresent(PF_ARM_SVE2_INSTRUCTIONS_AVAILABLE) != 0;
     runtime_feat.has_i8mm    = IsProcessorFeaturePresent(PF_ARM_V82_I8MM_INSTRUCTIONS_AVAILABLE) != 0;
