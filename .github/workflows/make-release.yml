@@ -78,8 +78,8 @@ jobs:
           echo "Local ggml version: ${GGML_VERSION}"
 
           if ! git clone --depth 1 --branch "${GGML_VERSION}" https://github.com/ggml-org/ggml.git upstream-ggml 2>/dev/null; then
-            echo "Warning: tag ${GGML_VERSION} not found in upstream ggml - skipping comparison"
-            exit 0
+            echo "Error: tag ${GGML_VERSION} not found in upstream ggml - skipping comparison"
+            exit 1
           fi
 
           echo "Comparing local ggml/ src and include with upstream ${GGML_VERSION}..."
