@@ -1298,10 +1298,12 @@ class TensorNameMap:
             "encoder.final_layer_norm", # t5
             "layer_norm",               # neobert
             "model.hidden_norm",        # dflash
+            "encoder.output_norm_enc",  # dflash (transformers MuseGlimmerAssistant)
         ),
 
         MODEL_TENSOR.FC: (
-            "model.fc", # dflash
+            "model.fc",   # dflash
+            "encoder.fc", # dflash (transformers MuseGlimmerAssistant)
         ),
 
         MODEL_TENSOR.DSPARK_MARKOV_W1: (
