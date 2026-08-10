@@ -87,7 +87,9 @@ jobs:
         id: python_depends
         run: |
           export PIP_BREAK_SYSTEM_PACKAGES="1"
-          python3 -m pip install --upgrade pip setuptools
+          python3 -m pip install --upgrade pip
+          source scripts/apply-pip-cooldown.sh python3
+          python3 -m pip install --upgrade setuptools
           pip3 install ./gguf-py
 
       - name: Build

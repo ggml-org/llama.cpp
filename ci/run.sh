@@ -734,6 +734,8 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     fi
     source "$MNT/venv/bin/activate"
 
+    source "${SRC}/scripts/apply-pip-cooldown.sh" python3 || exit 1
+
     pip install -r ${SRC}/requirements.txt --disable-pip-version-check
     pip install --editable gguf-py --disable-pip-version-check
 fi
