@@ -1,7 +1,7 @@
 <script lang="ts">
 	import {
-		ChatMessageAgenticContent,
 		ChatMessageActionIcons,
+		ChatMessageAgenticContent,
 		ChatMessageAssistantModel,
 		ChatMessageAssistantProcessingInfo,
 		ChatMessageAssistantRawOutput,
@@ -9,14 +9,13 @@
 		ChatMessageEditForm
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { modelLoadProgressText } from '$lib/utils';
 	import { MessageRole } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { chatStore, isChatStreaming, isLoading } from '$lib/stores/chat.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
-
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 
 	interface Props {
@@ -49,7 +48,6 @@
 		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
-		toolMessages = [],
 		onConfirmDelete,
 		onContinue,
 		onCopy,
@@ -61,7 +59,8 @@
 		onShowDeleteDialogChange,
 		showDeleteDialog,
 		siblingInfo = null,
-		textareaElement = $bindable()
+		textareaElement = $bindable(),
+		toolMessages = []
 	}: Props = $props();
 
 	// Get edit context
@@ -124,18 +123,21 @@
 
 		if (!userMessageEl) {
 			lastUserMessageHeight = 0;
+
 			return;
 		}
 
 		const updateHeight = () => {
 			const rect = userMessageEl.getBoundingClientRect();
 			const marginTop = Math.round(parseFloat(getComputedStyle(userMessageEl).marginTop));
+
 			lastUserMessageHeight = Math.round(rect.height + marginTop);
 		};
 
 		updateHeight();
 
 		const resizeObserver = new ResizeObserver(updateHeight);
+
 		resizeObserver.observe(userMessageEl);
 
 		return () => {
@@ -183,8 +185,8 @@
 		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="bottom" />
 	{/if}
 
-	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel}
+	{#if displayedModel}
+		<div class="info my-6 grid gap-4 tabular-nums">
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
@@ -200,8 +202,8 @@
 					showMessageStats={currentConfig.showMessageStats}
 				/>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 
 	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActionIcons

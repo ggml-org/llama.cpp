@@ -2638,7 +2638,8 @@ struct llama_sampler * llama_sampler_init_grammar_lazy_patterns(
 
 // penalties
 
-struct llama_sampler_penalties {
+struct llama_sampler_penalties : public llama_sampler_backend {
+    const int32_t n_vocab;
     const int32_t penalty_last_n;
     const float   penalty_repeat;
     const float   penalty_freq;
@@ -2648,10 +2649,50 @@ struct llama_sampler_penalties {
 
     // a frequency map to count token occurrences
     std::unordered_map<llama_token, int> token_count;
+
+    // backend graph inputs
+    ggml_tensor * inp_token_ids = nullptr;
+    ggml_tensor * inp_counts    = nullptr;
+
+    // backend helpers
+    int32_t n_max   = 0;
+    bool has_candidates = false;
+
+    std::vector<int32_t> host_token_ids;
+    std::vector<int32_t> host_counts;
+
+    static bool is_disabled(
+            int32_t penalty_last_n,
+            float   penalty_repeat,
+            float   penalty_freq,
+            float   penalty_present) {
+        return penalty_last_n == 0 ||
+            (penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f);
+    }
+
+    bool is_disabled() const {
+        return is_disabled(penalty_last_n, penalty_repeat, penalty_freq, penalty_present);
+    }
+
+    llama_sampler_penalties(
+            int32_t n_vocab,
+            int32_t penalty_last_n,
+            float   penalty_repeat,
+            float   penalty_freq,
+            float   penalty_present)
+        : llama_sampler_backend("penalties")
+        , n_vocab         (n_vocab)
+        , penalty_last_n  (penalty_last_n)
+        , penalty_repeat  (penalty_repeat)
+        , penalty_freq    (penalty_freq)
+        , penalty_present (penalty_present)
+        , prev            (penalty_last_n) {
+    }
 };
 
-static const char * llama_sampler_penalties_name(const struct llama_sampler * /*smpl*/) {
-    return "penalties";
+static const char * llama_sampler_penalties_name(const struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_penalties *) smpl->ctx;
+    return ctx->get_name();
 }
 
 static void llama_sampler_penalties_accept(struct llama_sampler * smpl, llama_token token) {
@@ -2688,8 +2729,7 @@ static void llama_sampler_penalties_accept(struct llama_sampler * smpl, llama_to
 static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_penalties *) smpl->ctx;
 
-    if ((ctx->penalty_last_n == 0) ||
-        (ctx->penalty_repeat == 1.0f && ctx->penalty_freq == 0.0f && ctx->penalty_present == 0.0f)) {
+    if (ctx->is_disabled()) {
         return;
     }
 
@@ -2727,6 +2767,7 @@ static void llama_sampler_penalties_reset(struct llama_sampler * smpl) {
 static struct llama_sampler * llama_sampler_penalties_clone(const struct llama_sampler * smpl) {
     const auto * ctx = (const llama_sampler_penalties *) smpl->ctx;
     auto * result = llama_sampler_init_penalties(
+            ctx->n_vocab,
             ctx->penalty_last_n,
             ctx->penalty_repeat,
             ctx->penalty_freq,
@@ -2736,7 +2777,8 @@ static struct llama_sampler * llama_sampler_penalties_clone(const struct llama_s
     {
         auto * result_ctx = (llama_sampler_penalties *) result->ctx;
 
-        result_ctx->prev = ctx->prev;
+        result_ctx->prev        = ctx->prev;
+        result_ctx->token_count = ctx->token_count;
     }
 
     return result;
@@ -2746,6 +2788,170 @@ static void llama_sampler_penalties_free(struct llama_sampler * smpl) {
     delete (llama_sampler_penalties *) smpl->ctx;
 }
 
+static bool llama_sampler_penalties_backend_init(
+        struct llama_sampler       * smpl,
+        ggml_backend_buffer_type_t   buft) {
+    auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+
+    const bool res = llama_sampler_backend_support(smpl, buft);
+
+    sctx->init(res);
+
+    return res;
+}
+
+static void llama_sampler_penalties_backend_apply(
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
+    GGML_UNUSED(gf);
+
+    auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+
+    if (sctx->is_disabled()) {
+        return;
+    }
+
+    GGML_ASSERT(sctx->n_vocab > 0);
+
+    sctx->has_candidates = data->candidates != nullptr;
+    sctx->n_max   = std::min(sctx->penalty_last_n, sctx->n_vocab);
+
+    sctx->inp_token_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
+    ggml_set_name(sctx->inp_token_ids, "penalties_token_ids");
+    ggml_set_input(sctx->inp_token_ids);
+
+    sctx->inp_counts = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
+    ggml_set_name(sctx->inp_counts, "penalties_counts");
+    ggml_set_input(sctx->inp_counts);
+
+    if ((int32_t) sctx->host_token_ids.size() != sctx->n_max) {
+        sctx->host_token_ids.assign(sctx->n_max, 0);
+        sctx->host_counts.assign(sctx->n_max, 0);
+    }
+
+    // flatten
+    ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+    ggml_tensor * gathered = logits;
+    ggml_tensor * counts_f32 = ggml_cast(ctx, sctx->inp_counts, GGML_TYPE_F32);
+
+    if (sctx->has_candidates) {
+        ggml_tensor * candidates = ggml_reshape_1d(
+                ctx, data->candidates, ggml_nelements(data->candidates));
+        const int64_t n_candidates = candidates->ne[0];
+        GGML_ASSERT(n_candidates == ggml_nelements(logits));
+
+        ggml_tensor * counts_rows = ggml_fill(
+                ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, sctx->n_vocab), 0.0f);
+        ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, counts_f32, 1, sctx->n_max);
+        counts_rows = ggml_set_rows(ctx, counts_rows, scatter_rows, sctx->inp_token_ids);
+        counts_f32 = ggml_get_rows(ctx, counts_rows, candidates);
+        counts_f32 = ggml_reshape_1d(ctx, counts_f32, n_candidates);
+    } else {
+        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
+        gathered = ggml_get_rows(ctx, logits_rows, sctx->inp_token_ids);
+        gathered = ggml_reshape_1d(ctx, gathered, sctx->n_max);
+    }
+
+    ggml_tensor * active_mask = ggml_step(ctx, counts_f32);
+    ggml_tensor * inactive_mask = ggml_sub(ctx, ggml_fill(ctx, active_mask, 1.0f), active_mask);
+
+    ggml_tensor * penalized = gathered;
+
+    if (sctx->penalty_repeat != 1.0f) {
+        ggml_tensor * pos_mask = ggml_step(ctx, penalized);
+        ggml_tensor * neg_mask = ggml_sub(ctx, ggml_fill(ctx, pos_mask, 1.0f), pos_mask);
+
+        ggml_tensor * pos_scale = ggml_scale(ctx, pos_mask, 1.0f/sctx->penalty_repeat);
+        ggml_tensor * neg_scale = ggml_scale(ctx, neg_mask, sctx->penalty_repeat);
+        ggml_tensor * repeat_scale = ggml_add(ctx, pos_scale, neg_scale);
+
+        // scale inactive entries with 1 to avoid -INF * 0 = NaN for values masked by top-p
+        repeat_scale = ggml_mul(ctx, repeat_scale, active_mask);
+        repeat_scale = ggml_add(ctx, repeat_scale, inactive_mask);
+        penalized = ggml_mul(ctx, gathered, repeat_scale);
+    }
+
+    if (sctx->penalty_freq != 0.0f) {
+        ggml_tensor * penalty_freq = ggml_scale(ctx, counts_f32, sctx->penalty_freq);
+        penalized = ggml_sub(ctx, penalized, penalty_freq);
+    }
+
+    if (sctx->penalty_present != 0.0f) {
+        ggml_tensor * penalty_present = ggml_scale(ctx, active_mask, sctx->penalty_present);
+        penalized = ggml_sub(ctx, penalized, penalty_present);
+    }
+
+    if (sctx->has_candidates) {
+        data->logits = penalized;
+    } else {
+        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
+        ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, penalized, 1, sctx->n_max);
+        logits_rows = ggml_set_rows(ctx, logits_rows, scatter_rows, sctx->inp_token_ids);
+        data->logits = ggml_reshape_1d(ctx, logits_rows, ggml_nelements(logits));
+    }
+}
+
+static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+
+    if (!sctx->inp_token_ids || !sctx->inp_counts || sctx->n_max <= 0 || sctx->n_vocab <= 0) {
+        return;
+    }
+
+    if (sctx->is_disabled()) {
+        return;
+    }
+
+    // fill active entries from the map
+    int32_t n_active = 0;
+
+    for (const auto & it : sctx->token_count) {
+        GGML_ASSERT(n_active < sctx->n_max);
+        sctx->host_token_ids[n_active] = it.first;
+        sctx->host_counts   [n_active] = it.second;
+        ++n_active;
+    }
+
+    // Sorting is required because backend_apply uses ggml_set_rows (a scatter-back operation)
+    std::vector<std::pair<int32_t, int32_t>> entries;
+    entries.reserve(n_active);
+    for (int32_t i = 0; i < n_active; ++i) {
+        entries.emplace_back(sctx->host_token_ids[i], sctx->host_counts[i]);
+    }
+    std::sort(entries.begin(), entries.end(), [](const auto & a, const auto & b) {
+        return a.first < b.first;
+    });
+    for (int32_t i = 0; i < n_active; ++i) {
+        sctx->host_token_ids[i] = entries[i].first;
+        sctx->host_counts   [i] = entries[i].second;
+    }
+
+    // Padding: Finds a filler token id that is not present in token_count.
+    // Use it to do padding for the arrays, it avoids resizing every time.
+    // The arrays must always have exactly n_max entries (the GPU tensor is a fixed size).
+    int32_t filler = 0;
+    if (n_active < sctx->n_max) {
+        while (sctx->token_count.find(filler) != sctx->token_count.end()) {
+            ++filler;
+        }
+        GGML_ASSERT(filler < sctx->n_vocab);
+    }
+
+    // Fill the rest of the arrays with the filler token id and count 0.
+    // Inactive slots are padded with a unique dummy token ID (count = 0).
+    // The uniqueness matters because ggml_set_rows with duplicate indices can produce non-deterministic or incorrect results.
+    // Using a filler token with count 0 that isn't in the active set is safe, because the active_mask step in backend_apply filters them out via ggml_step(counts_f32)
+    for (int32_t i = n_active; i < sctx->n_max; ++i) {
+        sctx->host_token_ids[i] = filler;
+        sctx->host_counts   [i] = 0;
+    }
+
+    ggml_backend_tensor_set(sctx->inp_token_ids, sctx->host_token_ids.data(), 0, sctx->n_max * sizeof(int32_t));
+    ggml_backend_tensor_set(sctx->inp_counts,    sctx->host_counts.data(),    0, sctx->n_max * sizeof(int32_t));
+}
+
 static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .name              = */ llama_sampler_penalties_name,
     /* .accept            = */ llama_sampler_penalties_accept,
@@ -2753,35 +2959,33 @@ static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .reset             = */ llama_sampler_penalties_reset,
     /* .clone             = */ llama_sampler_penalties_clone,
     /* .free              = */ llama_sampler_penalties_free,
-    /* .backend_init      = */ nullptr,
+    /* .backend_init      = */ llama_sampler_penalties_backend_init,
     /* .backend_accept    = */ nullptr,
-    /* .backend_apply     = */ nullptr,
-    /* .backend_set_input = */ nullptr,
+    /* .backend_apply     = */ llama_sampler_penalties_backend_apply,
+    /* .backend_set_input = */ llama_sampler_penalties_backend_set_input,
 };
 
 struct llama_sampler * llama_sampler_init_penalties(
+        int32_t n_vocab,
         int32_t penalty_last_n,
         float penalty_repeat,
         float penalty_freq,
         float penalty_present) {
     penalty_last_n = std::max(penalty_last_n, 0);
 
-    const bool is_empty = (penalty_last_n == 0 || (penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f));
-
-    if (is_empty) {
+    if (llama_sampler_penalties::is_disabled(
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present)) {
         return llama_sampler_init_empty("?penalties");
     }
 
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_penalties_i,
-        /* .ctx   = */ new llama_sampler_penalties {
-            /* .penalty_last_n  = */ penalty_last_n,
-            /* .penalty_repeat  = */ penalty_repeat,
-            /* .penalty_freq    = */ penalty_freq,
-            /* .penalty_present = */ penalty_present,
-            /* .prev            = */ ring_buffer<llama_token>(penalty_last_n),
-            /* .token_count     = */ {},
-        }
+        /* .ctx   = */ new llama_sampler_penalties(
+            n_vocab,
+            penalty_last_n,
+            penalty_repeat,
+            penalty_freq,
+            penalty_present)
     );
 }
 
@@ -2874,8 +3078,6 @@ struct llama_sampler * llama_sampler_init_top_n_sigma(float n) {
 // DRY
 
 struct llama_sampler_dry {
-    int32_t total_context_size;
-
     const float   dry_multiplier;
     const float   dry_base;
     const int32_t dry_allowed_length;
@@ -2951,8 +3153,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
         return;
     }
 
-    int32_t effective_dry_penalty_last_n = (ctx->dry_penalty_last_n == -1) ? ctx->total_context_size : std::max(ctx->dry_penalty_last_n, 0);
-    int last_n_repeat = std::min(std::min((int)ctx->last_tokens.size(), effective_dry_penalty_last_n), ctx->total_context_size);
+    int last_n_repeat = std::min((int) ctx->last_tokens.size(), ctx->dry_penalty_last_n);
 
     if (last_n_repeat <= ctx->dry_allowed_length) {
         return;
@@ -3165,7 +3366,7 @@ static struct llama_sampler * llama_sampler_dry_clone(const struct llama_sampler
     llama_vocab dummy_vocab;
 
     // dummy vocab is passed because it is only needed for raw sequence breaker processing, which we have already done and will simply be copying
-    auto * result = llama_sampler_init_dry(&dummy_vocab, ctx->total_context_size, ctx->dry_multiplier, ctx->dry_base, ctx->dry_allowed_length, ctx->dry_penalty_last_n, NULL, 0);
+    auto * result = llama_sampler_init_dry(&dummy_vocab, ctx->dry_multiplier, ctx->dry_base, ctx->dry_allowed_length, ctx->dry_penalty_last_n, NULL, 0);
 
     // Copy the state, including the processed breakers
     {
@@ -3196,8 +3397,8 @@ static struct llama_sampler_i llama_sampler_dry_i = {
     /* .backend_set_input = */ nullptr,
 };
 
-struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, int32_t n_ctx_train, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
-    int32_t effective_dry_penalty_last_n = (dry_penalty_last_n == -1) ? n_ctx_train : std::max(dry_penalty_last_n, 0);
+struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
+    dry_penalty_last_n = std::max(dry_penalty_last_n, 0);
     std::unordered_multimap<llama_token, std::vector<llama_token>> processed_breakers;
     const int MAX_CHAR_LEN = 40;
     const int MAX_SEQ_LEN = 20;
@@ -3234,23 +3435,22 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_dry_i,
         /* .ctx   = */ new llama_sampler_dry {
-            /* .total_context_size     = */ n_ctx_train,
             /* .dry_multiplier         = */ dry_multiplier,
             /* .dry_base               = */ dry_base,
             /* .dry_allowed_length     = */ dry_allowed_length,
             /* .dry_penalty_last_n     = */ dry_penalty_last_n,
             /* .dry_processed_breakers = */ std::move(processed_breakers),
-            /* .dry_repeat_count       = */ dry_enabled ? std::vector<int>(effective_dry_penalty_last_n, 0) : std::vector<int>{},
+            /* .dry_repeat_count       = */ dry_enabled ? std::vector<int>(dry_penalty_last_n, 0) : std::vector<int>{},
             /* .dry_max_token_repeat   = */ {},
-            /* .last_tokens            = */ dry_enabled ? ring_buffer<llama_token>(effective_dry_penalty_last_n) : ring_buffer<llama_token>(0),
+            /* .last_tokens            = */ dry_enabled ? ring_buffer<llama_token>(dry_penalty_last_n) : ring_buffer<llama_token>(0),
         }
     );
 }
 
 // wrapper for test-sampling.cpp
-struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const std::vector<std::vector<llama_token>>& seq_breakers) {
+struct llama_sampler * llama_sampler_init_dry_testing(float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const std::vector<std::vector<llama_token>>& seq_breakers) {
     llama_vocab dummy_vocab;
-    auto * result = llama_sampler_init_dry(&dummy_vocab, context_size, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, NULL, 0);
+    auto * result = llama_sampler_init_dry(&dummy_vocab, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, NULL, 0);
     auto * ctx = (llama_sampler_dry *) result->ctx;
 
     // Process the token-based sequence breakers

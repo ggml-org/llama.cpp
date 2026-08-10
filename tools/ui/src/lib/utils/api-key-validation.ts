@@ -1,6 +1,6 @@
-import { base } from '$app/paths';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
+import { base } from '$app/paths';
 import { AUTHORIZATION_HEADER, BEARER_PREFIX, CONTENT_TYPE_HEADER } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
@@ -36,6 +36,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 			}
 
 			console.warn(`Server responded with status ${response.status} during API key validation`);
+
 			return;
 		}
 	} catch (err) {

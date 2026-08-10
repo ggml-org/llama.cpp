@@ -1,15 +1,16 @@
-import { onMount } from 'svelte';
+import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
+import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
 import {
-	modelsStore,
 	modelOptions,
 	modelsLoading,
+	modelsStore,
 	modelsUpdating,
 	selectedModelId,
 	singleModelName
 } from '$lib/stores/models.svelte';
 import { isRouterMode } from '$lib/stores/server.svelte';
-import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 import type { ModelOption } from '$lib/types/models';
+import { onMount } from 'svelte';
 
 export interface UseModelsSelectorOptions {
 	currentModel: () => string | null;
@@ -64,18 +65,18 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const activeId = $derived(selectedModelId());
 	const isRouter = $derived(isRouterMode());
 	const serverModel = $derived(singleModelName());
-
 	const currentModel = $derived(opts.currentModel());
 	const onModelChange = $derived(opts.onModelChange?.());
-
 	const isHighlightedCurrentModelActive = $derived.by(() => {
 		if (!isRouter || !currentModel) return false;
+
 		const currentOption = options.find((option) => option.model === currentModel);
+
 		return currentOption ? currentOption.id === activeId : false;
 	});
-
 	const isCurrentModelInCache = $derived.by(() => {
 		if (!isRouter || !currentModel) return true;
+
 		return options.some((option) => option.model === currentModel);
 	});
 
@@ -83,6 +84,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	let searchTerm = $state('');
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
+
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
 	const groupedFilteredOptions = $derived(
 		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
@@ -121,6 +123,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 	async function handleSelect(modelId: string) {
 		const option = options.find((opt) => opt.id === modelId);
+
 		if (!option) return;
 
 		let shouldCloseMenu = true;
@@ -139,11 +142,9 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			handleOpenChange(false);
 
 			requestAnimationFrame(() => {
-				const textarea = document.querySelector<HTMLTextAreaElement>(
-					'[data-slot="chat-form"] textarea'
-				);
+				const input = document.querySelector<HTMLElement>(CHAT_INPUT_FOCUS_SELECTOR);
 
-				textarea?.focus({ preventScroll: true });
+				input?.focus({ preventScroll: true });
 			});
 		}
 
@@ -163,10 +164,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 			if (displayModel) {
 				return {
+					capabilities: [],
 					id: serverModel ? 'current' : 'offline-current',
 					model: displayModel,
-					name: displayModel.split('/').pop() || displayModel,
-					capabilities: []
+					name: displayModel.split('/').pop() || displayModel
 				};
 			}
 
@@ -176,10 +177,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		if (currentModel) {
 			if (!isCurrentModelInCache) {
 				return {
+					capabilities: [],
 					id: 'not-in-cache',
 					model: currentModel,
-					name: currentModel.split('/').pop() || currentModel,
-					capabilities: []
+					name: currentModel.split('/').pop() || currentModel
 				};
 			}
 
@@ -194,60 +195,64 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	}
 
 	return {
-		get options() {
-			return options;
-		},
-
-		get loading() {
-			return loading;
-		},
-
-		get updating() {
-			return updating;
-		},
-
 		get activeId() {
 			return activeId;
-		},
-
-		get isRouter() {
-			return isRouter;
-		},
-
-		get serverModel() {
-			return serverModel;
-		},
-
-		get isHighlightedCurrentModelActive() {
-			return isHighlightedCurrentModelActive;
-		},
-
-		get isCurrentModelInCache() {
-			return isCurrentModelInCache;
 		},
 
 		get filteredOptions() {
 			return filteredOptions;
 		},
 
+		getDisplayOption,
+
 		get groupedFilteredOptions() {
 			return groupedFilteredOptions;
+		},
+
+		handleInfoClick,
+
+		handleOpenChange,
+
+		handleSelect,
+
+		get infoModelId() {
+			return infoModelId;
+		},
+
+		get isCurrentModelInCache() {
+			return isCurrentModelInCache;
+		},
+
+		isFavorite(model: string) {
+			return modelsStore.favoriteModelIds.has(model);
+		},
+
+		get isHighlightedCurrentModelActive() {
+			return isHighlightedCurrentModelActive;
 		},
 
 		get isLoadingModel() {
 			return isLoadingModel;
 		},
 
+		get isRouter() {
+			return isRouter;
+		},
+
+		get loading() {
+			return loading;
+		},
+
+		get options() {
+			return options;
+		},
+
 		get searchTerm() {
 			return searchTerm;
 		},
 
-		get showModelDialog() {
-			return showModelDialog;
-		},
-
-		get infoModelId() {
-			return infoModelId;
+		get serverModel() {
+			return serverModel;
 		},
 
 		setSearchTerm(value: string) {
@@ -258,16 +263,12 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			showModelDialog = value;
 		},
 
-		handleInfoClick,
-
-		handleSelect,
-
-		handleOpenChange,
-
-		isFavorite(model: string) {
-			return modelsStore.favoriteModelIds.has(model);
+		get showModelDialog() {
+			return showModelDialog;
 		},
 
-		getDisplayOption
+		get updating() {
+			return updating;
+		}
 	};
 }

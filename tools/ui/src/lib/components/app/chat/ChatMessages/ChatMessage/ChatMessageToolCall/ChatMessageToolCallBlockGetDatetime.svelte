@@ -8,7 +8,7 @@
 		isStreaming?: boolean;
 	}
 
-	let { section, isStreaming = false }: Props = $props();
+	let { isStreaming = false, section }: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
@@ -24,9 +24,12 @@
 
 		try {
 			const parsed: unknown = JSON.parse(toolResultString);
+
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 				const obj = parsed as Record<string, unknown>;
+
 				if (typeof obj.error === 'string') return { errorMessage: obj.error };
+
 				if (typeof obj.result === 'string') return { dateString: obj.result.trim() };
 			}
 		} catch {

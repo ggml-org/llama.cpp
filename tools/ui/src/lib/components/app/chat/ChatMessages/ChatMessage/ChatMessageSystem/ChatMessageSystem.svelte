@@ -31,16 +31,16 @@
 
 	let {
 		class: className = '',
-		message,
-		siblingInfo = null,
-		showDeleteDialog,
 		deletionInfo,
-		onCopy,
-		onEdit,
-		onDelete,
+		message,
 		onConfirmDelete,
+		onCopy,
+		onDelete,
+		onEdit,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
+		showDeleteDialog,
+		siblingInfo = null,
 		textareaElement = $bindable()
 	}: Props = $props();
 
@@ -164,7 +164,7 @@
 								? `max-height: ${MAX_HEIGHT}px;`
 								: 'max-height: none;'}
 						>
-							{#if currentConfig.renderUserContentAsMarkdown}
+							{#if !currentConfig.renderContentAsRawText}
 								<div bind:this={messageElement} class={isExpanded ? 'cursor-text' : ''}>
 									<MarkdownContent class="markdown-system-content" content={message.content} />
 								</div>
