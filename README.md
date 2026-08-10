@@ -35,20 +35,36 @@ cmake --build build-vulkan --config Release -j 8
 
 Requires the Vulkan SDK and MSVC. Select the eGPU with `GGML_VK_VISIBLE_DEVICES=<idx>` (see the device list printed at startup).
 
-### MTP (multi-token prediction) speculative decoding
+### Server performance tuning (Qwen3.6-35B-A3B Q4_K_S, R9700 eGPU)
 
-For models with a built-in MTP head (e.g. Qwen3.6-35B-A3B-MTP):
+Recommended command:
 
 ```sh
-llama-server -m model.gguf --spec-type draft-mtp -ngl 99 -c 65536
+llama-server -m model.gguf -ngl 99 -c 65536 --parallel 1
 ```
 
-Measured on the R9700 eGPU (Qwen3.6-35B-A3B Q4_K_S, 256 tokens): 6.96 t/s baseline -> 9.88 t/s with draft-mtp (~1.4x), 65-81% draft acceptance. Check `draft acceptance` in the server log to confirm MTP is active.
+Measured decode speed (256-512 generated tokens, warm):
+
+| config | decode t/s |
+|---|---|
+| `--parallel 4` (default) | ~15 |
+| `--parallel 1` | ~80-85 |
+| `--parallel 1` + `-fa on` | ~44 |
+| `--parallel 1` + `--spec-type draft-mtp` | ~14 (43% acceptance) |
+
+Key findings:
+
+- Use `--parallel 1` for maximum single-stream speed. With 2+ slots on this hybrid (deltanet + attention) model, per-token decode drops ~5x even when only one slot is active.
+- MTP speculative decoding (`--spec-type draft-mtp`) is **model-dependent** on this eGPU:
+  - **Dense models (e.g. Qwen3.6-27B Q4_K_S): use it, it is a 11-12x win.** 3.8 t/s baseline -> 42-48 t/s (62-70% acceptance). Verification of ~3 drafted tokens in one batch reads the weights once, so a dense bandwidth/latency-bound decode becomes a batched one.
+  - **MoE models (e.g. Qwen3.6-35B-A3B): avoid it.** Only ~3B active params/token, so the base decode is already cheap (85 t/s); the draft-head overhead is a net 5x loss (~15 t/s).
+- `-fa on` helps prompt processing slightly but hurts single-token decode; leave it on `auto`.
 
 ### Roadmap (further speed work)
 
-- Tune MTP draft depth; try `-fa`, KV cache quantization (`-ctk q8_0 -ctv q8_0`), and Q4_0/IQ4_XS quants
-- Enable coopmat in the MoE `mul_mat_id` path on RDNA4 (largest potential decode win for MoE models)
+- Investigate why multi-slot decode is slow on this hybrid model (recurrent state cache copies?)
+- KV cache quantization (`-ctk q8_0 -ctv q8_0`), and Q4_0/IQ4_XS quants
+- Coopmat is already active in the MoE `mul_mat_id` path for batches (prompt processing, verified via SPIR-V + `matrix cores: KHR_coopmat`); n=1 decode correctly uses the `mul_mat_vec` path (bandwidth-bound). Remaining win: faster K/V or smaller quants for dense decode.
 - wave64 pipeline variants for gfx12
 - Linux + RADV exposes `VK_NV_cooperative_matrix2` and the decode-vector extension (faster prompt processing); HIP/ROCm is also worth benchmarking against Vulkan on the same GPU
 
