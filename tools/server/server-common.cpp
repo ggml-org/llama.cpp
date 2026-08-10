@@ -912,7 +912,54 @@ json oaicompat_chat_params_parse(
     auto tools = json_value(body, "tools", json());
     auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
+
+    // `tool_choice` is either a string ("auto" / "none" / "required") or, to force one
+    // specific function, an object: {"type":"function","function":{"name":"..."}}.
+    //
+    // json_value() only understands the string form: given the object it logs a type
+    // warning and silently falls back to "auto". That downgrade is invisible to the
+    // caller and, for templates whose grammar is lazy under "auto", means nothing
+    // constrains the model to emit a tool call at all.
+    //
+    // Named choice is "call exactly this function", so narrow `tools` to that one entry
+    // and treat it as "required". The grammar then admits only that call, which is the
+    // OpenAI semantics and needs no per-template support.
+    std::string tool_choice = "auto";
+    if (body.contains("tool_choice") && !body.at("tool_choice").is_null()) {
+        const auto & tc = body.at("tool_choice");
+        if (tc.is_string()) {
+            tool_choice = tc.get<std::string>();
+        } else if (tc.is_object()) {
+            const std::string tc_type = json_value(tc, "type", std::string());
+            if (tc_type != "function") {
+                throw std::invalid_argument("Invalid tool_choice: object form must have type \"function\"");
+            }
+            if (!tc.contains("function") || !tc.at("function").is_object()) {
+                throw std::invalid_argument("Invalid tool_choice: missing \"function\" object");
+            }
+            const std::string tc_name = json_value(tc.at("function"), "name", std::string());
+            if (tc_name.empty()) {
+                throw std::invalid_argument("Invalid tool_choice: missing function name");
+            }
+            if (!has_tools) {
+                throw std::invalid_argument("tool_choice names a function but no tools were provided");
+            }
+
+            json filtered = json::array();
+            for (const auto & tool : tools) {
+                if (tool.contains("function") && json_value(tool.at("function"), "name", std::string()) == tc_name) {
+                    filtered.push_back(tool);
+                }
+            }
+            if (filtered.empty()) {
+                throw std::invalid_argument("tool_choice names function \"" + tc_name + "\" which is not in tools");
+            }
+            tools       = filtered;
+            tool_choice = "required";
+        } else {
+            throw std::invalid_argument("Invalid tool_choice: expected a string or an object");
+        }
+    }
 
     if (!opt.use_jinja) {
         if (has_tools) {
