@@ -71,6 +71,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_OLMO,             "olmo"             },
     { LLM_ARCH_OLMO2,            "olmo2"            },
     { LLM_ARCH_OLMOE,            "olmoe"            },
+    { LLM_ARCH_MUSE_GLIMMER,     "muse-glimmer"     },
     { LLM_ARCH_OPENELM,          "openelm"          },
     { LLM_ARCH_ARCTIC,           "arctic"           },
     { LLM_ARCH_DEEPSEEK,         "deepseek"         },

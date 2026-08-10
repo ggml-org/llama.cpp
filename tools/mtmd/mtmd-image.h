@@ -230,3 +230,9 @@ struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
+
+// pick the patch grid closest to the input aspect ratio under the per-image token cap, stretch-resize.
+struct mtmd_image_preprocessor_muse_glimmer : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_muse_glimmer(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+};
