@@ -335,6 +335,92 @@ The server includes a set of built-in tools that enable the LLM to access the lo
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
+### MCP servers
+
+Besides the built-in tools, the server can expose tools coming from MCP servers. Only the stdio transport is supported: such a server is a child process reading JSON-RPC messages on its stdin and writing replies on its stdout, so nothing has to be started or maintained outside `llama-server`.
+
+Servers are declared in a Cursor-compatible JSON file:
+
+```sh
+llama-server -m model.gguf --mcp-servers-config mcp.json
+```
+
+The same JSON can be passed inline with `--mcp-servers-json`. Each entry under `mcpServers` accepts:
+
+| Key | Explanation |
+| --- | ----------- |
+| `command` | executable to spawn, required, entries without it are skipped |
+| `args` | array of arguments |
+| `env` | object merged over the parent environment |
+| `cwd` | working directory of the child process |
+| `timeout_ms` | per-tool-call timeout (default: 30000) |
+
+Every server is spawned once at startup to list its tools, then stopped, and respawned on demand when one of its tools is called. Tools are exposed as `<server>_<tool>` alongside the built-in ones: they show up in the Web UI and in `GET /tools`, and the model calls them like any other tool. A name colliding with an already registered tool is skipped. This is independent of `--tools`, MCP servers can be the only tools available.
+
+The child process runs with the same privileges as the server, so only declare commands you trust. As with `--tools`, `--cors-origins` then defaults to `localhost`.
+
+Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach remote MCP servers from the browser.
+
+#### Minimal example
+
+Since the protocol is one JSON-RPC message per line over stdio, a POSIX shell script is enough, with no SDK and no dependency:
+
+```sh
+#!/bin/sh
+# minimal MCP stdio server, one JSON-RPC message per line on stdin/stdout, logs go to stderr
+
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -En 's/.*"id":([0-9]+).*/\1/p')
+    method=$(printf '%s' "$line" | sed -En 's/.*"method":"([^"]*)".*/\1/p')
+    case "$method" in
+        initialize)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"echo-sh","version":"1.0"}}}\n' "$id"
+            ;;
+        tools/list)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","description":"Echo the input text back","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}}\n' "$id"
+            ;;
+        tools/call)
+            # the value is already JSON-escaped on the wire, so it can be re-embedded as-is
+            text=$(printf '%s' "$line" | sed -En 's/.*"text":"((\\.|[^"\\])*)".*/\1/p')
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\n' "$id" "$text"
+            ;;
+        *)
+            # notifications have no id and expect no reply
+            ;;
+    esac
+done
+```
+
+Save it as `mcp-echo.sh`, make it executable, and declare it in `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sh": { "command": "/path/to/mcp-echo.sh" }
+  }
+}
+```
+
+The tool is then registered as `sh_echo` and can be picked from the tools list in the Web UI.
+
+Replacing the echoed value with the output of a local command, `pmset -g batt` for instance, is enough to give the model live battery status without touching any C++ code. The same skeleton wraps any existing program, in any language: the process boundary is the sandbox, and only the tools it declares are visible to the model.
+
+### CORS
+
+By default the server reflects any `Origin` header back with credentials allowed. This matches the old, always-on `*` behavior and is fine as long as the server only exposes stateless, read-only endpoints.
+
+Enabling `--tools` or `--agent` exposes file read/write over the API, so in that case `--cors-origins` defaults to `localhost` instead: only pages served from localhost can reach the server. Pass `--cors-origins` explicitly to override either default.
+
+Recommended `--cors-origins` setting, depending on where the server runs:
+
+| Deployment | Recommendation |
+| ---------- | --------------- |
+| Public | set an API key, put the server behind a reverse proxy, `--cors-origins` optional |
+| Local network | set `--cors-origins` to your frontend's origin |
+| Same machine | `--cors-origins localhost` (default once `--agent` is set) |
+
+Related flags: `--cors-origins`, `--cors-methods`, `--cors-headers`, `--cors-credentials` / `--no-cors-credentials`. Background and rationale: [#25655](https://github.com/ggml-org/llama.cpp/pull/25655).
+
 ## Build
 
 `llama-server` is built alongside everything else from the root of the project
