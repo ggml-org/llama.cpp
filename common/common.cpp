@@ -1903,6 +1903,7 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         }
 
         struct ggml_tensor * tensor = ggml_get_tensor(ctx, name.c_str());
+        GGML_ASSERT(tensor != nullptr);
         if (tensor->type != GGML_TYPE_F32) {
             COM_ERR("invalid (non-F32) direction tensor type in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
