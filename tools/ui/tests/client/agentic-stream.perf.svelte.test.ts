@@ -10,15 +10,15 @@
 //
 // Run: npx vitest --project=client --run tests/client/agentic-stream.perf.svelte.test.ts
 
-import { describe, it } from 'vitest';
-import { render } from 'vitest-browser-svelte';
-import { tick } from 'svelte';
+import { perfState } from './components/agentic-perf-state.svelte';
 import AgenticPerfWrapper from './components/AgenticPerfWrapper.svelte';
 import ChatMessagesPerfWrapper from './components/ChatMessagesPerfWrapper.svelte';
-import { perfState } from './components/agentic-perf-state.svelte';
+import { MessageRole } from '$lib/enums';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import type { DatabaseMessage } from '$lib/types';
-import { MessageRole } from '$lib/enums';
+import { tick } from 'svelte';
+import { describe, it } from 'vitest';
+import { render } from 'vitest-browser-svelte';
 
 // --- fixture construction -------------------------------------------------
 
@@ -40,24 +40,28 @@ interface FixtureOpts {
 }
 
 const DEFAULTS: FixtureOpts = {
-	priorToolCalls: 0,
-	toolResultBytes: 1024,
 	editFileEdits: 0,
 	openCodeFence: false,
-	paragraphEvery: 0
+	paragraphEvery: 0,
+	priorToolCalls: 0,
+	toolResultBytes: 1024
 };
 
 function blob(bytes: number, seed: string): string {
 	const line = `${seed} output line with some representative width to it`;
 	const n = Math.max(1, Math.ceil(bytes / (line.length + 1)));
 	const out: string[] = [];
+
 	for (let i = 0; i < n; i++) out.push(`${line} ${i}`);
+
 	return out.join('\n');
 }
 
 function diffLines(n: number, seed: string): string {
 	const out: string[] = [];
+
 	for (let i = 0; i < n; i++) out.push(`${seed} line ${i} const value_${i} = compute(${i});`);
+
 	return out.join('\n');
 }
 
@@ -65,14 +69,14 @@ let msgSeq = 0;
 
 function baseMessage(overrides: Partial<DatabaseMessage>): DatabaseMessage {
 	return {
-		id: `m${msgSeq++}`,
-		convId: 'perf-conv',
-		type: 'text',
-		timestamp: 0,
-		role: MessageRole.ASSISTANT,
-		content: '',
-		parent: null,
 		children: [],
+		content: '',
+		convId: 'perf-conv',
+		id: `m${msgSeq++}`,
+		parent: null,
+		role: MessageRole.ASSISTANT,
+		timestamp: 0,
+		type: 'text',
 		...overrides
 	} as DatabaseMessage;
 }
@@ -86,48 +90,50 @@ function buildFixture(opts: FixtureOpts): {
 
 	for (let i = 0; i < opts.priorToolCalls; i++) {
 		const id = `call_${i}`;
+
 		toolCalls.push({
-			id,
-			type: 'function',
 			function: {
-				name: 'exec_shell_command',
-				arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` })
-			}
+				arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` }),
+				name: 'exec_shell_command'
+			},
+			id,
+			type: 'function'
 		});
 		toolMessages.push(
 			baseMessage({
+				content: `${blob(opts.toolResultBytes, `t${i}`)}\n[exit code: 0]`,
 				role: MessageRole.TOOL,
-				toolCallId: id,
-				content: `${blob(opts.toolResultBytes, `t${i}`)}\n[exit code: 0]`
+				toolCallId: id
 			})
 		);
 	}
 
 	for (let i = 0; i < opts.editFileEdits; i++) {
 		const id = `edit_${i}`;
+
 		toolCalls.push({
-			id,
-			type: 'function',
 			function: {
-				name: 'edit_file',
 				arguments: JSON.stringify({
-					path: `/src/file_${i}.ts`,
-					edits: [{ old_text: diffLines(400, 'old'), new_text: diffLines(400, 'new') }]
-				})
-			}
+					edits: [{ new_text: diffLines(400, 'new'), old_text: diffLines(400, 'old') }],
+					path: `/src/file_${i}.ts`
+				}),
+				name: 'edit_file'
+			},
+			id,
+			type: 'function'
 		});
 		toolMessages.push(
 			baseMessage({
+				content: JSON.stringify({ edits_applied: 1, result: 'ok' }),
 				role: MessageRole.TOOL,
-				toolCallId: id,
-				content: JSON.stringify({ result: 'ok', edits_applied: 1 })
+				toolCallId: id
 			})
 		);
 	}
 
 	const message = baseMessage({
-		toolCalls: toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
-		content: ''
+		content: '',
+		toolCalls: toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined
 	});
 
 	return { message, toolMessages };
@@ -174,18 +180,21 @@ async function measure(label: string, partial: Partial<FixtureOpts>, tokens = 60
 	await tick();
 
 	const CHUNK = 'The quick brown fox jumps over the lazy dog. ';
-	let accumulated = opts.openCodeFence ? '```notalanguage\n' : '';
-	const durations: number[] = [];
 
+	let accumulated = opts.openCodeFence ? '```notalanguage\n' : '';
+
+	const durations: number[] = [];
 	const wallStart = performance.now();
 
 	for (let i = 0; i < tokens; i++) {
 		accumulated += CHUNK;
+
 		if (opts.paragraphEvery > 0 && (i + 1) % opts.paragraphEvery === 0) {
 			accumulated += '\n\n';
 		}
 
 		const t0 = performance.now();
+
 		// Mirrors updateMessageAtIndex: a brand-new object identity per chunk.
 		perfState.message = { ...perfState.message!, content: accumulated };
 		await tick();
@@ -211,10 +220,10 @@ async function measure(label: string, partial: Partial<FixtureOpts>, tokens = 60
 
 	results.push({
 		label,
-		tokens,
+		max: durations[durations.length - 1],
 		mean: total / durations.length,
 		p95: durations[Math.floor(durations.length * 0.95)],
-		max: durations[durations.length - 1],
+		tokens,
 		total,
 		wall
 	});
@@ -223,7 +232,6 @@ async function measure(label: string, partial: Partial<FixtureOpts>, tokens = 60
 function report() {
 	const pad = (s: string, n: number) => s.padEnd(n);
 	const num = (n: number) => n.toFixed(2).padStart(8);
-
 	const header = `${pad('fixture', 40)}${pad('tok', 5)}${'mean'.padStart(8)}${'p95'.padStart(8)}${'max'.padStart(8)}${'sync'.padStart(9)}${'wall'.padStart(9)}`;
 	const lines = [
 		'',
@@ -268,56 +276,63 @@ async function measureConversation(
 	agentic = false
 ) {
 	const history: DatabaseMessage[] = [];
+
 	for (let i = 0; i < priorMessages; i++) {
 		const isAssistant = i % 2 !== 0;
 
 		if (isAssistant && agentic) {
 			const id = `prior_call_${i}`;
+
 			history.push(
 				baseMessage({
-					role: MessageRole.ASSISTANT,
 					content: `Message ${i}`,
+					role: MessageRole.ASSISTANT,
 					toolCalls: JSON.stringify([
 						{
-							id,
-							type: 'function',
 							function: {
-								name: 'exec_shell_command',
-								arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` })
-							}
+								arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` }),
+								name: 'exec_shell_command'
+							},
+							id,
+							type: 'function'
 						}
 					])
 				})
 			);
 			history.push(
 				baseMessage({
+					content: `${blob(1024, `r${i}`)}\n[exit code: 0]`,
 					role: MessageRole.TOOL,
-					toolCallId: id,
-					content: `${blob(1024, `r${i}`)}\n[exit code: 0]`
+					toolCallId: id
 				})
 			);
+
 			continue;
 		}
 
 		history.push(
 			baseMessage({
-				role: isAssistant ? MessageRole.ASSISTANT : MessageRole.USER,
-				content: `Message ${i}: ${blob(512, `m${i}`)}`
+				content: `Message ${i}: ${blob(512, `m${i}`)}`,
+				role: isAssistant ? MessageRole.ASSISTANT : MessageRole.USER
 			})
 		);
 	}
 
-	const streaming = baseMessage({ role: MessageRole.ASSISTANT, content: '' });
+	const streaming = baseMessage({ content: '', role: MessageRole.ASSISTANT });
+
 	history.push(streaming);
 
 	conversationsStore.activeMessages = history;
 
 	const { unmount } = render(ChatMessagesPerfWrapper);
+
 	await tick();
 
 	const idx = conversationsStore.findMessageIndex(streaming.id);
 	const CHUNK = 'The quick brown fox jumps over the lazy dog. ';
+
 	let accumulated = '';
+
 	const durations: number[] = [];
 	const wallStart = performance.now();
 
@@ -325,6 +340,7 @@ async function measureConversation(
 		accumulated += CHUNK;
 
 		const t0 = performance.now();
+
 		// The real path: chat.svelte.ts -> conversations.svelte.ts.
 		conversationsStore.updateMessageAtIndex(idx, { content: accumulated });
 		await tick();
@@ -346,10 +362,10 @@ async function measureConversation(
 
 	results.push({
 		label,
-		tokens,
+		max: durations[durations.length - 1],
 		mean: total / durations.length,
 		p95: durations[Math.floor(durations.length * 0.95)],
-		max: durations[durations.length - 1],
+		tokens,
 		total,
 		wall
 	});

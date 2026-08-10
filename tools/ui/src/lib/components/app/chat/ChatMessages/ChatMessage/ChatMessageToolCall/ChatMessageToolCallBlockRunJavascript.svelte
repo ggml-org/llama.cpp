@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { XCircle, Terminal } from '@lucide/svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { FileTypeText } from '$lib/enums';
-	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { getBuiltinToolUi, type AgenticSection } from '$lib/utils';
 	import { parseRunJavascriptMeta } from './parsers/run-javascript';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { Terminal, XCircle } from '@lucide/svelte';
+	import { SyntaxHighlightedCode } from '$lib/components/app';
+	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
+	import { FileTypeText } from '$lib/enums';
+	import { type AgenticSection, getBuiltinToolUi } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -14,7 +14,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const runJsMeta = $derived(parseRunJavascriptMeta(section));
 	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');

@@ -39,7 +39,6 @@ struct Params {
     n_head: u32,
     n_group: u32,
     n_seq_tokens: u32,
-    n_seqs: u32,
 
     y_elems: u32,
 };

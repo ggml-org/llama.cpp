@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Card } from '$lib/components/ui/card';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
+	import { Card } from '$lib/components/ui/card';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
@@ -14,12 +14,12 @@
 	}
 
 	let {
-		content,
 		attachments = [],
-		renderMarkdown = false,
-		textColorClass = 'text-foreground',
 		cardBgClass = 'dark:bg-primary/15',
-		maxHeightStyle = ''
+		content,
+		maxHeightStyle = '',
+		renderMarkdown = false,
+		textColorClass = 'text-foreground'
 	}: Props = $props();
 
 	let isMultiline = $state(false);
@@ -31,6 +31,7 @@
 
 		if (content.includes('\n')) {
 			isMultiline = true;
+
 			return;
 		}
 
@@ -63,7 +64,7 @@
 		data-multiline={isMultiline ? '' : undefined}
 		style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 	>
-		{#if renderMarkdown && currentConfig.renderUserContentAsMarkdown}
+		{#if renderMarkdown && !currentConfig.renderContentAsRawText}
 			<div bind:this={messageElement}>
 				<MarkdownContent class="markdown-user-content" {content} />
 			</div>
