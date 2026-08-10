@@ -67,6 +67,20 @@
 	const pickerSupported =
 		typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 
+	// When the server does not serve file_glob_search or the user disabled
+	// it, the picker still opens for manual entry but explains why search is
+	// unavailable instead of firing searches that would only fail. Browse is
+	// hidden too: it resolves the picked folder name through the same tool.
+	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
+	const fileSearchEnabled = $derived(
+		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
+	);
+	const searchUnavailableMessage = $derived(
+		fileSearchKey === null
+			? 'File search is unavailable on this server - type a full path and press Enter'
+			: 'File search is disabled - type a full path and press Enter, or enable "Search files" in Settings > Tools'
+	);
+
 	let searchInputRef: HTMLInputElement | null = $state(null);
 
 	let queryResults = $state<string[]>([]);
@@ -98,7 +112,7 @@
 		if (!isOpen) return;
 		const q = query.trim();
 		nav.reset(-1);
-		if (q) {
+		if (q && fileSearchEnabled) {
 			search.run(q);
 		} else {
 			search.cancel();
@@ -123,7 +137,7 @@
 	// children too, so path navigation does not require a trailing slash.
 	const search = useDebouncedSearch({
 		debounceMs: SEARCH_DEBOUNCE_MS,
-		canRun: () => isOpen,
+		canRun: () => isOpen && fileSearchEnabled,
 		getQuery: () => query.trim(),
 		run: async (q, signal, isCurrent) => {
 			const trimmed = q.trim();
@@ -340,7 +354,9 @@
 				class="w-full"
 			/>
 
-			{#if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
+			{#if !fileSearchEnabled}
+				<div class="px-2 py-1.5 text-sm text-muted-foreground">{searchUnavailableMessage}</div>
+			{:else if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
 				<ChatFormWorkingDirectoryResultsList
 					results={queryResults}
 					hoveredIndex={nav.hoveredIndex}
@@ -353,7 +369,7 @@
 				/>
 			{/if}
 
-			{#if pickerSupported}
+			{#if pickerSupported && fileSearchEnabled}
 				<button
 					type="button"
 					class="-mt-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
@@ -364,7 +380,7 @@
 				</button>
 			{/if}
 
-			{#if homeBase}
+			{#if homeBase && fileSearchEnabled}
 				<div class="-mx-2 my-2 h-px bg-border/20" aria-hidden="true"></div>
 
 				<span class="px-2 py-1.5 font-mono text-[10px]">
