@@ -353,7 +353,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         const int32_t type = gguf_type(hft == HANDCRAFTED_KV_BAD_ALIGN_TYPE ? GGUF_TYPE_INT32 : GGUF_TYPE_UINT32);
         helper_write(file, type);
 
-        alignment = (expect_context_not_null(hft) || hft == HANDCRAFTED_KV_BAD_ALIGN_TYPE) ? 1 : 13;
+        alignment = expect_context_not_null(hft) ? 1 : 13;
         helper_write(file, alignment);
     }
 
