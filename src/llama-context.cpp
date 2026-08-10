@@ -36,6 +36,10 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
 }
 
 static void llama_memory_set_rs_seq(llama_memory_i * memory, uint32_t n_rs_seq) {
+    if (memory == nullptr) {
+        return;
+    }
+
     if (auto * mem = dynamic_cast<llama_memory_recurrent *>(memory)) {
         mem->n_rs_seq = n_rs_seq;
     } else if (auto * mem = dynamic_cast<llama_memory_hybrid *>(memory)) {
@@ -544,15 +548,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
 
             ggml_backend_t backend_fused = ggml_backend_sched_get_tensor_backend(sched.get(), node.tensor);
             ggml_backend_dev_t device_fused = backend_fused ? ggml_backend_get_device(backend_fused) : nullptr;
-
-            if (probe.op == LLM_FUSED_OP_SSM_ROLLBACK &&
-                    device_fused != nullptr &&
-                    ggml_backend_dev_type(device_fused) == GGML_BACKEND_DEVICE_TYPE_CPU) {
-                LLAMA_LOG_WARN("%s: %s not supported on device %s\n",
-                        func, probe.name, ggml_backend_dev_name(device_fused));
-                device_mismatch = true;
-                break;
-            }
 
             // TODO: make this descriptor-specific; model.dev_layer() preserves the current behavior,
             // but is still wrong for cases like --no-kv-offload.

@@ -18424,6 +18424,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_SSM_SCAN:
             {
+                if (ggml_get_op_params_i32(op, 0) > 1) {
+                    return false;
+                }
+
                 for (int i = 0; i < 6; i++) {
                     if (op->src[i] && ggml_is_quantized(op->src[i]->type)) {
                         return false;
