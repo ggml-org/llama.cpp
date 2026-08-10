@@ -711,12 +711,12 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
             if (streams[i][j] != nullptr) {
                 CUDA_CHECK(cudaStreamDestroy(streams[i][j]));
             }
-        }
-        if (cublas_handles[i] != nullptr) {
-            CUBLAS_CHECK(cublasDestroy(cublas_handles[i]));
-        }
-        if (cublas_workspaces[i] != nullptr) {
-            CUDA_CHECK(cudaFree(cublas_workspaces[i]));
+            if (cublas_handles[i][j] != nullptr) {
+                CUBLAS_CHECK(cublasDestroy(cublas_handles[i][j]));
+            }
+            if (cublas_workspaces[i][j] != nullptr) {
+                CUDA_CHECK(cudaFree(cublas_workspaces[i][j]));
+            }
         }
     }
 }
@@ -1419,7 +1419,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
 
     const int64_t ne_dst = ggml_nelements(dst);
     cudaStream_t main_stream = ctx.stream();
-    cublasHandle_t cublas_h = ctx.cublas_handle(main_stream);
+    cublasHandle_t cublas_h = ctx.cublas_handle();
 
     const size_t src0_ts = ggml_type_size(src0->type);
     GGML_ASSERT(nb00 == src0_ts);
