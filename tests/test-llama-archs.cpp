@@ -217,6 +217,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
+        ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(1));
