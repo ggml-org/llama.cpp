@@ -40,6 +40,8 @@
 
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {
+        case LLM_ARCH_CLIP:
+            return new llama_model_clip(params);
         case LLM_ARCH_LLAMA:
             return new llama_model_llama(params);
         case LLM_ARCH_LLAMA4:
