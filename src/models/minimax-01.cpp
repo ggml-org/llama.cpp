@@ -59,7 +59,7 @@ std::unique_ptr<llm_graph_context> llama_model_minimax_01::build_arch_graph(cons
 
 class llm_graph_input_la : public llm_graph_input_i {
 public:
-    llm_graph_input_la(const llama_hparams & hparams) : hparams(hparams) {}
+    llm_graph_input_la(const llama_hparams & hparams, const llama_vocab & vocab) : hparams(hparams), vocab(vocab) {}
 
     void set_input(const llama_ubatch * ubatch) override {
         if (inp_slopes) {
@@ -143,6 +143,21 @@ public:
                 data[s] = (ubatch->seq_id ? ubatch->seq_id[s][0] : 0);
             }
         }
+
+        if (inp_logits_mask) {
+            const int64_t n_vocab = vocab.n_tokens();
+
+            GGML_ASSERT(n_vocab != 0);
+
+            GGML_ASSERT(ggml_backend_buffer_is_host(inp_logits_mask->buffer));
+
+            float * data = (float *) inp_logits_mask->data;
+
+            for (int t = 0; t < n_vocab; ++t) {
+                data[t] = t < 200032 ? 0.0f : -INFINITY;
+            }
+        }
+
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -150,11 +165,14 @@ public:
     }
 
     const llama_hparams & hparams;
+    const llama_vocab   & vocab;
+
     struct ggml_tensor * inp_slopes     = nullptr; // F32 [n_head]
     struct ggml_tensor * inp_q_decay    = nullptr; // F32 [n_batch, n_head]
     struct ggml_tensor * inp_k_decay    = nullptr; // F32 [n_batch, n_head]
     struct ggml_tensor * inp_diag_decay = nullptr; // F32 [n_batch, n_batch, n_head]
     struct ggml_tensor * inp_seq_ids    = nullptr; // F32 [n_batch, n_batch, n_head]
+    struct ggml_tensor * inp_logits_mask = nullptr; // F32 [n_vocab]
 };
 
 llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -184,7 +202,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
 
     llm_graph_input_la * la = nullptr;
 
-    auto inp = std::make_unique<llm_graph_input_la>(hparams);
+    auto inp = std::make_unique<llm_graph_input_la>(hparams, model.vocab);
 
     inp->inp_slopes = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_head);
     ggml_set_input(inp->inp_slopes);
@@ -210,6 +228,10 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
         cb(inp->inp_seq_ids, "seq_ids", -1);
     }
 
+    inp->inp_logits_mask = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, model.vocab.n_tokens());
+    ggml_set_input(inp->inp_logits_mask);
+    cb(inp->inp_logits_mask, "logits_mask", -1);
+
     la = (llm_graph_input_la *) res->add_input(std::move(inp));
 
     struct ggml_tensor * slopes = la->inp_slopes;
@@ -217,6 +239,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
     struct ggml_tensor * k_decay_exp = (n_seq_tokens != 1 ? la->inp_k_decay : nullptr);
     struct ggml_tensor * diag_decay_exp = (n_seq_tokens != 1 ? la->inp_diag_decay : nullptr);
     struct ggml_tensor * seq_ids = (n_seqs > 1 ? la->inp_seq_ids : nullptr);
+    struct ggml_tensor * logits_mask = la->inp_logits_mask;
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
@@ -503,6 +526,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
 
     // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = ggml_add(ctx0, cur, logits_mask);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
