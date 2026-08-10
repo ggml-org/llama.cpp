@@ -4,9 +4,9 @@
 // returns to its own default. The toggle is removed from the persisted
 // config so it does not stay orphaned in localStorage.
 
-import { beforeEach, describe, expect, it } from 'vitest';
-import { settingsStore, config } from '$lib/stores/settings.svelte';
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 function seedConfig(stored: Record<string, unknown>) {
 	localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(stored));

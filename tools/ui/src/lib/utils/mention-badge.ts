@@ -61,23 +61,24 @@ export interface MentionTextSegment {
 export function splitMentionSegments(value: string): MentionTextSegment[] {
 	const linkRe = fileMentionLinkRe('g');
 	const segments: MentionTextSegment[] = [];
+
 	let cursor = 0;
 	let match: RegExpExecArray | null;
 
 	while ((match = linkRe.exec(value)) !== null) {
 		if (match.index > cursor) {
-			segments.push({ text: value.slice(cursor, match.index), mention: null });
+			segments.push({ mention: null, text: value.slice(cursor, match.index) });
 		}
 
 		segments.push({
-			text: match[0],
-			mention: { name: match[1], path: decodeFileLinkPath(match[2]) }
+			mention: { name: match[1], path: decodeFileLinkPath(match[2]) },
+			text: match[0]
 		});
 
 		cursor = match.index + match[0].length;
 	}
 
-	if (cursor < value.length) segments.push({ text: value.slice(cursor), mention: null });
+	if (cursor < value.length) segments.push({ mention: null, text: value.slice(cursor) });
 
 	return segments;
 }
