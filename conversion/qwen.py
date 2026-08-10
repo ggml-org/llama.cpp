@@ -652,7 +652,7 @@ class DFlashModel(Qwen3Model):
         target_cls = get_model_class(target_arch)
 
         if target_cls is not type(self):
-            if target_arch == "NemotronHForCausalLM" and not hasattr(self, "is_moe"):
+            if target_arch == "NemotronHForCausalLM":
                 setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
             target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
         else:
