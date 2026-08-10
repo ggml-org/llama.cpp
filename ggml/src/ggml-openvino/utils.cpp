@@ -290,6 +290,19 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
                 r_ctx->infer_request_cache.erase(key);
             }
+            // Compiling a NEW graph after GGML_OPENVINO_RELEASE_WEIGHTS dropped the host weight
+            // pages would read those Constants as zeros and silently produce garbage. The guard in
+            // buffer_set_tensor only catches a weight set after the release; with two models
+            // (speculative decoding) both are loaded and registered BEFORE the first cache hit
+            // triggers it, so the draft model's graph would compile here instead. Fail loudly.
+            if (ggml_openvino_weight_buffers_released()) {
+                GGML_ABORT(
+                    "ggml-openvino: a new graph needs compiling after GGML_OPENVINO_RELEASE_WEIGHTS dropped the "
+                    "host weight buffers, so its weights would read as zeros. This mode supports a single model "
+                    "per process -- unset GGML_OPENVINO_RELEASE_WEIGHTS for speculative decoding and any other "
+                    "multi-model run.");
+            }
+
             bool model_is_splitted = is_model_splitted(cgraph);
 
             std::shared_ptr<ov::Model> model;
@@ -622,6 +635,16 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
                 print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
             }
         }
+    }
+
+    // GGML_OPENVINO_RELEASE_WEIGHTS: on GPU the plugin holds its own device copy of every weight
+    // after compile, so the host weight buffers can be dropped to reclaim their size in RSS. The GPU
+    // path uses one dynamic-shape model for both prefill and decode, so a compiled graph serves the
+    // whole session; release on the first cache HIT, by which point the plugin has its copy. A
+    // genuinely new graph after this point fails fast at the cache-miss branch above.
+    if (cache_hit && device == "GPU" && ggml_openvino_getenv_int("GGML_OPENVINO_RELEASE_WEIGHTS") &&
+        !ggml_openvino_weight_buffers_released()) {
+        ggml_openvino_release_weight_buffers();
     }
 
     if (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING")) {

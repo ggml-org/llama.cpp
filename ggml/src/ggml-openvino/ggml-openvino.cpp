@@ -10,6 +10,8 @@
 #include "ggml.h"
 
 #include <atomic>
+#include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -32,6 +34,7 @@
 #    endif
 #    include <windows.h>
 #else
+#    include <sys/mman.h>
 #    include <unistd.h>
 #endif
 
@@ -52,6 +55,77 @@
 // - CPU repack buffer: tensor->extra stores tensor_traits with repacked data
 // =====================================================
 
+// =====================================================
+// Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS)
+// =====================================================
+// The OpenVINO weight Constants are zero-copy views into the host buffers allocated here. On GPU the
+// plugin holds its own device copy after compile_model, so the host pages are dead weight for
+// inference and can be dropped to reclaim roughly the weights' size in RSS.
+//
+// The buffer is NOT freed: ggml owns its lifetime and tensors still point into it. madvise(
+// MADV_DONTNEED) drops the resident pages while keeping the mapping valid. A later recompile would
+// re-read those Constants from now-zeroed memory and silently produce garbage, so once released the
+// cache-miss compile path must fail loudly rather than run -- see the check in ov_graph_compute.
+namespace {
+struct ov_weight_buffer_registry {
+    std::mutex mutex;
+    std::vector<std::pair<void *, size_t>> buffers;
+    bool released = false;
+};
+
+ov_weight_buffer_registry & ov_weight_registry() {
+    static ov_weight_buffer_registry reg;
+    return reg;
+}
+}  // namespace
+
+void ggml_openvino_register_weight_buffer(void * data, size_t size) {
+    if (data == nullptr || size == 0) {
+        return;
+    }
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    for (const auto & b : reg.buffers) {
+        if (b.first == data) {
+            return;  // already registered
+        }
+    }
+    reg.buffers.emplace_back(data, size);
+}
+
+bool ggml_openvino_weight_buffers_released() {
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    return reg.released;
+}
+
+void ggml_openvino_release_weight_buffers() {
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    if (reg.released) {
+        return;
+    }
+    size_t total = 0;
+#if !defined(_WIN32)
+    const long page = sysconf(_SC_PAGESIZE);
+    for (const auto & b : reg.buffers) {
+        // Align inwards to page boundaries so madvise only drops whole pages owned by this buffer.
+        uintptr_t start = reinterpret_cast<uintptr_t>(b.first);
+        uintptr_t end = start + b.second;
+        uintptr_t astart = (start + page - 1) & ~(uintptr_t) (page - 1);
+        uintptr_t aend = end & ~(uintptr_t) (page - 1);
+        if (aend > astart) {
+            if (madvise(reinterpret_cast<void *>(astart), aend - astart, MADV_DONTNEED) == 0) {
+                total += aend - astart;
+            }
+        }
+    }
+#endif
+    reg.released = true;
+    GGML_LOG_INFO("%s: released %zu MB of host weight buffers (%zu buffers)\n", __func__, total / 1024 / 1024,
+                  reg.buffers.size());
+}
+
 // Buffer context that manages per-tensor allocations (no contiguous buffer for weights)
 struct ggml_backend_openvino_buffer_context {
     int device;
@@ -62,6 +136,11 @@ struct ggml_backend_openvino_buffer_context {
     void * data;
     size_t size;
     bool is_remote;
+
+    // Set when the buffer is a file-backed spill mapping (GGML_OPENVINO_SPILL_DIR); it must be
+    // munmap'd rather than freed.
+    void * spill_mapping = nullptr;
+    size_t spill_size = 0;
 
     // Wrapping of the buffer
     std::shared_ptr<ov::Tensor> ov_buffer;
@@ -96,6 +175,42 @@ struct ggml_backend_openvino_buffer_context {
                 gpu_context.create_usm_device_tensor(ov::element::u8, ov::Shape{size});
             data = usm_tensor.get();
             ov_buffer = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
+        } else if (const char * spill_dir = ggml_openvino_getenv_str("GGML_OPENVINO_SPILL_DIR")) {
+            // Disk-backed weight buffer: back the repacked weights with a temp file via MAP_SHARED
+            // instead of anonymous memory. Anonymous pages can only be evicted to swap, so the
+            // repacked buffer stays pinned alongside the mmap'd source and both are resident at once
+            // -- that double residency is the load-time peak. File-backed pages are reclaimable: the
+            // kernel can write them back and drop them under pressure, then re-read on demand, so RSS
+            // becomes a working set rather than the whole buffer. The file is unlinked immediately,
+            // so it disappears when the process exits.
+            //
+            // The directory must be real storage. Pointing this at a tmpfs mount (/tmp on many
+            // systems) backs the "spill" with RAM and makes matters worse.
+            char path[PATH_MAX];
+            snprintf(path, sizeof(path), "%s/ggml-ov-weights-%d-XXXXXX", spill_dir, (int) getpid());
+            int fd = mkstemp(path);
+            if (fd < 0) {
+                GGML_LOG_ERROR("%s: mkstemp(%s) failed: %s\n", __func__, path, strerror(errno));
+                return;
+            }
+            unlink(path);  // anonymous-but-file-backed: freed on process exit
+            if (ftruncate(fd, (off_t) size) != 0) {
+                GGML_LOG_ERROR("%s: ftruncate(%zu) failed: %s\n", __func__, size, strerror(errno));
+                close(fd);
+                return;
+            }
+            void * m = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            close(fd);  // the mapping keeps the file alive
+            if (m == MAP_FAILED) {
+                GGML_LOG_ERROR("%s: mmap(%zu) failed: %s\n", __func__, size, strerror(errno));
+                return;
+            }
+            data = m;
+            spill_mapping = m;
+            spill_size = size;
+            GGML_LOG_INFO("%s: weight buffer spilled to %s (%zu MB, file-backed)\n", __func__, spill_dir,
+                          size / 1024 / 1024);
+            ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
         } else {
             data = ggml_aligned_malloc(size);
             GGML_ASSERT(data);
@@ -123,7 +238,9 @@ struct ggml_backend_openvino_buffer_context {
             delete pair.second;
         }
         tensor_extras.clear();
-        if (!is_remote && data != nullptr) {
+        if (spill_mapping != nullptr) {
+            munmap(spill_mapping, spill_size);
+        } else if (!is_remote && data != nullptr) {
             ggml_aligned_free(data, size);
         }
     }
@@ -240,6 +357,19 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
 
     if (is_weight_buffer && is_full_tensor_set && is_2d) {
         try {
+            // Register the host buffer so its pages can be dropped once the GPU plugin has its own
+            // device copy (GGML_OPENVINO_RELEASE_WEIGHTS). Weights are set once at model load, so a
+            // weight arriving AFTER a release means a second model is loading while the first
+            // model's compiled graph is pinned; that graph would be reused with this model's key.
+            if (!ctx->is_remote) {
+                if (ggml_openvino_weight_buffers_released()) {
+                    GGML_ABORT(
+                        "ggml-openvino: loading a new model while GGML_OPENVINO_RELEASE_WEIGHTS pinned a previous "
+                        "model's compiled graph. This mode supports a single model per process; unset it for "
+                        "multi-model runs.");
+                }
+                ggml_openvino_register_weight_buffer(ctx->data, ctx->size);
+            }
             auto result = process_weight_tensor(tensor, data, tensor->data);
             result.weight_node->set_friendly_name(tensor->name);
 

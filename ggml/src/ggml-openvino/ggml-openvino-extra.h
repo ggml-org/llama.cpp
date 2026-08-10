@@ -113,6 +113,13 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
 // 1. Pre-built ov::Constant nodes for weights (avoiding memcpy during graph construction)
 // 2. ov::Tensor wrappers for KV cache / compute tensors (for direct use with infer_request)
 
+// Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only). The OV weight Constants are
+// zero-copy views into host buffers; once the GPU plugin holds its own device copy those pages can be
+// dropped. Single model per process: a graph compiled after the release would read zeros.
+void ggml_openvino_register_weight_buffer(void * data, size_t size);
+void ggml_openvino_release_weight_buffers();
+bool ggml_openvino_weight_buffers_released();
+
 // Base class for OpenVINO tensor extra data
 struct ggml_openvino_extra_base {
     enum class Type { WEIGHT, QUANTIZED_WEIGHT, TENSOR };
