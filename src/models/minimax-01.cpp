@@ -138,21 +138,6 @@ public:
             }
         }
 
-        if (inp_seq_ids) {
-            const int64_t n_head = hparams.n_head();
-            const int64_t n_seqs = ubatch->n_seqs;
-
-            GGML_ASSERT(n_seqs != 0);
-
-            GGML_ASSERT(ggml_backend_buffer_is_host(inp_seq_ids->buffer));
-
-            uint32_t * data = (uint32_t *) inp_seq_ids->data;
-
-            for (int s = 0; s < n_seqs; ++s) {
-                data[s] = (ubatch->seq_id ? ubatch->seq_id[s][0] : 0);
-            }
-        }
-
         if (inp_logits_mask) {
             const int64_t n_vocab = vocab.n_tokens();
 
@@ -180,7 +165,6 @@ public:
     struct ggml_tensor * inp_q_decay    = nullptr; // F32 [n_batch, n_head]
     struct ggml_tensor * inp_k_decay    = nullptr; // F32 [n_batch, n_head]
     struct ggml_tensor * inp_diag_decay = nullptr; // F32 [n_batch, n_batch, n_head]
-    struct ggml_tensor * inp_seq_ids    = nullptr; // F32 [n_batch, n_batch, n_head]
     struct ggml_tensor * inp_logits_mask = nullptr; // F32 [n_vocab]
 };
 
@@ -231,12 +215,6 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
         cb(inp->inp_diag_decay, "diag_decay_exp", -1);
     }
 
-    if (n_seqs > 1) {
-        inp->inp_seq_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
-        ggml_set_input(inp->inp_seq_ids);
-        cb(inp->inp_seq_ids, "seq_ids", -1);
-    }
-
     inp->inp_logits_mask = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, model.vocab.n_tokens());
     ggml_set_input(inp->inp_logits_mask);
     cb(inp->inp_logits_mask, "logits_mask", -1);
@@ -247,7 +225,6 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
     struct ggml_tensor * q_decay_exp = (n_seq_tokens != 1 ? la->inp_q_decay : nullptr);
     struct ggml_tensor * k_decay_exp = (n_seq_tokens != 1 ? la->inp_k_decay : nullptr);
     struct ggml_tensor * diag_decay_exp = (n_seq_tokens != 1 ? la->inp_diag_decay : nullptr);
-    struct ggml_tensor * seq_ids = (n_seqs > 1 ? la->inp_seq_ids : nullptr);
     struct ggml_tensor * logits_mask = la->inp_logits_mask;
 
     for (int il = 0; il < n_layer; ++il) {
@@ -297,7 +274,9 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         } else {
             const auto * mctx_cur = inp_rs->mctx;
+            const auto kv_head = mctx_cur->get_head();
 
+            // TODO any way to make conv states optional in recurrent memory?
             ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
             ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
             ggml_build_forward_expand(gf, conv_state_all);
@@ -306,7 +285,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
             struct ggml_tensor * slope_rate = ggml_scale(ctx0, slopes, slope_scale);
             cb(slope_rate, "slope_rate", il);
 
-            cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
+            cur = ggml_reshape_4d(ctx0, cur, cur->ne[0], n_seq_tokens, 1, n_seqs);
 
             struct ggml_tensor * QKVcur = build_lora_mm(model.layers[il].wqkv, cur);
             cb(QKVcur, "QKVcur", il);
@@ -314,7 +293,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
             QKVcur = ggml_silu(ctx0, QKVcur);
             cb(QKVcur, "QKVcur_silu", il);
 
-            QKVcur = ggml_view_4d(ctx0, QKVcur, n_embd_head * 3, n_head, n_seq_tokens, n_seqs, ggml_element_size(QKVcur)*n_embd_head*3, ggml_element_size(QKVcur)*n_embd_head*3*n_head, ggml_element_size(QKVcur)*n_embd_head*3*n_head*n_seq_tokens, 0);
+            QKVcur = ggml_reshape_4d(ctx0, QKVcur, n_embd_head * 3, n_head, n_seq_tokens, n_seqs);
 
             struct ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 0*sizeof(float)*n_embd_head));
             struct ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 1*sizeof(float)*n_embd_head));
@@ -324,17 +303,10 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            ggml_tensor * kv_l = mctx_cur->get_s_l(il);
-            struct ggml_tensor * kv_old = ggml_view_2d(ctx0, kv_l, n_embd_head*n_embd_head*n_head, n_seq_max, ggml_element_size(kv_l)*n_embd_head*n_embd_head*n_head, 0);
-            cb(kv_old, "kv_old_2d", il);
+            ggml_tensor * la_states_all = mctx_cur->get_s_l(il);
+            ggml_tensor * state = build_rs(inp_rs, la_states_all, hparams.n_embd_s(), n_seqs);
 
-            // optimization for a single sequence
-            if (n_seqs > 1) {
-                kv_old = ggml_get_rows(ctx0, kv_old, seq_ids);
-                cb(kv_old, "kv_old_2d_sel", il);
-            }
-
-            kv_old = ggml_view_4d(ctx0, kv_old, n_embd_head, n_embd_head, n_head, n_seqs, ggml_element_size(kv_l)*n_embd_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head*n_head, 0);
+            struct ggml_tensor * kv_old = ggml_reshape_4d(ctx0, state, n_embd_head, n_embd_head, n_head, n_seqs);
             cb(kv_old, "kv_old", il);
 
             struct ggml_tensor * qkv = nullptr;
@@ -443,19 +415,16 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 cb(kv_new, "kv_new", il);
             }
 
-            // store new kv states for each processed sequence
-            // TODO is there a prettier way to do it?
-            for (uint64_t s = 0; s < ubatch.n_seqs; s++) {
-                uint64_t seq_id = ubatch.seq_id ? ubatch.seq_id[s][0] : 0;
-                struct ggml_tensor * kv_old_seq_view = ggml_view_4d(ctx0, kv_l, n_embd_head, n_embd_head, n_head, 1, ggml_element_size(kv_l)*n_embd_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head*n_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head*n_head*seq_id);
-                struct ggml_tensor * kv_new_seq_view = ggml_view_4d(ctx0, kv_new, n_embd_head, n_embd_head, n_head, 1, ggml_element_size(kv_l)*n_embd_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head*n_head, ggml_element_size(kv_l)*n_embd_head*n_embd_head*n_head*s);
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, kv_new_seq_view, kv_old_seq_view));
-            }
+            // Update the recurrent states
+            ggml_build_forward_expand(gf,
+                                     ggml_cpy(ctx0, kv_new,
+                                              ggml_view_1d(ctx0, la_states_all, hparams.n_embd_s() * n_seqs,
+                                                           kv_head * hparams.n_embd_s() * ggml_element_size(la_states_all))));
 
             qkv = ggml_cont(ctx0, ggml_permute(ctx0, qkv, 0, 2, 1, 3));
             cb(qkv, "qkv_permuted", il);
 
-            qkv = ggml_view_3d(ctx0, qkv, qkv->ne[0]*qkv->ne[1], qkv->ne[2], qkv->ne[3], ggml_element_size(qkv)*qkv->ne[0]*qkv->ne[1], ggml_element_size(qkv)*qkv->ne[0]*qkv->ne[1]*qkv->ne[2], 0);
+            qkv = ggml_reshape_4d(ctx0, qkv, qkv->ne[0]*qkv->ne[1], qkv->ne[2], 1, qkv->ne[3]);
 
             // norm
             struct ggml_tensor * qkv_norm = build_norm(qkv,
