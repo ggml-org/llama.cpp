@@ -600,11 +600,11 @@ static __device__ __forceinline__ void flash_attn_tile_iter_KQ(
 
 #ifdef FAST_FP16_AVAILABLE
     // BF16 K/V keeps packed BF16 registers and uses v_dot2_f32_bf16; F16 K/V uses the half2 (FAST) path.
-    #ifdef V_DOT2_F32_BF16_AVAILABLE
+#ifdef V_DOT2_F32_BF16_AVAILABLE
     constexpr bool use_bf16 = std::is_same_v<T_KV, nv_bfloat162> && DV <= 256;
-    #else
+#else
     constexpr bool use_bf16 = false;
-    #endif // V_DOT2_F32_BF16_AVAILABLE
+#endif // V_DOT2_F32_BF16_AVAILABLE
     using T_fast = std::conditional_t<use_bf16, nv_bfloat162, half2>;
     static_assert((nbatch_K/2) % cpy_ne == 0, "bad nbatch_K");
 #pragma unroll
@@ -692,14 +692,14 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
     // KQ is originally 2D but uses a Z-shaped 3D memory pattern like KQ[ncols/KQ_cs][DVp][KQ_cs].
 #ifdef FAST_FP16_AVAILABLE
     // BF16 K/V keeps packed BF16 registers and uses v_dot2_f32_bf16; F16 K/V uses the half2 (FAST) path.
-    #ifdef V_DOT2_F32_BF16_AVAILABLE
-    constexpr bool use_bf16    = std::is_same_v<T_KV, nv_bfloat162> && DV <= 256;
-    #else
-    constexpr bool use_bf16    = false;
-    #endif // V_DOT2_F32_BF16_AVAILABLE
+#ifdef V_DOT2_F32_BF16_AVAILABLE
+    constexpr bool use_bf16 = std::is_same_v<T_KV, nv_bfloat162> && DV <= 256;
+#else
+    constexpr bool use_bf16 = false;
+#endif // V_DOT2_F32_BF16_AVAILABLE
     constexpr int KQ_cs = use_bf16 ? (cpw < 1*cpy_ne ? cpw : 1*cpy_ne) : (cpw < 2*cpy_ne ? cpw : 2*cpy_ne);
 #else
-    constexpr bool use_bf16    = false;
+    constexpr bool use_bf16 = false;
     constexpr int KQ_cs = cpw < 1*cpy_ne ? cpw : 1*cpy_ne;
 #endif // FAST_FP16_AVAILABLE
     static_assert(cpw % KQ_cs == 0, "bad KQ_cs");
@@ -842,42 +842,47 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
             static_assert(np == 1, "bad np for packed bf16 PV");
             static_assert(nbatch_V % 2 == 0, "bad nbatch_V for packed bf16 PV");
 #pragma unroll
-                for (int k1 = 0; k1 < nbatch_V; k1 += 2) {
-                    __align__(16) nv_bfloat162 V_k0[(DVp/2)/warp_size];
-                    __align__(16) nv_bfloat162 V_k1[(DVp/2)/warp_size];
-                    __align__(16) nv_bfloat162 KQ_k[cpw];
+            for (int k1 = 0; k1 < nbatch_V; k1 += 2) {
+                __align__(16) nv_bfloat162 V_k0[(DVp/2)/warp_size];
+                __align__(16) nv_bfloat162 V_k1[(DVp/2)/warp_size];
+                __align__(16) nv_bfloat162 KQ_k[cpw];
 
-                    constexpr int cpy_ne_D = cpy_ne/2 < (DVp/2)/warp_size ? cpy_ne/2 : (DVp/2)/warp_size;
+                constexpr int cpy_ne_D = cpy_ne/2 < (DVp/2)/warp_size ? cpy_ne/2 : (DVp/2)/warp_size;
 #pragma unroll
-                    for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
-                        ggml_cuda_memcpy_1<cpy_ne_D*4>(&V_k0[i0/warp_size], &KV_tmp[(k1 + threadIdx.y % np)*(DV/2) + i0 + threadIdx.x*cpy_ne_D]);
-                        ggml_cuda_memcpy_1<cpy_ne_D*4>(&V_k1[i0/warp_size], &KV_tmp[(k1 + 1 + threadIdx.y % np)*(DV/2) + i0 + threadIdx.x*cpy_ne_D]);
-                    }
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
+                    ggml_cuda_memcpy_1<cpy_ne_D*4>(
+                        &V_k0[i0/warp_size], &KV_tmp[(k1 + threadIdx.y % np)*(DV/2) + i0 + threadIdx.x*cpy_ne_D]);
+                    ggml_cuda_memcpy_1<cpy_ne_D*4>(
+                        &V_k1[i0/warp_size], &KV_tmp[(k1 + 1 + threadIdx.y % np)*(DV/2) + i0 + threadIdx.x*cpy_ne_D]);
+                }
 #pragma unroll
-                    for (int jc_VKQ_0 = 0; jc_VKQ_0 < cpw; jc_VKQ_0 += KQ_cs) {
-                        const int jc_KQ = jc_VKQ_0/KQ_cs + (threadIdx.y / np)*(cpw/KQ_cs);
+                for (int jc_VKQ_0 = 0; jc_VKQ_0 < cpw; jc_VKQ_0 += KQ_cs) {
+                    const int jc_KQ = jc_VKQ_0/KQ_cs + (threadIdx.y / np)*(cpw/KQ_cs);
 
-                        __align__(16) float tmp0[KQ_cs];
-                        __align__(16) float tmp1[KQ_cs];
-                        ggml_cuda_memcpy_1<KQ_cs*sizeof(float)>(&tmp0[0], KQ + jc_KQ*(nbatch_fa*KQ_cs) + (k0 + k1 + threadIdx.y % np)*KQ_cs);
-                        ggml_cuda_memcpy_1<KQ_cs*sizeof(float)>(&tmp1[0], KQ + jc_KQ*(nbatch_fa*KQ_cs) + (k0 + k1 + 1 + threadIdx.y % np)*KQ_cs);
+                    __align__(16) float tmp0[KQ_cs];
+                    __align__(16) float tmp1[KQ_cs];
+                    ggml_cuda_memcpy_1<KQ_cs*sizeof(float)>(
+                        &tmp0[0], KQ + jc_KQ*(nbatch_fa*KQ_cs) + (k0 + k1 + threadIdx.y % np)*KQ_cs);
+                    ggml_cuda_memcpy_1<KQ_cs*sizeof(float)>(
+                        &tmp1[0], KQ + jc_KQ*(nbatch_fa*KQ_cs) + (k0 + k1 + 1 + threadIdx.y % np)*KQ_cs);
 #pragma unroll
-                        for (int jc_VKQ_1 = 0; jc_VKQ_1 < KQ_cs; ++jc_VKQ_1) {
-                            KQ_k[jc_VKQ_0+jc_VKQ_1] = ggml_cuda_cast<nv_bfloat162>(make_float2(tmp0[jc_VKQ_1], tmp1[jc_VKQ_1]));
-                        }
-                    }
-
-#pragma unroll
-                    for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
-                        const nv_bfloat162 v_perm0 = ggml_cuda_bf16_perm_ll(V_k0[i0/warp_size], V_k1[i0/warp_size]);
-                        const nv_bfloat162 v_perm1 = ggml_cuda_bf16_perm_hh(V_k0[i0/warp_size], V_k1[i0/warp_size]);
-#pragma unroll
-                        for (int jc_VKQ_0 = 0; jc_VKQ_0 < cpw; ++jc_VKQ_0) {
-                            ggml_cuda_mad(VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size].x, v_perm0, KQ_k[jc_VKQ_0]);
-                            ggml_cuda_mad(VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size].y, v_perm1, KQ_k[jc_VKQ_0]);
-                        }
+                    for (int jc_VKQ_1 = 0; jc_VKQ_1 < KQ_cs; ++jc_VKQ_1) {
+                        KQ_k[jc_VKQ_0+jc_VKQ_1] =
+                            ggml_cuda_cast<nv_bfloat162>(make_float2(tmp0[jc_VKQ_1], tmp1[jc_VKQ_1]));
                     }
                 }
+
+#pragma unroll
+                for (int i0 = 0; i0 < DVp/2; i0 += warp_size) {
+                    const nv_bfloat162 v_perm0 = ggml_cuda_bf16_perm_ll(V_k0[i0/warp_size], V_k1[i0/warp_size]);
+                    const nv_bfloat162 v_perm1 = ggml_cuda_bf16_perm_hh(V_k0[i0/warp_size], V_k1[i0/warp_size]);
+#pragma unroll
+                    for (int jc_VKQ_0 = 0; jc_VKQ_0 < cpw; ++jc_VKQ_0) {
+                        ggml_cuda_mad(VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size].x, v_perm0, KQ_k[jc_VKQ_0]);
+                        ggml_cuda_mad(VKQ[jc_VKQ_0*((DVp/2)/warp_size) + i0/warp_size].y, v_perm1, KQ_k[jc_VKQ_0]);
+                    }
+                }
+            }
         } else
 #ifdef FAST_FP16_AVAILABLE
         {
@@ -1047,11 +1052,11 @@ static __global__ void flash_attn_tile(
 #ifdef FAST_FP16_AVAILABLE
     // Native BF16 tiles with FP32 math need v_dot2_f32_bf16 (RDNA3+, device pass only);
     // BF16 K/V with DV > 256 is converted to F16 at tile load like the non-BF16 paths.
-    #ifdef V_DOT2_F32_BF16_AVAILABLE
+#ifdef V_DOT2_F32_BF16_AVAILABLE
     constexpr bool bf16 = type_KV == GGML_TYPE_BF16 && DV <= 256;
-    #else
+#else
     constexpr bool bf16 = false;
-    #endif // V_DOT2_F32_BF16_AVAILABLE
+#endif // V_DOT2_F32_BF16_AVAILABLE
     constexpr int Q_tmp_count   = ncols*DKQ/2;
     constexpr int KV_tmp_stride = nbatch_K/2 + cpy_ne;
     constexpr int KV_tmp_count  = nbatch_fa*KV_tmp_stride + DVp-DV;
