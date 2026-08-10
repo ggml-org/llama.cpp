@@ -2334,6 +2334,63 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
     return static_cast<llm_graph_result *>(gf_res_reserve.get());
 }
 
+// pack sampler outputs into as few sequences as possible before using sequences without samplers
+static void ubatch_prepare_reserve(
+              llama_ubatch                            & ubatch,
+              uint32_t                                  n_outputs,
+        const std::map<llama_seq_id, llama_sampler *> & samplers,
+              uint32_t                                  n_outputs_max_per_seq) {
+    const uint32_t n_seqs       = ubatch.n_seqs;
+    const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
+
+    for (uint32_t s = 0; s < n_seqs; ++s) {
+        for (uint32_t t = 0; t < n_seq_tokens; ++t) {
+            const uint32_t i = s * n_seq_tokens + t;
+            ubatch.n_seq_id[i] = 1;
+            ubatch.seq_id[i] = &ubatch.seq_id_unq[s];
+        }
+    }
+
+    // sequences with a sampler that fit in this ubatch
+    std::vector<uint32_t> sampler_seqs;
+    std::vector<bool> has_sampler(n_seqs, false);
+    for (const auto & entry : samplers) {
+        const llama_seq_id seq_id = entry.first;
+        if (seq_id < 0 || (uint32_t) seq_id >= n_seqs) {
+            continue;
+        }
+
+        sampler_seqs.push_back(seq_id);
+        has_sampler[seq_id] = true;
+    }
+
+    uint32_t n_outputs_set = 0;
+
+    const uint32_t n_outputs_per_seq = std::min(n_seq_tokens, n_outputs_max_per_seq);
+    for (uint32_t s : sampler_seqs) {
+        if (n_outputs_set >= n_outputs) {
+            break;
+        }
+
+        for (uint32_t t = 0; t < n_outputs_per_seq && n_outputs_set < n_outputs; ++t) {
+            ubatch.output[s * n_seq_tokens + t] = true;
+            ++n_outputs_set;
+        }
+    }
+
+    // use sequences without samplers for any remaining outputs
+    for (uint32_t t = 0; t < n_seq_tokens && n_outputs_set < n_outputs; ++t) {
+        for (uint32_t s = 0; s < n_seqs && n_outputs_set < n_outputs; ++s) {
+            if (has_sampler[s]) {
+                continue;
+            }
+
+            ubatch.output[s * n_seq_tokens + t] = true;
+            ++n_outputs_set;
+        }
+    }
+}
+
 ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
@@ -2358,58 +2415,7 @@ ggml_cgraph * llama_context::graph_reserve(
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
 
-    // select sampler outputs first to reserve the largest valid sampling graph
-    std::vector<llama_seq_id> seq_ids(n_seqs);
-    for (uint32_t s = 0; s < n_seqs; ++s) {
-        seq_ids[s] = s;
-        for (uint32_t t = 0; t < ubatch.n_seq_tokens; ++t) {
-            const uint32_t i = s * ubatch.n_seq_tokens + t;
-            ubatch.n_seq_id[i] = 1;
-            ubatch.seq_id[i] = &seq_ids[s];
-        }
-    }
-
-    uint32_t n_outputs_set = 0;
-
-    std::vector<uint32_t> sampler_seqs;
-    std::vector<bool> has_sampler(n_seqs, false);
-    for (const auto & entry : sampling.samplers) {
-        const llama_seq_id seq_id = entry.first;
-        if (seq_id < 0 || (uint32_t) seq_id >= n_seqs) {
-            continue;
-        }
-
-        sampler_seqs.push_back(seq_id);
-        has_sampler[seq_id] = true;
-    }
-
-    const uint32_t n_sampling_outputs_per_seq = std::min(
-            ubatch.n_seq_tokens, cparams.n_outputs_max_per_seq);
-
-    // select sampling rows in round-robin order across sampler sequences
-    if (!sampler_seqs.empty()) {
-        const uint32_t n_sampler_seqs = sampler_seqs.size();
-        n_outputs_set = std::min<uint64_t>(
-                n_outputs, (uint64_t) n_sampler_seqs * n_sampling_outputs_per_seq);
-
-        for (uint32_t i = 0; i < n_outputs_set; ++i) {
-            const uint32_t s = sampler_seqs[i % n_sampler_seqs];
-            const uint32_t t = i / n_sampler_seqs;
-            ubatch.output[s * ubatch.n_seq_tokens + t] = true;
-        }
-    }
-
-    // use sequences without samplers for any remaining outputs
-    for (uint32_t t = 0; t < ubatch.n_seq_tokens && n_outputs_set < n_outputs; ++t) {
-        for (uint32_t s = 0; s < n_seqs && n_outputs_set < n_outputs; ++s) {
-            if (has_sampler[s]) {
-                continue;
-            }
-
-            ubatch.output[s * ubatch.n_seq_tokens + t] = true;
-            ++n_outputs_set;
-        }
-    }
+    ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
 
     auto * res = gf_res_reserve.get();
 

@@ -1121,7 +1121,7 @@ struct llama_sampler_dist : public llama_sampler_backend {
 
     std::mt19937 rng;
 
-    // multi-output backend draws are committed as an accepted prefix
+    // use a temporary RNG for multi-output sampling so rejected tokens do not advance rng
     bool backend_transactional;
     std::mt19937 rng_backend;
     size_t n_backend_draws_generated;
