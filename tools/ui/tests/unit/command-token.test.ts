@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { findCommandToken, takeCommandDismissSnapshot } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('findCommandToken', () => {
 	it('returns null when the value does not start with a slash', () => {
@@ -9,31 +9,31 @@ describe('findCommandToken', () => {
 	});
 
 	it('parses a bare slash', () => {
-		expect(findCommandToken('/')).toEqual({ name: '', args: '', end: 1 });
+		expect(findCommandToken('/')).toEqual({ args: '', end: 1, name: '' });
 	});
 
 	it('parses a command name with no args', () => {
-		expect(findCommandToken('/prompt')).toEqual({ name: 'prompt', args: '', end: 7 });
+		expect(findCommandToken('/prompt')).toEqual({ args: '', end: 7, name: 'prompt' });
 	});
 
 	it('parses a command name followed by a space', () => {
-		expect(findCommandToken('/prompt ')).toEqual({ name: 'prompt', args: '', end: 8 });
+		expect(findCommandToken('/prompt ')).toEqual({ args: '', end: 8, name: 'prompt' });
 	});
 
 	it('parses args after the command name', () => {
-		expect(findCommandToken('/prompt rev')).toEqual({ name: 'prompt', args: 'rev', end: 11 });
+		expect(findCommandToken('/prompt rev')).toEqual({ args: 'rev', end: 11, name: 'prompt' });
 	});
 
 	it('parses multi-word args', () => {
 		expect(findCommandToken('/prompt  review  code ')).toEqual({
-			name: 'prompt',
 			args: ' review  code ',
-			end: 22
+			end: 22,
+			name: 'prompt'
 		});
 	});
 
 	it('treats the whole run as the name when there is no space', () => {
-		expect(findCommandToken('/promptx')).toEqual({ name: 'promptx', args: '', end: 8 });
+		expect(findCommandToken('/promptx')).toEqual({ args: '', end: 8, name: 'promptx' });
 	});
 });
 
@@ -44,8 +44,8 @@ describe('takeCommandDismissSnapshot', () => {
 
 	it('captures the name and args', () => {
 		expect(takeCommandDismissSnapshot('/prompt rev')).toEqual({
-			name: 'prompt',
-			args: 'rev'
+			args: 'rev',
+			name: 'prompt'
 		});
 	});
 });

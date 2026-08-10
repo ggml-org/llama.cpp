@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { highlightCode, splitGluedClosingCodeFences, trimCodePadding } from '$lib/utils/code';
+import { describe, expect, it } from 'vitest';
 
 describe('trimCodePadding', () => {
 	it('removes a single leading newline', () => {
@@ -60,44 +60,52 @@ describe('highlightCode', () => {
 
 	it('does not produce a leading newline in the highlighted html', () => {
 		const html = highlightCode('\nfunction multiply(a, b) {\n  return a * b;\n}\n', 'javascript');
+
 		expect(html.startsWith('\n')).toBe(false);
 		expect(html.startsWith(' ')).toBe(false);
 	});
 
 	it('does not produce a trailing newline in the highlighted html', () => {
 		const html = highlightCode('\nfunction foo() {}\n', 'javascript');
+
 		expect(html.endsWith('\n')).toBe(false);
 	});
 
 	it('preserves internal blank lines in highlighted code', () => {
 		const html = highlightCode('\nfunction foo() {\n\n  return 1;\n}\n', 'javascript');
+
 		expect(html).toContain('\n\n');
 	});
 
 	it('produces the same body for framed and unframed input', () => {
 		const trimmed = highlightCode('function foo() {}', 'javascript');
 		const framed = highlightCode('\nfunction foo() {}\n', 'javascript');
+
 		expect(framed).toBe(trimmed);
 	});
 
 	it('auto-detects an unknown language by default', () => {
 		const html = highlightCode('const answer = 42;', 'not-a-language');
+
 		expect(html).toContain('hljs-');
 	});
 
 	it('escapes instead of auto-detecting when autoDetect is false', () => {
 		const html = highlightCode('const answer = 42;', 'not-a-language', false);
+
 		expect(html).not.toContain('hljs-');
 		expect(html).toBe('const answer = 42;');
 	});
 
 	it('still highlights a known language when autoDetect is false', () => {
 		const html = highlightCode('const answer = 42;', 'javascript', false);
+
 		expect(html).toContain('hljs-');
 	});
 
 	it('escapes html metacharacters when falling back to plain text', () => {
 		const html = highlightCode('<script>a && b</script>', 'not-a-language', false);
+
 		expect(html).toBe('&lt;script&gt;a &amp;&amp; b&lt;/script&gt;');
 	});
 });
@@ -105,6 +113,7 @@ describe('highlightCode', () => {
 describe('splitGluedClosingCodeFences', () => {
 	it('splits text glued to a closing fence onto its own line', () => {
 		const input = "```ts\nlet foo = 'bar';\n```create this file on [Desktop](file:///a/b/)";
+
 		expect(splitGluedClosingCodeFences(input)).toBe(
 			"```ts\nlet foo = 'bar';\n```\ncreate this file on [Desktop](file:///a/b/)"
 		);
@@ -112,6 +121,7 @@ describe('splitGluedClosingCodeFences', () => {
 
 	it('leaves a well-formed code block untouched', () => {
 		const input = "```ts\nlet foo = 'bar';\n```\ncreate this file on [Desktop](file:///a/b/)";
+
 		expect(splitGluedClosingCodeFences(input)).toBe(input);
 	});
 
@@ -121,11 +131,13 @@ describe('splitGluedClosingCodeFences', () => {
 
 	it('keeps nested markdown fences inside a block intact', () => {
 		const input = '```md\n# Example\n```python\nprint(1)\n```\n```';
+
 		expect(splitGluedClosingCodeFences(input)).toBe(input);
 	});
 
 	it('splits every glued closing fence when several blocks are present', () => {
 		const input = '```ts\na\n```first words\n\n```js\nb\n```second words';
+
 		expect(splitGluedClosingCodeFences(input)).toBe(
 			'```ts\na\n```\nfirst words\n\n```js\nb\n```\nsecond words'
 		);
@@ -133,6 +145,7 @@ describe('splitGluedClosingCodeFences', () => {
 
 	it('leaves a still-open fence untouched', () => {
 		const input = '```ts\nlet foo = 1;';
+
 		expect(splitGluedClosingCodeFences(input)).toBe(input);
 	});
 });

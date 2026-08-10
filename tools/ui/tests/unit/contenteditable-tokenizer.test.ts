@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { containsCodeSpan, isOffsetInCodeBlock, tokenizeContent } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
 
 describe('tokenizeContent', () => {
 	it('tokenizes a plain text buffer with no badges', () => {
@@ -36,6 +36,7 @@ describe('tokenizeContent', () => {
 	it('recognizes badges whose path contains spaces (macOS screenshots)', () => {
 		const path = '/Users/allozaur/Desktop/Screenshot 2026-07-28 at 17.21.50.png';
 		const source = `[Screenshot 2026-07-28 at 17.21.50.png](file://${path}) `;
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'badge', name: 'Screenshot 2026-07-28 at 17.21.50.png', path },
 			{ kind: 'text', text: ' ' }
@@ -46,6 +47,7 @@ describe('tokenizeContent', () => {
 		const path =
 			'/var/folders/78/j28m7pn57wb34bfjwlskh62h0000gn/T/TemporaryItems/NSIRD_screencaptureui_GD0A2R/Screenshot 2026-07-28 at 17.23.28.png';
 		const source = `[Screenshot 2026-07-28 at 17.23.28.png](file://${path}) `;
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'badge', name: 'Screenshot 2026-07-28 at 17.23.28.png', path },
 			{ kind: 'text', text: ' ' }
@@ -55,6 +57,7 @@ describe('tokenizeContent', () => {
 	it('keeps text around a badge with spaces in the path', () => {
 		const path = '/Users/allozaur/Desktop/Screenshot 2026-07-28 at 17.21.50.png';
 		const source = `see [Screenshot 2026-07-28 at 17.21.50.png](file://${path}) done`;
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'text', text: 'see ' },
 			{ kind: 'badge', name: 'Screenshot 2026-07-28 at 17.21.50.png', path },
@@ -65,6 +68,7 @@ describe('tokenizeContent', () => {
 	it('recognizes badges whose path contains a close parenthesis (macOS duplicate files)', () => {
 		const path = '/Users/foo/Screenshot (1).png';
 		const source = `[Screenshot (1).png](file://${path}) `;
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'badge', name: 'Screenshot (1).png', path },
 			{ kind: 'text', text: ' ' }
@@ -74,6 +78,7 @@ describe('tokenizeContent', () => {
 	it('recognizes badges whose folder name is wrapped in parentheses', () => {
 		const path = '/Users/foo/Project (Stuff)/main.rs';
 		const source = `[main.rs](file://${path}) `;
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'badge', name: 'main.rs', path },
 			{ kind: 'text', text: ' ' }
@@ -82,6 +87,7 @@ describe('tokenizeContent', () => {
 
 	it('recognizes adjacent badges back-to-back with no separator', () => {
 		const source = '[a](file:///p)[b](file:///q)';
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'badge', name: 'a', path: '/p' },
 			{ kind: 'badge', name: 'b', path: '/q' }
@@ -98,6 +104,7 @@ describe('tokenizeContent', () => {
 
 	it('tokenizes a fenced code block without a language', () => {
 		const source = 'before\n```\nconst a = 1;\n```\nafter';
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'text', text: 'before\n' },
 			{ kind: 'codeBlock', text: '```\nconst a = 1;\n```' },
@@ -107,6 +114,7 @@ describe('tokenizeContent', () => {
 
 	it('tokenizes a fenced code block with a language', () => {
 		const source = '```js\nconst a = 1;\n```';
+
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'codeBlock', text: '```js\nconst a = 1;\n```' }
 		]);
@@ -185,6 +193,7 @@ describe('isOffsetInCodeBlock', () => {
 
 	it('is true inside a still-open block while it is being typed', () => {
 		const open = '```js\nconst a = 1;';
+
 		expect(isOffsetInCodeBlock(open, open.length)).toBe(true);
 	});
 
@@ -198,6 +207,7 @@ describe('isOffsetInCodeBlock', () => {
 	it('toggles per fence across multiple blocks', () => {
 		const two = BLOCK + '\ntext\n' + BLOCK;
 		const secondBlock = two.lastIndexOf(BLOCK);
+
 		expect(isOffsetInCodeBlock(two, secondBlock - 2)).toBe(false);
 		expect(isOffsetInCodeBlock(two, secondBlock + 6)).toBe(true);
 		expect(isOffsetInCodeBlock(two, two.length)).toBe(false);

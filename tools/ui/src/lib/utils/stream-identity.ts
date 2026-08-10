@@ -8,6 +8,8 @@
  */
 export function streamIdentity(conversationId: string, model?: string | null): string {
 	if (!conversationId) return '';
+
 	if (!model) return conversationId;
+
 	return `${conversationId}::${model}`;
 }

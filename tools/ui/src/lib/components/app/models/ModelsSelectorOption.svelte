@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import {
 		CircleAlert,
 		Heart,
@@ -11,10 +11,10 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import type { ModelOption } from '$lib/types/models';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 
 	interface Props {
@@ -30,20 +30,21 @@
 	}
 
 	let {
-		option,
-		isSelected,
-		isHighlighted,
-		isFav,
 		hideOrgName = false,
-		onSelect,
-		onMouseEnter,
+		isFav,
+		isHighlighted,
+		isSelected,
+		onInfoClick,
 		onKeyDown,
-		onInfoClick
+		onMouseEnter,
+		onSelect,
+		option
 	}: Props = $props();
 
 	let currentRouterModels = $derived(routerModels());
 	let serverStatus = $derived.by(() => {
 		const model = currentRouterModels.find((m) => m.id === option.model);
+
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	});
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));

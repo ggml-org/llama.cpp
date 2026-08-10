@@ -1,5 +1,3 @@
-import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
-import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
 import {
 	CWD_CHANGED_PREFIX,
 	CWD_CLEARED_TEXT,
@@ -8,10 +6,13 @@ import {
 	HOME_TILDE,
 	HOME_TILDE_PREFIX
 } from '$lib/constants';
+import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
+import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
 
 export function lastPathSegment(p: string): string {
 	const trimmed = p.replace(TRAILING_SLASHES_REGEX, '');
 	const idx = trimmed.lastIndexOf(PATH_SEPARATOR);
+
 	return idx === -1 ? trimmed : trimmed.slice(idx + 1);
 }
 
@@ -22,10 +23,14 @@ export function abbreviateWorkingDir(
 	home: string | null | undefined
 ): string {
 	if (!path) return '';
+
 	if (!home) return lastPathSegment(path);
+
 	if (path === home) return HOME_TILDE;
+
 	if (path.startsWith(home + PATH_SEPARATOR))
 		return HOME_TILDE_PREFIX + path.slice(home.length + 1);
+
 	return lastPathSegment(path);
 }
 
@@ -33,9 +38,12 @@ export function abbreviateWorkingDir(
 // unchanged - used where the full path matters.
 export function abbreviateHome(path: string, home: string | null | undefined): string {
 	if (!home) return path;
+
 	if (path === home) return HOME_TILDE;
+
 	if (path.startsWith(home + PATH_SEPARATOR))
 		return HOME_TILDE_PREFIX + path.slice(home.length + 1);
+
 	return path;
 }
 
@@ -55,6 +63,7 @@ export interface CwdMessageInfo {
  */
 export function formatCwdMessage(cwd: string, home: string | null): string {
 	const display = abbreviateWorkingDir(cwd, home);
+
 	return `${CWD_CHANGED_PREFIX}[${FILE_URI_PREFIX}${cwd}](${display}).`;
 }
 
@@ -65,15 +74,20 @@ export function formatCwdMessage(cwd: string, home: string | null): string {
  */
 export function parseCwdMessage(content: string): CwdMessageInfo | null {
 	const trimmed = content.trim();
+
 	if (trimmed === CWD_CLEARED_TEXT) {
-		return { path: null, display: '' };
+		return { display: '', path: null };
 	}
+
 	if (trimmed.startsWith(CWD_CHANGED_PREFIX)) {
 		const rest = trimmed.slice(CWD_CHANGED_PREFIX.length);
 		// not anchored to the end: guidance may follow the link
 		const link = rest.match(CWD_LINK_REGEX);
-		if (link) return { path: link[1], display: link[2] };
-		return { path: rest, display: rest };
+
+		if (link) return { display: link[2], path: link[1] };
+
+		return { display: rest, path: rest };
 	}
+
 	return null;
 }

@@ -35,24 +35,24 @@
 	}
 
 	let {
-		isCommandPickerOpen,
 		commandQuery,
 		commands = [],
+		isCommandPickerOpen,
+		isMentionPickerOpen,
+		isPromptPickerOpen,
+		mentionAnchor,
+		mentionQuery,
 		onCommandPickerClose,
 		onCommandSelect,
-		isPromptPickerOpen,
-		promptSearchQuery,
-		isMentionPickerOpen,
-		mentionQuery,
-		mentionAnchor,
-		scopePath,
-		onPromptPickerClose,
-		onMentionPickerClose,
 		onMentionOpened,
+		onMentionPickerClose,
 		onMentionSelect,
-		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError
+		onPromptLoadError,
+		onPromptLoadStart,
+		onPromptPickerClose,
+		promptSearchQuery,
+		scopePath
 	}: Props = $props();
 
 	let commandPickerRef: ChatFormCommandPicker | undefined = $state(undefined);

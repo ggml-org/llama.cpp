@@ -3,14 +3,14 @@
 
 	export const emptyMediaVariants = tv({
 		base: 'mb-2 flex shrink-0 items-center justify-center [&_svg]:pointer-events-none [&_svg]:shrink-0',
+		defaultVariants: {
+			variant: 'default'
+		},
 		variants: {
 			variant: {
 				default: 'bg-transparent',
 				icon: "bg-muted text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg [&_svg:not([class*='size-'])]:size-4"
 			}
-		},
-		defaultVariants: {
-			variant: 'default'
 		}
 	});
 
@@ -22,9 +22,9 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {
-		ref = $bindable(null),
-		class: className,
 		children,
+		class: className,
+		ref = $bindable(null),
 		variant = 'default',
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> & { variant?: EmptyMediaVariant } = $props();

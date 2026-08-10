@@ -1,22 +1,22 @@
 <script lang="ts">
 	import { File, Folder } from '@lucide/svelte';
-	import { abbreviateHome, runGlobSearchWithChildren, type GlobEntryResult } from '$lib/utils';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
+	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
 	import * as Popover from '$lib/components/ui/popover';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
-	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
-	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import type { FileMentionEntry } from '$lib/types';
 	import {
 		FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
 		HOME_TILDE,
 		SEARCH_DEBOUNCE_MS
 	} from '$lib/constants';
+	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
+	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
+	import type { FileMentionEntry } from '$lib/types';
+	import { abbreviateHome, type GlobEntryResult, runGlobSearchWithChildren } from '$lib/utils';
 
 	/**
 	 * Floating file/folder mention picker. The chat input is the search
@@ -38,18 +38,18 @@
 
 	let {
 		class: className = '',
-		isOpen,
-		query,
 		customAnchor = null,
-		scopePath = null,
+		isOpen,
 		onClose,
+		onOpened,
 		onSelect,
-		onOpened
+		query,
+		scopePath = null
 	}: Props = $props();
 
 	const nav = usePickerNavigation({
-		isOpen: () => isOpen,
 		count: () => displayedItems.length,
+		isOpen: () => isOpen,
 		onClose: () => onClose(),
 		onSelect: (index) => handleSelect(displayedItems[index])
 	});
@@ -69,6 +69,7 @@
 	// would otherwise reach the server as max_depth 0 = unlimited.
 	const searchDepth = $derived.by(() => {
 		const n = Number(config().mentionSearchMaxDepth);
+
 		return Number.isInteger(n) && n > 0 ? n : FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH;
 	});
 
@@ -78,8 +79,8 @@
 	const MENTION_SEARCH_LIMIT = 50;
 
 	const search = useDebouncedSearch({
-		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen && fileSearchEnabled,
+		debounceMs: SEARCH_DEBOUNCE_MS,
 		getQuery: () => trimmedQuery,
 		run: async (query, signal, isCurrent) => {
 			try {
@@ -91,23 +92,29 @@
 					searchDepth,
 					MENTION_SEARCH_LIMIT,
 					signal,
-					{ type: GlobSearchType.ALL, descendOnTrailingSeparator: true }
+					{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
 				);
+
 				if (!isCurrent()) return;
+
 				if (res.error) {
 					searchResults = [];
 					searchError = res.error;
+
 					return;
 				}
+
 				const toEntry = (e: GlobEntryResult): FileMentionEntry => ({
-					path: e.path,
 					name: e.name,
+					path: e.path,
 					type: e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
 				});
+
 				searchResults = res.entries.map(toEntry);
 				searchError = null;
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;
+
 				searchResults = [];
 				searchError = err instanceof Error ? err.message : String(err);
 			}
@@ -121,9 +128,11 @@
 		if (fileSearchKey === null) {
 			return 'File search is unavailable on this server (started without --tools)';
 		}
+
 		if (!fileSearchEnabled) {
 			return 'File search is disabled - enable "Search files" in Settings > Tools to use @-mentions';
 		}
+
 		return searchError ? `Search failed - ${searchError}` : 'No matching files or folders';
 	});
 
@@ -131,6 +140,7 @@
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
+
 		void toolsStore.resolveServerHome();
 	});
 
@@ -146,12 +156,15 @@
 
 	$effect(() => {
 		const q = (query ?? '').trim();
+
 		if (!isOpen || !q || !fileSearchEnabled) {
 			search.cancel();
 			searchResults = [];
 			searchError = null;
+
 			return;
 		}
+
 		search.setLoading(true);
 		search.run(q);
 	});
@@ -167,9 +180,11 @@
 		// Enter-to-submit never fires mid-search.
 		if (isOpen && event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
+
 			if (nav.hoveredIndex >= 0 && displayedItems[nav.hoveredIndex]) {
 				handleSelect(displayedItems[nav.hoveredIndex]);
 			}
+
 			return true;
 		}
 

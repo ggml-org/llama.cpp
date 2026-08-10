@@ -1,23 +1,9 @@
 <script lang="ts">
-	import { FolderOpen } from '@lucide/svelte';
-	import { ToolsService } from '$lib/services/tools.service';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
-	import {
-		abbreviateHome,
-		buildCaseInsensitiveGlob,
-		joinPath,
-		lastPathSegment,
-		runGlobSearchWithChildren,
-		type GlobEntry
-	} from '$lib/utils';
-	import * as Popover from '$lib/components/ui/popover';
-	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
-	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
 	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
+	import { FolderOpen } from '@lucide/svelte';
+	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
+	import * as Popover from '$lib/components/ui/popover';
 	import {
 		DEFAULT_MOBILE_BREAKPOINT,
 		HOME_TILDE,
@@ -28,6 +14,20 @@
 		SEARCH_LIMIT,
 		SEARCH_MAX_DEPTH
 	} from '$lib/constants';
+	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
+	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
+	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
+	import { ToolsService } from '$lib/services/tools.service';
+	import { toolsStore } from '$lib/stores/tools.svelte';
+	import {
+		abbreviateHome,
+		buildCaseInsensitiveGlob,
+		type GlobEntry,
+		joinPath,
+		lastPathSegment,
+		runGlobSearchWithChildren
+	} from '$lib/utils';
 
 	// Microtask delay so the popover's focus scope tears down first.
 	const FOCUS_DELAY_MS = 0;
@@ -52,14 +52,14 @@
 
 	let {
 		class: className = '',
-		disabled = false,
-		directory = null,
-		isOpen,
-		query = $bindable(''),
 		customAnchor = null,
+		directory = null,
+		disabled = false,
+		isOpen,
 		onChange,
 		onClose,
-		onOpen
+		onOpen,
+		query = $bindable('')
 	}: Props = $props();
 
 	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
@@ -88,8 +88,8 @@
 	let listContainer = $state<HTMLDivElement | null>(null);
 
 	const nav = usePickerNavigation({
-		isOpen: () => isOpen,
 		count: () => queryResults.length,
+		isOpen: () => isOpen,
 		onClose: closePicker,
 		onSelect: (index) => commit(queryResults[index])
 	});
@@ -99,19 +99,24 @@
 	// Resolve home eagerly so the chip can abbreviate before the picker opens.
 	$effect(() => {
 		if (typeof window === 'undefined') return;
+
 		void toolsStore.resolveServerHome();
 	});
 
 	// HTML `autofocus` is unreliable on dynamically shown elements.
 	$effect(() => {
 		if (!isOpen) return;
+
 		setTimeout(() => searchInputRef?.focus(), FOCUS_DELAY_MS);
 	});
 
 	$effect(() => {
 		if (!isOpen) return;
+
 		const q = query.trim();
+
 		nav.reset(-1);
+
 		if (q && fileSearchEnabled) {
 			search.run(q);
 		} else {
@@ -124,11 +129,11 @@
 	});
 
 	useScrollActiveRow({
-		getTrigger: () => nav.scrollTrigger,
+		dataIndex: 'result',
 		getContainer: () => listContainer,
-		getIndex: () => nav.hoveredIndex,
 		getCount: () => queryResults.length,
-		dataIndex: 'result'
+		getIndex: () => nav.hoveredIndex,
+		getTrigger: () => nav.scrollTrigger
 	});
 
 	let searchScope = $state(HOME_TILDE);
@@ -136,16 +141,18 @@
 	// An exactly-typed directory is "entered": the shared search lists its
 	// children too, so path navigation does not require a trailing slash.
 	const search = useDebouncedSearch({
-		debounceMs: SEARCH_DEBOUNCE_MS,
 		canRun: () => isOpen && fileSearchEnabled,
+		debounceMs: SEARCH_DEBOUNCE_MS,
 		getQuery: () => query.trim(),
 		run: async (q, signal, isCurrent) => {
 			const trimmed = q.trim();
+
 			if (!trimmed) {
 				queryResults = [];
 				searchError = null;
 				nav.reset(-1);
 				searchScope = homeBase ?? HOME_TILDE;
+
 				return;
 			}
 
@@ -160,25 +167,31 @@
 					signal,
 					{ type: GlobSearchType.DIR }
 				);
+
 				if (!isCurrent()) return;
+
 				if (res.error) {
 					queryResults = [];
 					nav.reset(-1);
 					searchError = res.error;
+
 					return;
 				}
 
 				searchScope = res.exactDir ?? res.args.path;
 				queryResults = res.entries.map((e) => e.path).slice(0, MAX_RESULTS_SHOWN);
+
 				if (queryResults.length > 0) {
 					nav.reset(0);
 					nav.bumpScroll(); // scroll the list back to the top (first item is hovered)
 				} else {
 					nav.reset(-1);
 				}
+
 				searchError = null;
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;
+
 				queryResults = [];
 				nav.reset(-1);
 				searchError = err instanceof Error ? err.message : String(err);
@@ -197,7 +210,9 @@
 
 	function setDirectory(value: string) {
 		const trimmed = value.trim();
+
 		if (!trimmed) return;
+
 		onChange?.(trimmed);
 	}
 
@@ -207,17 +222,18 @@
 	async function resolveNativeName(name: string): Promise<string | null> {
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
-				path: homeBase ?? HOME_TILDE,
-				type: GlobSearchType.DIR,
 				include: buildCaseInsensitiveGlob(name),
+				limit: NATIVE_LIMIT,
 				max_depth: NATIVE_MAX_DEPTH,
-				limit: NATIVE_LIMIT
+				path: homeBase ?? HOME_TILDE,
+				type: GlobSearchType.DIR
 			});
 			const base = typeof res.base === 'string' ? res.base : '';
 			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
 			const match = entries.find(
 				(e) => lastPathSegment(e.path).toLowerCase() === name.toLowerCase()
 			);
+
 			return match ? joinPath(base, match.path) : null;
 		} catch {
 			return null;
@@ -226,9 +242,11 @@
 
 	async function browseNative() {
 		if (disabled || !window.showDirectoryPicker) return;
+
 		try {
 			const handle = await window.showDirectoryPicker();
 			const path = await resolveNativeName(handle.name);
+
 			if (path) {
 				setDirectory(path);
 				closePicker();
@@ -240,16 +258,20 @@
 		} catch (err) {
 			// user cancelled - silently ignore; other errors are logged
 			if (err instanceof DOMException && err.name === 'AbortError') return;
+
 			console.error('[ChatFormWorkingDirectory] showDirectoryPicker failed:', err);
 		}
 	}
 
 	function handleSubmit() {
 		const value = query.trim();
+
 		if (!value) {
 			closePicker();
+
 			return;
 		}
+
 		setDirectory(value);
 		closePicker();
 	}
@@ -257,6 +279,7 @@
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
+
 			if (nav.hoveredIndex >= 0 && queryResults[nav.hoveredIndex]) {
 				commit(queryResults[nav.hoveredIndex]);
 			} else if (queryResults.length === 0) {
@@ -287,6 +310,7 @@
 	function handleDismiss(event?: MouseEvent) {
 		event?.stopPropagation();
 		event?.preventDefault();
+
 		if (directory) {
 			clearDirectory(event);
 		}

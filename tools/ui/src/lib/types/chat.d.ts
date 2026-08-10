@@ -1,6 +1,6 @@
-import type { ChatFormCommandAction, ErrorDialogType, FileMentionEntryType } from '$lib/enums';
 import type { ApiChatCompletionToolCall } from './api';
 import type { DatabaseMessage, DatabaseMessageExtra } from './database';
+import type { ChatFormCommandAction, ErrorDialogType, FileMentionEntryType } from '$lib/enums';
 
 export interface ChatUploadedFile {
 	id: string;

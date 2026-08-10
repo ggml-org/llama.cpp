@@ -1,12 +1,12 @@
 <script lang="ts">
+	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
+	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
+	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
-	import type { MCPServerResources, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
 	import { parseResourcePath } from '$lib/utils';
-	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
-	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
-	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		onSelect?: (resource: MCPResourceInfo, shiftKey?: boolean) => void;
@@ -19,13 +19,13 @@
 	}
 
 	let {
-		onSelect,
-		onToggle,
-		onTemplateSelect,
-		selectedUris = new Set(),
-		selectedTemplateUri,
+		class: className,
 		expandToUri,
-		class: className
+		onSelect,
+		onTemplateSelect,
+		onToggle,
+		selectedTemplateUri,
+		selectedUris = new Set()
 	}: Props = $props();
 
 	let expandedServers = new SvelteSet<string>();
@@ -51,7 +51,6 @@
 					serverName.toLowerCase().includes(query)
 				);
 			});
-
 			const filteredTemplates = serverRes.templates.filter((t) => {
 				return (
 					t.name?.toLowerCase().includes(query) ||
@@ -82,18 +81,23 @@
 	function autoExpandToResource(uri: string) {
 		for (const [serverName, serverRes] of resources.entries()) {
 			const resource = serverRes.resources.find((r) => r.uri === uri);
+
 			if (resource) {
 				expandedServers.add(serverName);
 
 				const pathParts = parseResourcePath(uri);
+
 				if (pathParts.length > 1) {
 					let currentPath = '';
+
 					for (let i = 0; i < pathParts.length - 1; i++) {
 						currentPath = `${currentPath}/${pathParts[i]}`;
 						const folderId = `${serverName}:${currentPath}`;
+
 						expandedFolders.add(folderId);
 					}
 				}
+
 				break;
 			}
 		}

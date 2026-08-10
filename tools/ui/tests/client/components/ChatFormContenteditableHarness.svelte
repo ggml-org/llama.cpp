@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import ChatFormContenteditable from '$lib/components/app/chat/ChatForm/ChatFormContenteditable.svelte';
+	import { untrack } from 'svelte';
 
 	interface Props {
 		value?: string;

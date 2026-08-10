@@ -1,11 +1,11 @@
+import type { ChatMessagePromptProgress, ChatRole } from './chat';
 import type {
 	ContentPartType,
 	FileTypeAudio,
-	ServerModelStatus,
 	ServerModelsSseEventType,
+	ServerModelStatus,
 	ServerRole
 } from '$lib/enums';
-import type { ChatMessagePromptProgress, ChatRole } from './chat';
 
 export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
 

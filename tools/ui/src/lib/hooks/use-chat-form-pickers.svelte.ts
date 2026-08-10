@@ -2,12 +2,12 @@ import { getChatCommands, PROMPT_TRIGGER_PREFIX } from '$lib/constants';
 import { ChatFormCommandAction, KeyboardKey } from '$lib/enums';
 import type { ChatFormCommand } from '$lib/types';
 import {
+	type CommandDismissSnapshot,
 	findCommandToken,
 	findMentionToken,
+	type MentionDismissSnapshot,
 	takeCommandDismissSnapshot,
-	takeMentionDismissSnapshot,
-	type CommandDismissSnapshot,
-	type MentionDismissSnapshot
+	takeMentionDismissSnapshot
 } from '$lib/utils';
 
 /** Dependencies injected as getters so the hook stays free of store circular imports. */
@@ -47,23 +47,20 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let mentionQuery = $state('');
 	let isWorkingDirectoryPickerOpen = $state(false);
 	let workingDirectoryQuery = $state('');
-
 	// Last dismissed `@`-mention token; while intact, the picker does not
 	// reopen, so an escaped `@<query>` stays literal until edited.
 	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
-
 	// Same dismissal contract for the `/`-command token.
 	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
 
 	// Fall back to the server home so the picker still finds matches
 	// before a cwd is set.
 	const mentionScopePath = $derived(opts.getCwd() ?? opts.getServerHome() ?? null);
-
 	const availableCommands = $derived(
 		getChatCommands({
-			showModelSelector: opts.getShowModelSelector(),
+			hasCwdTools: opts.hasCwdTools,
 			hasPrompts: opts.hasPrompts,
-			hasCwdTools: opts.hasCwdTools
+			showModelSelector: opts.getShowModelSelector()
 		})
 	);
 
@@ -81,24 +78,29 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				opts.setValue('');
 				isPromptPickerOpen = true;
 				promptSearchQuery = args.trim();
+
 				break;
 			case ChatFormCommandAction.CWD: {
 				// Keep `/cwd <args>` in the input so the search field and the
 				// token stay two-way bound; normalize partial tokens (`/cw foo`).
 				const trimmed = args.trim();
 				const newValue = `/cwd ${trimmed}`;
+
 				if (opts.getValue() !== newValue) {
 					opts.setValue(newValue);
 					queueMicrotask(() => opts.setCaretOffset(newValue.length));
 				}
+
 				workingDirectoryQuery = trimmed;
 				isWorkingDirectoryPickerOpen = true;
+
 				break;
 			}
 			case ChatFormCommandAction.MODEL:
 				isWorkingDirectoryPickerOpen = false;
 				opts.setValue('');
 				opts.openModelSelector();
+
 				break;
 		}
 	}
@@ -114,9 +116,11 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			promptSearchQuery = '';
 
 			const token = findCommandToken(value);
+
 			if (!token) {
 				isCommandPickerOpen = false;
 				commandQuery = '';
+
 				return;
 			}
 
@@ -125,12 +129,14 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			if (isWorkingDirectoryPickerOpen) {
 				isCommandPickerOpen = false;
 				commandQuery = '';
+
 				if (token.name === 'cwd') {
 					workingDirectoryQuery = token.args.trim();
 				} else {
 					isWorkingDirectoryPickerOpen = false;
 					workingDirectoryQuery = '';
 				}
+
 				return;
 			}
 
@@ -143,6 +149,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			if (isDismissedSticky) {
 				isCommandPickerOpen = false;
 				commandQuery = '';
+
 				return;
 			}
 
@@ -156,14 +163,17 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				isCommandPickerOpen = false;
 				commandQuery = '';
 			}
+
 			return;
 		}
 
 		isCommandPickerOpen = false;
 		commandQuery = '';
+
 		if (commandDismissedSnapshot !== null) {
 			commandDismissedSnapshot = null;
 		}
+
 		if (isWorkingDirectoryPickerOpen) {
 			isWorkingDirectoryPickerOpen = false;
 		}
@@ -186,6 +196,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 					mentionQuery = token.query;
 					isPromptPickerOpen = false;
 					promptSearchQuery = '';
+
 					return;
 				}
 			}
@@ -210,6 +221,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		if (event.key === KeyboardKey.ESCAPE && isPromptPickerOpen) {
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
+
 			return true;
 		}
 
@@ -219,6 +231,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	function handleCommandSelect(command: ChatFormCommand) {
 		// Dispatch on the live token so typed args seed the target picker.
 		const token = findCommandToken(opts.getValue());
+
 		dispatchCommand(command, token?.args ?? '');
 	}
 
@@ -228,8 +241,10 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		if (isCommandPickerOpen) {
 			commandDismissedSnapshot = takeCommandDismissSnapshot(opts.getValue());
 		}
+
 		isCommandPickerOpen = false;
 		commandQuery = '';
+
 		// Target picker manages its own focus: don't yank it back to the input.
 		if (!isPromptPickerOpen && !isMentionPickerOpen && !isWorkingDirectoryPickerOpen) {
 			opts.focusInput();
@@ -240,8 +255,10 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	function handleMentionPickerClose() {
 		if (isMentionPickerOpen) {
 			const cursor = opts.getCaretOffset() ?? opts.getValue().length;
+
 			mentionDismissedSnapshot = takeMentionDismissSnapshot(opts.getValue(), cursor);
 		}
+
 		isMentionPickerOpen = false;
 		mentionQuery = '';
 		opts.focusInput();
@@ -268,21 +285,27 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	// reverse direction is handled by handleInput.
 	$effect(() => {
 		if (!isWorkingDirectoryPickerOpen) return;
+
 		const value = opts.getValue();
 		const token = findCommandToken(value);
+
 		if (!token || token.name !== 'cwd') return;
+
 		const newValue = `/cwd ${workingDirectoryQuery}`;
+
 		if (newValue === value) return;
+
 		opts.setValue(newValue);
 		queueMicrotask(() => opts.setCaretOffset(newValue.length));
 	});
 
 	return {
-		get isCommandPickerOpen() {
-			return isCommandPickerOpen;
+		get availableCommands() {
+			return availableCommands;
 		},
-		set isCommandPickerOpen(v: boolean) {
-			isCommandPickerOpen = v;
+		closePromptPicker() {
+			isPromptPickerOpen = false;
+			promptSearchQuery = '';
 		},
 		get commandQuery() {
 			return commandQuery;
@@ -290,17 +313,21 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		set commandQuery(v: string) {
 			commandQuery = v;
 		},
-		get isPromptPickerOpen() {
-			return isPromptPickerOpen;
+		dispatchCommand,
+		handleCommandPickerClose,
+		handleCommandSelect,
+		handleInput,
+		// True when a picker consumed the event, so the form skips submit.
+		handleKeydown,
+		handleMentionPickerClose,
+		handlePromptPickerClose,
+		handleWorkingDirectoryClose,
+		handleWorkingDirectoryOpen,
+		get isCommandPickerOpen() {
+			return isCommandPickerOpen;
 		},
-		set isPromptPickerOpen(v: boolean) {
-			isPromptPickerOpen = v;
-		},
-		get promptSearchQuery() {
-			return promptSearchQuery;
-		},
-		set promptSearchQuery(v: string) {
-			promptSearchQuery = v;
+		set isCommandPickerOpen(v: boolean) {
+			isCommandPickerOpen = v;
 		},
 		get isMentionPickerOpen() {
 			return isMentionPickerOpen;
@@ -308,11 +335,11 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		set isMentionPickerOpen(v: boolean) {
 			isMentionPickerOpen = v;
 		},
-		get mentionQuery() {
-			return mentionQuery;
+		get isPromptPickerOpen() {
+			return isPromptPickerOpen;
 		},
-		set mentionQuery(v: string) {
-			mentionQuery = v;
+		set isPromptPickerOpen(v: boolean) {
+			isPromptPickerOpen = v;
 		},
 		get isWorkingDirectoryPickerOpen() {
 			return isWorkingDirectoryPickerOpen;
@@ -320,34 +347,29 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		set isWorkingDirectoryPickerOpen(v: boolean) {
 			isWorkingDirectoryPickerOpen = v;
 		},
+		get mentionQuery() {
+			return mentionQuery;
+		},
+		set mentionQuery(v: string) {
+			mentionQuery = v;
+		},
+		get mentionScopePath() {
+			return mentionScopePath;
+		},
+		openPromptPicker() {
+			isPromptPickerOpen = true;
+		},
+		get promptSearchQuery() {
+			return promptSearchQuery;
+		},
+		set promptSearchQuery(v: string) {
+			promptSearchQuery = v;
+		},
 		get workingDirectoryQuery() {
 			return workingDirectoryQuery;
 		},
 		set workingDirectoryQuery(v: string) {
 			workingDirectoryQuery = v;
-		},
-		get availableCommands() {
-			return availableCommands;
-		},
-		get mentionScopePath() {
-			return mentionScopePath;
-		},
-		handleInput,
-		// True when a picker consumed the event, so the form skips submit.
-		handleKeydown,
-		dispatchCommand,
-		handleCommandSelect,
-		handleCommandPickerClose,
-		handleMentionPickerClose,
-		handlePromptPickerClose,
-		handleWorkingDirectoryOpen,
-		handleWorkingDirectoryClose,
-		openPromptPicker() {
-			isPromptPickerOpen = true;
-		},
-		closePromptPicker() {
-			isPromptPickerOpen = false;
-			promptSearchQuery = '';
 		}
 	};
 }

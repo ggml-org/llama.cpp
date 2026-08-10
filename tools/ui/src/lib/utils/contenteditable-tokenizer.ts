@@ -47,13 +47,13 @@ export type ContentToken =
 // Block wrappers browsers insert for newlines; each folds back into a
 // single `\n` during serialization.
 const BLOCK_TAG_NAMES = new Set(['DIV', 'P']);
-
 // `file://` is required so plain URLs stay as text; `)` terminates only
 // when not followed by whitespace or `[` (adjacent badges keep working).
 const MENTION_BADGE_RE = fileMentionLinkRe('g');
 
 function badgeSourceLength(name: string, path: string): number {
 	if (!name || !path) return 0;
+
 	return `[${name}](file://${path})`.length;
 }
 
@@ -74,6 +74,7 @@ const CODE_SPAN_RE = /(```[\s\S]*?```)|(`[^`\n]+`)/g;
  */
 export function containsCodeSpan(value: string): boolean {
 	CODE_SPAN_RE.lastIndex = 0;
+
 	return CODE_SPAN_RE.test(value);
 }
 
@@ -89,11 +90,14 @@ const CODE_FENCE_RE = /```/g;
  */
 export function isOffsetInCodeBlock(source: string, offset: number): boolean {
 	let inside = false;
+
 	CODE_FENCE_RE.lastIndex = 0;
 
 	let match: RegExpExecArray | null;
+
 	while ((match = CODE_FENCE_RE.exec(source)) !== null) {
 		if (match.index + match[0].length > offset) break;
+
 		inside = !inside;
 	}
 
@@ -110,10 +114,13 @@ export function isOffsetInCodeBlock(source: string, offset: number): boolean {
  */
 export function tokenizeContent(input: string): ContentToken[] {
 	const tokens: ContentToken[] = [];
+
 	let cursor = 0;
+
 	CODE_SPAN_RE.lastIndex = 0;
 
 	let match: RegExpExecArray | null;
+
 	while ((match = CODE_SPAN_RE.exec(input)) !== null) {
 		const start = match.index;
 
@@ -141,9 +148,11 @@ export function tokenizeContent(input: string): ContentToken[] {
  */
 function pushTextAndBadgeTokens(input: string, tokens: ContentToken[]) {
 	let cursor = 0;
+
 	MENTION_BADGE_RE.lastIndex = 0;
 
 	let match: RegExpExecArray | null;
+
 	while ((match = MENTION_BADGE_RE.exec(input)) !== null) {
 		const [whole, name, path] = match;
 		const start = match.index;
@@ -185,14 +194,17 @@ export function serializeContent(root: HTMLElement): string {
 		for (const child of Array.from(parent.childNodes)) {
 			if (child.nodeType === Node.TEXT_NODE) {
 				const text = child.textContent ?? '';
+
 				if (text.length > 0) {
 					if (pendingBlockBoundary) {
 						out += '\n';
 						pendingBlockBoundary = false;
 					}
+
 					out += text;
 					first = false;
 				}
+
 				continue;
 			}
 
@@ -203,55 +215,69 @@ export function serializeContent(root: HTMLElement): string {
 			if (el.dataset.mentionBadge === 'true') {
 				const name = el.dataset.mentionName ?? '';
 				const path = el.dataset.mentionPath ?? '';
+
 				if (name && path) {
 					if (pendingBlockBoundary) {
 						out += '\n';
 						pendingBlockBoundary = false;
 					}
+
 					out += `[${name}](file://${path})`;
 					first = false;
 				}
+
 				continue;
 			}
 
 			if (el.dataset.codeToken !== undefined) {
 				const isBlock = el.dataset.codeToken === 'block';
+
 				if (isBlock && (pendingBlockBoundary || !first)) out += '\n';
+
 				pendingBlockBoundary = false;
 				walk(el);
 				first = false;
+
 				if (isBlock) pendingBlockBoundary = true;
+
 				continue;
 			}
 
 			if (el.tagName === 'BR') {
 				const isHatch =
 					isCodeBlockElement(el.previousSibling) || isCodeBlockElement(el.nextSibling);
+
 				if (!isHatch && el.nextSibling) {
 					if (pendingBlockBoundary) {
 						out += '\n';
 						pendingBlockBoundary = false;
 					}
+
 					out += '\n';
 					first = false;
 				}
+
 				continue;
 			}
 
 			if (BLOCK_TAG_NAMES.has(el.tagName)) {
 				if (pendingBlockBoundary || !first) out += '\n';
+
 				pendingBlockBoundary = false;
 				walk(el);
 				first = false;
+
 				continue;
 			}
 
 			walk(el);
+
 			if (pendingBlockBoundary) first = false;
 		}
 	};
 
 	walk(root);
+
 	return out;
 }
 
@@ -265,6 +291,7 @@ export function serializeContent(root: HTMLElement): string {
  */
 export function domMatchesTokens(root: HTMLElement, tokens: ContentToken[]): boolean {
 	const expected = tokens.filter((token) => token.kind !== 'text');
+
 	let index = 0;
 
 	const walk = (parent: Node): boolean => {
@@ -277,21 +304,28 @@ export function domMatchesTokens(root: HTMLElement, tokens: ContentToken[]): boo
 
 			if (!isBadge && !isCode) {
 				if (!walk(el)) return false;
+
 				continue;
 			}
 
 			const token = expected[index++];
+
 			if (!token) return false;
 
 			if (isBadge) {
 				if (token.kind !== 'badge') return false;
+
 				if (token.name !== (el.dataset.mentionName ?? '')) return false;
+
 				if (token.path !== (el.dataset.mentionPath ?? '')) return false;
+
 				continue;
 			}
 
 			const codeKind = el.dataset.codeToken === 'block' ? 'codeBlock' : 'inlineCode';
+
 			if (token.kind !== codeKind) return false;
+
 			if (
 				(token.kind === 'inlineCode' || token.kind === 'codeBlock') &&
 				token.text !== (el.textContent ?? '')
@@ -319,6 +353,7 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 
 	// A point is at/before the caret iff it falls inside [root start, caret].
 	const pre = range.cloneRange();
+
 	pre.selectNodeContents(root);
 	pre.setEnd(range.endContainer, range.endOffset);
 	const atOrBeforeCaret = (node: Node, offset: number) => pre.comparePoint(node, offset) !== 1;
@@ -338,27 +373,39 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 
 			if (child.nodeType === Node.TEXT_NODE) {
 				const text = child.textContent ?? '';
+
 				if (text.length === 0) continue;
+
 				if (pendingPoint) {
-					const { node, index } = pendingPoint;
+					const { index, node } = pendingPoint;
+
 					pendingPoint = null;
+
 					if (!atOrBeforeCaret(node, index)) {
 						done = true;
+
 						return;
 					}
+
 					total += 1;
 				}
+
 				if (!atOrBeforeCaret(child, 0)) {
 					done = true;
+
 					return;
 				}
+
 				if (range.endContainer === child) {
 					total += range.endOffset;
 					done = true;
+
 					return;
 				}
+
 				total += text.length;
 				first = false;
+
 				continue;
 			}
 
@@ -369,52 +416,72 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 			const elIndex = Array.prototype.indexOf.call(parentNode.childNodes, el);
 
 			if (pendingPoint) {
-				const { node, index } = pendingPoint;
+				const { index, node } = pendingPoint;
+
 				pendingPoint = null;
+
 				if (!atOrBeforeCaret(node, index)) {
 					done = true;
+
 					return;
 				}
+
 				total += 1;
 			}
 
 			if (el.dataset.mentionBadge === 'true') {
 				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+
 				if (len === 0) continue;
+
 				if (!atOrBeforeCaret(parentNode, elIndex + 1)) {
 					done = true;
+
 					return;
 				}
+
 				total += len;
 				first = false;
+
 				continue;
 			}
 
 			if (el.dataset.codeToken !== undefined) {
 				const isBlock = el.dataset.codeToken === 'block';
+
 				if (isBlock && !first) {
 					if (!atOrBeforeCaret(el, 0)) {
 						done = true;
+
 						return;
 					}
+
 					total += 1;
 				}
+
 				walk(el);
 				first = false;
-				if (isBlock) pendingPoint = { node: parentNode, index: elIndex + 1 };
+
+				if (isBlock) pendingPoint = { index: elIndex + 1, node: parentNode };
+
 				continue;
 			}
 
 			if (el.tagName === 'BR') {
 				const isHatch =
 					isCodeBlockElement(el.previousSibling) || isCodeBlockElement(el.nextSibling);
+
 				if (isHatch || !el.nextSibling) continue;
+
 				if (!atOrBeforeCaret(parentNode, elIndex + 1)) {
 					done = true;
+
 					return;
 				}
+
 				total += 1;
 				first = false;
+
 				continue;
 			}
 
@@ -422,22 +489,29 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				if (!first) {
 					if (!atOrBeforeCaret(el, 0)) {
 						done = true;
+
 						return;
 					}
+
 					total += 1;
 				}
+
 				walk(el);
 				first = false;
+
 				continue;
 			}
 
 			const before = total;
+
 			walk(el);
+
 			if (total > before) first = false;
 		}
 	};
 
 	walk(root);
+
 	return total;
 }
 
@@ -463,20 +537,25 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 			if (tokens[index - 1]?.kind === 'codeBlock' && text.startsWith('\n')) {
 				text = text.slice(1);
 			}
+
 			if (tokens[index + 1]?.kind === 'codeBlock' && text.endsWith('\n')) {
 				text = text.slice(0, -1);
 			}
+
 			if (text.length === 0) continue;
 
 			fragment.appendChild(document.createTextNode(text));
+
 			continue;
 		}
 
 		if (token.kind === 'inlineCode' || token.kind === 'codeBlock') {
 			const code = document.createElement('code');
+
 			code.dataset.codeToken = token.kind === 'codeBlock' ? 'block' : 'inline';
 			code.textContent = token.text;
 			fragment.appendChild(code);
+
 			continue;
 		}
 
@@ -488,6 +567,7 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 		}
 
 		const badge = document.createElement('span');
+
 		badge.dataset.mentionBadge = 'true';
 		badge.dataset.mentionName = token.name;
 		badge.dataset.mentionPath = token.path;
@@ -496,6 +576,7 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 		badge.contentEditable = 'false';
 
 		const svg = document.createElementNS(MENTION_BADGE_SVG_ATTRIBUTES['xmlns'], 'svg');
+
 		for (const [attr, value] of Object.entries(MENTION_BADGE_SVG_ATTRIBUTES)) {
 			svg.setAttribute(attr, value);
 		}
@@ -505,11 +586,13 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 
 		for (const d of getMentionBadgeIconPaths(token.path)) {
 			const path = document.createElementNS(MENTION_BADGE_SVG_ATTRIBUTES['xmlns'], 'path');
+
 			path.setAttribute('d', d);
 			svg.appendChild(path);
 		}
 
 		const label = document.createElement('span');
+
 		label.classList.add('shrink-0', 'truncate');
 		label.textContent = getMentionBadgeLabel(
 			token.name,
@@ -530,7 +613,9 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 // (badge, another block, an existing hatch) or a non-empty text node.
 function hasLineBeside(node: Node | null): boolean {
 	if (!node) return false;
+
 	if (node.nodeType === Node.ELEMENT_NODE) return true;
+
 	return (node.textContent ?? '') !== '';
 }
 
@@ -561,6 +646,7 @@ export function syncCodeBlockHatches(root: HTMLElement) {
 		// A `<br>` with no code block around is a real newline (browser
 		// Shift+Enter shape) and stays.
 		let prevElement = child.previousSibling;
+
 		while (prevElement && prevElement.nodeType !== Node.ELEMENT_NODE) {
 			prevElement = prevElement.previousSibling;
 		}
@@ -601,14 +687,17 @@ export function stripBlockBoundaryLineBreaks(root: HTMLElement): boolean {
 
 	for (const child of Array.from(root.childNodes)) {
 		if (child.nodeType !== Node.TEXT_NODE) continue;
+
 		if (!isCodeBlockElement(child.previousSibling)) continue;
 
 		let text = child.textContent ?? '';
+
 		if (!/^\n{2,}$/.test(text)) continue;
 
 		text = text.slice(1);
 
 		const atBufferEnd = !child.nextSibling || child.nextSibling.nodeName === 'BR';
+
 		if (atBufferEnd) {
 			text = text.slice(0, -1);
 		}
@@ -634,12 +723,15 @@ export function badgeAwareWordJump(
 	direction: 'forward' | 'backward'
 ): number | null {
 	let masked = '';
+
 	const badgeSpans: Array<[number, number]> = [];
 
 	for (const token of tokenizeContent(source)) {
 		const len =
 			token.kind === 'badge' ? badgeSourceLength(token.name, token.path) : token.text.length;
+
 		if (token.kind === 'badge') badgeSpans.push([masked.length, masked.length + len]);
+
 		masked += token.kind === 'badge' ? 'a'.repeat(len) : token.text;
 	}
 
@@ -649,6 +741,7 @@ export function badgeAwareWordJump(
 	const spanStartingAt = (index: number) => badgeSpans.find(([start]) => start === index);
 	const spanEndingAt = (index: number) => badgeSpans.find(([, end]) => end === index);
 	const n = masked.length;
+
 	let i = offset;
 
 	if (direction === 'forward') {
@@ -656,24 +749,32 @@ export function badgeAwareWordJump(
 		if (!(i < n && isWord(i))) {
 			while (i < n && !isWord(i)) i++;
 		}
+
 		while (i < n && isWord(i)) {
 			const span = spanStartingAt(i);
+
 			if (span) {
 				i = span[1];
+
 				break;
 			}
+
 			i++;
 		}
 	} else {
 		if (!(i > 0 && isWord(i - 1))) {
 			while (i > 0 && !isWord(i - 1)) i--;
 		}
+
 		while (i > 0 && isWord(i - 1)) {
 			const span = spanEndingAt(i);
+
 			if (span) {
 				i = span[0];
+
 				break;
 			}
+
 			i--;
 		}
 	}
@@ -682,6 +783,7 @@ export function badgeAwareWordJump(
 
 	const lo = Math.min(offset, i);
 	const hi = Math.max(offset, i);
+
 	return badgeSpans.some(([start, end]) => start < hi && end > lo) ? i : null;
 }
 
@@ -692,7 +794,9 @@ export function badgeAwareWordJump(
  */
 export function leadingBadgeEdgeOffset(source: string, caret: number): number | null {
 	const [first] = tokenizeContent(source);
+
 	if (!first || first.kind !== 'badge') return null;
+
 	return caret === badgeSourceLength(first.name, first.path) ? 0 : null;
 }
 
@@ -708,6 +812,7 @@ export function leadingBadgeEdgeOffset(source: string, caret: number): number | 
  */
 export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 	const range = document.createRange();
+
 	let remaining = offset;
 	let landed = false;
 	let pendingBlockBoundary = false;
@@ -717,7 +822,6 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 		range.setEnd(node, nodeOffset);
 		landed = true;
 	};
-
 	const walk = (parent: Node) => {
 		let first = true;
 
@@ -726,23 +830,32 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 
 			if (child.nodeType === Node.TEXT_NODE) {
 				const text = child.textContent ?? '';
+
 				if (text.length === 0) continue;
+
 				if (pendingBlockBoundary) {
 					// The synthesized separator maps to the near edge of the
 					// content that follows the block.
 					pendingBlockBoundary = false;
+
 					if (remaining === 0) {
 						land(child, 0);
+
 						return;
 					}
+
 					remaining -= 1;
 				}
+
 				if (remaining <= text.length) {
 					land(child, remaining);
+
 					return;
 				}
+
 				remaining -= text.length;
 				first = false;
+
 				continue;
 			}
 
@@ -752,17 +865,23 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 
 			if (el.dataset.mentionBadge === 'true') {
 				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+
 				if (len === 0) continue;
+
 				if (pendingBlockBoundary) {
 					pendingBlockBoundary = false;
+
 					if (remaining === 0) {
 						range.setStartBefore(el);
 						range.setEndBefore(el);
 						landed = true;
+
 						return;
 					}
+
 					remaining -= 1;
 				}
+
 				if (remaining <= len) {
 					if (remaining === 0) {
 						range.setStartBefore(el);
@@ -771,53 +890,72 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 						range.setStartAfter(el);
 						range.setEndAfter(el);
 					}
+
 					landed = true;
+
 					return;
 				}
+
 				remaining -= len;
 				first = false;
+
 				continue;
 			}
 
 			if (el.dataset.codeToken !== undefined) {
 				const isBlock = el.dataset.codeToken === 'block';
+
 				if (isBlock && (pendingBlockBoundary || !first)) {
 					pendingBlockBoundary = false;
+
 					if (remaining === 0) {
 						range.setStartBefore(el);
 						range.setEndBefore(el);
 						landed = true;
+
 						return;
 					}
+
 					remaining -= 1;
 				}
 
 				const len = (el.textContent ?? '').length;
+
 				if (remaining === 0) {
 					range.setStartBefore(el);
 					range.setEndBefore(el);
 					landed = true;
+
 					return;
 				}
+
 				if (remaining === len) {
 					range.setStartAfter(el);
 					range.setEndAfter(el);
 					landed = true;
+
 					return;
 				}
+
 				if (remaining < len) {
 					walk(el);
+
 					return;
 				}
+
 				remaining -= len;
+
 				if (isBlock) remaining -= 1;
+
 				first = false;
+
 				continue;
 			}
 
 			if (el.tagName === 'BR') {
 				const isHatch =
 					isCodeBlockElement(el.previousSibling) || isCodeBlockElement(el.nextSibling);
+
 				if (isHatch) {
 					// Escape hatch: no source length; offset 0 lands before it
 					// so text typed there takes its place.
@@ -826,49 +964,66 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 						range.setEndBefore(el);
 						landed = true;
 					}
+
 					continue;
 				}
+
 				if (!el.nextSibling) continue;
+
 				if (pendingBlockBoundary) {
 					pendingBlockBoundary = false;
+
 					if (remaining === 0) {
 						range.setStartBefore(el);
 						range.setEndBefore(el);
 						landed = true;
+
 						return;
 					}
+
 					remaining -= 1;
 				}
+
 				if (remaining === 0) {
 					range.setStartBefore(el);
 					range.setEndBefore(el);
 					landed = true;
+
 					return;
 				}
+
 				remaining -= 1;
 				first = false;
+
 				continue;
 			}
 
 			if (BLOCK_TAG_NAMES.has(el.tagName)) {
 				if (pendingBlockBoundary || !first) {
 					pendingBlockBoundary = false;
+
 					if (remaining === 0) {
 						// The boundary newline belongs to the previous line.
 						range.setStartBefore(el);
 						range.setEndBefore(el);
 						landed = true;
+
 						return;
 					}
+
 					remaining -= 1;
 				}
+
 				walk(el);
 				first = false;
+
 				continue;
 			}
 
 			const before = remaining;
+
 			walk(el);
+
 			if (remaining < before) first = false;
 		}
 	};
@@ -877,6 +1032,7 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 
 	if (!landed) {
 		const last = root.lastChild;
+
 		if (last && last.nodeName === 'BR') {
 			range.setStartBefore(last);
 			range.setEndBefore(last);

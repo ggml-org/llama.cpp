@@ -13,6 +13,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 # marker for the grep_search test to find in this file
 GREP_MARKER = "llama_cpp_test_tools_builtin_marker_grep_search"
 
+# image the container runtime tests run their shell in
+DOCKER_IMAGE = "busybox"
+
 
 @pytest.fixture(autouse=True)
 def create_server():
@@ -149,14 +152,16 @@ def test_tools_builtin_cwd_header():
 
 
 def _docker_unavailable_reason() -> str | None:
-    """None if docker can be used to run a container, otherwise the reason it can't."""
+    """None if docker can run the image these tests use, otherwise the reason it can't."""
     docker_bin = shutil.which("docker")
     if docker_bin is None:
         return "docker is not installed"
     try:
-        subprocess.run([docker_bin, "info"], capture_output=True, timeout=5, check=True)
+        # a daemon that answers `docker info` still cannot run a linux image when it serves
+        # windows containers, so probe the image itself, which also pulls it before the tests
+        subprocess.run([docker_bin, "run", "--rm", DOCKER_IMAGE, "true"], capture_output=True, timeout=60, check=True)
     except Exception as e:
-        return f"docker daemon is not usable: {e}"
+        return f"docker cannot run {DOCKER_IMAGE}: {e}"
     return None
 
 
@@ -167,7 +172,7 @@ def docker_container():
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     proc = subprocess.run(
-        ["docker", "run", "-d", "--rm", "busybox", "sleep", "300"],
+        ["docker", "run", "-d", "--rm", DOCKER_IMAGE, "sleep", "300"],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
@@ -214,7 +219,7 @@ def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     global server
-    server.server_tools_runtime = "docker:busybox"
+    server.server_tools_runtime = f"docker:{DOCKER_IMAGE}"
     server.start()
 
     # exec_shell_command runs inside the container spawned for --tools-runtime; docker sets
