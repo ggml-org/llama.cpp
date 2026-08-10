@@ -413,8 +413,8 @@ extern "C" {
         float expert_hyst;            // hysteresis ratio for slot swaps
         int   expert_dwell;           // min updates a resident slot keeps before swap
         int   expert_pin_pct;         // percent of cold experts to keep pinned (madvise); -1 = auto
-        bool  expert_copy;            // copy experts to GPU (keep RAM copy); default move
         bool  expert_sidecar;         // load/save the expert heatmap sidecar (<model>.tier)
+        int   expert_move_mode;            // expert store mode: 0 = auto, 1 = copy, 2 = move
         int   expert_gpu;             // put the expert store on this GPU index (-1 = all GPUs)
 
         // a source/target/parent context

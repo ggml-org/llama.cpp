@@ -111,7 +111,7 @@
 | -------- | ----------- |
 | `-ehs, --expert-hot-s N` | expert hot store slots: -1 = autofit from free VRAM, 0 = disabled, N = manual top-N slots<br/>(env: LLAMA_ARG_EXPERT_HOT_S) |
 | `--expert-pin N` | fraction (percent) of cold experts to keep pinned in RAM via madvise, 0 = off, -1 = auto<br/>(env: LLAMA_ARG_EXPERT_PIN) |
-| `--expert-copy` | copy experts to the GPU store (keep the RAM copy). default: move (GPU store replaces the RAM copy; frees RAM)<br/>(env: LLAMA_ARG_EXPERT_COPY) |
+| `--expert-move-mode N` | expert store mode: 0 = auto, 1 = copy (keep RAM copy), 2 = move (free RAM after verified transfer)<br/>(env: LLAMA_ARG_EXPERT_MOVE_MODE) |
 | `--expert-sidecar` | load the expert heatmap sidecar (`<model>.tier`) at start, save it at exit<br/>(env: LLAMA_ARG_EXPERT_SIDECAR) |
 | `--expert-gpu N` | put the expert store on this GPU index (default: -1 = all GPUs)<br/>(env: LLAMA_ARG_EXPERT_GPU) |
 | `--expert-sync-period N` | expert hot store re-sync cadence in tokens (default: 1)<br/>(env: LLAMA_ARG_EXPERT_SYNC_PERIOD) |

@@ -76,7 +76,7 @@ static const std::regex g_re_exps_weight("blk\\.(\\d+)\\.ffn_(up|down|gate|gate_
 
 llama_expert_hotstore::llama_expert_hotstore(
         const llama_model * model, int n_layers, int n_experts, int hot_s, int sync_period,
-        float hyst, int dwell, bool copy_mode) :
+        float hyst, int dwell, int mode) :
     n_layers(n_layers),
     n_experts(n_experts),
     hot_s(hot_s),
@@ -84,7 +84,7 @@ llama_expert_hotstore::llama_expert_hotstore(
     sync_period(sync_period),
     hyst(hyst),
     dwell(dwell),
-    copy_mode(copy_mode) {
+    mode(mode) {
     if (n_layers <= 0) {
         return;
     }
@@ -112,11 +112,15 @@ llama_expert_hotstore::llama_expert_hotstore(
         entries_by_layer[e.layer_idx].push_back(&e);
     }
 
-    // auto copy/move: copy keeps the RAM copy of promoted experts (needs the
-    // full exps set resident); move frees it (RAM-tight). mmap exps are
-    // file-backed page cache (kernel-reclaimable), so copy is always right
-    // there; the RAM check only matters on no-mmap (committed anonymous pool).
-    if (!copy_mode) {
+    // resolve mode: 1 = copy, 2 = move, 0 = auto. copy keeps the RAM copy of
+    // promoted experts (needs the full exps set resident); move frees it
+    // (RAM-tight). mmap exps are file-backed page cache (kernel-reclaimable),
+    // so copy is always right there; the RAM check only matters on no-mmap.
+    if (mode == 1) {
+        copy_mode = true;
+    } else if (mode == 2) {
+        copy_mode = false;
+    } else if (!copy_mode) {
         const bool mmap_mode = !entries.empty() && llama_expert_preload::index_of(entries[0].src) < 0;
         if (mmap_mode) {
             copy_mode = true;

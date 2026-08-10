@@ -491,7 +491,7 @@ llama_context::llama_context(
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
             &model, hparams.n_layer(), hparams.n_expert,
             params.expert_hot_s, sync_period,
-            params.expert_hyst, params.expert_dwell, params.expert_copy);
+            params.expert_hyst, params.expert_dwell, params.expert_move_mode);
         // enable the GPU hot store on any GPU backend (CUDA, Vulkan, ROCm,
         // SYCL, Metal, ...).
         bool cache_enabled = false;
@@ -3648,7 +3648,7 @@ llama_context_params llama_context_default_params() {
         /*.expert_hyst                 =*/ 1.3f,
         /*.expert_dwell                =*/ 0,
         /*.expert_pin_pct              =*/ -1,
-        /*.expert_copy                 =*/ false,
+        /*.expert_move_mode                 =*/ 0,
         /*.expert_sidecar              =*/ false,
         /*.expert_gpu                  =*/ -1,
         /*.ctx_other                   =*/ nullptr,

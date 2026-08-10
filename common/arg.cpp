@@ -2757,14 +2757,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--expert-copy"},
-        {},
-        "copy experts to the GPU store (keep the RAM copy). default: move "
-        "(GPU store replaces the RAM copy; frees RAM)",
-        [](common_params & params, bool value) {
-            params.expert_copy = value;
+        {"--expert-move-mode"}, "N",
+        "expert store mode: 0 = auto, 1 = copy (keep RAM copy), 2 = move "
+        "(free RAM after verified transfer)",
+        [](common_params & params, int value) {
+            params.expert_move_mode = value;
         }
-    ).set_env("LLAMA_ARG_EXPERT_COPY"));
+    ).set_env("LLAMA_ARG_EXPERT_MOVE_MODE"));
     add_opt(common_arg(
         {"--expert-sidecar"},
         {},
