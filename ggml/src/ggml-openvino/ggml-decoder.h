@@ -23,6 +23,10 @@ struct ModelParams {
     int32_t rope_params[15];
     bool mixed_rope_params = false;
     std::vector<int> swa_layers;
+    // The sliding-window mask tensor, identified in compute_llm_params() by grouping attention
+    // layers on the mask they consume. Only used to tell the two masks apart when naming OV
+    // parameters -- both carry the same tensor name. Null when the graph has a single mask.
+    const ggml_tensor * swa_mask = nullptr;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
@@ -296,6 +300,10 @@ public:
         return op->op == GGML_OP_SET_ROWS && op->src[1] == tensor;
     }
 
+    bool is_swa_mask(const ggml_tensor * tensor) const {
+        return m_model_params.swa_mask != nullptr && tensor == m_model_params.swa_mask;
+    }
+
     inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE &&
                op->src[1]->op == GGML_OP_NONE;
@@ -308,8 +316,22 @@ public:
         if (is_inp_emb(tensor, op)) {
             return "embd";
         }
-        if (is_stateful() && is_inp_mask(tensor, op)) {
-            return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
+        if (is_inp_mask(tensor, op)) {
+            // Give the two attention masks distinct OV parameter names.
+            //
+            // An interleaved-SWA model builds one full-attention mask and one sliding-window mask,
+            // but build_attn_inp_kq_mask() names them identically, so keying a parameter off
+            // tensor->name alone makes the second mask OVERWRITE the first in m_model_inputs: both
+            // attention types then read a single parameter, and the windowed layers silently run
+            // against an unbanded mask. Disambiguate using the SWA layer set computed in
+            // compute_llm_params(), which classifies by mask tensor identity rather than by name.
+            //
+            // When no SWA layer was found there is only one mask in play, so the plain name is
+            // correct and no _swa parameter is created.
+            if (m_model_params.swa_layers.empty()) {
+                return "self_kq_mask";
+            }
+            return is_swa_mask(tensor) ? "self_kq_mask_swa" : "self_kq_mask";
         }
         return tensor->name;
     }

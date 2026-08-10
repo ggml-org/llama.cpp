@@ -369,6 +369,92 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         return -1;
     };
 
+    // Resolve the attention mask an attention node consumes, mirroring the src layout that
+    // get_attention_pattern_case() classifies. Used by the SWA pre-pass below.
+    auto get_attention_op_mask = [&get_attention_pattern_case](const ggml_tensor * node) -> const ggml_tensor * {
+        switch (get_attention_pattern_case(node)) {
+        case 0:
+        case 1:
+            return node->src[3];
+        case 2:
+        case 3:
+            return node->src[1];
+        default:
+            return nullptr;
+        }
+    };
+
+    // Pre-pass: classify sliding-window vs full-attention layers.
+    //
+    // An interleaved-SWA model keeps two KV caches and two attention masks, and hands each layer
+    // whichever pair matches its attention type. The mask tensor does not say which is which: both
+    // are named "attn_inp_kq_mask" by build_attn_inp_kq_mask(), and both carry the same n_kv because
+    // llama_kv_cache::get_n_kv() pads occupancy up to a common multiple.
+    //
+    // The KV cache does say. Each cache allocates cache_k_l<N> once at load time with its own cell
+    // count: the windowed cache is sized from the window
+    // (PAD(min(size_base, n_swa*(unified ? n_seq_max : 1) + n_ubatch), 256), see
+    // llama_kv_cache_iswa), the full-attention one spans the whole context. Read the LEAF buffer
+    // behind the VIEW rather than the VIEW itself: the leaf extent is a constant per layer, known
+    // from the first graph onwards, while the view grows with context depth and would invert the
+    // comparison at shallow depth.
+    //
+    // Layers whose leaf is smaller than the largest leaf are the windowed ones. When every layer
+    // reports the same extent there is no distinction to draw -- either the model has no windowed
+    // layers, or the window is at least as large as the context so the two caches coincide, in
+    // which case a windowed layer and a full-attention one compute the same thing.
+    //
+    // Getting this wrong is silent and severe: with the windowed layers classified as
+    // full-attention, permute's KV slicing uses attention_size instead of attention_size_swa. The
+    // two agree while the context is shorter than the window, then diverge, and the mask add fails
+    // shape inference ("Failed to broadcast-merge input shapes") partway into a long prompt.
+    {
+        std::map<int, int64_t> layer_extent;                      // layer -> leaf cache_k cell count
+        std::map<int, const ggml_tensor *> layer_mask;            // layer -> mask it consumes
+        int64_t max_extent = 0;
+
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            const ggml_tensor * mask = get_attention_op_mask(cgraph->nodes[i]);
+            if (mask == nullptr) {
+                continue;
+            }
+            const ggml_tensor * cache_k_permute = nullptr;
+            switch (get_attention_pattern_case(cgraph->nodes[i])) {
+            case 0:  cache_k_permute = cgraph->nodes[i]->src[1];                     break;
+            case 1:  cache_k_permute = cgraph->nodes[i]->src[1]->src[0];             break;
+            case 2:  cache_k_permute = cgraph->nodes[i]->src[0]->src[0];             break;
+            default: cache_k_permute = cgraph->nodes[i]->src[0]->src[0]->src[0];     break;
+            }
+            const ggml_tensor * cache_k_view = cache_k_permute->src[0];
+            if (cache_k_view->op != GGML_OP_VIEW) {
+                continue;
+            }
+            const ggml_tensor * leaf = cache_k_view->src[0];
+            auto layer = extract_layer_from_name(leaf->name);
+            if (!layer.has_value()) {
+                continue;
+            }
+            layer_extent[layer.value()] = leaf->ne[1];
+            layer_mask[layer.value()] = mask;
+            max_extent = std::max(max_extent, leaf->ne[1]);
+        }
+
+        for (const auto & [layer, extent] : layer_extent) {
+            if (extent < max_extent) {
+                model_params.swa_layers.push_back(layer);
+                if (model_params.swa_mask == nullptr) {
+                    model_params.swa_mask = layer_mask[layer];
+                }
+            }
+        }
+        std::sort(model_params.swa_layers.begin(), model_params.swa_layers.end());
+
+        if (ggml_openvino_getenv_int("GGML_OPENVINO_LOG_SWA_LAYERS")) {
+            GGML_LOG_WARN("ov-swa: attn_layers=%zu max_extent=%ld swa_layers=%zu\n", layer_extent.size(),
+                          (long) max_extent, model_params.swa_layers.size());
+        }
+    }
+
     bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
@@ -414,11 +500,13 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             ggml_tensor * cache_k = cache_k_view->src[0];
             int layer = extract_layer_from_name(cache_k->name).value();
 
-            std::string mask_name(mask->name);
+            // Classified by the pre-pass above, which groups layers by mask tensor identity. The
+            // mask NAME cannot be used: build_attn_inp_kq_mask() gives both masks the same name.
+            const bool layer_is_swa = std::find(model_params.swa_layers.begin(), model_params.swa_layers.end(),
+                                                layer) != model_params.swa_layers.end();
 
             model_params.kv_buffer_ctx_id = ggml_backend_openvino_buffer_get_ctx_id(cache_k->buffer);
-            if (mask_name.find("swa") != std::string::npos) {
-                model_params.swa_layers.push_back(layer);
+            if (layer_is_swa) {
                 model_params.ctx_per_seq_swa = cache_k->ne[1];
             } else {
                 model_params.ctx_per_seq = cache_k->ne[1];
@@ -431,7 +519,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             memcpy(&offset, cache_k_view->op_params, sizeof(size_t));
             compute_params.seq_active_start = offset / seq_size;
 
-            if (mask_name.find("swa") != std::string::npos) {
+            if (layer_is_swa) {
                 compute_params.attention_size_swa = mask->ne[0];
             } else {
                 compute_params.attention_size = mask->ne[0];
