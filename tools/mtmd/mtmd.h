@@ -55,6 +55,7 @@ enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_TEXT,
     MTMD_INPUT_CHUNK_TYPE_IMAGE,
     MTMD_INPUT_CHUNK_TYPE_AUDIO,
+    MTMD_INPUT_CHUNK_TYPE_COUNT, // for validation
 };
 
 // opaque types
@@ -67,6 +68,7 @@ struct mtmd_batch;
 
 struct mtmd_input_text {
     const char * text;
+    size_t text_len;
     bool add_special;
     bool parse_special;
 };
@@ -231,6 +233,15 @@ MTMD_API llama_pos                  mtmd_input_chunk_get_n_pos       (const mtmd
 MTMD_API mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk);
 MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
 
+// save/load an input chunk to/from a buffer (useful for KV save/load)
+// important: only chunk's metadata will be saved, the actual image/audio data will not be saved
+// the loaded chunk will always be a placeholder, cannot be used for mtmd_encode() or mtmd_batch_encode()
+// out_buf can be nullptr (to query expected_out_len)
+// returns 0 on success, non-zero on failure
+MTMD_API int32_t            mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len);
+// returns nullptr on failure
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len);
+
 
 // mtmd_image_tokens
 //
@@ -325,6 +336,60 @@ struct mtmd_caps {
     bool inp_audio;
 };
 MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
+
+/////////////////////////////////////////
+// EXPERIMENTAL API for audio generation, subjected to breaking changes
+
+// represent the pipeline type
+enum mtmd_gen_audio_type {
+    MTMD_GEN_AUDIO_TYPE_NONE, // not supported
+    MTMD_GEN_AUDIO_TYPE_QWEN3TTS,
+};
+struct mtmd_gen_audio_info {
+    enum mtmd_gen_audio_type type;
+    int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
+};
+MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
+
+enum mtmd_gen_process_type {
+    MTMD_GEN_PROCESS_TYPE_GEN_CODE, // h_state to semantic (codes, mel-spectrogram, etc.)
+    MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert semantic to PCM audio
+                                    // for qwen3tts, this is code2wav
+};
+struct mtmd_gen_inp {
+    enum mtmd_gen_process_type type;
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_CODE
+    int32_t code0;  // the sampled codebook 0 entry from backbone
+    float * embd;   // the hidden state from backbone, must have n_text_embd elements
+    int32_t top_k;
+    float   top_p;
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    int32_t * codes;
+    size_t    n_codes;
+    const char * state_data;
+    size_t       state_size;
+};
+struct mtmd_gen_out {
+    // note: output memory is allocated by the context, valid until next process() call
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_CODE
+    const int32_t * codes;
+    size_t n_codes;
+    const float * embd; // the generated hidden state, to be fed back to backbone
+                        // it must have n_text_embd elements
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    const float * audio;
+    size_t        n_samples;
+    const char * state_data;
+    size_t       state_size;
+};
+// note: this API is stateless, caller must handle state management and audio frame accumulation
+MTMD_API int32_t mtmd_gen_audio_process(mtmd_context * ctx,
+                                const struct mtmd_gen_inp * inp,
+                                struct mtmd_gen_out * out);
 
 /////////////////////////////////////////
 

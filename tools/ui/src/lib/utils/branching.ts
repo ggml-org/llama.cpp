@@ -25,6 +25,7 @@ export function findMessageById(
 	id: string | null | undefined
 ): DatabaseMessage | undefined {
 	if (!id) return undefined;
+
 	return messages.find((m) => m.id === id);
 }
 
@@ -52,9 +53,11 @@ export function filterByLeafNodeId(
 
 	// Find the starting node (leaf node or latest if not found)
 	let startNode: DatabaseMessage | undefined = nodeMap.get(leafNodeId);
+
 	if (!startNode) {
 		// If leaf node not found, use the message with latest timestamp
 		let latestTime = -1;
+
 		for (const msg of messages) {
 			if (msg.timestamp > latestTime) {
 				startNode = msg;
@@ -65,6 +68,7 @@ export function filterByLeafNodeId(
 
 	// Traverse from leaf to root, collecting messages
 	let currentNode: DatabaseMessage | undefined = startNode;
+
 	while (currentNode) {
 		// Include message if it's not root, or if we want to include root
 		if (currentNode.type !== 'root' || includeRoot) {
@@ -75,16 +79,19 @@ export function filterByLeafNodeId(
 		if (currentNode.parent === null) {
 			break;
 		}
+
 		currentNode = nodeMap.get(currentNode.parent);
 	}
 
 	// Sort: system messages first, then by timestamp
 	result.sort((a, b) => {
 		if (a.role === MessageRole.SYSTEM && b.role !== MessageRole.SYSTEM) return -1;
+
 		if (a.role !== MessageRole.SYSTEM && b.role === MessageRole.SYSTEM) return 1;
 
 		return a.timestamp - b.timestamp;
 	});
+
 	return result;
 }
 
@@ -101,9 +108,11 @@ function findLeafNodeInMap(
 	messageId: string
 ): string {
 	let currentNode: DatabaseMessage | undefined = nodeMap.get(messageId);
+
 	while (currentNode && currentNode.children.length > 0) {
 		// Follow the last child (most recent branch)
 		const lastChildId = currentNode.children[currentNode.children.length - 1];
+
 		currentNode = nodeMap.get(lastChildId);
 	}
 
@@ -111,18 +120,11 @@ function findLeafNodeInMap(
 }
 
 /**
- * Convenience wrapper around {@link findLeafNodeInMap} for callers that only have
- * a flat message array.
- *
- * Finds the leaf node (message with no children) for a given message branch.
- * Traverses down the tree following the last child until reaching a leaf.
- *
- * @param messages - All messages in the conversation
- * @param messageId - Starting message ID to find leaf for
- * @returns The leaf node ID, or the original messageId if no children
+ * Convenience wrapper around {@link findLeafNodeInMap} for callers that have a flat message array.
  */
 export function findLeafNode(messages: readonly DatabaseMessage[], messageId: string): string {
 	const nodeMap = new Map(messages.map((msg) => [msg.id, msg] as const));
+
 	return findLeafNodeInMap(nodeMap, messageId);
 }
 
@@ -177,6 +179,7 @@ export function getMessageSiblings(
 	messageId: string
 ): ChatMessageSiblingInfo | null {
 	const message = nodeMap.get(messageId);
+
 	if (!message) {
 		return null;
 	}
@@ -185,47 +188,45 @@ export function getMessageSiblings(
 	if (message.parent === null) {
 		// No parent means this is likely a root node with no siblings
 		return {
+			currentIndex: 0,
 			message,
 			siblingIds: [messageId],
-			currentIndex: 0,
 			totalSiblings: 1
 		};
 	}
 
 	const parentNode = nodeMap.get(message.parent);
+
 	if (!parentNode) {
 		// Parent not found - treat as single message
 		return {
+			currentIndex: 0,
 			message,
 			siblingIds: [messageId],
-			currentIndex: 0,
 			totalSiblings: 1
 		};
 	}
 
 	// Get all sibling IDs (including self)
 	const siblingIds = parentNode.children;
-
 	// Convert sibling message IDs to their corresponding leaf node IDs
 	// This allows navigation between different conversation branches
 	const siblingLeafIds = siblingIds.map((siblingId: string) =>
 		findLeafNodeInMap(nodeMap, siblingId)
 	);
-
 	// Find current message's position among siblings
 	const currentIndex = siblingIds.indexOf(messageId);
 
 	return {
+		currentIndex,
 		message,
 		siblingIds: siblingLeafIds,
-		currentIndex,
 		totalSiblings: siblingIds.length
 	};
 }
 
 /**
  * Builds sibling information for every message in a conversation.
- * A single node map is shared across all lookups for O(1) access.
  *
  * @param messages - All messages in the conversation
  * @returns Map of message ID to its sibling information
@@ -235,11 +236,14 @@ export function buildSiblingInfoMap(
 ): Map<string, ChatMessageSiblingInfo> {
 	const nodeMap = new Map(messages.map((msg) => [msg.id, msg] as const));
 	const siblingMap = new Map<string, ChatMessageSiblingInfo>();
+
 	for (const msg of messages) {
 		const info = getMessageSiblings(nodeMap, msg.id);
+
 		if (info) {
 			siblingMap.set(msg.id, info);
 		}
 	}
+
 	return siblingMap;
 }

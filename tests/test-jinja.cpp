@@ -4,7 +4,7 @@
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
-#include <sheredom/subprocess.h>
+#include "subproc.h"
 
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
@@ -1376,6 +1376,36 @@ static void test_string_methods(testing & t) {
         "bXnXna"
     );
 
+    test_template(t, "string.format() auto numbering",
+        "{{ '<{}|{}>'.format(s, 42) }}",
+        {{"s", "hello"}},
+        "<hello|42>"
+    );
+
+    test_template(t, "string.format() manual numbering",
+        "{{ '{1}-{0}-{1}'.format('a', 'b') }}",
+        json::object(),
+        "b-a-b"
+    );
+
+    test_template(t, "string.format() named fields",
+        "{{ '{name} is {age}'.format(name='Bob', age=7) }}",
+        json::object(),
+        "Bob is 7"
+    );
+
+    test_template(t, "string.format() escaped braces",
+        "{{ '{{}} {} {{x}}'.format('mid') }}",
+        json::object(),
+        "{} mid {x}"
+    );
+
+    test_template(t, "string.format() no fields",
+        "{{ 'plain'.format() }}",
+        json::object(),
+        "plain"
+    );
+
     test_template(t, "undefined|capitalize",
         "{{ arr|capitalize }}",
         json::object(),
@@ -2105,21 +2135,20 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         const char * python_executable = "python3";
 #endif
 
-        const char * command_line[] = {python_executable, "-c", py_script.c_str(), NULL};
+        std::vector<std::string> args = {python_executable, "-c", py_script, };
 
-        struct subprocess_s subprocess;
+        common_subproc subprocess;
         int options = subprocess_option_combined_stdout_stderr
                     | subprocess_option_no_window
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
-        int result = subprocess_create(command_line, options, &subprocess);
 
-        if (result != 0) {
-            t.log("Failed to create subprocess, error code: " + std::to_string(result));
+        if (!subprocess.create(args, options)) {
+            t.log("Failed to create subprocess");
             t.assert_true("subprocess creation", false);
             return;
         }
-        FILE * p_stdin = subprocess_stdin(&subprocess);
+        FILE * p_stdin = subprocess.stdin_file();
 
         // Write input
         std::string input = merged.dump();
@@ -2127,24 +2156,22 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         if (written != input.size()) {
             t.log("Failed to write complete input to subprocess stdin");
             t.assert_true("subprocess stdin write", false);
-            subprocess_destroy(&subprocess);
+            subprocess.close_stdin();
+            subprocess.join();
             return;
         }
         fflush(p_stdin);
-        fclose(p_stdin); // Close stdin to signal EOF to the Python process
-        subprocess.stdin_file = nullptr;
+        subprocess.close_stdin(); // Close stdin to signal EOF to the Python process
 
         // Read output
         std::string output;
         char buffer[1024];
-        FILE * p_stdout = subprocess_stdout(&subprocess);
+        FILE * p_stdout = subprocess.stdout_file();
         while (fgets(buffer, sizeof(buffer), p_stdout)) {
             output += buffer;
         }
 
-        int process_return;
-        subprocess_join(&subprocess, &process_return);
-        subprocess_destroy(&subprocess);
+        int process_return = subprocess.join();
 
         if (process_return != 0) {
             t.log("Python script failed with exit code: " + std::to_string(process_return));

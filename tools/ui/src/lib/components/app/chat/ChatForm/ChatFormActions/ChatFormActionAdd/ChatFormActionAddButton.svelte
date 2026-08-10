@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ATTACHMENT_TOOLTIP_TEXT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 
 	interface Props {
 		disabled?: boolean;
@@ -23,7 +24,7 @@
 		>
 			<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
-			<Plus class="h-4 w-4" />
+			<Plus class={ICON_CLASS_DEFAULT} />
 		</Button>
 	</Tooltip.Trigger>
 

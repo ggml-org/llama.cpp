@@ -47,6 +47,8 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.generation_prompt = common_chat_template_generation_prompt(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens  = autoparser.preserved_tokens;
+    data.additional_stops.insert(data.additional_stops.end(),
+        autoparser.additional_stops.begin(), autoparser.additional_stops.end());
 
     std::string parser_generation_prompt = data.generation_prompt;
 
@@ -147,7 +149,8 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
         } else {
             parser = content.build_parser(ctx);
         }
-        return pure_content ? p.prefix(generation_prompt, reasoning.start) + parser : p.prefix(generation_prompt, reasoning.start) << parser;
+        const std::string reasoning_start = trim_whitespace(reasoning.start);
+        return pure_content ? p.prefix(generation_prompt, reasoning_start) + parser : p.prefix(generation_prompt, reasoning_start) << parser;
     });
 }
 
@@ -261,6 +264,10 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
     bool              matched_atomic = false;
     common_peg_parser func_parser    = p.eps();
 
+    if (!function.args_separator.empty()) {
+        open = open + p.space() + p.literal(function.args_separator);
+    }
+
     if (!function.name_suffix.empty()) {
         func_parser    = open + call_id_section + p.space() + args;
         matched_atomic = true;
@@ -281,7 +288,13 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
         // we only emit tool_close when we can actually see the closing marker. This prevents
         // premature closing during partial parsing when we've seen e.g. "</" which could be
         // either "</tool_call>" (end) or "<arg_key>" prefix that failed to match.
-        func_parser = func_parser + p.tool_close(p.peek(p.literal(format.per_call_end)));
+        // Laguna (v4): the model may emit whitespace between the last </arg_value> and
+        // </tool_call> even though the template renders them tight. Tolerate optional
+        // leading space in the close lookahead so the tool call still closes.
+        auto close_peek = arguments.tolerate_intertag_whitespace
+                              ? p.peek(p.space() + p.literal(format.per_call_end))
+                              : p.peek(p.literal(format.per_call_end));
+        func_parser = func_parser + p.tool_close(close_peek);
     } else {
         func_parser = func_parser + p.tool_close(p.space());  // force this to process tool closing callbacks in mapper
     }

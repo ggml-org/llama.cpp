@@ -2,6 +2,16 @@
 
 #include <cpp-httplib/httplib.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#endif
+
 struct common_http_url {
     std::string scheme;
     std::string user;
@@ -118,4 +128,64 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
 
 static std::string common_http_show_masked_url(const common_http_url & parts) {
     return parts.scheme + "://" + (parts.user.empty() ? "" : "****:****@") + common_http_format_host(parts.host) + parts.path;
+}
+
+static int common_http_get_free_port() {
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return -1;
+    }
+    typedef SOCKET native_socket_t;
+#define INVALID_SOCKET_VAL INVALID_SOCKET
+#define CLOSE_SOCKET(s) closesocket(s)
+#else
+    typedef int native_socket_t;
+#define INVALID_SOCKET_VAL -1
+#define CLOSE_SOCKET(s) close(s)
+#endif
+
+    native_socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET_VAL) {
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return -1;
+    }
+
+    struct sockaddr_in serv_addr;
+    std::memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_addr.sin_port = htons(0);
+
+    if (bind(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) != 0) {
+        CLOSE_SOCKET(sock);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return -1;
+    }
+
+#ifdef _WIN32
+    int namelen = sizeof(serv_addr);
+#else
+    socklen_t namelen = sizeof(serv_addr);
+#endif
+    if (getsockname(sock, (struct sockaddr*)&serv_addr, &namelen) != 0) {
+        CLOSE_SOCKET(sock);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return -1;
+    }
+
+    int port = ntohs(serv_addr.sin_port);
+
+    CLOSE_SOCKET(sock);
+#ifdef _WIN32
+    WSACleanup();
+#endif
+
+    return port;
 }

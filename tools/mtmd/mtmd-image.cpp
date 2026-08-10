@@ -68,6 +68,9 @@ struct img_tool {
                 case RESIZE_ALGO_BICUBIC_PILLOW:
                     resize_bicubic_pillow(src, dst, target_resolution.width, target_resolution.height);
                     break;
+                case RESIZE_ALGO_LANCZOS:
+                    resize_lanczos_pillow(src, dst, target_resolution.width, target_resolution.height);
+                    break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
             }
@@ -96,6 +99,9 @@ struct img_tool {
                     break;
                 case RESIZE_ALGO_BICUBIC_PILLOW:
                     resize_bicubic_pillow(src, resized_image, new_width, new_height);
+                    break;
+                case RESIZE_ALGO_LANCZOS:
+                    resize_lanczos_pillow(src, resized_image, new_width, new_height);
                     break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
@@ -133,50 +139,46 @@ struct img_tool {
         }
     }
 
-    // calculate the size of the **resized** image, while preserving the aspect ratio
-    // the calculated size will be aligned to the nearest multiple of align_size
-    // if H or W size is larger than longest_edge, it will be resized to longest_edge
-    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const int align_size, const int longest_edge) {
-        GGML_ASSERT(align_size > 0);
-        if (inp_size.width <= 0 || inp_size.height <= 0 || longest_edge <= 0) {
+    struct calc_size_opt {
+        int align_size = 1;
+        int min_pixels = 0;   // 0 = disabled
+        int max_pixels = 0;   // 0 = disabled
+        // applied before min/max_pixels, so min_pixels can push an edge back above longest_edge
+        int longest_edge = 0; // 0 = disabled
+    };
+
+    // calculate the size of the **resized** image, while preserving the aspect ratio and
+    // aligning to the nearest multiple of align_size ("smart_resize" in transformers code)
+    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const calc_size_opt & opts) {
+        GGML_ASSERT(opts.align_size > 0);
+        const int width  = inp_size.width;
+        const int height = inp_size.height;
+        if (width <= 0 || height <= 0) {
             return {0, 0};
         }
 
-        float scale = std::min(static_cast<float>(longest_edge) / inp_size.width,
-                               static_cast<float>(longest_edge) / inp_size.height);
+        auto round_by_factor = [f = opts.align_size](float x) { return static_cast<int>(std::round(x / static_cast<float>(f))) * f; };
+        auto ceil_by_factor  = [f = opts.align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
+        auto floor_by_factor = [f = opts.align_size](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
 
-        float target_width_f  = static_cast<float>(inp_size.width)  * scale;
-        float target_height_f = static_cast<float>(inp_size.height) * scale;
+        int w_bar, h_bar;
+        if (opts.longest_edge > 0) {
+            const float scale = std::min(static_cast<float>(opts.longest_edge) / width,
+                                          static_cast<float>(opts.longest_edge) / height);
+            w_bar = ceil_by_factor(width  * scale);
+            h_bar = ceil_by_factor(height * scale);
+        } else {
+            // always align up first
+            w_bar = std::max(opts.align_size, round_by_factor(width));
+            h_bar = std::max(opts.align_size, round_by_factor(height));
+        }
 
-        auto ceil_by_factor = [f = align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
-        int aligned_width  = ceil_by_factor(target_width_f);
-        int aligned_height = ceil_by_factor(target_height_f);
-
-        return {aligned_width, aligned_height};
-    }
-
-    // calculate the size of the **resized** image, while preserving the aspect ratio
-    // the calculated size will have min_pixels <= W*H <= max_pixels
-    // this is referred as "smart_resize" in transformers code
-    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const int align_size, const int min_pixels, const int max_pixels) {
-        GGML_ASSERT(align_size > 0);
-        const int width  = inp_size.width;
-        const int height = inp_size.height;
-
-        auto round_by_factor = [f = align_size](float x) { return static_cast<int>(std::round(x / static_cast<float>(f))) * f; };
-        auto ceil_by_factor  = [f = align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
-        auto floor_by_factor = [f = align_size](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
-
-        // always align up first
-        int h_bar = std::max(align_size, round_by_factor(height));
-        int w_bar = std::max(align_size, round_by_factor(width));
-
-        if (h_bar * w_bar > max_pixels) {
-            const auto beta = std::sqrt(static_cast<float>(height * width) / max_pixels);
-            h_bar = std::max(align_size, floor_by_factor(height / beta));
-            w_bar = std::max(align_size, floor_by_factor(width  / beta));
-        } else if (h_bar * w_bar < min_pixels) {
-            const auto beta = std::sqrt(static_cast<float>(min_pixels) / (height * width));
+        if (opts.max_pixels > 0 && h_bar * w_bar > opts.max_pixels) {
+            const auto beta = std::sqrt(static_cast<float>(height) * width / opts.max_pixels);
+            h_bar = std::max(opts.align_size, floor_by_factor(height / beta));
+            w_bar = std::max(opts.align_size, floor_by_factor(width  / beta));
+        } else if (opts.min_pixels > 0 && h_bar * w_bar < opts.min_pixels) {
+            const auto beta = std::sqrt(static_cast<float>(opts.min_pixels) / (static_cast<float>(height) * width));
             h_bar = ceil_by_factor(height * beta);
             w_bar = ceil_by_factor(width * beta);
         }
@@ -337,22 +339,50 @@ private:
         }
     }
 
-    // Bicubic resize function using Pillow's ImagingResample algorithm
+    // Pillow-compatible separable resampling (Bicubic and Lanczos)
     // Adapted from https://github.com/python-pillow/Pillow/blob/main/src/libImaging/Resample.c
     //
-    // Key Difference with resize_bicubic:
-    // 1. Uses separable filtering: horizontal pass followed by vertical pass
+    // Key properties:
+    // 1. Separable filtering: horizontal pass followed by vertical pass
     // 2. Pre-computes normalized filter coefficients for each output pixel
-    // 3. Applies convolution using fixed-point integer arithmetic for performance
+    // 3. Fixed-point integer arithmetic (22 fractional bits) for speed and determinism
     static bool resize_bicubic_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
+        return resize_pillow(img, dst, target_width, target_height, /*use_lanczos=*/false);
+    }
+
+    // Lanczos-3 (support radius 3), matches Pillow's Image.LANCZOS
+    static bool resize_lanczos_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
+        return resize_pillow(img, dst, target_width, target_height, /*use_lanczos=*/true);
+    }
+
+    static bool resize_pillow(
+            const clip_image_u8 & img,
+            clip_image_u8 & dst,
+            int target_width,
+            int target_height,
+            bool use_lanczos) {
         // Fixed-point precision: 22 bits = 32 (int32_t) - 8 (uint8_t pixels) - 2 (headroom for accumulation)
         // This allows encoding fractional weights as integers: weight * 2^22
         const int PRECISION_BITS = 32 - 8 - 2;
 
-        // Bicubic filter function with a = -0.5 (Note that GGML/PyTorch takes a = -0.75)
+        // Resample filter: Lanczos-3 (support [-3, 3]) or bicubic with a = -0.5 (support [-2, 2])
+        // Note: GGML/PyTorch bicubic uses a = -0.75, Pillow uses a = -0.5
         // Returns filter weight for distance x from pixel center
-        // Support: [-2, 2], meaning the filter influences pixels within 2 units of distance
-        auto bicubic_filter = [](double x) -> double {
+        auto resample_filter = [use_lanczos](double x) -> double {
+            if (use_lanczos) {
+                if (-3.0 <= x && x < 3.0) {
+                    auto sinc = [](double v) {
+                        if (v == 0.0) {
+                            return 1.0;
+                        }
+                        const double pi_v = v * 3.141592653589793238462643383279502884;
+                        return std::sin(pi_v) / pi_v;
+                    };
+                    return sinc(x) * sinc(x / 3.0);
+                }
+                return 0.0;
+            }
+
             constexpr double a = -0.5;
             if (x < 0.0) {
                 x = -x;
@@ -366,8 +396,8 @@ private:
             return 0.0;  // Zero outside [-2, 2]
         };
 
-        // Filter support radius: bicubic extends 2 pixels in each direction
-        constexpr double filter_support = 2.0;
+        // Filter support radius: 2 for bicubic, 3 for lanczos
+        const double filter_support = use_lanczos ? 3.0 : 2.0;
 
         // Clipping function for 8-bit values
         auto clip8 = [](int val) -> uint8_t {
@@ -434,7 +464,7 @@ private:
                 // Compute filter weights for each contributing input pixel
                 for (x = 0; x < xmax; x++) {
                     // Distance from input pixel center to output pixel center in input space
-                    double w = bicubic_filter((x + xmin - center + 0.5) * ss);
+                    double w = resample_filter((x + xmin - center + 0.5) * ss);
                     pre_weights[xx * ksize + x] = w;
                     ww += w;  // Accumulate for normalization
                 }
@@ -463,6 +493,12 @@ private:
             const double fxp_scale = std::ldexp(1.0, PRECISION_BITS); // 1.0 * 2^PRECISION_BITS
 
             for (int i = 0; i < outSize * ksize; i++) {
+                if (use_lanczos) {
+                    // Pillow adds +/- 0.5 then truncates toward zero; std::round would round twice
+                    const double rounded = pre_weights[i] * fxp_scale + (pre_weights[i] < 0 ? -0.5 : 0.5);
+                    weights[i] = static_cast<int32_t>(rounded);
+                    continue;
+                }
                 double tmp_val = pre_weights[i] * fxp_scale;
                 if (pre_weights[i] < 0) {
                     tmp_val -= 0.5;
@@ -897,9 +933,12 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
     const int cur_merge = hparams.n_merge;
     const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
         original_size,
-        hparams.patch_size * cur_merge,
-        hparams.image_min_pixels,
-        hparams.image_max_pixels);
+        {
+            /* align_size   */ hparams.patch_size * cur_merge,
+            /* min_pixels   */ hparams.image_min_pixels,
+            /* max_pixels   */ hparams.image_max_pixels,
+            /* longest_edge */ 0,
+        });
     img_tool::resize(img, resized_image, target_size,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
@@ -921,8 +960,12 @@ mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const cl
     const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
     const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
         original_size,
-        hparams.patch_size * cur_merge,
-        hparams.image_longest_edge);
+        {
+            /* align_size   */ hparams.patch_size * cur_merge,
+            /* min_pixels   */ std::max(0, hparams.image_min_pixels),
+            /* max_pixels   */ std::max(0, hparams.image_max_pixels),
+            /* longest_edge */ hparams.image_longest_edge,
+        });
     img_tool::resize(img, resized_image, target_size,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
@@ -933,6 +976,26 @@ mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const cl
 }
 
 //
+// mtmd_image_preprocessor_minicpmv
+//
+
+mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_minicpmv::get_slice_instructions(const clip_image_size & original_size) {
+    if (hparams.n_merge == 2) {
+        const int   slice_size = hparams.image_size;
+        const float ratio      = (float)original_size.width * original_size.height / (slice_size * slice_size);
+        if (ratio <= 1.0f) {
+            mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
+            const int patch_size = hparams.patch_size * hparams.n_merge;
+            inst.overview_size = get_best_resize(original_size, slice_size, patch_size, true);
+            inst.refined_size  = clip_image_size{0, 0};
+            inst.grid_size     = clip_image_size{0, 0};
+            return inst;
+        }
+    }
+    return mtmd_image_preprocessor_llava_uhd::get_slice_instructions(original_size);
+}
+
+//
 // mtmd_image_preprocessor_lfm2
 //
 
@@ -940,8 +1003,8 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lf
     mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
     const int align_size = hparams.patch_size * hparams.n_merge;
     inst.overview_size = img_tool::calc_size_preserved_ratio(
-                            original_size, align_size,
-                            hparams.image_min_pixels, hparams.image_max_pixels);
+                            original_size,
+                            { align_size, hparams.image_min_pixels, hparams.image_max_pixels, 0 });
     // tile if either dimension exceeds tile_size with tolerance
     const bool needs_tiling = original_size.width > tile_size * max_pixels_tolerance || original_size.height > tile_size * max_pixels_tolerance;
 
@@ -1049,7 +1112,8 @@ mtmd_image_preproc_out mtmd_image_preprocessor_idefics3::preprocess(const clip_i
     // CITE: https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics3/image_processing_idefics3.py#L737
     const clip_image_size original_size = img.get_size();
     const clip_image_size refined_size = img_tool::calc_size_preserved_ratio(
-        original_size, hparams.image_size, hparams.image_longest_edge);
+        original_size,
+        { hparams.image_size, std::max(0, hparams.image_min_pixels), std::max(0, hparams.image_max_pixels), hparams.image_longest_edge });
     // LOG_INF("%s: original size: %d x %d, refined size: %d x %d\n",
     //         __func__, original_size.width, original_size.height,
     //         refined_size.width, refined_size.height);
@@ -1107,44 +1171,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_internvl::preprocess(const clip_i
 // mtmd_image_preprocessor_deepseekocr
 //
 
-mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img) {
-    static constexpr int native_resolutions[] = { 1024 /* base */, 1280 /* large */ };
-    // TODO: support 512 (tiny) and 640 (small) once we have eval data for them
-
-    const int64_t orig_area = static_cast<int64_t>(img.get_size().area());
-
-    size_t  mode_i   = 0;
-    int64_t min_diff = std::numeric_limits<int64_t>::max();
-    for (size_t i = 0; i < std::size(native_resolutions); i++) {
-        const int64_t r    = native_resolutions[i];
-        const int64_t diff = std::abs(orig_area - r * r);
-        if (diff < min_diff) {
-            mode_i   = i;
-            min_diff = diff;
-        }
-    }
-    const int image_size = native_resolutions[mode_i];
-
-    // Aspect-preserving fit-and-pad. Pillow bicubic + PAD_NEAREST for
-    // byte-parity with the upstream deepseek-ai/DeepSeek-OCR HF preprocessor.
-    clip_image_u8 padded;
-    img_tool::resize(img, padded, {image_size, image_size}, RESIZE_ALGO_BICUBIC_PILLOW,
-                     PAD_NEAREST, hparams.image_pad_color);
-    mtmd_image_preproc_out output;
-    output.append_overview(hparams, padded, true);
-    output.grid_x = 0;
-    output.grid_y = 0;
-    // TODO @ngxson : support slicing for DeepSeek-OCR, to do in another PR
-    return output;
-}
-
-//
-// mtmd_image_preprocessor_deepseekocr2
-//
-
-// candidate tile grids (cols, rows) with min_tiles <= cols*rows <= max_tiles
-// sorted by tile count
-std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr2::get_target_ratios() {
+std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr::get_target_ratios() const {
     std::vector<clip_image_size> ratios;
     for (int n = min_tiles; n <= max_tiles; n++) {
         for (int w = 1; w <= n; w++) {
@@ -1171,13 +1198,11 @@ std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr2::get_target_ra
     return ratios;
 }
 
-// pick the grid whose aspect ratio is closest to the image
-// on a tie, prefer the larger grid when the image fits
-clip_image_size mtmd_image_preprocessor_deepseekocr2::find_closest_aspect_ratio(
+clip_image_size mtmd_image_preprocessor_deepseekocr::find_closest_aspect_ratio(
     float                                aspect_ratio,
     const std::vector<clip_image_size> & target_ratios,
     int                                  width,
-    int                                  height) {
+    int                                  height) const {
     float           best_ratio_diff = std::numeric_limits<float>::max();
     clip_image_size best_ratio      = { 1, 1 };
     const float     area            = static_cast<float>(width * height);
@@ -1198,37 +1223,69 @@ clip_image_size mtmd_image_preprocessor_deepseekocr2::find_closest_aspect_ratio(
     return best_ratio;
 }
 
-mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img) {
-    // emit 768x768 local tiles when the image is larger than a tile in either
-    // dimension, then always a 1024x1024 global view. order: [tiles..., global].
-
+mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img) {
     mtmd_image_preproc_out output;
+    int grid_w = 0;
+    int grid_h = 0;
     const auto img_size = img.get_size();
+
+    // global view: aspect-preserving fit-and-pad to base_size
+    clip_image_u8 padded;
+    img_tool::resize(img, padded,
+                    { base_size, base_size },
+                    RESIZE_ALGO_BICUBIC_PILLOW,
+                    PAD_NEAREST,
+                    hparams.image_pad_color);
+    output.append_overview(hparams, padded, true);
+    output.overview.add_viewsep = true;
+
+    // if this condition doesn't hold, the output is overview only, no tiles
     if (img_size.width > tile_size || img_size.height > tile_size) {
         const float           aspect_ratio  = static_cast<float>(img_size.width) / img_size.height;
         const auto            target_ratios = get_target_ratios();
-        const clip_image_size grid          = find_closest_aspect_ratio(aspect_ratio, target_ratios, img_size.width, img_size.height);
+        const clip_image_size grid =
+            find_closest_aspect_ratio(aspect_ratio, target_ratios, img_size.width, img_size.height);
+        grid_w = grid.width;
+        grid_h = grid.height;
 
-        // stretch onto the grid (no aspect preserve), then crop tiles row-major.
         clip_image_u8 refined;
-        img_tool::resize(img, refined, { tile_size * grid.width, tile_size * grid.height },
-                         RESIZE_ALGO_BICUBIC_PILLOW, PAD_NONE);
+        img_tool::resize(img, refined, { tile_size * grid_w, tile_size * grid_h }, RESIZE_ALGO_BICUBIC_PILLOW,
+                         PAD_NONE);
 
-        for (int row = 0; row < grid.height; row++) {
-            for (int col = 0; col < grid.width; col++) {
-                clip_image_u8 tile;
-                img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
-                output.append(hparams, tile, true);
+        for (int row = 0; row < grid_h; row++) {
+            if (fuse_row) {
+                // concat all tiles in this row into a single image, along the H axis
+                // output image size: w = tile_size, h = tile_size * grid_w
+                // this is to ensure the whole row is always processed together
+                clip_image_u8 row_img;
+                row_img.set_size({tile_size, tile_size * grid_w}, false);
+                for (int col = 0; col < grid_w; col++) {
+                    for (int py = 0; py < tile_size; py++) {
+                        for (int px = 0; px < tile_size; px++) {
+                            row_img.set_pixel(px, col * tile_size + py,
+                                              refined.get_pixel(col * tile_size + px, row * tile_size + py));
+                        }
+                    }
+                }
+                output.append(hparams, row_img, true);
+            } else {
+                for (int col = 0; col < grid_w; col++) {
+                    clip_image_u8 tile;
+                    img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
+                    output.append(hparams, tile, true);
+                }
             }
+        }
+        if (fuse_row) {
+            grid_w = 1; // each fused row is one image; a single output column
         }
     }
 
-    // global view: aspect-preserving fit-and-pad to base_size.
-    clip_image_u8 padded;
-    img_tool::resize(img, padded, { base_size, base_size }, RESIZE_ALGO_BICUBIC_PILLOW,
-                     PAD_NEAREST, hparams.image_pad_color);
-    output.append_overview(hparams, padded, true);
-    output.overview.add_viewsep = true;
+    LOG_DBG("%s: grid size: %d x %d (%d tiles) + global view\n", __func__, grid_w, grid_h, grid_w * grid_h);
+    LOG_DBG("%s: overview size: %d x %d\n", __func__, padded.get_size().width, padded.get_size().height);
+
+    output.grid_x = grid_w;
+    output.grid_y = grid_h;
     return output;
 }
 
@@ -1556,5 +1613,67 @@ mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_im
             output.entries[i].add_newline = true;
         }
     }
+    return output;
+}
+
+//
+// mtmd_image_preprocessor_muse_glimmer
+//
+
+// Replicates transformers' get_aspect_ratio_preserving_size
+static clip_image_size muse_glimmer_grid_size(int img_w, int img_h, int patch_hw, int max_tokens) {
+    double i_nph = (double) img_h / patch_hw;
+    double i_npw = (double) img_w / patch_hw;
+    const double ratio = i_nph > 0.0 ? i_npw / i_nph : 1.0;
+    if (i_nph * i_npw > (double) max_tokens) {
+        i_nph = std::sqrt((double) max_tokens / ratio);
+        i_npw = i_nph * ratio;
+    }
+    const int hs[2] = { (int) std::floor(i_nph), (int) std::ceil(i_nph) };
+    const int ws[2] = { (int) std::floor(i_npw), (int) std::ceil(i_npw) };
+    const double target_ar = (double) img_h / (double) img_w;
+    int    best_nph = -1;
+    int    best_npw = -1;
+    double best_d   = 0.0;
+    for (int a = 0; a < 2; ++a) {
+        for (int b = 0; b < 2; ++b) {
+            const int nph = hs[a];
+            const int npw = ws[b];
+            if (nph < 1 || npw < 1 || nph * npw > max_tokens) {
+                continue;
+            }
+            const double d = std::fabs((double) nph / (double) npw - target_ar);
+            const int n_tokens      = nph * npw;
+            const int best_n_tokens = best_nph * best_npw;
+            if (best_nph < 0 || d < best_d || (d == best_d && n_tokens > best_n_tokens)) {
+                best_nph = nph;
+                best_npw = npw;
+                best_d   = d;
+            }
+        }
+    }
+    if (best_nph < 0) { // no candidate fit under the cap: round and clamp
+        best_nph = std::max(1, (int) std::lround(i_nph));
+        best_npw = std::max(1, (int) std::lround(i_npw));
+    }
+    return clip_image_size{ best_npw * patch_hw, best_nph * patch_hw };
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const clip_image_u8 & img) {
+    const int patch_hw   = hparams.patch_size * hparams.n_merge;
+    const int patch_area = hparams.patch_size * hparams.patch_size * hparams.n_merge * hparams.n_merge;
+    GGML_ASSERT(patch_area > 0 && hparams.image_max_pixels > 0);
+    const int max_tokens = hparams.image_max_pixels / patch_area;
+
+    const clip_image_size original_size = img.get_size();
+    const clip_image_size target_size   = muse_glimmer_grid_size(
+        original_size.width, original_size.height, patch_hw, max_tokens);
+
+    // PIL resizes directly to (target_w, target_h) -- a stretch, no padding.
+    clip_image_u8 resized_image;
+    img_tool::resize(img, resized_image, target_size, hparams.image_resize_algo, PAD_NONE);
+
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized_image, true);
     return output;
 }

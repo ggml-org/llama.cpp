@@ -1,26 +1,30 @@
 import { base } from '$app/paths';
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import { toast } from 'svelte-sonner';
-import { ServerModelStatus, ServerModelsSseEventType, ModelModality } from '$lib/enums';
+import {
+	API_MODELS,
+	FAVORITE_MODELS_LOCALSTORAGE_KEY,
+	MODEL_PROPS_CACHE_MAX_ENTRIES,
+	MODEL_PROPS_CACHE_TTL_MS,
+	SSE_DATA_PREFIX,
+	SSE_LINE_SEPARATOR,
+	SSE_RECORD_SEPARATOR
+} from '$lib/constants';
+import {
+	FileTypeCategory,
+	ModelModality,
+	ServerModelsSseEventType,
+	ServerModelStatus
+} from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
-import { serverStore, isRouterMode } from '$lib/stores/server.svelte';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
+import { getAuthHeaders, TTLCache } from '$lib/utils';
 import {
 	detectThinkingSupport,
 	detectThinkingSupportWithReason
 } from '$lib/utils/chat-template-thinking-detector';
-import { TTLCache, getAuthHeaders } from '$lib/utils';
-import {
-	MODEL_PROPS_CACHE_TTL_MS,
-	MODEL_PROPS_CACHE_MAX_ENTRIES,
-	FAVORITE_MODELS_LOCALSTORAGE_KEY,
-	API_MODELS,
-	SSE_RECORD_SEPARATOR,
-	SSE_LINE_SEPARATOR,
-	SSE_DATA_PREFIX
-} from '$lib/constants';
-
-import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { toast } from 'svelte-sonner';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes.
@@ -77,8 +81,8 @@ class ModelsStore {
 	 * TTL: 10 minutes — props don't change frequently.
 	 */
 	private modelPropsCache = new TTLCache<string, ApiLlamaCppServerProps>({
-		ttlMs: MODEL_PROPS_CACHE_TTL_MS,
-		maxEntries: MODEL_PROPS_CACHE_MAX_ENTRIES
+		maxEntries: MODEL_PROPS_CACHE_MAX_ENTRIES,
+		ttlMs: MODEL_PROPS_CACHE_TTL_MS
 	});
 	private modelPropsFetching = $state<Set<string>>(new Set());
 
@@ -97,6 +101,7 @@ class ModelsStore {
 
 	get selectedModel(): ModelOption | null {
 		if (!this.selectedModelId) return null;
+
 		return this.models.find((m) => m.id === this.selectedModelId) ?? null;
 	}
 
@@ -125,7 +130,9 @@ class ModelsStore {
 		if (isRouterMode()) return null;
 
 		const props = serverStore.props;
+
 		if (props?.model_alias) return props.model_alias;
+
 		if (!props?.model_path) return null;
 
 		return props.model_path.split(/(\\|\/)/).pop() || null;
@@ -133,6 +140,7 @@ class ModelsStore {
 
 	get selectedModelContextSize(): number | null {
 		if (!this.selectedModelName) return null;
+
 		return this.getModelContextSize(this.selectedModelName);
 	}
 
@@ -145,12 +153,18 @@ class ModelsStore {
 	 */
 
 	getModelModalities(modelId: string): ModelModalities | null {
+		if (!isRouterMode() && serverStore.props?.modalities) {
+			return this.buildModalities(serverStore.props.modalities);
+		}
+
 		const model = this.models.find((m) => m.model === modelId || m.id === modelId);
+
 		if (model?.modalities) {
 			return model.modalities;
 		}
 
 		const props = this.modelPropsCache.get(modelId);
+
 		if (props?.modalities) {
 			return this.buildModalities(props.modalities);
 		}
@@ -172,11 +186,15 @@ class ModelsStore {
 
 	getModelModalitiesArray(modelId: string): ModelModality[] {
 		const modalities = this.getModelModalities(modelId);
+
 		if (!modalities) return [];
 
 		const result: ModelModality[] = [];
+
 		if (modalities.vision) result.push(ModelModality.VISION);
+
 		if (modalities.audio) result.push(ModelModality.AUDIO);
+
 		if (modalities.video) result.push(ModelModality.VIDEO);
 
 		return result;
@@ -241,39 +259,47 @@ class ModelsStore {
 	 * Whether the selected model's chat template supports thinking/reasoning.
 	 * Uses heuristic detection on the model's chat_template from /props.
 	 *
-	 * - MODEL mode: uses serverStore.props.chat_template (single loaded model)
-	 * - ROUTER mode: fetches /props?model=<id> for the selected model (cached)
-	 *
-	 * Triggers an async fetch of model props if not yet cached in ROUTER mode.
+	 * - MODEL mode: the global /props already describes the single loaded model,
+	 *   so its chat_template is used directly and no per-model cache is involved
+	 * - ROUTER mode: fetches /props?model=<id> for the selected model (cached),
+	 *   triggering an async fetch if not yet cached
 	 */
 	get supportsThinking(): boolean {
-		const modelId = this.selectedModelName;
-		if (!modelId) {
-			if (!isRouterMode()) {
-				return detectThinkingSupport(serverStore.props?.chat_template ?? '');
-			}
-			return false;
+		if (!isRouterMode()) {
+			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
 		}
 
-		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+		const modelId = this.selectedModelName;
+
+		if (!modelId) return false;
+
+		if (!this.modelPropsCache.get(modelId)) {
 			this.fetchModelProps(modelId);
 		}
+
 		const props = this.getModelProps(modelId);
+
 		return detectThinkingSupport(props?.chat_template ?? '');
 	}
 
 	/**
 	 * Check if a specific model supports thinking.
-	 * Fetches model props if not cached (in router mode).
+	 * In MODEL mode the global /props describes the single loaded model.
+	 * In ROUTER mode, fetches model props if not cached.
 	 */
 	checkModelSupportsThinking(modelId: string): boolean {
+		if (!isRouterMode()) {
+			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
+		}
+
 		if (!modelId) return false;
 
-		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+		if (!this.modelPropsCache.get(modelId)) {
 			this.fetchModelProps(modelId);
 		}
 
 		const props = this.getModelProps(modelId);
+
 		return detectThinkingSupport(props?.chat_template ?? '');
 	}
 
@@ -281,17 +307,22 @@ class ModelsStore {
 	 * Detailed thinking support detection result with reason for debugging/UI.
 	 */
 	get thinkingSupportDetails(): { supported: boolean; reason: string } {
-		const modelId = this.selectedModelName;
-		if (!modelId) {
-			if (!isRouterMode()) {
-				return detectThinkingSupportWithReason(serverStore.props?.chat_template ?? '');
-			}
-			return { supported: false, reason: 'No model selected' };
+		if (!isRouterMode()) {
+			return detectThinkingSupportWithReason(serverStore.props?.chat_template ?? '');
 		}
-		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+
+		const modelId = this.selectedModelName;
+
+		if (!modelId) {
+			return { reason: 'No model selected', supported: false };
+		}
+
+		if (!this.modelPropsCache.get(modelId)) {
 			this.fetchModelProps(modelId);
 		}
+
 		const props = this.getModelProps(modelId);
+
 		return detectThinkingSupportWithReason(props?.chat_template ?? '');
 	}
 
@@ -309,6 +340,7 @@ class ModelsStore {
 	 */
 	async fetch(force = false): Promise<void> {
 		if (this.inflightFetch) return this.inflightFetch;
+
 		if (this.models.length > 0 && !force) return;
 
 		this.inflightFetch = this.runFetch();
@@ -379,15 +411,16 @@ class ModelsStore {
 			const modelId = details?.model || item.id;
 
 			return {
-				id: item.id,
-				name: this.toDisplayName(displayNameSource),
-				model: modelId,
-				description: details?.description,
-				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
-				details: details?.details,
-				meta: item.meta ?? null,
-				parsedId: ModelsService.parseModelId(modelId),
 				aliases: item.aliases ?? [],
+				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+				description: details?.description,
+				details: details?.details,
+				id: item.id,
+				meta: item.meta ?? null,
+				modalities: this.buildArchitectureModalities(item.architecture),
+				model: modelId,
+				name: this.toDisplayName(displayNameSource),
+				parsedId: ModelsService.parseModelId(modelId),
 				tags: item.tags ?? []
 			};
 		});
@@ -403,10 +436,12 @@ class ModelsStore {
 
 		try {
 			const response = await ModelsService.listRouter();
+
 			this.routerModels = response.data;
 			await this.fetchModalitiesForLoadedModels();
 
 			const visible = this.getVisibleModels();
+
 			if (visible.length === 1 && this.isModelLoaded(visible[0].model)) {
 				this.selectModelById(visible[0].id);
 			}
@@ -428,6 +463,7 @@ class ModelsStore {
 	 */
 	async fetchModelProps(modelId: string): Promise<ApiLlamaCppServerProps | null> {
 		const cached = this.modelPropsCache.get(modelId);
+
 		if (cached) return cached;
 
 		if (serverStore.isRouterMode && !this.isModelLoaded(modelId)) {
@@ -440,11 +476,14 @@ class ModelsStore {
 
 		try {
 			const props = await PropsService.fetchForModel(modelId);
+
 			this.modelPropsCache.set(modelId, props);
 			this.propsCacheVersion++;
+
 			return props;
 		} catch (error) {
 			console.warn(`Failed to fetch props for model ${modelId}:`, error);
+
 			return null;
 		} finally {
 			this.modelPropsFetching.delete(modelId);
@@ -454,6 +493,7 @@ class ModelsStore {
 	/** Fetch modalities for all loaded models from /props endpoint. */
 	async fetchModalitiesForLoadedModels(): Promise<void> {
 		const loadedModelIds = this.loadedModelIds;
+
 		if (loadedModelIds.length === 0) return;
 
 		const propsPromises = loadedModelIds.map((modelId) => this.fetchModelProps(modelId));
@@ -463,9 +503,11 @@ class ModelsStore {
 
 			this.models = this.models.map((model) => {
 				const modelIndex = loadedModelIds.indexOf(model.model);
+
 				if (modelIndex === -1) return model;
 
 				const props = results[modelIndex];
+
 				if (!props?.modalities) return model;
 
 				return { ...model, modalities: this.buildModalities(props.modalities) };
@@ -483,6 +525,7 @@ class ModelsStore {
 	 */
 	async updateModelModalities(modelId: string): Promise<void> {
 		const props = await this.fetchModelProps(modelId);
+
 		if (!props?.modalities) return;
 
 		this.models = this.models.map((model) =>
@@ -507,6 +550,7 @@ class ModelsStore {
 	 */
 	getModelFromLastAssistantResponse(): string | null {
 		const messages = conversationsStore.activeMessages;
+
 		if (!messages || messages.length === 0) return null;
 
 		for (let i = messages.length - 1; i >= 0; i--) {
@@ -524,17 +568,21 @@ class ModelsStore {
 	 */
 	async selectModelFromLastAssistantResponse(): Promise<boolean> {
 		const lastModel = this.getModelFromLastAssistantResponse();
+
 		if (!lastModel || this.selectedModelName === lastModel) return false;
 
 		const matchingModel = this.models.find((option) => option.model === lastModel);
+
 		if (!matchingModel || !this.isModelLoaded(lastModel)) return false;
 
 		try {
 			await this.selectModelById(matchingModel.id);
 			console.log(`[modelsStore] Automatically selected model: ${lastModel} from last message`);
+
 			return true;
 		} catch (error) {
 			console.warn('[modelsStore] Failed to automatically select model from last message:', error);
+
 			return false;
 		}
 	}
@@ -552,33 +600,42 @@ class ModelsStore {
 		if (this.selectedModelName) return;
 
 		const availableModels = this.getVisibleModels();
+
 		if (availableModels.length === 0) return;
 
 		// Try to select model from last assistant response first
 		const lastModel = this.getModelFromLastAssistantResponse();
+
 		if (lastModel) {
 			const lastModelOption = availableModels.find((m) => m.model === lastModel);
+
 			if (lastModelOption) {
 				await this.selectModelById(lastModelOption.id);
+
 				if (this.isModelLoaded(lastModel)) {
 					await this.fetchModelProps(lastModel);
 				}
+
 				return;
 			}
 		}
 
 		// Try a loaded model first
 		const loadedModel = availableModels.find((m) => this.isModelLoaded(m.model));
+
 		if (loadedModel) {
 			await this.selectModelById(loadedModel.id);
 			await this.fetchModelProps(loadedModel.model);
+
 			return;
 		}
 
 		// Try loading a favorite model
 		const favorite = this.favoriteModelIds.values().next()?.value;
+
 		if (favorite) {
 			await this.selectModelById(favorite);
+
 			return;
 		}
 
@@ -596,9 +653,11 @@ class ModelsStore {
 
 	async selectModelById(modelId: string): Promise<void> {
 		if (!modelId || this.updating) return;
+
 		if (this.selectedModelId === modelId) return;
 
 		const option = this.models.find((model) => model.id === modelId);
+
 		if (!option) throw new Error('Selected model is not available');
 
 		this.updating = true;
@@ -617,6 +676,7 @@ class ModelsStore {
 	 */
 	selectModelByName(modelName: string): void {
 		const option = this.models.find((model) => model.model === modelName);
+
 		if (option) {
 			this.selectedModelId = option.id;
 			this.selectedModelName = option.model;
@@ -629,7 +689,12 @@ class ModelsStore {
 	}
 
 	findModelByName(modelName: string): ModelOption | null {
-		return this.models.find((model) => model.model === modelName) ?? null;
+		return (
+			this.models.find(
+				(model) =>
+					model.model === modelName || model.id === modelName || model.aliases?.includes(modelName)
+			) ?? null
+		);
 	}
 
 	findModelById(modelId: string): ModelOption | null {
@@ -658,6 +723,7 @@ class ModelsStore {
 	 */
 	subscribeStatus(): void {
 		if (this.statusReaderActive) return;
+
 		if (!isRouterMode()) return;
 
 		this.statusReaderActive = true;
@@ -698,15 +764,18 @@ class ModelsStore {
 
 				if (response.ok && response.body) {
 					const reader = response.body.getReader();
+
 					let buffer = '';
 
 					while (!signal.aborted) {
-						const { value, done } = await reader.read();
+						const { done, value } = await reader.read();
+
 						if (done) break;
 
 						buffer += decoder.decode(value, { stream: true });
 
 						let boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
+
 						while (boundary !== -1) {
 							this.handleStatusRecord(buffer.slice(0, boundary));
 							buffer = buffer.slice(boundary + SSE_RECORD_SEPARATOR.length);
@@ -738,6 +807,7 @@ class ModelsStore {
 		if (payload.length === 0) return;
 
 		let envelope: ApiModelsSseEvent;
+
 		try {
 			envelope = JSON.parse(payload);
 		} catch {
@@ -758,12 +828,15 @@ class ModelsStore {
 			case ServerModelsSseEventType.MODEL_STATUS:
 			case ServerModelsSseEventType.STATUS_UPDATE:
 				this.applyModelStatus(event);
+
 				break;
 			case ServerModelsSseEventType.MODELS_RELOAD:
 				void this.fetchRouterModels();
+
 				break;
 			case ServerModelsSseEventType.MODEL_REMOVE:
 				this.removeRouterModel(event.model);
+
 				break;
 			case ServerModelsSseEventType.DOWNLOAD_PROGRESS:
 				break;
@@ -777,6 +850,7 @@ class ModelsStore {
 	private applyModelStatus(event: ApiModelsSseEvent): void {
 		const model = event.model;
 		const data = event.data;
+
 		if (!model || !data?.status) return;
 
 		const status = data.status;
@@ -799,6 +873,7 @@ class ModelsStore {
 
 		if (failed) {
 			this.rejectStatus(model, new Error(`Model failed: ${this.toDisplayName(model)}`));
+
 			return;
 		}
 
@@ -821,12 +896,15 @@ class ModelsStore {
 	 */
 	private setRouterModelStatus(modelId: string, status: ServerModelStatus): void {
 		const idx = this.routerModels.findIndex((m) => m.id === modelId);
+
 		if (idx === -1) return;
 
 		const current = this.routerModels[idx];
+
 		if (current.status.value === status) return;
 
 		const next = [...this.routerModels];
+
 		next[idx] = { ...current, status: { ...current.status, value: status } };
 		this.routerModels = next;
 	}
@@ -837,7 +915,7 @@ class ModelsStore {
 	 */
 	private waitForStatus(modelId: string, target: ServerModelStatus): Promise<void> {
 		return new Promise((resolve, reject) => {
-			this.statusWaiters.set(modelId, { target, resolve, reject });
+			this.statusWaiters.set(modelId, { reject, resolve, target });
 		});
 	}
 
@@ -846,6 +924,7 @@ class ModelsStore {
 	 */
 	private settleStatus(modelId: string, status: ServerModelStatus): void {
 		const waiter = this.statusWaiters.get(modelId);
+
 		if (waiter && waiter.target === status) {
 			this.statusWaiters.delete(modelId);
 			waiter.resolve();
@@ -857,6 +936,7 @@ class ModelsStore {
 	 */
 	private rejectStatus(modelId: string, error: Error): void {
 		const waiter = this.statusWaiters.get(modelId);
+
 		if (waiter) {
 			this.statusWaiters.delete(modelId);
 			waiter.reject(error);
@@ -865,6 +945,7 @@ class ModelsStore {
 
 	async loadModel(modelId: string): Promise<void> {
 		if (this.isModelLoaded(modelId)) return;
+
 		if (this.modelLoadingStates.get(modelId)) return;
 
 		this.modelLoadingStates.set(modelId, true);
@@ -874,6 +955,7 @@ class ModelsStore {
 		this.subscribeStatus();
 
 		const reachedLoaded = this.waitForStatus(modelId, ServerModelStatus.LOADED);
+
 		reachedLoaded.catch(() => {});
 
 		try {
@@ -884,6 +966,7 @@ class ModelsStore {
 			this.rejectStatus(modelId, error instanceof Error ? error : new Error('load failed'));
 			this.error = error instanceof Error ? error.message : 'Failed to load model';
 			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`);
+
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
@@ -892,6 +975,7 @@ class ModelsStore {
 
 	async unloadModel(modelId: string): Promise<void> {
 		if (!this.isModelLoaded(modelId)) return;
+
 		if (this.modelLoadingStates.get(modelId)) return;
 
 		this.modelLoadingStates.set(modelId, true);
@@ -900,6 +984,7 @@ class ModelsStore {
 		this.subscribeStatus();
 
 		const reachedUnloaded = this.waitForStatus(modelId, ServerModelStatus.UNLOADED);
+
 		reachedUnloaded.catch(() => {});
 
 		try {
@@ -910,6 +995,7 @@ class ModelsStore {
 			this.rejectStatus(modelId, error instanceof Error ? error : new Error('unload failed'));
 			this.error = error instanceof Error ? error.message : 'Failed to unload model';
 			toast.error(`Failed to unload model: ${this.toDisplayName(modelId)}`);
+
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
@@ -918,6 +1004,7 @@ class ModelsStore {
 
 	async ensureModelLoaded(modelId: string): Promise<void> {
 		if (this.isModelLoaded(modelId)) return;
+
 		await this.loadModel(modelId);
 	}
 
@@ -954,9 +1041,11 @@ class ModelsStore {
 	private loadFavoritesFromStorage(): Set<string> {
 		try {
 			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
+
 			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
 		} catch {
 			toast.error('Failed to load favorite models from local storage');
+
 			return new Set();
 		}
 	}
@@ -972,6 +1061,7 @@ class ModelsStore {
 	private toDisplayName(id: string): string {
 		const segments = id.split(/\\|\//);
 		const candidate = segments.pop();
+
 		return candidate && candidate.trim().length > 0 ? candidate : id;
 	}
 
@@ -979,9 +1069,24 @@ class ModelsStore {
 		modalities: NonNullable<ApiLlamaCppServerProps['modalities']>
 	): ModelModalities {
 		return {
-			vision: modalities.vision ?? false,
 			audio: modalities.audio ?? false,
-			video: modalities.video ?? false
+			video: modalities.video ?? false,
+			vision: modalities.vision ?? false
+		};
+	}
+
+	/** Map the router modalities, the only source available while a model is not loaded. */
+	private buildArchitectureModalities(
+		architecture: ApiModelDataEntry['architecture']
+	): ModelModalities | undefined {
+		if (!architecture) return undefined;
+
+		const inputs = architecture.input_modalities;
+
+		return {
+			audio: inputs.includes(FileTypeCategory.AUDIO),
+			video: inputs.includes(FileTypeCategory.VIDEO),
+			vision: inputs.includes(FileTypeCategory.IMAGE)
 		};
 	}
 

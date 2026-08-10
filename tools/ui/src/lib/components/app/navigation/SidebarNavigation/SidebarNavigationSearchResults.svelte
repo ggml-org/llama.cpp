@@ -1,27 +1,39 @@
 <script lang="ts">
-	import { buildConversationTree } from '$lib/stores/conversations.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
+	import { buildConversationTree } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		class?: string;
 		searchQuery: string;
 		filteredConversations: DatabaseConversation[];
 		currentChatId: string | undefined;
+		isSelectionMode?: boolean;
+		selectedIds?: Set<string>;
 		onSelect: (id: string) => void;
 		onEdit: (id: string) => void;
 		onDelete: (id: string) => void;
 		onStop: (id: string) => void;
+		onToggleSelect?: (id: string) => void;
+		onEnterSelectionMode?: (id: string) => void;
+		onSelectionClick?: (id: string, options: { shiftKey: boolean }) => void;
+		onRowMouseDown?: (id: string, event: MouseEvent) => void;
 	}
 
 	let {
 		class: className = '',
-		searchQuery,
-		filteredConversations,
 		currentChatId,
-		onSelect,
-		onEdit,
+		filteredConversations,
+		isSelectionMode = false,
 		onDelete,
-		onStop
+		onEdit,
+		onEnterSelectionMode,
+		onRowMouseDown,
+		onSelect,
+		onSelectionClick,
+		onStop,
+		onToggleSelect,
+		searchQuery,
+		selectedIds = new Set<string>()
 	}: Props = $props();
 
 	let tree = $derived(buildConversationTree(filteredConversations));
@@ -47,19 +59,25 @@
 				<li class="group/item relative mb-1 p-0">
 					<SidebarNavigationConversationItem
 						conversation={{
-							id: conversation.id,
-							name: conversation.name,
-							lastModified: conversation.lastModified,
 							currNode: conversation.currNode,
 							forkedFromConversationId: conversation.forkedFromConversationId,
+							id: conversation.id,
+							lastModified: conversation.lastModified,
+							name: conversation.name,
 							pinned: conversation.pinned
 						}}
 						{depth}
 						isActive={currentChatId === conversation.id}
+						{isSelectionMode}
+						isSelected={selectedIds.has(conversation.id)}
 						{onSelect}
 						{onEdit}
 						{onDelete}
 						{onStop}
+						{onToggleSelect}
+						{onEnterSelectionMode}
+						{onSelectionClick}
+						{onRowMouseDown}
 					/>
 				</li>
 			{/each}

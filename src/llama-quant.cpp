@@ -2,6 +2,7 @@
 #include "llama-model.h"
 #include "llama-model-loader.h"
 #include "llama-ext.h"
+#include "llama.h"
 
 #include <algorithm>
 #include <cmath>
@@ -306,6 +307,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
+    // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
+    quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
+
     // these are very small (e.g. 4x4)
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;
@@ -321,6 +325,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ssm_conv1d") == std::string::npos;
     quantize &= name.find("shortconv.conv.weight") == std::string::npos;
+
+    // do not quantize MiniMax's indexer projection weights, they are tiny
+    quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
+    quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
 
     // do not quantize RWKV's small yet 2D weights
     quantize &= name.find("time_mix_first.weight") == std::string::npos;
@@ -351,6 +359,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find(".patch_embd")    == std::string::npos;
     quantize &= name.find(".patch_merger")  == std::string::npos;
 
+    // audio codebook
+    quantize &= name.find("a.rvq.codebook")  == std::string::npos;
+    quantize &= name.find("mm.a.code_embd")  == std::string::npos;
+
     return quantize;
 }
 
@@ -380,6 +392,7 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_S:   // types on the right: block size 32
             case GGML_TYPE_IQ4_XS:  return_type = GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_Q2_0:
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_TQ1_0:
@@ -480,7 +493,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) {
                 new_type = GGML_TYPE_IQ3_S;
             }
-            else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0) {
+            else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0 || ftype == LLAMA_FTYPE_MOSTLY_Q2_0) {
                 new_type = GGML_TYPE_Q4_K;
             }
         }
@@ -672,7 +685,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
     ggml_type new_type = default_type;
 
     // get more optimal quantization type based on the tensor shape, layer, etc.
-    if (!params->pure && ggml_is_quantized(default_type)) {
+    if (ggml_is_quantized(default_type)) {
         // if the user provided tensor types - use those
         bool manual = false;
         if (!qs.tensor_type_patterns.empty()) {
@@ -691,7 +704,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         }
 
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-        if (!manual) {
+        if (!manual && !params->pure) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
         }
 
@@ -800,6 +813,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_BF16: return GGML_TYPE_BF16;
         case LLAMA_FTYPE_ALL_F32:     return GGML_TYPE_F32;
         case LLAMA_FTYPE_MOSTLY_Q1_0: return GGML_TYPE_Q1_0;
+        case LLAMA_FTYPE_MOSTLY_Q2_0: return GGML_TYPE_Q2_0;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
 
@@ -871,15 +885,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // mmap consistently increases speed on Linux, and also increases speed on Windows with
     // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
 #if defined(__linux__) || defined(_WIN32)
-    constexpr bool use_mmap = true;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
 #else
-    constexpr bool use_mmap = false;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_NONE;
 #endif
 
     const llama_model_kv_override * kv_overrides = params->kv_overrides;
     std::vector<std::string> splits = {};
     llama_model_loader ml(/*metadata*/ nullptr, /*set_tensor_data*/ nullptr, /*set_tensor_data_ud*/ nullptr,
-        fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
+        fname_inp, splits, /*file*/ nullptr, /*load_mode*/ load_mode, /*check_tensors*/ true, /*no_alloc*/ false, /*load_mtp*/ true, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
     auto mparams = llama_model_default_params();
@@ -1349,6 +1363,7 @@ llama_model * llama_quant_model_from_metadata(const llama_quant_model_desc * des
     model->hparams.n_embd_head_k_full = desc->n_embd_head_k;
     model->hparams.n_embd_head_v_full = desc->n_embd_head_v;
     model->hparams.n_layer_all        = desc->n_layer;
+    GGML_ASSERT(desc->n_layer > 0 && desc->n_layer <= LLAMA_MAX_LAYERS);
     model->hparams.n_expert           = desc->n_expert;
 
     for (uint32_t i = 0; i < desc->n_layer; i++) {

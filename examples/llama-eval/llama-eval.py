@@ -362,7 +362,7 @@ class EvalState:
             case = cases.get(task_id, {})
             status = case.get("status", "pending")
             expected = case.get("expected", "")
-            answer = case.get("answer", "") if status == "ok" else ""
+            answer = case.get("answer") or "" if status == "ok" else ""
             is_correct = case.get("correct", False) if status == "ok" else False
             response = case.get("response", "") or ""
             prompt = case.get("prompt", "") or ""
@@ -647,7 +647,7 @@ class EvalState:
             question, prompt, expected = self.get_case(i)
             case = cases.get(task_id, {})
             status = case.get("status", "pending")
-            answer = case.get("answer", "N/A") if status == "ok" else "N/A"
+            answer = case.get("answer") or "N/A" if status == "ok" else "N/A"
             tokens = case.get("tokens")
             tokens_str = str(tokens) if tokens is not None else "N/A"
             tps_gen = case.get("tps_gen")

@@ -1,5 +1,5 @@
-import type { ToolSource } from '$lib/enums';
 import type { OpenAIToolDefinition } from './mcp';
+import type { ToolSource } from '$lib/enums';
 
 export interface ToolEntry {
 	source: ToolSource;
@@ -14,6 +14,8 @@ export interface ToolEntry {
 
 export interface ToolGroup {
 	source: ToolSource;
+	/** Stable identity for keyed rendering and toggles, unique per group */
+	key: string;
 	label: string;
 	/** For MCP groups, the server ID */
 	serverId?: string;

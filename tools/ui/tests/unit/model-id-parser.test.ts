@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { ModelsService } from '$lib/services/models.service';
+import { describe, expect, it } from 'vitest';
 
 const { parseModelId } = ModelsService;
 
@@ -34,6 +34,11 @@ describe('parseModelId', () => {
 	it('extracts model parameters correctly in lowercase', () => {
 		expect(parseModelId('model-100b-bf16')).toMatchObject({ params: '100B' });
 		expect(parseModelId('model-100b:q4_k_m')).toMatchObject({ params: '100B' });
+	});
+
+	it('extracts effective parameters correctly', () => {
+		expect(parseModelId('model-E4B-BF16')).toMatchObject({ params: 'E4B' });
+		expect(parseModelId('model-e2b:q4_k_m')).toMatchObject({ params: 'E2B' });
 	});
 
 	it('extracts activated parameters correctly', () => {
@@ -239,16 +244,16 @@ describe('parseModelId', () => {
 	it('handles ambiguous model names', () => {
 		// Qwen3.5 Instruct vs Thinking — tags should distinguish them
 		expect(parseModelId('Qwen/Qwen3.5-30B-A3B-Instruct')).toMatchObject({
+			activatedParams: 'A3B',
 			modelName: 'Qwen3.5',
 			params: '30B',
-			activatedParams: 'A3B',
 			tags: ['Instruct']
 		});
 
 		expect(parseModelId('Qwen/Qwen3.5-30B-A3B-Thinking')).toMatchObject({
+			activatedParams: 'A3B',
 			modelName: 'Qwen3.5',
 			params: '30B',
-			activatedParams: 'A3B',
 			tags: ['Thinking']
 		});
 

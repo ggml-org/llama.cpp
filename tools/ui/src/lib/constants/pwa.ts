@@ -6,40 +6,40 @@
 import { APP_NAME } from './app';
 
 export const MEDIA_QUERIES = {
+	DISPLAY_MODE_STANDALONE: '(display-mode: standalone)',
 	PREFERS_DARK: '(prefers-color-scheme: dark)',
-	PREFERS_LIGHT: '(prefers-color-scheme: light)',
-	DISPLAY_MODE_STANDALONE: '(display-mode: standalone)'
+	PREFERS_LIGHT: '(prefers-color-scheme: light)'
 } as const;
 
 export const THEME_COLORS = {
-	LIGHT: '#ffffff',
-	DARK: '#0d0d0d',
 	ACCENT_BLUE: '#2563eb',
 	ACCENT_BLUE_HOVER: '#1d4ed8',
-	BACKGROUND_LIGHT: 'white',
 	BACKGROUND_DARK: '#111111',
+	BACKGROUND_LIGHT: 'white',
+	DARK: '#0d0d0d',
+	LIGHT: '#ffffff',
 	TITLE_UPDATE_ALERT: {
-		BORDER_LIGHT: 'zinc-200',
-		BORDER_DARK: 'zinc-700',
-		BG_LIGHT: 'white',
 		BG_DARK: 'zinc-800',
-		TEXT_LIGHT: 'zinc-500',
-		TEXT_DARK: 'zinc-400'
+		BG_LIGHT: 'white',
+		BORDER_DARK: 'zinc-700',
+		BORDER_LIGHT: 'zinc-200',
+		TEXT_DARK: 'zinc-400',
+		TEXT_LIGHT: 'zinc-500'
 	}
 } as const;
 
 export const FAVICON_PATHS = {
-	ICO_LIGHT: 'favicon.ico',
 	ICO_DARK: 'favicon-dark.ico',
-	SVG_LIGHT: 'favicon.svg',
-	SVG_DARK: 'favicon-dark.svg'
+	ICO_LIGHT: 'favicon.ico',
+	SVG_DARK: 'favicon-dark.svg',
+	SVG_LIGHT: 'favicon.svg'
 } as const;
 
 // Substituted for `currentColor` in src/lib/assets/logo.svg when generating
 // the light/dark static sources consumed by the PWA asset generator.
 export const FAVICON_COLORS = {
-	LIGHT: '#111111',
-	DARK: '#fafafa'
+	DARK: '#fafafa',
+	LIGHT: '#111111'
 } as const;
 
 export const FAVICON_SELECTORS = {
@@ -52,50 +52,50 @@ export const APPLE_ASSETS = {
 } as const;
 
 export const PWA_MANIFEST = {
+	background_color: THEME_COLORS.BACKGROUND_LIGHT,
+	description: 'Local AI chat interface powered by llama.cpp',
+	display: 'standalone' as const,
+	icons: [
+		{ sizes: '64x64', src: 'pwa-64x64.png', type: 'image/png' },
+		{ sizes: '192x192', src: 'pwa-192x192.png', type: 'image/png' },
+		{ purpose: 'any' as const, sizes: '512x512', src: 'pwa-512x512.png', type: 'image/png' },
+		{
+			purpose: 'maskable' as const,
+			sizes: '512x512',
+			src: 'maskable-icon-512x512.png',
+			type: 'image/png'
+		}
+	],
 	name: APP_NAME,
 	short_name: APP_NAME,
-	description: 'Local AI chat interface powered by llama.cpp',
 	start_url: './',
-	display: 'standalone' as const,
-	background_color: THEME_COLORS.BACKGROUND_LIGHT,
-	theme_color: THEME_COLORS.BACKGROUND_LIGHT,
-	icons: [
-		{ src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
-		{ src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-		{ src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' as const },
-		{
-			src: 'maskable-icon-512x512.png',
-			sizes: '512x512',
-			type: 'image/png',
-			purpose: 'maskable' as const
-		}
-	]
+	theme_color: THEME_COLORS.BACKGROUND_LIGHT
 };
 
 export const PWA_ICON_PATHS = {
+	MASKABLE_512: '/maskable-icon-512x512.png',
 	PWA_64: '/pwa-64x64.png',
 	PWA_192: '/pwa-192x192.png',
-	PWA_512: '/pwa-512x512.png',
-	MASKABLE_512: '/maskable-icon-512x512.png'
+	PWA_512: '/pwa-512x512.png'
 } as const;
 
 /** Apple device dimensions (logical points) and DPR, from Apple HIG. */
 export const APPLE_DEVICES = {
+	'640x1136': { dpr: 2, height: 568, width: 320 }, // iPhone 6/7/8 Plus
+	'744x1133': { dpr: 2, height: 573, width: 376 }, // iPad mini 8.3"
+	'750x1334': { dpr: 2, height: 667, width: 375 }, // iPhone 6/7/8, 14
+	'1032x1376': { dpr: 2, height: 1376, width: 1032 }, // iPad Air 13"
 	// iPhones (DPR 3)
-	'1170x2532': { width: 390, height: 844, dpr: 3 }, // iPhone 13, 15
-	'1179x2556': { width: 393, height: 852, dpr: 3 }, // iPhone 14, 15 Pro, 16
-	'1206x2622': { width: 402, height: 874, dpr: 3 }, // iPhone 16 Plus, 16e
-	'1284x2778': { width: 428, height: 926, dpr: 3 }, // iPhone 15 Plus
-	'1290x2796': { width: 430, height: 932, dpr: 3 }, // iPhone 15 Pro Max, 16 Pro
-	'1320x2868': { width: 440, height: 956, dpr: 3 }, // iPhone 16 Pro Max
-	'750x1334': { width: 375, height: 667, dpr: 2 }, // iPhone 6/7/8, 14
-	'640x1136': { width: 320, height: 568, dpr: 2 }, // iPhone 6/7/8 Plus
+	'1170x2532': { dpr: 3, height: 844, width: 390 }, // iPhone 13, 15
+	'1179x2556': { dpr: 3, height: 852, width: 393 }, // iPhone 14, 15 Pro, 16
+	'1206x2622': { dpr: 3, height: 874, width: 402 }, // iPhone 16 Plus, 16e
+	'1284x2778': { dpr: 3, height: 926, width: 428 }, // iPhone 15 Plus
+	'1290x2796': { dpr: 3, height: 932, width: 430 }, // iPhone 15 Pro Max, 16 Pro
+	'1320x2868': { dpr: 3, height: 956, width: 440 }, // iPhone 16 Pro Max
+	'1640x2360': { dpr: 2, height: 1180, width: 820 }, // iPad Air 10.9"
 	// iPads (DPR 2)
-	'1668x2388': { width: 834, height: 1194, dpr: 2 }, // iPad Air 11", iPad 11"
-	'2048x2732': { width: 1024, height: 1366, dpr: 2 }, // iPad Pro 12.9"
-	'1640x2360': { width: 820, height: 1180, dpr: 2 }, // iPad Air 10.9"
-	'1032x1376': { width: 1032, height: 1376, dpr: 2 }, // iPad Air 13"
-	'744x1133': { width: 376, height: 573, dpr: 2 } // iPad mini 8.3"
+	'1668x2388': { dpr: 2, height: 1194, width: 834 }, // iPad Air 11", iPad 11"
+	'2048x2732': { dpr: 2, height: 1366, width: 1024 } // iPad Pro 12.9"
 } as const;
 
 export type AppleDeviceKey = keyof typeof APPLE_DEVICES;
@@ -183,7 +183,6 @@ export const PUBLIC_ENDPOINTS = [
 	'/workbox-<hash>.js'
 ] as const;
 export const BUILD_CONFIG = {
-	OUTPUT_DIR: './dist',
 	GUIDE_COMMENT: `
 <!--
   This is a static build of the frontend.
@@ -191,12 +190,13 @@ export const BUILD_CONFIG = {
   Do not edit this file directly.
   To make changes, refer to the "Web UI" section in the README.
 -->
-`.trim()
+`.trim(),
+	OUTPUT_DIR: './dist'
 } as const;
 
 export const REGEX_PATTERNS = {
-	SPLASH_FILE: /^apple-splash-(portrait|landscape)-(dark-)?(\d+)x(\d+)\.png$/,
-	HEAD_CLOSE: /\t*<\/head>/
+	HEAD_CLOSE: /\t*<\/head>/,
+	SPLASH_FILE: /^apple-splash-(portrait|landscape)-(dark-)?(\d+)x(\d+)\.png$/
 } as const;
 
 // Device names used by @vite-pwa/assets-generator for splash screen generation.
@@ -235,34 +235,28 @@ export const PWA_GENERATOR_DEVICES = [
 // post-processed into the static favicon.svg so the in-app logo (which reads
 // src/lib/assets/logo.svg directly) is unaffected.
 export const PWA_ASSET_GENERATOR = {
-	LINK_PRESET: '2023',
-	FAVICON_PADDING: 0.04,
-	SPLASH_PADDING: 0.75,
-	FIT_MODE: 'contain',
 	ADD_MEDIA_SCREEN: true,
 	BASE_PATH: './',
-	XHTML: false,
+	DARK_PREFIX: 'dark-',
+	FAVICON_PADDING: 0.04,
+	FIT_MODE: 'contain',
+	LINK_PRESET: '2023',
 	PNG_COMPRESSION_LEVEL: 9,
 	PNG_QUALITY: 60,
-	DARK_PREFIX: 'dark-'
+	SPLASH_PADDING: 0.75,
+	XHTML: false
 } as const;
 
 export const CACHE_SETTINGS = {
-	IMMUTABLE_MAX_AGE_SECONDS: 31536000,
 	API_CACHE_MAX_AGE_SECONDS: 60 * 60 * 24,
 	API_CACHE_MAX_ENTRIES: 50,
+	IMMUTABLE_MAX_AGE_SECONDS: 31536000,
 	MAX_FILE_SIZE_BYTES: 10 * 1024 * 1024
 } as const;
 
 export const GLOB_PATTERNS: string[] = [
 	'**/*.{js,css,html,ico,svg,png,webp,woff,woff2,json,webmanifest}'
 ];
-
-// loading.html is the model loading page served by llama-server itself.
-// The SvelteKit PWA manifest transform strips the html extension from every
-// precache entry to match clean URLs, but loading.html is a plain static asset
-// with no clean URL, so static servers answer 404 and the SW install fails.
-export const GLOB_IGNORES: string[] = ['**/loading.html'];
 
 export const SW_CONFIG = {
 	CHECK_INTERVAL_MS: 60000,
@@ -277,35 +271,46 @@ export const SW_CONFIG = {
 
 // Runtime caching configuration for Workbox
 export const RUNTIME_CACHING = {
-	HANDLER: 'NetworkFirst',
-	CACHE_NAME: 'api-cache'
+	CACHE_NAME: 'api-cache',
+	HANDLER: 'NetworkFirst'
 } as const;
 
 // Workbox runtime caching patterns
 export const API_CACHING_PATTERNS = {
-	V1_API: /^\/v1\/.*/,
-	STATIC_API: /^\/(health|props|models|tools|slots|cors-proxy).*/
+	STATIC_API: /^\/(health|props|models|tools|slots|cors-proxy).*/,
+	V1_API: /^\/v1\/.*/
 } as const;
 
 // SvelteKit PWA plugin options
 export const PWA_KIT_OPTIONS = {} as const;
 
 export const APPLE_META_TAGS = {
-	MOBILE_WEB_APP_CAPABLE: { name: 'apple-mobile-web-app-capable', content: 'yes' },
-	STATUS_BAR_STYLE: { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
-	MOBILE_WEB_APP_TITLE: { name: 'apple-mobile-web-app-title' }
+	MOBILE_WEB_APP_CAPABLE: { content: 'yes', name: 'apple-mobile-web-app-capable' },
+	MOBILE_WEB_APP_TITLE: { name: 'apple-mobile-web-app-title' },
+	STATUS_BAR_STYLE: { content: 'black-translucent', name: 'apple-mobile-web-app-status-bar-style' }
 } as const;
 
 // Splash screen HTML link tag prefix used by generateSplashScreenLinks
 export const SPLASH_LINK = {
-	HTML: '<link rel="apple-touch-startup-image"',
-	DARK_MEDIA_SUFFIX: ' and (prefers-color-scheme: dark)'
+	DARK_MEDIA_SUFFIX: ' and (prefers-color-scheme: dark)',
+	HTML: '<link rel="apple-touch-startup-image"'
 } as const;
 
 // SvelteKit PWA plugin configuration — used by @vite.config.ts
 import type { SvelteKitPWAOptions } from '@vite-pwa/sveltekit';
 
 export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
+	devOptions: {
+		enabled: true,
+		suppressWarnings: true
+	},
+
+	// SvelteKit-specific options
+	kit: {
+		// Include version file for proper cache invalidation
+		includeVersionFile: true
+	},
+
 	// Strategy: generateSW - the plugin generates a service worker automatically
 	// using Workbox. For a custom SW, use 'injectManifest' instead.
 	// Manifest configuration
@@ -317,7 +322,6 @@ export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
 		// Uses '**/' because SvelteKit outputs files under _app/immutable/
 		// subdirectories.
 		globPatterns: GLOB_PATTERNS,
-		globIgnores: GLOB_IGNORES,
 		maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
 
 		// Prevent @vite-pwa/sveltekit from auto-adding a NavigationRoute by
@@ -331,38 +335,27 @@ export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
 		// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
 		runtimeCaching: [
 			{
-				urlPattern: API_CACHING_PATTERNS.V1_API,
 				handler: RUNTIME_CACHING.HANDLER,
 				options: {
 					cacheName: RUNTIME_CACHING.CACHE_NAME,
 					expiration: {
-						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
-						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
+						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS,
+						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES
 					}
-				}
+				},
+				urlPattern: API_CACHING_PATTERNS.V1_API
 			},
 			{
-				urlPattern: API_CACHING_PATTERNS.STATIC_API,
 				handler: RUNTIME_CACHING.HANDLER,
 				options: {
 					cacheName: RUNTIME_CACHING.CACHE_NAME,
 					expiration: {
-						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
-						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
+						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS,
+						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES
 					}
-				}
+				},
+				urlPattern: API_CACHING_PATTERNS.STATIC_API
 			}
 		]
-	},
-
-	devOptions: {
-		enabled: true,
-		suppressWarnings: true
-	},
-
-	// SvelteKit-specific options
-	kit: {
-		// Include version file for proper cache invalidation
-		includeVersionFile: true
 	}
 };

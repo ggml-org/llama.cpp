@@ -183,10 +183,11 @@ export { default as McpServerCardSkeleton } from './McpServerCardSkeleton.svelte
 /**
  * **McpServerCardCompact** - Condensed MCP server card
  *
- * Compact alternative to McpServerCard tailored for picker-style UIs.
- * Shows the server identity, status, and a flex-wrapped list of available tools.
- * Tool names are rendered as badges; hovering a badge shows its description in a tooltip.
- * Does not show connection logs or server instructions.
+ * Static card for picker-style UIs (e.g. recommended MCP servers in the
+ * Add New Server dialog). Shows an optional favicon, the server name, and
+ * a short description. Performs no network requests - safe to render
+ * without contacting any upstream server until the user explicitly adds
+ * the server.
  */
 export { default as McpServerCardCompact } from './McpServerCard/McpServerCardCompact.svelte';
 

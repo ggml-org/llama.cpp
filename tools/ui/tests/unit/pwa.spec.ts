@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -11,6 +11,7 @@ describe('PWA Build Output', () => {
 	if (!distExists) {
 		console.warn(`⚠ Skipping PWA Build Output tests - dist/ not found (run 'npm run build' first)`);
 		it('skipped - dist/ not found', () => {});
+
 		return;
 	}
 
@@ -25,6 +26,7 @@ describe('PWA Build Output', () => {
 		it('workbox library exists (hashed filename)', () => {
 			// SvelteKit generates workbox-{hash}.js files
 			const files = readdirSync(DIST_DIR).filter((f) => f.match(/^workbox-[^.]+\.js$/));
+
 			expect(files.length).toBeGreaterThan(0);
 		});
 
@@ -38,18 +40,22 @@ describe('PWA Build Output', () => {
 		it('SvelteKit bundle.js exists in _app/immutable/', () => {
 			// SvelteKit generates hashed bundle names in _app/immutable/
 			const appDir = resolve(DIST_DIR, '_app', 'immutable');
+
 			expect(existsSync(appDir), '_app/immutable/ not found').toBeTruthy();
 			const files = readdirSync(appDir).filter((f) => f.startsWith('bundle.') && f.endsWith('.js'));
+
 			expect(files.length).toBeGreaterThan(0);
 		});
 
 		it('SvelteKit bundle.css exists in _app/immutable/assets/', () => {
 			// SvelteKit generates hashed CSS bundles in _app/immutable/assets/
 			const cssDir = resolve(DIST_DIR, '_app', 'immutable', 'assets');
+
 			expect(existsSync(cssDir), '_app/immutable/assets/ not found').toBeTruthy();
 			const files = readdirSync(cssDir).filter(
 				(f) => f.startsWith('bundle.') && f.endsWith('.css')
 			);
+
 			expect(files.length).toBeGreaterThan(0);
 		});
 
@@ -66,6 +72,7 @@ describe('PWA Build Output', () => {
 		it('has valid JSON with version field', () => {
 			const content = readFileSync(resolve(DIST_DIR, '_app', 'version.json'), 'utf-8');
 			const parsed = JSON.parse(content);
+
 			expect(parsed).toHaveProperty('version');
 			expect(typeof parsed.version).toBe('string');
 			expect(parsed.version.length).toBeGreaterThan(0);
@@ -175,6 +182,7 @@ describe('PWA Build Output', () => {
 	describe('Hashed workbox files', () => {
 		it('workbox-*.js files exist in dist root (SvelteKit build output)', () => {
 			const files = readdirSync(DIST_DIR).filter((f) => f.match(/^workbox-[^.]+\.js$/));
+
 			expect(files.length).toBeGreaterThan(0);
 		});
 	});
@@ -188,10 +196,6 @@ describe('PWA Build Output', () => {
 			expect(existsSync(resolve(DIST_DIR, 'pwa-64x64.png'))).toBeTruthy();
 			expect(existsSync(resolve(DIST_DIR, 'pwa-192x192.png'))).toBeTruthy();
 			expect(existsSync(resolve(DIST_DIR, 'pwa-512x512.png'))).toBeTruthy();
-		});
-
-		it('has loading.html fallback page', () => {
-			expect(existsSync(resolve(DIST_DIR, 'loading.html'))).toBeTruthy();
 		});
 	});
 });

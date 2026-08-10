@@ -1,19 +1,20 @@
 <script lang="ts">
-	import { tick } from 'svelte';
-	import * as Card from '$lib/components/ui/card';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
+		McpConnectionLogs,
 		McpServerCardActions,
 		McpServerCardDeleteDialog,
 		McpServerCardEditForm,
 		McpServerCardHeader,
 		McpServerCardToolsList,
-		McpConnectionLogs,
 		McpServerInfo
 	} from '$lib/components/app/mcp';
+	import * as Card from '$lib/components/ui/card';
+	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { HealthCheckStatus } from '$lib/enums';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
+	import { tick } from 'svelte';
 
 	interface Props {
 		server: MCPServerSettingsEntry;
@@ -23,7 +24,7 @@
 		onDelete: () => void;
 	}
 
-	let { server, enabled, onToggle, onUpdate, onDelete }: Props = $props();
+	let { enabled, onDelete, onToggle, onUpdate, server }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(mcpStore.getServerLabel(server));
@@ -32,7 +33,9 @@
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.CONNECTING);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.SUCCESS);
 	let isError = $derived(healthState.status === HealthCheckStatus.ERROR);
-	let showSkeleton = $derived(isIdle || isHealthChecking);
+	// Disabled servers stay IDLE (no startup health check), so the body
+	// skeleton only applies while a check is running or expected to run.
+	let showSkeleton = $derived(isHealthChecking || (isIdle && server.enabled));
 	let errorMessage = $derived(
 		healthState.status === HealthCheckStatus.ERROR ? healthState.message : undefined
 	);
@@ -67,7 +70,12 @@
 	async function startEditing() {
 		isEditing = true;
 		await tick();
-		editFormRef?.setInitialValues(server.url, server.headers || '', server.useProxy || false);
+		editFormRef?.setInitialValues(
+			server.url,
+			server.headers || '',
+			server.useProxy || false,
+			displayName
+		);
 	}
 
 	function cancelEditing() {
@@ -78,10 +86,13 @@
 		}
 	}
 
-	function saveEditing(url: string, headers: string, useProxy: boolean) {
+	function saveEditing(url: string, headers: string, useProxy: boolean, name?: string) {
 		onUpdate({
-			url: url,
+			// undefined = prefill untouched, keep any existing custom name;
+			// empty string = field cleared, back to the automatic label
+			displayName: name === undefined ? server.displayName : name.trim() || undefined,
 			headers: headers || undefined,
+			url: url,
 			useProxy: useProxy
 		});
 		isEditing = false;
@@ -103,6 +114,7 @@
 			serverId={server.id}
 			serverUrl={server.url}
 			serverUseProxy={server.useProxy}
+			serverLabel={displayName}
 			onSave={saveEditing}
 			onCancel={cancelEditing}
 		/>
@@ -132,7 +144,7 @@
 			{#if showSkeleton}
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
-						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
 						<Skeleton class="h-3 w-24" />
 					</div>
 					<div class="flex flex-wrap gap-1.5">
@@ -144,7 +156,7 @@
 
 				<div class="space-y-1.5">
 					<div class="flex items-center gap-2">
-						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
 						<Skeleton class="h-3 w-32" />
 					</div>
 				</div>
