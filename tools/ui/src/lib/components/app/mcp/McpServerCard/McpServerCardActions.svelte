@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash2, RefreshCw, Pencil } from '@lucide/svelte';
+	import { Pencil, RefreshCw, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 
 	interface Props {
@@ -9,7 +9,7 @@
 		onDelete: () => void;
 	}
 
-	let { isHealthChecking, onEdit, onRefresh, onDelete }: Props = $props();
+	let { isHealthChecking, onDelete, onEdit, onRefresh }: Props = $props();
 </script>
 
 <div class="flex shrink-0 items-center gap-1">

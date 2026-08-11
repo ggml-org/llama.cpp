@@ -138,12 +138,13 @@ struct clip_graph_deepseekocr : clip_graph {
     clip_graph_deepseekocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_sam(ggml_tensor * inp); // build the SAM model
-    // bool support_batch() const override { return true; } // TODO: support batch for DeepSeek-OCR v1
+    bool support_batch() const override { return true; }
 };
 
 struct clip_graph_deepseekocr2 : clip_graph_deepseekocr {
     clip_graph_deepseekocr2(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_deepseekocr(ctx, img) {}
     ggml_cgraph * build() override; // reuses build_sam() from base
+    bool support_batch() const override { return true; }
 };
 
 struct clip_graph_conformer : clip_graph {
@@ -363,4 +364,9 @@ private:
 
     ggml_tensor * build_newline_row(ggml_context * ctx0);
     ggml_tensor * append_rowwise_newlines(ggml_context * ctx0, ggml_tensor * tile_output);
+};
+
+struct clip_graph_muse_glimmer : clip_graph {
+    clip_graph_muse_glimmer(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
 };

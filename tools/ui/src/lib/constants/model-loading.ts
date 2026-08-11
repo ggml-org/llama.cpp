@@ -2,9 +2,9 @@
  * Labels shown while a model loads, keyed by the stage reported on /models/sse.
  */
 export const MODEL_LOAD_STAGE_LABELS: Record<ApiModelLoadStage, string> = {
-	text_model: 'Loading weights',
+	mmproj_model: 'Loading projector',
 	spec_model: 'Loading draft',
-	mmproj_model: 'Loading projector'
+	text_model: 'Loading weights'
 };
 
 /**
