@@ -1,5 +1,7 @@
 # V620 RDNA2 Q4_0 DOT8 experiment
 
+> For the complete native-path inventory and all supported opt-in variables, see [Opt-in gfx1030 native optimizations](gfx1030-native-optimizations.md).
+
 Branch: `exp/rdna2-q4-0-dot8-v620`\\
 Parent: `exp/rdna2-q4k-mmid-batch6-pr23685`\\
 Implementation commits: `b4afc40ce`, `ed3565903`, `873653deb`, `7dd6d1fd6`, `f8c7dce9b`

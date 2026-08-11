@@ -1,5 +1,7 @@
 # gfx1030 next optimization plan
 
+> Current implemented paths, supported environment variables, correctness evidence, and benchmark results are consolidated in [Opt-in gfx1030 native optimizations](gfx1030-native-optimizations.md).
+
 ## Audit result
 
 The research is directionally correct, but parts are stale relative to this fork:

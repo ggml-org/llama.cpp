@@ -1,0 +1,141 @@
+# Opt-in gfx1030 native optimizations
+
+This branch contains experimental HIP paths tuned and validated on AMD RDNA2/gfx1030 (four Radeon Pro V620 GPUs). All behavior remains stock unless the master switch is enabled:
+
+```bash
+export GGML_HIP_GFX1030_NATIVE=1
+```
+
+Two model-specific fusions require their own additional switches. Setting either secondary switch without `GGML_HIP_GFX1030_NATIVE=1` has no effect.
+
+## Environment variables
+
+| Variable | Default | Effect |
+|---|---:|---|
+| `GGML_HIP_GFX1030_NATIVE` | unset / `0` | Master opt-in for validated gfx1030 kernel specializations. Enables the Q4_0 DOT8 MMVQ path, native tiled-FlashAttention arithmetic/reductions, and chunked GDN prefill loads. |
+| `GGML_HIP_GFX1030_Q8_1_FUSION` | unset / `0` | In combination with the master switch, fuses routed SwiGLU evaluation into Q8_1 activation staging for eligible prompt-processing `MUL_MAT_ID` down projections. |
+| `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset / `0` | In combination with the master switch, creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights. |
+
+The selectors are read once during backend or model initialization. Set them before starting `llama-cli`, `llama-server`, `llama-bench`, or a test binary.
+
+Example with every accepted path enabled:
+
+```bash
+GGML_HIP_GFX1030_NATIVE=1 \
+GGML_HIP_GFX1030_Q8_1_FUSION=1 \
+GGML_HIP_GFX1030_GDN_SIBLING_FUSION=1 \
+build/bin/llama-bench \
+  -m model.gguf -ngl 999 -sm layer -ts 1/1/1/1 -fa on \
+  -p 512 -n 128 -b 512 -ub 256 -r 5
+```
+
+To return to stock behavior, unset all three variables:
+
+```bash
+unset GGML_HIP_GFX1030_NATIVE
+unset GGML_HIP_GFX1030_Q8_1_FUSION
+unset GGML_HIP_GFX1030_GDN_SIBLING_FUSION
+```
+
+## Master-switch paths
+
+### Q4_0 DOT8 MMVQ
+
+For Q4_0 decode with one destination column, the native MMVQ specialization preserves the ordinary Q4_0 weights and Q8_1 activation bytes. A two-byte `sum_hi` sidecar per Q8_1 block supplies the exact high-nibble correction needed by gfx1030 `UDOT8`/`SDOT8`; no model conversion or persistent layout change is required. Other quantization types remain on their normal vector-dot implementations.
+
+The path is exact and opt-in, but the measured Qwen end-to-end result was neutral to approximately 0.7% slower. It is retained as a validated native arithmetic experiment rather than advertised as a default speedup. See [the Q4_0 DOT8 experiment](rdna2-v620-q4-0-dot8-experiment.md).
+
+### Tiled FlashAttention
+
+The native tiled-F16 specialization uses gfx1030 `fdot2` accumulation and native wave-32 sum/max reductions. Host dispatch selects a separate compile-time kernel specialization, so the inner loops do not contain a runtime branch. Vector and MMA FlashAttention variants are unchanged.
+
+Both stock and native runs passed `2920/2920` `FLASH_ATTN_EXT` backend tests. Four-GPU PP4096 measurements remained within run-to-run variance, so no end-to-end FlashAttention gain is claimed. The guarded benchmark and verification workflow is documented in [the native FA harness](gfx1030-native-fa-harness.md).
+
+### Chunked Gated DeltaNet prefill
+
+For GDN calls with more than one token, the native specialization has lane 0 load scalar `beta` and per-column value inputs and broadcast them across the wave. In the non-KDA form it also loads and broadcasts the scalar gate; the KDA form retains its per-row gate loads. Decode (`n_tokens == 1`) keeps the stock specialization.
+
+Direct GDN measurements improved by about 7.9% at 256 tokens and 17.7% at 512 tokens. The GDN backend suite passed all 36 cases across all five tested backends. Full-model PP4096 measurements were sensitive to process order and GPU temperature, so only the direct-kernel improvement is claimed.
+
+## Secondary fusions
+
+### Routed SwiGLU to Q8_1 staging
+
+With both the master switch and `GGML_HIP_GFX1030_Q8_1_FUSION=1`, graph fusion can replace:
+
+```text
+F32 gate + F32 up -> SwiGLU F32 tensor -> Q8_1 staging -> routed down projection
+```
+
+with register-level SwiGLU evaluation inside the Q8_1 staging kernel. Eligibility is deliberately narrow:
+
+- prompt processing only; batches eligible for MMVQ/decode are rejected immediately;
+- routed `GGML_OP_MUL_MAT_ID` down projection using the MMQ path;
+- F32 gate/up inputs with exact matching shapes and supported alignment;
+- SwiGLU, quantized down weights, and the ordinary non-deduplicated routed layout.
+
+TG retains normal MMVQ dispatch. Shared dense experts and broadcast/deduplicated MoE layouts retain the stock graph.
+
+Unsafe-math can otherwise reassociate arithmetic after removing the materialized F32 tensor. The fused kernel therefore keeps an opaque register-level compiler boundary after SwiGLU. Verification compared about 330 MB across 280 Qwen dispatches with zero Q8_1 byte differences. The targeted GLU plus staging sequence fell from about 41.5 microseconds to 11.6 microseconds; alternating PP512 runs measured a smaller end-to-end improvement of roughly 0.3% (with earlier runs near 1%).
+
+### DeltaNet sibling projections
+
+With both the master switch and `GGML_HIP_GFX1030_GDN_SIBLING_FUSION=1`, model loading creates two persistent row-concatenated weights for recurrent Qwen35MoE 35B layers:
+
+```text
+Q8_0 [wqkv | z]       : [2048, 8192] + [2048, 4096] -> [2048, 12288]
+F32  [beta | alpha]   : [2048,   32] + [2048,   32] -> [2048,    64]
+```
+
+Packed rows are copied byte-for-byte; no dequantization or requantization occurs. The graph performs two matrix multiplications instead of four and exposes the original logical tensors through correctly-strided views. Non-contiguous inputs to CUDA unary operations are materialized before use.
+
+The loader enables this only for the Qwen35MoE 35B architecture in layer-split mode, matching ROCm buffer types, expected Q8_0/F32 types, contiguous row layouts, and models without per-weight or input scales. If an active LoRA adapter is present, graph construction conservatively falls back to all four original `build_lora_mm` paths.
+
+The original weights remain resident to support fallback, so the fused weights add **780 MiB** total (about 195 MiB per GPU with an even four-way layer split). Observed model initialization increased by roughly 190 ms.
+
+Exact full-byte callback hashes matched for 181 canonical tensors in both PP and TG: 120 projection outputs, 30 convolution inputs, 30 recurrent final outputs, and final logits. A deterministic 32-token completion also matched byte-for-byte.
+
+Four-V620 ABBA benchmarks with seven repetitions measured:
+
+| Test | Sibling fusion off | Sibling fusion on | Change |
+|---|---:|---:|---:|
+| PP512 | 3052.22 tok/s | 3094.22 tok/s | **+1.38%** |
+| TG128 | 82.57 tok/s | 86.19 tok/s | **+4.39%** |
+
+Both arms used `GGML_HIP_GFX1030_NATIVE=1`, `GGML_HIP_GFX1030_Q8_1_FUSION=1`, `-sm layer -ts 1/1/1/1`, FlashAttention, and `-ub 256`; only the sibling-fusion switch differed.
+
+## Validation commands
+
+Build for gfx1030 using the normal HIP configuration, then run stock and native arms separately. Representative checks are:
+
+```bash
+# Gated DeltaNet
+build/bin/test-backend-ops test -o GATED_DELTA_NET -b ROCm0
+GGML_HIP_GFX1030_NATIVE=1 \
+  build/bin/test-backend-ops test -o GATED_DELTA_NET -b ROCm0
+
+# FlashAttention
+build/bin/test-backend-ops test -o FLASH_ATTN_EXT -b ROCm0
+GGML_HIP_GFX1030_NATIVE=1 \
+  build/bin/test-backend-ops test -o FLASH_ATTN_EXT -b ROCm0
+
+# Synthetic MMVQ and routed MMID
+GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmvq-rdna2
+GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmid-rdna2
+```
+
+Use the guarded scripts when collecting reproducible artifacts:
+
+- `scripts/benchmark-gfx1030-mmvq.py`
+- `scripts/verify-gfx1030-mmvq-run.py`
+- `scripts/benchmark-gfx1030-native-fa.py`
+- `scripts/verify-gfx1030-native-fa-run.py`
+
+## Related model preparation
+
+The native paths do not require a special GGUF. The Qwen Q4_0-S8 and MTP calibration work used for the measurements is documented separately:
+
+- [Qwen35 Q4_0-S8 recipe](qwen35-q4-0-s8-recipe.md)
+- [Three-dataset MTP calibration recipe](qwen35-three-dataset-mtp-recipe.md)
+
+Those quantization recipes are independent of the runtime environment variables above.
