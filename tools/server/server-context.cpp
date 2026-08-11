@@ -192,6 +192,55 @@ struct server_batch {
     }
 };
 
+struct server_slot_stats {
+    // Speculative decoding stats (mirror server_metrics)
+    int32_t n_draft_tokens      = 0;
+    int32_t n_draft_accepted    = 0;
+    int32_t n_draft_verif_steps = 0;
+    std::vector<int32_t> n_accepted_per_pos;
+
+    // these are absolute timestamps (in us)
+    int64_t t_start       = 0;
+    int64_t t_prompt_last = 0;
+    int64_t t_gen_last    = 0;
+
+    // can only move one direction: start -> prompt -> gen
+    void update_prompt_start() {
+        GGML_ASSERT(t_start == 0);
+        t_start = ggml_time_us();
+    }
+    void update_prompt_last() {
+        GGML_ASSERT(t_start > 0);
+        t_prompt_last = ggml_time_us();
+    }
+    void update_gen_last() {
+        GGML_ASSERT(t_prompt_last > 0);
+        t_gen_last = ggml_time_us();
+    }
+
+    // these are time durations
+    int64_t t_ellapsed_us() const {
+        return ggml_time_us() - t_start;
+    }
+    double t_prompt_ms() const {
+        return (t_prompt_last - t_start) / 1000.0;
+    }
+    double t_gen_ms() const {
+        // clamp to 1 us to avoid division by zero on the caller side
+        return std::max<int64_t>(1, t_gen_last - t_prompt_last) / 1000.0;
+    }
+
+    // other derived metrics
+    double n_prompt_tps(int32_t n_prompt_tokens) const {
+        const double t_ms = t_prompt_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_tokens : 0.0;
+    }
+    double n_gen_tps(int32_t n_gen_tokens) const {
+        const double t_ms = t_gen_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_gen_tokens : 0.0;
+    }
+};
+
 struct server_slot {
     int id;
 
@@ -236,6 +285,7 @@ struct server_slot {
     std::string  generated_text;
     std::string  debug_generated_text;
     llama_tokens generated_tokens;
+    size_t n_sent_text = 0; // number of sent text character (i.e. handle partial UTF-8 on streaming)
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -309,25 +359,13 @@ struct server_slot {
     // corresponding to one token position (size = n_embd)
     std::vector<float> inp_embd;
 
-    // stats
-    size_t n_sent_text = 0; // number of sent text character
-
-    // TODO @ngxson : move all metrics to a sub-struct for clarity
-    int64_t t_start_process_prompt;
-    int64_t t_start_generation;
-    int64_t t_print_last = 0;
-    int32_t n_decoded_last = 0;
-
-    double t_prompt_processing = 0.0; // ms
-    double t_token_generation = 0.0;  // ms
+    server_slot_stats stats;
 
     std::function<void(int /* id_slot */)> callback_on_release;
 
-    // Speculative decoding stats
-    int32_t n_draft_total = 0;      // Total draft tokens generated
-    int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
-    int32_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
-    std::vector<int32_t> n_accepted_per_pos; // Accepted tokens per draft position
+    // this is for printing timings with slot progress, not part of metrics
+    int64_t t_print_last = 0;
+    int32_t n_decoded_last = 0;
 
     void reset() {
         SLT_DBG(*this, "%s", "\n");
@@ -353,14 +391,10 @@ struct server_slot {
         generated_token_probs.clear();
         json_schema = json();
 
-        // clear speculative decoding stats
-        n_draft_total = 0;
-        n_draft_accepted = 0;
-        n_draft_verif_steps = 0;
-        n_accepted_per_pos.clear();
-
         task_prev = std::move(task);
         task.reset();
+
+        stats = {};
 
         llama_set_sampler(ctx_tgt, id, nullptr);
 
@@ -526,8 +560,7 @@ struct server_slot {
 
             SLT_INF(*this, "stop processing: n_tokens = %d, truncated = %d\n", prompt.n_tokens(), truncated);
 
-            t_last_used        =  ggml_time_us();
-            t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
+            t_last_used = ggml_time_us();
 
             state = SLOT_STATE_IDLE;
 
@@ -543,23 +576,26 @@ struct server_slot {
     }
 
     result_timings get_timings() const {
+        const double t_prompt_processing = stats.t_prompt_ms();
+        const double t_token_generation  = stats.t_gen_ms();
+
         result_timings timings;
         timings.cache_n = n_prompt_tokens_cache;
 
         timings.prompt_n            = n_prompt_tokens_processed;
         timings.prompt_ms           = t_prompt_processing;
         timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
-        timings.prompt_per_second   = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        timings.prompt_per_second   = stats.n_prompt_tps(n_prompt_tokens_processed);
 
         timings.predicted_n            = n_decoded;
         timings.predicted_ms           = t_token_generation;
         timings.predicted_per_token_ms = t_token_generation / n_decoded;
-        timings.predicted_per_second   = 1e3 / t_token_generation * n_decoded;
+        timings.predicted_per_second   = stats.n_gen_tps(n_decoded);
 
         // Add speculative metrics
-        if (n_draft_total > 0) {
-            timings.draft_n          = n_draft_total;
-            timings.draft_n_accepted = n_draft_accepted;
+        if (stats.n_draft_tokens > 0) {
+            timings.draft_n          = stats.n_draft_tokens;
+            timings.draft_n_accepted = stats.n_draft_accepted;
         }
 
         return timings;
@@ -607,7 +643,7 @@ struct server_slot {
             return;
         }
 
-        const double n_gen_second     = 1e3 / (t_token_generation)   * (n_decoded);
+        const double n_gen_second     = stats.n_gen_tps(n_decoded);
         const double n_gen_second_win = 1e6 / (t_now - t_print_last) * (n_decoded - n_decoded_last);
 
         t_print_last = t_now;
@@ -617,7 +653,9 @@ struct server_slot {
     }
 
     void print_timings_pp() const {
-        const double n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        const double t_prompt_processing = stats.t_prompt_ms();
+
+        const double n_prompt_second = stats.n_prompt_tps(n_prompt_tokens_processed);
         const double f_progress = (float) prompt.n_tokens() / task->n_tokens();
 
         if (t_prompt_processing < 3000.0) {
@@ -629,11 +667,14 @@ struct server_slot {
     }
 
     void print_timings() const {
-        const double t_prompt        =       t_prompt_processing / n_prompt_tokens_processed;
-        const double n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        const double t_prompt_processing = stats.t_prompt_ms();
+        const double t_token_generation  = stats.t_gen_ms();
 
-        const double t_gen        =       t_token_generation / n_decoded;
-        const double n_gen_second = 1e3 / t_token_generation * n_decoded;
+        const double t_prompt        = t_prompt_processing / n_prompt_tokens_processed;
+        const double n_prompt_second = stats.n_prompt_tps(n_prompt_tokens_processed);
+
+        const double t_gen        = t_token_generation / n_decoded;
+        const double n_gen_second = stats.n_gen_tps(n_decoded);
 
         SLT_INF(*this,
                 "prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
@@ -651,17 +692,21 @@ struct server_slot {
                 "   graphs reused = %10d\n",
                 llama_perf_context(ctx_tgt).n_reused);
 
+        const int32_t n_draft_total       = stats.n_draft_tokens;
+        const int32_t n_draft_accepted    = stats.n_draft_accepted;
+        const int32_t n_draft_verif_steps = stats.n_draft_verif_steps;
+
         if (n_draft_total > 0) {
             const float  draft_ratio  = (float) n_draft_accepted / n_draft_total;
             const double mean_acc_len = n_draft_verif_steps > 0 ? 1.0 + (double) n_draft_accepted / (double) n_draft_verif_steps : 1.0;
 
             std::string acceptance_rates_per_pos;
             if (n_draft_verif_steps > 0) {
-                for (size_t i = 0; i < n_accepted_per_pos.size(); ++i) {
+                for (size_t i = 0; i < stats.n_accepted_per_pos.size(); ++i) {
                     if (i > 0) {
                         acceptance_rates_per_pos += ", ";
                     }
-                    acceptance_rates_per_pos += string_format("%.3f", (double) n_accepted_per_pos[i] / (double) n_draft_verif_steps);
+                    acceptance_rates_per_pos += string_format("%.3f", (double) stats.n_accepted_per_pos[i] / (double) n_draft_verif_steps);
                 }
             }
 
@@ -721,8 +766,7 @@ struct server_slot {
         other.n_remaining = n_remaining;
         other.i_batch     = i_batch;
 
-        other.t_start_process_prompt    = t_start_process_prompt;
-        other.t_prompt_processing       = t_prompt_processing;
+        other.stats                     = stats;
         other.n_prompt_tokens_cache     = n_prompt_tokens_cache;
         other.n_prompt_tokens_processed = n_prompt_tokens_processed;
 
@@ -820,83 +864,46 @@ struct server_slot {
 };
 
 
-
 //
 // server_metrics
 //
 
-struct server_metrics {
-    int64_t t_start = 0;
+void server_metrics::on_prompt_eval(const server_slot & slot) {
+    const double t_ms = slot.stats.t_prompt_ms();
 
-    uint64_t n_prompt_tokens_processed_total = 0;
-    uint64_t t_prompt_processing_total       = 0;
-    uint64_t n_tokens_predicted_total        = 0;
-    uint64_t t_tokens_generation_total       = 0;
+    prompt       .add(slot.n_prompt_tokens_processed, t_ms);
+    prompt_bucket.add(slot.n_prompt_tokens_processed, t_ms);
 
-    uint64_t n_tokens_max = 0;
+    n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
+}
 
-    uint64_t n_prompt_tokens_processed = 0;
-    uint64_t t_prompt_processing       = 0;
+void server_metrics::on_prediction(const server_slot & slot) {
+    const double t_ms = slot.stats.t_gen_ms();
 
-    uint64_t n_tokens_predicted  = 0;
-    uint64_t t_tokens_generation = 0;
+    predict       .add(slot.n_decoded, t_ms);
+    predict_bucket.add(slot.n_decoded, t_ms);
 
-    uint64_t n_decode_total     = 0;
-    uint64_t n_busy_slots_total = 0;
+    n_draft_tokens      += slot.stats.n_draft_tokens;
+    n_draft_accepted    += slot.stats.n_draft_accepted;
+    n_draft_verif_steps += slot.stats.n_draft_verif_steps;
 
-    uint64_t n_draft_tokens_total      = 0;
-    uint64_t n_draft_accepted_total    = 0;
-    uint64_t n_draft_verif_steps_total = 0;
-    std::vector<uint64_t> n_accepted_per_pos_total;
-
-    void init() {
-        t_start = ggml_time_us();
+    if (n_accepted_per_pos.size() < slot.stats.n_accepted_per_pos.size()) {
+        n_accepted_per_pos.resize(slot.stats.n_accepted_per_pos.size(), 0);
     }
+    for (size_t i = 0; i < slot.stats.n_accepted_per_pos.size(); i++) {
+        n_accepted_per_pos[i] += slot.stats.n_accepted_per_pos[i];
+    }
+}
 
-    void on_prompt_eval(const server_slot & slot) {
-        n_prompt_tokens_processed_total += slot.n_prompt_tokens_processed;
-        n_prompt_tokens_processed       += slot.n_prompt_tokens_processed;
-        t_prompt_processing             += slot.t_prompt_processing;
-        t_prompt_processing_total       += slot.t_prompt_processing;
-
+void server_metrics::on_decoded(const std::vector<server_slot> & slots) {
+    n_decode++;
+    for (const auto & slot : slots) {
+        if (slot.is_processing()) {
+            n_busy_slots++;
+        }
         n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
     }
-
-    void on_prediction(const server_slot & slot) {
-        n_tokens_predicted_total   += slot.n_decoded;
-        n_tokens_predicted         += slot.n_decoded;
-        t_tokens_generation        += slot.t_token_generation;
-        t_tokens_generation_total  += slot.t_token_generation;
-
-        n_draft_tokens_total      += slot.n_draft_total;
-        n_draft_accepted_total    += slot.n_draft_accepted;
-        n_draft_verif_steps_total += slot.n_draft_verif_steps;
-
-        if (n_accepted_per_pos_total.size() < slot.n_accepted_per_pos.size()) {
-            n_accepted_per_pos_total.resize(slot.n_accepted_per_pos.size(), 0);
-        }
-        for (size_t i = 0; i < slot.n_accepted_per_pos.size(); i++) {
-            n_accepted_per_pos_total[i] += slot.n_accepted_per_pos[i];
-        }
-    }
-
-    void on_decoded(const std::vector<server_slot> & slots) {
-        n_decode_total++;
-        for (const auto & slot : slots) {
-            if (slot.is_processing()) {
-                n_busy_slots_total++;
-            }
-            n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
-        }
-    }
-
-    void reset_bucket() {
-        n_prompt_tokens_processed = 0;
-        t_prompt_processing       = 0;
-        n_tokens_predicted        = 0;
-        t_tokens_generation       = 0;
-    }
-};
+}
 
 
 //
@@ -1975,7 +1982,7 @@ private:
             slot.has_new_line = true;
 
             // if we have seen a new line, we stop after a certain time limit, but only upon another new line
-            if (slot.task->params.t_max_predict_ms > 0 && (ggml_time_us() - slot.t_start_generation > 1000.0f*slot.task->params.t_max_predict_ms)) {
+            if (slot.task->params.t_max_predict_ms > 0 && slot.stats.t_gen_ms() > slot.task->params.t_max_predict_ms) {
                 slot.stop           = STOP_TYPE_LIMIT;
                 slot.has_next_token = false;
 
@@ -2100,7 +2107,7 @@ private:
             res->progress.total     = slot.task->n_tokens();
             res->progress.cache     = slot.n_prompt_tokens_cache;
             res->progress.processed = slot.prompt.tokens.size();
-            res->progress.time_ms   = (ggml_time_us() - slot.t_start_process_prompt) / 1000;
+            res->progress.time_ms   = slot.stats.t_ellapsed_us() / 1000;
         }
         if (is_begin) {
             res->is_begin = true;
@@ -2549,25 +2556,21 @@ private:
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->t_start             = metrics.t_start;
 
-                    res->n_prompt_tokens_processed_total = metrics.n_prompt_tokens_processed_total;
-                    res->t_prompt_processing_total       = metrics.t_prompt_processing_total;
-                    res->n_tokens_predicted_total        = metrics.n_tokens_predicted_total;
-                    res->t_tokens_generation_total       = metrics.t_tokens_generation_total;
+                    res->prompt_bucket  = metrics.prompt_bucket;
+                    res->predict_bucket = metrics.predict_bucket;
+
+                    res->prompt  = metrics.prompt;
+                    res->predict = metrics.predict;
 
                     res->n_tokens_max = metrics.n_tokens_max;
 
-                    res->n_prompt_tokens_processed = metrics.n_prompt_tokens_processed;
-                    res->t_prompt_processing       = metrics.t_prompt_processing;
-                    res->n_tokens_predicted        = metrics.n_tokens_predicted;
-                    res->t_tokens_generation       = metrics.t_tokens_generation;
+                    res->n_decode     = metrics.n_decode;
+                    res->n_busy_slots = metrics.n_busy_slots;
 
-                    res->n_decode_total          = metrics.n_decode_total;
-                    res->n_busy_slots_total      = metrics.n_busy_slots_total;
-
-                    res->n_draft_tokens_total      = metrics.n_draft_tokens_total;
-                    res->n_draft_accepted_total    = metrics.n_draft_accepted_total;
-                    res->n_draft_verif_steps_total = metrics.n_draft_verif_steps_total;
-                    res->n_accepted_per_pos_total  = metrics.n_accepted_per_pos_total;
+                    res->n_draft_tokens      = metrics.n_draft_tokens;
+                    res->n_draft_accepted    = metrics.n_draft_accepted;
+                    res->n_draft_verif_steps = metrics.n_draft_verif_steps;
+                    res->n_accepted_per_pos  = metrics.n_accepted_per_pos;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -3049,7 +3052,7 @@ private:
             auto & draft = slot.spec_draft;
             auto & ckpt  = slot.spec_ckpt;
 
-            slot.n_draft_total += draft.size();
+            slot.stats.n_draft_tokens += draft.size();
 
             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
             const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
@@ -3137,8 +3140,7 @@ private:
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
-                        slot.t_start_process_prompt = ggml_time_us();
-                        slot.t_start_generation = 0;
+                        slot.stats.update_prompt_start();
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
@@ -3428,8 +3430,7 @@ private:
                         }
                     }
 
-                    const int64_t t_now = ggml_time_us();
-                    slot.t_prompt_processing = (t_now - slot.t_start_process_prompt) / 1e3;
+                    slot.stats.update_prompt_last();
                     slot.print_timings_pp();
 
                     // truncate any tokens that are beyond n_past for this slot
@@ -3828,14 +3829,13 @@ private:
             slot.n_decoded += 1;
 
             if (slot.n_decoded == 1) {
-                slot.t_start_generation = t_now;
+                slot.stats.update_prompt_last();
                 slot.t_print_last = t_now;
                 slot.n_decoded_last = 0;
-                slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                 metrics.on_prompt_eval(slot);
             }
 
-            slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
+            slot.stats.update_gen_last();
 
             completion_token_output result;
             result.tok          = id;
@@ -3926,8 +3926,6 @@ private:
                 slot.spec_draft = std::move(accepted);
             }
 
-            const int64_t t_now = ggml_time_us();
-
             const auto ids = std::move(slot.spec_draft);
 
             size_t n_accepted = ids.size() - 1;
@@ -3936,17 +3934,18 @@ private:
             }
             slot.spec_is_replay = false;
 
-            slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
+            slot.stats.update_gen_last();
 
             // update how many tokens out of those tested were accepted
-            slot.n_draft_accepted += n_accepted;
-            slot.n_draft_verif_steps += 1;
+            slot.stats.n_draft_accepted += n_accepted;
+            slot.stats.n_draft_verif_steps += 1;
 
-            if (slot.n_accepted_per_pos.empty()) {
-                slot.n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
+            auto & n_accepted_per_pos = slot.stats.n_accepted_per_pos;
+            if (n_accepted_per_pos.empty()) {
+                n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
             }
-            for (size_t i = 0; i < n_accepted && i < slot.n_accepted_per_pos.size(); ++i) {
-                slot.n_accepted_per_pos[i]++;
+            for (size_t i = 0; i < n_accepted && i < n_accepted_per_pos.size(); ++i) {
+                n_accepted_per_pos[i]++;
             }
 
             // add accepted tokens to the prompt
@@ -4436,23 +4435,23 @@ void server_routes::init_routes() {
             {"counter", {{
                     {"name",  "prompt_tokens_total"},
                     {"help",  "Number of prompt tokens processed."},
-                    {"value",  (uint64_t) res_task->n_prompt_tokens_processed_total}
+                    {"value",  res_task->prompt.count}
             }, {
                     {"name",  "prompt_seconds_total"},
                     {"help",  "Prompt process time"},
-                    {"value",  (uint64_t) res_task->t_prompt_processing_total / 1.e3}
+                    {"value",  res_task->prompt.time / 1.e3}
             }, {
                     {"name",  "tokens_predicted_total"},
                     {"help",  "Number of generation tokens processed."},
-                    {"value",  (uint64_t) res_task->n_tokens_predicted_total}
+                    {"value",  res_task->predict.count}
             }, {
                     {"name",  "tokens_predicted_seconds_total"},
                     {"help",  "Predict process time"},
-                    {"value",  (uint64_t) res_task->t_tokens_generation_total / 1.e3}
+                    {"value",  res_task->predict.time / 1.e3}
             }, {
                     {"name",  "n_decode_total"},
                     {"help",  "Total number of llama_decode() calls"},
-                    {"value",  res_task->n_decode_total}
+                    {"value",  res_task->n_decode}
             }, {
                     {"name",  "n_tokens_max"},
                     {"help",  "Largest observed n_tokens."},
@@ -4460,24 +4459,24 @@ void server_routes::init_routes() {
             }, {
                     {"name",  "spec_decode_num_draft_tokens_total"},
                     {"help",  "Total draft tokens generated"},
-                    {"value",  res_task->n_draft_tokens_total}
+                    {"value",  res_task->n_draft_tokens}
             }, {
                     {"name",  "spec_decode_num_accepted_tokens_total"},
                     {"help",  "Total draft tokens accepted by the target model"},
-                    {"value",  res_task->n_draft_accepted_total}
+                    {"value",  res_task->n_draft_accepted}
             }, {
                     {"name",  "spec_decode_num_drafts_total"},
                     {"help",  "Total speculative decoding verification steps"},
-                    {"value",  res_task->n_draft_verif_steps_total}
+                    {"value",  res_task->n_draft_verif_steps}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
                     {"help",  "Average prompt throughput in tokens/s."},
-                    {"value",  res_task->n_prompt_tokens_processed ? 1.e3 / res_task->t_prompt_processing * res_task->n_prompt_tokens_processed : 0.}
+                    {"value",  res_task->prompt_bucket.n_per_second()}
             },{
                     {"name",  "predicted_tokens_seconds"},
                     {"help",  "Average generation throughput in tokens/s."},
-                    {"value",  res_task->n_tokens_predicted ? 1.e3 / res_task->t_tokens_generation * res_task->n_tokens_predicted : 0.}
+                    {"value",  res_task->predict_bucket.n_per_second()}
             },{
                     {"name",  "requests_processing"},
                     {"help",  "Number of requests processing."},
@@ -4489,7 +4488,7 @@ void server_routes::init_routes() {
             },{
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
-                    {"value",  (float) res_task->n_busy_slots_total / std::max((float) res_task->n_decode_total, 1.f)}
+                    {"value",  (float) res_task->n_busy_slots / std::max((float) res_task->n_decode, 1.f)}
             }}}
         };
 
@@ -4511,13 +4510,13 @@ void server_routes::init_routes() {
         }
 
         // labeled counter: one time series per draft position
-        if (!res_task->n_accepted_per_pos_total.empty()) {
+        if (!res_task->n_accepted_per_pos.empty()) {
             prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
                           " Accepted tokens per draft position\n"
                        << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos_total counter\n";
-            for (size_t i = 0; i < res_task->n_accepted_per_pos_total.size(); i++) {
+            for (size_t i = 0; i < res_task->n_accepted_per_pos.size(); i++) {
                 prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\""
-                           << i << "\"} " << res_task->n_accepted_per_pos_total[i] << "\n";
+                           << i << "\"} " << res_task->n_accepted_per_pos[i] << "\n";
             }
         }
 

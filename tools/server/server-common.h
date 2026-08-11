@@ -446,3 +446,55 @@ struct server_pipe {
         return true;
     }
 };
+
+struct server_slot;
+
+struct server_metrics {
+    int64_t t_start = 0;
+
+    struct bucket {
+        uint64_t count = 0;
+        uint64_t time  = 0; // in milliseconds
+
+        double n_per_second() const {
+            return time > 0 ? (double) count / (double) time * 1e3 : 0.0;
+        }
+
+        void add(uint64_t n, double t_ms) {
+            count += n;
+            time  += (uint64_t) t_ms;
+        }
+    };
+
+    // these are reset by reset_bucket()
+    bucket prompt_bucket;
+    bucket predict_bucket;
+
+    // metrics below are cumulative since the server started
+    bucket prompt;
+    bucket predict;
+
+    uint64_t n_tokens_max = 0;
+
+    uint64_t n_decode     = 0;
+    uint64_t n_busy_slots = 0;
+
+    uint64_t n_draft_tokens      = 0; // Total draft tokens generated
+    uint64_t n_draft_accepted    = 0; // Draft tokens actually accepted
+    uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
+    std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
+
+    void init() {
+        t_start = ggml_time_us();
+    }
+
+    void reset_bucket() {
+        prompt_bucket  = {};
+        predict_bucket = {};
+    }
+
+    // these are implemented in server-context.cpp
+    void on_prompt_eval(const server_slot & slot);
+    void on_prediction(const server_slot & slot);
+    void on_decoded(const std::vector<server_slot> & slots);
+};

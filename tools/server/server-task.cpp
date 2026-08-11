@@ -1545,25 +1545,25 @@ json server_task_result_metrics::to_json() {
         { "deferred",                        n_tasks_deferred },
         { "t_start",                         t_start },
 
-        { "n_prompt_tokens_processed_total", n_prompt_tokens_processed_total },
-        { "t_tokens_generation_total",       t_tokens_generation_total },
-        { "n_tokens_predicted_total",        n_tokens_predicted_total },
-        { "t_prompt_processing_total",       t_prompt_processing_total },
+        { "n_prompt_tokens_processed_total", prompt.count },
+        { "t_tokens_generation_total",       predict.time },
+        { "n_tokens_predicted_total",        predict.count },
+        { "t_prompt_processing_total",       prompt.time },
 
         { "n_tokens_max",                    n_tokens_max },
 
-        { "n_prompt_tokens_processed",       n_prompt_tokens_processed },
-        { "t_prompt_processing",             t_prompt_processing },
-        { "n_tokens_predicted",              n_tokens_predicted },
-        { "t_tokens_generation",             t_tokens_generation },
+        { "n_prompt_tokens_processed",       prompt_bucket.count },
+        { "t_prompt_processing",             prompt_bucket.time },
+        { "n_tokens_predicted",              predict_bucket.count },
+        { "t_tokens_generation",             predict_bucket.time },
 
-        { "n_decode_total",                  n_decode_total },
-        { "n_busy_slots_total",              n_busy_slots_total },
+        { "n_decode_total",                  n_decode },
+        { "n_busy_slots_total",              n_busy_slots },
 
-        { "n_draft_tokens_total",            n_draft_tokens_total },
-        { "n_draft_accepted_total",          n_draft_accepted_total },
-        { "n_draft_verif_steps_total",       n_draft_verif_steps_total },
-        { "n_accepted_per_pos_total",        n_accepted_per_pos_total },
+        { "n_draft_tokens_total",            n_draft_tokens },
+        { "n_draft_accepted_total",          n_draft_accepted },
+        { "n_draft_verif_steps_total",       n_draft_verif_steps },
+        { "n_accepted_per_pos_total",        n_accepted_per_pos },
 
         { "slots",                           slots_data },
     };
