@@ -39,9 +39,9 @@ jobs:
     strategy:
       matrix:
         include:
+        # thread and address doesn't run properly on some self hosted machines, so run it on Github instead
         - sanitizer: ADDRESS
-          machine: [self-hosted, X64, Linux, Intel, OpenVINO]
-        # thread doesn't run properly on some self hosted machines, so run it on Github instead
+          machine: ubuntu-24.04
         - sanitizer: THREAD
           machine: ubuntu-24.04
         - sanitizer: UNDEFINED
@@ -56,9 +56,9 @@ jobs:
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
-        if: ${{ matrix.sanitizer == 'THREAD' }}
+        if: ${{ matrix.sanitizer != 'UNDEFINED' }}
         with:
-          key: ctest-thread-ubuntu-24.04
+          key: ctest-${{ matrix.sanitizer }}-ubuntu-24.04
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
