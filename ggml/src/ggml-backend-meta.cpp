@@ -4,6 +4,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
+#include "ggml-trace.h"
 
 #include <algorithm>
 #include <cassert>
@@ -2518,6 +2519,9 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             ggml_tensor * node_tmp = get_node_aux(node_dst);
             set_tmp_data(node_tmp, j_dst, i_buf);
 
+            ggml_trace_transfer("push", ggml_backend_name(bcj_src.backend), ggml_backend_name(bcj_dst.backend),
+                node_src->name, node_src->ne, ggml_nbytes(node_src));
+
             ggml_backend_tensor_copy_async(bcj_src.backend, bcj_dst.backend, node_src, node_tmp);
 
             ggml_tensor * node_red = get_node_aux(node_dst);
@@ -2739,6 +2743,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
 
             if (need_local_allreduce) {
+                ggml_tensor * node_ar = nodes[0];
+                const int trace_id = ggml_trace_allreduce_begin((int) i, (int) n_backends, node_ar->name,
+                    ggml_type_name(node_ar->type), node_ar->ne, ggml_nbytes(node_ar));
+
                 bool backend_allreduce_success = false;
                 if (backend_ctx->comm_ctx) {
                     backend_allreduce_success = backend_ctx->comm_allreduce(backend_ctx->comm_ctx, nodes.data());
@@ -2750,6 +2758,8 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                         return status;
                     }
                 }
+
+                ggml_trace_allreduce_end(trace_id, backend_allreduce_success ? "native" : "butterfly");
             }
 
             if (need_dist_allreduce) {
@@ -2764,6 +2774,13 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 }
 
                 if (has_dist_boundary) {
+                    // The cross-node collective. This is the one whose cost the transport
+                    // (TCP vs NetworkDirect) actually changes, so it is traced separately from
+                    // the intra-node allreduce above.
+                    ggml_tensor * node_ar = nodes[0];
+                    const int trace_id = ggml_trace_allreduce_begin((int) i, (int) n_backends, node_ar->name,
+                        ggml_type_name(node_ar->type), node_ar->ne, ggml_nbytes(node_ar));
+
                     // graph_compute_async() may leave boundary tensors in-flight on the backend.
                     // The distributed fallback reads and writes boundary tensors directly.
                     for (size_t j = 0; j < n_backends; j++) {
@@ -2771,6 +2788,9 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     }
 
                     const ggml_status status = dist_allreduce_fallback(nodes_dist_per_backend);
+
+                    ggml_trace_allreduce_end(trace_id, "dist-ring");
+
                     if (status != GGML_STATUS_SUCCESS) {
                         return status;
                     }

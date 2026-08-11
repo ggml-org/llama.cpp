@@ -1,6 +1,7 @@
 #include "arg.h"
 #include "common.h"
 #include "dist-comm.h"
+#include "ggml-trace.h"
 
 #include <clocale>
 #include <cstdio>
@@ -60,5 +61,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    return common_dist_tp_run_worker(*llama_init, env);
+    const int rc = common_dist_tp_run_worker(*llama_init, env);
+
+    // rank 1 keeps its own trace. Written explicitly rather than relying on the atexit hook,
+    // because the worker is usually terminated by the harness once rank 0 finishes.
+    ggml_trace_write_html_default();
+
+    return rc;
 }

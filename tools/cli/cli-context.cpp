@@ -5,6 +5,7 @@
 #include "base64.hpp"
 #include "log.h"
 #include "console.h"
+#include "ggml-trace.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
@@ -517,6 +518,9 @@ int cli_context::run() {
 
         // process commands
         if (string_starts_with(buffer, "/exit")) {
+            // written here, before teardown, so a harness that kills the process after the
+            // timings print cannot lose the report (atexit would never run)
+            ggml_trace_write_html_default();
             break;
         } else if (string_starts_with(buffer, "/regen")) {
             if (impl->messages.size() >= 2) {
@@ -658,6 +662,9 @@ int cli_context::run() {
     }
 
     ui::show_message("\n\nExiting...");
+
+    // covers exits that did not go through /exit; safe to call more than once
+    ggml_trace_write_html_default();
 
     return 0;
 }

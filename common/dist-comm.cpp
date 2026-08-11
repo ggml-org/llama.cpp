@@ -1,5 +1,6 @@
 #include "dist-comm.h"
 #include "dist-comm-nd.h"
+#include "ggml-trace.h"
 
 #include <algorithm>
 #include <array>
@@ -514,10 +515,20 @@ struct dist_comm_socket_context::impl {
         };
 
         // Rank parity avoids blocking send/send for large payloads.
-        if ((cfg.rank & 1) == 0) {
-            return send_payload() && recv_payload();
+        const bool ok = ((cfg.rank & 1) == 0)
+            ? (send_payload() && recv_payload())
+            : (recv_payload() && send_payload());
+
+        if (ok) {
+            // Recorded so the trace report accounts for the bytes this collective actually put
+            // on the wire, tagged with the transport that carried them. Payloads above
+            // nd_max_bytes fall back to TCP even in an RDMA run, so the endpoint is read from
+            // use_nd rather than from whether ND is configured.
+            const int64_t ne[GGML_MAX_DIMS] = { (int64_t) send_size, 1, 1, 1 };
+            ggml_trace_rpc(use_nd ? "nd" : "tcp", cfg.rank, "EXCHANGE_RING", "dist-tp", ne,
+                           sizeof(send_hdr) + send_size, sizeof(recv_hdr) + recv_size);
         }
-        return recv_payload() && send_payload();
+        return ok;
     }
 
     bool bootstrap_master(std::string & err) {

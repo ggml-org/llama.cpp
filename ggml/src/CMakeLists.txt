@@ -195,12 +195,14 @@ add_library(ggml-base
             ../include/ggml-backend.h
             ../include/ggml-cpp.h
             ../include/ggml-opt.h
+            ../include/ggml-trace.h
             ../include/gguf.h
             ggml.c
             ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp
             ggml-backend-meta.cpp
+            ggml-trace.cpp
             ggml-opt.cpp
             ggml-threading.cpp
             ggml-threading.h
