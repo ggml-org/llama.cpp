@@ -672,10 +672,12 @@ class Gemma4Model(Gemma3Model):
         
         if head_dim_full is None and "per_layer_config" in text_config:
             per_layer_config = text_config["per_layer_config"]
-            for layer_config in per_layer_config.values():
-                if "head_dim" in layer_config:
-                    head_dim_full = layer_config["head_dim"]
-                    break
+            layer_types = self.hparams.get("layer_types", [])
+            for layer_idx, layer_config in per_layer_config.items():
+                if isinstance(layer_idx, int) and layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "head_dim" in layer_config:
+                        head_dim_full = layer_config["head_dim"]
+                        break
         
         if head_dim_full is None:
             head_dim_full = self.hparams.get("head_dim", 256)
@@ -730,10 +732,12 @@ class Gemma4Model(Gemma3Model):
         
         if head_dim_full is None and "per_layer_config" in text_config:
             per_layer_config = text_config["per_layer_config"]
-            for layer_config in per_layer_config.values():
-                if "head_dim" in layer_config:
-                    head_dim_full = layer_config["head_dim"]
-                    break
+            layer_types = self.hparams.get("layer_types", [])
+            for layer_idx, layer_config in per_layer_config.items():
+                if isinstance(layer_idx, int) and layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "head_dim" in layer_config:
+                        head_dim_full = layer_config["head_dim"]
+                        break
         
         if head_dim_full is None:
             head_dim_full = self.hparams.get("head_dim", 256)
