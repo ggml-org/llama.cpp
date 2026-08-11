@@ -33,6 +33,24 @@
 #include <string>
 #include <vector>
 
+static std::set<std::string> collect_graph_output_names(const ggml_cgraph * cgraph) {
+    std::set<std::string> outputs;
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+        auto * node = cgraph->nodes[node_n];
+        if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            outputs.insert(node->name);
+        }
+    }
+    return outputs;
+}
+
+bool GgmlOvDecoder::has_same_graph_io(const ggml_cgraph * cgraph) const {
+    if (m_built_output_names.empty()) {
+        return true;  // no snapshot (naive / test decoders): nothing to compare against
+    }
+    return collect_graph_output_names(cgraph) == m_built_output_names;
+}
+
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
                              ModelParams & model_params,
                              ComputeParams & compute_params,
@@ -62,6 +80,8 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
     validate_cgraph();
 
+    m_built_output_names = collect_graph_output_names(cgraph);
+
     set_input_output();
     compute_node_dynamic_dims();
     compute_model_inputs();
@@ -77,6 +97,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
 void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
     m_cgraph = cgraph;
+    m_built_output_names = collect_graph_output_names(cgraph);
     m_model_inputs.clear();
     m_model_outputs.clear();
     m_node_info_list.clear();
