@@ -2413,6 +2413,18 @@ static uint32_t get_misalign_bytes(const ggml_backend_vk_context * ctx, const gg
     return ((vk_tensor_offset(t) + t->view_offs) & (ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1));;
 }
 
+static uint32_t ggml_vk_get_adjusted_misalign(const ggml_backend_vk_context * ctx, const ggml_tensor * t)
+{
+    const size_t offset = vk_tensor_offset(t) + t->view_offs;
+    const size_t align = ctx->device->properties.limits.minStorageBufferOffsetAlignment;
+    const size_t ts = ggml_type_size(t->type);
+    size_t misalign = offset & (align - 1);
+    while (misalign > 0 && misalign % ts != 0) {
+        misalign += align;
+    }
+    return (uint32_t)misalign;
+}
+
 static uint32_t ggml_vk_concat_unit_size(ggml_type type) {
     const uint32_t type_size = ggml_type_size(type);
 
@@ -8052,16 +8064,19 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
     if (!buffer) {
         auto buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
         buffer = buf_ctx->dev_buffer;
-        offset = vk_tensor_offset(tensor);
         if (use_view_offs) {
-            offset += tensor->view_offs;
+            offset = vk_tensor_offset(tensor) + tensor->view_offs;
+        } else {
+            const size_t target = vk_tensor_offset(tensor) + tensor->view_offs;
+            const size_t misalign = ggml_vk_get_adjusted_misalign(ctx, tensor);
+            offset = target - misalign;
         }
     }
     GGML_ASSERT(buffer != nullptr);
 
     size_t size = ggml_nbytes(tensor);
-    if (!use_view_offs && tensor->view_src != nullptr) {
-        size += tensor->view_offs;
+    if (!use_view_offs) {
+        size += ggml_vk_get_adjusted_misalign(ctx, tensor);
     }
 
     size_t misalign_bytes = offset & (ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1);
@@ -11831,9 +11846,9 @@ template <> void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk
 }
 
 template <> void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_binary_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
-    const uint32_t a_offset = src0->view_offs / ggml_type_size(src0->type);
-    const uint32_t b_offset = src1 != nullptr ? src1->view_offs / ggml_type_size(src1->type) : 0;
-    const uint32_t d_offset = dst->view_offs / ggml_type_size(dst->type);
+    const uint32_t a_offset = ggml_vk_get_adjusted_misalign(ctx, src0) / ggml_type_size(src0->type);
+    const uint32_t b_offset = src1 != nullptr ? ggml_vk_get_adjusted_misalign(ctx, src1) / ggml_type_size(src1->type) : 0;
+    const uint32_t d_offset = ggml_vk_get_adjusted_misalign(ctx, dst) / ggml_type_size(dst->type);
 
     GGML_ASSERT(a_offset <= 0xFFFF);
     GGML_ASSERT(b_offset <= 0xFF);
@@ -11841,7 +11856,6 @@ template <> void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk
 
     p.misalign_offsets = (a_offset << 16) | (b_offset << 8) | d_offset;
 
-    GGML_UNUSED(ctx);
     GGML_UNUSED(src2);
     GGML_UNUSED(src3);
 }
