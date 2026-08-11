@@ -4,10 +4,7 @@
 	import { MessageRole } from '$lib/enums';
 	import {
 		activeConversation,
-		agenticClearSteeringMessage,
-		agenticInjectSteeringMessage,
-		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras,
+		agenticStore,
 		chatClearPendingMessage,
 		chatInjectPendingMessage,
 		chatPendingMessageContent,
@@ -250,18 +247,19 @@
 		/>
 	{/each}
 
-	{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
+	{#if activeConversation() && agenticStore.pendingSteeringMessageContent(activeConversation()!.id)}
 		{@const convId = activeConversation()!.id}
-		{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
+		{@const pendingContent = agenticStore.pendingSteeringMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={agenticPendingSteeringMessageExtras(convId)}
+				extras={agenticStore.pendingSteeringMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
-				onDelete={() => agenticClearSteeringMessage(convId)}
+				onEdit={(newContent, extras) =>
+					agenticStore.injectSteeringMessage(convId, newContent, extras)}
+				onDelete={() => agenticStore.clearSteeringMessage(convId)}
 			/>
 		{/if}
 	{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}

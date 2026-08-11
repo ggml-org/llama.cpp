@@ -8,15 +8,7 @@
 		MarkdownContent
 	} from '$lib/components/app';
 	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
-	import {
-		agenticExecutingToolCallId,
-		agenticLastError,
-		agenticPendingContinueRequest,
-		agenticPendingPermissionRequest,
-		agenticResolveContinue,
-		agenticResolvePermission,
-		config
-	} from '$lib/stores';
+	import { agenticStore, config } from '$lib/stores';
 	import type { AgenticSection } from '$lib/types';
 	import type {
 		ChatMessageAgenticTimings,
@@ -47,13 +39,15 @@
 	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
 
 	const hasReasoningError = $derived(
-		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
+		isLastAssistantMessage ? !!agenticStore.lastError(message.convId) : false
 	);
 
 	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
+		isStreaming && isLastAssistantMessage
+			? agenticStore.pendingPermissionRequest(message.convId)
+			: null
 	);
 
 	let prevPendingRef: typeof pendingPermission = null;
@@ -69,13 +63,15 @@
 
 	function handlePermission(decision: ToolPermissionDecision) {
 		permissionDismissed = true;
-		agenticResolvePermission(message.convId, decision);
+		agenticStore.resolvePermission(message.convId, decision);
 	}
 
 	let continueDismissed = $state(false);
 
 	const pendingContinue = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
+		isStreaming && isLastAssistantMessage
+			? agenticStore.pendingContinueRequest(message.convId)
+			: false
 	);
 
 	let prevContinueRef = false;
@@ -91,13 +87,13 @@
 
 	function handleContinue(shouldContinue: boolean) {
 		continueDismissed = true;
-		agenticResolveContinue(message.convId, shouldContinue);
+		agenticStore.resolveContinue(message.convId, shouldContinue);
 	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	const currentlyExecutingToolCallId = $derived(
-		isStreaming ? agenticExecutingToolCallId(message.convId) : null
+		isStreaming ? agenticStore.executingToolCallId(message.convId) : null
 	);
 
 	type TurnGroup = {

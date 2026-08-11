@@ -43,25 +43,7 @@ export {
 export { draftMessagesStore } from './draft-messages.svelte';
 
 // AGENTIC (multi-turn tool orchestration)
-export {
-	agenticStore,
-	agenticIsRunning,
-	agenticCurrentTurn,
-	agenticTotalToolCalls,
-	agenticLastError,
-	agenticStreamingToolCall,
-	agenticPendingPermissionRequest,
-	agenticResolvePermission,
-	agenticPendingContinueRequest,
-	agenticResolveContinue,
-	agenticHasPendingSteeringMessage,
-	agenticInjectSteeringMessage,
-	agenticPendingSteeringMessageContent,
-	agenticPendingSteeringMessageExtras,
-	agenticClearSteeringMessage,
-	agenticIsAnyRunning,
-	agenticExecutingToolCallId
-} from './agentic.svelte';
+export { agenticStore } from './agentic.svelte';
 
 // CONVERSATIONS
 export type { ConversationTreeItem } from './conversations.svelte';
