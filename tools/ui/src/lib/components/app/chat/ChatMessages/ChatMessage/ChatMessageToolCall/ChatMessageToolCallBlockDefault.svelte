@@ -107,7 +107,10 @@
 							</div>
 							{#if line.media}
 								{#if line.media.type === 'AUDIO'}
-									{@const audioSrc = createBase64DataUrl(line.media.mimeType ?? 'audio/mpeg', (line.media as DatabaseMessageExtraAudioFile).base64Data)}
+									{@const audioSrc = createBase64DataUrl(
+										line.media.mimeType ?? 'audio/mpeg',
+										(line.media as DatabaseMessageExtraAudioFile).base64Data
+									)}
 									<div class="mt-2 mb-2">
 										<audio controls class="w-full rounded-lg">
 											<source src={audioSrc} type={line.media.mimeType ?? 'audio/mpeg'} />

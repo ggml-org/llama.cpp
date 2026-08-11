@@ -307,7 +307,7 @@ const toolResultLinesCache = new Map<string, ToolResultLine[]>();
 
 /**
  * Parse tool result text into lines, matching media attachments (images and audio) by name.
- * Memoized: called per render during streaming on unchanged tool result 
+ * Memoized: called per render during streaming on unchanged tool result
  * strings with unchanged extras.
  */
 export function parseToolResultWithMedia(

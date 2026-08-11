@@ -67,5 +67,5 @@ export const AUDIO_MIME_TO_EXTENSION: Record<string, string> = {
 	[MimeTypeAudio.X_WAV]: 'wav',
 	[MimeTypeAudio.X_WAVE]: 'wav',
 	[MimeTypeAudio.VND_WAVE]: 'wav',
-	[MimeTypeAudio.X_PN_WAV]: 'wav',
+	[MimeTypeAudio.X_PN_WAV]: 'wav'
 } as const;

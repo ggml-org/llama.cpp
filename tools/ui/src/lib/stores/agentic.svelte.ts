@@ -994,13 +994,17 @@ class AgenticStore {
 
 				for (const attachment of attachments) {
 					if (attachment.type === AttachmentType.AUDIO) {
-						contentParts.push({
-							type: ContentPartType.INPUT_AUDIO,
-							input_audio: {
-								data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
-								format: getAudioInputFormat((attachment as DatabaseMessageExtraAudioFile).mimeType)
-							}
-						});
+						if (modelsStore.modelSupportsAudio(effectiveModel)) {
+							contentParts.push({
+								type: ContentPartType.INPUT_AUDIO,
+								input_audio: {
+									data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
+									format: getAudioInputFormat(
+										(attachment as DatabaseMessageExtraAudioFile).mimeType
+									)
+								}
+							});
+						}
 					} else if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({

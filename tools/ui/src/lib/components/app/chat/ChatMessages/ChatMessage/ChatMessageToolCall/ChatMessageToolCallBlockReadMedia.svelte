@@ -2,7 +2,11 @@
 	import { Eye } from '@lucide/svelte';
 	import { AttachmentType } from '$lib/enums';
 	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
-	import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile, DatabaseMessageExtraAudioFile } from '$lib/types';
+	import type {
+		DatabaseMessageExtra,
+		DatabaseMessageExtraImageFile,
+		DatabaseMessageExtraAudioFile
+	} from '$lib/types';
 	import { type AgenticSection } from '$lib/utils';
 	import { createBase64DataUrl } from '$lib/utils/data-url';
 	import { parseReadMediaMeta } from './parsers/read-media';
@@ -29,11 +33,13 @@
 		const match = section.toolResult?.match(ATTACHMENT_SAVED_REGEX);
 		if (!match) return null;
 		const attachmentName = match[1];
-		return extras.find(
-			(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
-				(e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO) &&
-				e.name === attachmentName
-		) ?? null;
+		return (
+			extras.find(
+				(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
+					(e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO) &&
+					e.name === attachmentName
+			) ?? null
+		);
 	});
 
 	const isAudio = $derived(mediaAttachment?.type === AttachmentType.AUDIO);
