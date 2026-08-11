@@ -4,6 +4,8 @@ enable f16;
 #define SRC_TYPE f32
 #elif defined(SRC_F16)
 #define SRC_TYPE f16
+#elif defined(SRC_I32)
+#define SRC_TYPE i32
 #endif
 
 #ifdef DST_F32
