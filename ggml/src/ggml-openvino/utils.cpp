@@ -236,12 +236,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             // the target's per-layer residuals only once the draft is initialised) would otherwise keep
             // reusing a model that never produces them, and the host would read unwritten buffers as
             // zeros. Recompile when the output set differs.
-            if (!ggml_decoder->has_same_graph_io(cgraph)) {
-                cache_hit = false;
-            }
             old_m_params = ggml_decoder->get_model_params();
             if (!ggml_decoder->is_splited_model()) {
                 cache_hit = old_m_params.can_reuse_dynamically(m_params);
+            }
+            // Must come AFTER can_reuse_dynamically(), which ASSIGNS to cache_hit rather than
+            // and-ing into it and would otherwise silently undo this invalidation.
+            if (cache_hit && !ggml_decoder->has_same_graph_io(cgraph)) {
+                cache_hit = false;
             }
         }
 
