@@ -40,7 +40,7 @@ jobs:
       matrix:
         include:
         - sanitizer: ADDRESS
-          machine: Intel-LNL-U7-258V
+          machine: [self-hosted, X64, Linux, Intel, OpenVINO]
         # thread doesn't run properly on some self hosted machines, so run it on Github instead
         - sanitizer: THREAD
           machine: ubuntu-24.04
