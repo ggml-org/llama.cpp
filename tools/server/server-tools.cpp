@@ -982,10 +982,11 @@ static std::string get_mime_from_extension(const std::string & path) {
     return (it != mime_map.end()) ? it->second : "application/octet-stream";
 }
 
-struct server_tool_read_media : server_tool {
+struct server_tool_read_media : server_tool_read_file {
     server_tool_read_media() {
         name = "read_media";
         display_name = "Read media file";
+        uses_cwd = true;
         permission_write = false;
     }
 
