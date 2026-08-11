@@ -1,6 +1,7 @@
 // TurboPrefill by Trykhlieb
 // Port target: ggml-org/llama.cpp b10335, commit 74ce15741b420b8d6f12e720398458b576c51c2c
-// TurboPrefill_b10335_v2.0.0.0.5
+// TurboPrefill_b10335_v2.0.0.0.5.1
+// Pinned arena keeps one reusable block sized to 1.5x the observed series peak.
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -792,6 +793,7 @@ struct ggml_backend_sched_tp_pinned_arena {
     std::vector<ggml_backend_sched_tp_pinned_block> blocks;
     size_t block_index = 0;
     size_t block_offset = 0;
+    size_t series_required_size = 0;
     bool allocation_failed_this_series = false;
 
     ~ggml_backend_sched_tp_pinned_arena() {
@@ -1138,6 +1140,7 @@ static void ggml_backend_sched_tp_pinned_arena_reset(ggml_backend_sched_t sched)
     auto & arena = ggml_backend_sched_tp_pinned_arena_get(sched);
     arena.block_index = 0;
     arena.block_offset = 0;
+    arena.series_required_size = 0;
     arena.allocation_failed_this_series = false;
 }
 
@@ -1165,6 +1168,15 @@ static uint8_t * ggml_backend_sched_tp_pinned_arena_alloc(
     }
 
     auto & arena = ggml_backend_sched_tp_pinned_arena_get(sched);
+    if (arena.series_required_size <= SIZE_MAX - (alignment - 1)) {
+        const size_t aligned_offset =
+                (arena.series_required_size + alignment - 1) & ~(alignment - 1);
+        arena.series_required_size = size <= SIZE_MAX - aligned_offset
+                ? aligned_offset + size
+                : SIZE_MAX;
+    } else {
+        arena.series_required_size = SIZE_MAX;
+    }
     if (arena.allocation_failed_this_series) {
         return nullptr;
     }
@@ -1193,11 +1205,6 @@ static uint8_t * ggml_backend_sched_tp_pinned_arena_alloc(
 
     static constexpr size_t initial_block_size = 128ull * 1024ull * 1024ull;
     size_t block_size = std::max(size, initial_block_size);
-    if (!arena.blocks.empty()) {
-        const size_t previous_size = arena.blocks.back().capacity;
-        const size_t grown_size = previous_size <= SIZE_MAX / 2 ? previous_size * 2 : SIZE_MAX;
-        block_size = std::max(block_size, grown_size);
-    }
     if (block_size <= SIZE_MAX - (alignment - 1)) {
         block_size = (block_size + alignment - 1) & ~(alignment - 1);
     } else {
@@ -1216,6 +1223,65 @@ static uint8_t * ggml_backend_sched_tp_pinned_arena_alloc(
     arena.block_index = arena.blocks.size() - 1;
     arena.block_offset = size;
     return (uint8_t *) ggml_backend_buffer_get_base(buffer);
+}
+
+static void ggml_backend_sched_tp_pinned_arena_compact(ggml_backend_sched_t sched) {
+    auto & arena = ggml_backend_sched_tp_pinned_arena_get(sched);
+    static constexpr size_t alignment = 256;
+
+    if (arena.series_required_size == 0 || arena.series_required_size == SIZE_MAX) {
+        return;
+    }
+
+    const size_t reserve_extra = (arena.series_required_size + 1) / 2;
+    if (reserve_extra > SIZE_MAX - arena.series_required_size) {
+        return;
+    }
+
+    size_t reserve_size = arena.series_required_size + reserve_extra;
+    if (reserve_size > SIZE_MAX - (alignment - 1)) {
+        return;
+    }
+    reserve_size = (reserve_size + alignment - 1) & ~(alignment - 1);
+
+    size_t keep_index = arena.blocks.size();
+    for (size_t i = 0; i < arena.blocks.size(); ++i) {
+        if (arena.blocks[i].capacity >= reserve_size &&
+            (keep_index == arena.blocks.size() ||
+             arena.blocks[i].capacity < arena.blocks[keep_index].capacity)) {
+            keep_index = i;
+        }
+    }
+
+    if (keep_index < arena.blocks.size()) {
+        const ggml_backend_sched_tp_pinned_block keep = arena.blocks[keep_index];
+        for (size_t i = 0; i < arena.blocks.size(); ++i) {
+            if (i != keep_index) {
+                ggml_backend_buffer_free(arena.blocks[i].buffer);
+            }
+        }
+        arena.blocks.clear();
+        arena.blocks.push_back(keep);
+    } else {
+        for (const auto & block : arena.blocks) {
+            ggml_backend_buffer_free(block.buffer);
+        }
+        arena.blocks.clear();
+
+        if (arena.buft != nullptr) {
+            ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(arena.buft, reserve_size);
+            if (buffer != nullptr && ggml_backend_buffer_get_type(buffer) == arena.buft) {
+                arena.blocks.push_back({ buffer, reserve_size });
+            } else {
+                ggml_backend_buffer_free(buffer);
+            }
+        }
+    }
+
+    arena.block_index = 0;
+    arena.block_offset = 0;
+    arena.series_required_size = 0;
+    arena.allocation_failed_this_series = false;
 }
 
 static void ggml_backend_sched_tp_capture_tensor_meta(
@@ -2004,7 +2070,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<ggml_bitset_t> used_ids;
 
     static constexpr const char * GGML_BACKEND_SCHED_TP_FILE_VERSION =
-            "TurboPrefill_b10335_v2.0.0.0.5";
+            "TurboPrefill_b10335_v2.0.0.0.5.1";
     static ggml_backend_sched_t tp_timing_sched = nullptr;
     static int64_t tp_series_begin_us = -1;
     static int64_t tp_capture_done_us = -1;
@@ -3238,6 +3304,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 (long long) (tp_compute_done_us - tp_series_begin_us));
 
         saved_ubs.clear();
+        ggml_backend_sched_tp_pinned_arena_compact(sched);
 
         return GGML_STATUS_SUCCESS;
     }
