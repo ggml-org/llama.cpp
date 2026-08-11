@@ -1025,6 +1025,13 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (op->ne[3] != 1) {
             return true;
         }
+        // A bf16 gather is miscomputed on GPU, not merely imprecise:
+        //   ERR = 1.949733963 > 0.000000100  GET_ROWS(type=bf16,n=256,m=5,r=4,be1=7,be2=1,v=1)
+        // Decline it so the scheduler keeps it on CPU.
+        if (op->op == GGML_OP_GET_ROWS && ggml_openvino_get_device_name() == "GPU" &&
+            op->src[0]->type == GGML_TYPE_BF16) {
+            return true;
+        }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K)) {
             // ERR = 0.000000306 > 0.000000100   GET_ROWS(type=q4_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
             // ERR = 0.000000197 > 0.000000100   GET_ROWS(type=q5_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
