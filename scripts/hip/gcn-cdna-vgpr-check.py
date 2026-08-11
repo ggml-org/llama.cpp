@@ -63,7 +63,7 @@ def main():
         '_ZL13rwkv_wkv7_f32ILi128EEviiiiPKfS1_S1_S1_S1_S1_S1_Pf',
         '_ZL12rwkv_wkv_f32ILi128EEviiiiPKfS1_S1_S1_S1_S1_Pf',
         '_ZL9mul_mat_qIL9ggml_type10ELi64ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_',
-        '_ZL9mul_mat_qIL9ggml_type42ELi128ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_'
+        '_ZL9mul_mat_qIL9ggml_type42ELi128ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_',
     }
 
     functions = parse_log_file(log_file)
