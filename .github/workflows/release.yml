@@ -432,253 +432,253 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz
           name: llama-bin-android-arm64.tar.gz
 
-  ubuntu-24-openvino:
-    needs: [check-release, get-version]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
-
-    runs-on: ubuntu-24.04
-
-    permissions:
-      actions: write
-
-    outputs:
-      openvino_version: ${{ steps.openvino_version.outputs.value }}
-
-    env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
-
-    steps:
-      - name: Set OpenVINO version output
-        id: openvino_version
-        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-ubuntu-24.04-openvino-release-no-preset-v1
-
-      - name: Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
-          sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
-
-      - name: Use OpenVINO Toolkit Cache
-        uses: actions/cache@v5
-        id: cache-openvino
-        with:
-          path: ./openvino_toolkit
-          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
-
-      - name: Setup OpenVINO Toolkit
-        if: steps.cache-openvino.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-openvino
-        with:
-          path: ./openvino_toolkit
-          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
-          version_full: ${{ env.OPENVINO_VERSION_FULL }}
-
-      - name: Install OpenVINO dependencies
-        run: |
-          cd ./openvino_toolkit
-          chmod +x ./install_dependencies/install_openvino_dependencies.sh
-          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
-
-      - name: Build
-        id: cmake_build
-        run: |
-          source ./openvino_toolkit/setupvars.sh
-          cmake -B build/ReleaseOV -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENVINO=ON \
-            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
-            ${{ env.CMAKE_ARGS }}
-          cmake --build build/ReleaseOV --config Release --parallel
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-24.04-openvino-release-no-preset-v1
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Pack artifacts
-        id: pack_artifacts
-        run: |
-          dest=./build/ReleaseOV/bin
-          OPENVINO_ROOT=./openvino_toolkit
-          ov_lib="$OPENVINO_ROOT/runtime/lib/intel64"
-
-          # Bundle OpenVINO runtime libs + TBB. Binaries built with RPATH=$ORIGIN
-          # load these siblings without setupvars.sh / LD_LIBRARY_PATH.
-          cp -P "$ov_lib"/libopenvino.so* \
-                "$ov_lib"/libopenvino_c.so* \
-                "$ov_lib"/libopenvino_*_plugin.so \
-                "$ov_lib"/libopenvino_intel_npu_compiler*.so \
-                "$OPENVINO_ROOT"/runtime/3rdparty/tbb/lib/*.so* \
-                "$dest"
-          cp -P /usr/lib/x86_64-linux-gnu/libOpenCL.so.1* "$dest" 2>/dev/null || true
-          cp "$ov_lib"/cache.json "$dest" 2>/dev/null || true
-
-          # OpenVINO licensing
-          cp -r "$OPENVINO_ROOT"/docs/licensing "$dest"/openvino-licensing
-
-          cp LICENSE "$dest"
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C "$dest" .
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
-          name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
-
-  windows-openvino:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
-
-    runs-on: windows-2022
-
-    outputs:
-      openvino_version: ${{ steps.openvino_version.outputs.value }}
-
-    env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
-
-    steps:
-      - name: Set OpenVINO version output
-        id: openvino_version
-        shell: bash
-        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-        with:
-            fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-windows-2022-openvino
-          variant: ccache
-          evict-old-files: 1d
-
-      - name: Setup Cache
-        uses: actions/cache@v5
-        id: cache-openvino
-        with:
-          path: ./openvino_toolkit
-          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
-
-      - name: Setup OpenVINO Toolkit
-        if: steps.cache-openvino.outputs.cache-hit != 'true'
-        uses: ./.github/actions/windows-setup-openvino
-        with:
-          path: ./openvino_toolkit
-          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
-          version_full: ${{ env.OPENVINO_VERSION_FULL }}
-
-      - name: Install OpenCL using vcpkg
-        shell: powershell
-        run: |
-          git clone https://github.com/microsoft/vcpkg C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat
-          C:\vcpkg\vcpkg install opencl
-
-      - name: Build
-        id: cmake_build
-        shell: cmd
-        run: |
-          REM Find extracted OpenVINO folder dynamically
-          for /d %%i in (openvino_toolkit\*) do set OPENVINO_ROOT=%%i
-
-          if not exist "%OPENVINO_ROOT%\runtime\cmake\OpenVINOConfig.cmake" (
-              echo ERROR: OpenVINOConfig.cmake not found
-              exit /b 1
-          )
-
-          call "%OPENVINO_ROOT%\setupvars.bat"
-
-          cmake -B build\ReleaseOV -G "Visual Studio 17 2022" ^
-            -A x64 ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DGGML_OPENVINO=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON ^
-            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
-            ${{ env.CMAKE_ARGS }}
-
-          cmake --build build\ReleaseOV --config Release -- /m
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2022-openvino
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Pack artifacts
-        id: pack_artifacts
-        shell: powershell
-        run: |
-          # Locate the extracted OpenVINO toolkit root (same pattern as the Build step).
-          $OPENVINO_ROOT = (Get-ChildItem -Directory openvino_toolkit | Select-Object -First 1).FullName
-          if (-not $OPENVINO_ROOT) {
-            Write-Error "OpenVINO toolkit folder not found under .\openvino_toolkit"
-            exit 1
-          }
-
-          $dest = ".\build\ReleaseOV\bin\Release"
-
-          $ovBin = Join-Path $OPENVINO_ROOT 'runtime\bin\intel64\Release'
-          Copy-Item -Path (Join-Path $ovBin '*.dll')       -Destination $dest -Force
-          Copy-Item -Path (Join-Path $ovBin 'cache.json')  -Destination $dest -Force
-
-          $tbbBin = Join-Path $OPENVINO_ROOT 'runtime\3rdparty\tbb\bin'
-          Copy-Item -Path (Join-Path $tbbBin 'tbb*.dll') -Destination $dest -Force
-
-          # OpenVINO licensing
-          $licensingDest = Join-Path $dest 'openvino-licensing'
-          New-Item -ItemType Directory -Force -Path $licensingDest | Out-Null
-          Copy-Item -Path (Join-Path $OPENVINO_ROOT 'docs\licensing\*') -Destination $licensingDest -Recurse -Force
-
-          Copy-Item LICENSE $dest
-          7z a -snl llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
-          name: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
+#  ubuntu-24-openvino:
+#    needs: [check-release, get-version]
+#    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+#
+#    runs-on: ubuntu-24.04
+#
+#    permissions:
+#      actions: write
+#
+#    outputs:
+#      openvino_version: ${{ steps.openvino_version.outputs.value }}
+#
+#    env:
+#      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+#      OPENVINO_VERSION_MAJOR: "2026.2.1"
+#      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+#
+#    steps:
+#      - name: Set OpenVINO version output
+#        id: openvino_version
+#        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
+#
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#        with:
+#          fetch-depth: 0
+#
+#      - name: Setup Node.js
+#        uses: actions/setup-node@v6
+#        with:
+#          node-version: "24"
+#          cache: "npm"
+#          cache-dependency-path: "tools/ui/package-lock.json"
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: release-ubuntu-24.04-openvino-release-no-preset-v1
+#
+#      - name: Dependencies
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
+#          sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+#
+#      - name: Use OpenVINO Toolkit Cache
+#        uses: actions/cache@v5
+#        id: cache-openvino
+#        with:
+#          path: ./openvino_toolkit
+#          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+#
+#      - name: Setup OpenVINO Toolkit
+#        if: steps.cache-openvino.outputs.cache-hit != 'true'
+#        uses: ./.github/actions/linux-setup-openvino
+#        with:
+#          path: ./openvino_toolkit
+#          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+#          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+#
+#      - name: Install OpenVINO dependencies
+#        run: |
+#          cd ./openvino_toolkit
+#          chmod +x ./install_dependencies/install_openvino_dependencies.sh
+#          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
+#
+#      - name: Build
+#        id: cmake_build
+#        run: |
+#          source ./openvino_toolkit/setupvars.sh
+#          cmake -B build/ReleaseOV -G Ninja \
+#            -DCMAKE_BUILD_TYPE=Release \
+#            -DGGML_OPENVINO=ON \
+#            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+#            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+#            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
+#            ${{ env.CMAKE_ARGS }}
+#          cmake --build build/ReleaseOV --config Release --parallel
+#
+#      - name: ccache-clear
+#        uses: ./.github/actions/ccache-clear
+#        with:
+#          key: release-ubuntu-24.04-openvino-release-no-preset-v1
+#
+#      - name: Determine tag name
+#        id: tag
+#        uses: ./.github/actions/get-tag-name
+#
+#      - name: Pack artifacts
+#        id: pack_artifacts
+#        run: |
+#          dest=./build/ReleaseOV/bin
+#          OPENVINO_ROOT=./openvino_toolkit
+#          ov_lib="$OPENVINO_ROOT/runtime/lib/intel64"
+#
+#          # Bundle OpenVINO runtime libs + TBB. Binaries built with RPATH=$ORIGIN
+#          # load these siblings without setupvars.sh / LD_LIBRARY_PATH.
+#          cp -P "$ov_lib"/libopenvino.so* \
+#                "$ov_lib"/libopenvino_c.so* \
+#                "$ov_lib"/libopenvino_*_plugin.so \
+#                "$ov_lib"/libopenvino_intel_npu_compiler*.so \
+#                "$OPENVINO_ROOT"/runtime/3rdparty/tbb/lib/*.so* \
+#                "$dest"
+#          cp -P /usr/lib/x86_64-linux-gnu/libOpenCL.so.1* "$dest" 2>/dev/null || true
+#          cp "$ov_lib"/cache.json "$dest" 2>/dev/null || true
+#
+#          # OpenVINO licensing
+#          cp -r "$OPENVINO_ROOT"/docs/licensing "$dest"/openvino-licensing
+#
+#          cp LICENSE "$dest"
+#          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C "$dest" .
+#
+#      - name: Upload artifacts
+#        uses: actions/upload-artifact@v6
+#        with:
+#          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+#          name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+#
+#  windows-openvino:
+#    needs: [check-release]
+#    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+#
+#    runs-on: windows-2022
+#
+#    outputs:
+#      openvino_version: ${{ steps.openvino_version.outputs.value }}
+#
+#    env:
+#      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+#      OPENVINO_VERSION_MAJOR: "2026.2.1"
+#      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+#
+#    steps:
+#      - name: Set OpenVINO version output
+#        id: openvino_version
+#        shell: bash
+#        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
+#
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#        with:
+#            fetch-depth: 0
+#
+#      - name: Setup Node.js
+#        uses: actions/setup-node@v6
+#        with:
+#          node-version: "24"
+#          cache: "npm"
+#          cache-dependency-path: "tools/ui/package-lock.json"
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: release-windows-2022-openvino
+#          variant: ccache
+#          evict-old-files: 1d
+#
+#      - name: Setup Cache
+#        uses: actions/cache@v5
+#        id: cache-openvino
+#        with:
+#          path: ./openvino_toolkit
+#          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+#
+#      - name: Setup OpenVINO Toolkit
+#        if: steps.cache-openvino.outputs.cache-hit != 'true'
+#        uses: ./.github/actions/windows-setup-openvino
+#        with:
+#          path: ./openvino_toolkit
+#          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+#          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+#
+#      - name: Install OpenCL using vcpkg
+#        shell: powershell
+#        run: |
+#          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+#          C:\vcpkg\bootstrap-vcpkg.bat
+#          C:\vcpkg\vcpkg install opencl
+#
+#      - name: Build
+#        id: cmake_build
+#        shell: cmd
+#        run: |
+#          REM Find extracted OpenVINO folder dynamically
+#          for /d %%i in (openvino_toolkit\*) do set OPENVINO_ROOT=%%i
+#
+#          if not exist "%OPENVINO_ROOT%\runtime\cmake\OpenVINOConfig.cmake" (
+#              echo ERROR: OpenVINOConfig.cmake not found
+#              exit /b 1
+#          )
+#
+#          call "%OPENVINO_ROOT%\setupvars.bat"
+#
+#          cmake -B build\ReleaseOV -G "Visual Studio 17 2022" ^
+#            -A x64 ^
+#            -DCMAKE_BUILD_TYPE=Release ^
+#            -DGGML_OPENVINO=ON ^
+#            -DLLAMA_BUILD_BORINGSSL=ON ^
+#            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
+#            ${{ env.CMAKE_ARGS }}
+#
+#          cmake --build build\ReleaseOV --config Release -- /m
+#
+#      - name: ccache-clear
+#        uses: ./.github/actions/ccache-clear
+#        with:
+#          key: release-windows-2022-openvino
+#
+#      - name: Determine tag name
+#        id: tag
+#        uses: ./.github/actions/get-tag-name
+#
+#      - name: Pack artifacts
+#        id: pack_artifacts
+#        shell: powershell
+#        run: |
+#          # Locate the extracted OpenVINO toolkit root (same pattern as the Build step).
+#          $OPENVINO_ROOT = (Get-ChildItem -Directory openvino_toolkit | Select-Object -First 1).FullName
+#          if (-not $OPENVINO_ROOT) {
+#            Write-Error "OpenVINO toolkit folder not found under .\openvino_toolkit"
+#            exit 1
+#          }
+#
+#          $dest = ".\build\ReleaseOV\bin\Release"
+#
+#          $ovBin = Join-Path $OPENVINO_ROOT 'runtime\bin\intel64\Release'
+#          Copy-Item -Path (Join-Path $ovBin '*.dll')       -Destination $dest -Force
+#          Copy-Item -Path (Join-Path $ovBin 'cache.json')  -Destination $dest -Force
+#
+#          $tbbBin = Join-Path $OPENVINO_ROOT 'runtime\3rdparty\tbb\bin'
+#          Copy-Item -Path (Join-Path $tbbBin 'tbb*.dll') -Destination $dest -Force
+#
+#          # OpenVINO licensing
+#          $licensingDest = Join-Path $dest 'openvino-licensing'
+#          New-Item -ItemType Directory -Force -Path $licensingDest | Out-Null
+#          Copy-Item -Path (Join-Path $OPENVINO_ROOT 'docs\licensing\*') -Destination $licensingDest -Recurse -Force
+#
+#          Copy-Item LICENSE $dest
+#          7z a -snl llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
+#
+#      - name: Upload artifacts
+#        uses: actions/upload-artifact@v6
+#        with:
+#          path: llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
+#          name: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
 
   windows-cpu:
     needs: [check-release]
@@ -1686,7 +1686,7 @@ jobs:
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 7.14)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.14-x64.tar.gz)
-            - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
+            - Ubuntu x64 (OpenVINO) [DISABLED]()
             - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)
 
@@ -1701,7 +1701,7 @@ jobs:
             - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.3-x64.zip) - [CUDA 13.3 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.3-x64.zip)
             - [Windows arm64 (CUDA 13) (preview)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.4-arm64.zip) - [CUDA 13.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.4-arm64.zip)
             - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
-            - [Windows x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ needs.windows-openvino.outputs.openvino_version }}-x64.zip)
+            - Windows x64 (OpenVINO) [DISABLED]()
             - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)
             - [Windows x64 (ROCm 7.14)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-rocm-7.14-x64.zip)
 
