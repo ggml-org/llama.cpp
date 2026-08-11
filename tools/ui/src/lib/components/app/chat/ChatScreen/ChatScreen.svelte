@@ -20,18 +20,20 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
 		chatStore,
-		config,
 		conversationsStore,
 		device,
 		isMobile,
-		serverStore
+		serverStore,
+		settingsStore
 	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { onDestroy, onMount, tick } from 'svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
+	let disableAutoScroll = $derived(
+		Boolean(settingsStore.config.disableAutoScroll) || isMobile.current
+	);
 	let isMobileUserScrolledUp = $state(false);
 	let mobileScrollDownHint = $state(false);
 	let mobileScrollDownHintLockedUntil = $state(0);
@@ -241,7 +243,7 @@
 
 	$effect(() => {
 		const shouldDisableAutoScroll =
-			config().disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
+			settingsStore.config.disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
 
 		autoScroll.setDisabled(shouldDisableAutoScroll);
 

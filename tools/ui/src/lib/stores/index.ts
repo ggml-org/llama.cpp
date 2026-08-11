@@ -40,7 +40,7 @@ export { modelsStore } from './models.svelte';
 export { serverStore } from './server.svelte';
 
 // SETTINGS / UI PREFERENCES
-export { settingsStore, config, isInitialized } from './settings.svelte';
+export { settingsStore } from './settings.svelte';
 
 export { settingsReferrer } from './settings-referrer.svelte';
 
@@ -58,8 +58,6 @@ export { device } from './device.svelte';
 
 export { viewport, isMobile } from './viewport.svelte';
 
-// shared via theme.svelte (reactive system theme detection) - settings.svelte
-// also exports an unused `theme` getter which is intentionally NOT re-exported
 export { theme } from './theme.svelte';
 
 export {

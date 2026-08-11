@@ -35,7 +35,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	ApiChatMessageData,
@@ -1233,7 +1233,7 @@ class ChatStore {
 
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
-				const currentConfig = config();
+				const currentConfig = settingsStore.config;
 				const systemPrompt = currentConfig.systemMessage?.toString().trim();
 
 				let sysOrRootId = rootId;
@@ -1280,7 +1280,10 @@ class ChatStore {
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(
 					currentConv.id,
-					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						content,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
@@ -1292,7 +1295,7 @@ class ChatStore {
 				undefined,
 				undefined,
 				undefined,
-				config().titleGenerationUseLLM && isNewConversation ? content : undefined
+				settingsStore.config.titleGenerationUseLLM && isNewConversation ? content : undefined
 			);
 		} catch (error) {
 			if (isAbortError(error)) {
@@ -1583,13 +1586,13 @@ class ChatStore {
 				if (serverStore.isRouterMode) modelsStore.fetchRouterModels().catch(console.error);
 
 				// Pre-encode conversation in KV cache for faster next turn
-				if (config().preEncodeConversation) {
+				if (settingsStore.config.preEncodeConversation) {
 					this.triggerPreEncode(
 						allMessages,
 						assistantMessage,
 						streamedContent,
 						effectiveModel,
-						!!config().excludeReasoningFromContext
+						!!settingsStore.config.excludeReasoningFromContext
 					);
 				}
 			},
@@ -1812,7 +1815,7 @@ class ChatStore {
 			serverStore.isRouterMode && modelsStore.selectedModelName
 				? modelsStore.selectedModelName
 				: undefined;
-		const configValue = config();
+		const configValue = settingsStore.config;
 		const titlePromptTemplate =
 			typeof configValue.titleGenerationPrompt === 'string' &&
 			configValue.titleGenerationPrompt.trim()
@@ -1950,7 +1953,10 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationName(
 					activeConv.id,
-					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						newContent,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
@@ -2523,7 +2529,10 @@ class ChatStore {
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
 				await conversationsStore.updateConversationName(
 					activeConv.id,
-					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						newContent,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 			}
 
@@ -2608,7 +2617,10 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationName(
 					activeConv.id,
-					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						newContent,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 
 			await conversationsStore.refreshActiveMessages();
@@ -2719,7 +2731,7 @@ class ChatStore {
 			| { total: number; cache: number; processed: number; time_ms: number }
 			| undefined;
 		const contextTotal = this.getContextTotal();
-		const currentConfig = config();
+		const currentConfig = settingsStore.config;
 		const outputTokensMax = currentConfig.max_tokens || -1;
 		const contextUsed = promptTokens + cacheTokens + predictedTokens,
 			outputTokensUsed = predictedTokens;
@@ -2787,7 +2799,7 @@ class ChatStore {
 	}
 
 	private getApiOptions(): Record<string, unknown> {
-		const currentConfig = config();
+		const currentConfig = settingsStore.config;
 		const hasValue = (value: unknown): boolean =>
 			value !== undefined && value !== null && value !== '';
 		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true };

@@ -28,12 +28,12 @@
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
 		chatStore,
-		config,
 		conversationsStore,
 		mcpResourceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
+		settingsStore,
 		toolsStore
 	} from '$lib/stores';
 	import type {
@@ -181,7 +181,7 @@
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
-	let currentConfig = $derived(config());
+	let currentConfig = $derived(settingsStore.config);
 
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);

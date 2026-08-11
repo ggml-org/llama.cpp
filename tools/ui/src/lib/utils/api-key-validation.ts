@@ -3,7 +3,7 @@ import { browser } from '$app/environment';
 import { base } from '$app/paths';
 import { HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 
 /**
  * Validates API key by making a request to the server props endpoint
@@ -14,7 +14,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 		return;
 	}
 
-	const apiKey = config().apiKey;
+	const apiKey = settingsStore.config.apiKey;
 
 	try {
 		const headers: Record<string, string> = {

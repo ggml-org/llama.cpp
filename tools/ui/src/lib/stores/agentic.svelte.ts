@@ -46,7 +46,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	AgenticConfig,
@@ -433,7 +433,7 @@ class AgenticStore {
 			await toolsStore.fetchBuiltinTools();
 		}
 
-		const agenticConfig = this.getConfig(config(), perChatOverrides);
+		const agenticConfig = this.getConfig(settingsStore.config, perChatOverrides);
 
 		if (!agenticConfig.enabled) return { handled: false };
 

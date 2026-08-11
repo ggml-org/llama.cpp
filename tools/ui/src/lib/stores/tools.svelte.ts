@@ -17,7 +17,7 @@ import {
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { buildSandboxToolDefinition } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -176,8 +176,8 @@ class ToolsStore {
 	get frontendTools(): OpenAIToolDefinition[] {
 		const tools: OpenAIToolDefinition[] = [];
 
-		if (config().jsSandboxEnabled) {
-			tools.push(buildSandboxToolDefinition(!!config().symbolicMathEnabled));
+		if (settingsStore.config.jsSandboxEnabled) {
+			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
 		}
 
 		const readMedia = this.readMediaTool();
@@ -210,10 +210,11 @@ class ToolsStore {
 		if (!vision && !audio) return null;
 
 		return buildReadMediaToolDefinition(vision, audio);
+
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
-		const raw = config().customJson;
+		const raw = settingsStore.config.customJson;
 
 		if (!raw || typeof raw !== 'string') return [];
 

@@ -8,7 +8,7 @@
 		MarkdownContent
 	} from '$lib/components/app';
 	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
-	import { agenticStore, config } from '$lib/stores';
+	import { agenticStore, settingsStore } from '$lib/stores';
 	import type { AgenticSection } from '$lib/types';
 	import type {
 		ChatMessageAgenticTimings,
@@ -33,10 +33,14 @@
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
-	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
-	const showMessageStats = $derived(Boolean(config().showMessageStats));
-	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
+	const showThoughtInProgress = $derived(Boolean(settingsStore.config.showThoughtInProgress));
+	const alwaysShowToolCallContent = $derived(
+		Boolean(settingsStore.config.alwaysShowToolCallContent)
+	);
+	const showMessageStats = $derived(Boolean(settingsStore.config.showMessageStats));
+	const showAgenticTurnStats = $derived(
+		showMessageStats && Boolean(settingsStore.config.showAgenticTurnStats)
+	);
 
 	const hasReasoningError = $derived(
 		isLastAssistantMessage ? !!agenticStore.lastError(message.convId) : false

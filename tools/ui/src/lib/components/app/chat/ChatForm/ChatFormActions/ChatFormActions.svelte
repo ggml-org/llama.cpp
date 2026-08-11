@@ -13,7 +13,7 @@
 	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import { chatStore, config, conversationsStore, mcpStore } from '$lib/stores';
+	import { chatStore, conversationsStore, mcpStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -54,7 +54,7 @@
 		uploadedFiles = []
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
+	let currentConfig = $derived(settingsStore.config);
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();

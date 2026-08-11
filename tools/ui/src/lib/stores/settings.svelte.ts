@@ -575,7 +575,3 @@ class SettingsStore {
 }
 
 export const settingsStore = new SettingsStore();
-
-export const config = () => settingsStore.config;
-export const theme = () => settingsStore.config[SETTINGS_KEYS.THEME];
-export const isInitialized = () => settingsStore.isInitialized;

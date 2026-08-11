@@ -39,7 +39,7 @@ import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { McpServerOverride } from '$lib/types/database';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
@@ -696,7 +696,7 @@ class ConversationsStore {
 					this.activeConversation.id,
 					generateConversationTitle(
 						newFirstUserMessage.content,
-						Boolean(config().titleGenerationUseFirstLine)
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
 					)
 				);
 			}

@@ -2,7 +2,7 @@
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
-	import { agenticStore, chatStore, config, conversationsStore } from '$lib/stores';
+	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
@@ -20,7 +20,7 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
 	setChatActionsContext({
 		continueAssistantMessage: async (message: DatabaseMessage) => {

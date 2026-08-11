@@ -20,7 +20,7 @@
 	import { setChatSettingsConfigContext } from '$lib/contexts';
 	import { ColorMode } from '$lib/enums/ui.enums';
 	import { RouterService } from '$lib/services/router.service';
-	import { config, modelsStore, serverStore, settingsReferrer, settingsStore } from '$lib/stores';
+	import { modelsStore, serverStore, settingsReferrer, settingsStore } from '$lib/stores';
 	import type { SettingsSection } from '$lib/types';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
@@ -40,7 +40,7 @@
 			SETTINGS_CHAT_SECTIONS[0]
 	);
 
-	let localConfig: SettingsConfigType = $state({ ...config() });
+	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
 
 	let mobileHeader: { updateCarousel: () => void } | undefined;
 
@@ -68,7 +68,7 @@
 	}
 
 	function handleReset() {
-		localConfig = { ...config() };
+		localConfig = { ...settingsStore.config };
 		setMode(localConfig.theme as ColorMode);
 		mobileHeader?.updateCarousel();
 	}
@@ -120,7 +120,7 @@
 	}
 
 	export function reset() {
-		localConfig = { ...config() };
+		localConfig = { ...settingsStore.config };
 	}
 
 	setChatSettingsConfigContext({

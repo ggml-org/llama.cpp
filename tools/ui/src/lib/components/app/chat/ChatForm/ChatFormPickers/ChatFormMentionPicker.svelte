@@ -8,7 +8,7 @@
 	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { config, isMobile, toolsStore } from '$lib/stores';
+	import { isMobile, settingsStore, toolsStore } from '$lib/stores';
 	import type { FileMentionEntry, GlobEntryResult } from '$lib/types';
 	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
@@ -62,7 +62,7 @@
 	// Coerce the depth setting to a positive integer; an invalid value
 	// would otherwise reach the server as max_depth 0 = unlimited.
 	const searchDepth = $derived.by(() => {
-		const n = Number(config().mentionSearchMaxDepth);
+		const n = Number(settingsStore.config.mentionSearchMaxDepth);
 
 		return Number.isInteger(n) && n > 0 ? n : FILE_GLOB_SEARCH_PICKERS.DEFAULT_SEARCH_DEPTH;
 	});

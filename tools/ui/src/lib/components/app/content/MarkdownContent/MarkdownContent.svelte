@@ -45,7 +45,7 @@
 	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
-	import { config } from '$lib/stores';
+	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import {
 		copyCodeToClipboard,
@@ -864,7 +864,7 @@
 <div
 	bind:this={containerRef}
 	onclick={handleMermaidClick}
-	class="markdown-content {className}{config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
+	class="markdown-content {className}{settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
 		? ' full-height-code-blocks'
 		: ''}"
 >

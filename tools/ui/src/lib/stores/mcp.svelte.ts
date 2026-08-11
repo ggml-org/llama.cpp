@@ -44,7 +44,7 @@ import {
 import { MCPService } from '$lib/services/mcp.service';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type {
 	ClientCapabilities,
 	GetPromptResult,
@@ -161,7 +161,8 @@ class MCPStore {
 	 */
 	#requestTimeoutMs(): number {
 		const seconds =
-			Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
+			Number(settingsStore.config.mcpRequestTimeoutSeconds) ||
+			DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
 
 		return Math.round(seconds * 1000);
 	}
@@ -310,7 +311,7 @@ class MCPStore {
 	}
 
 	get isEnabled(): boolean {
-		const mcpConfig = this.#buildMcpClientConfig(config());
+		const mcpConfig = this.#buildMcpClientConfig(settingsStore.config);
 
 		return (
 			mcpConfig !== null && mcpConfig !== undefined && Object.keys(mcpConfig.servers).length > 0
@@ -374,7 +375,7 @@ class MCPStore {
 	}
 
 	getServers(): MCPServerSettingsEntry[] {
-		return parseMcpServerSettings(config().mcpServers);
+		return parseMcpServerSettings(settingsStore.config.mcpServers);
 	}
 
 	/**
@@ -591,10 +592,12 @@ class MCPStore {
 	}
 
 	hasAvailableServers(): boolean {
-		return parseMcpServerSettings(config().mcpServers).some((s) => s.enabled && s.url.trim());
+		return parseMcpServerSettings(settingsStore.config.mcpServers).some(
+			(s) => s.enabled && s.url.trim()
+		);
 	}
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
-		return Boolean(this.#buildMcpClientConfig(config(), perChatOverrides));
+		return Boolean(this.#buildMcpClientConfig(settingsStore.config, perChatOverrides));
 	}
 
 	getEnabledServersForConversation(
@@ -610,7 +613,7 @@ class MCPStore {
 			return false;
 		}
 
-		const mcpConfig = this.#buildMcpClientConfig(config(), perChatOverrides);
+		const mcpConfig = this.#buildMcpClientConfig(settingsStore.config, perChatOverrides);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 
 		if (!signature) {

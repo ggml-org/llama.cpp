@@ -14,8 +14,8 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
+	import { chatStore, conversationsStore, device, isMobile, settingsStore } from '$lib/stores';
 	import { buildConversationTree } from '$lib/utils';
-	import { chatStore, config, conversationsStore, device, isMobile } from '$lib/stores';
 	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
@@ -37,7 +37,7 @@
 
 	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
 	const isOnMobile = $derived(isMobile.current);
-	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
+	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {

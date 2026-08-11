@@ -1,14 +1,14 @@
 import { redactValue } from './redact';
 import { CORS_PROXY, HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 
 /**
  * Get authorization headers for API requests
  * Includes Bearer token if API key is configured
  */
 export function getAuthHeaders(): Record<string, string> {
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 	const apiKey = currentConfig.apiKey?.toString().trim();
 
 	return apiKey ? { [HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey}` } : {};

@@ -7,7 +7,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
-	import { config, serverStore, settingsStore } from '$lib/stores';
+	import { serverStore, settingsStore } from '$lib/stores';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
@@ -51,7 +51,7 @@
 	function handleShowApiKeyInput() {
 		showApiKeyInput = true;
 		// Pre-fill with current API key if it exists
-		const currentConfig = config();
+		const currentConfig = settingsStore.config;
 
 		apiKeyInput = currentConfig.apiKey?.toString() || '';
 	}

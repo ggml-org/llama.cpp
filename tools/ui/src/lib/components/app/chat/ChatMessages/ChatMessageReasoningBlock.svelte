@@ -3,7 +3,7 @@
 	import { CollapsibleContentBlock, MarkdownContent } from '$lib/components/app';
 	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
-	import { config } from '$lib/stores';
+	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import type { AgenticSection } from '$lib/types';
 
@@ -25,7 +25,7 @@
 		section
 	}: Props = $props();
 
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
 	const REASONING_HEADER = 'Reasoning';
 	const REASONING_HEADER_PENDING = 'Reasoning...';

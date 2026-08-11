@@ -21,7 +21,6 @@
 	import {
 		buildInfoStore,
 		chatStore,
-		config,
 		conversationsStore,
 		isMobile,
 		mcpStore,
@@ -47,7 +46,9 @@
 		  }
 		| undefined = $state();
 
-	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
+	let showBuildVersion = $derived(
+		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
+	);
 
 	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
 	const pwa = usePwa();
@@ -103,7 +104,7 @@
 	});
 
 	function checkApiKey() {
-		const apiKey = config().apiKey;
+		const apiKey = settingsStore.config.apiKey;
 
 		// Without a stored key there is nothing to re-validate here; the keyless
 		// 401 case is handled by validateApiKey() at navigation time, and the
@@ -182,7 +183,7 @@
 	// textContent keeps the value as text, never parsed as HTML
 	function customCss(node: HTMLStyleElement) {
 		$effect(() => {
-			node.textContent = (config().customCss as string | undefined) ?? '';
+			node.textContent = (settingsStore.config.customCss as string | undefined) ?? '';
 		});
 	}
 
@@ -255,7 +256,7 @@
 		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
 	{/if}
 
-	{#if config().customCss}
+	{#if settingsStore.config.customCss}
 		<style use:customCss></style>
 	{/if}
 
