@@ -1,23 +1,24 @@
-// Conversation filename constants
+// Conversation exporter / filename constants
 
-// Length of the trimmed conversation ID in the filename
-export const EXPORT_CONV_ID_TRIM_LENGTH = 8;
-// Maximum length of the sanitized conversation name snippet
-export const EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH = 20;
-// Characters to keep in the ISO timestamp. 19 keeps 2026-01-01T00:00:00
-export const ISO_TIMESTAMP_SLICE_LENGTH = 19;
+export const EXPORT_CONV = {
+	// Producer marker carried by the session record of a JSONL export
+	HARNESS: 'llama.app',
+	// Length of the trimmed conversation ID in the filename
+	ID_TRIM_LENGTH: 8,
+	// Replacements to the ISO date for use in the export filename
+	ISO_DATE_TIME_SEPARATOR: 'T',
 
-// Producer marker carried by the session record of a JSONL export
-export const SESSION_HARNESS = 'llama.app';
+	ISO_DATE_TIME_SEPARATOR_REPLACEMENT: '_',
 
-// Replacements for making the conversation title filename-friendly
-export const NON_ALPHANUMERIC_REGEX = /[^a-z0-9]/gi;
-export const EXPORT_CONV_NONALNUM_REPLACEMENT = '_';
-export const MULTIPLE_UNDERSCORE_REGEX = /_+/g;
+	ISO_TIME_SEPARATOR: ':',
+	ISO_TIME_SEPARATOR_REPLACEMENT: '-',
+	// Characters to keep in the ISO timestamp. 19 keeps 2026-01-01T00:00:00
+	ISO_TIMESTAMP_SLICE: 19,
 
-// Replacements to the ISO date for use in the export filename
-export const ISO_DATE_TIME_SEPARATOR = 'T';
-export const ISO_DATE_TIME_SEPARATOR_REPLACEMENT = '_';
-
-export const ISO_TIME_SEPARATOR = ':';
-export const ISO_TIME_SEPARATOR_REPLACEMENT = '-';
+	MULTIPLE_UNDERSCORE_REGEX: /_+/g,
+	// Maximum length of the sanitized conversation name snippet
+	NAME_SUFFIX_MAX_LENGTH: 20,
+	// Replacements for making the conversation title filename-friendly
+	NON_ALPHANUMERIC_REGEX: /[^a-z0-9]/gi,
+	NONALNUM_REPLACEMENT: '_'
+} as const;

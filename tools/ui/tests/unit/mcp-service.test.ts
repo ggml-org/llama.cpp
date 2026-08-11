@@ -1,5 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
-import { CORS_PROXY_HEADER_PREFIX } from '$lib/constants';
+import { CORS_PROXY } from '$lib/constants';
 import { MCPConnectionPhase, MCPTransportType } from '$lib/enums';
 import { MCPService } from '$lib/services/mcp.service';
 import type { MCPConnectionLog, MCPServerConfig } from '$lib/types';
@@ -96,9 +96,9 @@ describe('MCPService', () => {
 
 	it('wraps dynamic request headers when using the CORS proxy', async () => {
 		const logs: MCPConnectionLog[] = [];
-		const proxiedAuthToken = `${CORS_PROXY_HEADER_PREFIX}x-auth-token`;
-		const proxiedContentType = `${CORS_PROXY_HEADER_PREFIX}content-type`;
-		const proxiedSessionId = `${CORS_PROXY_HEADER_PREFIX}mcp-session-id`;
+		const proxiedAuthToken = `${CORS_PROXY.HEADER_PREFIX}x-auth-token`;
+		const proxiedContentType = `${CORS_PROXY.HEADER_PREFIX}content-type`;
+		const proxiedSessionId = `${CORS_PROXY.HEADER_PREFIX}mcp-session-id`;
 		const response = new Response('{}', {
 			headers: { 'content-type': 'application/json' },
 			status: 200

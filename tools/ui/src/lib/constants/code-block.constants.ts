@@ -1,17 +1,28 @@
 // Constants for the markdown code-block renderer: language/fence handling and CSS classes.
 
-export const DEFAULT_LANGUAGE = 'text';
-export const LANG_PATTERN = /^(\w*)\n?/;
-export const AMPERSAND_REGEX = /&/g;
-export const LT_REGEX = /</g;
-export const GT_REGEX = />/g;
-export const FENCE_PATTERN = /^```|\n```/g;
+/** Parsing and escaping helpers for the markdown code-block renderer. */
+export const CODE_BLOCK = {
+	AMPERSAND_REGEX: /&/g,
+	/** Language fallback used when no language is specified. */
+	DEFAULT_LANGUAGE: 'text',
+	/** Matches opening/closing markdown code fences. */
+	FENCE_PATTERN: /^```|\n```/g,
+	GT_REGEX: />/g,
+	/** Matches the language specifier at the start of a code fence. */
+	LANG_PATTERN: /^(\w*)\n?/,
+	LT_REGEX: /</g,
 
-// Whitespace-only empty lines (between start of string and first non-empty line).
-// Used by trimCodePadding to drop leading/trailing phantom blank rows from LLM
-// payload wrappers without touching internal blank lines.
-export const TRIM_LEADING_PADDING_REGEX = /^(?:[ \t]*\n)+/;
-export const TRIM_TRAILING_PADDING_REGEX = /(?:\n[ \t]*)+$/;
+	// Matches the `text:` prefix that file-type identifiers use to denote a
+	// plain-text language (e.g. `text:typescript`). Used by tool-call renderers
+	// to recover the underlying highlight.js language.
+	TEXT_LANGUAGE_PREFIX_REGEX: /^text:/,
+	// Whitespace-only empty lines (between start of string and first non-empty line).
+	// Used by trimCodePadding to drop leading/trailing phantom blank rows from LLM
+	// payload wrappers without touching internal blank lines.
+	TRIM_LEADING_PADDING_REGEX: /^(?:[ \t]*\n)+/,
+
+	TRIM_TRAILING_PADDING_REGEX: /(?:\n[ \t]*)+$/
+} as const;
 
 // Matches either Unix or Windows path separators so `String.split(REGEX)` can
 // recover the trailing file-name segment from either `/foo/bar.txt` or
@@ -26,12 +37,14 @@ export const FILE_EXTENSION_SEPARATOR = '.';
 // to recover the underlying highlight.js language.
 export const TEXT_LANGUAGE_PREFIX_REGEX = /^text:/;
 
-// CSS classes applied by the markdown code-block renderer.
-export const CODE_BLOCK_SCROLL_CONTAINER_CLASS = 'code-block-scroll-container';
-export const CODE_BLOCK_WRAPPER_CLASS = 'code-block-wrapper';
-export const CODE_BLOCK_HEADER_CLASS = 'code-block-header';
-export const CODE_BLOCK_ACTIONS_CLASS = 'code-block-actions';
-export const CODE_LANGUAGE_CLASS = 'code-language';
-export const COPY_CODE_BTN_CLASS = 'copy-code-btn';
-export const PREVIEW_CODE_BTN_CLASS = 'preview-code-btn';
-export const RELATIVE_CLASS = 'relative';
+/** CSS classes applied by the markdown code-block renderer. */
+export const CODE_BLOCK_CLASS = {
+	ACTIONS: 'code-block-actions',
+	COPY_BTN: 'copy-code-btn',
+	HEADER: 'code-block-header',
+	LANGUAGE: 'code-language',
+	PREVIEW_BTN: 'preview-code-btn',
+	RELATIVE: 'relative',
+	SCROLL_CONTAINER: 'code-block-scroll-container',
+	WRAPPER: 'code-block-wrapper'
+} as const;

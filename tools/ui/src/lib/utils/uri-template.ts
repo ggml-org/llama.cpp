@@ -133,7 +133,10 @@ export function expandTemplate(template: string, values: Record<string, string>)
 					return URI_TEMPLATE_SYMBOLS.FRAGMENT + expandedParts.join(URI_TEMPLATE_SYMBOLS.COMMA);
 				case URI_TEMPLATE_SYMBOLS.PATH_SEGMENT:
 					// Path segments
-					return URI_TEMPLATE_SYMBOLS.PATH_SEGMENT + expandedParts.join(URI_TEMPLATE_SYMBOLS.PATH_SEGMENT);
+					return (
+						URI_TEMPLATE_SYMBOLS.PATH_SEGMENT +
+						expandedParts.join(URI_TEMPLATE_SYMBOLS.PATH_SEGMENT)
+					);
 				case URI_TEMPLATE_SYMBOLS.LABEL:
 					// Label expansion
 					return URI_TEMPLATE_SYMBOLS.LABEL + expandedParts.join(URI_TEMPLATE_SYMBOLS.LABEL);

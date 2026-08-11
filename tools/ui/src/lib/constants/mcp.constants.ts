@@ -36,11 +36,14 @@ export const DEFAULT_MCP_CONFIG = {
 
 export const MCP_SERVER_ID_PREFIX = 'LlamaUI-MCP-Server';
 
-export const MCP_RECONNECT_INITIAL_DELAY = 1000;
-export const MCP_RECONNECT_BACKOFF_MULTIPLIER = 2;
-export const MCP_RECONNECT_MAX_DELAY = 30000;
-/** Per-attempt timeout for a single reconnection attempt before giving up and backing off. */
-export const MCP_RECONNECT_ATTEMPT_TIMEOUT_MS = 15_000;
+/** Backoff policy for reconnecting to a dropped MCP server. */
+export const MCP_RECONNECT = {
+	/** Per-attempt timeout for a single reconnection attempt before giving up and backing off. */
+	ATTEMPT_TIMEOUT_MS: 15_000,
+	BACKOFF_MULTIPLIER: 2,
+	INITIAL_DELAY: 1000,
+	MAX_DELAY: 30000
+};
 
 /** Maximum number of MCP server avatars to display in the chat form */
 export const MAX_DISPLAYED_MCP_AVATARS = 4;
@@ -48,40 +51,45 @@ export const MAX_DISPLAYED_MCP_AVATARS = 4;
 /** Expected count when two theme-less icons represent a light/dark pair */
 export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
 
-/** CORS proxy URL query parameter name */
-export const CORS_PROXY_URL_PARAM = 'url';
+/** CORS proxy connection settings */
+export const CORS_PROXY = {
+	/** Header prefix for headers that should be forwarded by the CORS proxy */
+	HEADER_PREFIX: 'x-llama-server-proxy-header-',
+	/** CORS proxy URL query parameter name */
+	URL_PARAM: 'url'
+} as const;
 
-/** Header prefix for headers that should be forwarded by the CORS proxy */
-export const CORS_PROXY_HEADER_PREFIX = 'x-llama-server-proxy-header-';
+/** HTTP header handling for API and MCP requests. */
+export const HEADERS = {
+	/** Canonical casing for the Authorization header (RFC 7235) */
+	AUTHORIZATION: 'Authorization',
+	/** Bearer scheme prefix used for Authorization headers (RFC 6750) */
+	BEARER: 'Bearer ',
+	/** Content-Type HTTP header name */
+	CONTENT_TYPE: 'Content-Type',
 
-/** Number of trailing characters to keep visible when partially redacting mcp-session-id */
-export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
+	/** Partial-redaction rules for MCP headers: header name -> visible trailing chars */
+	PARTIAL_REDACT: new Map<string, number>([['mcp-session-id', 5]]),
 
-/** Partial-redaction rules for MCP headers: header name -> visible trailing chars */
-export const MCP_PARTIAL_REDACT_HEADERS = new Map<string, number>([
-	['mcp-session-id', MCP_SESSION_ID_VISIBLE_CHARS]
-]);
+	/** Header names whose values should be redacted in diagnostic logs */
+	REDACTED: new Set([
+		'authorization',
+		'api-key',
+		'cookie',
+		'mcp-session-id',
+		'proxy-authorization',
+		'set-cookie',
+		'x-auth-token',
+		'x-api-key'
+	])
+};
 
-/** Bearer scheme prefix used for Authorization headers (RFC 6750) */
-export const BEARER_PREFIX = 'Bearer ';
-
-/** Canonical casing for the Authorization header (RFC 7235) */
-export const AUTHORIZATION_HEADER = 'Authorization';
-
-/** Content-Type HTTP header name */
-export const CONTENT_TYPE_HEADER = 'Content-Type';
-
-/** Header names whose values should be redacted in diagnostic logs */
-export const REDACTED_HEADERS = new Set([
-	'authorization',
-	'api-key',
-	'cookie',
-	'mcp-session-id',
-	'proxy-authorization',
-	'set-cookie',
-	'x-auth-token',
-	'x-api-key'
-]);
+/** Standard SSE endpoint path indicators */
+export const MCP_SSE = {
+	ENDPOINT: '/sse',
+	ENDPOINT_QUERY: '/sse?',
+	ENDPOINT_SLASH: '/sse/'
+} as const;
 
 /** Human-readable labels for MCP transport types */
 export const MCP_TRANSPORT_LABELS: Record<MCPTransportType, string> = {
@@ -96,8 +104,3 @@ export const MCP_TRANSPORT_ICONS: Record<MCPTransportType, Component> = {
 	[MCPTransportType.STREAMABLE_HTTP]: Globe,
 	[MCPTransportType.WEBSOCKET]: Zap
 };
-
-/** Standard SSE endpoint path indicators */
-export const MCP_SSE_ENDPOINT = '/sse';
-export const MCP_SSE_ENDPOINT_SLASH = '/sse/';
-export const MCP_SSE_ENDPOINT_QUERY = '/sse?';

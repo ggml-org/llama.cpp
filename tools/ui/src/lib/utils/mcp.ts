@@ -15,9 +15,7 @@ import {
 	FILE_EXTENSION_REGEX,
 	IMAGE_FILE_EXTENSION_REGEX,
 	MCP_SERVER_ID_PREFIX,
-	MCP_SSE_ENDPOINT,
-	MCP_SSE_ENDPOINT_QUERY,
-	MCP_SSE_ENDPOINT_SLASH,
+	MCP_SSE,
 	MIME_TYPE_PREFIXES,
 	MIME_TYPE_SUBSTRINGS,
 	PATH_SEPARATOR,
@@ -46,9 +44,9 @@ export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	}
 
 	if (
-		normalized.endsWith(MCP_SSE_ENDPOINT) ||
-		normalized.endsWith(MCP_SSE_ENDPOINT_SLASH) ||
-		normalized.includes(MCP_SSE_ENDPOINT_QUERY)
+		normalized.endsWith(MCP_SSE.ENDPOINT) ||
+		normalized.endsWith(MCP_SSE.ENDPOINT_SLASH) ||
+		normalized.includes(MCP_SSE.ENDPOINT_QUERY)
 	) {
 		return MCPTransportType.SSE;
 	}

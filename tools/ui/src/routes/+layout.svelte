@@ -8,10 +8,9 @@
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
-		AUTHORIZATION_HEADER,
-		BEARER_PREFIX,
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
+		HEADERS,
 		ROUTES,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
@@ -117,8 +116,8 @@
 				page.status !== 403
 			) {
 				const headers: Record<string, string> = {
-					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`,
-					'Content-Type': 'application/json'
+					'Content-Type': 'application/json',
+					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey.trim()}`
 				};
 
 				fetch(`${base}/props`, { headers })

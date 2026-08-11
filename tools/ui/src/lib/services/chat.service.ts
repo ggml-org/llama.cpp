@@ -1302,7 +1302,11 @@ export class ChatService {
 
 		for (const legacyContextFile of legacyContextFiles) {
 			contentParts.push({
-				text: formatAttachmentText(AttachmentLabel.FILE, legacyContextFile.name, legacyContextFile.content),
+				text: formatAttachmentText(
+					AttachmentLabel.FILE,
+					legacyContextFile.name,
+					legacyContextFile.content
+				),
 				type: ContentPartType.TEXT
 			});
 		}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { TRIM_LEADING_PADDING_REGEX, TRIM_TRAILING_PADDING_REGEX } from '$lib/constants';
+	import { CODE_BLOCK } from '$lib/constants';
 	import { ColorMode } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import type { ContentToken, SourceHistoryEntry } from '$lib/utils';
@@ -105,8 +105,8 @@
 		const prefix = open[0];
 		const language = open[1].trim().split(/\s+/)[0] ?? '';
 		const content = segment.slice(prefix.length, -3);
-		const leading = content.match(TRIM_LEADING_PADDING_REGEX)?.[0] ?? '';
-		const trailing = content.match(TRIM_TRAILING_PADDING_REGEX)?.[0] ?? '';
+		const leading = content.match(CODE_BLOCK.TRIM_LEADING_PADDING_REGEX)?.[0] ?? '';
+		const trailing = content.match(CODE_BLOCK.TRIM_TRAILING_PADDING_REGEX)?.[0] ?? '';
 		const core = content.slice(leading.length, content.length - trailing.length);
 		// autoDetect off: re-guessing the language on every keystroke
 		// costs ~38ms a call and flickers while typing

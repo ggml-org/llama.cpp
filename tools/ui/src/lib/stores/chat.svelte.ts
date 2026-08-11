@@ -12,9 +12,8 @@
  */
 
 import {
-	CONTENT_TYPE_HEADER,
-	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
-	MAX_INACTIVE_CONVERSATION_STATES,
+	HEADERS,
+	INACTIVE_CONVERSATION,
 	STREAM_RESUME_RETRY_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
@@ -234,7 +233,7 @@ class ChatStore {
 			// POST the one conv id we are probing
 			listResp = await fetch(`./v1/streams/lookup`, {
 				body: JSON.stringify({ conversation_ids: [convId] }),
-				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
+				headers: { ...getAuthHeaders(), [HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON },
 				method: 'POST'
 			});
 		} catch (e) {
@@ -808,7 +807,7 @@ class ChatStore {
 		try {
 			const resp = await fetch('./v1/streams/lookup', {
 				body: JSON.stringify({ conversation_ids: lookupIds }),
-				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
+				headers: { ...getAuthHeaders(), [HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON },
 				method: 'POST'
 			});
 
@@ -930,8 +929,8 @@ class ChatStore {
 
 		for (const { convId, lastAccessed } of cleanupCandidates) {
 			if (
-				cleanupCandidates.length - cleanedUp > MAX_INACTIVE_CONVERSATION_STATES ||
-				now - lastAccessed > INACTIVE_CONVERSATION_STATE_MAX_AGE_MS
+				cleanupCandidates.length - cleanedUp > INACTIVE_CONVERSATION.MAX_STATES ||
+				now - lastAccessed > INACTIVE_CONVERSATION.MAX_AGE_MS
 			) {
 				this.cleanupConversationState(convId);
 				cleanedUp++;

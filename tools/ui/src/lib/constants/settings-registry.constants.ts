@@ -3,10 +3,7 @@ import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
-import {
-	FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
-	FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH
-} from './working-directory.constants';
+import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import {
 	AlertTriangle,
 	Code,
@@ -105,14 +102,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				type: SettingsFieldType.INPUT
 			},
 			{
-				defaultValue: FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
+				defaultValue: FILE_GLOB_SEARCH_PICKERS.DEFAULT_SEARCH_DEPTH,
 				help: 'How many directory levels below the working directory the @-mention file search descends. Larger values surface deeply nested files but take longer on large trees.',
 				isPositiveInteger: true,
 				key: SETTINGS_KEYS.MENTION_SEARCH_MAX_DEPTH,
 				label: 'Mention search depth',
-				max: FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH,
+				max: FILE_GLOB_SEARCH_PICKERS.MAX_SEARCH_DEPTH,
 				min: 1,
-				placeholder: `${FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH}`,
+				placeholder: `${FILE_GLOB_SEARCH_PICKERS.DEFAULT_SEARCH_DEPTH}`,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				type: SettingsFieldType.INPUT
 			}

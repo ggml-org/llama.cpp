@@ -9,8 +9,8 @@ export const MIME_TYPE_PREFIXES = {
 } as const;
 
 export const MIME_TYPE_SUBSTRINGS = {
-	JSON: 'json',
 	JAVASCRIPT: 'javascript',
+	JSON: 'json',
 	TYPESCRIPT: 'typescript'
 } as const;
 

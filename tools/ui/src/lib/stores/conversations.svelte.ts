@@ -21,20 +21,10 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import {
-	EXPORT_CONV_ID_TRIM_LENGTH,
-	EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH,
-	EXPORT_CONV_NONALNUM_REPLACEMENT,
-	ISO_DATE_TIME_SEPARATOR,
-	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
-	ISO_TIME_SEPARATOR,
-	ISO_TIME_SEPARATOR_REPLACEMENT,
-	ISO_TIMESTAMP_SLICE_LENGTH,
-	MULTIPLE_UNDERSCORE_REGEX,
+	EXPORT_CONV,
 	NEWLINE,
-	NON_ALPHANUMERIC_REGEX,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
 	ROUTES,
-	SESSION_HARNESS,
 	ZIP_MAGIC
 } from '$lib/constants';
 import {
@@ -1002,18 +992,18 @@ class ConversationsStore {
 	): string {
 		const conversationName = (conversation.name ?? '').trim().toLowerCase();
 		const sanitizedName = conversationName
-			.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT)
-			.replace(MULTIPLE_UNDERSCORE_REGEX, '_')
-			.substring(0, EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH);
+			.replace(EXPORT_CONV.NON_ALPHANUMERIC_REGEX, EXPORT_CONV.NONALNUM_REPLACEMENT)
+			.replace(EXPORT_CONV.MULTIPLE_UNDERSCORE_REGEX, '_')
+			.substring(0, EXPORT_CONV.NAME_SUFFIX_MAX_LENGTH);
 		// If we have messages, use the timestamp of the newest message
 		const referenceDate = msgs?.length
 			? new Date(Math.max(...msgs.map((m) => m.timestamp)))
 			: new Date();
-		const iso = referenceDate.toISOString().slice(0, ISO_TIMESTAMP_SLICE_LENGTH);
+		const iso = referenceDate.toISOString().slice(0, EXPORT_CONV.ISO_TIMESTAMP_SLICE);
 		const formattedDate = iso
-			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
-			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
-		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
+			.replace(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR, EXPORT_CONV.ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
+			.replaceAll(EXPORT_CONV.ISO_TIME_SEPARATOR, EXPORT_CONV.ISO_TIME_SEPARATOR_REPLACEMENT);
+		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV.ID_TRIM_LENGTH) ?? '';
 
 		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
 	}
@@ -1028,7 +1018,7 @@ class ConversationsStore {
 	serializeSessionToJsonl(data: ExportedConversation): string {
 		const { conv, messages } = data;
 		const sessionLine = JSON.stringify({
-			harness: SESSION_HARNESS,
+			harness: EXPORT_CONV.HARNESS,
 			type: SessionRecordType.SESSION,
 			...conv
 		});
@@ -1209,7 +1199,7 @@ class ConversationsStore {
 			files[entryName] = strToU8(this.serializeSessionToJsonl(session));
 		}
 
-		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+		const archiveName = `${new Date().toISOString().split(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
 		const zipped = zipSync(files);
 		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
 
