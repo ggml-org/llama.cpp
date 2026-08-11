@@ -17,6 +17,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -1465,6 +1466,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
+    act_policy       (params.act_policy),
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
@@ -1489,6 +1491,10 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+
+    if (llama_act_policy_prec_a8(act_policy, w)) {
+        ggml_mul_mat_set_prec(res, GGML_PREC_A8);
+    }
 
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
@@ -1522,6 +1528,10 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
+    if (llama_act_policy_prec_a8(act_policy, w)) {
+        ggml_mul_mat_set_prec(res, GGML_PREC_A8);
+    }
+
     if (w_s) {
         const int64_t n_expert = w_s->ne[0];
         const int64_t n_tokens = cur->ne[2];
@@ -1530,6 +1540,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         s = ggml_get_rows(ctx0, s, ids);
         res = ggml_mul(ctx0, res, s);
     }
+
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
         if (lw == nullptr) {
