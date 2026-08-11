@@ -99,6 +99,7 @@ jobs:
         run: |
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DCMAKE_HIP_COMPILER_LAUNCHER=ccache \
             -DGPU_TARGETS="gfx1030" \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
