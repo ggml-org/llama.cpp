@@ -62,13 +62,10 @@ export const IMAGE_MIME_TO_EXTENSION: Record<string, string> = {
 export const AUDIO_MIME_TO_EXTENSION: Record<string, string> = {
 	[MimeTypeAudio.MP3_MPEG]: 'mp3',
 	[MimeTypeAudio.MP3]: 'mp3',
-	[MimeTypeAudio.MP4]: 'm4a',
 	[MimeTypeAudio.WAV]: 'wav',
 	[MimeTypeAudio.WAVE]: 'wav',
 	[MimeTypeAudio.X_WAV]: 'wav',
 	[MimeTypeAudio.X_WAVE]: 'wav',
 	[MimeTypeAudio.VND_WAVE]: 'wav',
 	[MimeTypeAudio.X_PN_WAV]: 'wav',
-	[MimeTypeAudio.WEBM]: 'webm',
-	[MimeTypeAudio.WEBM_OPUS]: 'opus'
 } as const;

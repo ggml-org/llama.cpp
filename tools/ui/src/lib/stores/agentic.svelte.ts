@@ -25,7 +25,9 @@ import {
 	DATA_URI_BASE64_REGEX,
 	DEFAULT_IMAGE_EXTENSION,
 	IMAGE_MIME_TO_EXTENSION,
-	MCP_ATTACHMENT_NAME_PREFIX
+	AUDIO_MIME_TO_EXTENSION,
+	MCP_ATTACHMENT_NAME_PREFIX,
+	AUDIO_FILE_EXTENSION_REGEX
 } from '$lib/constants';
 import { BuiltInTool, ToolPermissionDecision, ToolSource } from '$lib/enums';
 import {

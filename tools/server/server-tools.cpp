@@ -966,16 +966,18 @@ static std::string get_mime_from_extension(const std::string & path) {
         {".tiff", "image/tiff"},
         {".tif",  "image/tiff"},
         {".gif",  "image/gif"},
-        // Audio
+        // Audio — only wav and mp3: the model's input_audio API
+        // only accepts these two formats (FileTypeAudio.WAV | MP3).
         {".mp3",  "audio/mpeg"},
         {".wav",  "audio/wav"},
-        {".ogg",  "audio/ogg"},
-        {".flac", "audio/flac"},
-        {".m4a",  "audio/mp4"},
-        {".opus", "audio/opus"},
     };
+
     auto ext = fs::path(path).extension().string();
-    auto it = mime_map.find(ext);
+    std::string ext_lower;
+    ext_lower.reserve(ext.size());
+    for (char c : ext) ext_lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    auto it = mime_map.find(ext_lower);
     return (it != mime_map.end()) ? it->second : "application/octet-stream";
 }
 
@@ -991,7 +993,10 @@ struct server_tool_read_media : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Read the content of a media file (audio, image)."},
+                {"description",
+                    "Read the content of a media file (image or audio).\n"
+                    " Audio: .wav, .mp3.\n"
+                    " Images: .png, .jpg, .jpeg, .webp, .bmp, .tiff, .gif."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
@@ -1024,6 +1029,13 @@ struct server_tool_read_media : server_tool {
         }
 
         std::string mime = get_mime_from_extension(path);
+
+        // Reject unknown/unrecognized file extensions instead of producing
+        // a multi-MB data URI that inflates the model context with garbage.
+        if (mime == "application/octet-stream") {
+            return {{"error", "unrecognized or unsupported extension: " + path}};
+        }
+
         std::string b64  = base64::encode(content.data(), content.size());
 
         // Return as plain_text_response with a data URI line so the UI can
