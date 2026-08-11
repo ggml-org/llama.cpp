@@ -558,24 +558,26 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
 template <bool use_native, int width = WARP_SIZE>
 static __device__ __forceinline__ float ggml_cuda_warp_reduce_sum_gfx1030(float x) {
 #if defined(GGML_USE_HIP) && defined(RDNA2)
+#if __has_builtin(__builtin_amdgcn_wave_reduce_fadd_f32)
     if constexpr (use_native && width == 32) {
         return __builtin_amdgcn_wave_reduce_fadd_f32(x, 0);
     }
-#else
-    GGML_UNUSED(use_native);
 #endif
+#endif
+    GGML_UNUSED(use_native);
     return warp_reduce_sum<width>(x);
 }
 
 template <bool use_native, int width = WARP_SIZE>
 static __device__ __forceinline__ float ggml_cuda_warp_reduce_max_gfx1030(float x) {
 #if defined(GGML_USE_HIP) && defined(RDNA2)
+#if __has_builtin(__builtin_amdgcn_wave_reduce_fmax_f32)
     if constexpr (use_native && width == 32) {
         return __builtin_amdgcn_wave_reduce_fmax_f32(x, 0);
     }
-#else
-    GGML_UNUSED(use_native);
 #endif
+#endif
+    GGML_UNUSED(use_native);
     return warp_reduce_max<width>(x);
 }
 
@@ -1359,6 +1361,15 @@ struct ggml_cuda_graph {
         if (graph != nullptr) {
             CUDA_CHECK(cudaGraphDestroy(graph));
         }
+        int previous_device = 0;
+        CUDA_CHECK(cudaGetDevice(&previous_device));
+        for (const auto & entry : q8_cache_entries) {
+            if (entry.data != nullptr) {
+                ggml_cuda_set_device(entry.device);
+                CUDA_CHECK(cudaFree(entry.data));
+            }
+        }
+        CUDA_CHECK(cudaSetDevice(previous_device));
     }
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
@@ -1375,6 +1386,213 @@ struct ggml_cuda_graph {
         size_t   node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
     };
     std::vector<node_properties> node_props;
+
+    // Exact standard-Q8_1 activation storage follows this graph's lifetime. Entries are keyed by
+    // source version and execution layout; readiness is reset on every graph execution.
+    struct q8_cache_telemetry_entry {
+        const ggml_tensor * source = nullptr;
+        void * source_data = nullptr;
+        ggml_type consumer_type = GGML_TYPE_COUNT;
+        int64_t padded_k = 0;
+        int stream = 0;
+        int first_node = -1;
+        int last_node = -1;
+        size_t q8_bytes = 0;
+        size_t calls = 0;
+        bool lifetime_safe = true;
+    };
+    std::vector<q8_cache_telemetry_entry> q8_cache_telemetry;
+    bool q8_cache_telemetry_reported = false;
+    size_t q8_cache_last_calls = 0;
+    size_t q8_cache_last_reuses = 0;
+    size_t q8_cache_last_bytes = 0;
+    size_t q8_cache_hits = 0;
+    size_t q8_cache_misses = 0;
+    size_t q8_cache_last_hits = 0;
+
+    struct q8_cache_entry {
+        const ggml_tensor * source = nullptr;
+        void * source_data = nullptr;
+        ggml_type consumer_type = GGML_TYPE_COUNT;
+        int64_t padded_k = 0;
+        int stream = 0;
+        size_t q8_bytes = 0;
+        void * data = nullptr;
+        int device = 0;
+        bool ready = false;
+    };
+    std::vector<q8_cache_entry> q8_cache_entries;
+    bool q8_cache_available = true;
+    bool q8_cache_enabled = false;
+
+    void q8_cache_telemetry_begin(bool cache_enabled) {
+        q8_cache_telemetry.clear();
+        q8_cache_enabled = cache_enabled && q8_cache_available;
+        q8_cache_hits = 0;
+        q8_cache_misses = 0;
+        for (auto & entry : q8_cache_entries) {
+            entry.ready = false;
+        }
+    }
+
+    void q8_cache_telemetry_record(
+            const ggml_cgraph * cgraph, int node_index, int stream, const ggml_tensor * source,
+            ggml_type consumer_type, int64_t padded_k, size_t q8_bytes) {
+        auto same_key = [&](const q8_cache_telemetry_entry & record) {
+            return record.source == source && record.consumer_type == consumer_type &&
+                record.padded_k == padded_k && record.stream == stream;
+        };
+        auto it = std::find_if(q8_cache_telemetry.begin(), q8_cache_telemetry.end(), same_key);
+        if (it == q8_cache_telemetry.end()) {
+            q8_cache_telemetry.push_back({
+                source, source->data, consumer_type, padded_k, stream,
+                node_index, node_index, q8_bytes, 1, true,
+            });
+            return;
+        }
+
+        if (it->source_data != source->data || it->q8_bytes != q8_bytes) {
+            it->lifetime_safe = false;
+        }
+        const uintptr_t source_begin = reinterpret_cast<uintptr_t>(source->data);
+        const uintptr_t source_end = source_begin + ggml_nbytes(source);
+        for (int i = it->last_node + 1; i < node_index; ++i) {
+            const ggml_tensor * output = cgraph->nodes[i];
+            if (output->data == nullptr || output == source || output->op == GGML_OP_RESHAPE ||
+                    output->op == GGML_OP_TRANSPOSE || output->op == GGML_OP_VIEW ||
+                    output->op == GGML_OP_PERMUTE || output->op == GGML_OP_NONE) {
+                continue;
+            }
+            const uintptr_t output_begin = reinterpret_cast<uintptr_t>(output->data);
+            const uintptr_t output_end = output_begin + ggml_nbytes(output);
+            if (output_begin < source_end && source_begin < output_end) {
+                it->lifetime_safe = false;
+                break;
+            }
+        }
+        it->last_node = node_index;
+        ++it->calls;
+    }
+
+    void * q8_cache_producer(
+            int stream, const ggml_tensor * source, ggml_type consumer_type,
+            int64_t padded_k, size_t q8_bytes) {
+        if (!q8_cache_enabled) {
+            return nullptr;
+        }
+        auto same_key = [&](const q8_cache_entry & entry) {
+            return entry.source == source && entry.source_data == source->data &&
+                entry.consumer_type == consumer_type && entry.padded_k == padded_k &&
+                entry.stream == stream && entry.q8_bytes == q8_bytes;
+        };
+        auto it = std::find_if(q8_cache_entries.begin(), q8_cache_entries.end(), same_key);
+        if (it == q8_cache_entries.end()) {
+            return nullptr;
+        }
+        it->ready = true;
+        return it->data;
+    }
+
+    bool q8_cache_lookup(
+            const ggml_cgraph * cgraph, int node_index, int stream, const ggml_tensor * source,
+            ggml_type consumer_type, int64_t padded_k, size_t q8_bytes, void ** data) {
+        q8_cache_telemetry_record(cgraph, node_index, stream, source, consumer_type, padded_k, q8_bytes);
+        *data = nullptr;
+        if (!q8_cache_enabled) {
+            return false;
+        }
+
+        auto same_key = [&](const q8_cache_entry & entry) {
+            return entry.source == source && entry.source_data == source->data &&
+                entry.consumer_type == consumer_type && entry.padded_k == padded_k &&
+                entry.stream == stream && entry.q8_bytes == q8_bytes;
+        };
+        auto cache_it = std::find_if(q8_cache_entries.begin(), q8_cache_entries.end(), same_key);
+        if (cache_it == q8_cache_entries.end()) {
+            ++q8_cache_misses;
+            return false;
+        }
+        auto telemetry_it = std::find_if(q8_cache_telemetry.begin(), q8_cache_telemetry.end(),
+            [&](const q8_cache_telemetry_entry & record) {
+                return record.source == source && record.consumer_type == consumer_type &&
+                    record.padded_k == padded_k && record.stream == stream;
+            });
+        GGML_ASSERT(telemetry_it != q8_cache_telemetry.end());
+
+        *data = cache_it->data;
+        const bool hit = cache_it->ready && telemetry_it->lifetime_safe;
+        cache_it->ready = true;
+        q8_cache_hits += hit;
+        q8_cache_misses += !hit;
+        return hit;
+    }
+
+    void q8_cache_telemetry_end(int device, bool report) {
+        size_t calls = 0;
+        size_t reuses = 0;
+        size_t bytes = 0;
+        for (const auto & record : q8_cache_telemetry) {
+            calls += record.calls;
+            if (record.lifetime_safe && record.calls > 1) {
+                reuses += record.calls - 1;
+                bytes += (record.calls - 1)*record.q8_bytes;
+            }
+        }
+        if (q8_cache_enabled) {
+            for (const auto & record : q8_cache_telemetry) {
+                if (!record.lifetime_safe || record.calls <= 1) {
+                    continue;
+                }
+                auto same_key = [&](const q8_cache_entry & entry) {
+                    return entry.source == record.source && entry.source_data == record.source_data &&
+                        entry.consumer_type == record.consumer_type && entry.padded_k == record.padded_k &&
+                        entry.stream == record.stream && entry.q8_bytes == record.q8_bytes;
+                };
+                if (std::find_if(q8_cache_entries.begin(), q8_cache_entries.end(), same_key) != q8_cache_entries.end()) {
+                    continue;
+                }
+                q8_cache_entry entry;
+                entry.source = record.source;
+                entry.source_data = record.source_data;
+                entry.consumer_type = record.consumer_type;
+                entry.padded_k = record.padded_k;
+                entry.stream = record.stream;
+                entry.q8_bytes = record.q8_bytes;
+                entry.device = device;
+                ggml_cuda_set_device(device);
+                const cudaError_t alloc_result = cudaMalloc(&entry.data, entry.q8_bytes);
+                if (alloc_result != cudaSuccess) {
+                    GGML_LOG_WARN("gfx1030 Q8 cache allocation failed on device %d: %s; disabling this graph cache\n",
+                        device, cudaGetErrorString(alloc_result));
+                    (void) cudaGetLastError();
+                    q8_cache_available = false;
+                    q8_cache_enabled = false;
+                    break;
+                }
+                q8_cache_entries.push_back(entry);
+            }
+        }
+        if (!report || calls == 0 || (q8_cache_telemetry_reported && calls == q8_cache_last_calls &&
+                reuses == q8_cache_last_reuses && bytes == q8_cache_last_bytes &&
+                q8_cache_hits == q8_cache_last_hits)) {
+            return;
+        }
+        q8_cache_telemetry_reported = true;
+        q8_cache_last_calls = calls;
+        q8_cache_last_reuses = reuses;
+        q8_cache_last_bytes = bytes;
+        q8_cache_last_hits = q8_cache_hits;
+        GGML_LOG_INFO("gfx1030 Q8 cache telemetry: device=%d calls=%zu sources=%zu reusable=%zu bytes=%zu entries=%zu hits=%zu misses=%zu\n",
+            device, calls, q8_cache_telemetry.size(), reuses, bytes, q8_cache_entries.size(),
+            q8_cache_hits, q8_cache_misses);
+        for (const auto & record : q8_cache_telemetry) {
+            if (record.calls > 1) {
+                GGML_LOG_INFO("gfx1030 Q8 cache source: device=%d name=%s calls=%zu stream=%d nodes=%d..%d safe=%d bytes=%zu\n",
+                    device, record.source->name, record.calls, record.stream, record.first_node,
+                    record.last_node, record.lifetime_safe, record.q8_bytes);
+            }
+        }
+    }
 
     bool is_enabled() const {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
@@ -1550,6 +1768,41 @@ struct ggml_backend_cuda_context {
     std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
 
     int64_t last_graph_eviction_sweep = 0;
+
+    // Set only while directly evaluating or capturing one graph. Graph replay uses the pointers
+    // already captured in its kernel nodes and does not call the cache planner.
+    ggml_cuda_graph * active_graph = nullptr;
+    const ggml_cgraph * active_cgraph = nullptr;
+    int active_node_index = -1;
+
+    void q8_cache_telemetry_record(
+            const ggml_tensor * source, ggml_type consumer_type, int64_t padded_k, size_t q8_bytes) {
+        if (active_graph != nullptr && active_cgraph != nullptr && active_node_index >= 0) {
+            active_graph->q8_cache_telemetry_record(
+                active_cgraph, active_node_index, curr_stream_no, source, consumer_type, padded_k, q8_bytes);
+        }
+    }
+
+    void * q8_cache_producer(
+            const ggml_tensor * source, ggml_type consumer_type, int64_t padded_k, size_t q8_bytes) {
+        if (active_graph == nullptr || active_cgraph == nullptr || active_node_index < 0) {
+            return nullptr;
+        }
+        return active_graph->q8_cache_producer(
+            curr_stream_no, source, consumer_type, padded_k, q8_bytes);
+    }
+
+    bool q8_cache_lookup(
+            const ggml_tensor * source, ggml_type consumer_type, int64_t padded_k,
+            size_t q8_bytes, void ** data) {
+        if (active_graph == nullptr || active_cgraph == nullptr || active_node_index < 0) {
+            *data = nullptr;
+            return false;
+        }
+        return active_graph->q8_cache_lookup(
+            active_cgraph, active_node_index, curr_stream_no, source,
+            consumer_type, padded_k, q8_bytes, data);
+    }
 
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
         const int64_t time_now = ggml_time_us();

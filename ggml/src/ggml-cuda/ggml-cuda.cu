@@ -3393,6 +3393,44 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
+static bool ggml_cuda_use_gfx1030_q8_cache() {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = []() {
+        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
+        const char * cache = std::getenv("GGML_HIP_GFX1030_Q8_CACHE");
+        return native != nullptr && std::atoi(native) != 0 &&
+               cache != nullptr && std::atoi(cache) != 0;
+    }();
+    if (!enabled) {
+        return false;
+    }
+
+    const int device = ggml_cuda_get_device();
+    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+#else
+    return false;
+#endif
+}
+
+static bool ggml_cuda_use_gfx1030_q8_cache_telemetry() {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = []() {
+        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
+        const char * telemetry = std::getenv("GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY");
+        return native != nullptr && std::atoi(native) != 0 &&
+               telemetry != nullptr && std::atoi(telemetry) != 0;
+    }();
+    if (!enabled) {
+        return false;
+    }
+
+    const int device = ggml_cuda_get_device();
+    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+#else
+    return false;
+#endif
+}
+
 static bool ggml_cuda_use_gfx1030_q8_1_fusion() {
 #if defined(GGML_USE_HIP)
     // Environment configuration is immutable after backend initialization;
@@ -4160,7 +4198,31 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
-        ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
+        ggml_tensor * mul = cgraph->nodes[i + 1];
+        void * q8_cache = nullptr;
+#ifdef USE_CUDA_GRAPH
+        if (ggml_cuda_use_gfx1030_q8_cache()) {
+            const ggml_tensor * rms_src = node->src[0];
+            const ggml_tensor * mul_src = mul->src[0] == node ? mul->src[1] : mul->src[0];
+            const bool producer_ok = (mul->src[0] == node || mul->src[1] == node) &&
+                rms_src->type == GGML_TYPE_F32 && mul_src->type == GGML_TYPE_F32 && mul->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(rms_src) && ggml_is_contiguous(mul_src) && ggml_is_contiguous(mul) &&
+                rms_src->ne[1] == 1 && rms_src->ne[2] == 1 && rms_src->ne[3] == 1 &&
+                mul_src->ne[0] == rms_src->ne[0] && ggml_nelements(mul_src) == rms_src->ne[0] &&
+                ggml_are_same_shape(rms_src, mul) && rms_src->ne[0] >= 1024 &&
+                rms_src->ne[0] % 1024 == 0 && rms_src->ne[0] % QK8_1 == 0;
+            if (producer_ok) {
+                const size_t q8_bytes = rms_src->ne[0] / QK8_1 * sizeof(block_q8_1);
+                q8_cache = cuda_ctx->q8_cache_producer(
+                    mul, GGML_TYPE_Q8_0, rms_src->ne[0], q8_bytes);
+            }
+        }
+#endif
+        if (q8_cache != nullptr) {
+            ggml_cuda_op_rms_norm_fused_q8_1(*cuda_ctx, node, mul, q8_cache);
+        } else {
+            ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, mul);
+        }
         return 1;
     }
 
@@ -4294,6 +4356,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
+#ifdef USE_CUDA_GRAPH
+                cuda_ctx->active_node_index = i;
+#endif
                 if (is_concurrent_event_active) {
                     GGML_ASSERT(concurrent_event);
 
@@ -4444,6 +4509,14 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     ggml_cuda_graph_set_enabled(cuda_ctx, graph_key);
 
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+    const bool q8_cache_enabled = ggml_cuda_use_gfx1030_q8_cache();
+    const bool q8_cache_telemetry = q8_cache_enabled || ggml_cuda_use_gfx1030_q8_cache_telemetry();
+    if (q8_cache_telemetry) {
+        graph->q8_cache_telemetry_begin(q8_cache_enabled);
+        cuda_ctx->active_graph = graph;
+        cuda_ctx->active_cgraph = cgraph;
+        cuda_ctx->active_node_index = -1;
+    }
     if (graph->is_enabled()) {
         const bool graph_compatible = ggml_cuda_graph_check_compability(cgraph);
         if (graph_compatible) {
@@ -4484,6 +4557,16 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     }
 
     ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
+
+#ifdef USE_CUDA_GRAPH
+    if (cuda_ctx->active_graph != nullptr) {
+        cuda_ctx->active_graph->q8_cache_telemetry_end(
+            cuda_ctx->device, ggml_cuda_use_gfx1030_q8_cache_telemetry());
+        cuda_ctx->active_graph = nullptr;
+        cuda_ctx->active_cgraph = nullptr;
+        cuda_ctx->active_node_index = -1;
+    }
+#endif
 
     return GGML_STATUS_SUCCESS;
 }

@@ -1442,7 +1442,29 @@ static bool mmvq_use_gfx1030_native() {
     return mmvq_use_gfx1030_native(ggml_cuda_info().devices[device].cc);
 }
 
+static bool mmvq_use_gfx1030_q8_cache() {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = [] {
+        const char * cache = std::getenv("GGML_HIP_GFX1030_Q8_CACHE");
+        return cache != nullptr && std::atoi(cache) != 0;
+    }();
+    return enabled && mmvq_use_gfx1030_native();
+#else
+    return false;
+#endif
+}
 
+static bool mmvq_use_gfx1030_q8_cache_telemetry() {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = [] {
+        const char * telemetry = std::getenv("GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY");
+        return telemetry != nullptr && std::atoi(telemetry) != 0;
+    }();
+    return (enabled || mmvq_use_gfx1030_q8_cache()) && mmvq_use_gfx1030_native();
+#else
+    return false;
+#endif
+}
 
 void ggml_cuda_mul_mat_vec_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
@@ -1534,27 +1556,50 @@ void ggml_cuda_mul_mat_vec_q(
     GGML_ASSERT(!use_q4_0_dot8 || !use_q8_1_layout);
     const int64_t nblocks_src1_q8_1 = ne13*ne12 * ne11*ne10_padded / QK8_1;
     const size_t nbytes_src1_q8_1 = nblocks_src1_q8_1 * sizeof(block_q8_1);
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
+    // The first cache contract is standard block_q8_1 TG only. Packed layouts, sum_hi, routed
+    // scatter, and MMQ retain their existing staging allocations.
+    const bool q8_cache_eligible = ids == nullptr && ncols_dst == 1 && src0->type == GGML_TYPE_Q8_0 &&
+        !use_q8_1_layout && !use_q4_0_dot8;
+    void * q8_cache_data = nullptr;
+    bool q8_cache_hit = false;
+#ifdef USE_CUDA_GRAPH
+    if (q8_cache_eligible && mmvq_use_gfx1030_q8_cache()) {
+        q8_cache_hit = ctx.q8_cache_lookup(
+            src1, src0->type, ne10_padded, nbytes_src1_q8_1, &q8_cache_data);
+    } else if (q8_cache_eligible && mmvq_use_gfx1030_q8_cache_telemetry()) {
+        ctx.q8_cache_telemetry_record(src1, src0->type, ne10_padded, nbytes_src1_q8_1);
+    }
+#else
+    GGML_UNUSED(q8_cache_eligible);
+#endif
+
+    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool());
+    if (q8_cache_data == nullptr) {
+        q8_cache_data = src1_q8_1.alloc(nbytes_src1_q8_1);
+    }
     ggml_cuda_pool_alloc<char> src1_sum_hi;
     if (use_q4_0_dot8) {
         src1_sum_hi.alloc(ctx.pool(), nblocks_src1_q8_1 * sizeof(block_q8_1_sum_hi));
     }
-    {
+    const auto quantize_src1 = [&](void * data) {
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
         if (use_q8_1_layout) {
             quantize_row_q8_1_layout_cuda_switch(
-                    q8_1_layout_block_size, src1_d, nullptr, src1_q8_1.get(), src0->type,
+                    q8_1_layout_block_size, src1_d, nullptr, data, src0->type,
                     ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
         } else {
-            quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type,
+            quantize_row_q8_1_cuda(src1_d, nullptr, data, src0->type,
                     ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream,
                     use_q4_0_dot8 ? src1_sum_hi.get() : nullptr);
         }
+    };
+    if (!q8_cache_hit) {
+        quantize_src1(q8_cache_data);
     }
 
-    const void * src1_q8_1_d = src1_q8_1.get();
+    const void * src1_q8_1_d = q8_cache_data;
     const block_q8_1_sum_hi * src1_sum_hi_d = (const block_q8_1_sum_hi *) src1_sum_hi.get();
 
     const int64_t s01 = src0->nb[1] / ts_src0;
