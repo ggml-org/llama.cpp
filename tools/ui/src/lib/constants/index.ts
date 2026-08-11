@@ -4,7 +4,6 @@
 export * from './agentic.constants';
 export * from './api-endpoints.constants';
 export * from './app.constants';
-export * from './attachment-labels.constants';
 export * from './database.constants';
 export * from './reasoning-effort.constants';
 export * from './recommended-mcp-servers.constants';
@@ -14,6 +13,7 @@ export * from './auto-scroll.constants';
 export * from './context-gauge-popup.constants';
 export * from './conversation-import.constants';
 export * from './binary-detection.constants';
+export * from './content-detection.constants';
 export * from './built-in-tools.constants';
 export * from './cache.constants';
 export * from './chat-form.constants';

@@ -1,7 +1,7 @@
 import { ROUTES } from './routes.constants';
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
-import type { Component } from 'svelte';
+import type { DesktopIconStripItem } from '$lib/types';
 
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
@@ -14,16 +14,6 @@ export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
-
-export interface DesktopIconStripItem {
-	icon: Component;
-	tooltip: string;
-	route?: string;
-	activeRouteId?: string;
-	activeRoutePrefix?: string;
-	activeUrlIncludes?: string;
-	keys?: string[];
-}
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{ icon: SquarePen, keys: ['shift', 'cmd', 'o'], route: ROUTES.NEW_CHAT, tooltip: 'New chat' },

@@ -317,7 +317,8 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getBuiltinToolUi, type BuiltinToolUiEntry } from '$lib/constants';
+export { getBuiltinToolUi } from '$lib/constants';
+export type { BuiltinToolUiEntry } from '$lib/types';
 
 // Cryptography utilities
 

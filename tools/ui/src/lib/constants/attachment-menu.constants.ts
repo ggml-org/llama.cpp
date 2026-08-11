@@ -6,28 +6,7 @@ import {
 	AttachmentItemVisibleWhen,
 	AttachmentMenuItemId
 } from '$lib/enums';
-import type { Component } from 'svelte';
-
-export interface AttachmentMenuItem {
-	/** Unique identifier for the item */
-	id: AttachmentMenuItemId;
-	/** Display label */
-	label: string;
-	/** Lucide icon component */
-	icon: Component;
-	/** Extra CSS class applied to the item (e.g. for test selectors) */
-	class?: string;
-	/** Whether the item requires a specific modality to be enabled */
-	enabledWhen?: AttachmentItemEnabledWhen;
-	/** Tooltip shown when the item is disabled */
-	disabledTooltip?: string;
-	/** Callback key on the Props interface to invoke when clicked */
-	action: AttachmentAction;
-	/** Whether the item is only shown when a specific capability is present */
-	visibleWhen?: AttachmentItemVisibleWhen;
-	/** Whether this item has a tooltip even when enabled (uses dynamic text) */
-	hasEnabledTooltip?: boolean;
-}
+import type { AttachmentMenuItem } from '$lib/types';
 
 /**
  * File attachment menu items shown in both the desktop dropdown and mobile sheet.
