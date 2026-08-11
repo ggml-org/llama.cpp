@@ -270,6 +270,11 @@ public:
 
     void update_io(ggml_cgraph * cgraph);
 
+    // The cgraph this decoder currently describes. A cached decoder can be handed a DIFFERENT
+    // cgraph instance with the same graph_key, and every cached ggml_tensor* (and m_cgraph itself)
+    // then dangles, so callers must compare and refresh.
+    const ggml_cgraph * get_cgraph() const { return m_cgraph; }
+
     inline static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
     }
@@ -280,6 +285,16 @@ public:
 
     inline static bool is_inp_emb(const ggml_tensor * tensor, const ggml_tensor * op) {
         return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
+    }
+
+    // A 2-D float graph input feeding a matmul as src[1]. Speculative decoding hands the draft the
+    // target's hidden features this way ([n_embd, n_tokens], with no GET_ROWS lookup, so none of the
+    // other seeds match it) and the token count differs between the prompt pass and the shorter
+    // draft blocks, so its token dim must stay dynamic.
+    inline static bool is_inp_embd_2d(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return (tensor->flags & GGML_TENSOR_FLAG_INPUT) && tensor->op == GGML_OP_NONE &&
+               tensor->type == GGML_TYPE_F32 && tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+               op->op == GGML_OP_MUL_MAT && tensor == op->src[1];
     }
 
     inline static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {

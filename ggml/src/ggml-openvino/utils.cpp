@@ -232,7 +232,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
             ggml_decoder->set_compute_params(c_params);
             ggml_decoder->set_model_params(m_params);
-            if (old_m_params.kv_buffer_changed(m_params)) {
+            // The decoder caches a ggml_tensor* for every graph input and output, and m_cgraph
+            // itself. A cached decoder is keyed only on (n_nodes, first/last node name), so a
+            // DIFFERENT cgraph instance with the same key can hit it -- speculative decoding
+            // rebuilds its graphs every step with freshly allocated tensors. Those pointers then
+            // dangle, and walking them segfaults (get_tensor_used_op iterates m_cgraph->nodes).
+            // Refresh the IO map whenever the cgraph differs; kv_buffer_changed() alone misses
+            // this because the KV buffer is unchanged across those passes.
+            if (ggml_decoder->get_cgraph() != cgraph || old_m_params.kv_buffer_changed(m_params)) {
                 ggml_decoder->update_io(cgraph);
             }
             ggml_decoder->add_extra_inputs();
@@ -485,7 +492,14 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         ggml_decoder->m_is_prefill = is_prefill;
         ggml_decoder->set_model_params(m_params);
         ggml_decoder->set_compute_params(c_params);
-        if (old_m_params.kv_buffer_changed(m_params)) {
+        // The decoder caches a ggml_tensor* for every graph input and output, and m_cgraph
+        // itself. A cached decoder is keyed only on (n_nodes, first/last node name), so a
+        // DIFFERENT cgraph instance with the same key can hit it -- speculative decoding
+        // rebuilds its graphs every step with freshly allocated tensors. Those pointers then
+        // dangle, and walking them segfaults (get_tensor_used_op iterates m_cgraph->nodes).
+        // Refresh the IO map whenever the cgraph differs; kv_buffer_changed() alone misses
+        // this because the KV buffer is unchanged across those passes.
+        if (ggml_decoder->get_cgraph() != cgraph || old_m_params.kv_buffer_changed(m_params)) {
             ggml_decoder->update_io(cgraph);
         }
         ggml_decoder->add_extra_inputs();
