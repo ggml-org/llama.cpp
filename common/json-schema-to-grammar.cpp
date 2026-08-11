@@ -346,11 +346,17 @@ private:
     }
 
     std::string _visit_pattern(const std::string & pattern, const std::string & name) {
-        if (!(pattern.front() == '^' && pattern.back() == '$')) {
-            _errors.push_back("Pattern must start with '^' and end with '$'");
-            return "";
+        std::string sub_pattern = pattern;
+        if (!sub_pattern.empty() && sub_pattern.front() == '^') {
+            sub_pattern = sub_pattern.substr(1);
+        } else {
+            sub_pattern = ".*" + sub_pattern;
         }
-        std::string sub_pattern = pattern.substr(1, pattern.length() - 2);
+        if (!sub_pattern.empty() && sub_pattern.back() == '$') {
+            sub_pattern.pop_back();
+        } else {
+            sub_pattern += ".*";
+        }
         std::unordered_map<std::string, std::string> sub_rule_ids;
 
         size_t i = 0;
