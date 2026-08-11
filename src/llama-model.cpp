@@ -7,6 +7,9 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#if defined(LLAMA_WEIGHT_CACHE)
+#include "llama-weight-cache.h"
+#endif
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -1031,6 +1034,9 @@ struct llama_model::impl {
 
     // model memory mapped files
     llama_mmaps mappings;
+#if defined(LLAMA_WEIGHT_CACHE)
+    std::unique_ptr<llama_weight_cache> weight_cache;
+#endif
 
     // objects representing data potentially being locked in memory
     llama_mlocks mlock_bufs;
@@ -1620,13 +1626,17 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 buf_map.emplace(idx, buf);
             }
         } else {
-            ggml_backend_buffer_t buf;
-            if (ml.no_alloc) {
+            ggml_backend_buffer_t buf = nullptr;
+#if defined(LLAMA_WEIGHT_CACHE)
+            buf = ml.try_mmap_weight_cache(ctx, buft, use_mlock, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+#endif
+
+            if (!buf && ml.no_alloc) {
                 buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
                 for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
                     t->buffer = buf; // set dummy buffer for weights so that the backend scheduler won't try to allocate them
                 }
-            } else {
+            } else if (!buf) {
                 buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
             }
             if (buf == nullptr) {
@@ -1695,6 +1705,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
     }
+#if defined(LLAMA_WEIGHT_CACHE)
+    pimpl->weight_cache = std::move(ml.weight_cache);
+#endif
 
     return true;
 }

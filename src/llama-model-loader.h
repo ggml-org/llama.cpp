@@ -15,6 +15,10 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#if defined(LLAMA_WEIGHT_CACHE)
+struct llama_weight_cache;
+#endif
+
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
 // lists of buffer types used for each layer
@@ -83,6 +87,9 @@ struct llama_model_loader {
     bool load_mtp;
 
     llama_files files;
+#if defined(LLAMA_WEIGHT_CACHE)
+    std::unique_ptr<llama_weight_cache> weight_cache;
+#endif
     llama_ftype ftype;
     llama_fver  fver;
 
@@ -134,6 +141,8 @@ struct llama_model_loader {
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+
+    ~llama_model_loader();
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
@@ -196,6 +205,14 @@ struct llama_model_loader {
 
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const;
+
+#if defined(LLAMA_WEIGHT_CACHE)
+    ggml_backend_buffer_t try_mmap_weight_cache(
+            struct ggml_context * ctx,
+            ggml_backend_buffer_type_t buft,
+            bool use_mlock,
+            llama_mlocks * mlocks);
+#endif
 
     // Returns false if cancelled by progress_callback
     bool load_all_data(
