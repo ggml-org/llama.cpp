@@ -235,13 +235,13 @@ struct server_slot_stats {
     }
 
     // other derived metrics
-    double n_prompt_tps(int32_t n_prompt_tokens) const {
+    double n_prompt_tps() const {
         const double t_ms = t_prompt_ms();
-        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_tokens : 0.0;
+        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_processed : 0.0;
     }
-    double n_gen_tps(int32_t n_gen_tokens) const {
+    double n_gen_tps() const {
         const double t_ms = t_gen_ms();
-        return t_ms > 0.0 ? 1e3 / t_ms * n_gen_tokens : 0.0;
+        return t_ms > 0.0 ? 1e3 / t_ms * n_predict : 0.0;
     }
 };
 
@@ -576,12 +576,12 @@ struct server_slot {
         timings.prompt_n            = stats.n_prompt_processed;
         timings.prompt_ms           = t_prompt_processing;
         timings.prompt_per_token_ms = t_prompt_processing / stats.n_prompt_processed;
-        timings.prompt_per_second   = stats.n_prompt_tps(stats.n_prompt_processed);
+        timings.prompt_per_second   = stats.n_prompt_tps();
 
         timings.predicted_n            = stats.n_predict;
         timings.predicted_ms           = t_token_generation;
         timings.predicted_per_token_ms = t_token_generation / stats.n_predict;
-        timings.predicted_per_second   = stats.n_gen_tps(stats.n_predict);
+        timings.predicted_per_second   = stats.n_gen_tps();
 
         // Add speculative metrics
         if (stats.n_draft_tokens > 0) {
@@ -634,7 +634,7 @@ struct server_slot {
             return;
         }
 
-        const double n_gen_second     = stats.n_gen_tps(stats.n_predict);
+        const double n_gen_second     = stats.n_gen_tps();
         const double n_gen_second_win = 1e6 / (t_now - t_print_last) * (stats.n_predict - n_decoded_last);
 
         t_print_last = t_now;
@@ -646,7 +646,7 @@ struct server_slot {
     void print_timings_pp() const {
         const double t_prompt_processing = stats.t_prompt_ms();
 
-        const double n_prompt_second = stats.n_prompt_tps(stats.n_prompt_processed);
+        const double n_prompt_second = stats.n_prompt_tps();
         const double f_progress = (float) prompt.n_tokens() / task->n_tokens();
 
         if (t_prompt_processing < 3000.0) {
@@ -662,10 +662,10 @@ struct server_slot {
         const double t_token_generation  = stats.t_gen_ms();
 
         const double t_prompt        = t_prompt_processing / stats.n_prompt_processed;
-        const double n_prompt_second = stats.n_prompt_tps(stats.n_prompt_processed);
+        const double n_prompt_second = stats.n_prompt_tps();
 
         const double t_gen        = t_token_generation / stats.n_predict;
-        const double n_gen_second = stats.n_gen_tps(stats.n_predict);
+        const double n_gen_second = stats.n_gen_tps();
 
         SLT_INF(*this,
                 "prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
