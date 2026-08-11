@@ -23,7 +23,7 @@
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
 	let currentModelParams = $derived.by(() => {
-		modelsStore.propsCacheVersion;
+		void modelsStore.propsCacheVersion;
 
 		if (serverStore.isRouterMode) {
 			const currentModelName = modelsStore.selectedModelName;

@@ -40,8 +40,8 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		);
 	});
 	const modelSupportsThinking = $derived.by(() => {
-		modelsStore.loadedModelIds;
-		modelsStore.propsCacheVersion;
+		void modelsStore.loadedModelIds;
+		void modelsStore.propsCacheVersion;
 
 		if (serverStore.isRouterMode) {
 			const modelId = modelsStore.selectedModelName || conversationModel;
