@@ -328,7 +328,7 @@ inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
     #define GGML_F16_VEC_REDUCE         GGML_F32Cx4_REDUCE
 #endif
 
-#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA)
+#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA) && defined(__ARM_FP16_FORMAT_IEEE)
 
 #define GGML_SIMD
 
