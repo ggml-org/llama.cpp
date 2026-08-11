@@ -68,7 +68,7 @@ std::unique_ptr<llm_graph_context> llama_model_minimax_01::build_arch_graph(cons
 
 class llm_graph_input_la : public llm_graph_input_i {
 public:
-    llm_graph_input_la(const llama_hparams & hparams, const llama_vocab & vocab) : hparams(hparams), vocab(vocab) {}
+    llm_graph_input_la(const llama_hparams & hparams) : hparams(hparams) {}
 
     void set_input(const llama_ubatch * ubatch) override {
         // TODO use real token positions here
@@ -154,7 +154,6 @@ public:
     }
 
     const llama_hparams & hparams;
-    const llama_vocab   & vocab;
 
     ggml_tensor * inp_slopes     = nullptr; // F32 [n_head]
     ggml_tensor * inp_q_decay    = nullptr; // F32 [1, n_head, n_batch]
@@ -188,7 +187,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
 
     llm_graph_input_la * la = nullptr;
 
-    auto inp = std::make_unique<llm_graph_input_la>(hparams, model.vocab);
+    auto inp = std::make_unique<llm_graph_input_la>(hparams);
 
     inp->inp_slopes = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_head);
     ggml_set_input(inp->inp_slopes);

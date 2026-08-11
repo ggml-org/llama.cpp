@@ -2050,11 +2050,6 @@ struct llama_model_minimax_01 : public llama_model_base {
 
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
-        struct ggml_tensor * llm_build_inp_slopes();
-        struct ggml_tensor * llm_build_inp_q_decay();
-        struct ggml_tensor * llm_build_inp_k_decay();
-        struct ggml_tensor * llm_build_inp_diag_decay();
-        struct ggml_tensor * llm_build_inp_seq_ids();
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
