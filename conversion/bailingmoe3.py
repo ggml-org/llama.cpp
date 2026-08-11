@@ -53,6 +53,11 @@ class BailingMoeV3Model(TextModel):
         kv_lora_rank = self.hparams["kv_lora_rank"]
         qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
         qk_rope_head_dim = self.hparams["qk_rope_head_dim"]
+        # Ling-3.0-tiny LoRA-compresses Q as well as KV (q_a_proj -> q_a_layernorm ->
+        # q_b_proj), whereas Ling-3.0-flash has q_lora_rank=None and projects Q directly.
+        # Only emit the key when present; the C++ side treats absent/0 as "direct Q".
+        if (q_lora_rank := self.hparams.get("q_lora_rank")) is not None:
+            self.gguf_writer.add_q_lora_rank(q_lora_rank)
         self.gguf_writer.add_kv_lora_rank(kv_lora_rank)
         self.gguf_writer.add_rope_dimension_count(qk_rope_head_dim)
         self.gguf_writer.add_key_length(kv_lora_rank + qk_rope_head_dim)
