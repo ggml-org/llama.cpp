@@ -47,7 +47,7 @@ export { settingsReferrer } from './settings-referrer.svelte';
 export { permissionsStore } from './permissions.svelte';
 
 // TOOLS
-export { toolsStore, allTools, allToolDefinitions, toolGroups } from './tools.svelte';
+export { toolsStore } from './tools.svelte';
 
 // ENVIRONMENT / META
 export { buildInfoStore } from './build-info.svelte';
