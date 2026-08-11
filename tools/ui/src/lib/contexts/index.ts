@@ -13,7 +13,8 @@ export {
 } from './chat-actions.context';
 
 export {
-	getChatSettingsConfigContext,
-	setChatSettingsConfigContext,
-	type ChatSettingsConfigContext
-} from './chat-settings-config.context';
+	getChatMessageActionsContext,
+	setChatMessageActionsContext,
+	type ChatMessageActionsContext,
+	type ChatMessageDeletionInfo
+} from './chat-message-actions.context';

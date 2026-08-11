@@ -13,40 +13,15 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		siblingInfo?: ChatMessageSiblingInfo | null;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
 		isLastUserMessage?: boolean;
 		nextAssistantMessage?: DatabaseMessage | null;
-		showDeleteDialog: boolean;
-		onEdit: () => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onCopy: () => void;
 	}
 
 	let {
 		class: className = '',
-		deletionInfo,
 		isLastUserMessage = false,
 		message,
-		nextAssistantMessage = null,
-		onConfirmDelete,
-		onCopy,
-		onDelete,
-		onEdit,
-		onForkConversation,
-		onNavigateToSibling,
-		onShowDeleteDialogChange,
-		showDeleteDialog,
-		siblingInfo = null
+		nextAssistantMessage = null
 	}: Props = $props();
 
 	// Get contexts
@@ -132,21 +107,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
-					actionsPosition="right"
-					{deletionInfo}
-					justify="end"
-					{onConfirmDelete}
-					{onCopy}
-					{onDelete}
-					{onEdit}
-					{onForkConversation}
-					{onNavigateToSibling}
-					{onShowDeleteDialogChange}
-					{siblingInfo}
-					{showDeleteDialog}
-					role={MessageRole.USER}
-				/>
+				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
 			</div>
 		{/if}
 	{/if}

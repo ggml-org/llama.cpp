@@ -12,37 +12,10 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		siblingInfo?: ChatMessageSiblingInfo | null;
-		showDeleteDialog: boolean;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
-		onCopy: () => void;
-		onEdit: () => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
 		textareaElement?: HTMLTextAreaElement;
 	}
 
-	let {
-		class: className = '',
-		deletionInfo,
-		message,
-		onConfirmDelete,
-		onCopy,
-		onDelete,
-		onEdit,
-		onNavigateToSibling,
-		onShowDeleteDialogChange,
-		showDeleteDialog,
-		siblingInfo = null,
-		textareaElement = $bindable()
-	}: Props = $props();
+	let { class: className = '', message, textareaElement = $bindable() }: Props = $props();
 
 	const editCtx = getMessageEditContext();
 
@@ -218,20 +191,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
-					actionsPosition="right"
-					{deletionInfo}
-					justify="end"
-					{onConfirmDelete}
-					{onCopy}
-					{onDelete}
-					{onEdit}
-					{onNavigateToSibling}
-					{onShowDeleteDialogChange}
-					{siblingInfo}
-					{showDeleteDialog}
-					role={MessageRole.USER}
-				/>
+				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
 			</div>
 		{/if}
 	{/if}

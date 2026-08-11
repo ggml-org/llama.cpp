@@ -17,45 +17,20 @@
 
 	interface Props {
 		class?: string;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
 		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
-		onCopy: () => void;
-		onConfirmDelete: () => void;
 		onContinue?: () => void;
-		onDelete: () => void;
-		onEdit?: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
-		showDeleteDialog: boolean;
-		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 	}
 
 	let {
 		class: className = '',
-		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
-		onConfirmDelete,
 		onContinue,
-		onCopy,
-		onDelete,
-		onEdit,
-		onForkConversation,
-		onNavigateToSibling,
 		onRegenerate,
-		onShowDeleteDialogChange,
-		showDeleteDialog,
-		siblingInfo = null,
 		textareaElement = $bindable(),
 		toolMessages = []
 	}: Props = $props();
@@ -207,18 +182,8 @@
 			role={MessageRole.ASSISTANT}
 			justify="start"
 			actionsPosition="left"
-			{siblingInfo}
-			{showDeleteDialog}
-			{deletionInfo}
-			{onCopy}
-			{onEdit}
 			{onRegenerate}
 			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
-			{onForkConversation}
-			{onDelete}
-			{onConfirmDelete}
-			{onNavigateToSibling}
-			{onShowDeleteDialogChange}
 			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}

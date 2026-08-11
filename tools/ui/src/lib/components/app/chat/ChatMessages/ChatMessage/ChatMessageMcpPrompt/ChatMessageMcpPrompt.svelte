@@ -12,36 +12,9 @@
 		class?: string;
 		message: DatabaseMessage;
 		mcpPrompt: DatabaseMessageExtraMcpPrompt;
-		siblingInfo?: ChatMessageSiblingInfo | null;
-		showDeleteDialog: boolean;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
-		onCopy: () => void;
-		onEdit: () => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
 	}
 
-	let {
-		class: className = '',
-		deletionInfo,
-		mcpPrompt,
-		message,
-		onConfirmDelete,
-		onCopy,
-		onDelete,
-		onEdit,
-		onNavigateToSibling,
-		onShowDeleteDialogChange,
-		showDeleteDialog,
-		siblingInfo = null
-	}: Props = $props();
+	let { class: className = '', mcpPrompt, message }: Props = $props();
 
 	// Get edit context
 	const editCtx = getMessageEditContext();
@@ -63,20 +36,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
-					actionsPosition="right"
-					{deletionInfo}
-					justify="end"
-					{onConfirmDelete}
-					{onCopy}
-					{onDelete}
-					{onEdit}
-					{onNavigateToSibling}
-					{onShowDeleteDialogChange}
-					{siblingInfo}
-					{showDeleteDialog}
-					role={MessageRole.USER}
-				/>
+				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
 			</div>
 		{/if}
 	{/if}

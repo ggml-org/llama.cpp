@@ -8,7 +8,12 @@
 		ChatMessageUser
 	} from '$lib/components/app/chat';
 	import { REASONING_TAGS, ROUTES, SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
-	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
+	import {
+		type ChatMessageDeletionInfo,
+		getChatActionsContext,
+		setChatMessageActionsContext,
+		setMessageEditContext
+	} from '$lib/contexts';
 	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { chatStore, conversationsStore, isMobile } from '$lib/stores';
@@ -38,12 +43,7 @@
 
 	const chatActions = getChatActionsContext();
 
-	let deletionInfo = $state<{
-		totalCount: number;
-		userMessages: number;
-		assistantMessages: number;
-		messageTypes: string[];
-	} | null>(null);
+	let deletionInfo = $state<ChatMessageDeletionInfo | null>(null);
 	// The system message placeholder must never surface as editable content; keeping
 	// it in the derived (not just in handleEdit) guards against prop invalidation
 	// reverting the override while editing
@@ -164,6 +164,30 @@
 			return showSaveOnlyOption;
 		},
 		startEdit: handleEdit
+	});
+
+	setChatMessageActionsContext({
+		confirmDelete: handleConfirmDelete,
+		copy: handleCopy,
+		get deletionInfo() {
+			return deletionInfo;
+		},
+		get forkConversation() {
+			const isForkableUser = message.role === MessageRole.USER && !mcpPromptExtra;
+
+			return isForkableUser || message.role === MessageRole.ASSISTANT
+				? handleForkConversation
+				: undefined;
+		},
+		navigateToSibling: handleNavigateToSibling,
+		requestDelete: handleDelete,
+		setShowDeleteDialog: handleShowDeleteDialogChange,
+		get showDeleteDialog() {
+			return showDeleteDialog;
+		},
+		get siblingInfo() {
+			return siblingInfo;
+		}
 	});
 
 	let mcpPromptExtra = $derived.by(() => {
@@ -360,73 +384,22 @@
 
 <div class="chat-message" class:chat-message--synthetic={isSynthetic}>
 	{#if message.role === MessageRole.SYSTEM}
-		<ChatMessageSystem
-			bind:textareaElement
-			class={className}
-			{deletionInfo}
-			{message}
-			onConfirmDelete={handleConfirmDelete}
-			onCopy={handleCopy}
-			onDelete={handleDelete}
-			onEdit={handleEdit}
-			onNavigateToSibling={handleNavigateToSibling}
-			onShowDeleteDialogChange={handleShowDeleteDialogChange}
-			{showDeleteDialog}
-			{siblingInfo}
-		/>
+		<ChatMessageSystem bind:textareaElement class={className} {message} />
 	{:else if mcpPromptExtra}
-		<ChatMessageMcpPrompt
-			class={className}
-			{deletionInfo}
-			{message}
-			mcpPrompt={mcpPromptExtra}
-			onConfirmDelete={handleConfirmDelete}
-			onCopy={handleCopy}
-			onDelete={handleDelete}
-			onEdit={handleEdit}
-			onNavigateToSibling={handleNavigateToSibling}
-			onShowDeleteDialogChange={handleShowDeleteDialogChange}
-			{showDeleteDialog}
-			{siblingInfo}
-		/>
+		<ChatMessageMcpPrompt class={className} {message} mcpPrompt={mcpPromptExtra} />
 	{:else if isSynthetic}
 		<ChatMessageSynthetic {message} class={className} />
 	{:else if message.role === MessageRole.USER}
-		<ChatMessageUser
-			class={className}
-			{deletionInfo}
-			{isLastUserMessage}
-			{message}
-			{nextAssistantMessage}
-			onConfirmDelete={handleConfirmDelete}
-			onCopy={handleCopy}
-			onDelete={handleDelete}
-			onEdit={handleEdit}
-			onForkConversation={handleForkConversation}
-			onNavigateToSibling={handleNavigateToSibling}
-			onShowDeleteDialogChange={handleShowDeleteDialogChange}
-			{showDeleteDialog}
-			{siblingInfo}
-		/>
+		<ChatMessageUser class={className} {isLastUserMessage} {message} {nextAssistantMessage} />
 	{:else}
 		<ChatMessageAssistant
 			bind:textareaElement
 			class={className}
-			{deletionInfo}
 			{isLastAssistantMessage}
 			{message}
 			{toolMessages}
-			onConfirmDelete={handleConfirmDelete}
 			onContinue={handleContinue}
-			onCopy={handleCopy}
-			onDelete={handleDelete}
-			onEdit={handleEdit}
-			onForkConversation={handleForkConversation}
-			onNavigateToSibling={handleNavigateToSibling}
 			onRegenerate={handleRegenerate}
-			onShowDeleteDialogChange={handleShowDeleteDialogChange}
-			{showDeleteDialog}
-			{siblingInfo}
 		/>
 	{/if}
 </div>
