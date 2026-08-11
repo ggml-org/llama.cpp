@@ -741,6 +741,27 @@ On Windows arm64, use `GGML_KLEIDIAI_SME=<n>` as the temporary diagnostics/debug
 
 If the CPU does not support the required SME-family capability for a bundled kernel, that kernel is disabled regardless of the environment variable.
 
+### Weight cache
+
+KleidiAI repacks supported model weights into an optimized layout for its kernels. The repacked weights can be cached on disk and reused across subsequent model loads. Enable weight cache support at build time with:
+
+```bash
+cmake -B build -DGGML_CPU_KLEIDIAI=ON -DLLAMA_WEIGHT_CACHE=ON
+cmake --build build --config Release
+```
+
+When compiled in, the weight cache is enabled by default. On the first model load, supported weights are repacked and written to the cache. Subsequent loads mmap the cached weights instead of repacking them. By default, the cache is stored alongside the model as `<model-path>.ggml-weight-cache-v1`. Set `GGML_WEIGHT_CACHE_DIR` to store cache files in another directory.
+
+| Environment variable | Description |
+| --- | --- |
+| `GGML_WEIGHT_CACHE=0` | Disable the weight cache. `false` and `off` are also accepted. |
+| `GGML_WEIGHT_CACHE=1` or unset | Read existing cache files and create them when needed. |
+| `GGML_WEIGHT_CACHE=readonly` | Read existing cache files without creating or updating them. |
+| `GGML_WEIGHT_CACHE=rebuild` | Ignore existing cache files, repack the weights, and replace the cache. |
+| `GGML_WEIGHT_CACHE_DIR=<directory>` | Store cache files in the specified directory. |
+
+Cache files that do not match the model or the current backend packing layout are ignored automatically. Since the cached representation may be larger than the original quantized weights, ensure that the cache location has sufficient free disk space.
+
 ## OpenCL
 
 This provides GPU acceleration through OpenCL on recent Adreno GPU.
