@@ -27,6 +27,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <functional>
@@ -37,6 +38,16 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+static bool llama_model_use_gfx1030_gdn_sibling_fusion() {
+    static const bool enabled = []() {
+        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
+        const char * fusion = std::getenv("GGML_HIP_GFX1030_GDN_SIBLING_FUSION");
+        return native != nullptr && std::atoi(native) != 0 &&
+               fusion != nullptr && std::atoi(fusion) != 0;
+    }();
+    return enabled;
+}
 
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {
@@ -1716,6 +1727,104 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
         if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
             return false;
+        }
+    }
+
+    // Opt-in Qwen3.5/3.6 GDN sibling projection fusion. The source tensors are
+    // retained so graph construction can fall back for LoRA adapters. Packed
+    // Q8_0 rows and F32 rows are copied byte-for-byte without requantization.
+    if (llama_model_use_gfx1030_gdn_sibling_fusion() &&
+            arch == LLM_ARCH_QWEN35MOE && type == LLM_TYPE_35B_A3B &&
+            split_mode == LLAMA_SPLIT_MODE_LAYER) {
+        size_t fused_bytes = 0;
+        int fused_qkvz = 0;
+        int fused_ba = 0;
+
+        auto fuse_rows = [&](ggml_tensor * first, ggml_tensor * second, ggml_type expected_type,
+                             const std::string & name) -> ggml_tensor * {
+            if (first == nullptr || second == nullptr || first->buffer == nullptr || second->buffer == nullptr ||
+                    first->type != expected_type || second->type != expected_type ||
+                    ggml_n_dims(first) != 2 || ggml_n_dims(second) != 2 ||
+                    first->ne[0] != second->ne[0] ||
+                    !ggml_is_contiguous(first) || !ggml_is_contiguous(second)) {
+                return nullptr;
+            }
+
+            ggml_backend_buffer_type_t first_buft = ggml_backend_buffer_get_type(first->buffer);
+            ggml_backend_buffer_type_t second_buft = ggml_backend_buffer_get_type(second->buffer);
+            if (first_buft == nullptr || first_buft != second_buft) {
+                return nullptr;
+            }
+
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(first_buft);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg == nullptr || std::strcmp(ggml_backend_reg_name(reg), "ROCm") != 0) {
+                return nullptr;
+            }
+
+            const size_t row_size = ggml_row_size(expected_type, first->ne[0]);
+            const size_t first_bytes = row_size * first->ne[1];
+            const size_t second_bytes = row_size * second->ne[1];
+            if (ggml_nbytes(first) != first_bytes || ggml_nbytes(second) != second_bytes) {
+                return nullptr;
+            }
+
+            const ggml_init_params ctx_params = {
+                /*.mem_size   =*/ ggml_tensor_overhead(),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            ggml_context_ptr fused_ctx(ggml_init(ctx_params));
+            if (!fused_ctx) {
+                return nullptr;
+            }
+
+            ggml_tensor * fused = ggml_new_tensor_2d(
+                fused_ctx.get(), expected_type, first->ne[0], first->ne[1] + second->ne[1]);
+            ggml_set_name(fused, name.c_str());
+
+            ggml_backend_buffer_ptr fused_buf(
+                ggml_backend_alloc_ctx_tensors_from_buft(fused_ctx.get(), first_buft));
+            if (!fused_buf) {
+                return nullptr;
+            }
+            ggml_backend_buffer_set_usage(fused_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            std::vector<uint8_t> packed(first_bytes + second_bytes);
+            ggml_backend_tensor_get(first, packed.data(), 0, first_bytes);
+            ggml_backend_tensor_get(second, packed.data() + first_bytes, 0, second_bytes);
+            ggml_backend_tensor_set(fused, packed.data(), 0, packed.size());
+
+            std::vector<ggml_backend_buffer_ptr> fused_bufs;
+            fused_bufs.emplace_back(std::move(fused_buf));
+            pimpl->ctxs_bufs.emplace_back(std::move(fused_ctx), std::move(fused_bufs));
+            fused_bytes += packed.size();
+            return fused;
+        };
+
+        for (int il = 0; il < n_layer_all; ++il) {
+            llama_layer & layer = layers[il];
+
+            if (layer.ssm_in == nullptr &&
+                    layer.wqkv_s == nullptr && layer.wqkv_gate_s == nullptr &&
+                    layer.wqkv_in_s == nullptr && layer.wqkv_gate_in_s == nullptr) {
+                layer.ssm_in = fuse_rows(layer.wqkv, layer.wqkv_gate, GGML_TYPE_Q8_0,
+                    format("blk.%d.gdn_qkvz.fused", il));
+                fused_qkvz += layer.ssm_in != nullptr;
+            }
+
+            if (layer.ssm_beta_alpha == nullptr &&
+                    layer.ssm_beta_s == nullptr && layer.ssm_alpha_s == nullptr &&
+                    layer.ssm_beta_in_s == nullptr && layer.ssm_alpha_in_s == nullptr) {
+                layer.ssm_beta_alpha = fuse_rows(layer.ssm_beta, layer.ssm_alpha, GGML_TYPE_F32,
+                    format("blk.%d.gdn_beta_alpha.fused", il));
+                fused_ba += layer.ssm_beta_alpha != nullptr;
+            }
+        }
+
+        if (fused_qkvz != 0 || fused_ba != 0) {
+            LLAMA_LOG_INFO("%s: gfx1030 GDN sibling fusion: qkvz=%d, beta_alpha=%d, buffers=%.2f MiB\n",
+                __func__, fused_qkvz, fused_ba, fused_bytes / 1024.0 / 1024.0);
         }
     }
 
