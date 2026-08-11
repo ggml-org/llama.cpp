@@ -10,6 +10,7 @@
 #include <chrono>
 #include <ctime>
 #include <atomic>
+#include <cctype>
 #include <cstring>
 #include <cctype>
 #include <cstdint>
@@ -966,7 +967,7 @@ static std::string get_mime_from_extension(const std::string & path) {
         {".tiff", "image/tiff"},
         {".tif",  "image/tiff"},
         {".gif",  "image/gif"},
-        // Audio — only wav and mp3: the model's input_audio API
+        // Audio - only wav and mp3: the model's input_audio API
         // only accepts these two formats (FileTypeAudio.WAV | MP3).
         {".mp3",  "audio/mpeg"},
         {".wav",  "audio/wav"},
@@ -1023,17 +1024,17 @@ struct server_tool_read_media : server_tool {
                 (size_t)file_size, SERVER_TOOL_READ_MEDIA_MAX_SIZE)}};
         }
 
-        std::string content;
-        if (!io->read_file(path, content)) {
-            return {{"error", "failed to open file: " + path}};
-        }
-
         std::string mime = get_mime_from_extension(path);
 
         // Reject unknown/unrecognized file extensions instead of producing
         // a multi-MB data URI that inflates the model context with garbage.
         if (mime == "application/octet-stream") {
             return {{"error", "unrecognized or unsupported extension: " + path}};
+        }
+
+        std::string content;
+        if (!io->read_file(path, content)) {
+            return {{"error", "failed to open file: " + path}};
         }
 
         std::string b64  = base64::encode(content.data(), content.size());

@@ -1113,7 +1113,7 @@ class AgenticStore {
 				return `[Attachment saved: ${name}]`;
 			}
 
-			if (mimeType.startsWith('audio/')) {
+			if (mimeType.startsWith(MimeTypePrefix.AUDIO)) {
 				attachments.push({
 					type: AttachmentType.AUDIO,
 					name,
