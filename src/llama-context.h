@@ -247,9 +247,23 @@ public:
     // returns the result of ggml_backend_sched_graph_compute_async execution
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 
+    struct graph_reserve_params {
+        uint32_t n_tokens;
+        uint32_t n_seqs;
+        uint32_t n_outputs;
+        const llama_memory_context_i * mctx;
+        bool split_only = false;
+        size_t * sizes = nullptr;
+    };
+
+    struct graph_reserve_result {
+        ggml_cgraph * gf;
+
+        uint32_t n_intput_tensors;
+    };
+
     // reserve a graph with a dummy ubatch of the specified size
-    ggml_cgraph * graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
+    graph_reserve_result graph_reserve(graph_reserve_params params);
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
@@ -330,7 +344,6 @@ private:
     // reuse the batch_allocr to avoid unnecessary memory allocations
     std::unique_ptr<llama_batch_allocr> balloc;
 
-    uint32_t n_intput_tensors = 0; // number of tensors marked as input during the last graph reserve
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
