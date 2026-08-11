@@ -4541,8 +4541,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = op->type == GGML_TYPE_F32;
             break;
         case GGML_OP_SSM_SCAN:
-            supports_op = ggml_get_op_params_i32(op, 0) == 1 &&
-                          op->type == GGML_TYPE_F32 &&
+            supports_op = ggml_get_op_params_i32(op, 0) == 1 && op->type == GGML_TYPE_F32 &&
                           src0->ne[0] <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
             break;
         case GGML_OP_GATED_DELTA_NET:
