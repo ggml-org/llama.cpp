@@ -749,6 +749,7 @@ jobs:
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
   windows-rocm:
+    needs: [check-release]
     runs-on: windows-2022
 
     strategy:
