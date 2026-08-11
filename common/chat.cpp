@@ -3205,7 +3205,7 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
                 return p.zero_or_more(start + analysis) + start + tool_calls;
             }
-            auto trailing_calls = p.optional(p.literal("<|eom|>") + p.optional(start) + tool_calls);
+            auto trailing_calls = p.optional(p.literal("<|eom|>") + start + tool_calls);
             return p.zero_or_more(start + analysis) + start + (tool_calls | (final_msg + trailing_calls));
         }
 
