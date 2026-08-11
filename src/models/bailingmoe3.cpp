@@ -6,9 +6,6 @@ void llama_model_bailingmoe3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,         hparams.n_embd_head_k_mla_impl);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,       hparams.n_embd_head_v_mla_impl);
     ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,           hparams.n_lora_kv);
-    // Optional: Ling-3.0-tiny LoRA-compresses Q as well as KV
-    // (q_a_proj -> q_a_layernorm -> q_b_proj). Ling-3.0-flash has no q_lora_rank
-    // and projects Q directly, so an absent key must leave n_lora_q == 0.
     ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,            hparams.n_lora_q, false);
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,                  hparams.ssm_d_conv);
     ml.get_key(LLM_KV_KDA_HEAD_DIM,                     hparams.n_embd_head_kda);
@@ -59,7 +56,7 @@ void llama_model_bailingmoe3::load_arch_tensors(llama_model_loader & ml) {
     const int64_t d_inner = head_dim * n_head;
     const int64_t d_conv = hparams.ssm_d_conv;
     const int64_t kv_lora_rank = hparams.n_lora_kv;
-    const int64_t q_lora_rank  = hparams.n_lora_q;   // 0 => direct Q projection (flash)
+    const int64_t q_lora_rank  = hparams.n_lora_q;
     const int64_t qk_rope_head_dim = hparams.n_rot();
     const int64_t qk_head_dim = hparams.n_embd_head_k_mla();
     const int64_t v_head_dim = hparams.n_embd_head_v_mla();
@@ -84,8 +81,6 @@ void llama_model_bailingmoe3::load_arch_tensors(llama_model_loader & ml) {
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", il), { d_inner, n_embd }, 0);
         } else {
             if (q_lora_rank > 0) {
-                // Ling-3.0-tiny: Q goes through a LoRA bottleneck with an RMS norm
-                // between the two projections, mirroring deepseek2's MLA.
                 layer.wq_a = create_tensor(tn(LLM_TENSOR_ATTN_Q_A, "weight", il), { n_embd, q_lora_rank }, 0);
                 layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", il), { q_lora_rank }, 0);
                 layer.wq_b = create_tensor(tn(LLM_TENSOR_ATTN_Q_B, "weight", il), { q_lora_rank, n_head * qk_head_dim }, 0);
@@ -122,13 +117,7 @@ void llama_model_bailingmoe3::load_arch_tensors(llama_model_loader & ml) {
         const int flags = ml.load_mtp ? 0 : TENSOR_SKIP;
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", il), { n_embd }, flags);
-        if (q_lora_rank > 0) {
-            layer.wq_a = create_tensor(tn(LLM_TENSOR_ATTN_Q_A, "weight", il), { n_embd, q_lora_rank }, flags);
-            layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", il), { q_lora_rank }, flags);
-            layer.wq_b = create_tensor(tn(LLM_TENSOR_ATTN_Q_B, "weight", il), { q_lora_rank, n_head * qk_head_dim }, flags);
-        } else {
-            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", il), { n_embd, n_head * qk_head_dim }, flags);
-        }
+        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", il), { n_embd, n_head * qk_head_dim }, flags);
         layer.wkv_a_mqa = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", il), { n_embd, kv_lora_rank + qk_rope_head_dim }, flags);
         layer.attn_kv_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", il), { kv_lora_rank }, flags);
         layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K_B, "weight", il), { qk_head_dim - qk_rope_head_dim, kv_lora_rank, n_head }, flags);
@@ -287,9 +276,6 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
             ggml_tensor * attn_input = cur;
             ggml_tensor * q_all;
             if (layer.wq_a) {
-                // Ling-3.0-tiny: Q-LoRA bottleneck - down-project to q_lora_rank,
-                // RMS-norm, then up-project to n_head * qk_head_dim. Same shape as the
-                // direct path below, so everything downstream is unchanged.
                 q_all = ggml_mul_mat(ctx0, layer.wq_a, cur);
                 cb(q_all, "q_a", il);
                 q_all = build_norm(q_all, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
