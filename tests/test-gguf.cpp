@@ -26,6 +26,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_HEADER_EMPTY               = 800,
 
     HANDCRAFTED_KV_BAD_KEY_SIZE            =  10 + offset_has_kv,
+    HANDCRAFTED_KV_EMPTY_KEY               =  15 + offset_has_kv,
     HANDCRAFTED_KV_BAD_TYPE                =  20 + offset_has_kv,
     // HANDCRAFTED_KV_BAD_VALUE_SIZE          =  30 + offset_has_kv, // removed because it can result in allocations > 1 TB (default sanitizer limit)
     HANDCRAFTED_KV_DUPLICATE_KEY           =  40 + offset_has_kv,
@@ -64,6 +65,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_HEADER_EMPTY:               return "HEADER_EMPTY";
 
         case HANDCRAFTED_KV_BAD_KEY_SIZE:            return "KV_BAD_KEY_SIZE";
+        case HANDCRAFTED_KV_EMPTY_KEY:               return "KV_EMPTY_KEY";
         case HANDCRAFTED_KV_BAD_TYPE:                return "KV_BAD_TYPE";
         case HANDCRAFTED_KV_DUPLICATE_KEY:           return "KV_DUPLICATE_KEY";
         case HANDCRAFTED_KV_BAD_ALIGN:               return "KV_BAD_ALIGN";
@@ -284,7 +286,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         const enum gguf_type type     = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].first);
         const enum gguf_type type_arr = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].second);
 
-        const std::string key = "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
+        const std::string key = hft == HANDCRAFTED_KV_EMPTY_KEY
+            ? ""
+            : "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
 
         if (hft == HANDCRAFTED_KV_BAD_KEY_SIZE) {
             const uint64_t n = -1;
@@ -658,6 +662,13 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
             if (gguf_get_tensor_type(gguf_ctx, id) != type) {
                 ok = false;
             }
+
+            const int64_t * ne = gguf_get_tensor_ne(gguf_ctx, id);
+            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+                if (ne[j] != shape[j]) {
+                    ok = false;
+                }
+            }
         } else {
             ok = false;
             continue;
@@ -732,6 +743,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_HEADER_EMPTY,
 
         HANDCRAFTED_KV_BAD_KEY_SIZE,
+        HANDCRAFTED_KV_EMPTY_KEY,
         HANDCRAFTED_KV_BAD_TYPE,
         HANDCRAFTED_KV_DUPLICATE_KEY,
         HANDCRAFTED_KV_BAD_ALIGN,

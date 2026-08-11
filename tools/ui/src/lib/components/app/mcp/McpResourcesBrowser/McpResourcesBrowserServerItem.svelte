@@ -1,18 +1,19 @@
 <script lang="ts">
-	import { FolderOpen, ChevronDown, ChevronRight, Loader2, Braces } from '@lucide/svelte';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
-	import { SvelteSet } from 'svelte/reactivity';
 	import {
-		type ResourceTreeNode,
 		buildResourceTree,
 		countTreeResources,
+		type ResourceTreeNode,
 		sortTreeChildren
 	} from './mcp-resources-browser';
-	import { getDisplayName, getResourceIcon } from '$lib/utils';
+	import { Braces, ChevronDown, ChevronRight, FolderOpen, Loader2 } from '@lucide/svelte';
 	import { McpServerIdentity } from '$lib/components/app/mcp';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Collapsible from '$lib/components/ui/collapsible';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
+	import { getDisplayName, getResourceIcon } from '$lib/utils';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		serverName: string;
@@ -30,18 +31,18 @@
 	}
 
 	let {
-		serverName,
-		serverRes,
-		isExpanded,
-		selectedUris,
-		selectedTemplateUri,
 		expandedFolders,
-		onToggleServer,
-		onToggleFolder,
+		isExpanded,
 		onSelect,
-		onToggle,
 		onTemplateSelect,
-		searchQuery = ''
+		onToggle,
+		onToggleFolder,
+		onToggleServer,
+		searchQuery = '',
+		selectedTemplateUri,
+		selectedUris,
+		serverName,
+		serverRes
 	}: Props = $props();
 
 	let serverDisplayName = $derived(mcpStore.getServerDisplayName(serverName));
@@ -54,14 +55,14 @@
 
 	const templateInfos = $derived<MCPResourceTemplateInfo[]>(
 		serverRes.templates.map((t) => ({
-			uriTemplate: t.uriTemplate,
-			name: t.name,
-			title: t.title,
-			description: t.description,
-			mimeType: t.mimeType,
-			serverName,
 			annotations: t.annotations,
-			icons: t.icons
+			description: t.description,
+			icons: t.icons,
+			mimeType: t.mimeType,
+			name: t.name,
+			serverName,
+			title: t.title,
+			uriTemplate: t.uriTemplate
 		}))
 	);
 
@@ -122,7 +123,7 @@
 					checked={isSelected}
 					onCheckedChange={(checked: boolean | 'indeterminate') =>
 						handleCheckboxChange(resource, checked === true)}
-					class="h-4 w-4"
+					class={ICON_CLASS_DEFAULT}
 				/>
 			{/if}
 
@@ -160,7 +161,7 @@
 				<McpServerIdentity
 					displayName={serverDisplayName}
 					faviconUrl={serverFaviconUrl}
-					iconClass="h-4 w-4"
+					iconClass={ICON_CLASS_DEFAULT}
 					showVersion={false}
 				/>
 			</div>

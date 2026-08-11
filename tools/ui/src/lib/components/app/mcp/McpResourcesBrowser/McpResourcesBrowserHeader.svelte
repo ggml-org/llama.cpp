@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { RefreshCw, Loader2 } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Loader2, RefreshCw } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app/forms';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 
 	interface Props {
 		isLoading: boolean;
@@ -30,9 +31,9 @@
 			title="Refresh resources"
 		>
 			{#if isLoading}
-				<Loader2 class="h-4 w-4 animate-spin" />
+				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />
 			{:else}
-				<RefreshCw class="h-4 w-4" />
+				<RefreshCw class={ICON_CLASS_DEFAULT} />
 			{/if}
 		</Button>
 	</div>

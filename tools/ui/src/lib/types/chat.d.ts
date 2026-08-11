@@ -1,6 +1,6 @@
-import type { ErrorDialogType } from '$lib/enums';
 import type { ApiChatCompletionToolCall } from './api';
 import type { DatabaseMessage, DatabaseMessageExtra } from './database';
+import type { ChatFormCommandAction, ErrorDialogType, FileMentionEntryType } from '$lib/enums';
 
 export interface ChatUploadedFile {
 	id: string;
@@ -108,8 +108,14 @@ export interface ChatStreamCallbacks {
 	createToolResultMessage?: (
 		toolCallId: string,
 		content: string,
-		extras?: DatabaseMessageExtra[]
+		extras?: DatabaseMessageExtra[],
+		toolCwd?: string
 	) => Promise<DatabaseMessage>;
+	updateToolResultMessage?: (
+		messageId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	) => Promise<void>;
 	createAssistantMessage?: () => Promise<DatabaseMessage>;
 	onFlowComplete?: (timings?: ChatMessageTimings) => void;
 	onError?: (error: Error) => void;
@@ -159,4 +165,28 @@ export interface AttachmentDisplayItemsOptions {
 export interface FileProcessingResult {
 	extras: DatabaseMessageExtra[];
 	emptyFiles: string[];
+}
+
+/**
+ * A file or folder picked in the @-mention picker. `path` is the absolute
+ * server-side path; `name` is the basename.
+ */
+export interface FileMentionEntry {
+	path: string;
+	name: string;
+	type: FileMentionEntryType;
+}
+
+/**
+ * A slash command surfaced by the `/` command picker. `disabled` marks a
+ * command whose backing capability is unavailable (e.g. `/prompt` when no
+ * MCP server exposes prompts): visible but greyed out and not selectable.
+ */
+export interface ChatFormCommand {
+	name: string;
+	description: string;
+	/** Extra search terms that should match this command in the picker. */
+	keywords?: string[];
+	action: ChatFormCommandAction;
+	disabled: boolean;
 }

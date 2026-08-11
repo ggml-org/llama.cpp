@@ -123,6 +123,8 @@ export enum FileExtensionText {
 	HTML = '.html',
 	HTM = '.htm',
 	JSON = '.json',
+	JSONL = '.jsonl',
+	ZIP = '.zip',
 	XML = '.xml',
 	YAML = '.yaml',
 	YML = '.yml',
@@ -178,8 +180,10 @@ export enum UriPattern {
 
 // MIME type enums
 export enum MimeTypeApplication {
+	JSON = 'application/json',
 	PDF = 'application/pdf',
-	OCTET_STREAM = 'application/octet-stream'
+	OCTET_STREAM = 'application/octet-stream',
+	ZIP = 'application/zip'
 }
 
 export enum MimeTypeAudio {
@@ -226,6 +230,7 @@ export enum MimeTypeText {
 	CSS = 'text/css',
 	HTML = 'text/html',
 	JSON = 'application/json',
+	JSONL = 'application/jsonl',
 	XML_TEXT = 'text/xml',
 	XML_APP = 'application/xml',
 	YAML_TEXT = 'text/yaml',

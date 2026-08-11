@@ -15,8 +15,14 @@ add_library(${TARGET} STATIC
     server-common.h
     server-context.cpp
     server-context.h
+    server-stream.cpp
+    server-stream.h
     server-tools.cpp
     server-tools.h
+    server-mcp.cpp
+    server-mcp.h
+    server-schema.cpp
+    server-schema.h
 )
 
 if (BUILD_SHARED_LIBS)

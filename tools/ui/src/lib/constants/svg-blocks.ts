@@ -30,8 +30,8 @@ export const SVG_MAX_BYTES = 256 * 1024;
  * so an author <style> stays scoped to that root and can not reach the page.
  */
 export const SVG_SANITIZE_CONFIG = {
-	USE_PROFILES: { svg: true, svgFilters: true },
-	FORBID_TAGS: ['foreignObject', 'script']
+	FORBID_TAGS: ['foreignObject', 'script'],
+	USE_PROFILES: { svg: true, svgFilters: true }
 };
 
 /**

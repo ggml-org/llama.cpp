@@ -1,6 +1,6 @@
 <script lang="ts">
+	import { ChatAttachmentsList, MarkdownContent, MentionText } from '$lib/components/app';
 	import { Card } from '$lib/components/ui/card';
-	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
@@ -14,12 +14,12 @@
 	}
 
 	let {
-		content,
 		attachments = [],
-		renderMarkdown = false,
-		textColorClass = 'text-foreground',
 		cardBgClass = 'dark:bg-primary/15',
-		maxHeightStyle = 'max-height: var(--max-message-height);'
+		content,
+		maxHeightStyle = '',
+		renderMarkdown = false,
+		textColorClass = 'text-foreground'
 	}: Props = $props();
 
 	let isMultiline = $state(false);
@@ -31,6 +31,7 @@
 
 		if (content.includes('\n')) {
 			isMultiline = true;
+
 			return;
 		}
 
@@ -59,18 +60,18 @@
 
 {#if content.trim()}
 	<Card
-		class="max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-[multiline]:py-2.5 {cardBgClass}"
+		class="chat-message-user-bubble max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-multiline:py-2.5 {cardBgClass}"
 		data-multiline={isMultiline ? '' : undefined}
 		style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 	>
 		{#if renderMarkdown && currentConfig.renderUserContentAsMarkdown}
 			<div bind:this={messageElement}>
-				<MarkdownContent class="markdown-user-content -my-4" {content} />
+				<MarkdownContent class="markdown-user-content" {content} />
 			</div>
 		{:else}
-			<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
-				{content}
-			</span>
+			<span bind:this={messageElement} class="text-md whitespace-pre-wrap"
+				><MentionText {content} /></span
+			>
 		{/if}
 	</Card>
 {/if}

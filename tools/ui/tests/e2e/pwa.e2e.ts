@@ -13,6 +13,7 @@ test.describe('PWA Service Worker', () => {
 					setTimeout(() => reject(new Error('Service worker registration failed: timeout')), 15000)
 				)
 			]);
+
 			// @ts-expect-error registration is of type unknown
 			return registration.active?.scriptURL;
 		});
@@ -30,6 +31,7 @@ test.describe('PWA Service Worker', () => {
 
 		const swActive = await page.evaluate(async () => {
 			const reg = await navigator.serviceWorker.ready;
+
 			return reg.active?.scriptURL ?? null;
 		});
 
@@ -39,11 +41,14 @@ test.describe('PWA Service Worker', () => {
 		const swContent = await swResponse.text();
 
 		// Precache contains SvelteKit content-hashed bundle paths
-		expect(swContent).toMatch(/"_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"/);
-		expect(swContent).toMatch(/"_app\/immutable\/assets\/bundle\.[a-zA-Z0-9-]+\.css"/);
+		expect(swContent).toMatch(/"_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
+		expect(swContent).toMatch(/"_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
 		expect(swContent).toMatch(/"manifest\.webmanifest"/);
 		expect(swContent).toMatch(/"_app\/version\.json"/);
-		expect(swContent).toMatch(/NavigationRoute/);
+		// NavigationRoute is intentionally absent — server API endpoints
+		// (e.g. /slots, /models) must not be intercepted by the PWA and
+		// should return JSON directly from the server.
+		expect(swContent).not.toMatch(/NavigationRoute/);
 		expect(swContent).toMatch(/api-cache/);
 	});
 
@@ -64,6 +69,7 @@ test.describe('PWA Service Worker', () => {
 		await offlinePage.goto('/');
 
 		const bodyText = await offlinePage.locator('body').textContent();
+
 		expect(bodyText).toBeTruthy();
 
 		await context.close();
@@ -71,9 +77,11 @@ test.describe('PWA Service Worker', () => {
 
 	test('version.json is accessible and contains version', async ({ page }) => {
 		const versionResponse = await page.request.get('/_app/version.json');
+
 		expect(versionResponse.ok()).toBeTruthy();
 
 		const versionData = await versionResponse.json();
+
 		expect(versionData).toHaveProperty('version');
 		expect(typeof versionData.version).toBe('string');
 		expect(versionData.version.length).toBeGreaterThan(0);
@@ -81,9 +89,11 @@ test.describe('PWA Service Worker', () => {
 
 	test('manifest.webmanifest is accessible and valid', async ({ page }) => {
 		const response = await page.request.get('/manifest.webmanifest');
+
 		expect(response.ok()).toBeTruthy();
 
 		const manifest = await response.json();
+
 		expect(manifest).toHaveProperty('name', 'llama-ui');
 		expect(manifest).toHaveProperty('short_name', 'llama-ui');
 		expect(manifest).toHaveProperty('start_url', './');
@@ -94,13 +104,14 @@ test.describe('PWA Service Worker', () => {
 
 	test('index.html contains content-hashed bundle references', async ({ page }) => {
 		const response = await page.request.get('/');
+
 		expect(response.ok()).toBeTruthy();
 
 		const html = await response.text();
 
 		// SvelteKit outputs content-hashed bundle names in _app/immutable/
-		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"/);
-		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9-]+\.css"/);
-		expect(html).toMatch(/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"\)/);
+		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
+		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
+		expect(html).toMatch(/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"\)/);
 	});
 });

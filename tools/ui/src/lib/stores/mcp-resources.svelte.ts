@@ -10,29 +10,29 @@
  * @see MCP Protocol Specification: https://modelcontextprotocol.io/specification/2025-06-18/server/resources
  */
 
-import { SvelteMap } from 'svelte/reactivity';
-import { AttachmentType } from '$lib/enums';
 import {
+	BINARY_CONTENT_LABEL,
 	MCP_RESOURCE_ATTACHMENT_ID_PREFIX,
 	MCP_RESOURCE_CACHE_MAX_ENTRIES,
 	MCP_RESOURCE_CACHE_TTL_MS,
-	NEWLINE_SEPARATOR,
-	RESOURCE_UNKNOWN_TYPE,
-	BINARY_CONTENT_LABEL
+	NEWLINE,
+	RESOURCE_UNKNOWN_TYPE
 } from '$lib/constants';
-import { normalizeResourceUri } from '$lib/utils';
+import { AttachmentType } from '$lib/enums';
 import type {
+	DatabaseMessageExtraMcpResource,
+	MCPCachedResource,
 	MCPResource,
-	MCPResourceTemplate,
+	MCPResourceAttachment,
 	MCPResourceContent,
 	MCPResourceInfo,
-	MCPResourceTemplateInfo,
-	MCPCachedResource,
-	MCPResourceAttachment,
 	MCPResourceSubscription,
-	MCPServerResources,
-	DatabaseMessageExtraMcpResource
+	MCPResourceTemplate,
+	MCPResourceTemplateInfo,
+	MCPServerResources
 } from '$lib/types';
+import { normalizeResourceUri } from '$lib/utils';
+import { SvelteMap } from 'svelte/reactivity';
 
 function generateAttachmentId(): string {
 	return `${MCP_RESOURCE_ATTACHMENT_ID_PREFIX}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -67,6 +67,7 @@ class MCPResourceStore {
 
 	get totalResourceCount(): number {
 		let count = 0;
+
 		for (const serverRes of this._serverResources.values()) {
 			count += serverRes.resources.length;
 		}
@@ -76,6 +77,7 @@ class MCPResourceStore {
 
 	get totalTemplateCount(): number {
 		let count = 0;
+
 		for (const serverRes of this._serverResources.values()) {
 			count += serverRes.templates.length;
 		}
@@ -108,12 +110,12 @@ class MCPResourceStore {
 		templates: MCPResourceTemplate[]
 	): void {
 		this._serverResources.set(serverName, {
-			serverName,
-			resources,
-			templates,
+			error: undefined,
 			lastFetched: new Date(),
 			loading: false,
-			error: undefined
+			resources,
+			serverName,
+			templates
 		});
 		console.log(
 			`[MCPResources][${serverName}] Set ${resources.length} resources, ${templates.length} templates`
@@ -125,15 +127,16 @@ class MCPResourceStore {
 	 */
 	setServerLoading(serverName: string, loading: boolean): void {
 		const existing = this._serverResources.get(serverName);
+
 		if (existing) {
 			this._serverResources.set(serverName, { ...existing, loading });
 		} else {
 			this._serverResources.set(serverName, {
-				serverName,
-				resources: [],
-				templates: [],
+				error: undefined,
 				loading,
-				error: undefined
+				resources: [],
+				serverName,
+				templates: []
 			});
 		}
 	}
@@ -145,14 +148,14 @@ class MCPResourceStore {
 		const existing = this._serverResources.get(serverName);
 
 		if (existing) {
-			this._serverResources.set(serverName, { ...existing, loading: false, error });
+			this._serverResources.set(serverName, { ...existing, error, loading: false });
 		} else {
 			this._serverResources.set(serverName, {
-				serverName,
-				resources: [],
-				templates: [],
+				error,
 				loading: false,
-				error
+				resources: [],
+				serverName,
+				templates: []
 			});
 		}
 	}
@@ -173,14 +176,14 @@ class MCPResourceStore {
 		for (const [serverName, serverRes] of this._serverResources) {
 			for (const resource of serverRes.resources) {
 				result.push({
-					uri: resource.uri,
-					name: resource.name,
-					title: resource.title,
-					description: resource.description,
-					mimeType: resource.mimeType,
-					serverName,
 					annotations: resource.annotations,
-					icons: resource.icons
+					description: resource.description,
+					icons: resource.icons,
+					mimeType: resource.mimeType,
+					name: resource.name,
+					serverName,
+					title: resource.title,
+					uri: resource.uri
 				});
 			}
 		}
@@ -197,14 +200,14 @@ class MCPResourceStore {
 		for (const [serverName, serverRes] of this._serverResources) {
 			for (const template of serverRes.templates) {
 				result.push({
-					uriTemplate: template.uriTemplate,
-					name: template.name,
-					title: template.title,
-					description: template.description,
-					mimeType: template.mimeType,
-					serverName,
 					annotations: template.annotations,
-					icons: template.icons
+					description: template.description,
+					icons: template.icons,
+					mimeType: template.mimeType,
+					name: template.name,
+					serverName,
+					title: template.title,
+					uriTemplate: template.uriTemplate
 				});
 			}
 		}
@@ -258,9 +261,9 @@ class MCPResourceStore {
 		}
 
 		this._cachedResources.set(resource.uri, {
-			resource,
 			content,
 			fetchedAt: new Date(),
+			resource,
 			subscribed: this._subscriptions.has(resource.uri)
 		});
 		console.log(`[MCPResources] Cached content for: ${resource.uri}`);
@@ -271,6 +274,7 @@ class MCPResourceStore {
 	 */
 	getCachedContent(uri: string): MCPCachedResource | undefined {
 		const cached = this._cachedResources.get(uri);
+
 		if (!cached) return undefined;
 
 		// Check if cache is still valid
@@ -315,13 +319,14 @@ class MCPResourceStore {
 	 */
 	addSubscription(uri: string, serverName: string): void {
 		this._subscriptions.set(uri, {
-			uri,
 			serverName,
-			subscribedAt: new Date()
+			subscribedAt: new Date(),
+			uri
 		});
 
 		// Update cached resource if exists
 		const cached = this._cachedResources.get(uri);
+
 		if (cached) {
 			this._cachedResources.set(uri, { ...cached, subscribed: true });
 		}
@@ -337,6 +342,7 @@ class MCPResourceStore {
 
 		// Update cached resource if exists
 		const cached = this._cachedResources.get(uri);
+
 		if (cached) {
 			this._cachedResources.set(uri, { ...cached, subscribed: false });
 		}
@@ -360,6 +366,7 @@ class MCPResourceStore {
 
 		// Update subscription last update time
 		const sub = this._subscriptions.get(uri);
+
 		if (sub) {
 			this._subscriptions.set(uri, { ...sub, lastUpdate: new Date() });
 		}
@@ -373,12 +380,14 @@ class MCPResourceStore {
 	handleResourcesListChanged(serverName: string): void {
 		// Mark server resources as needing refresh
 		const existing = this._serverResources.get(serverName);
+
 		if (existing) {
 			this._serverResources.set(serverName, {
 				...existing,
 				lastFetched: undefined // Mark as stale
 			});
 		}
+
 		console.log(`[MCPResources][${serverName}] Resources list changed, needs refresh`);
 	}
 
@@ -396,8 +405,8 @@ class MCPResourceStore {
 	addAttachment(resource: MCPResourceInfo): MCPResourceAttachment {
 		const attachment: MCPResourceAttachment = {
 			id: generateAttachmentId(),
-			resource,
-			loading: true
+			loading: true,
+			resource
 		};
 
 		this._attachments = [...this._attachments, attachment];
@@ -411,7 +420,7 @@ class MCPResourceStore {
 	 */
 	updateAttachmentContent(attachmentId: string, content: MCPResourceContent[]): void {
 		this._attachments = this._attachments.map((att) =>
-			att.id === attachmentId ? { ...att, content, loading: false, error: undefined } : att
+			att.id === attachmentId ? { ...att, content, error: undefined, loading: false } : att
 		);
 	}
 
@@ -420,7 +429,7 @@ class MCPResourceStore {
 	 */
 	updateAttachmentError(attachmentId: string, error: string): void {
 		this._attachments = this._attachments.map((att) =>
-			att.id === attachmentId ? { ...att, loading: false, error } : att
+			att.id === attachmentId ? { ...att, error, loading: false } : att
 		);
 	}
 
@@ -486,14 +495,14 @@ class MCPResourceStore {
 
 			if (resource) {
 				return {
-					uri: resource.uri,
-					name: resource.name,
-					title: resource.title,
-					description: resource.description,
-					mimeType: resource.mimeType,
-					serverName,
 					annotations: resource.annotations,
-					icons: resource.icons
+					description: resource.description,
+					icons: resource.icons,
+					mimeType: resource.mimeType,
+					name: resource.name,
+					serverName,
+					title: resource.title,
+					uri: resource.uri
 				};
 			}
 		}
@@ -537,6 +546,7 @@ class MCPResourceStore {
 
 		for (const attachment of this._attachments) {
 			if (attachment.error) continue;
+
 			if (!attachment.content || attachment.content.length === 0) continue;
 
 			const resourceName = attachment.resource.title || attachment.resource.name;
@@ -566,6 +576,7 @@ class MCPResourceStore {
 
 		for (const attachment of this._attachments) {
 			if (attachment.error) continue;
+
 			if (!attachment.content || attachment.content.length === 0) continue;
 
 			const resourceName = attachment.resource.title || attachment.resource.name;
@@ -583,12 +594,12 @@ class MCPResourceStore {
 
 			if (contentParts.length > 0) {
 				extras.push({
-					type: AttachmentType.MCP_RESOURCE,
+					content: contentParts.join(NEWLINE),
+					mimeType: attachment.resource.mimeType,
 					name: resourceName,
-					uri: attachment.resource.uri,
 					serverName: attachment.resource.serverName,
-					content: contentParts.join(NEWLINE_SEPARATOR),
-					mimeType: attachment.resource.mimeType
+					type: AttachmentType.MCP_RESOURCE,
+					uri: attachment.resource.uri
 				});
 			}
 		}

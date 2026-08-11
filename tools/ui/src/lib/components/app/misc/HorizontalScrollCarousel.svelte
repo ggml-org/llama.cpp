@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -9,7 +10,7 @@
 		onScrollableChange?: (isScrollable: boolean) => void;
 	}
 
-	let { class: className = '', children, gapSize = '3', onScrollableChange }: Props = $props();
+	let { children, class: className = '', gapSize = '3', onScrollableChange }: Props = $props();
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
@@ -21,7 +22,7 @@
 
 		if (!scrollContainer) return;
 
-		scrollContainer.scrollBy({ left: scrollContainer.clientWidth * -0.67, behavior: 'smooth' });
+		scrollContainer.scrollBy({ behavior: 'smooth', left: scrollContainer.clientWidth * -0.67 });
 	}
 
 	function scrollRight(event?: MouseEvent) {
@@ -30,18 +31,19 @@
 
 		if (!scrollContainer) return;
 
-		scrollContainer.scrollBy({ left: scrollContainer.clientWidth * 0.67, behavior: 'smooth' });
+		scrollContainer.scrollBy({ behavior: 'smooth', left: scrollContainer.clientWidth * 0.67 });
 	}
 
 	function updateScrollButtons() {
 		if (!scrollContainer) return;
 
-		const { scrollLeft, scrollWidth, clientWidth } = scrollContainer;
+		const { clientWidth, scrollLeft, scrollWidth } = scrollContainer;
 
 		canScrollLeft = scrollLeft > 0;
 		canScrollRight = scrollLeft < scrollWidth - clientWidth - 1;
 
 		const isScrollable = scrollWidth > clientWidth;
+
 		onScrollableChange?.(isScrollable);
 	}
 
@@ -58,6 +60,7 @@
 		if (!scrollContainer) return;
 
 		const observer = new ResizeObserver(() => updateScrollButtons());
+
 		observer.observe(scrollContainer);
 
 		return () => observer.disconnect();
@@ -71,7 +74,7 @@
 		disabled={!canScrollLeft}
 		aria-label="Scroll left"
 	>
-		<ChevronLeft class="h-4 w-4" />
+		<ChevronLeft class={ICON_CLASS_DEFAULT} />
 	</button>
 
 	<div
@@ -88,6 +91,6 @@
 		disabled={!canScrollRight}
 		aria-label="Scroll right"
 	>
-		<ChevronRight class="h-4 w-4" />
+		<ChevronRight class={ICON_CLASS_DEFAULT} />
 	</button>
 </div>

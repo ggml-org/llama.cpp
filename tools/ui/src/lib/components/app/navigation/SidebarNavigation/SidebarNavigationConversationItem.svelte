@@ -1,42 +1,57 @@
 <script lang="ts">
 	import {
-		Trash2,
-		Pencil,
-		MoreHorizontal,
 		Download,
-		Loader2,
-		Square,
 		GitBranch,
+		ListChecks,
+		Loader2,
+		MoreHorizontal,
+		Pencil,
 		Pin,
-		PinOff
+		PinOff,
+		Square,
+		Trash2
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
+	import { TruncatedText } from '$lib/components/app';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { RouterService } from '$lib/services/router.service';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { TruncatedText } from '$lib/components/app';
 	import { onMount } from 'svelte';
 
 	interface Props {
 		isActive?: boolean;
 		depth?: number;
 		conversation: DatabaseConversation;
+		isSelectionMode?: boolean;
+		isSelected?: boolean;
 		onDelete?: (id: string) => void;
 		onEdit?: (id: string) => void;
 		onSelect?: (id: string) => void;
 		onStop?: (id: string) => void;
+		onToggleSelect?: (id: string) => void;
+		onEnterSelectionMode?: (id: string) => void;
+		onSelectionClick?: (id: string, options: { shiftKey: boolean }) => void;
+		onRowMouseDown?: (id: string, event: MouseEvent) => void;
 	}
 
 	let {
 		conversation,
+		depth = 0,
+		isActive = false,
+		isSelected = false,
+		isSelectionMode = false,
 		onDelete,
 		onEdit,
+		onEnterSelectionMode,
+		onRowMouseDown,
 		onSelect,
+		onSelectionClick,
 		onStop,
-		isActive = false,
-		depth = 0
+		onToggleSelect
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
@@ -63,6 +78,11 @@
 		conversationsStore.toggleConversationPin(conversation.id);
 	}
 
+	function handleEnterSelectionMode(event: Event) {
+		event.stopPropagation();
+		onEnterSelectionMode?.(conversation.id);
+	}
+
 	function handleGlobalEditEvent(event: Event) {
 		const customEvent = event as CustomEvent<{ conversationId: string }>;
 
@@ -78,11 +98,44 @@
 	}
 
 	function handleMouseOver() {
+		if (isSelectionMode) return;
+
 		renderActionsDropdown = true;
 	}
 
-	function handleSelect() {
-		onSelect?.(conversation.id);
+	function handleSelect(event: MouseEvent) {
+		if (isSelectionMode) {
+			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
+		} else {
+			onSelect?.(conversation.id);
+		}
+	}
+
+	function handleCheckboxClick(event: MouseEvent) {
+		event.stopPropagation();
+
+		if (isSelectionMode) {
+			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
+		} else {
+			onToggleSelect?.(conversation.id);
+		}
+	}
+
+	function handleRowMouseDown(event: MouseEvent) {
+		onRowMouseDown?.(conversation.id, event);
+	}
+
+	function handleCheckboxKeydown(event: KeyboardEvent) {
+		if (event.key !== ' ' && event.key !== 'Enter') return;
+
+		event.stopPropagation();
+		event.preventDefault();
+
+		if (isSelectionMode) {
+			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
+		} else {
+			onToggleSelect?.(conversation.id);
+		}
 	}
 
 	$effect(() => {
@@ -107,10 +160,14 @@
 <button
 	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
-		: ''} px-3"
-	onclick={handleSelect}
+		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
+		? 'is-selection-mode'
+		: ''} px-2"
+	data-conversation-row={conversation.id}
+	onclick={(e) => handleSelect(e)}
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
+	onmousedown={(e) => handleRowMouseDown(e)}
 	onfocusin={handleMouseOver}
 	onfocusout={(e) => {
 		if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -122,6 +179,23 @@
 		class="flex min-w-0 flex-1 items-center gap-2"
 		style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
 	>
+		{#if isSelectionMode}
+			<div
+				class="shrink-0"
+				onclick={(e) => handleCheckboxClick(e)}
+				onkeydown={handleCheckboxKeydown}
+				role="checkbox"
+				aria-checked={isSelected}
+				aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
+				tabindex="-1"
+			>
+				<Checkbox
+					checked={isSelected}
+					aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
+				/>
+			</div>
+		{/if}
+
 		{#if depth > 0}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -147,7 +221,7 @@
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<div
-						class="stop-button flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+						class="stop-button flex {ICON_CLASS_DEFAULT} shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
 						onclick={handleStop}
 						onkeydown={(e) => e.key === 'Enter' && handleStop(e)}
 						role="button"
@@ -169,7 +243,7 @@
 		<TruncatedText text={conversation.name} class="text-sm font-medium" showTooltip={false} />
 	</div>
 
-	{#if renderActionsDropdown}
+	{#if !isSelectionMode && renderActionsDropdown}
 		<div class="actions flex items-center">
 			<DropdownMenuActions
 				triggerIcon={MoreHorizontal}
@@ -200,12 +274,17 @@
 						shortcut: ['shift', 'cmd', 's']
 					},
 					{
+						icon: ListChecks,
+						label: 'Select',
+						onclick: handleEnterSelectionMode
+					},
+					{
 						icon: Trash2,
 						label: 'Delete',
 						onclick: handleDelete,
-						variant: 'destructive',
+						separator: true,
 						shortcut: ['shift', 'cmd', 'd'],
-						separator: true
+						variant: 'destructive'
 					}
 				]}
 			/>
@@ -227,6 +306,10 @@
 			:global([data-slot='dropdown-menu-trigger']) {
 				opacity: 1 !important;
 			}
+		}
+
+		&.is-selection-mode :global([data-slot='dropdown-menu-trigger']) {
+			display: none !important;
 		}
 
 		.stop-button {

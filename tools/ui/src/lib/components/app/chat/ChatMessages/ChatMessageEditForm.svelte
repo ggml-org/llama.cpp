@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { X, AlertTriangle } from '@lucide/svelte';
+	import { AlertTriangle, X } from '@lucide/svelte';
+	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
-	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -19,6 +19,7 @@
 
 	let hasUnsavedChanges = $derived.by(() => {
 		if (editCtx.editedContent !== editCtx.originalContent) return true;
+
 		if (editCtx.editedUploadedFiles.length > 0) return true;
 
 		const extrasChanged =
@@ -71,17 +72,20 @@
 
 	function handleAttachmentRemove(index: number) {
 		const newExtras = [...editCtx.editedExtras];
+
 		newExtras.splice(index, 1);
 		editCtx.setExtras(newExtras);
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
 		const newFiles = editCtx.editedUploadedFiles.filter((f) => f.id !== fileId);
+
 		editCtx.setUploadedFiles(newFiles);
 	}
 
 	async function handleFilesAdd(files: File[]) {
 		const processed = await processFilesToChatUploaded(files);
+
 		editCtx.setUploadedFiles([...editCtx.editedUploadedFiles, ...processed]);
 	}
 
