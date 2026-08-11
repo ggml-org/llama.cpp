@@ -407,8 +407,12 @@ class SchemaConverter:
             we define sub-rules to keep the output lean.
         '''
 
-        assert pattern.startswith('^') and pattern.endswith('$'), 'Pattern must start with "^" and end with "$"'
-        pattern = pattern[1:-1]
+        # "pattern" is an unanchored partial match in JSON Schema: the regex only
+        # has to match *somewhere* in the string, so '^'/'$' are optional.
+        # Synthesise whichever anchor is missing with '.*' rather than rejecting
+        # the schema. A fully anchored pattern is stripped exactly as before.
+        pattern = pattern[1:] if pattern.startswith('^') else '.*' + pattern
+        pattern = pattern[:-1] if pattern.endswith('$') else pattern + '.*'
         sub_rule_ids = {}
 
         i = 0

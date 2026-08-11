@@ -346,11 +346,21 @@ private:
     }
 
     std::string _visit_pattern(const std::string & pattern, const std::string & name) {
-        if (!(pattern.front() == '^' && pattern.back() == '$')) {
-            _errors.push_back("Pattern must start with '^' and end with '$'");
-            return "";
+        // "pattern" is an unanchored partial match in JSON Schema: the regex only
+        // has to match *somewhere* in the string, so "^"/"$" are optional.
+        // Synthesise whichever anchor is missing with ".*" rather than rejecting
+        // the schema. A fully anchored pattern is stripped exactly as before.
+        std::string sub_pattern = pattern;
+        if (!sub_pattern.empty() && sub_pattern.front() == '^') {
+            sub_pattern.erase(0, 1);
+        } else {
+            sub_pattern.insert(0, ".*");
         }
-        std::string sub_pattern = pattern.substr(1, pattern.length() - 2);
+        if (!sub_pattern.empty() && sub_pattern.back() == '$') {
+            sub_pattern.pop_back();
+        } else {
+            sub_pattern.append(".*");
+        }
         std::unordered_map<std::string, std::string> sub_rule_ids;
 
         size_t i = 0;

@@ -770,6 +770,48 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "unanchored regexp",
+        R"""({
+            "type": "string",
+            "pattern": "abc"
+        })""",
+        R"""(
+            dot ::= [^\x0A\x0D]
+            root ::= "\"" (dot* "abc" dot*) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp anchored at start only",
+        R"""({
+            "type": "string",
+            "pattern": "^abc"
+        })""",
+        R"""(
+            dot ::= [^\x0A\x0D]
+            root ::= "\"" ("abc" dot*) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp anchored at end only",
+        R"""({
+            "type": "string",
+            "pattern": "abc$"
+        })""",
+        R"""(
+            dot ::= [^\x0A\x0D]
+            root ::= "\"" (dot* "abc") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "regexp escapes",
         R"""({
             "type": "string",
