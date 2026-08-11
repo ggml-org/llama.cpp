@@ -57,6 +57,9 @@ add_library(mtmd
             models/mimo-audio.cpp
             models/qwen3tts-spkenc.cpp
             models/qwen3tts-gen.cpp
+            models/pockettts-seanet.cpp
+            models/pockettts-spkenc.cpp
+            models/pockettts-gen.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp

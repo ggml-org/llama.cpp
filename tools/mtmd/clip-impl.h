@@ -92,7 +92,9 @@
 #define KEY_A_LOCAL_GROUP_SIZE     "clip.audio.local_group_size"     // mimo-v2.5: input_local_transformer grouping size
 // audio generation (gen-audio)-specific
 #define KEY_GEN_AUDIO_PROJ_TYPE    "clip.gen.audio.projector_type" // for models with mixed modalities
-#define KEY_AUDIO_SUBSAMPLING_FACTOR "clip.audio.subsampling_factor"
+// name of the weight variant, for settings that are not in the checkpoint
+#define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
+#define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
 
 //
 // tensor name constants
@@ -245,6 +247,38 @@
 #define TN_A_GEN_WAV_DAC_RES_CONV2   "a.gen.wav.dac.blk.%d.res.%d.conv2.%s"
 #define TN_A_GEN_WAV_DAC_POST_SNAKE  "a.gen.wav.dac.post_snake.%s"
 #define TN_A_GEN_WAV_DAC_POST_CONV   "a.gen.wav.dac.post_conv.%s"
+
+// pocket-tts
+#define TN_A_SEANET_CONV_IN      "a.seanet.conv_in.%s"
+#define TN_A_SEANET_CONV_OUT     "a.seanet.conv_out.%s"
+#define TN_A_SEANET_RES_CONV1    "a.seanet.blk.%d.res_conv1.%s"
+#define TN_A_SEANET_RES_CONV2    "a.seanet.blk.%d.res_conv2.%s"
+#define TN_A_SEANET_SCALE_CONV   "a.seanet.blk.%d.scale_conv.%s"
+#define TN_A_SPEAKER_PROJ        "a.speaker_proj.%s"
+#define TN_A_DOWNSAMPLE_CONV     "a.downsample.conv.%s"
+#define TN_A_GEN_FLOW_INPUT_PROJ "a.gen.flow.input_proj.%s"
+#define TN_A_GEN_FLOW_COND_EMBD  "a.gen.flow.cond_embd.%s"
+#define TN_A_GEN_FLOW_TIME_FREQS "a.gen.flow.time.%d.freqs"
+#define TN_A_GEN_FLOW_TIME_UP    "a.gen.flow.time.%d.up.%s"
+#define TN_A_GEN_FLOW_TIME_DOWN  "a.gen.flow.time.%d.down.%s"
+#define TN_A_GEN_FLOW_TIME_NORM  "a.gen.flow.time.%d.norm"
+#define TN_A_GEN_FLOW_BLK_NORM   "a.gen.flow.blk.%d.norm.%s"
+#define TN_A_GEN_FLOW_BLK_UP     "a.gen.flow.blk.%d.up.%s"
+#define TN_A_GEN_FLOW_BLK_DOWN   "a.gen.flow.blk.%d.down.%s"
+#define TN_A_GEN_FLOW_BLK_ADA    "a.gen.flow.blk.%d.ada.%s"
+#define TN_A_GEN_FLOW_FINAL_ADA  "a.gen.flow.final.ada.%s"
+#define TN_A_GEN_FLOW_FINAL_PROJ "a.gen.flow.final.proj.%s"
+#define TN_A_GEN_OUT_EOS         "a.gen.out_eos.%s"
+#define TN_A_GEN_INPUT_LINEAR    "a.gen.input_linear.%s"
+#define TN_A_GEN_EMB_MEAN        "a.gen.emb_mean"
+#define TN_A_GEN_EMB_STD         "a.gen.emb_std"
+#define TN_A_GEN_WAV_QUANT_OUT   "a.gen.wav.quant_out.%s"
+#define TN_A_GEN_WAV_UPSAMPLE    "a.gen.wav.upsample.%s"
+#define TN_A_GEN_WAV_SEANET_CONV_IN    "a.gen.wav.seanet.conv_in.%s"
+#define TN_A_GEN_WAV_SEANET_CONV_OUT   "a.gen.wav.seanet.conv_out.%s"
+#define TN_A_GEN_WAV_SEANET_RES_CONV1  "a.gen.wav.seanet.blk.%d.res_conv1.%s"
+#define TN_A_GEN_WAV_SEANET_RES_CONV2  "a.gen.wav.seanet.blk.%d.res_conv2.%s"
+#define TN_A_GEN_WAV_SEANET_SCALE_CONV "a.gen.wav.seanet.blk.%d.scale_conv.%s"
 
 // cogvlm
 #define TN_MM_POST_FC_NORM "mm.post_fc_norm.%s"
@@ -455,6 +489,8 @@ enum projector_type {
     PROJECTOR_TYPE_MIMO_AUDIO,
     PROJECTOR_TYPE_QWEN3TTS_SPKENC,
     PROJECTOR_TYPE_QWEN3TTS_GEN,
+    PROJECTOR_TYPE_POCKETTTS_SPKENC,
+    PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_UNKNOWN,
 };
@@ -515,6 +551,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_PARAKEET,          "parakeet"},
     { PROJECTOR_TYPE_QWEN3TTS_SPKENC,   "qwen3tts_spkenc"},
     { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
+    { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
+    { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
 };
 
