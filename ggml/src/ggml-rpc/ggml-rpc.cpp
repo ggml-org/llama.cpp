@@ -1461,6 +1461,19 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
             graph->use_counts[hash_pos] = tensor_ptrs.at(id)->use_count;
         }
     }
+
+    // PATCH: Validate graph nodes to prevent OOB writes (Issue #26912)
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        struct ggml_tensor * node = graph->nodes[i];
+
+        if (node != nullptr && node->op == GGML_OP_SET_ROWS && node->src[0] != nullptr) {
+            if (node->ne[2] != node->src[0]->ne[2] || node->ne[3] != node->src[0]->ne[3]) {
+                GGML_LOG_ERROR("[%s] malformed SET_ROWS graph detected (dimension mismatch)\n", __func__);
+                return false;  // Safely drop the connection
+            }
+        }
+    }
+
     ggml_status status = ggml_backend_graph_compute(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
     stored_graphs[device].graph = graph;
