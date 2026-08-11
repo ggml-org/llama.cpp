@@ -151,6 +151,12 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
         return std::nullopt;
     }
 
+    if (ggml_tensor->data == nullptr) {
+        // unallocated input: let the caller build an owning zero tensor rather than slice a null
+        // pointer
+        return std::nullopt;
+    }
+
     ov::Shape sliced_shape = full_shape;
     sliced_shape[2] = static_cast<size_t>(n_kv);
 
@@ -561,6 +567,11 @@ ov::Tensor create_ov_output_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_d
         return context.create_tensor(output_type, output_shape, resolved);
     }
 
+    // A graph output can also have no backing storage. Give OV an owning tensor so the infer request
+    // has somewhere to write; nothing downstream reads it.
+    if (output_data == nullptr) {
+        return ov::Tensor(output_type, output_shape);
+    }
     ov::Tensor output_tensor(output_type, output_shape, output_data);
     return output_tensor;
 }
@@ -713,6 +724,20 @@ ov::Tensor convert_ggml_input_to_ov(const std::shared_ptr<GgmlOvDecoder> & ggml_
         return make_contiguous_split_input_tensor(ggml_tensor, input_shape);
     }
 
+    // A graph input may legitimately be left unallocated (data == nullptr, no buffer): llama.cpp
+    // skips filling the attention mask when a graph only stores K/V without attending, which is what
+    // a speculative KV-injection pass does. Such an input is never read, but OpenVINO still requires
+    // a backing tensor for the Parameter and constructing an ov::Tensor over a null pointer asserts.
+    // Hand OV an owning zero-filled tensor; its contents cannot affect the result because no op
+    // consumes them.
+    if (input_data == nullptr) {
+        GGML_LOG_WARN("ggml-openvino: unallocated INPUT '%s' (ggml name '%s', type %s, ne=[%ld,%ld,%ld,%ld]) "
+                      "-> zero tensor\n",
+                      name.c_str(), ggml_tensor->name, ggml_type_name(ggml_tensor->type),
+                      (long) ggml_tensor->ne[0], (long) ggml_tensor->ne[1], (long) ggml_tensor->ne[2],
+                      (long) ggml_tensor->ne[3]);
+        return ov::Tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), input_shape);
+    }
     auto input_tensor = ov::Tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), input_shape, input_data);
     return input_tensor;
 }
