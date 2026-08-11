@@ -671,7 +671,8 @@ static int mmvq_select_q8_1_layout_block_size(ggml_type type, int64_t ncols_dst)
 
 template <
     ggml_type type, int ncols_dst, bool has_fusion, bool small_k = false,
-    int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false>
+    int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false,
+    bool use_gfx1030_native = false>
 __launch_bounds__((mmvq_layout_policy<type, q8_1_layout_block_size>::nwarps(ncols_dst, get_device_table_id())*ggml_cuda_get_physical_warp_size()), 1)
 static __global__ void mul_mat_vec_q(
         const void * vx_ptr, const void * vy_ptr, const block_q8_1_sum_hi * sum_hi_ptr,
@@ -702,8 +703,8 @@ static __global__ void mul_mat_vec_q(
     constexpr int rows_per_cuda_block = layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
-    constexpr bool use_dot8 = use_q4_0_dot8 && type == GGML_TYPE_Q4_0;
-    constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda<use_q4_0_dot8>(type);
+    constexpr bool use_dot8 = use_gfx1030_native && type == GGML_TYPE_Q4_0 && ncols_dst == 1;
+    constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda<use_gfx1030_native>(type);
 
     const     int tid = warp_size*threadIdx.y + threadIdx.x;
     const     int row0 = rows_per_cuda_block*blockIdx.x;
@@ -1004,7 +1005,8 @@ static __global__ void mul_mat_vec_q_moe(
     }
 }
 
-template<ggml_type type, int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD>
+template<ggml_type type, int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD,
+         bool use_gfx1030_native = false>
 static std::pair<dim3, dim3> calc_launch_params(
         const int ncols_dst, const int nrows_x, const int nchannels_dst, const int nsamples_or_ntokens,
         const int warp_size, const mmvq_parameter_table_id table_id, const bool small_k = false) {
@@ -1027,7 +1029,8 @@ static std::pair<dim3, dim3> calc_launch_params(
 
 template <
     ggml_type type, int c_ncols_dst, bool small_k = false,
-    int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false>
+    int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false,
+    bool use_gfx1030_native = false>
 static void mul_mat_vec_q_switch_fusion(
         const void * vx, const void * vy, const block_q8_1_sum_hi * sum_hi, const int32_t * ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1041,7 +1044,7 @@ static void mul_mat_vec_q_switch_fusion(
                             fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
     if constexpr (c_ncols_dst == 1) {
         if (has_fusion) {
-            mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size, use_q4_0_dot8><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native><<<block_nums, block_dims, nbytes_shared, stream>>>
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -1051,7 +1054,7 @@ static void mul_mat_vec_q_switch_fusion(
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
-    mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size, use_q4_0_dot8><<<block_nums, block_dims, nbytes_shared, stream>>>
+    mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native><<<block_nums, block_dims, nbytes_shared, stream>>>
         (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -1079,7 +1082,8 @@ static void mul_mat_vec_q_moe_launch(
         ncols_dst, ids_stride);
 }
 
-template <ggml_type type, int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false>
+template <ggml_type type, int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD,
+         bool use_q4_0_dot8 = false, bool use_gfx1030_native = false>
 static void mul_mat_vec_q_switch_ncols_dst(
         const void * vx, const void * vy, const block_q8_1_sum_hi * sum_hi, const int32_t * ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1171,17 +1175,17 @@ static void mul_mat_vec_q_switch_ncols_dst(
             bool use_small_k = !use_q8_1_layout && should_use_small_k(c_ncols_dst);
 
             if (use_small_k) {
-                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size>(c_ncols_dst, nrows_x, nchannels_dst,
+                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst,
                                                                         nsamples_dst, warp_size, table_id, true);
-                mul_mat_vec_q_switch_fusion<type, c_ncols_dst, true, q8_1_layout_block_size, use_q4_0_dot8>(
+                mul_mat_vec_q_switch_fusion<type, c_ncols_dst, true, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native>(
                     vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                     channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst, sample_ratio_fd,
                     stride_sample_x, stride_sample_y, stride_sample_dst, dims.first, dims.second, 0, ids_stride,
                     stream);
             } else {
-                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size>(c_ncols_dst, nrows_x, nchannels_dst,
+                std::pair<dim3, dim3> dims = calc_launch_params<type, q8_1_layout_block_size, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst,
                                                                         nsamples_dst, warp_size, table_id);
-                mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, q8_1_layout_block_size, use_q4_0_dot8>(
+                mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native>(
                     vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                     channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst, sample_ratio_fd,
                     stride_sample_x, stride_sample_y, stride_sample_dst, dims.first, dims.second, 0, ids_stride,
@@ -1190,56 +1194,56 @@ static void mul_mat_vec_q_switch_ncols_dst(
         } break;
         case 2: {
             constexpr int c_ncols_dst = 2;
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
                  dims.first, dims.second, 0, ids_stride, stream);
         } break;
         case 3: {
             constexpr int c_ncols_dst = 3;
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
                  dims.first, dims.second, 0, ids_stride, stream);
         } break;
         case 4: {
             constexpr int c_ncols_dst = 4;
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
                  dims.first, dims.second, 0, ids_stride, stream);
         } break;
         case 5: {
             constexpr int c_ncols_dst = 5;
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
                  dims.first, dims.second, 0, ids_stride, stream);
         } break;
         case 6: {
             constexpr int c_ncols_dst = 6;
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
                  dims.first, dims.second, 0, ids_stride, stream);
         } break;
         case 7: {
             constexpr int c_ncols_dst = 7;
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
                  dims.first, dims.second, 0, ids_stride, stream);
         } break;
         case 8: {
             constexpr int c_ncols_dst = 8;
-            std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
+            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
                  dims.first, dims.second, 0, ids_stride, stream);
@@ -1250,7 +1254,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
     }
 }
 
-template <ggml_type type, int q8_1_layout_block_size>
+template <ggml_type type, int q8_1_layout_block_size, bool use_gfx1030_native = false>
 static void mul_mat_vec_q_switch_q8_1_layout(
         const void * vx, const void * vy, const block_q8_1_sum_hi * sum_hi, const int32_t * ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1264,19 +1268,19 @@ static void mul_mat_vec_q_switch_q8_1_layout(
     static_assert(mmvq_type_supports_q8_1_layout<type, q8_1_layout_block_size>());
 
     if (use_q8_1_layout) {
-        mul_mat_vec_q_switch_ncols_dst<type, q8_1_layout_block_size>
+        mul_mat_vec_q_switch_ncols_dst<type, q8_1_layout_block_size, false, use_gfx1030_native>
             (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
              nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
              nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
     } else {
-        mul_mat_vec_q_switch_ncols_dst<type>
+        mul_mat_vec_q_switch_ncols_dst<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>
             (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
              nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
              nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
     }
 }
 
-template <ggml_type type, int q8_1_layout_block_size>
+template <ggml_type type, int q8_1_layout_block_size, bool use_gfx1030_native = false>
 static void mul_mat_vec_q_switch_q8_1_layout_block(
         const void * vx, const void * vy, const block_q8_1_sum_hi * sum_hi, const int32_t * ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1289,7 +1293,7 @@ static void mul_mat_vec_q_switch_q8_1_layout_block(
     static_assert(mmvq_uses_q8_1_layout<q8_1_layout_block_size>());
 
     if constexpr (mmvq_type_supports_q8_1_layout<type, q8_1_layout_block_size>()) {
-        mul_mat_vec_q_switch_q8_1_layout<type, q8_1_layout_block_size>
+        mul_mat_vec_q_switch_q8_1_layout<type, q8_1_layout_block_size, use_gfx1030_native>
             (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
              nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
              nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream, true);
@@ -1298,7 +1302,7 @@ static void mul_mat_vec_q_switch_q8_1_layout_block(
     }
 }
 
-template <ggml_type type, bool use_q4_0_dot8 = false>
+template <ggml_type type, bool use_q4_0_dot8 = false, bool use_gfx1030_native = false>
 static void mul_mat_vec_q_switch_q8_1_layout_for_type(
         const void * vx, const void * vy, const block_q8_1_sum_hi * sum_hi, const int32_t * ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1309,25 +1313,25 @@ static void mul_mat_vec_q_switch_q8_1_layout_for_type(
         const int nsamples_x, const int nsamples_dst, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const int ids_stride, cudaStream_t stream, const int q8_1_layout_block_size) {    switch (q8_1_layout_block_size) {
         case MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_32:
-            mul_mat_vec_q_switch_ncols_dst<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_q4_0_dot8>
+            mul_mat_vec_q_switch_ncols_dst<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_q4_0_dot8, use_gfx1030_native>
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
         case MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_64:
-            mul_mat_vec_q_switch_q8_1_layout_block<type, MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_64>
+            mul_mat_vec_q_switch_q8_1_layout_block<type, MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_64, use_gfx1030_native>
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
         case MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_128:
-            mul_mat_vec_q_switch_q8_1_layout_block<type, MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_128>
+            mul_mat_vec_q_switch_q8_1_layout_block<type, MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_128, use_gfx1030_native>
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
         case MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_256:
-            mul_mat_vec_q_switch_q8_1_layout_block<type, MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_256>
+            mul_mat_vec_q_switch_q8_1_layout_block<type, MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_256, use_gfx1030_native>
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
@@ -1361,7 +1365,7 @@ static void quantize_row_q8_1_layout_cuda_switch(
     }
 }
 
-template <bool use_q4_0_dot8 = false>
+template <bool use_q4_0_dot8 = false, bool use_gfx1030_native = false>
 static void mul_mat_vec_q_switch_type(
         const void * vx, const ggml_type type_x, const void * vy, const block_q8_1_sum_hi * sum_hi,
         const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1375,7 +1379,7 @@ static void mul_mat_vec_q_switch_type(
     switch (type_x) {
 #define MMVQ_SWITCH_TYPE(type) \
         case type: \
-            mul_mat_vec_q_switch_q8_1_layout_for_type<type, use_q4_0_dot8> \
+            mul_mat_vec_q_switch_q8_1_layout_for_type<type, use_q4_0_dot8, use_gfx1030_native> \
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst, \
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst, \
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream, q8_1_layout_block_size); \
@@ -1409,25 +1413,20 @@ static void mul_mat_vec_q_switch_type(
     }
 }
 
-static bool mmvq_use_q4_0_dot8(const ggml_type type, const int ncols_dst) {
+static bool mmvq_use_gfx1030_native() {
 #if defined(GGML_USE_HIP)
-    if (type != GGML_TYPE_Q4_0 || ncols_dst != 1) {
-        return false;
-    }
-
     const int device = ggml_cuda_get_device();
     if (!GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc)) {
         return false;
     }
-
-    const char * env = std::getenv("GGML_HIP_Q4_0_DOT8");
+    const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
     return env != nullptr && std::atoi(env) != 0;
 #else
-    GGML_UNUSED(type);
-    GGML_UNUSED(ncols_dst);
     return false;
 #endif
 }
+
+
 
 void ggml_cuda_mul_mat_vec_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
@@ -1514,7 +1513,8 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t nchannels_dst = ids ? ne1  : ne2;
     const int q8_1_layout_block_size = mmvq_select_q8_1_layout_block_size(src0->type, ncols_dst);
     const bool use_q8_1_layout = q8_1_layout_block_size != MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
-    const bool use_q4_0_dot8 = mmvq_use_q4_0_dot8(src0->type, ncols_dst);
+    const bool use_gfx1030_native = mmvq_use_gfx1030_native();
+    const bool use_q4_0_dot8 = use_gfx1030_native && src0->type == GGML_TYPE_Q4_0 && ncols_dst == 1;
     GGML_ASSERT(!use_q4_0_dot8 || !use_q8_1_layout);
     const int64_t nblocks_src1_q8_1 = ne13*ne12 * ne11*ne10_padded / QK8_1;
     const size_t nbytes_src1_q8_1 = nblocks_src1_q8_1 * sizeof(block_q8_1);
@@ -1561,13 +1561,19 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
     if (use_q4_0_dot8) {
-        mul_mat_vec_q_switch_type<true>(
+        mul_mat_vec_q_switch_type<true, true>(
             src0->data, src0->type, src1_q8_1_d, src1_sum_hi_d, ids_d, fusion_local, dst_d, ne00,
             ne01,              ncols_dst,     s01, stride_col_y, stride_col_dst,
             ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
             ne03,              ne3,           s03, s13,              s3,               ids_stride, stream, q8_1_layout_block_size);
+    } else if (use_gfx1030_native) {
+        mul_mat_vec_q_switch_type<false, true>(
+            src0->data, src0->type, src1_q8_1_d, nullptr, ids_d, fusion_local, dst_d, ne00,
+            ne01,              ncols_dst,     s01, stride_col_y, stride_col_dst,
+            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+            ne03,              ne3,           s03, s13,              s3,               ids_stride, stream, q8_1_layout_block_size);
     } else {
-        mul_mat_vec_q_switch_type<false>(
+        mul_mat_vec_q_switch_type<false, false>(
             src0->data, src0->type, src1_q8_1_d, nullptr, ids_d, fusion_local, dst_d, ne00,
             ne01,              ncols_dst,     s01, stride_col_y, stride_col_dst,
             ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
@@ -1599,9 +1605,15 @@ void ggml_cuda_op_mul_mat_vec_q(
     const int stride_col_y = src1_padded_row_size / QK8_1;
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
-    mul_mat_vec_q_switch_type(
-        src0_dd_i, src0->type, src1_ddq_i, nullptr, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);
+    if (mmvq_use_gfx1030_native()) {
+        mul_mat_vec_q_switch_type<false, true>(
+            src0_dd_i, src0->type, src1_ddq_i, nullptr, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);
+    } else {
+        mul_mat_vec_q_switch_type<false, false>(
+            src0_dd_i, src0->type, src1_ddq_i, nullptr, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);
+    }
 
     GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_ncols, src1_padded_row_size);
 }

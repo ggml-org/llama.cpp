@@ -9,10 +9,38 @@ Implementation commits: `b4afc40ce`, `ed3565903`, `873653deb`, `7dd6d1fd6`, `f8c
 This is an opt-in Q4_0 MMVQ/decode prototype for HIP RDNA2/gfx1030 only. GGUF files, Q4_0 weights, NVIDIA behavior, other quantizations, and the stock DP4A path are preserved. Enable it with:
 
 ```bash
-GGML_HIP_Q4_0_DOT8=1
+GGML_HIP_GFX1030_NATIVE=1
 ```
 
 Unset or zero keeps the stock path. The selector is compiled as an A/B kernel specialization so stock execution does not enter the DOT8 arithmetic.
+
+### gfx1030 native-path inventory
+
+`GGML_HIP_GFX1030_NATIVE=1` currently selects the Q4_0 DOT8 MMVQ/decode specialization. The other applicable gfx1030 paths are already selected by the HIP architecture at compile time:
+
+- Q8_0 matvec/MMQ uses `ggml_cuda_dp4a`, lowered on RDNA2 to native `__builtin_amdgcn_sdot4`.
+- F16 attention dot products use `v_dot2_f32_f16` through `V_DOT2_F32_F16_AVAILABLE`.
+- Q4 table unpacking uses `__builtin_amdgcn_perm`; lane and wave reductions use HIP shuffle intrinsics.
+- FP16 packed scale/reduction operations use `half2` arithmetic.
+- `expf`, `logf`, and `sqrtf` execute in HIP device kernels; they are not CPU fallbacks.
+- With `GGML_HIP_GFX1030_NATIVE=1`, tiled FlashAttention KQ accumulation additionally uses HIP `__builtin_amdgcn_fdot2` (`v_dot2c_f32_f16` in the gfx1030 ISA). The host flag selects between compile-time tile-kernel specializations; vector/MMA variants remain unchanged and carry no per-dot runtime branch.
+- With the flag unset, tiled FlashAttention retains the existing `v_dot2_f32_f16`/fallback helper, preserving stock behavior.
+
+Native DOT8 extensions for Q4_K/Q5_K/Q6_K and a separate Q8 DOT8 path are not enabled because the current gfx1030 kernels do not yet have validated implementations for those formats.
+
+FlashAttention validation used the existing backend-op suite:
+
+```bash
+unset GGML_HIP_GFX1030_NATIVE
+build/bin/test-backend-ops test -o FLASH_ATTN_EXT -b ROCm0
+GGML_HIP_GFX1030_NATIVE=1 build/bin/test-backend-ops test -o FLASH_ATTN_EXT -b ROCm0
+GGML_HIP_GFX1030_NATIVE=1 GGML_CUDA_DISABLE_GRAPHS=1 \
+  build/bin/test-backend-ops test -o FLASH_ATTN_EXT -b ROCm0
+```
+
+Each run completed `2920/2920 tests passed`, including 4k/16k-context F16 tiled-FA cases. Both production and diagnostic `libggml-hip.so` binaries retain the RCCL dependency.
+
+The native tile path is selected at host dispatch time, so the inner KQ loop has no per-dot runtime branch and the stock/native kernels are separate compile-time specializations. Matched `llama-bench` runs used `-fa on -ts 1/1/1/1 -pg 4096,0 -b 512 -ub 512 -r 5`: stock prompt throughput was `4581 +/- 17` and `4688 +/- 11` tok/s across two runs; native was `4644 +/- 8` and `4683 +/- 14` tok/s. This is within run-to-run variance, so no statistically decisive FA speedup is claimed yet.
 
 The first prototype used existing Q8_1 bytes and three DOT8 operations per eight Q4 values. The follow-up keeps the normal 36-byte `block_q8_1` unchanged and adds only a two-byte-per-block `block_q8_1_sum_hi` sidecar. The optional Q8 quantizer variant writes that sidecar while producing the ordinary Q8 bytes. The DOT8 vec-dot loads the existing Q8 bytes, constructs interleaved LO/HI words in registers, and uses two independent accumulators:
 
@@ -64,7 +92,7 @@ Qwen benchmark settings: four V620s, layer split `1/1/1/1`, `--flash-attn on`, `
 
 A temporary compile-time sweep tested rows-per-block values 1, 2, 4, and 8. On isolated synthetic Q4_0 kernels, rows-four sometimes reduced kernel time and the generated ISA showed one Q8 activation load set feeding multiple row accumulators. However, this did not translate to Qwen decode performance.
 
-The rows-four Qwen trial used the temporary `GGML_HIP_Q4_0_DOT8_MMVQ_ROWS=4` build. Lower `avg_ts` means lower throughput, so the result is a regression:
+The rows-four Qwen trial used the temporary `GGML_HIP_GFX1030_NATIVE_MMVQ_ROWS=4` build. Lower `avg_ts` means lower throughput, so the result is a regression:
 
 | Generation | Stock rows=1 | Temporary DOT8 rows=4 | Time change |
 |---:|---:|---:|---:|

@@ -126,7 +126,7 @@ export GGML_CUDA_ALLREDUCE="${GGML_CUDA_ALLREDUCE:-nccl}"
 export GGML_CUDA_P2P="${GGML_CUDA_P2P:-1}"
 export NCCL_P2P_LEVEL="${NCCL_P2P_LEVEL:-PXB}"
 export GGML_TP_SHARDED_OUTPUT="${GGML_TP_SHARDED_OUTPUT:-1}"
-unset GGML_HIP_Q4_0_DOT8
+# Respect caller setting GGML_HIP_GFX1030_NATIVE; unset means stock kernels.
 
 if [[ -z "$IMATRIX" && -f "$HOME/models/qwen35-imatrix/imatrix_unsloth.gguf_file" ]]; then
     IMATRIX="$HOME/models/qwen35-imatrix/imatrix_unsloth.gguf_file"

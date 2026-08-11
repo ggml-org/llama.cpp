@@ -552,6 +552,33 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
     return x;
 }
 
+// gfx1030 wave reductions use the compiler's native DPP sequence when the
+// caller selected the native path. Keep the existing shuffle implementation
+// as the exact stock fallback and for sub-wave reductions.
+template <bool use_native, int width = WARP_SIZE>
+static __device__ __forceinline__ float ggml_cuda_warp_reduce_sum_gfx1030(float x) {
+#if defined(GGML_USE_HIP) && defined(RDNA2)
+    if constexpr (use_native && width == 32) {
+        return __builtin_amdgcn_wave_reduce_fadd_f32(x, 0);
+    }
+#else
+    GGML_UNUSED(use_native);
+#endif
+    return warp_reduce_sum<width>(x);
+}
+
+template <bool use_native, int width = WARP_SIZE>
+static __device__ __forceinline__ float ggml_cuda_warp_reduce_max_gfx1030(float x) {
+#if defined(GGML_USE_HIP) && defined(RDNA2)
+    if constexpr (use_native && width == 32) {
+        return __builtin_amdgcn_wave_reduce_fmax_f32(x, 0);
+    }
+#else
+    GGML_UNUSED(use_native);
+#endif
+    return warp_reduce_max<width>(x);
+}
+
 template<typename T, int width = WARP_SIZE>
 static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
     const int lane_id = threadIdx.x % width;
@@ -753,6 +780,21 @@ static __device__ __forceinline__ int ggml_hip_sdot8_i4(const int a, const int b
 #endif
 }
 
+// RDNA2 packed signed-16 dot helper. It is exposed for a future I16
+// consumer; current quantized LLM paths use sdot4/sdot8 instead.
+static __device__ __forceinline__ int ggml_hip_sdot2_i16(const int a, const int b, int c) {
+#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(__gfx1030__))
+    using i16x2 = short __attribute__((vector_size(4)));
+    const i16x2 va = reinterpret_cast<const i16x2 &>(a);
+    const i16x2 vb = reinterpret_cast<const i16x2 &>(b);
+    return __builtin_amdgcn_sdot2(va, vb, c, false);
+#else
+    const int16_t * va = reinterpret_cast<const int16_t *>(&a);
+    const int16_t * vb = reinterpret_cast<const int16_t *>(&b);
+    return c + int(va[0]) * int(vb[0]) + int(va[1]) * int(vb[1]);
+#endif
+}
+
 static __device__ __forceinline__ int ggml_hip_udot8_u4(const uint32_t a, const uint32_t b, int c) {
 #if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(__gfx1030__))
     return (int) __builtin_amdgcn_udot8(a, b, (uint32_t) c, false);
@@ -832,6 +874,22 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v,
     acc += tmpv.y * tmpu.y;
 #endif // FAST_FP16_AVAILABLE
 #endif // V_DOT2_F32_F16_AVAILABLE
+}
+
+// Optional RDNA2-only mixed FP16 dot path. The host supplies the runtime flag
+// so stock kernels retain the existing v_dot2/scalar implementation.
+template <bool use_native>
+static __device__ __forceinline__ void ggml_cuda_mad_f16_gfx1030(
+        float & acc, const half2 v, const half2 u) {
+#if defined(GGML_USE_HIP) && defined(RDNA2)
+    if constexpr (use_native) {
+        acc = __builtin_amdgcn_fdot2(v, u, acc, false);
+        return;
+    }
+#else
+    GGML_UNUSED(use_native);
+#endif
+    ggml_cuda_mad(acc, v, u);
 }
 
 static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v, const half2 u) {
