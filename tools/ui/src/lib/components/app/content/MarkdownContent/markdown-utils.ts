@@ -65,6 +65,7 @@ export function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
 
 	if (!wrapper) {
 		console.error('No wrapper found');
+
 		return null;
 	}
 
@@ -72,13 +73,13 @@ export function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
 
 	if (!codeElement) {
 		console.error('No code element found in wrapper');
+
 		return null;
 	}
 
 	const rawCode = codeElement.textContent ?? '';
-
 	const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
 	const language = languageLabel?.textContent?.trim() || 'text';
 
-	return { rawCode, language };
+	return { language, rawCode };
 }

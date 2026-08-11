@@ -1,34 +1,12 @@
 const STD = ['com', 'net', 'org', 'gov', 'edu'] as const;
-
 const STD_MIL = [...STD, 'mil'] as const;
-
 const ccTLD_PREFIXES: Record<string, readonly string[]> = {
+	ae: ['co', 'net', 'org', 'gov', 'ac', 'sch'],
 	// --- Standard 5 only ---
 	ar: STD,
+	au: [...STD_MIL, 'id', 'asn', 'csiro'],
 	bd: STD,
 	bg: STD,
-	cn: STD_MIL,
-	eg: STD,
-	gr: STD,
-	hk: STD,
-	hr: STD,
-	lk: STD,
-	mx: STD_MIL,
-	my: STD_MIL,
-	ng: STD,
-	ph: STD,
-	pk: STD,
-	pl: STD,
-	ro: STD,
-	ru: STD,
-	sa: STD,
-	si: STD,
-	tr: STD,
-	tw: STD,
-	ua: STD,
-	ve: STD,
-
-	au: [...STD_MIL, 'id', 'asn', 'csiro'],
 	br: [
 		...STD_MIL,
 		'art',
@@ -84,9 +62,22 @@ const ccTLD_PREFIXES: Record<string, readonly string[]> = {
 		'wiki',
 		'zlg'
 	],
+	cn: STD_MIL,
+	eg: STD,
+	gr: STD,
+	hk: STD,
+	hr: STD,
+	hu: ['co', 'net', 'org', 'gov', 'edu'],
 	id: [...STD_MIL, 'co', 'go', 'or', 'web', 'sch'],
+	il: ['co', 'net', 'org', 'gov', 'ac', 'muni'],
 	in: [...STD_MIL, 'co', 'gen', 'ind', 'firm', 'ernet', 'nic'],
+	jp: ['ac', 'ad', 'co', 'ed', 'go', 'gr', 'lg', 'ne', 'or'],
+	ke: ['co', 'or', 'ne', 'go', 'ac', 'sc'],
 	kr: [...STD_MIL, 'co', 'go', 'or', 'ac', 're'],
+	lk: STD,
+	mx: STD_MIL,
+	my: STD_MIL,
+	ng: STD,
 	nz: [
 		...STD_MIL,
 		'co',
@@ -100,19 +91,25 @@ const ccTLD_PREFIXES: Record<string, readonly string[]> = {
 		'iwi',
 		'parliament'
 	],
-	sg: [...STD, 'per'],
-	th: ['co', 'go', 'or', 'in', 'ac', 'mi', 'net'],
 
-	ae: ['co', 'net', 'org', 'gov', 'ac', 'sch'],
-	hu: ['co', 'net', 'org', 'gov', 'edu'],
-	il: ['co', 'net', 'org', 'gov', 'ac', 'muni'],
-	jp: ['ac', 'ad', 'co', 'ed', 'go', 'gr', 'lg', 'ne', 'or'],
-	ke: ['co', 'or', 'ne', 'go', 'ac', 'sc'],
+	ph: STD,
+	pk: STD,
+	pl: STD,
+	ro: STD,
 	rs: ['co', 'net', 'org', 'gov', 'edu'],
+	ru: STD,
+	sa: STD,
+	sg: [...STD, 'per'],
+
+	si: STD,
+	th: ['co', 'go', 'or', 'in', 'ac', 'mi', 'net'],
+	tr: STD,
+	tw: STD,
+	ua: STD,
 	uk: ['co', 'org', 'net', 'ac', 'gov', 'mil', 'nhs', 'police', 'mod', 'ltd', 'plc', 'me', 'sch'],
+	ve: STD,
 	za: ['co', 'org', 'net', 'web', 'law', 'mil']
 };
-
 const WILDCARD_BASES: Record<string, readonly string[]> = {
 	br: ['nom', 'blog'],
 	jp: [

@@ -1,8 +1,8 @@
-import { beforeAll, describe, expect, it } from 'vitest';
-import { zipSync, strToU8 } from 'fflate';
-import { MessageRole, MessageType } from '$lib/enums';
 import { NEWLINE } from '$lib/constants';
+import { MessageRole, MessageType } from '$lib/enums';
 import type { ExportedConversation } from '$lib/types/database';
+import { strToU8, zipSync } from 'fflate';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 let conversationsStore: typeof import('$lib/stores/conversations.svelte').conversationsStore;
 
@@ -12,12 +12,12 @@ let conversationsStore: typeof import('$lib/stores/conversations.svelte').conver
 beforeAll(async () => {
 	const store = new Map<string, string>();
 	const polyfill: Storage = {
-		get length() {
-			return store.size;
-		},
 		clear: () => store.clear(),
 		getItem: (k) => (store.has(k) ? store.get(k)! : null),
 		key: (i) => Array.from(store.keys())[i] ?? null,
+		get length() {
+			return store.size;
+		},
 		removeItem: (k) => {
 			store.delete(k);
 		},
@@ -25,6 +25,7 @@ beforeAll(async () => {
 			store.set(k, String(v));
 		}
 	};
+
 	(globalThis as unknown as { localStorage: Storage }).localStorage = polyfill;
 
 	({ conversationsStore } = await import('$lib/stores/conversations.svelte'));
@@ -32,17 +33,17 @@ beforeAll(async () => {
 
 function makeSession(id: string): ExportedConversation {
 	return {
-		conv: { id, currNode: `${id}-msg`, lastModified: 0, name: `Chat ${id}` },
+		conv: { currNode: `${id}-msg`, id, lastModified: 0, name: `Chat ${id}` },
 		messages: [
 			{
-				id: `${id}-msg`,
-				convId: id,
-				type: MessageType.TEXT,
-				timestamp: 0,
-				role: MessageRole.USER,
+				children: [],
 				content: `hello from ${id}`,
+				convId: id,
+				id: `${id}-msg`,
 				parent: null,
-				children: []
+				role: MessageRole.USER,
+				timestamp: 0,
+				type: MessageType.TEXT
 			}
 		]
 	} as unknown as ExportedConversation;
@@ -56,7 +57,6 @@ function makeSession(id: string): ExportedConversation {
 describe('conversationsStore.parseImportFile', () => {
 	it('imports a JSONL export whose name has no meaningful extension', async () => {
 		const jsonl = conversationsStore.serializeSessionToJsonl(makeSession('a'));
-
 		const sessions = await conversationsStore.parseImportFile(new File([jsonl], 'export'));
 
 		expect(sessions).toHaveLength(1);
@@ -68,7 +68,6 @@ describe('conversationsStore.parseImportFile', () => {
 		const jsonl = [makeSession('a'), makeSession('b')]
 			.map((session) => conversationsStore.serializeSessionToJsonl(session))
 			.join(NEWLINE);
-
 		const sessions = await conversationsStore.parseImportFile(new File([jsonl], 'export.txt'));
 
 		expect(sessions.map((session) => session.conv.id)).toEqual(['a', 'b']);
@@ -80,7 +79,6 @@ describe('conversationsStore.parseImportFile', () => {
 			'b.jsonl': strToU8(conversationsStore.serializeSessionToJsonl(makeSession('b'))),
 			'notes.txt': strToU8('ignored')
 		});
-
 		const sessions = await conversationsStore.parseImportFile(new File([zipped], 'archive'));
 
 		expect(sessions.map((session) => session.conv.id).sort()).toEqual(['a', 'b']);
@@ -88,7 +86,6 @@ describe('conversationsStore.parseImportFile', () => {
 
 	it('imports the legacy JSON array format', async () => {
 		const json = JSON.stringify([makeSession('a')], null, 2);
-
 		const sessions = await conversationsStore.parseImportFile(new File([json], 'export.jsonl'));
 
 		expect(sessions).toHaveLength(1);
@@ -97,7 +94,6 @@ describe('conversationsStore.parseImportFile', () => {
 
 	it('imports the legacy JSON single object format', async () => {
 		const json = JSON.stringify(makeSession('a'));
-
 		const sessions = await conversationsStore.parseImportFile(new File([json], 'export'));
 
 		expect(sessions).toHaveLength(1);
