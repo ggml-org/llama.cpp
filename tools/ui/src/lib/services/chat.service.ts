@@ -21,17 +21,12 @@ import {
 import {
 	AttachmentType,
 	ContentPartType,
-	FileTypeAudio,
 	MessageRole,
 	ReasoningFormat,
 	StreamConnectionState
 } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
-import type {
-	AudioInputFormat,
-	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource
-} from '$lib/types';
+import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import type {
 	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,

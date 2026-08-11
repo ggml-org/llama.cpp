@@ -79,8 +79,9 @@ import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraImageFile} from '$lib/types/database';
-import { getAudioInputFormat,isAbortError } from '$lib/utils';
+	DatabaseMessageExtraImageFile
+} from '$lib/types/database';
+import { getAudioInputFormat, isAbortError } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {

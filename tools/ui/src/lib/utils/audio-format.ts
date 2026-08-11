@@ -1,4 +1,4 @@
-import { FileTypeAudio,MimeTypeAudio } from '$lib/enums';
+import { FileTypeAudio, MimeTypeAudio } from '$lib/enums';
 import type { AudioInputFormat } from '$lib/types/api';
 
 /**

@@ -1,5 +1,5 @@
 import { NEWLINE } from '$lib/constants/code';
-import { PREFIX_FILE, PREFIX_MIME,PREFIX_SIZE } from '$lib/constants/read-media';
+import { PREFIX_FILE, PREFIX_MIME, PREFIX_SIZE } from '$lib/constants/read-media';
 import type { AgenticSection } from '$lib/utils';
 
 export interface ReadMediaMeta {
