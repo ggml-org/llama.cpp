@@ -600,14 +600,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         cparams.auto_fhc = false;
     }
 
-    if (cparams.n_rs_seq > 0) {
-        bool enabled = true;
-        resolve(llm_fused_op_ssm_rollback_probe, enabled);
-        if (!enabled) {
-            cparams.n_rs_seq = 0;
-            llama_memory_set_rs_seq(memory.get(), 0);
-        }
-    }
 }
 
 void llama_context::sched_reserve() {
