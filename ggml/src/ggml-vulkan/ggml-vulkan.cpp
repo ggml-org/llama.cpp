@@ -4334,6 +4334,14 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         }
 
+        // gfx12 (RDNA4): expert (mul_mat_id) GEMMs have small m (768), so a 128-row
+        // medium tile halves the row dispatches vs 64. A/B against 64 in perf runs.
+        if (!device->coopmat2 && device->architecture == vk_device_architecture::AMD_RDNA4) {
+            m_warptile_mmqid       = { 128, 128,  64, 32, mul_mat_subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, mul_mat_subgroup_size_8 };
+            m_warptile_mmqid_int   = { 128, 128,  64, 32, mul_mat_subgroup_size_8, 32, 2, 2,    2,    1,    mul_mat_subgroup_size_8 };
+            m_warptile_mmqid_int_k = { 128, 128,  64, 32, mul_mat_subgroup_size_8, 32, 1, 2,    2,    1,    mul_mat_subgroup_size_8 };
+        }
+
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
         s_mmq_wg_denoms = s_wg_denoms = { 32,  32, 1 };
