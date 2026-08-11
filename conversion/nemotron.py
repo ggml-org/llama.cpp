@@ -275,10 +275,18 @@ class NemotronHModel(GraniteHybridModel):
                 return None
         elif cls.mtp_only:
             # --mtp: export the MTP head plus the tensors it shares with the target model
+            # Include lm_head scale sidecars so NVFP4 packing sees them.
             keep = name in (
                 "backbone.embeddings.weight",
                 "backbone.norm_f.weight",
                 "lm_head.weight",
+                "lm_head.weight_scale",
+                "lm_head.weight_scale_2",
+                "lm_head.weight_scale_inv",
+                "lm_head.input_scale",
+                "lm_head.input_global_scale",
+                "lm_head.weight_global_scale",
+                "lm_head.weight_packed",
             )
             if not keep:
                 return None
