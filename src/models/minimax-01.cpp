@@ -328,7 +328,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * k_trans = ggml_cont(ctx0, ggml_permute(ctx0, Kcur, 1, 2, 0, 3));
                 cb(k_trans, "k_trans", il);
 
-                ggml_tensor * kv_cur = ggml_mul_mat(ctx0, v_trans, k_trans);
+                ggml_tensor * kv_cur = ggml_mul_mat(ctx0, k_trans, v_trans);
                 cb(kv_cur, "kv_cur", il);
 
                 ggml_tensor * kv_old_s = ggml_mul(ctx0, kv_old, ratio_3d);
@@ -340,10 +340,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * q_trans = ggml_cont(ctx0, ggml_permute(ctx0, Qcur, 0, 2, 1, 3));
                 cb(q_trans, "q_trans", il);
 
-                ggml_tensor * kv_new_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_new));
-                cb(kv_new_trans, "kv_new_trans", il);
-
-                qkv = ggml_mul_mat(ctx0, kv_new_trans, q_trans);
+                qkv = ggml_mul_mat(ctx0, kv_new, q_trans);
                 cb(qkv, "qkv", il);
             } else if(n_seq_tokens > 1) {
                 ggml_tensor * q_decay = ggml_exp(ctx0, ggml_scale(ctx0, q_decay_exp, slope_scale));
@@ -359,10 +356,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * q_s_trans = ggml_cont(ctx0, ggml_permute(ctx0, q_s, 0, 2, 1, 3));
                 cb(q_s_trans, "q_s_trans", il);
 
-                ggml_tensor * kv_old_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_old));
-                cb(kv_old_trans, "kv_old_trans", il);
-
-                ggml_tensor * qkv_none_diag = ggml_mul_mat(ctx0, kv_old_trans, q_s_trans);
+                ggml_tensor * qkv_none_diag = ggml_mul_mat(ctx0, kv_old, q_s_trans);
                 cb(qkv_none_diag, "qkv_none_diag", il);
 
                 ggml_tensor * q_trans = ggml_cont(ctx0, ggml_permute(ctx0, Qcur, 0, 2, 1, 3));
@@ -408,7 +402,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * k_after_decay_trans = ggml_cont(ctx0, ggml_permute(ctx0, k_after_decay, 1, 2, 0, 3));
                 cb(k_after_decay_trans, "k_after_decay_trans", il);
 
-                ggml_tensor * kv_cur = ggml_mul_mat(ctx0, v_trans, k_after_decay_trans);
+                ggml_tensor * kv_cur = ggml_mul_mat(ctx0, k_after_decay_trans, v_trans);
                 cb(kv_cur, "kv_cur", il);
 
                 kv_new = ggml_add(ctx0, kv_old_s, kv_cur);
