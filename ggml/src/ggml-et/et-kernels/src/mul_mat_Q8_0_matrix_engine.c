@@ -357,10 +357,6 @@ int entry_point(struct ggml_et_mm_q8_params *params, void *env) {
         }
 
         // ----- Hart 0: consumer -----
-        setup_cache_scp();
-#if CACHEOP_MAX > 0 || REP_RATE > 0
-        ucache_control(1, REP_RATE, CACHEOP_MAX);
-#endif
         CLEAR_TENSOR_ERROR;
         // Rendezvous with the producer so its counter reset is visible before we read.
         et_barrier(ET_BARRIER_MINION);
@@ -603,10 +599,6 @@ int entry_point(struct ggml_et_mm_q8_params *params, void *env) {
         return 0;
     }
 
-    setup_cache_scp();
-#if CACHEOP_MAX > 0 || REP_RATE > 0
-    ucache_control(1, REP_RATE, CACHEOP_MAX);
-#endif
     CLEAR_TENSOR_ERROR;
     // Rendezvous with the producer so its counter reset is visible before we read.
     et_barrier(ET_BARRIER_MINION);
