@@ -4,7 +4,7 @@
 	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
 	import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types';
 	import { type AgenticSection } from '$lib/utils';
-	import { parseReadImageMeta } from './parsers/read-image';
+	import { parseReadMediaMeta } from './parsers/read-media';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
@@ -16,12 +16,12 @@
 
 	let { section, open, isStreaming, onToggle }: Props = $props();
 
-	const readImageMeta = $derived(parseReadImageMeta(section));
+	const readMediaMeta = $derived(parseReadMediaMeta(section));
 
-	// Find the image attachment from toolResultExtras (attached to the tool result message.
+	// Find the attachment from toolResultExtras (attached to the tool result message.
 	// The extractBase64Attachments function in agentic.svelte.ts replaces the data URI line
 	// with [Attachment saved: name] and stores the base64 as an extra.
-	const imageAttachment = $derived.by(() => {
+	const mediaAttachment = $derived.by(() => {
 		const extras = section.toolResultExtras;
 		if (!extras || extras.length === 0) return null;
 		// Extract the attachment name from the cleaned result text
@@ -35,46 +35,46 @@
 	});
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={readImageMeta} {onToggle}>
+<ToolCallBlock {section} {open} {isStreaming} meta={readMediaMeta} {onToggle}>
 	{#snippet titleSnippet()}
-		<span class="text-muted-foreground">Read image </span>
-		<span class="font-mono">{readImageMeta?.fileName}</span>
+		<span class="text-muted-foreground">Read media </span>
+		<span class="font-mono">{readMediaMeta?.fileName}</span>
 	{/snippet}
 
 	{#snippet children(_meta, _ctx)}
 		{#if section.toolResult}
-			{#if imageAttachment}
+			{#if mediaAttachment}
 				<div class="mt-2">
 					<img
-						src={imageAttachment.base64Url}
-						alt={readImageMeta?.fileName ?? 'image'}
+						src={mediaAttachment.base64Url}
+						alt={readMediaMeta?.fileName ?? 'media'}
 						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
 						loading="lazy"
 					/>
 				</div>
 			{:else}
 				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-					Image attachment not found in message extras
+					Media attachment not found in message extras
 				</div>
 			{/if}
 
-			{#if readImageMeta?.sizeBytes || readImageMeta?.mimeType}
+			{#if readMediaMeta?.sizeBytes || readMediaMeta?.mimeType}
 				<div class="mt-2 flex gap-4 text-xs text-muted-foreground">
-					{#if readImageMeta?.sizeBytes}
-						<span>Size: {readImageMeta.sizeBytes} bytes</span>
+					{#if readMediaMeta?.sizeBytes}
+						<span>Size: {readMediaMeta.sizeBytes} bytes</span>
 					{/if}
-					{#if readImageMeta?.mimeType}
-						<span>MIME: {readImageMeta.mimeType}</span>
+					{#if readMediaMeta?.mimeType}
+						<span>MIME: {readMediaMeta.mimeType}</span>
 					{/if}
 				</div>
 			{/if}
 
-			{#if readImageMeta?.path}
-				<div class="mt-1 text-xs text-muted-foreground/60 font-mono">{readImageMeta.path}</div>
+			{#if readMediaMeta?.path}
+				<div class="mt-1 text-xs text-muted-foreground/60 font-mono">{readMediaMeta.path}</div>
 			{/if}
 		{:else}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-				Waiting for image data...
+				Waiting for media data...
 			</div>
 		{/if}
 	{/snippet}
