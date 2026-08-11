@@ -71,6 +71,8 @@ public:
     llm_graph_input_la(const llama_hparams & hparams, const llama_vocab & vocab) : hparams(hparams), vocab(vocab) {}
 
     void set_input(const llama_ubatch * ubatch) override {
+        // TODO use real token positions here
+
         if (inp_slopes) {
             const int64_t n_head = hparams.n_head();
 
@@ -140,17 +142,24 @@ public:
     }
 
     bool can_reuse(const llm_graph_params & params) override {
-        GGML_UNUSED(params);
-        return false;
+        bool res = true;
+
+        if (params.ubatch.n_seq_tokens > 1) {
+            res &= (   inp_q_decay &&    inp_q_decay->ne[2] == params.ubatch.n_seq_tokens);
+            res &= (   inp_k_decay &&    inp_k_decay->ne[2] == params.ubatch.n_seq_tokens);
+            res &= (inp_diag_decay && inp_diag_decay->ne[1] == params.ubatch.n_seq_tokens);
+        }
+
+        return res;
     }
 
     const llama_hparams & hparams;
     const llama_vocab   & vocab;
 
     ggml_tensor * inp_slopes     = nullptr; // F32 [n_head]
-    ggml_tensor * inp_q_decay    = nullptr; // F32 [n_batch, n_head]
-    ggml_tensor * inp_k_decay    = nullptr; // F32 [n_batch, n_head]
-    ggml_tensor * inp_diag_decay = nullptr; // F32 [n_head, n_batch, n_batch]
+    ggml_tensor * inp_q_decay    = nullptr; // F32 [1, n_head, n_batch]
+    ggml_tensor * inp_k_decay    = nullptr; // F32 [1, n_head, n_batch]
+    ggml_tensor * inp_diag_decay = nullptr; // F32 [n_batch, n_batch, n_head]
 };
 
 llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -202,9 +211,6 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
     la = (llm_graph_input_la *) res->add_input(std::move(inp));
 
     ggml_tensor * slopes = la->inp_slopes;
-    ggml_tensor * q_decay_exp = (n_seq_tokens != 1 ? la->inp_q_decay : nullptr);
-    ggml_tensor * k_decay_exp = (n_seq_tokens != 1 ? la->inp_k_decay : nullptr);
-    ggml_tensor * diag_decay_exp = (n_seq_tokens != 1 ? la->inp_diag_decay : nullptr);
 
     ggml_tensor * logits_mask = build_inp_logits_mask(model, 32);
 
@@ -220,7 +226,8 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
 
         // self_attention
         if (!hparams.is_recr(il)) {
-            // compute Q and K and RoPE them
+            // softmax attention layer
+
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
             cb(Qcur, "Qcur", il);
 
@@ -254,10 +261,12 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                     model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         } else {
+            // lightning attention layer
+
             const auto * mctx_cur = inp_rs->mctx;
             const auto kv_head = mctx_cur->get_head();
 
-            // TODO any way to make conv states optional in recurrent memory?
+            // TODO unneeded - any way to make conv states optional in recurrent memory?
             ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
             ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
             ggml_build_forward_expand(gf, conv_state_all);
@@ -276,14 +285,15 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
 
             QKVcur = ggml_reshape_4d(ctx0, QKVcur, n_embd_head * 3, n_head, n_seq_tokens, n_seqs);
 
-            ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 0*sizeof(float)*n_embd_head));
-            ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 1*sizeof(float)*n_embd_head));
-            ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 2*sizeof(float)*n_embd_head));
+            ggml_tensor * Qcur = ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 0*ggml_element_size(QKVcur)*n_embd_head);
+            ggml_tensor * Kcur = ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 1*ggml_element_size(QKVcur)*n_embd_head);
+            ggml_tensor * Vcur = ggml_view_4d(ctx0, QKVcur, n_embd_head, n_head, n_seq_tokens, n_seqs, QKVcur->nb[1], QKVcur->nb[2], QKVcur->nb[3], 2*ggml_element_size(QKVcur)*n_embd_head);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
+            // get previous KV
             ggml_tensor * la_states_all = mctx_cur->get_s_l(il);
             ggml_tensor * state = build_rs(inp_rs, la_states_all, hparams.n_embd_s(), n_seqs);
 
@@ -294,6 +304,8 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
             ggml_tensor * kv_new = nullptr;
 
             if (n_seq_tokens == 1) {
+                // lightning attention - optimized single token case for TG
+
                 ggml_tensor * slopes_neg = ggml_scale(ctx0, slope_rate, -1.0);
                 cb(slopes_neg, "slopes_neg", il);
 
@@ -324,9 +336,15 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 qkv = ggml_mul_mat(ctx0, kv_new, q_trans);
                 cb(qkv, "qkv", il);
             } else if(n_seq_tokens > 1) {
-                ggml_tensor * q_decay = ggml_exp(ctx0, ggml_scale(ctx0, q_decay_exp, slope_scale));
+                // lightning attention - general multi token case for PP
+
+                ggml_tensor *    q_decay_exp = la->inp_q_decay;
+                ggml_tensor *    k_decay_exp = la->inp_k_decay;
+                ggml_tensor * diag_decay_exp = la->inp_diag_decay;
+
+                ggml_tensor *    q_decay = ggml_exp(ctx0, ggml_scale(ctx0, q_decay_exp, slope_scale));
                 cb(q_decay, "q_decay", il);
-                ggml_tensor * k_decay = ggml_exp(ctx0, ggml_scale(ctx0, k_decay_exp, slope_scale));
+                ggml_tensor *    k_decay = ggml_exp(ctx0, ggml_scale(ctx0, k_decay_exp, slope_scale));
                 cb(k_decay, "k_decay", il);
                 ggml_tensor * diag_decay = ggml_exp(ctx0, ggml_scale(ctx0, diag_decay_exp, slope_scale));
                 cb(diag_decay, "diag_decay", il);
@@ -388,7 +406,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 cb(kv_new, "kv_new", il);
             }
 
-            // update the recurrent states
+            // store new KV
             ggml_build_forward_expand(gf,
                                      ggml_cpy(ctx0, kv_new,
                                               ggml_view_1d(ctx0, la_states_all, hparams.n_embd_s() * n_seqs,
