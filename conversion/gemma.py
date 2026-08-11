@@ -666,7 +666,20 @@ class Gemma4Model(Gemma3Model):
         self.gguf_writer.add_sliding_window_pattern(swa_layers)
 
         text_config = self.hparams.get("text_config", {})
-        head_dim_full = text_config.get("global_head_dim", self.hparams.get("head_dim", 256))
+        head_dim_full = None
+        
+        head_dim_full = text_config.get("global_head_dim")
+        
+        if head_dim_full is None and "per_layer_config" in text_config:
+            per_layer_config = text_config["per_layer_config"]
+            for layer_config in per_layer_config.values():
+                if "head_dim" in layer_config:
+                    head_dim_full = layer_config["head_dim"]
+                    break
+        
+        if head_dim_full is None:
+            head_dim_full = self.hparams.get("head_dim", 256)
+
         head_dim_swa = self.hparams["head_dim"]
         # correct the head dim for global/swa layers
         self.gguf_writer.add_key_length(head_dim_full)
@@ -709,8 +722,22 @@ class Gemma4Model(Gemma3Model):
         # IMPORTANT: this ROPE_FREQS tensor is ONLY used by the full_attention layers
         rope_params_full = self.hparams["rope_parameters"]["full_attention"]
         assert rope_params_full["rope_type"] == "proportional"
+
         text_config = self.hparams.get("text_config", {})
-        head_dim_full = text_config.get("global_head_dim", self.hparams.get("head_dim", 256))
+        head_dim_full = None
+        
+        head_dim_full = text_config.get("global_head_dim")
+        
+        if head_dim_full is None and "per_layer_config" in text_config:
+            per_layer_config = text_config["per_layer_config"]
+            for layer_config in per_layer_config.values():
+                if "head_dim" in layer_config:
+                    head_dim_full = layer_config["head_dim"]
+                    break
+        
+        if head_dim_full is None:
+            head_dim_full = self.hparams.get("head_dim", 256)
+        
         partial_rotary_factor_full = rope_params_full["partial_rotary_factor"]
         n_rot_full = int(head_dim_full * partial_rotary_factor_full / 2)
         n_unrot_full = int(head_dim_full / 2) - n_rot_full
