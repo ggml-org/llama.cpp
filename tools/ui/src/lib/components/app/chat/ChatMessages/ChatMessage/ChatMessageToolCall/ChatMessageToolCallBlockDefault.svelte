@@ -121,8 +121,8 @@
 										class="mt-2 mb-2 h-auto max-w-full rounded-lg"
 										loading="lazy"
 									/>
-									{/if}
 								{/if}
+							{/if}
 						{/each}
 					</div>
 				{/if}
