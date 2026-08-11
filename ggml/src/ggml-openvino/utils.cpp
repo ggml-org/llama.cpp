@@ -1301,9 +1301,20 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
         if (cache_hit) {
             ggml_decoder = entry->ptr;
+            // The cache key is only (n_nodes, first/last node name), so it cannot see a change in
+            // WHICH tensors are graph outputs -- and the compiled model's Results are fixed when it is
+            // built. A consumer that starts requesting extra outputs later (speculative decoding marks
+            // the target's per-layer residuals only once the draft is initialised) would otherwise keep
+            // reusing a model that never produces them, and the host would read unwritten buffers as
+            // zeros. Recompile when the output set differs.
             old_m_params = ggml_decoder->get_model_params();
             if (!ggml_decoder->is_splited_model()) {
                 cache_hit = old_m_params.can_reuse_dynamically(m_params);
+            }
+            // Must come AFTER can_reuse_dynamically(), which ASSIGNS to cache_hit rather than
+            // and-ing into it and would otherwise silently undo this invalidation.
+            if (cache_hit && !ggml_decoder->has_same_graph_io(cgraph)) {
+                cache_hit = false;
             }
         }
 

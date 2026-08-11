@@ -458,6 +458,11 @@ public:
     void update_io(ggml_cgraph * cgraph);
     bool is_bound_to(const ggml_cgraph * cgraph) const;
 
+    // Was this decoder built for a graph with the same OUTPUT set as `cgraph`? The cache key is
+    // only (n_nodes, first/last node name), which cannot see a change in which tensors are marked
+    // as outputs, and the compiled model's Results are fixed at compile time.
+    bool has_same_graph_io(const ggml_cgraph * cgraph) const;
+
     static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
     }
@@ -769,6 +774,8 @@ private:
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::map<std::string, ggml_tensor *> m_model_outputs;
     std::set<std::string> m_model_output_names;
+    // The output set the compiled model was built from, for has_same_graph_io().
+    std::set<std::string> m_built_output_names;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
     std::set<const ggml_tensor *> m_kvcache_4d;
