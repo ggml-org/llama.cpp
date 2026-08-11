@@ -398,8 +398,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
-                    const int smem_offs_b = ggml_cuda_fattn_swz_bytes_rc<stride_tile, swz>(i, k*h2_per_chunk);
-                    cp_async_cg_16<preload>(tile_KV_32 + smem_offs_b, KV + i*stride_KV + k*h2_per_chunk);
+                    if constexpr (swz) {
+                        const int smem_offs_b = ggml_cuda_fattn_swz_bytes_rc<stride_tile, swz>(i, k*h2_per_chunk);
+                        cp_async_cg_16<preload>(tile_KV_32 + smem_offs_b, KV + i*stride_KV + k*h2_per_chunk);
+                    } else {
+                        cp_async_cg_16<preload>(
+                            tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV + i*stride_KV + k*h2_per_chunk);
+                    }
                 }
             }
         };
@@ -434,8 +439,15 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
-                    ggml_cuda_memcpy_1<16>((char*)tile_KV + ggml_cuda_fattn_swz_bytes_rc<stride_tile, swz>(i, k*h2_per_chunk),
-                        !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
+                    if constexpr (swz) {
+                        ggml_cuda_memcpy_1<16>(
+                            (char *) tile_KV + ggml_cuda_fattn_swz_bytes_rc<stride_tile, swz>(i, k*h2_per_chunk),
+                            !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
+                    } else {
+                        ggml_cuda_memcpy_1<16>(
+                            tile_KV + i*stride_tile + k*4,
+                            !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
+                    }
                 }
             }
         };
@@ -984,9 +996,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::J;
 
                 T_A_VKQ A; // Transposed in SRAM but not in registers, gets transposed on load.
-                const int v_lin = (int)(tile_V_i - tile_V) + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2;
-                ggml_cuda_fattn_smem_swizzle::load_ldmatrix_trans<T_A_VKQ, stride_tile_V, swz_V>(
-                    A, tile_V, v_lin / stride_tile_V, v_lin % stride_tile_V);
+                if constexpr (swz_V) {
+                    const int v_lin = (int)(tile_V_i - tile_V) + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2;
+                    ggml_cuda_fattn_smem_swizzle::load_ldmatrix_trans<T_A_VKQ, stride_tile_V, swz_V>(
+                        A, tile_V, v_lin / stride_tile_V, v_lin % stride_tile_V);
+                } else {
+                    load_ldmatrix_trans(
+                        A, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
+                }
                 if constexpr (T_B_KQ::I == 8) {
                     mma(VKQ_C[i_VKQ_0/T_A_VKQ::I], A, B[k00/(np*T_A_VKQ::J)]);
                 } else {
@@ -1012,9 +1029,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::I;
 
                 T_A_VKQ A; // Transposed in both SRAM and registers, load normally.
-                const int v_lin = (int)(tile_V_i - tile_V) + k0*stride_tile_V + (i_VKQ_0 - i0_start)/2;
-                ggml_cuda_fattn_smem_swizzle::load_ldmatrix<T_A_VKQ, stride_tile_V, swz_V>(
-                    A, tile_V, v_lin / stride_tile_V, v_lin % stride_tile_V);
+                if constexpr (swz_V) {
+                    const int v_lin = (int)(tile_V_i - tile_V) + k0*stride_tile_V + (i_VKQ_0 - i0_start)/2;
+                    ggml_cuda_fattn_smem_swizzle::load_ldmatrix<T_A_VKQ, stride_tile_V, swz_V>(
+                        A, tile_V, v_lin / stride_tile_V, v_lin % stride_tile_V);
+                } else {
+                    load_ldmatrix(A, tile_V_i + k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
+                }
                 mma(VKQ_C[i_VKQ_0/i0_stride], B[k00/(np*T_A_VKQ::I)], A);
             }
         }
