@@ -1053,7 +1053,7 @@ struct server_tool_read_media : server_tool {
                     data_uri.c_str())},
             {"path", path},
             {"mime", mime},
-            {"size_bytes", (int)file_size},
+            {"size_bytes", (size_t)file_size},
         };
     }
 };
