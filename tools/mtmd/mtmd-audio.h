@@ -129,6 +129,13 @@ struct mtmd_audio_preprocessor_qwen3tts_spk : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+// mimi convolves the waveform directly, so this only pads it to a whole number of frames
+struct mtmd_audio_preprocessor_pockettts : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_pockettts(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override {}
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+};
+
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_parakeet(clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) { }
     void initialize() override;

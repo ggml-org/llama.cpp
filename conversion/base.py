@@ -58,6 +58,11 @@ logger = logging.getLogger("hf-to-gguf")
 AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
 
 
+# for checkpoints that ship no config.json, we will try to provide a synthetic one
+HparamsMatcher = Callable[[Path], bool]
+HparamsLoader = Callable[[Path], dict[str, Any]]
+
+
 class SentencePieceTokenTypes(IntEnum):
     NORMAL = 1
     UNKNOWN = 2
@@ -77,6 +82,7 @@ class ModelBase:
         ModelType.TEXT: {},
         ModelType.MMPROJ: {},
     }
+    _hparams_loaders: list[tuple[HparamsMatcher, HparamsLoader]] = []
 
     dir_model: Path
     ftype: gguf.LlamaFileType
@@ -1041,6 +1047,24 @@ class ModelBase:
         return part_names
 
     @staticmethod
+    def load_hparams_guess(dir_model: Path) -> dict[str, Any] | None:
+        # some models ship no config.json, will try to guess them
+        from conversion import load_all_models
+        load_all_models()
+
+        for matcher, loader in ModelBase._hparams_loaders:
+            if matcher(dir_model):
+                return loader(dir_model)
+        return None
+
+    @classmethod
+    def register_hparams_loader(cls, matcher: HparamsMatcher) -> Callable[[HparamsLoader], HparamsLoader]:
+        def inner(loader: HparamsLoader) -> HparamsLoader:
+            cls._hparams_loaders.append((matcher, loader))
+            return loader
+        return inner
+
+    @staticmethod
     def load_hparams(dir_model: Path, is_mistral_format: bool):
         if is_mistral_format:
             with open(dir_model / "params.json", "r", encoding="utf-8") as f:
@@ -1053,6 +1077,10 @@ class ModelBase:
             config = AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
+            if not (dir_model / "config.json").is_file():
+                config = ModelBase.load_hparams_guess(dir_model)
+                if config is not None:
+                    return config
             logger.warning("Trying to load config.json instead")
             with open(dir_model / "config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
