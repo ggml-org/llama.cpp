@@ -650,13 +650,19 @@ struct server_slot {
         SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s, tg_3s = %6.2f t/s\n", n_decoded, n_gen_second, n_gen_second_win);
     }
 
-    void print_timings_pp() const {
-        const double n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
-        const double f_progress = (float) prompt.n_tokens() / task->n_tokens();
+    void print_timings_pp() {
+        const int64_t t_now = ggml_time_us();
 
-        if (t_prompt_processing < 3000.0) {
+        if (t_prompt_processing < 3000.0 || t_now - t_print_last < 3*1000*1000) {
             return;
         }
+
+        t_print_last = t_now;
+
+        const int32_t n_prompt_tokens_done       = std::max(0, prompt.n_tokens() - n_prompt_tokens_cache);
+        const int32_t n_prompt_tokens_to_process = std::max(1, task->n_tokens() - n_prompt_tokens_cache);
+        const double  n_prompt_second            = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        const double  f_progress                 = std::min(1.0, (double) n_prompt_tokens_done / n_prompt_tokens_to_process);
 
         SLT_INF(*this, "prompt processing, n_tokens = %6d, progress = %.2f, t = %6.2f s / %.2f tokens per second\n",
                 n_prompt_tokens_processed, f_progress, t_prompt_processing / 1e3, n_prompt_second);
