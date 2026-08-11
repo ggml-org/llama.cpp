@@ -75,9 +75,10 @@ import type {
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
-	DatabaseMessageExtraImageFile
+	DatabaseMessageExtraImageFile,
+	DatabaseMessageExtraAudioFile
 } from '$lib/types/database';
-import { isAbortError } from '$lib/utils';
+import { isAbortError, getAudioInputFormat } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
@@ -990,7 +991,15 @@ class AgenticStore {
 				];
 
 				for (const attachment of attachments) {
-					if (attachment.type === AttachmentType.IMAGE) {
+					if (attachment.type === AttachmentType.AUDIO) {
+						contentParts.push({
+							type: ContentPartType.INPUT_AUDIO,
+							input_audio: {
+								data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
+								format: getAudioInputFormat((attachment as DatabaseMessageExtraAudioFile).mimeType)
+							}
+						});
+					} else if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
 								image_url: {
@@ -1092,11 +1101,23 @@ class AgenticStore {
 				return line;
 			}
 
+			// Audio extras require raw base64 in base64Data (not full data URI).
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
 			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
 				attachments.push({ base64Url: trimmedLine, name, type: AttachmentType.IMAGE });
+
+				return `[Attachment saved: ${name}]`;
+			}
+
+			if (mimeType.startsWith('audio/')) {
+				attachments.push({
+					type: AttachmentType.AUDIO,
+					name,
+					mimeType,
+					base64Data: base64Data
+				});
 
 				return `[Attachment saved: ${name}]`;
 			}
@@ -1108,6 +1129,11 @@ class AgenticStore {
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
+		if (mimeType.startsWith('audio/')) {
+			const extension = AUDIO_MIME_TO_EXTENSION[mimeType] ?? 'mp3';
+			return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+		}
+
 		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
 
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;

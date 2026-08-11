@@ -950,13 +950,14 @@ struct server_tool_read_file : server_tool {
 // read_media: read a media file (image or audio)
 //
 
-static constexpr size_t SERVER_TOOL_READ_MEDIA_MAX_SIZE = 16 * 1024 * 1024; // 16 MB
+static constexpr size_t SERVER_TOOL_READ_MEDIA_MAX_SIZE = 32 * 1024 * 1024; // 32 MB
 static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_FILE = "File: ";
 static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_SIZE = "Size: ";
 static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_MIME = "MIME: ";
 
 static std::string get_mime_from_extension(const std::string & path) {
     static const std::unordered_map<std::string, std::string> mime_map = {
+        // Images
         {".png",  "image/png"},
         {".jpg",  "image/jpeg"},
         {".jpeg", "image/jpeg"},
@@ -965,6 +966,13 @@ static std::string get_mime_from_extension(const std::string & path) {
         {".tiff", "image/tiff"},
         {".tif",  "image/tiff"},
         {".gif",  "image/gif"},
+        // Audio
+        {".mp3",  "audio/mpeg"},
+        {".wav",  "audio/wav"},
+        {".ogg",  "audio/ogg"},
+        {".flac", "audio/flac"},
+        {".m4a",  "audio/mp4"},
+        {".opus", "audio/opus"},
     };
     auto ext = fs::path(path).extension().string();
     auto it = mime_map.find(ext);
@@ -983,11 +991,11 @@ struct server_tool_read_media : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Read a media file (audio, image) from disk and return it as base64-encoded data with metadata."},
+                {"description", "Read the content of a media file (audio, image)."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
-                        {"path", {{"type", "string"}, {"description", "Absolute path to the media file."}}},
+                        {"path", {{"type", "string"}, {"description", "Path to the media file."}}},
                     }},
                     {"required", json::array({"path"})},
                 }},
@@ -2072,7 +2080,6 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
     throw std::invalid_argument(string_format("unknown tool \"%s\"", name.c_str()));
 }
 
-//
 //
 // public API
 //
