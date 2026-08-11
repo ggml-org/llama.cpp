@@ -59,8 +59,10 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
 
 ### Checklist for porting new audio generation models to mtmd
 
-1. Establish a list of reusable and missing components from the current mtmd implementation.
-2. For GGUF conversion:
+1. Make sure to consult merged PRs about adding new TTS models, especially reviewer comments
+    - Example: https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+mtmd+tts+is%3Amerged
+2. Establish a list of reusable and missing components from the current mtmd implementation.
+3. For GGUF conversion:
     - Backbone model should be converted to a normal text model (loadable via `libllama`)
         - If model used hard-coded embedding row ID, append them to token embeddings and assign token name for them (see `qwen3tts.py`)
         - If model have a specific output logits head for audio codes (usually semantic code), keep the head as-is and pad the logits at inference time (see `src/models/qwen3vl.cpp`)
@@ -70,12 +72,17 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
     - For tensor naming:
         - Prefixed with `a.*` for tensors used by speaker encoder pipeline
         - Prefixed with `a.gen.*` for generation stages (code / mel-spectrogram / PCM generation)
-3. Make sure most of the changes happen inside `mtmd-helper-gen.cpp`. A good PR looks like this:
+    - For GGUF metadata:
+        - Reuse as many existing keys as possible
+        - In most cases, you can hard-code model configs in the model graph class, or in `clip_hparams`
+        - If some values need to be exposed to the `mtmd_helper` layer, hard-code them in `mtmd_helper` and distinguish by pipeline and `mtmd_gen_audio_info::model_variant` if necessary
+        - Do NOT add new GGUF metadata or new fields to `mtmd_gen_audio_info` unless you can prove that you absolutely need them
+4. Make sure most of the changes happen inside `mtmd-helper-gen.cpp`. A good PR looks like this:
     - 10-20% changes is to add new backbone (text) model and conversion
     - 60% changes inside `mtmd-helper-gen.cpp`
     - 10% changes inside `libmtmd` and `clip.cpp` systems
     - The rest downstream code (CLI, server) should have no changes at all
-4. Update usage documentation in `tools/tts/README.md`
+5. Update usage documentation in `tools/tts/README.md`
 
 IMPORTANT: If your model needs changes that don't fit the existing infrastructure, **open an issue first for discussion**.
 

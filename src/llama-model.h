@@ -223,6 +223,24 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_norm      = nullptr;
 };
 
+struct llama_layer_switch_lora {
+    struct ggml_tensor * a_q    = nullptr;
+    struct ggml_tensor * b_q    = nullptr;
+    struct ggml_tensor * a_k    = nullptr;
+    struct ggml_tensor * b_k    = nullptr;
+    struct ggml_tensor * a_v    = nullptr;
+    struct ggml_tensor * b_v    = nullptr;
+    struct ggml_tensor * a_o    = nullptr;
+    struct ggml_tensor * b_o    = nullptr;
+
+    struct ggml_tensor * a_gate = nullptr;
+    struct ggml_tensor * b_gate = nullptr;
+    struct ggml_tensor * a_up   = nullptr;
+    struct ggml_tensor * b_up   = nullptr;
+    struct ggml_tensor * a_down = nullptr;
+    struct ggml_tensor * b_down = nullptr;
+};
+
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
@@ -533,6 +551,8 @@ struct llama_layer {
     struct llama_layer_shortconv shortconv;
 
     struct llama_layer_nextn nextn;
+
+    struct llama_layer_switch_lora switch_lora;
 };
 
 struct llama_device {
@@ -603,8 +623,9 @@ struct llama_model {
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
-    // eagle3
-    struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    // eagle3 / dflash feature fusion layer
+    struct ggml_tensor * fc   = nullptr;
+    struct ggml_tensor * fc_s = nullptr;
     struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
 
     // dspark

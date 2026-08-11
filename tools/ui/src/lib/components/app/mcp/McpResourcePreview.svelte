@@ -1,18 +1,18 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { FileText, Loader2, AlertCircle, Download } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		isImageMimeType,
-		createBase64DataUrl,
-		getResourceTextContent,
-		getResourceBlobContent,
-		downloadResourceContent
-	} from '$lib/utils';
-	import { MimeTypeApplication, MimeTypeText } from '$lib/enums';
+	import { AlertCircle, Download, FileText, Loader2 } from '@lucide/svelte';
 	import { ActionIconCopyToClipboard } from '$lib/components/app';
-	import type { MCPResourceInfo, MCPResourceContent } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { MimeTypeApplication, MimeTypeText } from '$lib/enums';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import type { MCPResourceContent, MCPResourceInfo } from '$lib/types';
+	import {
+		createBase64DataUrl,
+		downloadResourceContent,
+		getResourceBlobContent,
+		getResourceTextContent,
+		isImageMimeType
+	} from '$lib/utils';
 
 	interface Props {
 		resource: MCPResourceInfo | null;
@@ -21,7 +21,7 @@
 		class?: string;
 	}
 
-	let { resource, preloadedContent, class: className }: Props = $props();
+	let { class: className, preloadedContent, resource }: Props = $props();
 
 	let content = $state<MCPResourceContent[] | null>(null);
 	let isLoading = $state(false);
@@ -48,6 +48,7 @@
 
 		try {
 			const result = await mcpStore.readResource(uri);
+
 			if (result) {
 				content = result;
 			} else {
@@ -62,7 +63,9 @@
 
 	function handleDownload() {
 		const text = getResourceTextContent(content);
+
 		if (!text || !resource) return;
+
 		downloadResourceContent(
 			text,
 			resource.mimeType || MimeTypeText.PLAIN,

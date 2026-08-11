@@ -33,6 +33,7 @@ export {
 export {
 	highlightCode,
 	detectIncompleteCodeBlock,
+	splitGluedClosingCodeFences,
 	trimCodePadding,
 	type IncompleteCodeBlock
 } from './code';
@@ -174,18 +175,80 @@ export {
 export {
 	splitPathQuery,
 	buildCaseInsensitiveGlob,
+	buildGlobSearchArgs,
 	rankEntries,
 	joinPath,
 	highlightMatch,
 	type GlobEntry,
+	type GlobSearchArgs,
 	type PathQuery
 } from './working-directory';
+
+// Shared `file_glob_search` runner with a short-lived result cache
+export {
+	runGlobSearch,
+	runGlobSearchWithChildren,
+	type GlobEntryResult,
+	type GlobSearchResult
+} from './glob-search';
+
+// Mention-token detection (for the `@`-triggered file/folder mention picker)
+export {
+	findMentionToken,
+	takeMentionDismissSnapshot,
+	type MentionDismissSnapshot
+} from './mention-token';
+
+// Slash-command token detection (for the `/`-triggered command picker)
+export {
+	findCommandToken,
+	takeCommandDismissSnapshot,
+	type CommandDismissSnapshot
+} from './command-token';
+
+// Tokenization for the chat-form contenteditable (mention links + code spans <-> chip DOM)
+export {
+	tokenizeContent,
+	containsCodeSpan,
+	isOffsetInCodeBlock,
+	domMatchesTokens,
+	syncCodeBlockHatches,
+	stripBlockBoundaryLineBreaks,
+	serializeContent,
+	buildFragment,
+	rangeToTextOffset,
+	textOffsetToRange,
+	badgeAwareWordJump,
+	leadingBadgeEdgeOffset,
+	type ContentToken
+} from './contenteditable-tokenizer';
+
+// Source-space undo/redo history for the chat-form contenteditable
+export { SourceHistory, type SourceHistoryEntry } from './source-history';
+
+// Mention-badge visual contract (used by the contenteditable / rehype
+// DOM paths that build the same chip without a Svelte mount)
+export {
+	containsFileMentionLink,
+	fileMentionLinkRe,
+	encodeFileLinkPath,
+	decodeFileLinkPath,
+	MENTION_BADGE_CLASSNAME,
+	MENTION_BADGE_ICON_CLASSNAME,
+	MENTION_BADGE_SVG_ATTRIBUTES,
+	MENTION_BADGE_FILE_ICON_PATHS,
+	MENTION_BADGE_FOLDER_ICON_PATHS,
+	getMentionBadgeIconPaths,
+	getMentionBadgeLabel,
+	splitMentionSegments,
+	buildMentionInsertion
+} from './mention-badge';
 
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
 	buildAssistantRawOutput,
-	parseToolResultWithImages,
+	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
 	classifyToolResult,
@@ -254,7 +317,16 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getBuiltinToolUi, type BuiltinToolUiEntry } from '$lib/constants/built-in-tools';
+export { getBuiltinToolUi } from './built-in-tools';
+export type { BuiltinToolUiEntry } from '$lib/types';
+
+// Chat command picker
+
+export { getChatCommands } from './chat-commands';
+
+// Sandbox tool definition
+// SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.
+export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-tool';
 
 // Cryptography utilities
 
@@ -262,3 +334,6 @@ export { uuid } from './uuid';
 
 // CSS utilities
 export { remToPx } from './css';
+
+// Audio format helper (used by agentic store and chat service)
+export { getAudioInputFormat } from './audio-format';

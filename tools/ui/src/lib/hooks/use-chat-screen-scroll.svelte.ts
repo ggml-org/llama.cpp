@@ -7,8 +7,8 @@
  * scroll handler seeing spurious events from layout shifts.
  */
 
-import { afterNavigate, beforeNavigate } from '$app/navigation';
 import type { AutoScrollController } from './use-auto-scroll.svelte';
+import { afterNavigate, beforeNavigate } from '$app/navigation';
 
 export function useChatScreenScroll(autoScroll: AutoScrollController) {
 	let chatScrollContainer: HTMLElement | undefined = $state();
@@ -18,6 +18,7 @@ export function useChatScreenScroll(autoScroll: AutoScrollController) {
 		// Ignore scroll events caused by navigation layout changes or by our own
 		// programmatic scrolls so they don't accidentally disable auto-scroll.
 		if (isNavigating || !event.isTrusted) return;
+
 		autoScroll.handleScroll();
 	}
 

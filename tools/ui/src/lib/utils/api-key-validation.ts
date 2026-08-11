@@ -1,7 +1,7 @@
-import { base } from '$app/paths';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
-import { AUTHORIZATION_HEADER, BEARER_PREFIX, CONTENT_TYPE_HEADER } from '$lib/constants';
+import { base } from '$app/paths';
+import { HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 
@@ -18,14 +18,14 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 
 	try {
 		const headers: Record<string, string> = {
-			[CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON
+			[HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON
 		};
 
 		// Probe /props even without a stored key: on a server started with
 		// --api-key the unauthenticated request returns 401 and surfaces the
 		// API key splash, which is the onboarding path for entering the key.
 		if (apiKey) {
-			headers[AUTHORIZATION_HEADER] = `${BEARER_PREFIX}${apiKey}`;
+			headers[HEADERS.AUTHORIZATION] = `${HEADERS.BEARER}${apiKey}`;
 		}
 
 		const response = await fetch(`${base}/props`, { headers });
@@ -36,6 +36,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 			}
 
 			console.warn(`Server responded with status ${response.status} during API key validation`);
+
 			return;
 		}
 	} catch (err) {

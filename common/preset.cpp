@@ -322,6 +322,8 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                     preset.options[opt] = value;
                 }
                 LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
+            } else if (ignore_unknown_keys) {
+                LOG_WRN("ignoring option '%s' from %s: not supported by this program\n", key.c_str(), path.c_str());
             } else {
                 throw std::runtime_error(string_format(
                     "option '%s' not recognized in preset '%s'",

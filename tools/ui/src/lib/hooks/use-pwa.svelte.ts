@@ -1,8 +1,7 @@
 import { browser } from '$app/environment';
-import { useRegisterSW } from 'virtual:pwa-register/svelte';
+import { BUILD_VERSION_LOCALSTORAGE_KEY, SW_CONFIG } from '$lib/constants';
 import { versionStore } from '$lib/stores/version.svelte';
-import { BUILD_VERSION_LOCALSTORAGE_KEY } from '$lib/constants/storage';
-import { SW_CONFIG } from '$lib/constants/pwa';
+import { useRegisterSW } from 'virtual:pwa-register/svelte';
 
 /**
  * Hook for PWA service worker registration, update polling, and build version mismatch detection.
@@ -24,6 +23,7 @@ export function usePwa() {
 			if (swCheckInterval) {
 				clearInterval(swCheckInterval);
 			}
+
 			swCheckInterval = setInterval(async () => {
 				if (!r || r.installing || !navigator?.onLine) return;
 
@@ -35,6 +35,7 @@ export function usePwa() {
 							'cache-control': SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE_CONTROL
 						}
 					});
+
 					if (resp?.status === 200) {
 						await r.update();
 					}
@@ -53,14 +54,17 @@ export function usePwa() {
 	// This comparison detects server upgrades for non-PWA users.
 	$effect(() => {
 		if (!browser) return;
+
 		// PWA pages update via the service worker path; the storage check is the non-PWA fallback only
 		if (navigator.serviceWorker?.controller) return;
 
 		const currentVersion = versionStore.value;
+
 		if (!currentVersion) return;
 
 		try {
 			const storedVersion = localStorage.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
+
 			needRefreshByStorage = !!storedVersion && storedVersion !== currentVersion;
 			localStorage.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
 		} catch {
@@ -73,10 +77,10 @@ export function usePwa() {
 		get needRefresh() {
 			return pwaNeedRefresh;
 		},
-		updateServiceWorker,
 		/** Version mismatch detected via localStorage (non-PWA users) */
 		get needRefreshByStorage() {
 			return needRefreshByStorage;
-		}
+		},
+		updateServiceWorker
 	};
 }

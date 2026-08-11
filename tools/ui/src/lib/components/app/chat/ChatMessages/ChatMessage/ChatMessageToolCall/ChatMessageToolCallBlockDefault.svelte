@@ -3,19 +3,21 @@
 	// Renders section.toolArgs / section.toolResult directly using the
 	// shared chrome shell.
 
+	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
-	import { FileTypeText, ToolResultKind } from '$lib/enums';
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
+	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
+	import type { DatabaseMessageExtra } from '$lib/types';
 	import {
+		type AgenticSection,
 		classifyToolResult,
 		formatJsonPretty,
-		parseToolResultWithImages,
-		type AgenticSection
+		getBuiltinToolUi,
+		parseToolResultWithMedia,
+		type ToolResultLine
 	} from '$lib/utils';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { createBase64DataUrl } from '$lib/utils/data-url';
 
 	interface Props {
 		section: AgenticSection;
@@ -25,12 +27,12 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, attachments, onToggle }: Props = $props();
+	let { attachments, isStreaming, onToggle, open, section }: Props = $props();
 
 	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
 	const outputKind = $derived(classifyToolResult(section.toolResult));
-	const parsedLines = $derived(
-		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
+	const parsedLines: ToolResultLine[] = $derived(
+		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
 	);
 </script>
 
@@ -103,13 +105,26 @@
 							<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
 								{line.text}
 							</div>
-							{#if line.image}
-								<img
-									src={line.image.base64Url}
-									alt={line.image.name}
-									class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-									loading="lazy"
-								/>
+							{#if line.media}
+								{#if line.media.type === AttachmentType.AUDIO}
+									{@const audioMimeType = line.media.mimeType ?? MimeTypeAudio.MP3_MPEG}
+									<div class="mt-2 mb-2">
+										<audio controls class="w-full rounded-lg">
+											<source
+												src={createBase64DataUrl(audioMimeType, line.media.base64Data)}
+												type={audioMimeType}
+											/>
+											Your browser does not support the audio element.
+										</audio>
+									</div>
+								{:else}
+									<img
+										src={line.media.base64Url}
+										alt={line.media.name}
+										class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+										loading="lazy"
+									/>
+								{/if}
 							{/if}
 						{/each}
 					</div>

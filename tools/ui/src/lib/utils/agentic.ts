@@ -1,26 +1,18 @@
 import {
+	ATTACHMENT_SAVED_REGEX,
+	MARKDOWN,
+	NEWLINE,
+	REASONING_TAGS,
+	SEARCH_SUMMARY,
+	TOOL_RESULT_JSON_OPEN_REGEX
+} from '$lib/constants';
+import {
 	AgenticSectionType,
 	AttachmentType,
 	ContinueIntentKind,
 	MessageRole,
 	ToolResultKind
 } from '$lib/enums';
-import {
-	ATTACHMENT_SAVED_REGEX,
-	MARKDOWN_ATX_HEADING_REGEX,
-	MARKDOWN_BOLD_REGEX,
-	MARKDOWN_BLOCKQUOTE_REGEX,
-	MARKDOWN_CODE_FENCE_REGEX,
-	MARKDOWN_LINK_REGEX,
-	MARKDOWN_LIST_BULLET_REGEX,
-	MARKDOWN_LIST_NUMBERED_REGEX,
-	MARKDOWN_TABLE_SEPARATOR_REGEX,
-	NEWLINE,
-	REASONING_TAGS,
-	SEARCH_SUMMARY_SEPARATOR,
-	SEARCH_SUMMARY_TOTAL_REGEX,
-	TOOL_RESULT_JSON_OPEN_REGEX
-} from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
@@ -50,11 +42,11 @@ export interface AgenticSection {
 }
 
 /**
- * Represents a tool result line that may reference an image attachment
+ * Represents a tool result line that may reference a media attachment (image or audio)
  */
 export type ToolResultLine = {
 	text: string;
-	image?: DatabaseMessageExtraImageFile;
+	media?: DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile;
 };
 
 /**
@@ -78,9 +70,10 @@ function deriveSingleTurnSections(
 		const hasContentAfterReasoning =
 			!!message.content?.trim() || toolCalls.length > 0 || streamingToolCalls.length > 0;
 		const isPending = isStreaming && !hasContentAfterReasoning;
+
 		sections.push({
-			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
 			content: message.reasoningContent,
+			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
 			wasInterrupted: !isStreaming && !hasContentAfterReasoning
 		});
 	}
@@ -88,16 +81,16 @@ function deriveSingleTurnSections(
 	// 2. Text content
 	if (message.content?.trim()) {
 		sections.push({
-			type: AgenticSectionType.TEXT,
-			content: message.content
+			content: message.content,
+			type: AgenticSectionType.TEXT
 		});
 	}
 
 	// 3. Persisted tool calls (from message.toolCalls field)
 	const toolCalls = parseToolCalls(message.toolCalls);
-
 	// Index tool messages by toolCallId for O(1) lookup instead of O(n) find()
 	const toolMsgById = new Map<string, DatabaseMessage>();
+
 	for (const tm of toolMessages) {
 		if (tm.toolCallId && !toolMsgById.has(tm.toolCallId)) {
 			toolMsgById.set(tm.toolCallId, tm);
@@ -112,29 +105,32 @@ function deriveSingleTurnSections(
 			: isStreaming
 				? AgenticSectionType.TOOL_CALL_PENDING
 				: AgenticSectionType.TOOL_CALL;
+
 		sections.push({
-			type,
 			content: resultMsg?.content || '',
-			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
+			toolCallId: tc.id,
+			toolCwd: resultMsg?.toolCwd,
+			toolName: tc.function?.name,
 			toolResult: resultMsg?.content,
 			toolResultExtras: resultMsg?.extra,
-			toolCwd: resultMsg?.toolCwd,
-			toolCallId: tc.id
+			type
 		});
 	}
 
 	// 4. Streaming tool calls (not yet persisted - currently being received)
 	const persistedIds = new Set(toolCalls.map((t) => t.id).filter(Boolean));
+
 	for (const tc of streamingToolCalls) {
 		// Skip if already in persisted tool calls
 		if (tc.id && persistedIds.has(tc.id)) continue;
+
 		sections.push({
-			type: AgenticSectionType.TOOL_CALL_STREAMING,
 			content: '',
-			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
-			toolCallId: tc.id
+			toolCallId: tc.id,
+			toolName: tc.function?.name,
+			type: AgenticSectionType.TOOL_CALL_STREAMING
 		});
 	}
 
@@ -168,8 +164,8 @@ export function deriveAgenticSections(
 	}
 
 	const sections: AgenticSection[] = [];
-
 	const firstTurnToolMsgs = collectToolMessages(toolMessages, 0);
+
 	sections.push(...deriveSingleTurnSections(message, firstTurnToolMsgs));
 
 	let i = firstTurnToolMsgs.length;
@@ -212,10 +208,12 @@ export function buildAssistantRawOutput(sections: AgenticSection[]): string {
 			case AgenticSectionType.REASONING:
 			case AgenticSectionType.REASONING_PENDING:
 				parts.push(`${REASONING_TAGS.START}${NEWLINE}${section.content}${REASONING_TAGS.END}`);
+
 				break;
 
 			case AgenticSectionType.TEXT:
 				parts.push(section.content);
+
 				break;
 
 			case AgenticSectionType.TOOL_CALL:
@@ -277,12 +275,12 @@ export function splitSearchSummaryList(
 	text: string,
 	captureTotal: (n: number) => void
 ): { lines: string[] } {
-	const separatorIndex = text.indexOf(SEARCH_SUMMARY_SEPARATOR);
+	const separatorIndex = text.indexOf(SEARCH_SUMMARY.SEPARATOR);
 	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
 	const summaryText =
-		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY_SEPARATOR.length);
+		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY.SEPARATOR.length);
+	const totalMatch = summaryText.match(SEARCH_SUMMARY.TOTAL_REGEX);
 
-	const totalMatch = summaryText.match(SEARCH_SUMMARY_TOTAL_REGEX);
 	if (totalMatch) {
 		captureTotal(parseInt(totalMatch[1], 10));
 	}
@@ -295,16 +293,16 @@ export function splitSearchSummaryList(
 	return { lines };
 }
 
-/** Bounded cache for parseToolResultWithImages results. */
+/** Bounded cache for parseToolResultWithMedia results. */
 const TOOL_RESULT_LINES_CACHE_MAX_SIZE = 32;
 const toolResultLinesCache = new Map<string, ToolResultLine[]>();
 
 /**
- * Parse tool result text into lines, matching image attachments by name.
+ * Parse tool result text into lines, matching media attachments (images and audio) by name.
  * Memoized: called per render during streaming on unchanged tool result
  * strings with unchanged extras.
  */
-export function parseToolResultWithImages(
+export function parseToolResultWithMedia(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
@@ -316,25 +314,29 @@ export function parseToolResultWithImages(
 		.join(NEWLINE);
 	const cacheKey = `${imageNames}:${toolResult}`;
 	const cached = toolResultLinesCache.get(cacheKey);
+
 	if (cached !== undefined) return cached;
 
 	const lines = toolResult.split(NEWLINE);
 	const result = lines.map((line) => {
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
+
 		if (!match || !extras) return { text: line };
 
 		const attachmentName = match[1];
-		const image = extras.find(
-			(e): e is DatabaseMessageExtraImageFile =>
-				e.type === AttachmentType.IMAGE && e.name === attachmentName
+		const media = extras.find(
+			(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
+				(e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO) &&
+				e.name === attachmentName
 		);
 
-		return { text: line, image };
+		return { media, text: line };
 	});
 
 	if (toolResultLinesCache.size >= TOOL_RESULT_LINES_CACHE_MAX_SIZE) {
 		toolResultLinesCache.delete(toolResultLinesCache.keys().next().value!);
 	}
+
 	toolResultLinesCache.set(cacheKey, result);
 
 	return result;
@@ -359,9 +361,11 @@ export function classifyToolResult(content: string | undefined): ToolResultKind 
 	if (!content) return ToolResultKind.TEXT;
 
 	const cached = classifyCache.get(content);
+
 	if (cached !== undefined) return cached;
 
 	const trimmed = content.trim();
+
 	if (!trimmed) return ToolResultKind.TEXT;
 
 	let result: ToolResultKind = ToolResultKind.TEXT;
@@ -383,6 +387,7 @@ export function classifyToolResult(content: string | undefined): ToolResultKind 
 	if (classifyCache.size >= CLASSIFY_CACHE_MAX_SIZE) {
 		classifyCache.delete(classifyCache.keys().next().value!);
 	}
+
 	classifyCache.set(content, result);
 
 	return result;
@@ -399,27 +404,31 @@ export function classifyToolResult(content: string | undefined): ToolResultKind 
  */
 function looksLikeMarkdown(content: string): boolean {
 	// Code fences are unambiguous - triple backticks or tildes at line start.
-	if (MARKDOWN_CODE_FENCE_REGEX.test(content)) return true;
+	if (MARKDOWN.CODE_FENCE_REGEX.test(content)) return true;
 
 	const lines = content.split(NEWLINE);
 
 	for (const line of lines) {
-		if (MARKDOWN_ATX_HEADING_REGEX.test(line)) return true;
-		if (MARKDOWN_BLOCKQUOTE_REGEX.test(line)) return true;
-		if (MARKDOWN_LIST_BULLET_REGEX.test(line)) return true;
-		if (MARKDOWN_LIST_NUMBERED_REGEX.test(line)) return true;
+		if (MARKDOWN.ATX_HEADING_REGEX.test(line)) return true;
+
+		if (MARKDOWN.BLOCKQUOTE_REGEX.test(line)) return true;
+
+		if (MARKDOWN.LIST_BULLET_REGEX.test(line)) return true;
+
+		if (MARKDOWN.LIST_NUMBERED_REGEX.test(line)) return true;
 	}
 
 	// Inline structural markers anywhere in the body.
-	if (MARKDOWN_LINK_REGEX.test(content)) return true;
-	if (MARKDOWN_BOLD_REGEX.test(content)) return true;
+	if (MARKDOWN.LINK_REGEX.test(content)) return true;
+
+	if (MARKDOWN.BOLD_REGEX.test(content)) return true;
 
 	// Tables: a pipe-bearing header line followed by a separator row.
 	if (lines.length >= 2) {
 		const head = lines[0];
 		const sep = lines[1];
 
-		if (head.includes('|') && MARKDOWN_TABLE_SEPARATOR_REGEX.test(sep)) return true;
+		if (head.includes('|') && MARKDOWN.TABLE_SEPARATOR_REGEX.test(sep)) return true;
 	}
 
 	return false;
@@ -438,11 +447,14 @@ function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {
 	if (!toolCallsJson) return [];
 
 	const cached = toolCallsParseCache.get(toolCallsJson);
+
 	if (cached) return cached;
 
 	let result: ApiChatCompletionToolCall[];
+
 	try {
 		const parsed = JSON.parse(toolCallsJson);
+
 		result = Array.isArray(parsed) ? parsed : [];
 	} catch {
 		result = [];
@@ -451,6 +463,7 @@ function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {
 	if (toolCallsParseCache.size >= TOOL_CALLS_CACHE_MAX_SIZE) {
 		toolCallsParseCache.delete(toolCallsParseCache.keys().next().value!);
 	}
+
 	toolCallsParseCache.set(toolCallsJson, result);
 
 	return result;
@@ -508,6 +521,7 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	}
 
 	const hasToolCalls = parseToolCalls(target.toolCalls).length > 0;
+
 	if (!hasToolCalls) {
 		return { kind: ContinueIntentKind.APPEND_TEXT };
 	}
@@ -516,6 +530,7 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	// messages directly after the assistant turn that owns them, so the first
 	// non tool message marks the boundary.
 	let lastTrailingTool = idx;
+
 	for (let i = idx + 1; i < messages.length; i++) {
 		if (messages[i].role === MessageRole.TOOL) {
 			lastTrailingTool = i;

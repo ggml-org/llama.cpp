@@ -119,27 +119,27 @@ jobs:
           version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
           version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
-  windows-2022-rocm-cache:
-    runs-on: windows-2022
+  # windows-2022-rocm-cache:
+  #   runs-on: windows-2022
 
-    env:
-      # Make sure this is in sync with build.yml
-      HIPSDK_INSTALLER_VERSION: "26.Q1"
+  #   env:
+  #     # Make sure this is in sync with release.yml and build-cuda-windows.yml
+  #     ROCM_VERSION: "7.14.0"
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v6
 
-      - name: Setup Cache
-        uses: actions/cache@v5
-        id: cache-rocm
-        with:
-          path: C:\Program Files\AMD\ROCm
-          key: cache-gha-rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+  #     - name: Setup Cache
+  #       uses: actions/cache@v5
+  #       id: cache-rocm
+  #       with:
+  #         path: C:\TheRock\build
+  #         key: rocm-wheels-${{ env.ROCM_VERSION }}-multi-arch-${{ runner.os }}
 
-      - name: Setup ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
-        uses: ./.github/actions/windows-setup-rocm
-        with:
-          version: ${{ env.HIPSDK_INSTALLER_VERSION }}
+  #     - name: Setup ROCm
+  #       if: steps.cache-rocm.outputs.cache-hit != 'true'
+  #       uses: ./.github/actions/windows-setup-rocm
+  #       with:
+  #         version: ${{ env.ROCM_VERSION }}

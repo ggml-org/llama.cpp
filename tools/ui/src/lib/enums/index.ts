@@ -1,4 +1,5 @@
 export {
+	AttachmentLabel,
 	AttachmentType,
 	AttachmentMenuItemId,
 	AttachmentItemEnabledWhen,
@@ -24,7 +25,9 @@ export {
 	MessageRole,
 	MessageType,
 	PdfViewMode,
-	ReasoningFormat
+	ReasoningFormat,
+	ChatFormCommandAction,
+	FileMentionEntryType
 } from './chat.enums';
 
 export { SessionRecordType } from './conversation-import.enums';
@@ -41,13 +44,13 @@ export {
 	FileExtensionAudio,
 	FileExtensionPdf,
 	FileExtensionText,
-	MimeTypePrefix,
-	MimeTypeIncludes,
-	UriPattern,
 	MimeTypeApplication,
 	MimeTypeAudio,
 	MimeTypeVideo,
 	MimeTypeImage,
+	MimeTypePrefix,
+	MimeTypeIncludes,
+	UriPattern,
 	MimeTypeText,
 	SpecialFileType
 } from './files.enums';

@@ -1,28 +1,27 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
+	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { parseHeadersToArray, uuid, canonicalizeServerUrl } from '$lib/utils';
 	import {
-		BEARER_PREFIX,
 		BOOL_FALSE_STRING,
 		BOOL_TRUE_STRING,
 		DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
+		HEADERS,
 		MCP_SERVER_ID_PREFIX,
-		RECOMMENDED_MCP_SERVERS,
-		REDACTED_HEADERS
+		RECOMMENDED_MCP_SERVERS
 	} from '$lib/constants';
-	import { browser } from '$app/environment';
 	import { HealthCheckStatus } from '$lib/enums';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
 
 	interface Props {
 		open: boolean;
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), onOpenChange }: Props = $props();
+	let { onOpenChange, open = $bindable() }: Props = $props();
 
 	let newServerUrl = $state('');
 	let newServerName = $state('');
@@ -42,8 +41,11 @@
 
 	let selectedRecommendationId = $derived.by(() => {
 		const url = newServerUrl.trim();
+
 		if (!url) return null;
+
 		const targetCanonical = canonicalizeServerUrl(url);
+
 		return (
 			RECOMMENDED_MCP_SERVERS.find((rec) => canonicalizeServerUrl(rec.url) === targetCanonical)
 				?.id ?? null
@@ -58,10 +60,10 @@
 
 	let bearerTokenFilled = $derived.by(() => {
 		const pairs = parseHeadersToArray(newServerHeaders);
-		const bearerPrefix = BEARER_PREFIX.toLowerCase();
+		const bearerPrefix = HEADERS.BEARER.toLowerCase();
 		const bearer = pairs.find(
 			(p) =>
-				REDACTED_HEADERS.has(p.key.trim().toLowerCase()) &&
+				HEADERS.REDACTED.has(p.key.trim().toLowerCase()) &&
 				p.value.trim().toLowerCase().startsWith(bearerPrefix)
 		);
 
@@ -72,6 +74,7 @@
 
 	let newServerUrlError = $derived.by(() => {
 		if (!newServerUrl.trim()) return 'URL is required';
+
 		try {
 			new URL(newServerUrl);
 
@@ -90,15 +93,18 @@
 	// Backward-compatible read: older versions stored a JSON array of dismissed ids.
 	function readRecommendationsDismissed(): boolean {
 		if (!browser) return false;
+
 		const raw = localStorage.getItem(DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY);
 
 		if (!raw) return false;
 
 		if (raw === BOOL_TRUE_STRING) return true;
+
 		if (raw === BOOL_FALSE_STRING) return false;
 
 		try {
 			const parsed = JSON.parse(raw);
+
 			return Array.isArray(parsed) && parsed.length > 0;
 		} catch {
 			return false;
@@ -142,10 +148,10 @@
 		const previewId = `${MCP_SERVER_ID_PREFIX}-preview-${run}`;
 		const timer = setTimeout(async () => {
 			await mcpStore.runHealthCheck({
-				id: previewId,
 				enabled: false,
-				url,
 				headers: headers || undefined,
+				id: previewId,
+				url,
 				useProxy
 			});
 
@@ -207,6 +213,7 @@
 			newServerUseProxy = false;
 			newServerWantsAuthorization = false;
 		}
+
 		open = value;
 		onOpenChange?.(value);
 	}
@@ -217,16 +224,16 @@
 		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
 		mcpStore.addServer({
-			id: newServerId,
-			enabled: true,
-			url: newServerUrl.trim(),
 			// A name equal to the autofilled server-reported one is not a
 			// customization: keep following the automatic label.
 			displayName:
 				newServerName.trim() && newServerName.trim() !== nameAutoFilled.trim()
 					? newServerName.trim()
 					: undefined,
+			enabled: true,
 			headers: newServerHeaders.trim() || undefined,
+			id: newServerId,
+			url: newServerUrl.trim(),
 			useProxy: newServerUseProxy
 		});
 

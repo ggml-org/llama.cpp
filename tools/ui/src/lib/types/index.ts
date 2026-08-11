@@ -40,6 +40,7 @@ export type {
 
 // Chat types
 export type {
+	AttachmentMenuItem,
 	ChatUploadedFile,
 	ChatAttachmentDisplayItem,
 	ChatMessageSiblingInfo,
@@ -53,7 +54,11 @@ export type {
 	LiveProcessingStats,
 	LiveGenerationStats,
 	AttachmentDisplayItemsOptions,
-	FileProcessingResult
+	FileProcessingResult,
+	FileMentionEntry,
+	ChatFormCommand,
+	ChatCommandsOptions,
+	ControlAction
 } from './chat.d';
 
 // Database types
@@ -172,8 +177,11 @@ export type {
 	SteeringMessage
 } from './agentic';
 
+// Navigation types
+export type { DesktopIconStripItem } from './navigation';
+
 // Tools types
-export type { ToolEntry, ToolGroup } from './tools';
+export type { ToolEntry, ToolGroup, BuiltinToolUiEntry } from './tools';
 
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';

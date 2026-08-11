@@ -94,8 +94,10 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DGGML_NATIVE=OFF \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_NATIVE=OFF
           time cmake --build build --config Release -j $(nproc)
 
       - name: Test
