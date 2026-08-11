@@ -192,59 +192,6 @@ struct server_batch {
     }
 };
 
-struct server_slot_stats {
-    uint64_t n_prompt_cached    = 0;
-    uint64_t n_prompt_processed = 0;
-    uint64_t n_predict          = 0;
-
-    // Speculative decoding stats (mirror server_metrics)
-    uint64_t n_draft_tokens      = 0;
-    uint64_t n_draft_accepted    = 0;
-    uint64_t n_draft_verif_steps = 0;
-    std::vector<uint64_t> n_accepted_per_pos;
-
-    // these are absolute timestamps (in us)
-    uint64_t t_start       = 0;
-    uint64_t t_prompt_last = 0;
-    uint64_t t_gen_last    = 0;
-
-    // can only move one direction: start -> prompt -> gen
-    void update_prompt_start() {
-        GGML_ASSERT(t_start == 0);
-        t_start = ggml_time_us();
-    }
-    void update_prompt_last() {
-        GGML_ASSERT(t_start > 0);
-        t_prompt_last = ggml_time_us();
-    }
-    void update_gen_last() {
-        GGML_ASSERT(t_prompt_last > 0);
-        t_gen_last = ggml_time_us();
-    }
-
-    // these are time durations
-    int64_t t_ellapsed_us() const {
-        return ggml_time_us() - t_start;
-    }
-    double t_prompt_ms() const {
-        return (t_prompt_last - t_start) / 1000.0;
-    }
-    double t_gen_ms() const {
-        // clamp to 1 us to avoid division by zero on the caller side
-        return std::max<int64_t>(1, t_gen_last - t_prompt_last) / 1000.0;
-    }
-
-    // other derived metrics
-    double n_prompt_tps() const {
-        const double t_ms = t_prompt_ms();
-        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_processed : 0.0;
-    }
-    double n_gen_tps() const {
-        const double t_ms = t_gen_ms();
-        return t_ms > 0.0 ? 1e3 / t_ms * n_predict : 0.0;
-    }
-};
-
 struct server_slot {
     int id;
 
@@ -564,32 +511,6 @@ struct server_slot {
 
             callback_on_release(id);
         }
-    }
-
-    result_timings get_timings() const {
-        const double t_prompt_processing = stats.t_prompt_ms();
-        const double t_token_generation  = stats.t_gen_ms();
-
-        result_timings timings;
-        timings.cache_n = stats.n_prompt_cached;
-
-        timings.prompt_n            = stats.n_prompt_processed;
-        timings.prompt_ms           = t_prompt_processing;
-        timings.prompt_per_token_ms = t_prompt_processing / stats.n_prompt_processed;
-        timings.prompt_per_second   = stats.n_prompt_tps();
-
-        timings.predicted_n            = stats.n_predict;
-        timings.predicted_ms           = t_token_generation;
-        timings.predicted_per_token_ms = t_token_generation / stats.n_predict;
-        timings.predicted_per_second   = stats.n_gen_tps();
-
-        // Add speculative metrics
-        if (stats.n_draft_tokens > 0) {
-            timings.draft_n          = stats.n_draft_tokens;
-            timings.draft_n_accepted = stats.n_draft_accepted;
-        }
-
-        return timings;
     }
 
     size_t find_stopping_strings(const std::string & text, const size_t last_token_size, bool is_full_stop) {
@@ -2123,7 +2044,7 @@ private:
 
         // populate timings if this is final response or timings_per_token is enabled
         if (slot.stop != STOP_TYPE_NONE || slot.task->params.timings_per_token) {
-            res->timings = slot.get_timings();
+            res->stats = slot.stats;
         }
 
         queue_results.send(std::move(res));
@@ -2150,7 +2071,7 @@ private:
             res->content     = std::move(slot.generated_text);
             res->tokens      = std::move(slot.generated_tokens);
         }
-        res->timings         = slot.get_timings();
+        res->stats           = slot.stats;
         res->prompt          = slot.task->tokens.detokenize(ctx_tgt, true);
         res->response_fields = std::move(slot.task->params.response_fields);
 

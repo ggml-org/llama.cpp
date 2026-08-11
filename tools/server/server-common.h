@@ -449,6 +449,68 @@ struct server_pipe {
 
 struct server_slot;
 
+// shared between server_slot and server_task_result_*
+struct server_slot_stats {
+    uint64_t n_prompt_cached    = 0;
+    uint64_t n_prompt_processed = 0;
+    uint64_t n_predict          = 0;
+
+    // Speculative decoding stats (mirror server_metrics)
+    uint64_t n_draft_tokens      = 0;
+    uint64_t n_draft_accepted    = 0;
+    uint64_t n_draft_verif_steps = 0;
+    std::vector<uint64_t> n_accepted_per_pos;
+
+    // these are absolute timestamps (in us)
+    uint64_t t_start       = 0;
+    uint64_t t_prompt_last = 0;
+    uint64_t t_gen_last    = 0;
+
+    // can only move one direction: start -> prompt -> gen
+    void update_prompt_start() {
+        GGML_ASSERT(t_start == 0);
+        t_start = ggml_time_us();
+    }
+    void update_prompt_last() {
+        GGML_ASSERT(t_start > 0);
+        t_prompt_last = ggml_time_us();
+    }
+    void update_gen_last() {
+        GGML_ASSERT(t_prompt_last > 0);
+        t_gen_last = ggml_time_us();
+    }
+
+    // these are time durations
+    int64_t t_ellapsed_us() const {
+        return ggml_time_us() - t_start;
+    }
+    double t_prompt_ms() const {
+        return (t_prompt_last - t_start) / 1000.0;
+    }
+    double t_gen_ms() const {
+        // clamp to 1 us to avoid division by zero on the caller side
+        return std::max<int64_t>(1, t_gen_last - t_prompt_last) / 1000.0;
+    }
+
+    // other derived metrics
+    double n_prompt_tps() const {
+        const double t_ms = t_prompt_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_processed : 0.0;
+    }
+    double n_gen_tps() const {
+        const double t_ms = t_gen_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_predict : 0.0;
+    }
+
+    // false if the slot never started, i.e. the task result carries no stats
+    bool is_set() const {
+        return t_start > 0;
+    }
+
+    json to_json() const;
+};
+
+// unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
 struct server_metrics {
     int64_t t_start = 0;
 

@@ -259,26 +259,6 @@ struct server_task {
     }
 };
 
-struct result_timings {
-    int32_t cache_n = -1;
-
-    int32_t prompt_n = -1;
-    double prompt_ms = 0.0;
-    double prompt_per_token_ms = 0.0;
-    double prompt_per_second = 0.0;
-
-    int32_t predicted_n = -1;
-    double predicted_ms = 0.0;
-    double predicted_per_token_ms = 0.0;
-    double predicted_per_second = 0.0;
-
-    // Optional speculative metrics - only included when > 0
-    int32_t draft_n = 0;
-    int32_t draft_n_accepted = 0;
-
-    json to_json() const;
-};
-
 struct result_prompt_progress {
     int32_t total = 0;
     int32_t cache = 0;
@@ -343,7 +323,7 @@ struct server_task_result_cmpl_final : server_task_result {
 
     bool stream;
     bool include_usage;
-    result_timings timings;
+    server_slot_stats stats;
     std::string prompt;
 
     bool truncated;
@@ -425,7 +405,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
                            // ref: https://github.com/ggml-org/llama.cpp/pull/23884
     completion_token_output prob_output;
-    result_timings timings;
+    server_slot_stats stats;
     result_prompt_progress progress;
 
     // response formatting
