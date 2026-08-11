@@ -6,7 +6,7 @@
 		getMdastNodeHash,
 		isAppendMode
 	} from './markdown-utils';
-	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+	import { rehypeEnhanceCodeBlocks, remarkPreserveCodeMeta } from './plugins/rehype/enhance-code-blocks';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
 	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
@@ -160,6 +160,7 @@
 		proc = proc
 			.use(remarkBreaks) // Convert line breaks to <br>
 			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+			.use(remarkPreserveCodeMeta) // Preserve code block meta string for filename extraction
 			.use(remarkRehype); // Convert Markdown AST to rehype
 
 		if (!disableMath) {
@@ -192,10 +193,15 @@
 		if (!containerRef) return;
 
 		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
+		const downloadButtons = containerRef.querySelectorAll<HTMLButtonElement>('.download-code-btn');
 		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
 
 		for (const button of copyButtons) {
 			button.removeEventListener('click', handleCopyClick);
+		}
+
+		for (const button of downloadButtons) {
+			button.removeEventListener('click', handleDownloadClick);
 		}
 
 		for (const button of previewButtons) {
@@ -267,6 +273,153 @@
 		transformCache.set(hash, html);
 
 		return { hash, html };
+	}
+
+	/**
+	 * Handles click events on download buttons within code blocks.
+	 * Extensively parses DOM elements for extracting the file name from the llm generated text or md.
+	 * @param event - The click event from the download button
+	 */
+	function handleDownloadClick(event: Event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const target = event.currentTarget as HTMLButtonElement | null;
+		if (!target) return;
+
+		const info = getCodeInfoFromTarget(target);
+		if (!info) return;
+
+		const rawCode = info.rawCode;
+		const wrapper = target.closest('.code-block-wrapper');
+		const languageLabel = wrapper?.querySelector<HTMLElement>('.code-language');
+		const language = languageLabel?.textContent?.trim() || 'text';
+
+		// Determine extension from md code block
+		const EXTENSION_MAP: Record<string, string> = {
+			python: '.py', py: '.py',
+			javascript: '.js', js: '.js',
+			typescript: '.ts', ts: '.ts',
+			bash: '.sh', sh: '.sh', shell: '.sh',
+			'c++': '.cpp', cpp: '.cpp',
+			yaml: '.yml', yml: '.yml',
+			markdown: '.md', text: '.txt', plaintext: '.txt'
+		};
+
+		let extension = EXTENSION_MAP[language.toLowerCase()] || '';
+		if (!extension) {
+			const alphanumeric = language.replace(/[^a-z0-9]/gi, '').toLowerCase();
+			extension = alphanumeric ? `.${alphanumeric}` : '.md';
+		}
+
+		// Extract filename
+		let filename: string | null = null;
+
+		// Priority 1: From data-filename attribute (extracted from code block info string)
+		filename = wrapper?.getAttribute('data-filename') || null;
+
+		// Priority 2: Scan preceding elements for potential filenames, climbing the DOM
+		if (!filename && wrapper) {
+			let prevTexts: string[] = [];
+			let curr: HTMLElement | null = wrapper as HTMLElement;
+
+			// Climb out of wrapper up to the highest markdown blocks before containerRef
+			while (curr && curr !== containerRef && prevTexts.length < 3) {
+				if (curr.previousElementSibling) {
+					curr = curr.previousElementSibling as HTMLElement;
+					
+					// Break immediately if we encounter a preceding code block
+					if (
+						curr.classList.contains('code-block-wrapper') || 
+						curr.querySelector('.code-block-wrapper') || 
+						curr.tagName === 'PRE'
+					) break;
+
+					const text = curr.textContent?.trim();
+					if (text) {
+						prevTexts.push(text);
+					}
+				} else {
+					curr = curr.parentElement;
+				}
+			}
+
+			// Iterate over the closest text blocks first
+			for (const text of prevTexts) {
+				let candidate: string | null = null;
+
+				// First try if file name is within backticks, quotes, parens, bold
+				const boundaryRegex = /`([^`]+)`|"([^"]+)"|'([^']+)'|\(([^)]+)\)|\*\*([^*]+)\*\*/g;
+				let match;
+
+				while ((match = boundaryRegex.exec(text)) !== null) {
+					// Extract matched string from whatever capture group matched
+					const innerText = match[1] || match[2] || match[3] || match[4] || match[5];
+					
+					if (!innerText || !innerText.includes('.')) continue;
+
+					// If we found an extension mapped to the code block type, the boundary string MUST end with it
+					if (extension && !innerText.toLowerCase().endsWith(extension.toLowerCase())) {
+						continue;
+					}
+
+					candidate = innerText;
+				}
+
+				if (candidate) {
+					filename = candidate;
+					break;
+				}
+
+				// Alternatively, look for an unquoted filename that must match the expected extension (optionally followed by a colon)
+				if (extension) {
+					const extEscaped = extension.replace(/\./g, '\\.');
+					// Matches a non-whitespace string ending in our extension, optionally followed by a colon
+					const wordRegex = new RegExp(`([^\\s"'\`()*]+${extEscaped}):?`, 'gi');
+					let wordMatch;
+
+					while ((wordMatch = wordRegex.exec(text)) !== null) {
+						candidate = wordMatch[1]; // Get string without colon
+					}
+
+					if (candidate) {
+						filename = candidate;
+						break;
+					}
+				}
+			}
+		}
+
+		// Strip virtual directory paths (e.g. app/src/main.js -> main.js)
+		if (filename) {
+			const parts = filename.split(/[/\\]/);
+			filename = parts[parts.length - 1];
+		}
+
+		// Default filename fallback with timestamp
+		if (!filename) {
+			const now = new Date();
+			const y = now.getFullYear();
+			const m = String(now.getMonth() + 1).padStart(2, '0');
+			const d = String(now.getDate()).padStart(2, '0');
+			const hh = String(now.getHours()).padStart(2, '0');
+			const mm = String(now.getMinutes()).padStart(2, '0');
+			const ss = String(now.getSeconds()).padStart(2, '0');
+			const ts = `${y}${m}${d}_${hh}${mm}${ss}`;
+			filename = `llama_${ts}${extension}`;
+		} else {
+			if (!filename.includes('.')) {
+				filename += extension;
+			}
+	}
+
+		const blob = new Blob([rawCode], { type: 'text/plain' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = filename;
+		a.click();
+		URL.revokeObjectURL(url);
 	}
 
 	/**
@@ -484,7 +637,13 @@
 
 		for (const wrapper of wrappers) {
 			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
+			const downloadButton = wrapper.querySelector<HTMLButtonElement>('.download-code-btn');
 			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
+
+			if (downloadButton && downloadButton.dataset.listenerBound !== 'true') {
+				downloadButton.dataset.listenerBound = 'true';
+				downloadButton.addEventListener('click', handleDownloadClick);
+			}
 
 			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
 				copyButton.dataset.listenerBound = 'true';

@@ -21,7 +21,13 @@ export const CODE_BLOCK = {
 	// payload wrappers without touching internal blank lines.
 	TRIM_LEADING_PADDING_REGEX: /^(?:[ \t]*\n)+/,
 
-	TRIM_TRAILING_PADDING_REGEX: /(?:\n[ \t]*)+$/
+	TRIM_TRAILING_PADDING_REGEX: /(?:\n[ \t]*)+$/,
+
+	/** filter file name from MD code block, like ```python title="script.py" */
+	FILE_NAME_REGEX: /(?:^|\s)(?:[a-zA-Z0-9_-]+=)?["'`]?([^"'`\s]+\.[a-zA-Z][a-zA-Z0-9]{0,6})["'`]?(?:\s|$)/i,
+
+	/** filter file name from just above MD code block, like here is **script.py**: ```python... */
+	FILE_NAME_BOUNDARY_REGEX: /`([^`]+)`|"([^"]+)"|'([^']+)'|\(([^)]+)\)|\*\*([^*]+)\*\*/g
 } as const;
 
 // Matches either Unix or Windows path separators so `String.split(REGEX)` can
@@ -44,7 +50,33 @@ export const CODE_BLOCK_CLASS = {
 	HEADER: 'code-block-header',
 	LANGUAGE: 'code-language',
 	PREVIEW_BTN: 'preview-code-btn',
+	DOWNLOAD_BTN: 'download-code-btn',
 	RELATIVE: 'relative',
 	SCROLL_CONTAINER: 'code-block-scroll-container',
 	WRAPPER: 'code-block-wrapper'
 } as const;
+
+/** Attributes applied by the markdown code-block renderer. */
+export const CODE_BLOCK_ATTR = {
+	CODE_ID: 'data-code-id',
+	META_DATA: 'data-meta',
+	FILE_NAME: 'data-filename'
+} as const;
+
+/** Language sensitive texts */
+export const CODE_BLOCK_TEXT = {
+	COPY_BTN_TITLE = 'Copy code',
+	DOWNLOAD_BTN_TITLE = 'Download file',
+	PREVIEW_TITLE = 'Preview code'
+} as const;
+
+/** Markdown code block type name to file extension mapping */
+export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
+	python: '.py', py: '.py',
+	javascript: '.js', js: '.js',
+	typescript: '.ts', ts: '.ts',
+	bash: '.sh', sh: '.sh', shell: '.sh',
+	'c++': '.cpp', cpp: '.cpp',
+	yaml: '.yml', yml: '.yml',
+	markdown: '.md', text: '.txt', plaintext: '.txt'
+};
