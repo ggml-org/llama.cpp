@@ -1747,14 +1747,21 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         }
     }
 
-    // PATCH: Validate graph nodes to prevent OOB writes (Issue #26912)
+    // PATCH: Validate graph nodes to prevent OOB writes (Issue #26912 and #26825)
     for (uint32_t i = 0; i < n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
 
         if (node != nullptr && node->op == GGML_OP_SET_ROWS && node->src[0] != nullptr) {
             if (node->ne[2] != node->src[0]->ne[2] || node->ne[3] != node->src[0]->ne[3]) {
                 GGML_LOG_ERROR("[%s] malformed SET_ROWS graph detected (dimension mismatch)\n", __func__);
-                return false;  // Safely drop the connection
+                return false;
+            }
+        }
+
+        if (node != nullptr && node->op == GGML_OP_GET_ROWS && node->src[0] != nullptr && node->src[1] != nullptr) {
+            if (node->src[0]->ne[2] != node->src[1]->ne[1]) {
+                GGML_LOG_ERROR("[%s] malformed GET_ROWS graph detected (dimension mismatch)\n", __func__);
+                return false;
             }
         }
     }
