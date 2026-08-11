@@ -80,6 +80,12 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+static const llm_fused_op_probe llm_fused_op_ssm_rollback_probe = {
+    /*.op               =*/ LLM_FUSED_OP_SSM_ROLLBACK,
+    /*.name             =*/ "SSM recurrent-state rollback",
+    /*.n_tokens_per_seq =*/ 2,
+};
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -235,6 +241,8 @@ llama_context::llama_context(
 
     cparams.fused_lid    = true;
     cparams.auto_flid    = true;
+
+    cparams.fused_ssm_scan = true;
 
     cparams.fused_dsv4_hc_pre  = true;
     cparams.fused_dsv4_hc_comb = true;
@@ -577,6 +585,14 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         cparams.auto_fhc = false;
     }
 
+    const bool has_ssm_rollback =
+        model.arch == LLM_ARCH_NEMOTRON_H ||
+        model.arch == LLM_ARCH_NEMOTRON_H_MOE;
+
+    if (cparams.n_rs_seq > 0 && has_ssm_rollback) {
+        LLAMA_LOG_INFO("%s: resolving SSM recurrent-state rollback support:\n", func);
+        resolve(llm_fused_op_ssm_rollback_probe, cparams.fused_ssm_scan);
+    }
 }
 
 void llama_context::sched_reserve() {
@@ -3678,7 +3694,18 @@ uint32_t llama_n_seq_max(const llama_context * ctx) {
 }
 
 uint32_t llama_n_rs_seq(const llama_context * ctx) {
-    return ctx->get_cparams().n_rs_seq;
+    const auto & cparams = ctx->get_cparams();
+    const auto   arch    = ctx->get_model().arch;
+
+    const bool has_ssm_rollback =
+        arch == LLM_ARCH_NEMOTRON_H ||
+        arch == LLM_ARCH_NEMOTRON_H_MOE;
+
+    if (has_ssm_rollback && !cparams.fused_ssm_scan) {
+        return 0;
+    }
+
+    return cparams.n_rs_seq;
 }
 
 const llama_model * llama_get_model(const llama_context * ctx) {

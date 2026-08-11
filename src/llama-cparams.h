@@ -44,6 +44,7 @@ struct llama_cparams {
     bool auto_fgdn;
     bool fused_lid;          // use fused lightning indexer
     bool auto_flid;
+    bool fused_ssm_scan;     // use fused SSM scan with recurrent-state snapshots
     bool fused_dsv4_hc_pre;
     bool fused_dsv4_hc_comb;
     bool fused_dsv4_hc_post;

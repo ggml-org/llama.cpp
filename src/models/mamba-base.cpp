@@ -167,7 +167,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
     const int64_t n_seqs   = ubatch.n_seqs;
 
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
-    const int64_t K            = cparams.n_rs_seq > 0 ? (int64_t) cparams.n_rs_seq + 1 : 1;
+    const int64_t K            = cparams.n_rs_seq > 0 && cparams.fused_ssm_scan ? (int64_t) cparams.n_rs_seq + 1 : 1;
 
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
