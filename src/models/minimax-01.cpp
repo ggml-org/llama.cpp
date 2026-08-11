@@ -137,21 +137,6 @@ public:
                 }
             }
         }
-
-        if (inp_logits_mask) {
-            const int64_t n_vocab = vocab.n_tokens();
-
-            GGML_ASSERT(n_vocab != 0);
-
-            GGML_ASSERT(ggml_backend_buffer_is_host(inp_logits_mask->buffer));
-
-            float * data = (float *) inp_logits_mask->data;
-
-            for (int t = 0; t < n_vocab; ++t) {
-                data[t] = t < 200032 ? 0.0f : -INFINITY;
-            }
-        }
-
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -166,7 +151,6 @@ public:
     ggml_tensor * inp_q_decay    = nullptr; // F32 [n_batch, n_head]
     ggml_tensor * inp_k_decay    = nullptr; // F32 [n_batch, n_head]
     ggml_tensor * inp_diag_decay = nullptr; // F32 [n_batch, n_batch, n_head]
-    ggml_tensor * inp_logits_mask = nullptr; // F32 [n_vocab]
 };
 
 llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -215,17 +199,14 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
         cb(inp->inp_diag_decay, "diag_decay_exp", -1);
     }
 
-    inp->inp_logits_mask = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, model.vocab.n_tokens());
-    ggml_set_input(inp->inp_logits_mask);
-    cb(inp->inp_logits_mask, "logits_mask", -1);
-
     la = (llm_graph_input_la *) res->add_input(std::move(inp));
 
     ggml_tensor * slopes = la->inp_slopes;
     ggml_tensor * q_decay_exp = (n_seq_tokens != 1 ? la->inp_q_decay : nullptr);
     ggml_tensor * k_decay_exp = (n_seq_tokens != 1 ? la->inp_k_decay : nullptr);
     ggml_tensor * diag_decay_exp = (n_seq_tokens != 1 ? la->inp_diag_decay : nullptr);
-    ggml_tensor * logits_mask = la->inp_logits_mask;
+
+    ggml_tensor * logits_mask = build_inp_logits_mask(model, 32);
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
