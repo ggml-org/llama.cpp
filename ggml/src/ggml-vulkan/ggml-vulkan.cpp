@@ -2408,14 +2408,24 @@ static uint64_t vk_tensor_offset(const ggml_tensor * tensor) {
     return (uint8_t *) tensor->data - (uint8_t *) vk_ptr_base;
 }
 
+static size_t ggml_vk_tensor_physical_offset(const ggml_backend_vk_context * ctx, const ggml_tensor * t) {
+    if (ctx->device->uma) {
+        vk_buffer buf = nullptr;
+        size_t off = 0;
+        ggml_vk_host_get(ctx->device, t->data, buf, off);
+        return off;
+    }
+    return (size_t)(vk_tensor_offset(t) + t->view_offs);
+}
+
 static uint32_t get_misalign_bytes(const ggml_backend_vk_context * ctx, const ggml_tensor * t)
 {
-    return ((vk_tensor_offset(t) + t->view_offs) & (ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1));;
+    return (ggml_vk_tensor_physical_offset(ctx, t) & (ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1));
 }
 
 static uint32_t ggml_vk_get_adjusted_misalign(const ggml_backend_vk_context * ctx, const ggml_tensor * t)
 {
-    const size_t offset = vk_tensor_offset(t) + t->view_offs;
+    const size_t offset = ggml_vk_tensor_physical_offset(ctx, t);
     const size_t align = ctx->device->properties.limits.minStorageBufferOffsetAlignment;
     const size_t ts = ggml_type_size(t->type);
     size_t misalign = offset & (align - 1);
@@ -8064,13 +8074,17 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
     if (!buffer) {
         auto buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
         buffer = buf_ctx->dev_buffer;
-        if (use_view_offs) {
+    }
+
+    if (use_view_offs) {
+        if (!ctx->device->uma) {
             offset = vk_tensor_offset(tensor) + tensor->view_offs;
-        } else {
-            const size_t target = vk_tensor_offset(tensor) + tensor->view_offs;
-            const size_t misalign = ggml_vk_get_adjusted_misalign(ctx, tensor);
-            offset = target - misalign;
         }
+    } else {
+        const size_t physical = ggml_vk_tensor_physical_offset(ctx, tensor);
+        const size_t misalign = ggml_vk_get_adjusted_misalign(ctx, tensor);
+        GGML_ASSERT(physical >= misalign);
+        offset = physical - misalign;
     }
     GGML_ASSERT(buffer != nullptr);
 
