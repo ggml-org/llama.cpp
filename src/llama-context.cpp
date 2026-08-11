@@ -97,12 +97,6 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
-static const llm_fused_op_probe llm_fused_op_ssm_rollback_probe = {
-    /*.op               =*/ LLM_FUSED_OP_SSM_ROLLBACK,
-    /*.name             =*/ "recurrent-state rollback snapshots",
-    /*.n_tokens_per_seq =*/ 2,
-};
-
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
