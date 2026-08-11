@@ -50,6 +50,7 @@ static __device__ __forceinline__ int ggml_cuda_fattn_swz_bytes_rc(const int row
 
 namespace ggml_cuda_fattn_smem_swizzle {
 
+#if defined(TURING_MMA_AVAILABLE)
 // ldmatrix.x4 via 64-bit generic pointer.
 static __device__ __forceinline__ void ggml_cuda_fattn_ldmatrix_x4(int * xi, const half2 * addr) {
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
@@ -61,6 +62,7 @@ static __device__ __forceinline__ void ggml_cuda_fattn_ldmatrix_x4_trans(int * x
         : "=r"(xi[0]), "=r"(xi[2]), "=r"(xi[1]), "=r"(xi[3])
         : "l"(addr));
 }
+#endif // defined(TURING_MMA_AVAILABLE)
 
 // Per-lane swizzled generic pointer for tile<16,8> ldmatrix.
 template<int stride_h2, bool swz>
