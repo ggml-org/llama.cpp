@@ -1,5 +1,5 @@
 import { base } from '$app/paths';
-import { API_TOOLS, X_TOOL_CWD_HEADER } from '$lib/constants';
+import { API_TOOLS, X_RESP_TYPE_HEADER, X_TOOL_CWD_HEADER } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
 import type { ServerBuiltinToolInfo, ToolExecutionResult } from '$lib/types';
 import { apiFetch } from '$lib/utils';
@@ -51,16 +51,26 @@ export class ToolsService {
 	 * Execute a built-in tool and return the raw JSON response. Unlike
 	 * executeTool, this preserves structured fields (e.g. file_glob_search's
 	 * `entries` and `base`) that the flattened ToolExecutionResult drops.
+	 *
+	 * @param respType - sent as the x-resp-type request header. Only read_file
+	 * honors it, with `base64` to get the raw bytes instead of decoded text.
 	 */
 	static async executeToolRaw(
 		toolName: string,
 		params: Record<string, unknown>,
 		signal?: AbortSignal,
-		cwd?: string
+		cwd?: string,
+		respType?: string
 	): Promise<Record<string, unknown>> {
+		const headers: Record<string, string> = {};
+
+		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
+
+		if (respType) headers[X_RESP_TYPE_HEADER] = respType;
+
 		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
 			body: JSON.stringify({ params, tool: toolName }),
-			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
+			headers: Object.keys(headers).length > 0 ? headers : undefined,
 			method: 'POST',
 			signal
 		});

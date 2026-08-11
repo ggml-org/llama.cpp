@@ -2,7 +2,6 @@ import { MimeTypeAudio, MimeTypeImage } from '$lib/enums';
 
 // File extension patterns for resource type detection
 export const IMAGE_FILE_EXTENSION_REGEX = /\.(png|jpg|jpeg|gif|svg|webp)$/i;
-export const AUDIO_FILE_EXTENSION_REGEX = /\.(mp3|wav|ogg|flac|m4a|opus)$/i;
 export const CODE_FILE_EXTENSION_REGEX =
 	/\.(js|ts|json|yaml|yml|xml|html|css|py|rs|go|java|cpp|c|h|rb|sh|toml)$/i;
 export const TEXT_FILE_EXTENSION_REGEX = /\.(txt|md|log)$/i;
@@ -27,6 +26,9 @@ export const MCP_RESOURCE_ATTACHMENT_ID_PREFIX = 'res';
 
 // Default file extension for unknown image types
 export const DEFAULT_IMAGE_EXTENSION = 'img';
+
+// Default file extension for unknown audio types
+export const DEFAULT_AUDIO_EXTENSION = 'mp3';
 
 // Default filename for resource content downloads
 export const DEFAULT_RESOURCE_FILENAME = 'resource.txt';

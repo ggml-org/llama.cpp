@@ -22,12 +22,12 @@
 
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
 import {
+	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
+	DEFAULT_AUDIO_EXTENSION,
 	DEFAULT_IMAGE_EXTENSION,
 	IMAGE_MIME_TO_EXTENSION,
-	AUDIO_MIME_TO_EXTENSION,
-	MCP_ATTACHMENT_NAME_PREFIX,
-	AUDIO_FILE_EXTENSION_REGEX
+	MCP_ATTACHMENT_NAME_PREFIX
 } from '$lib/constants';
 import { BuiltInTool, ToolPermissionDecision, ToolSource } from '$lib/enums';
 import {
@@ -38,6 +38,7 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import { ChatService } from '$lib/services';
+import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -903,7 +904,18 @@ class AgenticStore {
 							if (executionResult.isError) toolSuccess = false;
 						} else if (toolSource === ToolSource.FRONTEND) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await SandboxService.executeTool(toolName, args, signal);
+							const executionResult =
+								toolName === BuiltInTool.READ_MEDIA
+									? await ReadMediaService.executeTool(
+											args,
+											{
+												audio: modelsStore.modelSupportsAudio(effectiveModel),
+												vision: modelsStore.modelSupportsVision(effectiveModel)
+											},
+											signal,
+											conversationsStore.activeConversation?.cwd
+										)
+									: await SandboxService.executeTool(toolName, args, signal);
 
 							result = executionResult.content;
 
@@ -1107,7 +1119,6 @@ class AgenticStore {
 				return line;
 			}
 
-			// Audio extras require raw base64 in base64Data (not full data URI).
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
@@ -1118,11 +1129,12 @@ class AgenticStore {
 			}
 
 			if (mimeType.startsWith(MimeTypePrefix.AUDIO)) {
+				// audio extras hold the bare base64, the input_audio part has no room for a data URI
 				attachments.push({
-					type: AttachmentType.AUDIO,
-					name,
+					base64Data,
 					mimeType,
-					base64Data: base64Data
+					name,
+					type: AttachmentType.AUDIO
 				});
 
 				return `[Attachment saved: ${name}]`;
@@ -1135,12 +1147,9 @@ class AgenticStore {
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
-		if (mimeType.startsWith('audio/')) {
-			const extension = AUDIO_MIME_TO_EXTENSION[mimeType] ?? 'mp3';
-			return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
-		}
-
-		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
+		const extension = mimeType.startsWith(MimeTypePrefix.AUDIO)
+			? (AUDIO_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_AUDIO_EXTENSION)
+			: (IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION);
 
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
 	}

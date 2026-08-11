@@ -1,12 +1,7 @@
 <script lang="ts">
-	import { Eye } from '@lucide/svelte';
-	import { AttachmentType } from '$lib/enums';
 	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
-	import type {
-		DatabaseMessageExtra,
-		DatabaseMessageExtraImageFile,
-		DatabaseMessageExtraAudioFile
-	} from '$lib/types';
+	import { AttachmentType, MimeTypeAudio } from '$lib/enums';
+	import type { DatabaseMessageExtraAudioFile, DatabaseMessageExtraImageFile } from '$lib/types';
 	import { type AgenticSection } from '$lib/utils';
 	import { createBase64DataUrl } from '$lib/utils/data-url';
 	import { parseReadMediaMeta } from './parsers/read-media';
@@ -23,16 +18,19 @@
 
 	const readMediaMeta = $derived(parseReadMediaMeta(section));
 
-	// Find the attachment from toolResultExtras (attached to the tool result message.
-	// The extractBase64Attachments function in agentic.svelte.ts replaces the data URI line
-	// with [Attachment saved: name] and stores the base64 as an extra.
+	// extractBase64Attachments swapped the data URI line for [Attachment saved: name]
+	// and moved the bytes to the message extras, so the name is the only link back
 	const mediaAttachment = $derived.by(() => {
 		const extras = section.toolResultExtras;
+
 		if (!extras || extras.length === 0) return null;
-		// Extract the attachment name from the cleaned result text
+
 		const match = section.toolResult?.match(ATTACHMENT_SAVED_REGEX);
+
 		if (!match) return null;
+
 		const attachmentName = match[1];
+
 		return (
 			extras.find(
 				(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
@@ -42,7 +40,7 @@
 		);
 	});
 
-	const isAudio = $derived(mediaAttachment?.type === AttachmentType.AUDIO);
+	const audioMimeType = $derived(readMediaMeta?.mimeType ?? MimeTypeAudio.MP3_MPEG);
 </script>
 
 <ToolCallBlock {section} {open} {isStreaming} meta={readMediaMeta} {onToggle}>
@@ -53,31 +51,28 @@
 
 	{#snippet children(_meta, _ctx)}
 		{#if section.toolResult}
-			{#if mediaAttachment}
-				{#if isAudio}
-					{@const audioSrc = createBase64DataUrl(
-						readMediaMeta?.mimeType ?? 'audio/mpeg',
-						(mediaAttachment as DatabaseMessageExtraAudioFile).base64Data
-					)}
-					<div class="mt-2">
-						<audio controls class="w-full rounded-lg">
-							<source src={audioSrc} type={readMediaMeta?.mimeType ?? 'audio/mpeg'} />
-							Your browser does not support the audio element.
-						</audio>
-					</div>
-				{:else}
-					<div class="mt-2">
-						<img
-							src={mediaAttachment.base64Url}
-							alt={readMediaMeta?.fileName ?? 'media'}
-							class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
-							loading="lazy"
-						/>
-					</div>
-				{/if}
-			{:else}
+			{#if !mediaAttachment}
 				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
 					Media attachment not found in message extras
+				</div>
+			{:else if mediaAttachment.type === AttachmentType.AUDIO}
+				<div class="mt-2">
+					<audio controls class="w-full rounded-lg">
+						<source
+							src={createBase64DataUrl(audioMimeType, mediaAttachment.base64Data)}
+							type={audioMimeType}
+						/>
+						Your browser does not support the audio element.
+					</audio>
+				</div>
+			{:else}
+				<div class="mt-2">
+					<img
+						src={mediaAttachment.base64Url}
+						alt={readMediaMeta?.fileName ?? 'media'}
+						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
+						loading="lazy"
+					/>
 				</div>
 			{/if}
 
@@ -93,7 +88,7 @@
 			{/if}
 
 			{#if readMediaMeta?.path}
-				<div class="mt-1 text-xs text-muted-foreground/60 font-mono">{readMediaMeta.path}</div>
+				<div class="mt-1 font-mono text-xs text-muted-foreground/60">{readMediaMeta.path}</div>
 			{/if}
 		{:else}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">

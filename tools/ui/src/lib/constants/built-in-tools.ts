@@ -48,7 +48,7 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 		source: ToolSource.BUILTIN
 	},
 	[BuiltInTool.READ_FILE]: { icon: FileText, label: 'Read file', source: ToolSource.BUILTIN },
-	[BuiltInTool.READ_MEDIA]: { icon: Eye, label: 'Read media', source: ToolSource.BUILTIN },
+	[BuiltInTool.READ_MEDIA]: { icon: Eye, label: 'Read media', source: ToolSource.FRONTEND },
 	[BuiltInTool.RUN_JAVASCRIPT]: {
 		icon: Braces,
 		label: 'Run JavaScript',

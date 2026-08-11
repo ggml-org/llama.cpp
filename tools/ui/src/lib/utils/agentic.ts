@@ -301,7 +301,7 @@ export function splitSearchSummaryList(
 	return { lines };
 }
 
-/** Bounded cache for parseToolResultWithImages results. */
+/** Bounded cache for parseToolResultWithMedia results. */
 const TOOL_RESULT_LINES_CACHE_MAX_SIZE = 32;
 const toolResultLinesCache = new Map<string, ToolResultLine[]>();
 

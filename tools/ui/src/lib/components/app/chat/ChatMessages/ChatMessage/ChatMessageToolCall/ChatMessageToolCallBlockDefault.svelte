@@ -8,8 +8,8 @@
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import { FileTypeText, ToolResultKind } from '$lib/enums';
-	import type { DatabaseMessageExtra, DatabaseMessageExtraAudioFile } from '$lib/types';
+	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
+	import type { DatabaseMessageExtra } from '$lib/types';
 	import { createBase64DataUrl } from '$lib/utils/data-url';
 	import {
 		type AgenticSection,
@@ -106,14 +106,14 @@
 								{line.text}
 							</div>
 							{#if line.media}
-								{#if line.media.type === 'AUDIO'}
-									{@const audioSrc = createBase64DataUrl(
-										line.media.mimeType ?? 'audio/mpeg',
-										(line.media as DatabaseMessageExtraAudioFile).base64Data
-									)}
+								{#if line.media.type === AttachmentType.AUDIO}
+									{@const audioMimeType = line.media.mimeType ?? MimeTypeAudio.MP3_MPEG}
 									<div class="mt-2 mb-2">
 										<audio controls class="w-full rounded-lg">
-											<source src={audioSrc} type={line.media.mimeType ?? 'audio/mpeg'} />
+											<source
+												src={createBase64DataUrl(audioMimeType, line.media.base64Data)}
+												type={audioMimeType}
+											/>
 											Your browser does not support the audio element.
 										</audio>
 									</div>
