@@ -72,6 +72,72 @@ def test_slot_save_restore():
     assert res.body["timings"]["prompt_n"] == 1
 
 
+def test_slot_restore_after_embedding_can_use_prompt_cache(tmp_path):
+    global server
+    prompt = "What is the capital of France?"
+    server.n_predict = 4
+    server.kv_unified = True
+    server.server_embeddings = True
+    server.pooling = "mean"
+    server.slot_save_path = str(tmp_path)
+    server.start()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": prompt,
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    original_prompt_n = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/slots/0?action=save", data={
+        "filename": "completion.bin",
+    })
+    assert res.status_code == 200
+    server.stop()
+
+    server = ServerPreset.tinyllama2()
+    server.n_predict = 4
+    server.temperature = 0.0
+    server.slot_save_path = str(tmp_path)
+    server.server_embeddings = True
+    server.pooling = "mean"
+    server.server_slots = True
+    server.kv_unified = True
+    server.cache_ram = 100
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": "embedding prompt",
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "completion.bin",
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "A different prompt",
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    with open(server.log_path) as log_file:
+        assert "__TEST_TAG_CACHE_IDLE_SLOT__" in log_file.read()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": prompt,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] > 0
+    assert res.body["timings"]["prompt_n"] < original_prompt_n
+
+
 def test_slot_erase():
     global server
     server.start()
