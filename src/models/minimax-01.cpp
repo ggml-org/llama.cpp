@@ -337,7 +337,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 kv_new = ggml_add(ctx0, kv_old_s, kv_cur);
                 cb(kv_new, "kv_new", il);
 
-                ggml_tensor * q_trans = ggml_cont(ctx0, ggml_permute(ctx0, Qcur, 0, 2, 1, 3));
+                ggml_tensor * q_trans = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
                 cb(q_trans, "q_trans", il);
 
                 qkv = ggml_mul_mat(ctx0, kv_new, q_trans);
@@ -353,16 +353,16 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * q_s = ggml_mul(ctx0, Qcur, q_decay);
                 cb(q_s, "q_s", il);
 
-                ggml_tensor * q_s_trans = ggml_cont(ctx0, ggml_permute(ctx0, q_s, 0, 2, 1, 3));
+                ggml_tensor * q_s_trans = ggml_permute(ctx0, q_s, 0, 2, 1, 3);
                 cb(q_s_trans, "q_s_trans", il);
 
                 ggml_tensor * qkv_none_diag = ggml_mul_mat(ctx0, kv_old, q_s_trans);
                 cb(qkv_none_diag, "qkv_none_diag", il);
 
-                ggml_tensor * q_trans = ggml_cont(ctx0, ggml_permute(ctx0, Qcur, 0, 2, 1, 3));
+                ggml_tensor * q_trans = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
                 cb(q_trans, "q_trans", il);
 
-                ggml_tensor * k_trans = ggml_cont(ctx0, ggml_permute(ctx0, Kcur, 0, 2, 1, 3));
+                ggml_tensor * k_trans = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
                 cb(k_trans, "k_trans", il);
 
                 ggml_tensor * qk = ggml_mul_mat(ctx0, k_trans, q_trans);
