@@ -1,5 +1,5 @@
+import { FileTypeAudio,MimeTypeAudio } from '$lib/enums';
 import type { AudioInputFormat } from '$lib/types/api';
-import { MimeTypeAudio, FileTypeAudio } from '$lib/enums';
 
 /**
  * Map a MIME type to the AudioInputFormat expected by the API.

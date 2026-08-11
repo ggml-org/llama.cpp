@@ -10,7 +10,6 @@
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
 	import type { DatabaseMessageExtra } from '$lib/types';
-	import { createBase64DataUrl } from '$lib/utils/data-url';
 	import {
 		type AgenticSection,
 		classifyToolResult,
@@ -18,6 +17,7 @@
 		parseToolResultWithMedia,
 		type ToolResultLine
 	} from '$lib/utils';
+	import { createBase64DataUrl } from '$lib/utils/data-url';
 
 	interface Props {
 		section: AgenticSection;

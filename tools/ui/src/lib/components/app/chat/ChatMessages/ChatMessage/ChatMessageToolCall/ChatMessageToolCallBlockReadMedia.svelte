@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { parseReadMediaMeta } from './parsers/read-media';
+	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
 	import { AttachmentType, MimeTypeAudio } from '$lib/enums';
 	import type { DatabaseMessageExtraAudioFile, DatabaseMessageExtraImageFile } from '$lib/types';
 	import { type AgenticSection } from '$lib/utils';
 	import { createBase64DataUrl } from '$lib/utils/data-url';
-	import { parseReadMediaMeta } from './parsers/read-media';
-	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;
@@ -14,7 +14,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const readMediaMeta = $derived(parseReadMediaMeta(section));
 

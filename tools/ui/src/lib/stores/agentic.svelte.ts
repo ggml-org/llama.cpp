@@ -78,10 +78,9 @@ import type {
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
-	DatabaseMessageExtraImageFile,
-	DatabaseMessageExtraAudioFile
-} from '$lib/types/database';
-import { isAbortError, getAudioInputFormat } from '$lib/utils';
+	DatabaseMessageExtraAudioFile,
+	DatabaseMessageExtraImageFile} from '$lib/types/database';
+import { getAudioInputFormat,isAbortError } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
@@ -1008,13 +1007,13 @@ class AgenticStore {
 					if (attachment.type === AttachmentType.AUDIO) {
 						if (modelsStore.modelSupportsAudio(effectiveModel)) {
 							contentParts.push({
-								type: ContentPartType.INPUT_AUDIO,
 								input_audio: {
 									data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
 									format: getAudioInputFormat(
 										(attachment as DatabaseMessageExtraAudioFile).mimeType
 									)
-								}
+								},
+								type: ContentPartType.INPUT_AUDIO
 							});
 						}
 					} else if (attachment.type === AttachmentType.IMAGE) {

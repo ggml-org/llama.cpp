@@ -62,12 +62,12 @@ export const IMAGE_MIME_TO_EXTENSION: Record<string, string> = {
  * Used for generating attachment filenames from MIME types.
  */
 export const AUDIO_MIME_TO_EXTENSION: Record<string, string> = {
-	[MimeTypeAudio.MP3_MPEG]: 'mp3',
 	[MimeTypeAudio.MP3]: 'mp3',
+	[MimeTypeAudio.MP3_MPEG]: 'mp3',
+	[MimeTypeAudio.VND_WAVE]: 'wav',
 	[MimeTypeAudio.WAV]: 'wav',
 	[MimeTypeAudio.WAVE]: 'wav',
+	[MimeTypeAudio.X_PN_WAV]: 'wav',
 	[MimeTypeAudio.X_WAV]: 'wav',
-	[MimeTypeAudio.X_WAVE]: 'wav',
-	[MimeTypeAudio.VND_WAVE]: 'wav',
-	[MimeTypeAudio.X_PN_WAV]: 'wav'
+	[MimeTypeAudio.X_WAVE]: 'wav'
 } as const;

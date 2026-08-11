@@ -1,4 +1,5 @@
 import { settingsStore } from '../stores/settings.svelte';
+import { getAudioInputFormat } from '../utils/audio-format';
 import { capImageDataURLSize } from '../utils/cap-img-size';
 import {
 	API_CHAT,
@@ -41,7 +42,6 @@ import { isAbortError } from '$lib/utils/abort';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
-import { getAudioInputFormat } from '../utils/audio-format';
 
 interface ResumableStreamState {
 	bytesReceived: number;

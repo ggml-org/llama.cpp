@@ -56,6 +56,7 @@ export class ReadMediaService {
 		const extension = fileExtension(path);
 		const imageMime = READ_MEDIA_IMAGE_MIME[extension];
 		const audioMime = READ_MEDIA_AUDIO_MIME[extension];
+
 		let resolvedMime: string | undefined;
 
 		if (imageMime && capabilities.vision) resolvedMime = imageMime;
@@ -66,7 +67,6 @@ export class ReadMediaService {
 				...(capabilities.vision ? Object.keys(READ_MEDIA_IMAGE_MIME) : []),
 				...(capabilities.audio ? Object.keys(READ_MEDIA_AUDIO_MIME) : [])
 			];
-
 			// an unreadable-by-this-model file is a dead end, so say why instead of failing silently
 			const reason =
 				imageMime || audioMime
