@@ -33,10 +33,10 @@ import {
 	NEWLINE,
 	NON_ALPHANUMERIC_REGEX,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
+	ROUTES,
 	SESSION_HARNESS,
 	ZIP_MAGIC
 } from '$lib/constants';
-import { ROUTES } from '$lib/constants/routes';
 import {
 	FileExtensionText,
 	MessageRole,

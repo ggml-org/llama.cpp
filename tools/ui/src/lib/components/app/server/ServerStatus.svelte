@@ -2,7 +2,7 @@
 	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { singleModelName } from '$lib/stores/models.svelte';
 	import { serverError, serverLoading, serverProps } from '$lib/stores/server.svelte';
 

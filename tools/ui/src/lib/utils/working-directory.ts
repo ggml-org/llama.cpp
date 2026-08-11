@@ -16,11 +16,11 @@ import {
 	HOME_TILDE,
 	LEADING_SLASHES_REGEX,
 	PATH_NAV_MAX_DEPTH,
+	PATH_SEPARATOR,
+	TRAILING_SLASHES_REGEX,
 	UNC_ROOT_REGEX,
 	WINDOWS_SEPARATOR
 } from '$lib/constants';
-import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
-import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
 
 export interface GlobEntry {
 	path: string;

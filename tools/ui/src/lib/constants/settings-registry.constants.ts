@@ -1,12 +1,12 @@
-import { CLI_FLAGS } from './cli-flags';
-import { DEFAULT_MCP_CONFIG } from './mcp';
-import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
-import { SETTINGS_KEYS } from './settings-keys';
-import { TITLE_GENERATION } from './title-generation';
+import { CLI_FLAGS } from './cli-flags.constants';
+import { DEFAULT_MCP_CONFIG } from './mcp.constants';
+import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes.constants';
+import { SETTINGS_KEYS } from './settings-keys.constants';
+import { TITLE_GENERATION } from './title-generation.constants';
 import {
 	FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
 	FILE_GLOB_SEARCH_PICKERS_MAX_SEARCH_DEPTH
-} from './working-directory';
+} from './working-directory.constants';
 import {
 	AlertTriangle,
 	Code,
@@ -14,7 +14,6 @@ import {
 	Funnel,
 	ListRestart,
 	Monitor,
-	Monitor as MonitorIcon,
 	Moon,
 	PencilRuler,
 	Sliders,
@@ -53,7 +52,7 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 	}
 ];
 const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component }> = [
-	{ icon: MonitorIcon, label: 'System', value: ColorMode.SYSTEM },
+	{ icon: Monitor, label: 'System', value: ColorMode.SYSTEM },
 	{ icon: Sun, label: 'Light', value: ColorMode.LIGHT },
 	{ icon: Moon, label: 'Dark', value: ColorMode.DARK }
 ];

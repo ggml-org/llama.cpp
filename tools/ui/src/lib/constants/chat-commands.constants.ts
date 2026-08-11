@@ -1,4 +1,4 @@
-import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants/working-directory';
+import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
 import { ChatFormCommandAction } from '$lib/enums';
 import type { ChatFormCommand } from '$lib/types';
 

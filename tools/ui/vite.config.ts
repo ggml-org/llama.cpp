@@ -2,7 +2,7 @@ import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
 import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer';
 import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
 import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
-import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
+import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa.constants';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';

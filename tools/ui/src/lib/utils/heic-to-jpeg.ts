@@ -1,4 +1,4 @@
-import { HEIC_JPEG_QUALITY } from '$lib/constants/image-size';
+import { HEIC_JPEG_QUALITY } from '$lib/constants';
 import { MimeTypeImage } from '$lib/enums';
 
 // heic requires a relatively large decoder, in order to reduce primary bundle size

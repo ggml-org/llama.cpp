@@ -8,11 +8,13 @@ export const URI_SCHEME_SEPARATOR = '://';
 /** Regex to match template expressions like {var}, {+var}, {#var}, {/var} */
 export const TEMPLATE_EXPRESSION_REGEX = /\{([+#./;?&]?)([^}]+)\}/g;
 
-/** RFC 6570 URI template operators */
-export const URI_TEMPLATE_OPERATORS = {
-	/** Form-style query continuation */
-	FORM_CONTINUATION: '&',
+/** RFC 6570 URI template operators and separators. A single object covers both: an operator prefix character doubles as the separator written into the expansion (e.g. `{/a}`/`{;a}` use `/` and `;` for both), so the characters live here once. */
+export const URI_TEMPLATE_SYMBOLS = {
+	/** Comma separator for list expansion */
+	COMMA: ',',
 	/** Form-style query */
+	FORM_CONTINUATION: '&',
+	/** Form-style query prefix */
 	FORM_QUERY: '?',
 	/** Fragment expansion */
 	FRAGMENT: '#',
@@ -26,22 +28,6 @@ export const URI_TEMPLATE_OPERATORS = {
 	RESERVED: '+',
 	/** Simple string expansion (default) */
 	SIMPLE: ''
-} as const;
-
-/** URI template separators used in expansion */
-export const URI_TEMPLATE_SEPARATORS = {
-	/** Comma separator for list expansion */
-	COMMA: ',',
-	/** Period separator for label expansion */
-	PERIOD: '.',
-	/** Ampersand prefix for query continuation */
-	QUERY_CONTINUATION: '&',
-	/** Question mark prefix for query string */
-	QUERY_PREFIX: '?',
-	/** Semicolon separator for path parameters */
-	SEMICOLON: ';',
-	/** Slash separator for path segments */
-	SLASH: '/'
 } as const;
 
 /** Maximum number of leading slashes to strip during URI normalization */

@@ -1,5 +1,5 @@
-export const NEWLINE = '\n';
-export const TAB = '\t';
+// Constants for the markdown code-block renderer: language/fence handling and CSS classes.
+
 export const DEFAULT_LANGUAGE = 'text';
 export const LANG_PATTERN = /^(\w*)\n?/;
 export const AMPERSAND_REGEX = /&/g;
@@ -25,3 +25,13 @@ export const FILE_EXTENSION_SEPARATOR = '.';
 // plain-text language (e.g. `text:typescript`). Used by tool-call renderers
 // to recover the underlying highlight.js language.
 export const TEXT_LANGUAGE_PREFIX_REGEX = /^text:/;
+
+// CSS classes applied by the markdown code-block renderer.
+export const CODE_BLOCK_SCROLL_CONTAINER_CLASS = 'code-block-scroll-container';
+export const CODE_BLOCK_WRAPPER_CLASS = 'code-block-wrapper';
+export const CODE_BLOCK_HEADER_CLASS = 'code-block-header';
+export const CODE_BLOCK_ACTIONS_CLASS = 'code-block-actions';
+export const CODE_LANGUAGE_CLASS = 'code-language';
+export const COPY_CODE_BTN_CLASS = 'copy-code-btn';
+export const PREVIEW_CODE_BTN_CLASS = 'preview-code-btn';
+export const RELATIVE_CLASS = 'relative';

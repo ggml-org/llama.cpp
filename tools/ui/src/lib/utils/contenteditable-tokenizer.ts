@@ -520,7 +520,7 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
  * tokens, `<span data-mention-badge="true">` elements for badges,
  * `<code data-code-token>` elements for code spans. The badge's class
  * string + inline SVG are shared with the rehype plugin via
- * `$lib/constants/mention-badge`.
+ * `$lib/constants`.
  */
 export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 	const fragment = document.createDocumentFragment();

@@ -1,4 +1,4 @@
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { serverStore } from '$lib/stores/server.svelte';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { beforeEach, describe, expect, it } from 'vitest';

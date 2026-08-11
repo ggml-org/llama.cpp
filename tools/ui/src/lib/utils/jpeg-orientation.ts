@@ -8,7 +8,7 @@ import {
 	SOS_MARKER,
 	TIFF_LITTLE_ENDIAN,
 	TIFF_MAGIC
-} from '$lib/constants/jpeg-exif';
+} from '$lib/constants';
 import { MimeTypeImage } from '$lib/enums';
 
 /**

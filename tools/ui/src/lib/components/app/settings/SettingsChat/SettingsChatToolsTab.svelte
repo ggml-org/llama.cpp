@@ -3,8 +3,7 @@
 	import { McpServerIdentity, TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { getBuiltinToolUi, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ToolSource } from '$lib/enums/tools.enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { permissionsStore } from '$lib/stores/permissions.svelte';

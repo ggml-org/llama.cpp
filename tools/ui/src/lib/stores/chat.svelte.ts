@@ -11,14 +11,14 @@
  * @see ChatService in services/chat.service.ts for API operations
  */
 
-import { CONTENT_TYPE_HEADER } from '$lib/constants';
 import {
+	CONTENT_TYPE_HEADER,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
 	MAX_INACTIVE_CONVERSATION_STATES,
+	STREAM_RESUME_RETRY_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
 } from '$lib/constants';
-import { STREAM_RESUME_RETRY_MS } from '$lib/constants/api-endpoints';
 import { MimeTypeApplication } from '$lib/enums';
 import {
 	ContinueIntentKind,

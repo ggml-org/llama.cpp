@@ -7,10 +7,15 @@
 	import { SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { AUTHORIZATION_HEADER, BEARER_PREFIX, TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
-	import { ROUTES } from '$lib/constants/routes';
+	import {
+		AUTHORIZATION_HEADER,
+		BEARER_PREFIX,
+		FAVICON_PATHS,
+		FAVICON_SELECTORS,
+		ROUTES,
+		SETTINGS_KEYS,
+		TOOLTIP_DELAY_DURATION
+	} from '$lib/constants';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { RouterService } from '$lib/services/router.service';

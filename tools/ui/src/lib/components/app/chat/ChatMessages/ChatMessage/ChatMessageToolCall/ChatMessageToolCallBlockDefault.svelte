@@ -6,8 +6,7 @@
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
-	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
+	import { getBuiltinToolUi, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import {

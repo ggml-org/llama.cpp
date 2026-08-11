@@ -1,6 +1,6 @@
 import { beforeNavigate } from '$app/navigation';
 import { page } from '$app/state';
-import { ROUTES } from '$lib/constants/routes';
+import { ROUTES } from '$lib/constants';
 import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
 
 export interface ChatSettings {

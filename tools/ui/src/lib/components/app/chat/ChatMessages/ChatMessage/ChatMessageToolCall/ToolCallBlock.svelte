@@ -11,8 +11,7 @@
 
 	import { Loader2, Wrench } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
+	import { getBuiltinToolUi, ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { AgenticSection, BuiltinToolUiEntry } from '$lib/utils';

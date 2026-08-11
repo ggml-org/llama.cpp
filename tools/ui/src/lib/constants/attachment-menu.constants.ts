@@ -1,5 +1,5 @@
 import { FolderOpen, MessageSquare, Zap } from '@lucide/svelte';
-import { FILE_TYPE_ICONS } from '$lib/constants/icons';
+import { FILE_TYPE_ICONS } from '$lib/constants';
 import {
 	AttachmentAction,
 	AttachmentItemEnabledWhen,

@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
-	import { ROUTES } from '$lib/constants/routes';
+	import { ROUTES } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversations, conversationsStore } from '$lib/stores/conversations.svelte';

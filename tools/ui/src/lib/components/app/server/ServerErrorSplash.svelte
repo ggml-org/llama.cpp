@@ -5,9 +5,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import { AUTHORIZATION_HEADER, BEARER_PREFIX, SETTINGS_KEYS } from '$lib/constants';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { ROUTES } from '$lib/constants/routes';
+	import {
+		AUTHORIZATION_HEADER,
+		BEARER_PREFIX,
+		ICON_CLASS_DEFAULT,
+		ROUTES,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { serverLoading, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';

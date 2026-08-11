@@ -4,7 +4,7 @@
 // returns to its own default. The toggle is removed from the persisted
 // config so it does not stay orphaned in localStorage.
 
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { MigrationService } from '$lib/services/migration.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { beforeEach, describe, expect, it } from 'vitest';

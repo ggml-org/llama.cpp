@@ -1,6 +1,5 @@
 import { getJpegOrientationFromDataURL, isJpegMimeType } from './jpeg-orientation';
-import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
-import { BASE64_IMAGE_URI_REGEX } from '$lib/constants/uri-template';
+import { BASE64_IMAGE_URI_REGEX, MEGAPIXELS_TO_PIXELS } from '$lib/constants';
 import { MimeTypeImage } from '$lib/enums';
 
 /**
