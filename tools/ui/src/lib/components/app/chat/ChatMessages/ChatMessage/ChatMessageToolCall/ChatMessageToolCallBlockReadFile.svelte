@@ -3,7 +3,7 @@
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { CODE_BLOCK, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { type AgenticSection } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
 
 	interface Props {
 		section: AgenticSection;

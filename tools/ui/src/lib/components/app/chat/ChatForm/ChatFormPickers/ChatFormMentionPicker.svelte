@@ -11,8 +11,8 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
-	import type { FileMentionEntry } from '$lib/types';
-	import { abbreviateHome, type GlobEntryResult, runGlobSearchWithChildren } from '$lib/utils';
+	import type { FileMentionEntry, GlobEntryResult } from '$lib/types';
+	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
 	/**
 	 * Floating file/folder mention picker. The chat input is the search

@@ -2,7 +2,8 @@
 	import { Info, Loader2 } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { abbreviateHome, type AgenticSection } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
+	import { abbreviateHome } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;

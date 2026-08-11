@@ -6,7 +6,8 @@
 import { parseToolArgs } from './_shared';
 import { CODE_BLOCK, FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, getFileTypeByExtension } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { getFileTypeByExtension } from '$lib/utils';
 
 export type ReadFileMeta = {
 	fileName: string;
