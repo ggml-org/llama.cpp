@@ -3,15 +3,6 @@
 #include "types.glsl"
 #include "generic_unary_head.glsl"
 
-// Tiled transpose for a 0<->2 axis swap, i.e. ggml_cont(ggml_permute(x, 2, 1, 0, 3)).
-// copy_transpose.comp handles the 0<->1 case (src dim1 innermost); here src dim2
-// is the innermost (stride-1) dimension and dst dim0 is, with dim1 acting as a
-// batch dimension that both sides index with their own strides.
-//
-// Without this the op falls back to the generic per-element strided copy, whose
-// source reads are strided by ne0*ne1 elements -- one cache line per lane.
-// Measured on DeepSeek-V4 indexer shapes that ran at ~1-9 GB/s on a ~200 GB/s part.
-
 // workgroup does 32x32 tile, but uses 32x8 threads
 #define TILE_DIM 32
 layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
@@ -31,8 +22,6 @@ void iter(uvec3 wg_id) {
     const uint i01 = i1;
     const uint i03 = i3;
 
-    // Read: tid_col walks src dim2, which is contiguous, so lanes within a
-    // subgroup read adjacent addresses.
     [[unroll]] for (uint y = 0; y < 4; ++y) {
         const uint i00 = tile_i0 * TILE_DIM + tid_row + 8 * y;
         const uint i02 = tile_i2 * TILE_DIM + tid_col;
@@ -44,8 +33,6 @@ void iter(uvec3 wg_id) {
 
     barrier();
 
-    // Write: tid_col walks dst dim0, which is contiguous, so the stores coalesce
-    // too. The transpose happens in shared memory, not in global addressing.
     [[unroll]] for (uint y = 0; y < 4; ++y) {
         const uint i0 = tile_i0 * TILE_DIM + tid_col;
         const uint i2 = tile_i2 * TILE_DIM + tid_row + 8 * y;

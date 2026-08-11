@@ -8905,9 +8905,7 @@ static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const
         }
     }
 
-    // Same idea for a 0<->2 swap (ggml_cont(ggml_permute(x, 2, 1, 0, 3))): src
-    // dim2 is innermost. Without this it falls to the generic strided copy,
-    // whose reads stride by ne0*ne1 -- one cache line per lane.
+    // Same, for a 0<->2 swap: src dim2 is the innermost dimension.
     bool transpose02 = dst && !contig && src->nb[2] == ggml_type_size(to) &&
                        ggml_is_contiguous(dst) && ggml_are_same_shape(dst, src);
 

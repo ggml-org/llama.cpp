@@ -3062,10 +3062,7 @@ struct test_cpy : public test_case {
 
 // GGML_OP_CONT
 // permute = {0, 0, 0, 0} means no permutation: the source is transposed (or
-// view-sliced). A non-identity permute exercises ggml_cont of an arbitrary
-// ggml_permute -- e.g. the 0<->2 swap DeepSeek-V4's lightning indexer performs
-// on a [n_kv, n_tokens, n_head] tensor -- which takes a different backend path
-// than the 0<->1 transpose and was previously uncovered.
+// view-sliced). A non-identity permute applies ggml_permute before ggml_cont.
 struct test_cont : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
@@ -8664,12 +8661,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
         for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
                 {10, 10, 10, 1}, {33, 5, 7, 1}, {64, 3, 65, 1}, {2, 3, 5, 7},
-                // Large, tile-aligned and tile-unaligned, matching the shapes the
-                // perf cases use. Perf mode does NOT verify results, so without
-                // these the fast path would only ever be checked on tiny tensors.
+                // large, tile-aligned and tile-unaligned, matching the perf cases
                 {1024, 64, 64, 1}, {2304, 64, 64, 1}, {1000, 33, 65, 1} }) {
             for (std::array<int64_t, 4> perm : std::initializer_list<std::array<int64_t, 4>>{
-                    {2, 1, 0, 3},   // 0<->2 swap (the DeepSeek-V4 indexer pattern)
+                    {2, 1, 0, 3},   // 0<->2 swap
                     {1, 2, 0, 3},   // 3-cycle
                     {0, 2, 1, 3} }) {
                 test_cases.emplace_back(new test_cont(type_dst, ne, false, perm));
