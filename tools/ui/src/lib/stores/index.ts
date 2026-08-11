@@ -40,15 +40,7 @@ export {
 // MCP
 export { mcpStore } from './mcp.svelte';
 
-export {
-	mcpResourceStore,
-	mcpResources,
-	mcpResourceAttachments,
-	mcpResourceAttachmentCount,
-	mcpHasResourceAttachments,
-	mcpTotalResourceCount,
-	mcpResourcesLoading
-} from './mcp-resources.svelte';
+export { mcpResourceStore } from './mcp-resources.svelte';
 
 // MODELS
 export { modelsStore } from './models.svelte';

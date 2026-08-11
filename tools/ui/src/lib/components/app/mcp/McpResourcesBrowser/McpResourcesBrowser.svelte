@@ -2,7 +2,7 @@
 	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
 	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
 	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
-	import { mcpResources, mcpResourcesLoading, mcpStore } from '$lib/stores';
+	import { mcpResourceStore, mcpStore } from '$lib/stores';
 	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
 	import { parseResourcePath } from '$lib/utils';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -31,8 +31,8 @@
 	let expandedFolders = new SvelteSet<string>();
 	let searchQuery = $state('');
 
-	const resources = $derived(mcpResources());
-	const isLoading = $derived(mcpResourcesLoading());
+	const resources = $derived(mcpResourceStore.serverResources);
+	const isLoading = $derived(mcpResourceStore.isLoading);
 
 	const filteredResources = $derived.by(() => {
 		if (!searchQuery.trim()) {

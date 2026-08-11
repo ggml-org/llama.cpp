@@ -32,7 +32,7 @@
 		chatStore,
 		config,
 		conversationsStore,
-		mcpHasResourceAttachments,
+		mcpResourceStore,
 		mcpStore,
 		modelsStore,
 		pendingCwd,
@@ -636,7 +636,7 @@
 				/>
 			{/if}
 
-			{#if mcpHasResourceAttachments()}
+			{#if mcpResourceStore.hasAttachments}
 				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {
