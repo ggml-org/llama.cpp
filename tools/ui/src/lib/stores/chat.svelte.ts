@@ -12,6 +12,7 @@
  */
 
 import {
+	CONVERSATION_ID_SEPARATOR,
 	HEADERS,
 	INACTIVE_CONVERSATION,
 	STREAM_RESUME_RETRY_MS,
@@ -413,7 +414,7 @@ class ChatStore {
 
 		// extract the model suffix, the resume calls in handleStreamResponse must reuse the model
 		// the session was tagged with, not the live dropdown
-		const sepIdx = id.indexOf('::');
+		const sepIdx = id.indexOf(CONVERSATION_ID_SEPARATOR);
 		const attachedModel: string | null = sepIdx === -1 ? null : id.slice(sepIdx + 2);
 
 		this.setChatStreaming(convId, existingContent, targetMessageId, attachedModel);
@@ -828,7 +829,7 @@ class ChatStore {
 		for (const s of sessions) {
 			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
 				// strip the optional ::model suffix, the sidebar set is keyed by the bare conv id
-				const sepIdx = s.conversation_id.indexOf('::');
+				const sepIdx = s.conversation_id.indexOf(CONVERSATION_ID_SEPARATOR);
 				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
 
 				running.add(bareId);

@@ -1,23 +1,14 @@
 import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
 import { ChatFormCommandAction } from '$lib/enums';
-import type { ChatFormCommand } from '$lib/types';
-
-interface ChatCommandsOptions {
-	/** Gates `/model`. */
-	showModelSelector: boolean;
-	/** Gates `/prompt`. */
-	hasPrompts: () => boolean;
-	/** Gates `/cwd`. */
-	hasCwdTools: () => boolean;
-}
+import type { ChatCommandsOptions, ChatFormCommand } from '$lib/types';
 
 /**
  * The slash commands surfaced by the `/` command picker, in display order.
  *
  * Availability is supplied as predicates rather than store imports: this
- * module is re-exported through the `$lib/constants` barrel, and importing
+ * module is re-exported through the `$lib/utils` barrel, and importing
  * stores at module load would create a circular dependency (the stores
- * themselves import from `$lib/constants`).
+ * themselves import from `$lib/utils`).
  */
 export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[] {
 	return [

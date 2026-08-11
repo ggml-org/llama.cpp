@@ -6,6 +6,7 @@ import {
 	API_SLOTS,
 	API_STREAM,
 	CONTROL_ACTION,
+	HEADERS,
 	LEGACY_AGENTIC_REGEX,
 	REASONING_EFFORT_TOKENS,
 	SETTINGS_KEYS,
@@ -339,7 +340,7 @@ export class ChatService {
 			// server side replay buffer and powers discoverActiveStream on tab reopen. with an explicit
 			// model the ::model suffix keeps the per model session distinct
 			if (stream && conversationId) {
-				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
+				headers[HEADERS.X_CONVERSATION_ID_HEADER] = streamIdentity(conversationId, options.model);
 				// persist the pending stream before the fetch: a reload during the model load or
 				// the prompt processing must still find its way back to the session once it exists
 				ChatService.saveStreamState(conversationId, 0, options.model ?? null);

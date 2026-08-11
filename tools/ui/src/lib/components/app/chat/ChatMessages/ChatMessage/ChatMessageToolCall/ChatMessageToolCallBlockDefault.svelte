@@ -6,13 +6,14 @@
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
-	import { getBuiltinToolUi, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
+	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import {
 		type AgenticSection,
 		classifyToolResult,
 		formatJsonPretty,
+		getBuiltinToolUi,
 		parseToolResultWithMedia,
 		type ToolResultLine
 	} from '$lib/utils';

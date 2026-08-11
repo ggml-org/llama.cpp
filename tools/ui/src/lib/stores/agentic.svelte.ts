@@ -31,7 +31,13 @@ import {
 	MIME_TYPE_PREFIXES
 } from '$lib/constants';
 import { BuiltInTool, ToolPermissionDecision, ToolSource } from '$lib/enums';
-import { AttachmentType, ContentPartType, MessageRole, ToolCallType } from '$lib/enums';
+import {
+	AttachmentType,
+	ContentPartType,
+	MessageRole,
+	MimeTypePrefix,
+	ToolCallType
+} from '$lib/enums';
 import { ChatService } from '$lib/services';
 import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';

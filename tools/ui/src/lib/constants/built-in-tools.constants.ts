@@ -50,9 +50,3 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 	},
 	[BuiltInTool.WRITE_FILE]: { icon: FilePlus, label: 'Write file', source: ToolSource.BUILTIN }
 } as const;
-
-export function getBuiltinToolUi(toolName: string | undefined): BuiltinToolUiEntry | null {
-	if (!toolName) return null;
-
-	return (BUILTIN_TOOL_UI as Record<string, BuiltinToolUiEntry>)[toolName] ?? null;
-}

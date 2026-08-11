@@ -215,6 +215,18 @@ export interface FileMentionEntry {
  * command whose backing capability is unavailable (e.g. `/prompt` when no
  * MCP server exposes prompts): visible but greyed out and not selectable.
  */
+export interface ChatCommandsOptions {
+	/** Gates `/model`. */
+	showModelSelector: boolean;
+	/** Gates `/prompt`. */
+	hasPrompts: () => boolean;
+	/** Gates `/cwd`. */
+	hasCwdTools: () => boolean;
+}
+
+/** Protocol-level verbs accepted by the realtime inference control endpoint. Mirrors `CONTROL_ACTION`. */
+export type ControlAction = 'reasoning_end';
+
 export interface ChatFormCommand {
 	name: string;
 	description: string;
