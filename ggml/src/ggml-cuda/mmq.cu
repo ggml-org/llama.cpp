@@ -97,7 +97,12 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
 }
 
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+        const ggml_tensor * swiglu_gate, const ggml_tensor * swiglu_up) {
+    GGML_ASSERT((swiglu_gate == nullptr) == (swiglu_up == nullptr));
+    GGML_ASSERT(!swiglu_gate || ids != nullptr);
+    GGML_ASSERT(!swiglu_gate || (swiglu_gate->type == GGML_TYPE_F32 && swiglu_up->type == GGML_TYPE_F32));
+    GGML_ASSERT(!swiglu_gate || (swiglu_gate->ne[0] == src1->ne[0] && swiglu_up->ne[0] == src1->ne[0]));
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
@@ -205,6 +210,9 @@ void ggml_cuda_mul_mat_q(
     // gate/up activations are broadcast across experts (ne11 == 1): quantize each token once and
     // scatter to its slots. ids_src1 then holds the inverse map (token slot -> compact row).
     const bool dedup_bcast = ne11 == 1 && n_expert_used > 1;
+    // The first prototype supports the ordinary expert-used activation layout.
+    // Broadcast/scatter quantization remains on the stock path.
+    GGML_ASSERT(!swiglu_gate || !dedup_bcast);
 
     {
         GGML_ASSERT(ids->nb[0] == ggml_element_size(ids));
@@ -246,6 +254,15 @@ void ggml_cuda_mul_mat_q(
         } else if (dedup_bcast) {
             quantize_scatter_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10,
                                     /*stride_token=*/s12, ne10_padded, ne12, ne11_flat, n_expert_used, stream);
+        } else if (swiglu_gate) {
+            const int64_t gate_s11 = swiglu_gate->nb[1] / sizeof(float);
+            const int64_t gate_s12 = swiglu_gate->nb[2] / sizeof(float);
+            const int64_t up_s11   = swiglu_up->nb[1] / sizeof(float);
+            const int64_t up_s12   = swiglu_up->nb[2] / sizeof(float);
+            quantize_mmq_q8_1_swiglu_cuda((const float *) swiglu_gate->data, (const float *) swiglu_up->data,
+                    ids_src1.get(), src1_q8_1.get(), src0->type, ne10,
+                    gate_s11, gate_s12, up_s11, up_s12,
+                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         } else {
             quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
                                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);

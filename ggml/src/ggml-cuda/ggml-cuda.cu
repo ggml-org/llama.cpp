@@ -3393,6 +3393,27 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
+static bool ggml_cuda_use_gfx1030_q8_1_fusion() {
+#if defined(GGML_USE_HIP)
+    // Environment configuration is immutable after backend initialization;
+    // avoid repeated getenv/atoi work while traversing every graph.
+    static const bool enabled = []() {
+        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
+        const char * fusion = std::getenv("GGML_HIP_GFX1030_Q8_1_FUSION");
+        return native != nullptr && std::atoi(native) != 0 &&
+               fusion != nullptr && std::atoi(fusion) != 0;
+    }();
+    if (!enabled) {
+        return false;
+    }
+
+    const int device = ggml_cuda_get_device();
+    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+#else
+    return false;
+#endif
+}
+
 // try and fuse nodes and return the number of nodes to skip
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
@@ -3402,6 +3423,60 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    // Prototype: fuse SwiGLU evaluation into the Q8_1 quantization feeding the
+    // following down projection. This targets the PP/MMQ path first; the TG
+    // gate+up+GLU path is already fused in MMVQ and is deliberately untouched.
+    if (node->op == GGML_OP_GLU && i + 1 < cgraph->n_nodes) {
+        ggml_tensor * down = cgraph->nodes[i + 1];
+
+        // Reject decode before consulting environment/device state or checking
+        // tensor layouts. Batches up to MMVQ_MAX_BATCH_SIZE keep the original
+        // MMVQ path and pay only these cheap graph-field comparisons.
+        const bool is_pp_mmid = down->op == GGML_OP_MUL_MAT_ID &&
+                                down->src[1] != nullptr &&
+                                down->src[1]->ne[2] > MMVQ_MAX_BATCH_SIZE;
+
+        if (is_pp_mmid && ggml_cuda_use_gfx1030_q8_1_fusion()) {
+            const bool is_swiglu = ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU;
+            const bool shape_ok = node->src[0] != nullptr && node->src[1] != nullptr &&
+                                  node->src[0]->type == GGML_TYPE_F32 && node->src[1]->type == GGML_TYPE_F32 &&
+                                  down->src[1] == node && down->src[1]->type == GGML_TYPE_F32 &&
+                                  down->type == GGML_TYPE_F32 && down->src[0] != nullptr &&
+                                  ggml_is_quantized(down->src[0]->type) &&
+                                  ggml_are_same_shape(node->src[0], node->src[1]) &&
+                                  node->src[0]->ne[0] == down->src[1]->ne[0] &&
+                                  node->src[0]->ne[0] % 4 == 0 &&
+                                  node->src[0]->ne[3] == 1 &&
+                                  node->src[0]->nb[1] % sizeof(float4) == 0 &&
+                                  node->src[0]->nb[2] % sizeof(float4) == 0 &&
+                                  node->src[1]->nb[1] % sizeof(float4) == 0 &&
+                                  node->src[1]->nb[2] % sizeof(float4) == 0 &&
+                                  ggml_cuda_is_aligned(node->src[0], sizeof(float4)) &&
+                                  ggml_cuda_is_aligned(node->src[1], sizeof(float4));
+            // The fused producer currently cannot reproduce the broadcast/dedup
+            // scatter layout used when src1->ne[1] == 1 and top_k > 1.
+            const bool routed_layout_ok = down->src[2] == nullptr ||
+                                          down->src[1]->ne[1] != 1 ||
+                                          down->src[2]->ne[0] <= 1;
+
+            if (is_swiglu && shape_ok && routed_layout_ok) {
+                const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+                const int64_t ncols = down->src[1]->ne[2];
+                const int64_t n_experts = down->src[0]->ne[2];
+                const bool mmq_ok = ggml_cuda_should_use_mmq(down->src[0]->type, cc, ncols, n_experts);
+                const ggml_op ops[] = { GGML_OP_GLU, down->op };
+                const int out_nodes[] = { i + 1 };
+
+                if (mmq_ok && ggml_can_fuse_subgraph(cgraph, i, 2, ops, out_nodes, 1) &&
+                        ggml_cuda_check_fusion_memory_ranges(cgraph, i, 2, out_nodes, 1)) {
+                    ggml_cuda_mul_mat_q(*cuda_ctx, down->src[0], down->src[1], down->src[2], down,
+                            node->src[0], node->src[1]);
+                    return 1;
+                }
+            }
+        }
+    }
 
     // gated_delta_net -> cpy: scatter recurrent-state snapshots into the cache
     if (node->op == GGML_OP_GATED_DELTA_NET) {
