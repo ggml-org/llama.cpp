@@ -734,9 +734,7 @@ class Gemma4Model(Gemma3Model):
         rope_params_full = self.hparams["rope_parameters"]["full_attention"]
         assert rope_params_full["rope_type"] == "proportional"
 
-        text_config = self.hparams.get("text_config", {})
-        head_dim_full = None
-        
+        head_dim_full = None        
         head_dim_full = self.hparams.get("global_head_dim")
         
         if head_dim_full is None and "per_layer_config" in self.hparams:
