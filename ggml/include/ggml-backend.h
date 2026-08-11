@@ -224,6 +224,10 @@ extern "C" {
     };
     typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
 
+    // Temporarily pin an existing host allocation for backend transfers.
+    typedef bool (*ggml_backend_register_host_buffer_t)  (void * buffer, size_t size);
+    typedef void (*ggml_backend_unregister_host_buffer_t)(void * buffer);
+
     //
     // Backend registry
     //

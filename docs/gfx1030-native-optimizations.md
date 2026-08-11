@@ -42,6 +42,8 @@ unset GGML_HIP_GFX1030_Q8_CACHE
 unset GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY
 ```
 
+Multi-GPU ROCm state save/restore stability has a separate opt-in, `GGML_HIP_SAFE_STATE_IO=1`. It does not require the gfx1030 master switch and does not change inference kernels. See [the multi-GPU ROCm state-I/O workaround](rocm-multi-gpu-state-io.md).
+
 ## Master-switch paths
 
 ### Q4_0 DOT8 MMVQ

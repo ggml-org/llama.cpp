@@ -17,6 +17,7 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -2538,6 +2539,96 @@ llm_graph_cb llama_context::graph_get_cb() const {
 // state save/load
 //
 
+static bool llama_safe_state_io_enabled() {
+    static const bool enabled = [] {
+        const char * value = getenv("GGML_HIP_SAFE_STATE_IO");
+        return value != nullptr && atoi(value) != 0;
+    }();
+    return enabled;
+}
+
+// Multi-device ROCm can fault while copying large pageable state buffers even when
+// their lifetime is synchronized (ROCm/rocm-systems#4817). Keep opted-in host state
+// allocations registered for the complete deferred tensor transfer scope.
+class llama_host_buffer_registration {
+public:
+    llama_host_buffer_registration(
+            const std::vector<ggml_backend_ptr> & backends,
+            const void * buffer,
+            size_t size,
+            bool required) : buffer(const_cast<void *>(buffer)), required(required && size > 0) {
+        if (!this->required) {
+            return;
+        }
+
+        std::vector<ggml_backend_reg_t> checked;
+        bool registration_supported = false;
+        for (const auto & backend : backends) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+            ggml_backend_reg_t reg = dev != nullptr ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg == nullptr) {
+                continue;
+            }
+
+            bool seen = false;
+            for (ggml_backend_reg_t checked_reg : checked) {
+                if (checked_reg == reg) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (seen) {
+                continue;
+            }
+            checked.push_back(reg);
+
+            auto register_fn = reinterpret_cast<ggml_backend_register_host_buffer_t>(
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_register_host_buffer"));
+            auto unregister_fn = reinterpret_cast<ggml_backend_unregister_host_buffer_t>(
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_unregister_host_buffer"));
+            if (register_fn == nullptr || unregister_fn == nullptr) {
+                continue;
+            }
+            registration_supported = true;
+            if (!register_fn(this->buffer, size)) {
+                continue;
+            }
+
+            this->unregister_fn = unregister_fn;
+            LLAMA_LOG_DEBUG("%s: registered %.2f MiB host state buffer\n", __func__, size/1024.0/1024.0);
+            return;
+        }
+
+        if (!registration_supported) {
+            // The HIP-specific opt-in is harmless in builds without a compatible GPU backend.
+            this->required = false;
+            return;
+        }
+
+        LLAMA_LOG_ERROR(
+            "%s: GGML_HIP_SAFE_STATE_IO=1 could not register the %.2f MiB host state buffer\n",
+            __func__, size/1024.0/1024.0);
+    }
+
+    ~llama_host_buffer_registration() {
+        if (unregister_fn != nullptr) {
+            unregister_fn(buffer);
+        }
+    }
+
+    llama_host_buffer_registration(const llama_host_buffer_registration &) = delete;
+    llama_host_buffer_registration & operator=(const llama_host_buffer_registration &) = delete;
+
+    bool valid() const {
+        return !required || unregister_fn != nullptr;
+    }
+
+private:
+    void * buffer = nullptr;
+    bool required = false;
+    ggml_backend_unregister_host_buffer_t unregister_fn = nullptr;
+};
+
 class llama_io_write_dummy : public llama_io_write_i {
 public:
     llama_io_write_dummy(bool skip_tensors) : skip_tensors(skip_tensors) {}
@@ -2951,6 +3042,11 @@ size_t llama_context::state_get_size() {
 }
 
 size_t llama_context::state_get_data(uint8_t * dst, size_t size) {
+    llama_host_buffer_registration registration(backends, dst, size, llama_safe_state_io_enabled());
+    if (!registration.valid()) {
+        return 0;
+    }
+
     llama_io_write_host io(dst, size);
     try {
         return state_write_data(io);
@@ -2961,6 +3057,11 @@ size_t llama_context::state_get_data(uint8_t * dst, size_t size) {
 }
 
 size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
+    llama_host_buffer_registration registration(backends, src, size, llama_safe_state_io_enabled());
+    if (!registration.valid()) {
+        return 0;
+    }
+
     llama_io_read_host io(src, size);
     try {
         return state_read_data(io);
@@ -2986,6 +3087,13 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
 }
 
 size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
+    const bool host_state = !(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+    llama_host_buffer_registration registration(
+        backends, dst, size, host_state && llama_safe_state_io_enabled());
+    if (!registration.valid()) {
+        return 0;
+    }
+
     std::unique_ptr<llama_io_write_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
@@ -3005,6 +3113,13 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
+    const bool host_state = !(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+    llama_host_buffer_registration registration(
+        backends, src, size, host_state && llama_safe_state_io_enabled());
+    if (!registration.valid()) {
+        return 0;
+    }
+
     std::unique_ptr<llama_io_read_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         // create a temporary io to read the magic and the src seq_id

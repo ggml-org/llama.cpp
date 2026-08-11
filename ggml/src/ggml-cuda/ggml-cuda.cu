@@ -4906,8 +4906,23 @@ void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * tot
     *total /= share_count;
 }
 
+static bool ggml_cuda_should_register_host_buffer() {
+    if (getenv("GGML_CUDA_REGISTER_HOST") != nullptr) {
+        return true;
+    }
+
+#if defined(GGML_USE_HIP)
+    // Work around ROCm/rocm-systems#4817 for in-memory state transfers without
+    // enabling registration of unrelated host allocations on CUDA or MUSA.
+    const char * safe_state_io = getenv("GGML_HIP_SAFE_STATE_IO");
+    return safe_state_io != nullptr && atoi(safe_state_io) != 0;
+#else
+    return false;
+#endif
+}
+
 bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
-    if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
+    if (!ggml_cuda_should_register_host_buffer()) {
         return false;
     }
 
@@ -4930,7 +4945,7 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
 }
 
 void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
-    if (getenv("GGML_CUDA_REGISTER_HOST") == nullptr) {
+    if (!ggml_cuda_should_register_host_buffer()) {
         return;
     }
 
