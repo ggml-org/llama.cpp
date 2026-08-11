@@ -167,15 +167,17 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
+        shell: bash
         run: |
           cd tools/server/tests
-          $env:PYTHONIOENCODING = ":replace"
+          export PYTHONIOENCODING=":replace"
           ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        shell: bash
         run: |
           cd tools/server/tests
-          $env:SLOW_TESTS = "1"
+          export SLOW_TESTS="1"
           ./tests.sh
