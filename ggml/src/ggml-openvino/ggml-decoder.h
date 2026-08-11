@@ -501,6 +501,16 @@ public:
                (tensor->op == GGML_OP_NONE || tensor->op == GGML_OP_CPY);
     }
 
+    // A 2-D float graph input feeding a matmul as src[1]. Speculative decoding hands the draft the
+    // target's hidden features this way ([n_embd, n_tokens], with no GET_ROWS lookup, so none of the
+    // other seeds match it) and the token count differs between the prompt pass and the shorter
+    // draft blocks, so its token dim must stay dynamic.
+    static bool is_inp_embd_2d(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return (tensor->flags & GGML_TENSOR_FLAG_INPUT) && tensor->op == GGML_OP_NONE &&
+               tensor->type == GGML_TYPE_F32 && tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+               op->op == GGML_OP_MUL_MAT && tensor == op->src[1];
+    }
+
     static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]) ||
                (op->op == GGML_OP_SOFT_MAX && tensor == op->src[1]);

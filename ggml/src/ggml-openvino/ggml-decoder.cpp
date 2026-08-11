@@ -2851,6 +2851,10 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
+                if (is_inp_embd_2d(src, node)) {
+                    m_node_dynamic_dims[src] = 1;
+                    continue;
+                }
                 self(self, src);
             }
         }
@@ -2919,6 +2923,12 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             if (node->src[0]->op == GGML_OP_SSM_SCAN) {
                 // y part [head_dim, n_head, n_tokens, n_seqs] at offset 0; the state part is token-independent
                 m_node_dynamic_dims[node] = node->view_offs == 0 ? 2 : -1;
+                break;
+            }
+
+            // A VIEW that does not change the shape is a pass-through for dynamic-dim purposes.
+            if (is_same_shape(node->src[0], node)) {
+                m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
                 break;
             }
             // Use stride-based matching: the stride of a VIEW dimension directly
