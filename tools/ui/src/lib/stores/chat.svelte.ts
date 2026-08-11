@@ -186,7 +186,9 @@ class ChatStore {
 
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
 	}
-	private getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
+	private getChatStreamingState(
+		convId: string
+	): { response: string; messageId: string } | undefined {
 		return this.chatStreamingStates.get(convId);
 	}
 	syncLoadingStateForChat(convId: string): void {
@@ -845,16 +847,12 @@ class ChatStore {
 		}
 	}
 
-	getChatStreamingPublic(convId: string): { response: string; messageId: string } | undefined {
-		return this.getChatStreaming(convId);
+	getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
+		return this.getChatStreamingState(convId);
 	}
 
-	isChatLoadingPublic(convId: string): boolean {
+	isChatLoading(convId: string): boolean {
 		return this.chatLoadingStates.get(convId) || false;
-	}
-
-	isChatReasoningPublic(convId: string): boolean {
-		return this.chatReasoningStates.get(convId) || false;
 	}
 
 	private isChatLoadingInternal(convId: string): boolean {
@@ -1853,7 +1851,7 @@ class ChatStore {
 
 		if (!conversationId) return;
 
-		const streamingState = this.getChatStreaming(conversationId);
+		const streamingState = this.getChatStreamingState(conversationId);
 
 		if (!streamingState) return;
 
@@ -2910,27 +2908,3 @@ class ChatStore {
 }
 
 export const chatStore = new ChatStore();
-
-export const activeProcessingState = () => chatStore.activeProcessingState;
-export const currentResponse = () => chatStore.currentResponse;
-export const errorDialog = () => chatStore.errorDialogState;
-export const getAddFilesHandler = () => chatStore.getAddFilesHandler();
-export const getAllLoadingChats = () => chatStore.getAllLoadingChats();
-export const getAllStreamingChats = () => chatStore.getAllStreamingChats();
-export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
-export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
-export const isChatStreaming = () => chatStore.isStreaming();
-export const isEditing = () => chatStore.isEditing();
-export const isLoading = () => chatStore.isLoading;
-export const isReasoning = () => chatStore.isReasoning;
-export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
-export const chatHasPendingMessage = (convId: string) => chatStore.hasPendingMessage(convId);
-export const chatPendingMessageContent = (convId: string) =>
-	chatStore.pendingMessageContent(convId);
-export const chatPendingMessageExtras = (convId: string) => chatStore.pendingMessageExtras(convId);
-export const chatClearPendingMessage = (convId: string) => chatStore.clearPendingMessage(convId);
-export const chatInjectPendingMessage = (
-	convId: string,
-	content: string,
-	extras?: DatabaseMessageExtra[]
-) => chatStore.injectPendingMessage(convId, content, extras);

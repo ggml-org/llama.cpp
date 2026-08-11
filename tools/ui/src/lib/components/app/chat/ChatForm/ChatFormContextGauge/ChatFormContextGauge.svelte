@@ -9,9 +9,7 @@
 		gaugeTriggerEnter,
 		gaugeTriggerKeydown,
 		gaugeTriggerLeave,
-		gaugeTriggerPointerDown,
-		isChatStreaming,
-		isLoading
+		gaugeTriggerPointerDown
 	} from '$lib/stores';
 	import { untrack } from 'svelte';
 
@@ -29,7 +27,7 @@
 
 		if (!conv) return;
 
-		if (isLoading() || isChatStreaming()) return;
+		if (chatStore.isLoading || chatStore.isStreaming()) return;
 
 		if (messages.length === 0) {
 			untrack(() => chatStore.clearProcessingState(conv.id));

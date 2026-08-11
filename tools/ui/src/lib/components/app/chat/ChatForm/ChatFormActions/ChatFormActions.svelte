@@ -13,15 +13,7 @@
 	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import {
-		activeMessages,
-		activeProcessingState,
-		config,
-		conversationsStore,
-		isChatStreaming,
-		isLoading as chatIsLoading,
-		mcpStore
-	} from '$lib/stores';
+	import { activeMessages, chatStore, config, conversationsStore, mcpStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -126,9 +118,9 @@
 
 		if (totalHistoricalTokens > 0) return true;
 
-		if (!chatIsLoading() && !isChatStreaming()) return false;
+		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
 
-		const processingState = activeProcessingState();
+		const processingState = chatStore.activeProcessingState;
 
 		if (!processingState) return false;
 

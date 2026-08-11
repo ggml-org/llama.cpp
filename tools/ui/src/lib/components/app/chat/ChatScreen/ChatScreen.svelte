@@ -25,10 +25,6 @@
 		config,
 		conversationsStore,
 		device,
-		errorDialog,
-		isChatStreaming,
-		isEditing,
-		isLoading,
 		isMobile,
 		serverError,
 		serverLoading
@@ -47,12 +43,15 @@
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
-		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
+		showCenteredEmpty &&
+			!activeConversation() &&
+			activeMessages().length === 0 &&
+			!chatStore.isLoading
 	);
-	let activeErrorDialog = $derived(errorDialog());
+	let activeErrorDialog = $derived(chatStore.errorDialogState);
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
-	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!isMobile.current) return '1rem';
 
@@ -353,7 +352,7 @@
 
 			<ChatScreenForm
 				class="pointer-events-auto conversation-chat-form"
-				disabled={hasPropsError || isEditing()}
+				disabled={hasPropsError || chatStore.isEditing()}
 				{initialMessage}
 				isLoading={isCurrentConversationLoading}
 				onFileRemove={fileUpload.handleFileRemove}

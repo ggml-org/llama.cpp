@@ -11,7 +11,7 @@
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
-	import { chatStore, conversationsStore, isMobile, pendingEditMessageId } from '$lib/stores';
+	import { chatStore, conversationsStore, isMobile } from '$lib/stores';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 	import { deriveAgenticSections } from '$lib/utils';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
@@ -183,7 +183,7 @@
 	});
 
 	$effect(() => {
-		const pendingId = pendingEditMessageId();
+		const pendingId = chatStore.pendingEditMessageId;
 
 		if (pendingId && pendingId === message.id && !isEditing) {
 			handleEdit();

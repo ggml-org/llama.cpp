@@ -5,10 +5,6 @@
 	import {
 		activeConversation,
 		agenticStore,
-		chatClearPendingMessage,
-		chatInjectPendingMessage,
-		chatPendingMessageContent,
-		chatPendingMessageExtras,
 		chatStore,
 		config,
 		conversationsStore
@@ -262,18 +258,18 @@
 				onDelete={() => agenticStore.clearSteeringMessage(convId)}
 			/>
 		{/if}
-	{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
+	{:else if activeConversation() && chatStore.pendingMessageContent(activeConversation()!.id)}
 		{@const convId = activeConversation()!.id}
-		{@const pendingContent = chatPendingMessageContent(convId)}
+		{@const pendingContent = chatStore.pendingMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={chatPendingMessageExtras(convId)}
+				extras={chatStore.pendingMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
-				onDelete={() => chatClearPendingMessage(convId)}
+				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
+				onDelete={() => chatStore.clearPendingMessage(convId)}
 			/>
 		{/if}
 	{/if}

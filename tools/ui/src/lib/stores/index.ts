@@ -18,27 +18,7 @@
  */
 
 // CHAT / MESSAGING
-export {
-	chatStore,
-	activeProcessingState,
-	currentResponse,
-	errorDialog,
-	getAddFilesHandler,
-	getAllLoadingChats,
-	getAllStreamingChats,
-	getChatStreaming,
-	isChatLoading,
-	isChatStreaming,
-	isEditing,
-	isLoading,
-	isReasoning,
-	pendingEditMessageId,
-	chatHasPendingMessage,
-	chatPendingMessageContent,
-	chatPendingMessageExtras,
-	chatClearPendingMessage,
-	chatInjectPendingMessage
-} from './chat.svelte';
+export { chatStore } from './chat.svelte';
 
 export { draftMessagesStore } from './draft-messages.svelte';
 

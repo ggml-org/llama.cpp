@@ -17,7 +17,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FORK_TREE_DEPTH_PADDING, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { conversationsStore, getAllLoadingChats } from '$lib/stores';
+	import { chatStore, conversationsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -55,7 +55,7 @@
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	let isLoading = $derived(getAllLoadingChats().includes(conversation.id));
+	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
