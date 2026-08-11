@@ -2,9 +2,8 @@
 	import ContextGaugeDial from './ContextGaugeDial.svelte';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
 	import {
-		activeConversation,
-		activeMessages,
 		chatStore,
+		conversationsStore,
 		gaugeTriggerClick,
 		gaugeTriggerEnter,
 		gaugeTriggerKeydown,
@@ -16,14 +15,14 @@
 	const gauge = useContextGauge();
 
 	$effect(() => {
-		const conv = activeConversation();
+		const conv = conversationsStore.activeConversation;
 
 		untrack(() => chatStore.setActiveProcessingConversation(conv?.id ?? null));
 	});
 
 	$effect(() => {
-		const conv = activeConversation();
-		const messages = activeMessages() as DatabaseMessage[];
+		const conv = conversationsStore.activeConversation;
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 
 		if (!conv) return;
 

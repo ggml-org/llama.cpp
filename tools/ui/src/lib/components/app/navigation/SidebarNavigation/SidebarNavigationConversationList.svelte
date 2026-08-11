@@ -3,7 +3,7 @@
 	import SidebarNavigationSearchResults from './SidebarNavigationSearchResults.svelte';
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
 	import { Pin } from '@lucide/svelte';
-	import { buildConversationTree } from '$lib/stores';
+	import { buildConversationTree } from '$lib/utils';
 
 	interface Props {
 		class: string;

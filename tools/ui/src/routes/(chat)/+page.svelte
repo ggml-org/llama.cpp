@@ -3,13 +3,7 @@
 	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, URL_PARAMS } from '$lib/constants';
-	import {
-		chatStore,
-		conversationsStore,
-		isConversationsInitialized,
-		modelsStore,
-		serverStore
-	} from '$lib/stores';
+	import { chatStore, conversationsStore, modelsStore, serverStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
@@ -82,7 +76,7 @@
 	}
 
 	onMount(async () => {
-		if (!isConversationsInitialized()) {
+		if (!conversationsStore.isInitialized) {
 			await conversationsStore.initialize();
 		}
 

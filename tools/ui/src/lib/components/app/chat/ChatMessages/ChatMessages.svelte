@@ -2,13 +2,7 @@
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
-	import {
-		activeConversation,
-		agenticStore,
-		chatStore,
-		config,
-		conversationsStore
-	} from '$lib/stores';
+	import { agenticStore, chatStore, config, conversationsStore } from '$lib/stores';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
@@ -100,7 +94,7 @@
 	});
 
 	function refreshAllMessages() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
 			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
@@ -113,7 +107,7 @@
 
 	// Refresh messages whenever the active conversation changes
 	$effect(() => {
-		if (activeConversation()) {
+		if (conversationsStore.activeConversation) {
 			refreshAllMessages();
 		}
 	});
@@ -243,8 +237,8 @@
 		/>
 	{/each}
 
-	{#if activeConversation() && agenticStore.pendingSteeringMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
+	{#if conversationsStore.activeConversation && agenticStore.pendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
+		{@const convId = conversationsStore.activeConversation!.id}
 		{@const pendingContent = agenticStore.pendingSteeringMessageContent(convId)}
 
 		{#if pendingContent}
@@ -258,8 +252,8 @@
 				onDelete={() => agenticStore.clearSteeringMessage(convId)}
 			/>
 		{/if}
-	{:else if activeConversation() && chatStore.pendingMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
+	{:else if conversationsStore.activeConversation && chatStore.pendingMessageContent(conversationsStore.activeConversation!.id)}
+		{@const convId = conversationsStore.activeConversation!.id}
 		{@const pendingContent = chatStore.pendingMessageContent(convId)}
 
 		{#if pendingContent}

@@ -4,7 +4,7 @@
 	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, ROUTES, URL_PARAMS } from '$lib/constants';
-	import { activeConversation, chatStore, conversationsStore, modelsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, modelsStore } from '$lib/stores';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
@@ -84,7 +84,7 @@
 			urlParamsProcessed = false; // Reset for new chat
 
 			// Skip loading if this conversation is already active (e.g., just created)
-			if (activeConversation()?.id === chatId) {
+			if (conversationsStore.activeConversation?.id === chatId) {
 				void chatStore.discoverActiveStream(chatId);
 
 				if ((qParam !== null || modelParam !== null) && !urlParamsProcessed) {
@@ -134,7 +134,7 @@
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - {APP_NAME}</title>
+	<title>{conversationsStore.activeConversation?.name || 'Chat'} - {APP_NAME}</title>
 </svelte:head>
 
 <DialogModelNotAvailable

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { activeMessages, chatStore, isMobile, modelsStore, serverStore } from '$lib/stores';
+	import { chatStore, conversationsStore, isMobile, modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
 		disabled?: boolean;
@@ -30,7 +30,7 @@
 	let isOffline = $derived(!!serverStore.error);
 
 	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
 
 	let lastSyncedConversationModel: string | null = null;
@@ -64,7 +64,7 @@
 			isRouter &&
 			!modelsStore.selectedModelId &&
 			modelsStore.loadedModelIds.length > 0 &&
-			activeMessages().length > 0 &&
+			conversationsStore.activeMessages.length > 0 &&
 			!conversationModel
 		) {
 			lastSyncedConversationModel = null;

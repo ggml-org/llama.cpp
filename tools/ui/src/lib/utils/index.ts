@@ -51,7 +51,12 @@ export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from '.
 export { modelLoadFraction, modelLoadProgressText } from './progress';
 
 // Conversation utilities
-export { createMessageCountMap, getMessageCount } from './conversation-utils';
+export {
+	createMessageCountMap,
+	getMessageCount,
+	buildConversationTree,
+	type ConversationTreeItem
+} from './conversation-utils';
 
 // Clipboard utilities
 export {

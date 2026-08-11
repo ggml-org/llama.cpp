@@ -22,7 +22,7 @@
 		buildInfoStore,
 		chatStore,
 		config,
-		conversations,
+		conversationsStore,
 		isMobile,
 		mcpStore,
 		modelsStore,
@@ -70,7 +70,7 @@
 	}
 
 	function navigateToConversation(direction: -1 | 1) {
-		const allConvs = conversations();
+		const allConvs = conversationsStore.conversations;
 
 		if (allConvs.length === 0) return;
 

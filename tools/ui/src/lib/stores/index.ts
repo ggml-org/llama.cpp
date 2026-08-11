@@ -26,16 +26,7 @@ export { draftMessagesStore } from './draft-messages.svelte';
 export { agenticStore } from './agentic.svelte';
 
 // CONVERSATIONS
-export type { ConversationTreeItem } from './conversations.svelte';
-export {
-	conversationsStore,
-	conversations,
-	activeConversation,
-	activeMessages,
-	pendingCwd,
-	isConversationsInitialized,
-	buildConversationTree
-} from './conversations.svelte';
+export { conversationsStore } from './conversations.svelte';
 
 // MCP
 export { mcpStore } from './mcp.svelte';

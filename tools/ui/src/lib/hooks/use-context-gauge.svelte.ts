@@ -8,7 +8,7 @@ import { useProcessingState } from './use-processing-state.svelte';
 import { colorLevelFromPercent } from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
 import { STATS_UNITS } from '$lib/constants';
 import { ColorLevel, MessageRole } from '$lib/enums';
-import { activeMessages, chatStore, modelsStore, serverStore } from '$lib/stores';
+import { chatStore, conversationsStore, modelsStore, serverStore } from '$lib/stores';
 import type { ChatMessageTimings, DatabaseMessage } from '$lib/types';
 
 interface LiveStats {
@@ -98,7 +98,7 @@ export function useContextGauge(): UseContextGaugeReturn {
 			if (model) return model.model;
 		}
 
-		return chatStore.getConversationModel(activeMessages() as DatabaseMessage[]);
+		return chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[]);
 	});
 	const isActiveModelLoaded = $derived(
 		activeModelId !== null && (!isRouterMode() || modelsStore.isModelLoaded(activeModelId))
@@ -125,7 +125,7 @@ export function useContextGauge(): UseContextGaugeReturn {
 	});
 	const liveStats = $derived(deriveLiveStats(processingState.processingState));
 	const currentRead = $derived.by(() => {
-		const timings = lastAssistantTimings(activeMessages() as DatabaseMessage[]);
+		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 
 		let read = 0;
 
@@ -142,13 +142,13 @@ export function useContextGauge(): UseContextGaugeReturn {
 		return read;
 	});
 	const currentFresh = $derived.by(() => {
-		const timings = lastAssistantTimings(activeMessages() as DatabaseMessage[]);
+		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 		const fresh = timings?.prompt_n ?? 0;
 
 		return Math.max(fresh, liveStats?.freshTokens ?? 0);
 	});
 	const currentCache = $derived.by(() => {
-		const timings = lastAssistantTimings(activeMessages() as DatabaseMessage[]);
+		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 		const cached = timings?.cache_n ?? 0;
 
 		if (liveStats && liveStats.promptTokens > 0) {
@@ -160,14 +160,14 @@ export function useContextGauge(): UseContextGaugeReturn {
 	const currentOutput = $derived.by(() => {
 		if (liveStats && liveStats.outputTokens > 0) return liveStats.outputTokens;
 
-		const timings = lastAssistantTimings(activeMessages() as DatabaseMessage[]);
+		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 
 		return timings?.predicted_n ?? 0;
 	});
 	const kvTotal = $derived(currentRead + currentOutput);
 	const contextUsed = $derived(currentRead + currentOutput);
 	const cumulative = $derived.by(() => {
-		const messages = activeMessages() as DatabaseMessage[];
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 		// Agentic sessions stamp the same agentic.llm totals onto every
 		// assistant message; cache_n is never per-turn so cache_total stays 0.
 		const agenticMessages = messages.filter(

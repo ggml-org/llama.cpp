@@ -27,15 +27,12 @@
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
-		activeConversation,
-		activeMessages,
 		chatStore,
 		config,
 		conversationsStore,
 		mcpResourceStore,
 		mcpStore,
 		modelsStore,
-		pendingCwd,
 		serverStore,
 		toolsStore
 	} from '$lib/stores';
@@ -143,7 +140,7 @@
 	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
-	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
+	let cwd = $derived(conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd);
 
 	const pickers = useChatFormPickers({
 		focusInput: refocusInput,
@@ -194,7 +191,7 @@
 
 	let isRouter = $derived(serverStore.isRouterMode);
 	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
 	let activeModelId = $derived.by(() => {
 		const options = modelsStore.models;

@@ -5,7 +5,7 @@
 	import { SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
 	import { ROUTES } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore, conversations, conversationsStore, isMobile } from '$lib/stores';
+	import { chatStore, conversationsStore, isMobile } from '$lib/stores';
 
 	let searchQuery = $state('');
 	let searchInputRef = $state<HTMLInputElement | null>(null);
@@ -17,7 +17,7 @@
 
 		if (query.length === 0) return [];
 
-		return conversations().filter((c) => c.name.toLowerCase().includes(query));
+		return conversationsStore.conversations.filter((c) => c.name.toLowerCase().includes(query));
 	});
 
 	// Search page is intended for mobile; on desktop the sidebar already exposes
@@ -33,7 +33,7 @@
 	}
 
 	async function handleEditConversation(id: string) {
-		const conversation = conversations().find((c) => c.id === id);
+		const conversation = conversationsStore.conversations.find((c) => c.id === id);
 
 		if (!conversation) return;
 
@@ -45,7 +45,7 @@
 	}
 
 	async function handleDeleteConversation(id: string) {
-		const conversation = conversations().find((c) => c.id === id);
+		const conversation = conversationsStore.conversations.find((c) => c.id === id);
 
 		if (!conversation) return;
 

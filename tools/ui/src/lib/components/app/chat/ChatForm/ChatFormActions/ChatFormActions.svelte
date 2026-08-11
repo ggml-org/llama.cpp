@@ -13,7 +13,7 @@
 	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import { activeMessages, chatStore, config, conversationsStore, mcpStore } from '$lib/stores';
+	import { chatStore, config, conversationsStore, mcpStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -96,7 +96,7 @@
 	let hasProcessedTokens = $derived.by(() => {
 		if (!page.params.id) return false;
 
-		const messages = activeMessages() as DatabaseMessage[];
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 
 		let totalHistoricalTokens = 0;
 

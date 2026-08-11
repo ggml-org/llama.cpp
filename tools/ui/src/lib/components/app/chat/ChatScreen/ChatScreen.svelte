@@ -19,8 +19,6 @@
 	import { useChatScreenScroll } from '$lib/hooks/use-chat-screen-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
-		activeConversation,
-		activeMessages,
 		chatStore,
 		config,
 		conversationsStore,
@@ -43,8 +41,8 @@
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
 		showCenteredEmpty &&
-			!activeConversation() &&
-			activeMessages().length === 0 &&
+			!conversationsStore.activeConversation &&
+			conversationsStore.activeMessages.length === 0 &&
 			!chatStore.isLoading
 	);
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
@@ -77,7 +75,7 @@
 	});
 	const { handleKeydown } = useKeyboardShortcuts({
 		deleteActiveConversation: () => {
-			if (activeConversation()) {
+			if (conversationsStore.activeConversation) {
 				showDeleteDialog = true;
 			}
 		}
@@ -97,7 +95,7 @@
 	}
 
 	async function handleDeleteConfirm() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
 			await conversationsStore.deleteConversation(conversation.id);
@@ -145,7 +143,7 @@
 	async function handleMessagesReady(messageCount: number) {
 		if (messageCount === 0) return;
 
-		const id = activeConversation()?.id ?? null;
+		const id = conversationsStore.activeConversation?.id ?? null;
 
 		if (!id || id === lastScrolledConversationId) return;
 
@@ -165,7 +163,7 @@
 		const settle = () => {
 			if (autoScroll.userScrolledUp) return;
 
-			if (activeConversation()?.id !== id) return;
+			if (conversationsStore.activeConversation?.id !== id) return;
 
 			autoScroll.scrollToBottom();
 			const height = container.scrollHeight;
@@ -307,7 +305,7 @@
 	>
 		{#if !isEmpty}
 			<ChatMessages
-				messages={activeMessages()}
+				messages={conversationsStore.activeMessages}
 				onMessagesReady={handleMessagesReady}
 				onUserAction={() => {
 					handleSendLikeScroll();
