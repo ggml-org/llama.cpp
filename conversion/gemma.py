@@ -665,13 +665,11 @@ class Gemma4Model(Gemma3Model):
         swa_layers = [t == "sliding_attention" for t in self.hparams["layer_types"]]
         self.gguf_writer.add_sliding_window_pattern(swa_layers)
 
-        text_config = self.hparams.get("text_config", {})
         head_dim_full = None
+        head_dim_full = self.hparams.get("global_head_dim")
         
-        head_dim_full = text_config.get("global_head_dim")
-        
-        if head_dim_full is None and "per_layer_config" in text_config:
-            per_layer_config = text_config["per_layer_config"]
+        if head_dim_full is None and "per_layer_config" in self.hparams:
+            per_layer_config = self.hparams["per_layer_config"]
             layer_types = self.hparams.get("layer_types", [])
             for layer_idx, layer_config in per_layer_config.items():
                 if isinstance(layer_idx, int) and layer_idx < len(layer_types):
@@ -705,9 +703,8 @@ class Gemma4Model(Gemma3Model):
         num_key_value_heads_full = self.hparams.get("num_global_key_value_heads")
         if num_key_value_heads_full is None:
             # fallback: try to get from per_layer_config for full_attention layers
-            text_config = self.hparams.get("text_config", {})
-            if "per_layer_config" in text_config:
-                per_layer_config = text_config["per_layer_config"]
+            if "per_layer_config" in self.hparams:
+                per_layer_config = self.hparams["per_layer_config"]
                 layer_types = self.hparams.get("layer_types", [])
                 for layer_idx, layer_config in per_layer_config.items():
                     if isinstance(layer_idx, int) and layer_idx < len(layer_types):
@@ -740,10 +737,10 @@ class Gemma4Model(Gemma3Model):
         text_config = self.hparams.get("text_config", {})
         head_dim_full = None
         
-        head_dim_full = text_config.get("global_head_dim")
+        head_dim_full = self.hparams.get("global_head_dim")
         
-        if head_dim_full is None and "per_layer_config" in text_config:
-            per_layer_config = text_config["per_layer_config"]
+        if head_dim_full is None and "per_layer_config" in self.hparams:
+            per_layer_config = self.hparams["per_layer_config"]
             layer_types = self.hparams.get("layer_types", [])
             for layer_idx, layer_config in per_layer_config.items():
                 if isinstance(layer_idx, int) and layer_idx < len(layer_types):
