@@ -101,7 +101,8 @@ export function useContextGauge(): UseContextGaugeReturn {
 		return chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[]);
 	});
 	const isActiveModelLoaded = $derived(
-		activeModelId !== null && (!isRouterMode() || modelsStore.isModelLoaded(activeModelId))
+		activeModelId !== null &&
+			(!serverStore.isRouterMode || modelsStore.isModelLoaded(activeModelId))
 	);
 	const isActiveModelLoading = $derived(
 		activeModelId !== null && modelsStore.isModelOperationInProgress(activeModelId)
