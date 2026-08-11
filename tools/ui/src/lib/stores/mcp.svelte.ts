@@ -1978,20 +1978,3 @@ class MCPStore {
 }
 
 export const mcpStore = new MCPStore();
-
-export const mcpIsInitializing = () => mcpStore.isInitializing;
-export const mcpIsInitialized = () => mcpStore.isInitialized;
-export const mcpError = () => mcpStore.error;
-export const mcpIsEnabled = () => mcpStore.isEnabled;
-export const mcpIsProxyAvailable = () => mcpStore.isProxyAvailable;
-export const mcpAvailableTools = () => mcpStore.availableTools;
-export const mcpConnectedServerCount = () => mcpStore.connectedServerCount;
-export const mcpConnectedServerNames = () => mcpStore.connectedServerNames;
-export const mcpToolCount = () => mcpStore.toolCount;
-export const mcpServerInstructions = () => mcpStore.getServerInstructions();
-export const mcpHasServerInstructions = () => mcpStore.hasServerInstructions();
-
-// Resources exports
-export const mcpHasResourcesCapability = () => mcpStore.hasResourcesCapability();
-export const mcpServersWithResources = () => mcpStore.getServersWithResources();
-export const mcpResourceContext = () => mcpStore.getResourceContextForChat();

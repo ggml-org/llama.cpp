@@ -38,23 +38,7 @@ export {
 } from './conversations.svelte';
 
 // MCP
-export {
-	mcpStore,
-	mcpIsInitializing,
-	mcpIsInitialized,
-	mcpError,
-	mcpIsEnabled,
-	mcpIsProxyAvailable,
-	mcpAvailableTools,
-	mcpConnectedServerCount,
-	mcpConnectedServerNames,
-	mcpToolCount,
-	mcpServerInstructions,
-	mcpHasServerInstructions,
-	mcpHasResourcesCapability,
-	mcpServersWithResources,
-	mcpResourceContext
-} from './mcp.svelte';
+export { mcpStore } from './mcp.svelte';
 
 export {
 	mcpResourceStore,
