@@ -172,6 +172,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     endif()
 
     llama_build(test-gbnf-validator.cpp)
+    llama_build_and_test(test-unicode-regex-split.cpp)
 
     # build test-tokenizer-1-bpe target once and add many tests
     llama_build(test-tokenizer-1-bpe.cpp)
