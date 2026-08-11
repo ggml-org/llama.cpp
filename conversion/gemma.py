@@ -665,7 +665,8 @@ class Gemma4Model(Gemma3Model):
         swa_layers = [t == "sliding_attention" for t in self.hparams["layer_types"]]
         self.gguf_writer.add_sliding_window_pattern(swa_layers)
 
-        head_dim_full = self.hparams["global_head_dim"]
+        text_config = self.hparams.get("text_config", {})
+        head_dim_full = text_config.get("global_head_dim", self.hparams.get("head_dim", 256))
         head_dim_swa = self.hparams["head_dim"]
         # correct the head dim for global/swa layers
         self.gguf_writer.add_key_length(head_dim_full)
@@ -708,7 +709,8 @@ class Gemma4Model(Gemma3Model):
         # IMPORTANT: this ROPE_FREQS tensor is ONLY used by the full_attention layers
         rope_params_full = self.hparams["rope_parameters"]["full_attention"]
         assert rope_params_full["rope_type"] == "proportional"
-        head_dim_full = (self.hparams["global_head_dim"])
+        text_config = self.hparams.get("text_config", {})
+        head_dim_full = text_config.get("global_head_dim", self.hparams.get("head_dim", 256))
         partial_rotary_factor_full = rope_params_full["partial_rotary_factor"]
         n_rot_full = int(head_dim_full * partial_rotary_factor_full / 2)
         n_unrot_full = int(head_dim_full / 2) - n_rot_full
