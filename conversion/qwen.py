@@ -4,6 +4,7 @@ import json
 
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
@@ -719,8 +720,9 @@ class DSparkModel(DFlashModel):
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, False)
 
-        # only the arch name separates the SpecForge drafts from the DeepSpec ones
-        self._is_specforge = hparams["architectures"][0] in ("DSparkDraftModel", "DSparkSpeculator")
+        # block layout default by arch: speculators drafts are 1+N, DeepSpec ones sample from the anchor
+        self._sample_from_anchor = hparams.get("sample_from_anchor",
+            hparams["architectures"][0] not in ("DSparkDraftModel", "DSparkSpeculator"))
         if "transformer_layer_config" in hparams:  # speculators nests the backbone hparams
             hparams = {**hparams, **hparams["transformer_layer_config"]}
 
@@ -745,65 +747,52 @@ class DSparkModel(DFlashModel):
         if self._n_vocab_draft > n_vocab:
             raise ValueError(f"draft_vocab_size {self._n_vocab_draft} exceeds vocab_size {n_vocab}")
         self._d2t: Tensor | None = None
-        self._pending_reduced: list[tuple[str, Tensor]] = []
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        if self._is_specforge:
-            # 1+N fill-in block: the anchor slot is a bonus token, not a prediction slot
-            self.gguf_writer.add_bonus_anchor(not self.hparams.get("sample_from_anchor", False))
+        # false: 1+N fill-in block, the anchor slot is a bonus token, not a prediction slot
+        self.gguf_writer.add_sample_from_anchor(self._sample_from_anchor)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name = item[0]
-        if name == "t2d":  # training-only target->draft mask
-            return None
-        if name == "d2t" or name.startswith("lm_head."):
-            # keep un-prefixed: d2t is consumed below, lm_head maps to output
+        if name in ("d2t", "t2d") or name.startswith("lm_head."):
+            # keep un-prefixed: d2t/t2d are consumed below, lm_head maps to output
             return TextModel.filter_tensors(item)
         return super().filter_tensors(item)
 
-    def _expand_reduced_vocab(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
-        assert self._d2t is not None
-        # the scatter needs real values (d2t indexing), so leave lazy-land here
-        data_torch = LazyTorchTensor.to_eager(data_torch)
-        n_vocab = self.hparams["vocab_size"]
-        rows = torch.arange(data_torch.shape[0], dtype=torch.long) + self._d2t
-        full = data_torch.new_zeros((n_vocab, data_torch.shape[1]))
-        full[rows] = data_torch
-        yield from super().modify_tensors(full, name, None)
-        if name.startswith("lm_head."):
-            # mask the target-vocab rows the draft cannot produce
-            bias = torch.full((n_vocab,), -1e9, dtype=torch.float32)
-            bias[rows] = 0.0
-            yield from super().modify_tensors(bias, "lm_head.bias", None)
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "d2t":
-            # d2t[i] is the offset from draft row i to its target token id
-            self._d2t = LazyTorchTensor.to_eager(data_torch).to(torch.long)
-            pending, self._pending_reduced = self._pending_reduced, []
-            for pending_name, pending_data in pending:
-                yield from self._expand_reduced_vocab(pending_data, pending_name)
+            # store for manual int64 handling in prepare_tensors (avoid F32 conversion)
+            self._d2t = data_torch
             return
 
-        if not self._is_specforge and name.endswith(("embed_tokens.weight", "lm_head.weight")):
-            # DeepSpec drafts share the target's embeddings and head via ctx_other
+        if name == "t2d":
+            # not used at runtime, skip
             return
 
-        is_reduced = self._n_vocab_draft < self.hparams["vocab_size"] \
-            and (name.startswith("lm_head.") or name.endswith("markov_head.markov_w2.weight"))
-        if is_reduced:
-            if self._d2t is None:
-                self._pending_reduced.append((name, data_torch))
-            else:
-                yield from self._expand_reduced_vocab(data_torch, name)
+        if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            # full-vocab drafts share the target's embeddings and head via ctx_other
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
-        if self._pending_reduced:
-            raise ValueError("reduced-vocab tensors present but no d2t table found: "
-                             + ", ".join(name for name, _ in self._pending_reduced))
+
+        n_vocab = self.hparams["vocab_size"]
+        if self._n_vocab_draft < n_vocab and self._d2t is None:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} < vocab_size {n_vocab} but no d2t table found")
+
+        # write d2t as absolute target token ids
+        if self._d2t is not None:
+            data = LazyTorchTensor.to_eager(self._d2t).to(torch.int64).cpu().numpy().reshape(-1)
+            if data.size != self._n_vocab_draft:
+                raise ValueError(f"d2t size {data.size} does not match draft_vocab_size {self._n_vocab_draft}")
+            data = data + np.arange(data.size, dtype=np.int64)
+            if np.any((data < 0) | (data >= n_vocab)):
+                raise ValueError(f"d2t target ids out of range for target vocab size {n_vocab}")
+            if np.unique(data).size != data.size:
+                raise ValueError("d2t contains duplicate target ids")
+            logger.info(f"{'d2t,':<30} --> I64, shape = {{{data.size}}}")
+            self.gguf_writer.add_tensor("d2t", data, raw_dtype=gguf.GGMLQuantizationType.I64)

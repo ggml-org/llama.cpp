@@ -85,6 +85,16 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
 
     tok_embd        = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,       "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+
+    // reduced draft vocab (optional): d2t maps draft rows to target token ids
+    int64_t n_vocab_draft = n_vocab;
+    const struct ggml_tensor * d2t_meta = ml->get_tensor_meta("d2t");
+    if (d2t_meta) {
+        n_vocab_draft = d2t_meta->ne[0];
+        d2t = create_tensor(tn(LLM_TENSOR_D2T), { n_vocab_draft }, 0);
+        LLAMA_LOG_INFO("%s: DFlash using d2t mapping (draft_vocab_size = %lld)\n", __func__, (long long) n_vocab_draft);
+    }
+
     // DSpark = DFlash + a semi-autoregressive Markov head and Confidence head
     //
     // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
@@ -94,7 +104,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         const int64_t dspark_markov_rank = markov_meta->ne[0];
 
         dspark_markov_w1 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { dspark_markov_rank, n_vocab }, 0);
-        dspark_markov_w2 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { dspark_markov_rank, n_vocab }, 0);
+        dspark_markov_w2 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { dspark_markov_rank, n_vocab_draft }, 0);
 
         dspark_conf_proj   = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), { n_embd + dspark_markov_rank, 1 }, 0);
         dspark_conf_proj_b = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"),   { 1 },             TENSOR_NOT_REQUIRED);
@@ -158,9 +168,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     // optional: reduced-vocab drafts ship their own, full-vocab drafts share the target's via ctx_other
-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-    output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-    output_b = create_tensor(tn(LLM_TENSOR_OUTPUT,     "bias"),   { n_vocab },         TENSOR_NOT_REQUIRED);
+    output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab_draft }, TENSOR_NOT_REQUIRED);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
@@ -248,9 +256,9 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     GGML_ASSERT(block_size > 0);
 
     // bonus anchor (SpecForge exports): slot 0 holds a bonus token, not a prediction slot
-    const auto it_ba = model.gguf_kv.find("dflash.bonus_anchor");
-    const bool    bonus_anchor  = it_ba != model.gguf_kv.end() && it_ba->second == "true";
-    const int64_t i_first_pred  = bonus_anchor ? 1 : 0;
+    const auto it_sample_from_anchor = model.gguf_kv.find("dflash.sample_from_anchor");
+    const bool    sample_from_anchor = it_sample_from_anchor == model.gguf_kv.end() || it_sample_from_anchor->second == "true";
+    const int64_t i_first_pred       = sample_from_anchor ? 0 : 1;
 
     const int64_t n_blocks = g.ubatch.n_seqs_unq;
     GGML_ASSERT(n_blocks > 0 && n_tok % n_blocks == 0 && "DSpark markov head requires equal-size blocks");
@@ -273,7 +281,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * cat      = nullptr;
     ggml_tensor * cat_conf = nullptr;
 
-    if (bonus_anchor) {
+    if (!sample_from_anchor) {
         // bonus anchor slot: pass the logits through unbiased, pad the (unread) confidence column
         cat      = ggml_cont(ctx0, ggml_view_2d(ctx0, base, n_vocab, n_blocks, base_stride, 0));
         cat_conf = ggml_sigmoid(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0)));
@@ -283,7 +291,16 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     //       token pick, not the Markov conditioning path
     for (int64_t i = i_first_pred; i < block_drafts; ++i) {
         ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);   // [R, n_blocks]
-        ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab, n_blocks]
+        ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab_draft, n_blocks]
+        if (model.d2t) {
+            // reduced draft vocab: scatter the bias to the target rows (base is -inf on the others)
+            const int64_t n_draft_vocab = bias->ne[0];
+            ggml_tensor * full = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_blocks), 0.0f);
+            bias = ggml_set_rows(ctx0, full,
+                    ggml_reshape_3d(ctx0, bias,      1,             n_draft_vocab, n_blocks),
+                    ggml_reshape_3d(ctx0, model.d2t, n_draft_vocab, 1,             1));
+            bias = ggml_reshape_2d(ctx0, bias, n_vocab, n_blocks);
+        }
 
         // position i of every block: strided view [n_vocab, n_blocks]
         ggml_tensor * base_i = ggml_view_2d(ctx0, base, n_vocab, n_blocks, base_stride, i*base->nb[1]);
@@ -513,9 +530,21 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
 
     cur = build_lora_mm(output, cur, output_s);
-    if (model.output_b) {
-        // reduced-draft-vocab exports: -1e9 on the target rows the draft cannot produce
-        cur = ggml_add(ctx0, cur, model.output_b);
+
+    // reduced-draft-vocab exports: scatter the draft logits to the target vocabulary via d2t
+    if (model.d2t) {
+        const int64_t n_draft_vocab = cur->ne[0];
+        const int64_t n_outputs     = cur->ne[1];
+        const int64_t n_vocab       = (int64_t) model.vocab.n_tokens();
+
+        GGML_ASSERT(model.d2t->type == GGML_TYPE_I64);
+        GGML_ASSERT(model.d2t->ne[0] == n_draft_vocab);
+
+        ggml_tensor * logits = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_outputs), -INFINITY);
+        cur = ggml_set_rows(ctx0, logits,
+                ggml_reshape_3d(ctx0, cur,       1,             n_draft_vocab, n_outputs),
+                ggml_reshape_3d(ctx0, model.d2t, n_draft_vocab, 1,             1));
+        cur = ggml_reshape_2d(ctx0, cur, n_vocab, n_outputs);
     }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
