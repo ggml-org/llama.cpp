@@ -272,6 +272,10 @@ llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-cuda-allreduce-precision.cpp)
 target_include_directories(test-cuda-allreduce-precision PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
 
+# Pure host-side selector contract for the bounded gfx1030 routed MMVQ six-row path.
+llama_build_and_test(test-mmvq-batch6-config.cpp)
+target_include_directories(test-mmvq-batch6-config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-cuda)
+
 # Pure host-side model/backend selector contract for automatic Qwen3.5 routed Q4_K MMQ J16.
 llama_build_and_test(test-qwen35moe-mmq-config.cpp)
 target_include_directories(test-qwen35moe-mmq-config PRIVATE

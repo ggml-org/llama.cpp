@@ -1,4 +1,5 @@
 #include "mmvq.cuh"
+#include "mmvq-batch6-config.h"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -291,6 +292,22 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
     }
 }
 
+static bool mmvq_use_gfx1030_native(int cc) {
+#if defined(GGML_USE_HIP)
+    if (!GGML_CUDA_CC_IS_RDNA2(cc)) {
+        return false;
+    }
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+    return enabled;
+#else
+    GGML_UNUSED(cc);
+    return false;
+#endif
+}
+
 // Host function: returns the max batch size for the current arch+type at runtime.
 int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     // NVIDIA: Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
@@ -325,14 +342,21 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     return MMVQ_MAX_BATCH_SIZE;
 }
 
-int get_mmvq_mmid_max_batch(const ggml_tensor * src0, int cc) {
+int get_mmvq_mmid_max_batch(const ggml_tensor * src0, const ggml_tensor * ids, int cc) {
     const int max_batch = get_mmvq_mmid_max_batch(src0->type, cc);
-    if ((src0->flags & GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6) != 0 &&
-            (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K) &&
-            (GGML_CUDA_CC_IS_RDNA1(cc) || GGML_CUDA_CC_IS_RDNA2(cc))) {
-        return 6;
-    }
-    return max_batch;
+    const ggml_cuda_mmvq_batch6_type type = src0->type == GGML_TYPE_Q4_K
+        ? ggml_cuda_mmvq_batch6_type::q4_k
+        : src0->type == GGML_TYPE_Q6_K
+            ? ggml_cuda_mmvq_batch6_type::q6_k
+            : ggml_cuda_mmvq_batch6_type::other;
+    const ggml_cuda_mmvq_batch6_input input = {
+        /*.gfx1030_native =*/ mmvq_use_gfx1030_native(cc),
+        /*.rdna2          =*/ GGML_CUDA_CC_IS_RDNA2(cc),
+        /*.type           =*/ type,
+        /*.model_hint     =*/ (src0->flags & GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6) != 0,
+        /*.n_expert_used  =*/ ids != nullptr && ids->type == GGML_TYPE_I32 ? ids->ne[0] : 0,
+    };
+    return ggml_cuda_mmvq_mmid_batch6(input) ? 6 : max_batch;
 }
 
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
@@ -1414,16 +1438,8 @@ static void mul_mat_vec_q_switch_type(
 }
 
 static bool mmvq_use_gfx1030_native() {
-#if defined(GGML_USE_HIP)
     const int device = ggml_cuda_get_device();
-    if (!GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc)) {
-        return false;
-    }
-    const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
-    return env != nullptr && std::atoi(env) != 0;
-#else
-    return false;
-#endif
+    return mmvq_use_gfx1030_native(ggml_cuda_info().devices[device].cc);
 }
 
 

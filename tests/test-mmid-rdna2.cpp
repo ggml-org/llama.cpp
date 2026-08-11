@@ -93,7 +93,7 @@ void usage(const char * program) {
     std::printf("  --routing MODE          uniform or hot (uniform)\n");
     std::printf("  --fixture MODE          prototypes or unique (prototypes)\n");
     std::printf("  --explicit-multi        src1 = [k, top_k, batch] (replicas the DSV4 down-exps ne11>1 form)\n");
-    std::printf("  --mmvq-batch6-hint      mark quantized routed weights as RDNA2 six-row MMVQ-safe\n");
+    std::printf("  --mmvq-batch6-hint      mark quantized routed weights for the native RDNA2 six-row MMVQ override\n");
     std::printf("  --warmup N              warmup graph executions (10)\n");
     std::printf("  --iterations N          timed graph executions (50)\n");
     std::printf("  --device NAME           exact ROCm GGML device name; defaults to the first GPU\n");

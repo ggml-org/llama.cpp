@@ -12,7 +12,7 @@ Two model-specific fusions require their own additional switches. Setting either
 
 | Variable | Default | Effect |
 |---|---:|---|
-| `GGML_HIP_GFX1030_NATIVE` | unset / `0` | Master opt-in for validated gfx1030 kernel specializations. Enables the Q4_0 DOT8 MMVQ path, native tiled-FlashAttention arithmetic/reductions, and chunked GDN prefill loads. |
+| `GGML_HIP_GFX1030_NATIVE` | unset / `0` | Master opt-in for validated gfx1030 kernel specializations. Enables the Q4_0 DOT8 MMVQ path, bounded six-row Q4_K/Q6_K routed MMVQ dispatch, native tiled-FlashAttention arithmetic/reductions, and chunked GDN prefill loads. |
 | `GGML_HIP_GFX1030_Q8_1_FUSION` | unset / `0` | In combination with the master switch, fuses routed SwiGLU evaluation into Q8_1 activation staging for eligible prompt-processing `MUL_MAT_ID` down projections. |
 | `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset / `0` | In combination with the master switch, creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights. |
 
@@ -44,6 +44,20 @@ unset GGML_HIP_GFX1030_GDN_SIBLING_FUSION
 For Q4_0 decode with one destination column, the native MMVQ specialization preserves the ordinary Q4_0 weights and Q8_1 activation bytes. A two-byte `sum_hi` sidecar per Q8_1 block supplies the exact high-nibble correction needed by gfx1030 `UDOT8`/`SDOT8`; no model conversion or persistent layout change is required. Other quantization types remain on their normal vector-dot implementations.
 
 The path is exact and opt-in, but the measured Qwen end-to-end result was neutral to approximately 0.7% slower. It is retained as a validated native arithmetic experiment rather than advertised as a default speedup. See [the Q4_0 DOT8 experiment](rdna2-v620-q4-0-dot8-experiment.md).
+
+### Bounded six-row routed MMVQ
+
+On RDNA2, stock Q4_K and Q6_K `MUL_MAT_ID` dispatch changes from MMVQ to MMQ above five routed token rows. Native mode extends MMVQ through six rows when all of the following hold:
+
+- the expert weights are Q4_K or Q6_K;
+- the destination has at most six token rows;
+- the routed IDs select at most four experts per token.
+
+The top-k bound is intentionally conservative. Across 48 Q4_K/Q6_K cases with top-k 2 or 4, K from 256 to 8192, N from 256 to 4096, 8 to 256 experts, and both uniform and concentrated routing, six-row MMVQ reduced operation latency by 15.9% to 61.2%. Top-k 6 regressed in one tested Q6_K case, while concentrated top-k 8 routing regressed in 12 of 16 grid cases by as much as 54.5%; those cases therefore retain stock dispatch.
+
+The exact Qwen3.6 35B four-GPU layer-split configuration carries an advisory tensor flag that permits its validated top-k 8 MTP path to use six-row MMVQ. The flag is inert unless `GGML_HIP_GFX1030_NATIVE=1`, so native-off execution remains stock. Other models do not receive this exception.
+
+MMQ and MMVQ accumulate floating-point products in different orders and are not generally byte-identical. The validation sweep measured NMSE from `4.23e-10` to `9.15e-9`, compared with the backend `MUL_MAT_ID` allowance of `5e-4`; MMVQ graph and non-graph outputs were byte-identical. This path does not alter quantized weights or Q8_1 activation encoding.
 
 ### Tiled FlashAttention
 
@@ -119,9 +133,19 @@ build/bin/test-backend-ops test -o FLASH_ATTN_EXT -b ROCm0
 GGML_HIP_GFX1030_NATIVE=1 \
   build/bin/test-backend-ops test -o FLASH_ATTN_EXT -b ROCm0
 
-# Synthetic MMVQ and routed MMID
+# Six-row selector contract
+build/bin/test-mmvq-batch6-config
+
+# Synthetic MMVQ and bounded generic routed MMID
 GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmvq-rdna2
-GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmid-rdna2
+GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmid-rdna2 \
+  --type q4_k --k 2048 --n 512 --batch 6 \
+  --experts 64 --top-k 4 --routing hot
+
+# Exercise the native-only Qwen-style advisory override
+GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmid-rdna2 \
+  --type q4_k --k 2048 --n 512 --batch 6 \
+  --experts 256 --top-k 8 --mmvq-batch6-hint
 ```
 
 Use the guarded scripts when collecting reproducible artifacts:
