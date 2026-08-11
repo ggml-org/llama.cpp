@@ -321,10 +321,6 @@ public:
         return values;
     }
 
-    bool done() const {
-        return pos == size;
-    }
-
     size_t remaining() const {
         return size - pos;
     }
@@ -567,20 +563,11 @@ server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_m
         if (!chunk) {
             throw std::runtime_error("Cannot load media chunk from server tokens state");
         }
-        const auto type = mtmd_input_chunk_get_type(chunk.get());
-        if (type != MTMD_INPUT_CHUNK_TYPE_IMAGE && type != MTMD_INPUT_CHUNK_TYPE_AUDIO) {
-            throw std::runtime_error("Unsupported media type in server tokens state");
-        }
         result.map_idx_to_media[start_idx] = std::move(chunk);
     }
 
     if (reader.remaining() >= sizeof(llama_token)) {
         throw std::runtime_error("Trailing data in server tokens state");
-    }
-    while (!reader.done()) {
-        if (reader.read<uint8_t>() != 0) {
-            throw std::runtime_error("Invalid padding in server tokens state");
-        }
     }
 
     return result;
@@ -715,6 +702,9 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
         if (t == LLAMA_TOKEN_NULL) {
             try {
                 const auto & chunk = find_chunk(i);
+                if (mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                    return false;
+                }
                 const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
                 const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
                 if (n_tokens == 0 || n_pos <= 0 || n_tokens > tokens.size() - i) {

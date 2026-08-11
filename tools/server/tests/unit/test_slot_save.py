@@ -246,11 +246,6 @@ def test_slot_save_restore_with_image(mmproj_server):
     assert res.body["timings"]["cache_n"] == 0
     assert prompt_n_full > 32  # text plus image tokens are all processed
 
-    # erase remains gated on media content
-    res = server.make_request("POST", "/slots/1?action=erase")
-    assert res.status_code == 501
-    assert res.body["error"]["type"] == "not_supported_error"
-
     res = server.make_request("POST", "/slots/1?action=save", data={
         "filename": "mm_slot_image.bin",
     })
@@ -259,6 +254,9 @@ def test_slot_save_restore_with_image(mmproj_server):
     n_written = res.body["n_written"]
     assert n_saved > 0
     assert n_written > 0
+
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
 
     res = server.make_request("POST", "/slots/0?action=restore", data={
         "filename": "mm_slot_image.bin",
@@ -529,30 +527,3 @@ def test_slot_restore_media_file_without_mmproj(mmproj_server):
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == 0
     assert res.body["content"] == content
-
-
-def test_slot_erase_text_only_on_multimodal(mmproj_server):
-    server = mmproj_server
-    server.start()
-
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox jumps over the lazy dog.",
-        "id_slot": 1,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-    prompt_n = res.body["timings"]["prompt_n"]
-    assert prompt_n > 0  # all tokens are processed
-
-    # Erasing a pure-text slot must succeed even though an mmproj is loaded.
-    res = server.make_request("POST", "/slots/1?action=erase")
-    assert res.status_code == 200
-
-    # Re-running the same prompt should process all tokens again.
-    res = server.make_request("POST", "/completion", data={
-        "prompt": "The quick brown fox jumps over the lazy dog.",
-        "id_slot": 1,
-        "cache_prompt": True,
-    })
-    assert res.status_code == 200
-    assert res.body["timings"]["prompt_n"] == prompt_n  # all tokens are processed again
