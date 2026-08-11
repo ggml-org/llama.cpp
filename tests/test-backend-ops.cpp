@@ -4407,6 +4407,69 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
+struct test_mul_mat_i8_convrot : public test_case {
+    const int64_t k;
+    const int64_t n;
+    const int64_t rows;
+    const bool use_bias;
+
+    std::string vars() override {
+        return VARS_TO_STR4(k, n, rows, use_bias);
+    }
+
+    test_mul_mat_i8_convrot(int64_t k, int64_t n, int64_t rows, bool use_bias)
+        : k(k), n(n), rows(rows), use_bias(use_bias) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, rows);
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_I8, k, n);
+        ggml_tensor * weight_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
+        ggml_tensor * bias = use_bias ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n) : nullptr;
+        ggml_set_name(input, "input");
+        ggml_set_name(weight, "weight");
+        ggml_set_name(weight_scale, "weight_scale");
+        if (bias != nullptr) {
+            ggml_set_name(bias, "bias");
+        }
+
+        ggml_tensor * quantized = ggml_quantize_i8_convrot(ctx, input, 256);
+        ggml_set_name(quantized, "quantized");
+        ggml_tensor * out = ggml_mul_mat_i8_tensorwise(ctx, weight, quantized, weight_scale, bias, 256);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "weight") == 0) {
+                std::vector<int8_t> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); ++i) {
+                    data[i] = (int8_t) ((i * 17 + i / (size_t) k * 11) % 61 - 30);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size());
+            } else if (strcmp(t->name, "weight_scale") == 0) {
+                init_tensor_uniform(t, 0.01f, 0.25f);
+            } else if (strcmp(t->name, "input") == 0 || strcmp(t->name, "bias") == 0) {
+                init_tensor_uniform(t, -2.0f, 2.0f);
+            }
+        }
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_I8_CONVROT";
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * k * n * rows;
+    }
+
+    bool run_whole_graph() override {
+        return true;
+    }
+};
+
 static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
     std::random_device rd;
     std::default_random_engine rng(rd());
@@ -8847,6 +8910,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 32, 1, 32)); // too small (N<64)
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 1, 1024)); // too big (N>512)
 
+    test_cases.emplace_back(new test_mul_mat_i8_convrot(256, 4, 1, true));
+    test_cases.emplace_back(new test_mul_mat_i8_convrot(512, 128, 65, true));
+    test_cases.emplace_back(new test_mul_mat_i8_convrot(512, 128, 65, false));
+
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16,  900000,  3, 2592, {1, 1}, {1, 1}));
@@ -9909,6 +9976,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 2048, 128));
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 256, 2048, 256));
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 512, 2048, 512));
+
+    test_cases.emplace_back(new test_mul_mat_i8_convrot(512, 128, 65, true));
 
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 32, 64, 4, 4 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 2 }, { 32, 128, 4, 2 }));

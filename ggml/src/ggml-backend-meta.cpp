@@ -1009,6 +1009,12 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_GLU: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;
+            case GGML_OP_REGULAR_HADAMARD: {
+                split_state = handle_per_row(src_ss);
+            } break;
+            case GGML_OP_QUANTIZE_I8_CONVROT: {
+                split_state = handle_generic(src_ss, /*scalar_only =*/ true);
+            } break;
             default: {
                 GGML_ABORT("ggml op not implemented: %s", ggml_op_name(tensor->op));
                 split_state = {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};

@@ -1161,6 +1161,147 @@ void ggml_set_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, 
 
 // ggml_compute_forward_mul_mat
 
+static void ggml_regular_hadamard_group_f32(float * values, int group_size) {
+    const float scale = 1.0f / sqrtf((float) group_size);
+    for (int i = 0; i < group_size; ++i) {
+        values[i] *= scale;
+    }
+
+    for (int stride = 1; stride < group_size; stride *= 4) {
+        for (int base = 0; base < group_size; base += 4 * stride) {
+            for (int j = 0; j < stride; ++j) {
+                const int i0 = base + j;
+                const int i1 = i0 + stride;
+                const int i2 = i1 + stride;
+                const int i3 = i2 + stride;
+                const float a = values[i0];
+                const float b = values[i1];
+                const float c = values[i2];
+                const float d = values[i3];
+                values[i0] =  a + b + c - d;
+                values[i1] =  a + b - c + d;
+                values[i2] =  a - b + c + d;
+                values[i3] = -a + b + c + d;
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_mul_mat_i8_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_I8);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_I8);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->ne[2] == 1 && src0->ne[3] == 1);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    const int64_t k              = src0->ne[0];
+    const int64_t n              = src0->ne[1];
+    const int64_t rows           = ggml_nrows(dst);
+    const bool prequantized      = src1->type == GGML_TYPE_I8;
+    const int64_t rows_padded    = GGML_PAD(rows, 4);
+    const int64_t scale_rows     = (rows * (int64_t) sizeof(float) + k - 1) / k;
+    const int convrot_group_size = ggml_get_op_params_i32(dst, 2);
+    const size_t qbytes          = prequantized ? 0 : (size_t) ggml_nelements(src1) * sizeof(int8_t);
+    const size_t scale_offset    = GGML_PAD(qbytes, sizeof(float));
+
+    GGML_ASSERT(src1->ne[0] == k);
+    GGML_ASSERT(!prequantized || (src1->op == GGML_OP_QUANTIZE_I8_CONVROT && src1->ne[1] == rows_padded + scale_rows));
+    GGML_ASSERT(convrot_group_size == 0 || (convrot_group_size <= 256 && k % convrot_group_size == 0));
+    GGML_ASSERT(prequantized || params->wsize >= scale_offset + (size_t) rows * sizeof(float));
+
+    int hadamard_size = convrot_group_size;
+    while (hadamard_size > 1 && hadamard_size % 4 == 0) {
+        hadamard_size /= 4;
+    }
+    GGML_ASSERT(hadamard_size == 0 || hadamard_size == 1);
+
+    int8_t * qdata = prequantized ? (int8_t *) src1->data : (int8_t *) params->wdata;
+    float * scales = prequantized ? NULL : (float *) ((char *) params->wdata + scale_offset);
+    const float * packed_scales = prequantized ? (const float *) ((const int8_t *) src1->data + k * rows_padded) : NULL;
+    const float * src1_data     = prequantized ? NULL : (const float *) src1->data;
+
+    for (int64_t row = params->ith; !prequantized && row < rows; row += params->nth) {
+        const float * src_row = src1_data + row * k;
+        int8_t * qrow         = qdata + row * k;
+        float amax            = 0.0f;
+        if (convrot_group_size == 0) {
+            for (int64_t i = 0; i < k; ++i) {
+                amax = MAX(amax, fabsf(src_row[i]));
+            }
+        } else {
+            float values[256];
+            for (int64_t group = 0; group < k; group += convrot_group_size) {
+                memcpy(values, src_row + group, (size_t) convrot_group_size * sizeof(float));
+                ggml_regular_hadamard_group_f32(values, convrot_group_size);
+                for (int i = 0; i < convrot_group_size; ++i) {
+                    amax = MAX(amax, fabsf(values[i]));
+                }
+            }
+        }
+
+        const float row_scale = amax / 127.0f;
+        scales[row]           = row_scale;
+        if (row_scale == 0.0f) {
+            memset(qrow, 0, (size_t) k);
+            continue;
+        }
+
+        const float inv_scale = 1.0f / row_scale;
+        if (convrot_group_size == 0) {
+            for (int64_t i = 0; i < k; ++i) {
+                int value = (int) lrintf(src_row[i] * inv_scale);
+                value     = MAX(-127, MIN(127, value));
+                qrow[i]   = (int8_t) value;
+            }
+        } else {
+            float values[256];
+            for (int64_t group = 0; group < k; group += convrot_group_size) {
+                memcpy(values, src_row + group, (size_t) convrot_group_size * sizeof(float));
+                ggml_regular_hadamard_group_f32(values, convrot_group_size);
+                for (int i = 0; i < convrot_group_size; ++i) {
+                    int value = (int) lrintf(values[i] * inv_scale);
+                    value     = MAX(-127, MIN(127, value));
+                    qrow[group + i] = (int8_t) value;
+                }
+            }
+        }
+    }
+
+    if (!prequantized) {
+        ggml_barrier(params->threadpool);
+    }
+
+    float * dst_data = (float *) dst->data;
+    const int64_t output_elements = n * rows;
+    for (int64_t index = params->ith; index < output_elements; index += params->nth) {
+        const int64_t output_row = index / n;
+        const int64_t i01        = index - output_row * n;
+        const int8_t * weight_row = (const int8_t *) ((const char *) src0->data + i01 * src0->nb[1]);
+        const int8_t * activation_row = prequantized ? (const int8_t *) ((const char *) src1->data + output_row * src1->nb[1]) : qdata + output_row * k;
+
+        int32_t sum = 0;
+        for (int64_t i = 0; i < k; ++i) {
+            sum += (int32_t) weight_row[i] * (int32_t) activation_row[i];
+        }
+        const float activation_scale = prequantized ? packed_scales[output_row] : scales[output_row];
+        float value = (float) sum * activation_scale;
+        if (dst->src[2] != NULL) {
+            value *= ((const float *) dst->src[2]->data)[i01];
+        }
+        if (dst->src[3] != NULL) {
+            value += ((const float *) dst->src[3]->data)[i01];
+        }
+        dst_data[index] = value;
+    }
+}
+
 static void ggml_compute_forward_mul_mat_one_chunk(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst,
@@ -1257,6 +1398,13 @@ void ggml_compute_forward_mul_mat(
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
+
+    if (src0->type == GGML_TYPE_I8 &&
+        (src1->type == GGML_TYPE_F32 ||
+            (src1->type == GGML_TYPE_I8 && src1->op == GGML_OP_QUANTIZE_I8_CONVROT))) {
+        ggml_compute_forward_mul_mat_i8_f32(params, dst);
+        return;
+    }
 
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
     if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
@@ -2032,6 +2180,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_glu(params, tensor);
             } break;
+        case GGML_OP_REGULAR_HADAMARD:
+            {
+                ggml_compute_forward_regular_hadamard(params, tensor);
+            } break;
+        case GGML_OP_QUANTIZE_I8_CONVROT:
+            {
+                ggml_compute_forward_quantize_i8_convrot(params, tensor);
+            } break;
         case GGML_OP_GET_REL_POS:
             {
                 ggml_compute_forward_get_rel_pos(params, tensor);
@@ -2330,6 +2486,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_OUT_PROD:
+        case GGML_OP_REGULAR_HADAMARD:
+        case GGML_OP_QUANTIZE_I8_CONVROT:
             {
                 n_tasks = n_threads;
             } break;
@@ -2847,6 +3005,11 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_MUL_MAT:
                     {
+                        if (node->src[0]->type == GGML_TYPE_I8 && node->src[1]->type == GGML_TYPE_F32) {
+                            const size_t qbytes = (size_t) ggml_nelements(node->src[1]) * sizeof(int8_t);
+                            cur = GGML_PAD(qbytes, sizeof(float)) + (size_t) ggml_nrows(node->src[1]) * sizeof(float);
+                            break;
+                        }
                         const enum ggml_type vec_dot_type = type_traits_cpu[node->src[0]->type].vec_dot_type;
 
                         if (node->src[1]->type != vec_dot_type) {
