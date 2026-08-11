@@ -173,8 +173,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     if (params.measure_only) {
         llama_model_params mparams = common_model_params_to_llama(params);
         mparams.no_alloc  = true;
-        mparams.use_mmap  = false;
-        mparams.use_mlock = false;
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
 
         llama_model_ptr model{llama_model_load_from_file(params.model.path.c_str(), mparams)};
         if (!model) {

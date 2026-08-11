@@ -935,7 +935,6 @@ int server_models::can_fit(const buft_memory_map & bmm_req) const {
                 bmm_total[buft] += mem;
             }
         }
-        lru_model_name = sched->pick_victim(lk, "");
     }
 
     auto get = [](const buft_memory_map & dmm, ggml_backend_buffer_type_t buft) -> size_t {
@@ -1032,18 +1031,15 @@ buft_memory_map server_models::estimate_model_memory(const std::string & name) {
 
     SRV_INF("estimating memory for model name=%s\n", name.c_str());
 
-    std::vector<char *> argv = to_char_ptr_array(child_args);
-    std::vector<char *> envp = to_char_ptr_array(child_env);
-
-    subprocess_s proc;
+    common_subproc proc;
     int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
-    if (subprocess_create_ex(argv.data(), options, envp.data(), &proc) != 0) {
+    if (!proc.create(child_args, options, child_env)) {
         SRV_ERR("failed to spawn measure process for model name=%s\n", name.c_str());
         return {};
     }
 
     buft_memory_map result;
-    FILE * out = subprocess_stdout(&proc);
+    FILE * out = proc.stdout_file();
     if (out) {
         char buffer[4096];
         while (fgets(buffer, sizeof(buffer), out) != nullptr) {
@@ -1066,9 +1062,7 @@ buft_memory_map server_models::estimate_model_memory(const std::string & name) {
         }
     }
 
-    int exit_code = 0;
-    subprocess_join(&proc, &exit_code);
-    subprocess_destroy(&proc);
+    int exit_code = proc.join();
 
     if (exit_code != 0) {
         SRV_ERR("measure process for model name=%s exited with code %d\n", name.c_str(), exit_code);
