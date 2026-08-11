@@ -9,13 +9,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ICON_CLASS_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
 	import { SettingsFieldType } from '$lib/enums/settings.enums';
-	import {
-		modelsStore,
-		propsCacheVersion,
-		selectedModelName,
-		serverStore,
-		settingsStore
-	} from '$lib/stores';
+	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
 	import type { Component } from 'svelte';
 
@@ -29,10 +23,10 @@
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
 	let currentModelParams = $derived.by(() => {
-		propsCacheVersion();
+		modelsStore.propsCacheVersion;
 
 		if (serverStore.isRouterMode) {
-			const currentModelName = selectedModelName();
+			const currentModelName = modelsStore.selectedModelName;
 
 			if (currentModelName) {
 				const currentModelProps = modelsStore.getModelProps(currentModelName);

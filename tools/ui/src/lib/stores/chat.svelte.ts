@@ -33,11 +33,7 @@ import { DatabaseService } from '$lib/services/database.service';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import {
-	modelsStore,
-	selectedModelContextSize,
-	selectedModelName
-} from '$lib/stores/models.svelte';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
@@ -296,7 +292,7 @@ class ChatStore {
 		// fetch the replay stream from byte 0, rebuild the assistant message from scratch.
 		// resolve the server side identity, fall back to streamIdentity when the caller does not
 		// pass a streamId. probeServerStream returns the full id (with ::model suffix when present)
-		const id = streamId || streamIdentity(convId, selectedModelName());
+		const id = streamId || streamIdentity(convId, modelsStore.selectedModelName);
 
 		let response: Response;
 
@@ -525,7 +521,11 @@ class ChatStore {
 			// persisted state so the lookup key matches what the server stored. null means a single
 			// model conv with no ::suffix, only guess from the dropdown with no persisted state
 			const localState = ChatService.getStreamState(convId);
-			const streamId = ChatService.resumeStreamIdentity(convId, localState, selectedModelName());
+			const streamId = ChatService.resumeStreamIdentity(
+				convId,
+				localState,
+				modelsStore.selectedModelName
+			);
 			// primary path: ask the server which sessions exist for this identity
 			const serverTarget = await this.probeServerStream(streamId);
 
@@ -1335,7 +1335,7 @@ class ChatStore {
 		if (isRouterMode()) {
 			const conversationModel = this.getConversationModel(allMessages);
 
-			effectiveModel = modelOverride || selectedModelName() || conversationModel;
+			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
 
 		if (isRouterMode() && effectiveModel) {
@@ -1808,7 +1808,8 @@ class ChatStore {
 		assistantContent: string,
 		convId: string
 	): Promise<void> {
-		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
+		const effectiveModel =
+			isRouterMode() && modelsStore.selectedModelName ? modelsStore.selectedModelName : undefined;
 		const configValue = config();
 		const titlePromptTemplate =
 			typeof configValue.titleGenerationPrompt === 'string' &&
@@ -2664,7 +2665,7 @@ class ChatStore {
 			return activeState.contextTotal;
 
 		if (isRouterMode()) {
-			const modelContextSize = selectedModelContextSize();
+			const modelContextSize = modelsStore.selectedModelContextSize;
 
 			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
 				return modelContextSize;
@@ -2790,7 +2791,7 @@ class ChatStore {
 		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true };
 
 		if (isRouterMode()) {
-			const modelName = selectedModelName();
+			const modelName = modelsStore.selectedModelName;
 
 			if (modelName) apiOptions.model = modelName;
 		}

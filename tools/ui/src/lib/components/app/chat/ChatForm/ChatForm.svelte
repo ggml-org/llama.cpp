@@ -35,9 +35,8 @@
 		isRouterMode,
 		mcpHasResourceAttachments,
 		mcpStore,
-		modelOptions,
+		modelsStore,
 		pendingCwd,
-		selectedModelId,
 		toolsStore
 	} from '$lib/stores';
 	import type {
@@ -198,13 +197,13 @@
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
 	let activeModelId = $derived.by(() => {
-		const options = modelOptions();
+		const options = modelsStore.models;
 
 		if (!isRouter) {
 			return options.length > 0 ? options[0].model : null;
 		}
 
-		const selectedId = selectedModelId();
+		const selectedId = modelsStore.selectedModelId;
 
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);
@@ -221,7 +220,9 @@
 		return null;
 	});
 
-	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
+	let hasModelSelected = $derived(
+		!isRouter || !!conversationModel || !!modelsStore.selectedModelId
+	);
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let hasAttachments = $derived(
 		(attachments && attachments.length > 0) || (uploadedFiles && uploadedFiles.length > 0)

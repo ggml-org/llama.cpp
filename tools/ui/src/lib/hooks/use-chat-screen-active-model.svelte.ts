@@ -8,14 +8,7 @@
  * demand if they aren't cached yet.
  */
 
-import {
-	activeMessages,
-	chatStore,
-	isRouterMode,
-	modelOptions,
-	modelsStore,
-	selectedModelId
-} from '$lib/stores';
+import { activeMessages, chatStore, isRouterMode, modelsStore } from '$lib/stores';
 
 export function useChatScreenActiveModel() {
 	const isRouter = $derived(isRouterMode());
@@ -23,13 +16,13 @@ export function useChatScreenActiveModel() {
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
 	const activeModelId = $derived.by(() => {
-		const options = modelOptions();
+		const options = modelsStore.models;
 
 		if (!isRouter) {
 			return options.length > 0 ? options[0].model : null;
 		}
 
-		const selectedId = selectedModelId();
+		const selectedId = modelsStore.selectedModelId;
 
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);

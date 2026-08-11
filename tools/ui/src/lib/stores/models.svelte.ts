@@ -1119,22 +1119,3 @@ class ModelsStore {
 }
 
 export const modelsStore = new ModelsStore();
-
-export const modelOptions = () => modelsStore.models;
-export const routerModels = () => modelsStore.routerModels;
-export const modelsLoading = () => modelsStore.loading;
-export const modelsUpdating = () => modelsStore.updating;
-export const modelsError = () => modelsStore.error;
-export const selectedModelId = () => modelsStore.selectedModelId;
-export const selectedModelName = () => modelsStore.selectedModelName;
-export const selectedModelOption = () => modelsStore.selectedModel;
-export const loadedModelIds = () => modelsStore.loadedModelIds;
-export const loadingModelIds = () => modelsStore.loadingModelIds;
-export const propsCacheVersion = () => modelsStore.propsCacheVersion;
-export const singleModelName = () => modelsStore.singleModelName;
-export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
-export const favoriteModelIds = () => modelsStore.favoriteModelIds;
-export const supportsThinking = () => modelsStore.supportsThinking;
-export const checkModelSupportsThinking = (modelId: string) =>
-	modelsStore.checkModelSupportsThinking(modelId);
-export const thinkingSupportDetails = () => modelsStore.thinkingSupportDetails;

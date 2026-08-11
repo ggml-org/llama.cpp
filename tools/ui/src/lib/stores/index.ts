@@ -8,7 +8,7 @@
  * Import from this barrel in leaf consumers:
  *
  * ```ts
- * import { chatStore, modelsStore, selectedModelName } from '$lib/stores';
+ * import { chatStore, modelsStore } from '$lib/stores';
  * ```
  *
  * Store modules keep direct imports between each other (and from services/
@@ -67,26 +67,7 @@ export {
 } from './mcp-resources.svelte';
 
 // MODELS
-export {
-	modelsStore,
-	modelOptions,
-	routerModels,
-	modelsLoading,
-	modelsUpdating,
-	modelsError,
-	selectedModelId,
-	selectedModelName,
-	selectedModelOption,
-	loadedModelIds,
-	loadingModelIds,
-	propsCacheVersion,
-	singleModelName,
-	selectedModelContextSize,
-	favoriteModelIds,
-	supportsThinking,
-	checkModelSupportsThinking,
-	thinkingSupportDetails
-} from './models.svelte';
+export { modelsStore } from './models.svelte';
 
 // SERVER
 export {

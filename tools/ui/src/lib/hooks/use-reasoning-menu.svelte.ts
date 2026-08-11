@@ -3,13 +3,9 @@ import { ReasoningEffort } from '$lib/enums';
 import {
 	activeMessages,
 	chatStore,
-	checkModelSupportsThinking,
 	conversationsStore,
 	isRouterMode,
-	loadedModelIds,
-	modelsStore,
-	propsCacheVersion,
-	supportsThinking
+	modelsStore
 } from '$lib/stores';
 import type { ReasoningEffortLevel } from '$lib/types';
 import type { DatabaseMessage } from '$lib/types/database';
@@ -48,16 +44,18 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		);
 	});
 	const modelSupportsThinking = $derived.by(() => {
-		loadedModelIds();
-		propsCacheVersion();
+		modelsStore.loadedModelIds;
+		modelsStore.propsCacheVersion;
 
 		if (isRouterMode()) {
 			const modelId = modelsStore.selectedModelName || conversationModel;
 
-			return checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages;
+			return (
+				modelsStore.checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages
+			);
 		}
 
-		return supportsThinking() || modelSupportsThinkingFromMessages;
+		return modelsStore.supportsThinking || modelSupportsThinkingFromMessages;
 	});
 	const currentEffort = $derived(conversationsStore.getReasoningEffort());
 	const thinkingEnabled = $derived(

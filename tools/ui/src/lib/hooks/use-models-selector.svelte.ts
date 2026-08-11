@@ -1,14 +1,6 @@
 import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import {
-	isRouterMode,
-	modelOptions,
-	modelsLoading,
-	modelsStore,
-	modelsUpdating,
-	selectedModelId,
-	singleModelName
-} from '$lib/stores';
+import { isRouterMode, modelsStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
 import { onMount } from 'svelte';
 
@@ -54,17 +46,17 @@ export interface UseModelsSelectorReturn {
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
 	const options = $derived(
-		modelOptions().filter((option) => {
+		modelsStore.models.filter((option) => {
 			const modelProps = modelsStore.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
 		})
 	);
-	const loading = $derived(modelsLoading());
-	const updating = $derived(modelsUpdating());
-	const activeId = $derived(selectedModelId());
+	const loading = $derived(modelsStore.loading);
+	const updating = $derived(modelsStore.updating);
+	const activeId = $derived(modelsStore.selectedModelId);
 	const isRouter = $derived(isRouterMode());
-	const serverModel = $derived(singleModelName());
+	const serverModel = $derived(modelsStore.singleModelName);
 	const currentModel = $derived(opts.currentModel());
 	const onModelChange = $derived(opts.onModelChange?.());
 	const isHighlightedCurrentModelActive = $derived.by(() => {

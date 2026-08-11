@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { serverError, serverLoading, serverProps, singleModelName } from '$lib/stores';
+	import { modelsStore, serverError, serverLoading, serverProps } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -14,7 +14,7 @@
 
 	let error = $derived(serverError());
 	let loading = $derived(serverLoading());
-	let model = $derived(singleModelName());
+	let model = $derived(modelsStore.singleModelName);
 	let serverData = $derived(serverProps());
 
 	function getStatusColor() {

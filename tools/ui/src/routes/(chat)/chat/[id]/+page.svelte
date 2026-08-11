@@ -4,13 +4,7 @@
 	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, ROUTES, URL_PARAMS } from '$lib/constants';
-	import {
-		activeConversation,
-		chatStore,
-		conversationsStore,
-		modelOptions,
-		modelsStore
-	} from '$lib/stores';
+	import { activeConversation, chatStore, conversationsStore, modelsStore } from '$lib/stores';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
@@ -22,7 +16,7 @@
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
 	let requestedModelName = $state('');
-	let availableModelNames = $derived(modelOptions().map((m) => m.model));
+	let availableModelNames = $derived(modelsStore.models.map((m) => m.model));
 
 	// Track if URL params have been processed for this chat
 	let urlParamsProcessed = $state(false);
