@@ -4780,14 +4780,53 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     bool is_uma = prop.integrated > 0 || uma_env;
 
     if (is_uma) {
-        // For UMA systems (like DGX Spark), use system memory info
-        long available_memory_kb = 0;
-        long free_swap_kb = 0;
+        // For UMA systems, try sysfs VRAM first (accurate for large-VRAM iGPUs
+        // like AMD Strix Halo where hipMemGetInfo returns system RAM).
+        // Fall back to /proc/meminfo if sysfs is unavailable.
+        bool vram_read = false;
+        for (int drm_idx = 128; drm_idx < 140; drm_idx++) {
+            char vram_path[256];
+            snprintf(vram_path, sizeof(vram_path),
+                     "/sys/class/drm/renderD%d/device/mem_info_vram_total", drm_idx);
+            FILE * vram_f = fopen(vram_path, "r");
+            if (!vram_f) continue;
 
-        if (ggml_backend_cuda_get_available_uma_memory(&available_memory_kb, &free_swap_kb) && available_memory_kb > 0) {
-            *free = (size_t)available_memory_kb * 1024;
-        } else {
-            GGML_LOG_ERROR("%s: /proc/meminfo reading failed, using cudaMemGetInfo\n", __func__);
+            unsigned long vram_total_bytes = 0;
+            if (fscanf(vram_f, "%lu", &vram_total_bytes) == 1 && vram_total_bytes > 0) {
+                fclose(vram_f);
+
+                snprintf(vram_path, sizeof(vram_path),
+                         "/sys/class/drm/renderD%d/device/mem_info_vram_used", drm_idx);
+                vram_f = fopen(vram_path, "r");
+                unsigned long vram_used_bytes = 0;
+                if (vram_f) {
+                    fscanf(vram_f, "%lu", &vram_used_bytes);
+                    fclose(vram_f);
+                }
+
+                if (vram_used_bytes <= vram_total_bytes) {
+                    *free = (size_t)(vram_total_bytes - vram_used_bytes);
+                    *total = (size_t)vram_total_bytes;
+                    vram_read = true;
+                    GGML_LOG_DEBUG("%s: using sysfs VRAM: total=%zu free=%zu\n",
+                                   __func__, *total, *free);
+                }
+            } else {
+                if (vram_f) fclose(vram_f);
+            }
+            break;
+        }
+
+        if (!vram_read) {
+            // Fall back to /proc/meminfo
+            long available_memory_kb = 0;
+            long free_swap_kb = 0;
+
+            if (ggml_backend_cuda_get_available_uma_memory(&available_memory_kb, &free_swap_kb) && available_memory_kb > 0) {
+                *free = (size_t)available_memory_kb * 1024;
+            } else {
+                GGML_LOG_ERROR("%s: /proc/meminfo reading failed, using cudaMemGetInfo\n", __func__);
+            }
         }
     }
 #endif // defined(__linux__)
