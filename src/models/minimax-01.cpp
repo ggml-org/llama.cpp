@@ -127,12 +127,12 @@ public:
             float * slopes = (float *) inp_slopes->data;
             float * data = (float *) inp_diag_decay->data;
 
-            for (int j = 0; j < n_seq_tokens; ++j) {
-                for (int i = 0; i < n_seq_tokens; ++i) {
-                    int index = j - i;
-                    for (int h = 0; h < n_head; ++h) {
+            for (int h = 0; h < n_head; ++h) {
+                for (int j = 0; j < n_seq_tokens; ++j) {
+                    for (int i = 0; i < n_seq_tokens; ++i) {
+                        int index = j - i;
                         float s_index = index >= 0 ? -slopes[h] * index : -INFINITY;
-                        data[j * n_head * n_seq_tokens + i * n_head + h] = s_index;
+                        data[h * n_seq_tokens * n_seq_tokens + j * n_seq_tokens + i] = s_index;
                     }
                 }
             }
@@ -150,7 +150,7 @@ public:
     ggml_tensor * inp_slopes     = nullptr; // F32 [n_head]
     ggml_tensor * inp_q_decay    = nullptr; // F32 [n_batch, n_head]
     ggml_tensor * inp_k_decay    = nullptr; // F32 [n_batch, n_head]
-    ggml_tensor * inp_diag_decay = nullptr; // F32 [n_batch, n_batch, n_head]
+    ggml_tensor * inp_diag_decay = nullptr; // F32 [n_head, n_batch, n_batch]
 };
 
 llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -194,7 +194,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
         ggml_set_input(inp->inp_k_decay);
         cb(inp->inp_k_decay, "k_decay_exp", -1);
 
-        inp->inp_diag_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_head, n_seq_tokens, n_seq_tokens);
+        inp->inp_diag_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_seq_tokens, n_seq_tokens, n_head);
         ggml_set_input(inp->inp_diag_decay);
         cb(inp->inp_diag_decay, "diag_decay_exp", -1);
     }
@@ -349,9 +349,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * qk = ggml_mul_mat(ctx0, k_trans, q_trans);
                 cb(qk, "qk", il);
 
-                ggml_tensor * diag_decay_trans = ggml_cont(ctx0, ggml_permute(ctx0, diag_decay, 2, 0, 1, 3));
-
-                qk = ggml_mul(ctx0, qk, diag_decay_trans);
+                qk = ggml_mul(ctx0, qk, diag_decay);
                 cb(qk, "qk_s", il);
 
                 ggml_tensor * v_trans = ggml_cont(ctx0, ggml_permute(ctx0, Vcur, 1, 2, 0, 3));
