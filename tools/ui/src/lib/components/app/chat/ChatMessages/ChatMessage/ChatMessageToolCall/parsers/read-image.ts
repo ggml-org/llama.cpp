@@ -1,4 +1,6 @@
 import type { AgenticSection } from '$lib/utils';
+import { NEWLINE } from '$lib/constants/code';
+import { PREFIX_IMAGE, PREFIX_SIZE, PREFIX_MIME } from '$lib/constants/read-image';
 
 export interface ReadImageMeta {
 	fileName: string;
@@ -21,7 +23,7 @@ export interface ReadImageMeta {
 export function parseReadImageMeta(section: AgenticSection): ReadImageMeta | null {
 	if (!section.toolResult) return null;
 
-	const lines = section.toolResult.split('\n');
+	const lines = section.toolResult.split(NEWLINE);
 	let fileName = '';
 	let path = '';
 	let sizeBytes: number | undefined;
@@ -29,14 +31,14 @@ export function parseReadImageMeta(section: AgenticSection): ReadImageMeta | nul
 
 	for (const line of lines) {
 		const trimmed = line.trim();
-		if (trimmed.startsWith('Image: ')) {
-			path = trimmed.slice('Image: '.length).trim();
+		if (trimmed.startsWith(PREFIX_IMAGE)) {
+			path = trimmed.slice(PREFIX_IMAGE.length).trim();
 			fileName = path.split('/').pop() ?? path;
-		} else if (trimmed.startsWith('Size: ')) {
-			const match = trimmed.match(/Size:\s*(\d+)\s*bytes/);
+		} else if (trimmed.startsWith(PREFIX_SIZE)) {
+			const match = trimmed.match(new RegExp(`${PREFIX_SIZE}\\s*(\\d+)\\s*bytes`));
 			if (match) sizeBytes = parseInt(match[1], 10);
-		} else if (trimmed.startsWith('MIME: ')) {
-			mimeType = trimmed.slice('MIME: '.length).trim();
+		} else if (trimmed.startsWith(PREFIX_MIME)) {
+			mimeType = trimmed.slice(PREFIX_MIME.length).trim();
 		}
 	}
 
