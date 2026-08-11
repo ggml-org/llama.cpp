@@ -2563,34 +2563,6 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
     return result;
 }
 
-bool common_speculative_need_embd(common_speculative * spec) {
-    if (spec == nullptr) {
-        return false;
-    }
-
-    for (auto & impl : spec->impls) {
-        if (impl->need_embd()) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool common_speculative_need_embd_nextn(common_speculative * spec) {
-    if (spec == nullptr) {
-        return false;
-    }
-
-    for (auto & impl : spec->impls) {
-        if (impl->need_embd_nextn()) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 void common_speculative_draft(common_speculative * spec) {
     if (spec == nullptr) {
         return;
