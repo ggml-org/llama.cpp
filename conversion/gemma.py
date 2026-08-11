@@ -703,6 +703,18 @@ class Gemma4Model(Gemma3Model):
 
         # handle num_global_key_value_heads
         num_key_value_heads_full = self.hparams.get("num_global_key_value_heads")
+        if num_key_value_heads_full is None:
+            # fallback: try to get from per_layer_config for full_attention layers
+            text_config = self.hparams.get("text_config", {})
+            if "per_layer_config" in text_config:
+                per_layer_config = text_config["per_layer_config"]
+                layer_types = self.hparams.get("layer_types", [])
+                for layer_idx, layer_config in per_layer_config.items():
+                    if isinstance(layer_idx, int) and layer_idx < len(layer_types):
+                        if layer_types[layer_idx] == "full_attention" and "num_key_value_heads" in layer_config:
+                            num_key_value_heads_full = layer_config["num_key_value_heads"]
+                            break
+
         num_key_value_heads_swa = self.hparams.get("num_key_value_heads")
         if num_key_value_heads_full is not None and num_key_value_heads_swa is not None:
             value_arr = [num_key_value_heads_swa if is_swa else num_key_value_heads_full for is_swa in swa_layers]
