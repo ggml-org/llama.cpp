@@ -870,17 +870,18 @@ static void llama_grammar_advance_stack(
     std::set<llama_grammar_stack, decltype(stack_cmp)> seen(stack_cmp);
 
     while (!todo.empty()) {
-        llama_grammar_stack curr_stack = std::move(todo.back());
+        llama_grammar_stack curr_stack_candidate = std::move(todo.back());
         todo.pop_back();
 
-        if (seen.find( curr_stack) != seen.end()) {
+        auto [curr_stack_it, inserted] = seen.insert(std::move(curr_stack_candidate));
+        if (!inserted) {
             continue;
         }
-        seen.insert(curr_stack);
+        const llama_grammar_stack & curr_stack = *curr_stack_it;
 
         if (curr_stack.empty()) {
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
-                new_stacks.emplace_back(std::move(curr_stack));
+                new_stacks.emplace_back(curr_stack);
             }
             continue;
         }
@@ -923,7 +924,7 @@ static void llama_grammar_advance_stack(
         case LLAMA_GRETYPE_TOKEN_NOT:
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
                 // only add the stack if it's not a duplicate of one we already have
-                new_stacks.emplace_back(std::move(curr_stack));
+                new_stacks.emplace_back(curr_stack);
             }
             break;
         default:
