@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -2591,20 +2592,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         return GGML_STATUS_SUCCESS;
     };
 
-    auto is_dist_collective_boundary = [](const ggml_tensor * node) -> bool {
-        if (node == nullptr || node->name[0] == '\0') {
-            return false;
-        }
-
-        const std::string_view name(node->name);
-        return
-            name.rfind("linear_attn_out-", 0) == 0 ||
-            name.rfind("attn_output-", 0) == 0 ||
-            name.rfind("ffn_down-", 0) == 0 ||
-            name.rfind("ffn_out-", 0) == 0 ||
-            name.rfind("ffn_moe_out-", 0) == 0;
-    };
-
     auto dist_allreduce_fallback = [&](const std::vector<std::vector<ggml_tensor *>> & nodes_dist_per_backend) -> ggml_status {
 
         int dist_rank = 0;
@@ -2627,37 +2614,51 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 if (node_dst == nullptr) {
                     continue;
                 }
-                if (!is_dist_collective_boundary(node_dst)) {
-                    continue;
-                }
+
+                const size_t n           = (size_t) ggml_nelements(node_dst);
+                const bool   is_f32      = node_dst->type == GGML_TYPE_F32;
+                const bool   is_f16      = node_dst->type == GGML_TYPE_F16;
+                const size_t nbytes_dst  = ggml_nbytes(node_dst);
+                const size_t nbytes_want = is_f32 ? n * sizeof(float) : n * sizeof(ggml_fp16_t);
+
+                // Every node reaching this loop is a subgraph boundary: a partial sum that must
+                // be reduced across all shards before the residual stream is valid again. A
+                // boundary we skip leaves this rank holding only its own half, which corrupts
+                // every layer downstream, so a skip must never be silent.
+                const char * skip_reason = nullptr;
                 if (!ggml_is_contiguous(node_dst)) {
+                    skip_reason = "non-contiguous";
+                } else if (!is_f32 && !is_f16) {
+                    skip_reason = "unsupported-dtype";
+                } else if (nbytes_dst != nbytes_want) {
+                    skip_reason = "padded-nbytes";
+                }
+
+                if (skip_reason != nullptr) {
+                    if (n != 0) {
+                        // stderr, not GGML_LOG_*: llama-cli pauses the common_log logger while
+                        // it streams tokens, which would swallow this exact warning
+                        static int n_warned = 0;
+                        if (n_warned++ < 16) {
+                            fprintf(stderr, "[dist-tp] WARN skipping required allreduce: name='%s' type=%s ne=%lld reason=%s\n",
+                                    node_dst->name[0] ? node_dst->name : "<unnamed>",
+                                    ggml_type_name(node_dst->type), (long long) n, skip_reason);
+                            fflush(stderr);
+                        }
+                    }
                     continue;
                 }
 
-                const size_t n = (size_t) ggml_nelements(node_dst);
                 if (n == 0) {
                     continue;
                 }
 
-                const bool is_f32 = node_dst->type == GGML_TYPE_F32;
-                const bool is_f16 = node_dst->type == GGML_TYPE_F16;
-                if (!is_f32 && !is_f16) {
-                    continue;
-                }
-
-                size_t nbytes_dst = ggml_nbytes(node_dst);
                 cur.resize(n);
                 recv.resize(n);
                 if (is_f32) {
-                    if (nbytes_dst != n * sizeof(float)) {
-                        continue;
-                    }
                     ggml_backend_tensor_get(node_dst, cur.data(), 0, nbytes_dst);
                 } else {
                     cur_f16.resize(n);
-                    if (nbytes_dst != n * sizeof(ggml_fp16_t)) {
-                        continue;
-                    }
                     ggml_backend_tensor_get(node_dst, cur_f16.data(), 0, nbytes_dst);
                     ggml_fp16_to_fp32_row(cur_f16.data(), cur.data(), n);
                 }
@@ -2755,7 +2756,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 bool has_dist_boundary = false;
                 for (size_t j = 0; j < n_backends && !has_dist_boundary; j++) {
                     for (ggml_tensor * node_dst : nodes_dist_per_backend[j]) {
-                        if (is_dist_collective_boundary(node_dst)) {
+                        if (node_dst != nullptr) {
                             has_dist_boundary = true;
                             break;
                         }
@@ -2777,6 +2778,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
         }
     }
+
     return GGML_STATUS_SUCCESS;
 }
 

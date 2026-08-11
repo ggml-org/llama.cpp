@@ -1,4 +1,5 @@
 #include "dist-comm.h"
+#include "dist-comm-nd.h"
 
 #include <algorithm>
 #include <array>
@@ -384,6 +385,18 @@ socket_t connect_with_retry(const std::string & host, int port, std::string & er
     return DIST_CCL_INVALID_SOCKET;
 }
 
+// same truthiness rule as env_true() below, duplicated here because the transport selection
+// runs before that anonymous namespace is in scope
+bool dist_transport_env_true(const char * key, bool def) {
+    const char * v = std::getenv(key);
+    if (!v || v[0] == '\0') {
+        return def;
+    }
+    std::string s(v);
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    return s == "1" || s == "true" || s == "yes" || s == "on";
+}
+
 } // namespace
 
 struct dist_comm_socket_context::impl {
@@ -394,7 +407,22 @@ struct dist_comm_socket_context::impl {
     std::vector<peer_info> members;
     dist_comm_stats stats;
 
+    // Optional NetworkDirect data path for the collective payload. Bootstrap, framing, ring
+    // ordering and the broadcasts all stay on the TCP sockets above; only exchange_ring()
+    // moves its bytes over ND when this is non-null.
+    dist_nd_conn * nd = nullptr;
+    // Payload ceiling for the ND path, in bytes; 0 means no ceiling. ND sends block on each
+    // chunk's completion before staging the next, so a payload that spans many chunks (prefill,
+    // ~20 MB here) serialises badly and is measurably faster on TCP, while the small per-token
+    // decode exchanges are pure latency and much faster on ND. Both ranks see the same size, so
+    // both take the same branch and the two transports never disagree.
+    size_t nd_max_bytes = 0;
+
     ~impl() {
+        if (nd != nullptr) {
+            dist_nd_free(nd);
+            nd = nullptr;
+        }
         close_fd(ring_in_fd);
         close_fd(ring_out_fd);
         close_fd(listen_fd);
@@ -433,7 +461,18 @@ struct dist_comm_socket_context::impl {
         };
         op_hdr recv_hdr {};
 
+        const bool use_nd = nd != nullptr &&
+                            (nd_max_bytes == 0 || (send_size <= nd_max_bytes && recv_size <= nd_max_bytes));
+
         auto send_payload = [&]() -> bool {
+            if (use_nd) {
+                // header and payload leave as one ND chunk
+                if (!dist_nd_send2(nd, &send_hdr, sizeof(send_hdr), send_data_ptr, send_size, err)) {
+                    return false;
+                }
+                stats.bytes_sent += sizeof(send_hdr) + send_size;
+                return true;
+            }
             if (!write_msg(ring_out_fd, &send_hdr, sizeof(send_hdr), err)) {
                 return false;
             }
@@ -444,7 +483,12 @@ struct dist_comm_socket_context::impl {
         };
 
         auto recv_payload = [&]() -> bool {
-            if (!read_msg(ring_in_fd, &recv_hdr, sizeof(recv_hdr), err)) {
+            if (use_nd) {
+                if (!dist_nd_recv(nd, &recv_hdr, sizeof(recv_hdr), err)) {
+                    return false;
+                }
+                stats.bytes_recv += sizeof(recv_hdr);
+            } else if (!read_msg(ring_in_fd, &recv_hdr, sizeof(recv_hdr), err)) {
                 return false;
             }
             if (recv_hdr.op != op) {
@@ -455,8 +499,15 @@ struct dist_comm_socket_context::impl {
                 err = "unexpected payload size on ring";
                 return false;
             }
-            if (recv_size > 0 && !read_msg(ring_in_fd, recv_data_ptr, recv_size, err)) {
-                return false;
+            if (recv_size > 0) {
+                if (use_nd) {
+                    if (!dist_nd_recv(nd, recv_data_ptr, recv_size, err)) {
+                        return false;
+                    }
+                    stats.bytes_recv += recv_size;
+                } else if (!read_msg(ring_in_fd, recv_data_ptr, recv_size, err)) {
+                    return false;
+                }
             }
             recv_src_rank = recv_hdr.src_rank;
             return true;
@@ -588,6 +639,62 @@ struct dist_comm_socket_context::impl {
         close_fd(listen_fd);
         return true;
     }
+
+    // Selects the data path for exchange_ring(). Opt-in via LLAMA_DIST_TP_RDMA; any failure
+    // here is logged and leaves the ring on TCP rather than aborting the run.
+    void select_transport() {
+        if (cfg.world_size >= 2 && dist_transport_env_true("LLAMA_DIST_TP_RDMA", false)) {
+            if (!dist_nd_available()) {
+                std::fprintf(stderr,
+                             "dist-tp: LLAMA_DIST_TP_RDMA is set but this binary was built without "
+                             "NetworkDirect support; staying on TCP\n");
+            } else if (cfg.world_size != 2) {
+                // one ND listener per host is all the provider's fixed CM port allows, which is
+                // exactly enough for a 2-rank ring where prev and next are the same peer
+                std::fprintf(stderr,
+                             "dist-tp: LLAMA_DIST_TP_RDMA only supports world_size=2 (have %d); "
+                             "staying on TCP\n", cfg.world_size);
+            } else {
+                std::string nd_err;
+                // rank 0 listens and advertises, rank 1 dials in; rank 0 makes the final call
+                nd = dist_nd_establish((uintptr_t) ring_out_fd, (uintptr_t) ring_in_fd,
+                                       cfg.rank == 0, nd_err);
+                if (nd == nullptr) {
+                    std::fprintf(stderr,
+                                 "dist-tp: NetworkDirect setup failed on rank %d (%s); "
+                                 "falling back to TCP\n", cfg.rank, nd_err.c_str());
+                }
+            }
+        }
+
+        if (nd != nullptr) {
+            // default: one ND chunk per exchange; larger payloads stay on TCP. 0 = no ceiling.
+            nd_max_bytes = 256 * 1024;
+            const char * v = std::getenv("LLAMA_DIST_TP_RDMA_MAX_BYTES");
+            if (v != nullptr && v[0] != '\0') {
+                try {
+                    const long long n = std::stoll(v);
+                    if (n >= 0) {
+                        nd_max_bytes = (size_t) n;
+                    }
+                } catch (...) {
+                    // keep the default
+                }
+            }
+        }
+
+        std::fprintf(stderr, "dist-tp transport: %s [rank %d/%d]",
+                     nd != nullptr ? "RDMA (ND)" : "TCP", cfg.rank, cfg.world_size);
+        if (nd != nullptr) {
+            if (nd_max_bytes == 0) {
+                std::fprintf(stderr, " (all payloads over ND)");
+            } else {
+                std::fprintf(stderr, " (ND up to %zu B, TCP above)", nd_max_bytes);
+            }
+        }
+        std::fprintf(stderr, "\n");
+        std::fflush(stderr);
+    }
 };
 
 dist_comm_socket_context::dist_comm_socket_context(std::unique_ptr<impl> impl_) : impl_(std::move(impl_)) {}
@@ -634,6 +741,8 @@ std::unique_ptr<dist_comm_socket_context> dist_comm_socket_context::create(const
     if (!p->establish_ring(err)) {
         return nullptr;
     }
+
+    p->select_transport();
 
     return std::unique_ptr<dist_comm_socket_context>(new dist_comm_socket_context(std::move(p)));
 }

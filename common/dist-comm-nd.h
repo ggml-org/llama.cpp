@@ -1,0 +1,41 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
+// NetworkDirect (Windows RDMA) data path for the distributed-TP ring.
+//
+// This is a transport substitution only. The ring bootstrap, the op_hdr wire framing and the
+// send/recv ordering all stay in dist-comm.cpp; only the bytes of the collective payload move
+// over NetworkDirect instead of TCP. The ND connection is negotiated out of band over the ring
+// sockets that dist-comm.cpp has already established, and every failure path leaves the caller
+// on TCP rather than aborting.
+//
+// The transport is opt-in: dist-comm.cpp only calls dist_nd_establish() when
+// LLAMA_DIST_TP_RDMA is set to a true value.
+
+struct dist_nd_conn;
+
+// true when this build was compiled with NetworkDirect support
+bool dist_nd_available();
+
+// Establishes one bidirectional ND connection with the ring peer.
+//
+//   tcp_out / tcp_in : the ring sockets already connected to the peer. tcp_out carries the
+//                      outbound half of the negotiation, tcp_in the inbound half; tcp_in is
+//                      also polled for end-of-stream while blocked on the completion queue.
+//   listen_side      : true  -> wait for the peer to dial in  (rank 0)
+//                      false -> dial out to the peer          (rank 1)
+//
+// Both ranks agree on the outcome before this returns: rank 0 makes the final call and tells
+// rank 1. Returns nullptr with err set when ND is unavailable or negotiation failed.
+dist_nd_conn * dist_nd_establish(uintptr_t tcp_out, uintptr_t tcp_in, bool listen_side, std::string & err);
+
+// Sends a header and its payload as a single ND chunk, so one collective costs one round of
+// wire latency rather than two.
+bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
+                   const void * payload, size_t payload_size, std::string & err);
+bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err);
+
+void dist_nd_free(dist_nd_conn * c);

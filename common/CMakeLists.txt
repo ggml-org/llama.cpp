@@ -73,6 +73,8 @@ add_library(${TARGET}
     debug.h
     dist-comm.cpp
     dist-comm.h
+    dist-comm-nd.cpp
+    dist-comm-nd.h
     download.cpp
     download.h
     fit.cpp
@@ -181,4 +183,56 @@ target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
 
 if (WIN32)
     target_link_libraries(${TARGET} PRIVATE ws2_32)
+endif()
+
+#
+# NetworkDirect (Windows RDMA) data path for distributed tensor parallelism.
+#
+# Opt in at build time with -DLLAMA_DIST_TP_ND=ON -DLLAMA_DIST_TP_ND_SDK=<NetworkDirect checkout>,
+# then opt in again at run time with LLAMA_DIST_TP_RDMA=1. Without the run-time switch the
+# binary behaves exactly as before and the ring stays on TCP.
+#
+if (WIN32)
+    option(LLAMA_DIST_TP_ND "llama: enable the NetworkDirect RDMA data path for distributed TP" OFF)
+    # GGML_RPC_ND_SDK is accepted as a default so the ggml-rpc and dist-tp builds can share one flag
+    set(LLAMA_DIST_TP_ND_SDK "${GGML_RPC_ND_SDK}" CACHE PATH
+        "llama: path to a NetworkDirect checkout providing src/ndutil")
+else()
+    set(LLAMA_DIST_TP_ND OFF CACHE BOOL "NetworkDirect is Windows only" FORCE)
+endif()
+
+if (LLAMA_DIST_TP_ND)
+    if (NOT LLAMA_DIST_TP_ND_SDK)
+        message(FATAL_ERROR "LLAMA_DIST_TP_ND requires LLAMA_DIST_TP_ND_SDK to point at a NetworkDirect checkout")
+    endif()
+    set(LLAMA_ND_UTIL_DIR "${LLAMA_DIST_TP_ND_SDK}/src/ndutil")
+    foreach (ND_SRC ndaddr.cpp ndfrmwrk.cpp ndprov.cpp)
+        if (NOT EXISTS "${LLAMA_ND_UTIL_DIR}/${ND_SRC}")
+            message(FATAL_ERROR "LLAMA_DIST_TP_ND_SDK does not contain src/ndutil/${ND_SRC}")
+        endif()
+    endforeach()
+    # ndstatus.h is generated from ndstatus.mc into the SDK's build output tree
+    find_path(LLAMA_DIST_TP_ND_STATUS_DIR ndstatus.h
+              PATHS "${LLAMA_DIST_TP_ND_SDK}/out"
+              PATH_SUFFIXES Release-x64/include Debug-x64/include
+              NO_DEFAULT_PATH)
+    if (NOT LLAMA_DIST_TP_ND_STATUS_DIR)
+        message(FATAL_ERROR "ndstatus.h not found under ${LLAMA_DIST_TP_ND_SDK}/out - build the NetworkDirect SDK first")
+    endif()
+    # the prebuilt ndutil.lib is /MT, so compile the loader sources in instead of linking it
+    set(LLAMA_ND_UTIL_SOURCES
+        "${LLAMA_ND_UTIL_DIR}/ndaddr.cpp"
+        "${LLAMA_ND_UTIL_DIR}/ndfrmwrk.cpp"
+        "${LLAMA_ND_UTIL_DIR}/ndprov.cpp")
+    target_sources(${TARGET} PRIVATE ${LLAMA_ND_UTIL_SOURCES})
+    if (MSVC)
+        set_source_files_properties(${LLAMA_ND_UTIL_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
+    else()
+        set_source_files_properties(${LLAMA_ND_UTIL_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+    endif()
+    target_include_directories(${TARGET} PRIVATE "${LLAMA_ND_UTIL_DIR}" "${LLAMA_DIST_TP_ND_STATUS_DIR}")
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_DIST_TP_ND _CRT_SECURE_NO_WARNINGS)
+    message(STATUS "llama: NetworkDirect dist-TP transport enabled (${LLAMA_DIST_TP_ND_SDK})")
+else()
+    message(STATUS "llama: NetworkDirect dist-TP transport disabled")
 endif()
