@@ -84,7 +84,26 @@ int main(int argc, char ** argv) {
         }
 
         auto cparams = common_context_params_to_llama(params_dft);
+
+        // drafters that borrow tensors from the target model (e.g. DFlash models
+        // without their own token embeddings / output head) cannot create a
+        // context without a reference to the target context
+        cparams.ctx_other = ctx_tgt;
+
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+        if (ctx_dft == nullptr) {
+            LOG_ERR("failed to create context for draft model, '%s'\n", params_dft.model.path.c_str());
+            return 1;
+        }
+
+        {
+            char arch[64] = {0};
+            llama_model_meta_val_str(model_dft.get(), "general.architecture", arch, sizeof(arch));
+            if (strcmp(arch, "dflash") == 0) {
+                LOG_WRN("%s: this example does not stage target-model features for '%s' drafters - "
+                        "draft acceptance will be much lower than with llama-server\n", __func__, arch);
+            }
+        }
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
         params.speculative.draft.ctx_dft = ctx_dft.get();
