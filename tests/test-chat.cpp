@@ -6955,6 +6955,70 @@ static void test_reasoning_budget_message_per_request() {
     }
 }
 
+static void test_reasoning_effort_extra_context() {
+    LOG_DBG("%s\n", __func__);
+
+    // deepseek-ai-DeepSeek-V4
+    {
+        auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+        inputs.reasoning_effort = "max";
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "Reasoning Effort: Absolute maximum");
+    }
+
+    // muse-glimmer
+    {
+        auto tmpls = read_templates("models/templates/muse-glimmer.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+        inputs.reasoning_effort = "low";
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "Reasoning strength: low.");
+    }
+
+    // tencent-Hy3
+    {
+        auto tmpls = read_templates("models/templates/tencent-Hy3.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+        inputs.reasoning_effort = "low";
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "reasoning_effort:low");
+    }
+
+    // openai-gpt-oss-120b
+    {
+        auto tmpls = read_templates("models/templates/openai-gpt-oss-120b.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+        inputs.reasoning_effort = "low";
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "Reasoning: low");
+    }
+
+    // upstage-Solar-Open-100B
+    {
+        auto tmpls = read_templates("models/templates/upstage-Solar-Open-100B.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+        inputs.reasoning_effort = "low";
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "<|think|>");
+    }
+
+    // Cohere2MoE
+    {
+        auto tmpls = read_templates("models/templates/Cohere2MoE.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+        inputs.reasoning_effort = "none";
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "<|START_THINKING|><|END_THINKING|>");
+    }
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -7114,6 +7178,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
+        test_reasoning_effort_extra_context();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);

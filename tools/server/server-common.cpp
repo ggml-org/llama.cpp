@@ -1087,11 +1087,23 @@ json oaicompat_chat_params_parse(
     }
 
     // Parse also the OAI "reasoning_effort": "none" specific value
-    if (body.contains("reasoning_effort")) {
-        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+    // official values: none, minimal, low, medium, high, xhigh, max
+    // Also support "reasoning": { "effort": "..." } syntax
+    auto reasoning_effort = json_value(
+        body,
+        "reasoning_effort",
+        json_value(
+            json_value(body, "reasoning", json::object()),
+            "effort",
+            std::string("")
+        )
+    );
+    if (!reasoning_effort.empty()) {
         if (reasoning_effort == "none") {
             inputs.enable_thinking = false;
-        } // other reasoning_effort values are model-specific and not yet handled
+        } else {
+            inputs.reasoning_effort = reasoning_effort;
+        }
     }
 
     inputs.force_pure_content = opt.force_pure_content;
