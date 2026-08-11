@@ -750,6 +750,8 @@ jobs:
 
   windows-rocm:
     needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
     runs-on: windows-2022
 
     strategy:
