@@ -160,6 +160,49 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     }
 
     fprintf(stderr, "%s : multi-seq split replay matched (max diff %g)\n", __func__, (double) diff_max);
+
+    // seq-1-only decodes must be independent of seq 0's content: diverge seq 0
+    // in ctx_ref only, then compare identical seq-1-only continuations bitwise
+    constexpr uint32_t n_tail = 4;
+
+    {
+        llama_batch batch_tail = llama_batch_init(n_tail, 0, 1);
+        for (uint32_t i = 0; i < n_tail; ++i) {
+            const llama_pos pos = p0 + (llama_pos) (n_replay + i);
+            common_batch_add(batch_tail, tok(0, pos + 7), pos, { 0 }, false);
+        }
+        ok = llama_decode(ctx_ref, batch_tail) == 0;
+        llama_batch_free(batch_tail);
+    }
+
+    float diff_tail = 0.0f;
+    for (uint32_t i = 0; i < n_tail && ok; ++i) {
+        const llama_pos pos = p0 + (llama_pos) (n_replay + i);
+        llama_batch batch_one = llama_batch_init(1, 0, 1);
+        common_batch_add(batch_one, tok(1, pos), pos, { 1 }, true);
+        ok = llama_decode(ctx_roll, batch_one) == 0;
+        ok = ok && llama_decode(ctx_ref, batch_one) == 0;
+        llama_batch_free(batch_one);
+        if (!ok) {
+            break;
+        }
+
+        const float * l_roll = llama_get_logits_ith(ctx_roll, 0);
+        const float * l_ref  = llama_get_logits_ith(ctx_ref,  0);
+        ok = l_roll != nullptr && l_ref != nullptr;
+        for (int t = 0; ok && t < n_vocab; ++t) {
+            diff_tail = std::max(diff_tail, std::fabs(l_roll[t] - l_ref[t]));
+        }
+    }
+
+    if (!ok || diff_tail > eps) {
+        fprintf(stderr, "%s : seq-1-only decode leaked seq 0 state (ok=%d, max diff %g)\n",
+                __func__, ok ? 1 : 0, (double) diff_tail);
+        cleanup();
+        return false;
+    }
+
+    fprintf(stderr, "%s : seq-1-only decode independent of seq 0 (max diff %g)\n", __func__, (double) diff_tail);
     cleanup();
     return true;
 }
