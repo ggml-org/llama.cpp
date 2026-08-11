@@ -2267,12 +2267,13 @@ struct test_get_rows : public test_case {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * in;
         if (vs0) {
-            const int padded_m = m + 3;
+            const int offset_rows = 3;
+            const int padded_m = m + offset_rows;
             ggml_tensor * in_padded = ggml_new_tensor_4d(ctx, type, n, padded_m, be1, be2);
             ggml_set_name(in_padded, "in_padded");
             in = ggml_view_4d(ctx, in_padded, n, m, be1, be2,
                               in_padded->nb[1], in_padded->nb[2], in_padded->nb[3],
-                              3 * in_padded->nb[1]);
+                              offset_rows * in_padded->nb[1]);
             ggml_set_name(in, "in_view");
         } else {
             in = ggml_new_tensor_4d(ctx, type, n, m, be1, be2);
@@ -2286,7 +2287,7 @@ struct test_get_rows : public test_case {
             ggml_set_name(rows, "view_of_rows");
         }
 
-        const bool grad_supported = ggml_is_matrix(in) && ggml_is_vector(rows);
+        const bool grad_supported = !vs0 && ggml_is_matrix(in) && ggml_is_vector(rows);
         if (grad_supported) {
             ggml_set_param(in);
             // rows is a constant input -> no gradients
@@ -8149,9 +8150,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_get_rows(GGML_TYPE_I32, 256, 5, 4, b, 1, v));
         }
     }
-    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_I32}) {
+    for (ggml_type type : all_types) {
+        for (int b : {1, 7}) {
+            for (bool v : {false, true}) {
+                test_cases.emplace_back(new test_get_rows(type, 256, 5, 4, b, 1, v, /*vs0=*/true));
+            }
+        }
+    }
+    for (int b : {1, 7}) {
         for (bool v : {false, true}) {
-            test_cases.emplace_back(new test_get_rows(type, 256, 5, 4, 1, 1, v, /*vs0=*/true));
+            test_cases.emplace_back(new test_get_rows(GGML_TYPE_I32, 256, 5, 4, b, 1, v, /*vs0=*/true));
         }
     }
 
