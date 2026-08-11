@@ -647,10 +647,13 @@ class DFlashModel(Qwen3Model):
         # own tokenizer logic, not the Qwen default).
         from . import get_model_class
         with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
-            target_arch = json.load(f)["architectures"][0]
+            target_hparams = json.load(f)
+            target_arch = target_hparams["architectures"][0]
         target_cls = get_model_class(target_arch)
 
         if target_cls is not type(self):
+            if target_arch == "NemotronHForCausalLM":
+                setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
             target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
         else:
             super().set_vocab()
@@ -687,6 +690,12 @@ class DFlashModel(Qwen3Model):
         if not name.startswith("model."):
             name = "model." + name
         return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.embed_tokens.weight" and not self.hparams.get("has_embed_tokens", True):
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3DSparkModel")

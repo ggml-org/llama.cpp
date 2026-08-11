@@ -177,8 +177,11 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     auto * inp = build_inp_mem_hybrid();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+    const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         struct ggml_tensor * inpSA = inpL;
 
         // norm
@@ -195,7 +198,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
             cur = build_ffn_layer(cur, model, il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked && !extract_final_inp) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -209,6 +212,13 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     }
 
     cur = inpL;
+    if (extract_final_inp) {
+        res->t_layer_inp[n_layer] = cur;
+
+        if (inp_out_ids && cparams.embeddings_nextn_masked) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        }
+    }
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 
