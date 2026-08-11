@@ -12,7 +12,7 @@
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { TooltipSide } from '$lib/enums';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { isMobile } from '$lib/stores';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';

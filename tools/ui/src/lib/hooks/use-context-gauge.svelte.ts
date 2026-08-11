@@ -8,15 +8,15 @@ import { useProcessingState } from './use-processing-state.svelte';
 import { colorLevelFromPercent } from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
 import { STATS_UNITS } from '$lib/constants';
 import { ColorLevel, MessageRole } from '$lib/enums';
-import { chatStore } from '$lib/stores/chat.svelte';
-import { activeMessages } from '$lib/stores/conversations.svelte';
 import {
+	activeMessages,
+	chatStore,
+	isRouterMode,
 	modelOptions,
 	modelsStore,
 	selectedModelId,
 	singleModelName
-} from '$lib/stores/models.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
+} from '$lib/stores';
 import type { ChatMessageTimings, DatabaseMessage } from '$lib/types';
 
 interface LiveStats {

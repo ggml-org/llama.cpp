@@ -19,21 +19,20 @@
 	import { useChatScreenScroll } from '$lib/hooks/use-chat-screen-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
+		activeConversation,
+		activeMessages,
 		chatStore,
+		config,
+		conversationsStore,
+		device,
 		errorDialog,
 		isChatStreaming,
 		isEditing,
-		isLoading
-	} from '$lib/stores/chat.svelte';
-	import {
-		activeConversation,
-		activeMessages,
-		conversationsStore
-	} from '$lib/stores/conversations.svelte';
-	import { device } from '$lib/stores/device.svelte';
-	import { serverError, serverLoading } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+		isLoading,
+		isMobile,
+		serverError,
+		serverLoading
+	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { onDestroy, onMount, tick } from 'svelte';
 

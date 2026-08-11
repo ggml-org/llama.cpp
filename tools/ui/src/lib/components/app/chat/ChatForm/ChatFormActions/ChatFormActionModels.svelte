@@ -1,15 +1,16 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeMessages } from '$lib/stores/conversations.svelte';
 	import {
+		activeMessages,
+		chatStore,
+		isMobile,
+		isRouterMode,
 		modelOptions,
 		modelsStore,
 		selectedModelId,
-		selectedModelName
-	} from '$lib/stores/models.svelte';
-	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+		selectedModelName,
+		serverError
+	} from '$lib/stores';
 
 	interface Props {
 		disabled?: boolean;

@@ -2,8 +2,7 @@
 	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
 	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
 	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
+	import { mcpResources, mcpResourcesLoading, mcpStore } from '$lib/stores';
 	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
 	import { parseResourcePath } from '$lib/utils';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';

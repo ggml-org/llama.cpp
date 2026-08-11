@@ -1,15 +1,16 @@
 import { REASONING_EFFORT_LEVELS, REASONING_EFFORT_TOKENS } from '$lib/constants';
 import { ReasoningEffort } from '$lib/enums';
-import { chatStore } from '$lib/stores/chat.svelte';
-import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
 import {
+	activeMessages,
+	chatStore,
 	checkModelSupportsThinking,
+	conversationsStore,
+	isRouterMode,
 	loadedModelIds,
 	modelsStore,
 	propsCacheVersion,
 	supportsThinking
-} from '$lib/stores/models.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
+} from '$lib/stores';
 import type { ReasoningEffortLevel } from '$lib/types';
 import type { DatabaseMessage } from '$lib/types/database';
 

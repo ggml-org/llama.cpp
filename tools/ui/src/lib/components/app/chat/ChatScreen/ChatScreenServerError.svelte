@@ -2,7 +2,7 @@
 	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { serverError, serverLoading, serverStatus, serverStore } from '$lib/stores/server.svelte';
+	import { serverError, serverLoading, serverStatus, serverStore } from '$lib/stores';
 
 	let hasError = $derived(!!serverError());
 	let isLoadingModel = $derived(serverStatus() === 503);

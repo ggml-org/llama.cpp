@@ -10,7 +10,7 @@
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelsStore, routerModels } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {

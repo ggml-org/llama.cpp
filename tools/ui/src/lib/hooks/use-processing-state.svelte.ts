@@ -1,5 +1,5 @@
 import { STATS_UNITS } from '$lib/constants';
-import { activeProcessingState } from '$lib/stores/chat.svelte';
+import { activeProcessingState } from '$lib/stores';
 import type { ApiProcessingState, LiveGenerationStats, LiveProcessingStats } from '$lib/types';
 
 export interface UseProcessingStateReturn {

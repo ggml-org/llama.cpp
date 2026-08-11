@@ -12,7 +12,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
 	import { tick } from 'svelte';
 

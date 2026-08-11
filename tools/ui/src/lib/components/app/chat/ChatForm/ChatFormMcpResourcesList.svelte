@@ -3,11 +3,7 @@
 		ChatAttachmentsListItemMcpResource,
 		HorizontalScrollCarousel
 	} from '$lib/components/app';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		mcpHasResourceAttachments,
-		mcpResourceAttachments
-	} from '$lib/stores/mcp-resources.svelte';
+	import { mcpHasResourceAttachments, mcpResourceAttachments, mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;

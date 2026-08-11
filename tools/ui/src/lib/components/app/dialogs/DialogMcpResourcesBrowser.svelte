@@ -8,13 +8,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
+		conversationsStore,
 		mcpResources,
 		mcpResourceStore,
+		mcpStore,
 		mcpTotalResourceCount
-	} from '$lib/stores/mcp-resources.svelte';
+	} from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';

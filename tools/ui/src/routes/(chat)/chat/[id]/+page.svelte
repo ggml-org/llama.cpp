@@ -4,9 +4,13 @@
 	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, ROUTES, URL_PARAMS } from '$lib/constants';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeConversation, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { modelOptions, modelsStore } from '$lib/stores/models.svelte';
+	import {
+		activeConversation,
+		chatStore,
+		conversationsStore,
+		modelOptions,
+		modelsStore
+	} from '$lib/stores';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;

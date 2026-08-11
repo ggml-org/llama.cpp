@@ -10,7 +10,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import { MessageRole } from '$lib/enums';
-	import { activeConversation } from '$lib/stores/conversations.svelte';
+	import { activeConversation } from '$lib/stores';
 
 	interface Props {
 		role: MessageRole.USER | MessageRole.ASSISTANT;

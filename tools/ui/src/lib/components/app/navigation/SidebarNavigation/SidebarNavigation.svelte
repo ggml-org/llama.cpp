@@ -14,15 +14,15 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore } from '$lib/stores/chat.svelte';
 	import {
 		buildConversationTree,
+		chatStore,
+		config,
 		conversations,
-		conversationsStore
-	} from '$lib/stores/conversations.svelte';
-	import { device } from '$lib/stores/device.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+		conversationsStore,
+		device,
+		isMobile
+	} from '$lib/stores';
 	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';

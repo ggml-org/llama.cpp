@@ -8,10 +8,14 @@
  * demand if they aren't cached yet.
  */
 
-import { chatStore } from '$lib/stores/chat.svelte';
-import { activeMessages } from '$lib/stores/conversations.svelte';
-import { modelOptions, modelsStore, selectedModelId } from '$lib/stores/models.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
+import {
+	activeMessages,
+	chatStore,
+	isRouterMode,
+	modelOptions,
+	modelsStore,
+	selectedModelId
+} from '$lib/stores';
 
 export function useChatScreenActiveModel() {
 	const isRouter = $derived(isRouterMode());

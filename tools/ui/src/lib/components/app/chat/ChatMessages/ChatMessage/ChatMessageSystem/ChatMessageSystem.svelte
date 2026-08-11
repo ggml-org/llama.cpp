@@ -6,7 +6,7 @@
 	import { INPUT_CLASSES } from '$lib/constants';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
+	import { config } from '$lib/stores';
 	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
 
 	interface Props {

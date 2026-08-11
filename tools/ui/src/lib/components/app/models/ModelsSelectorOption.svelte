@@ -13,7 +13,7 @@
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelsStore, routerModels } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 

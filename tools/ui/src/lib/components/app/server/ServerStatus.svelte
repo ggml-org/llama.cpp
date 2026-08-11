@@ -3,8 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { singleModelName } from '$lib/stores/models.svelte';
-	import { serverError, serverLoading, serverProps } from '$lib/stores/server.svelte';
+	import { serverError, serverLoading, serverProps, singleModelName } from '$lib/stores';
 
 	interface Props {
 		class?: string;

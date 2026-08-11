@@ -8,8 +8,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { config, isLoading } from '$lib/stores';
 
 	interface Props {
 		class?: string;

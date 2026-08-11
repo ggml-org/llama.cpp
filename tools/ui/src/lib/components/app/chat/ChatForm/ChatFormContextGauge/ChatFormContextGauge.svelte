@@ -1,15 +1,18 @@
 <script lang="ts">
 	import ContextGaugeDial from './ContextGaugeDial.svelte';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { chatStore, isChatStreaming, isLoading } from '$lib/stores/chat.svelte';
 	import {
+		activeConversation,
+		activeMessages,
+		chatStore,
 		gaugeTriggerClick,
 		gaugeTriggerEnter,
 		gaugeTriggerKeydown,
 		gaugeTriggerLeave,
-		gaugeTriggerPointerDown
-	} from '$lib/stores/context-gauge-popup.svelte';
-	import { activeConversation, activeMessages } from '$lib/stores/conversations.svelte';
+		gaugeTriggerPointerDown,
+		isChatStreaming,
+		isLoading
+	} from '$lib/stores';
 	import { untrack } from 'svelte';
 
 	const gauge = useContextGauge();

@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import {
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
@@ -35,6 +36,9 @@ class ToolsStore {
 	private _serverHome = $state<string | null | undefined>(undefined);
 
 	constructor() {
+		// browser-only init: skip on SSR to avoid localStorage/fetch side effects
+		if (!browser) return;
+
 		try {
 			const stored = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
 

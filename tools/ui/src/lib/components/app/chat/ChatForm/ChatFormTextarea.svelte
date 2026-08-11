@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { isMobile } from '$lib/stores';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 

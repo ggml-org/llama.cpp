@@ -20,10 +20,7 @@
 	import { setChatSettingsConfigContext } from '$lib/contexts';
 	import { ColorMode } from '$lib/enums/ui.enums';
 	import { RouterService } from '$lib/services/router.service';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
+	import { config, isRouterMode, modelsStore, settingsReferrer, settingsStore } from '$lib/stores';
 	import type { SettingsSection } from '$lib/types';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';

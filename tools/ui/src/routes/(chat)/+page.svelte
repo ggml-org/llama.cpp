@@ -3,10 +3,14 @@
 	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, URL_PARAMS } from '$lib/constants';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
-	import { modelOptions, modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import {
+		chatStore,
+		conversationsStore,
+		isConversationsInitialized,
+		isRouterMode,
+		modelOptions,
+		modelsStore
+	} from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));

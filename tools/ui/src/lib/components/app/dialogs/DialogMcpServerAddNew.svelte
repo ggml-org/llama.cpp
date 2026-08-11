@@ -12,8 +12,7 @@
 		RECOMMENDED_MCP_SERVERS
 	} from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
 
 	interface Props {

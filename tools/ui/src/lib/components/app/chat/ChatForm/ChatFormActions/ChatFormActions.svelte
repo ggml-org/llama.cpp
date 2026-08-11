@@ -14,13 +14,14 @@
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
 	import {
+		activeMessages,
 		activeProcessingState,
+		config,
+		conversationsStore,
 		isChatStreaming,
-		isLoading as chatIsLoading
-	} from '$lib/stores/chat.svelte';
-	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+		isLoading as chatIsLoading,
+		mcpStore
+	} from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {

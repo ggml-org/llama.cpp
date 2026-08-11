@@ -3,20 +3,19 @@
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import {
+		activeConversation,
 		agenticClearSteeringMessage,
 		agenticInjectSteeringMessage,
 		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras
-	} from '$lib/stores/agentic.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import {
+		agenticPendingSteeringMessageExtras,
 		chatClearPendingMessage,
 		chatInjectPendingMessage,
 		chatPendingMessageContent,
-		chatPendingMessageExtras
-	} from '$lib/stores/chat.svelte';
-	import { activeConversation, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+		chatPendingMessageExtras,
+		chatStore,
+		config,
+		conversationsStore
+	} from '$lib/stores';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,

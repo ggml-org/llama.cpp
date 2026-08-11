@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChatAttachmentsList, MarkdownContent, MentionText } from '$lib/components/app';
 	import { Card } from '$lib/components/ui/card';
-	import { config } from '$lib/stores/settings.svelte';
+	import { config } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
 	interface Props {

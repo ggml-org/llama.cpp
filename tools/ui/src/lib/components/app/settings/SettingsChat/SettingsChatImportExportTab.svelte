@@ -8,8 +8,7 @@
 	} from '$lib/components/app';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
 	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
-	import { conversations, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { conversations, conversationsStore, settingsStore } from '$lib/stores';
 	import { createMessageCountMap } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';

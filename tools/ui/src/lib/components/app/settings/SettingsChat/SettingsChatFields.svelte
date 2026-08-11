@@ -9,9 +9,13 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ICON_CLASS_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
 	import { SettingsFieldType } from '$lib/enums/settings.enums';
-	import { modelsStore, propsCacheVersion, selectedModelName } from '$lib/stores/models.svelte';
-	import { serverStore } from '$lib/stores/server.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import {
+		modelsStore,
+		propsCacheVersion,
+		selectedModelName,
+		serverStore,
+		settingsStore
+	} from '$lib/stores';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
 	import type { Component } from 'svelte';
 

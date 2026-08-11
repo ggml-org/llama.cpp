@@ -26,19 +26,20 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
 	import {
 		activeConversation,
 		activeMessages,
+		chatStore,
+		config,
 		conversationsStore,
-		pendingCwd
-	} from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
-	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+		isRouterMode,
+		mcpHasResourceAttachments,
+		mcpStore,
+		modelOptions,
+		pendingCwd,
+		selectedModelId,
+		toolsStore
+	} from '$lib/stores';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,

@@ -7,7 +7,7 @@
  * caller's onDrop callback.
  */
 
-import { getAddFilesHandler, isEditing } from '$lib/stores/chat.svelte';
+import { getAddFilesHandler, isEditing } from '$lib/stores';
 
 interface UseChatScreenDragAndDropOptions {
 	/** Called when the user drops files and no message is being edited. */

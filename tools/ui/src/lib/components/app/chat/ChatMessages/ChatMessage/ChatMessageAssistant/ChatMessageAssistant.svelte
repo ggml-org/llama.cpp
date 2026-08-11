@@ -11,10 +11,14 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, isChatStreaming, isLoading } from '$lib/stores/chat.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import {
+		chatStore,
+		config,
+		isChatStreaming,
+		isLoading,
+		isRouterMode,
+		modelsStore
+	} from '$lib/stores';
 	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 

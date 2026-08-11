@@ -7,8 +7,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
-	import { serverLoading, serverStore } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { config, serverLoading, serverStore, settingsStore } from '$lib/stores';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {

@@ -5,9 +5,7 @@
 	import { SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
 	import { ROUTES } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversations, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { chatStore, conversations, conversationsStore, isMobile } from '$lib/stores';
 
 	let searchQuery = $state('');
 	let searchInputRef = $state<HTMLInputElement | null>(null);

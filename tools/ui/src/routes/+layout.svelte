@@ -18,15 +18,19 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { RouterService } from '$lib/services/router.service';
-	import { buildInfoStore } from '$lib/stores/build-info.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversations } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { theme } from '$lib/stores/theme.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import {
+		buildInfoStore,
+		chatStore,
+		config,
+		conversations,
+		isMobile,
+		isRouterMode,
+		mcpStore,
+		modelsStore,
+		serverStore,
+		settingsStore,
+		theme
+	} from '$lib/stores';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';

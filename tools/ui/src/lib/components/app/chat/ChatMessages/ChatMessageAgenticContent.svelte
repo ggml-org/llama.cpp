@@ -14,9 +14,9 @@
 		agenticPendingContinueRequest,
 		agenticPendingPermissionRequest,
 		agenticResolveContinue,
-		agenticResolvePermission
-	} from '$lib/stores/agentic.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+		agenticResolvePermission,
+		config
+	} from '$lib/stores';
 	import type { AgenticSection } from '$lib/types';
 	import type {
 		ChatMessageAgenticTimings,

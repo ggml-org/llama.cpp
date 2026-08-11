@@ -3,8 +3,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_DEFAULT, MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
