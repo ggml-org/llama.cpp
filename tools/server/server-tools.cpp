@@ -10,7 +10,6 @@
 #include <chrono>
 #include <ctime>
 #include <atomic>
-#include <cctype>
 #include <cstring>
 #include <cctype>
 #include <cstdint>
@@ -866,6 +865,7 @@ static bool path_glob_match(const std::string & pattern, const std::string & rel
 //
 
 static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE = 16 * 1024; // 16 KB
+static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64 = 32 * 1024 * 1024; // 32 MB
 
 struct server_tool_read_file : server_tool {
     server_tool_read_file() {
@@ -901,6 +901,8 @@ struct server_tool_read_file : server_tool {
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
         bool append_loc   = json_value(params, "append_loc", false);
+        // comes from the x-resp-type header, the model cannot ask for it
+        bool as_base64    = json_value(params, "resp_type", std::string()) == "base64";
 
         auto io = make_tools_io(params);
 
@@ -908,6 +910,23 @@ struct server_tool_read_file : server_tool {
         if (!io->file_size(path, file_size)) {
             return {{"error", "cannot stat file: " + path}};
         }
+
+        if (as_base64) {
+            if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64) {
+                return {{"error", string_format(
+                    "file too large (%zu bytes, max %zu)",
+                    (size_t)file_size, SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64)}};
+            }
+            std::string content;
+            if (!io->read_file(path, content)) {
+                return {{"error", "failed to open file: " + path}};
+            }
+            return {
+                {"base64",     base64::encode(content.data(), content.size())},
+                {"size_bytes", (size_t) content.size()},
+            };
+        }
+
         if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1) {
             return {{"error", string_format(
                 "file too large (%zu bytes, max %zu). Use start_line/end_line to read a portion.",
@@ -944,119 +963,6 @@ struct server_tool_read_file : server_tool {
         }
 
         return {{"plain_text_response", result}};
-    }
-};
-
-//
-// read_media: read a media file (image or audio)
-//
-
-static constexpr size_t SERVER_TOOL_READ_MEDIA_MAX_SIZE = 32 * 1024 * 1024; // 32 MB
-static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_FILE = "File: ";
-static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_SIZE = "Size: ";
-static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_MIME = "MIME: ";
-
-static std::string get_mime_from_extension(const std::string & path) {
-    static const std::unordered_map<std::string, std::string> mime_map = {
-        // Images
-        {".png",  "image/png"},
-        {".jpg",  "image/jpeg"},
-        {".jpeg", "image/jpeg"},
-        {".webp", "image/webp"},
-        {".bmp",  "image/bmp"},
-        {".tiff", "image/tiff"},
-        {".tif",  "image/tiff"},
-        {".gif",  "image/gif"},
-        // Audio - only wav and mp3: the model's input_audio API
-        // only accepts these two formats (FileTypeAudio.WAV | MP3).
-        {".mp3",  "audio/mpeg"},
-        {".wav",  "audio/wav"},
-    };
-
-    auto ext = fs::path(path).extension().string();
-    std::string ext_lower;
-    ext_lower.reserve(ext.size());
-    for (char c : ext) ext_lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-    auto it = mime_map.find(ext_lower);
-    return (it != mime_map.end()) ? it->second : "application/octet-stream";
-}
-
-struct server_tool_read_media : server_tool_read_file {
-    server_tool_read_media() {
-        name = "read_media";
-        display_name = "Read media file";
-        uses_cwd = true;
-        permission_write = false;
-    }
-
-    json get_definition() const override {
-        return {
-            {"type", "function"},
-            {"function", {
-                {"name", name},
-                {"description",
-                    "Read the content of a media file (image or audio).\n"
-                    " Audio: .wav, .mp3.\n"
-                    " Images: .png, .jpg, .jpeg, .webp, .bmp, .tiff, .gif."},
-                {"parameters", {
-                    {"type", "object"},
-                    {"properties", {
-                        {"path", {{"type", "string"}, {"description", "Path to the media file."}}},
-                    }},
-                    {"required", json::array({"path"})},
-                }},
-            }},
-        };
-    }
-
-    json invoke(json params, server_tool::stream *) const override {
-        std::string path = params.at("path").get<std::string>();
-
-        auto io = make_tools_io(params);
-
-        uintmax_t file_size = 0;
-        if (!io->file_size(path, file_size)) {
-            return {{"error", "cannot stat file: " + path}};
-        }
-        if (file_size > SERVER_TOOL_READ_MEDIA_MAX_SIZE) {
-            return {{"error", string_format(
-                "media file too large (%zu bytes, max %zu)",
-                (size_t)file_size, SERVER_TOOL_READ_MEDIA_MAX_SIZE)}};
-        }
-
-        std::string mime = get_mime_from_extension(path);
-
-        // Reject unknown/unrecognized file extensions instead of producing
-        // a multi-MB data URI that inflates the model context with garbage.
-        if (mime == "application/octet-stream") {
-            return {{"error", "unrecognized or unsupported extension: " + path}};
-        }
-
-        std::string content;
-        if (!io->read_file(path, content)) {
-            return {{"error", "failed to open file: " + path}};
-        }
-
-        std::string b64  = base64::encode(content.data(), content.size());
-
-        // Return as plain_text_response with a data URI line so the UI can
-        // extract it as an attachment (via extractBase64Attachments)
-        // and replace it with some placeholder
-        std::string data_uri = "data:" + mime + ";base64," + b64;
-
-        return {
-            {"plain_text_response",
-                string_format(
-                    "%s%s\n%s%zu bytes\n%s%s\n%s",
-                    SERVER_TOOL_READ_MEDIA_PREFIX_FILE, path.c_str(),
-                    SERVER_TOOL_READ_MEDIA_PREFIX_SIZE, (size_t)file_size,
-                    SERVER_TOOL_READ_MEDIA_PREFIX_MIME, mime.c_str(),
-                    data_uri.c_str())},
-            {"path", path},
-            {"mime", mime},
-            {"size_bytes", (size_t)file_size},
-        };
     }
 };
 
@@ -2101,7 +2007,6 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 static std::vector<std::unique_ptr<server_tool>> build_tools() {
     std::vector<std::unique_ptr<server_tool>> tools;
     tools.push_back(std::make_unique<server_tool_read_file>());
-    tools.push_back(std::make_unique<server_tool_read_media>());
     tools.push_back(std::make_unique<server_tool_file_glob_search>());
     tools.push_back(std::make_unique<server_tool_grep_search>());
     tools.push_back(std::make_unique<server_tool_exec_shell_command>());
@@ -2249,6 +2154,15 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 params["runtime"] = runtime_header;
             } else if (runtime) {
                 params["runtime"] = runtime->spec();
+            }
+
+            // x-resp-type header is only used by read_file for now
+            if (params.contains("resp_type")) {
+                params.erase("resp_type");
+            }
+            auto resp_type = get_header(req.headers, "x-resp-type");
+            if (!resp_type.empty()) {
+                params["resp_type"] = resp_type;
             }
 
             server_tool & tool = find_tool(tools, tool_name, stream);
