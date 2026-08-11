@@ -8,7 +8,7 @@ import { useProcessingState } from './use-processing-state.svelte';
 import { colorLevelFromPercent } from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
 import { STATS_UNITS } from '$lib/constants';
 import { ColorLevel, MessageRole } from '$lib/enums';
-import { activeMessages, chatStore, isRouterMode, modelsStore } from '$lib/stores';
+import { activeMessages, chatStore, modelsStore, serverStore } from '$lib/stores';
 import type { ChatMessageTimings, DatabaseMessage } from '$lib/types';
 
 interface LiveStats {
@@ -86,7 +86,7 @@ export function useContextGauge(): UseContextGaugeReturn {
 	// Resolve the model the gauge reports context for: explicit selection >
 	// last assistant model > single-model mode (mirrors useChatScreenActiveModel).
 	const activeModelId = $derived.by(() => {
-		if (!isRouterMode()) {
+		if (!serverStore.isRouterMode) {
 			return modelsStore.singleModelName;
 		}
 

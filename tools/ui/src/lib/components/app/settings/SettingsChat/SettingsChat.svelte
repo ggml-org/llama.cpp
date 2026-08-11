@@ -20,7 +20,7 @@
 	import { setChatSettingsConfigContext } from '$lib/contexts';
 	import { ColorMode } from '$lib/enums/ui.enums';
 	import { RouterService } from '$lib/services/router.service';
-	import { config, isRouterMode, modelsStore, settingsReferrer, settingsStore } from '$lib/stores';
+	import { config, modelsStore, serverStore, settingsReferrer, settingsStore } from '$lib/stores';
 	import type { SettingsSection } from '$lib/types';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
@@ -47,7 +47,7 @@
 	let fetchInitiated = false;
 
 	$effect(() => {
-		if (isRouterMode() && currentSection.fields && !fetchInitiated) {
+		if (serverStore.isRouterMode && currentSection.fields && !fetchInitiated) {
 			fetchInitiated = true;
 
 			void modelsStore

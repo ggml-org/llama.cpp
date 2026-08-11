@@ -1,13 +1,6 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import {
-		activeMessages,
-		chatStore,
-		isMobile,
-		isRouterMode,
-		modelsStore,
-		serverError
-	} from '$lib/stores';
+	import { activeMessages, chatStore, isMobile, modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
 		disabled?: boolean;
@@ -33,8 +26,8 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let isRouter = $derived(isRouterMode());
-	let isOffline = $derived(!!serverError());
+	let isRouter = $derived(serverStore.isRouterMode);
+	let isOffline = $derived(!!serverStore.error);
 
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])

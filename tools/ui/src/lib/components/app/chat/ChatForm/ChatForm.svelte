@@ -32,11 +32,11 @@
 		chatStore,
 		config,
 		conversationsStore,
-		isRouterMode,
 		mcpHasResourceAttachments,
 		mcpStore,
 		modelsStore,
 		pendingCwd,
+		serverStore,
 		toolsStore
 	} from '$lib/stores';
 	import type {
@@ -192,7 +192,7 @@
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 
-	let isRouter = $derived(isRouterMode());
+	let isRouter = $derived(serverStore.isRouterMode);
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);

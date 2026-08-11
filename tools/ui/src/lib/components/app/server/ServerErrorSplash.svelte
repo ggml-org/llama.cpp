@@ -7,7 +7,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
-	import { config, serverLoading, serverStore, settingsStore } from '$lib/stores';
+	import { config, serverStore, settingsStore } from '$lib/stores';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
@@ -26,7 +26,7 @@
 		showTroubleshooting = false
 	}: Props = $props();
 
-	let isServerLoading = $derived(serverLoading());
+	let isServerLoading = $derived(serverStore.loading);
 	let isAccessDeniedError = $derived(
 		error.toLowerCase().includes('access denied') ||
 			error.toLowerCase().includes('invalid api key') ||

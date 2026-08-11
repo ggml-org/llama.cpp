@@ -7,8 +7,8 @@
 		chatStore,
 		conversationsStore,
 		isConversationsInitialized,
-		isRouterMode,
-		modelsStore
+		modelsStore,
+		serverStore
 	} from '$lib/stores';
 	import { onMount } from 'svelte';
 
@@ -48,7 +48,11 @@
 
 					// with ?load=true, start loading right away so the model is ready sooner;
 					// not awaited, so the UI stays usable during the load
-					if (loadParam === 'true' && isRouterMode() && !modelsStore.isModelLoaded(model.id)) {
+					if (
+						loadParam === 'true' &&
+						serverStore.isRouterMode &&
+						!modelsStore.isModelLoaded(model.id)
+					) {
 						modelsStore
 							.loadModel(model.id)
 							.catch((error) => console.error('Failed to load model:', error));

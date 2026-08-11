@@ -16,11 +16,8 @@ import {
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-// deep imports, not the '$lib/utils' barrel: it re-exports modules that reach back
-// into the stores, and going through it here would read a half-built module
-import { getAuthHeaders } from '$lib/utils/api-headers';
-import { TTLCache } from '$lib/utils/cache-ttl';
+import { serverStore } from '$lib/stores/server.svelte';
+import { getAuthHeaders, TTLCache } from '$lib/utils';
 import {
 	detectThinkingSupport,
 	detectThinkingSupportWithReason
@@ -129,7 +126,7 @@ class ModelsStore {
 	 * In ROUTER mode, returns null (model is per-conversation).
 	 */
 	get singleModelName(): string | null {
-		if (isRouterMode()) return null;
+		if (serverStore.isRouterMode) return null;
 
 		const props = serverStore.props;
 
@@ -155,7 +152,7 @@ class ModelsStore {
 	 */
 
 	getModelModalities(modelId: string): ModelModalities | null {
-		if (!isRouterMode() && serverStore.props?.modalities) {
+		if (!serverStore.isRouterMode && serverStore.props?.modalities) {
 			return this.buildModalities(serverStore.props.modalities);
 		}
 
@@ -267,7 +264,7 @@ class ModelsStore {
 	 *   triggering an async fetch if not yet cached
 	 */
 	get supportsThinking(): boolean {
-		if (!isRouterMode()) {
+		if (!serverStore.isRouterMode) {
 			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
 		}
 
@@ -290,7 +287,7 @@ class ModelsStore {
 	 * In ROUTER mode, fetches model props if not cached.
 	 */
 	checkModelSupportsThinking(modelId: string): boolean {
-		if (!isRouterMode()) {
+		if (!serverStore.isRouterMode) {
 			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
 		}
 
@@ -309,7 +306,7 @@ class ModelsStore {
 	 * Detailed thinking support detection result with reason for debugging/UI.
 	 */
 	get thinkingSupportDetails(): { supported: boolean; reason: string } {
-		if (!isRouterMode()) {
+		if (!serverStore.isRouterMode) {
 			return detectThinkingSupportWithReason(serverStore.props?.chat_template ?? '');
 		}
 
@@ -362,7 +359,7 @@ class ModelsStore {
 				await serverStore.fetch();
 			}
 
-			const router = isRouterMode();
+			const router = serverStore.isRouterMode;
 
 			if (router) {
 				const response = await ModelsService.listRouter();
@@ -434,7 +431,7 @@ class ModelsStore {
 	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
 	 */
 	async fetchRouterModels(): Promise<void> {
-		if (!isRouterMode()) return;
+		if (!serverStore.isRouterMode) return;
 
 		try {
 			const response = await ModelsService.listRouter();
@@ -726,7 +723,7 @@ class ModelsStore {
 	subscribeStatus(): void {
 		if (this.statusReaderActive) return;
 
-		if (!isRouterMode()) return;
+		if (!serverStore.isRouterMode) return;
 
 		this.statusReaderActive = true;
 		this.statusAbort = new AbortController();

@@ -4,8 +4,8 @@ import {
 	activeMessages,
 	chatStore,
 	conversationsStore,
-	isRouterMode,
-	modelsStore
+	modelsStore,
+	serverStore
 } from '$lib/stores';
 import type { ReasoningEffortLevel } from '$lib/types';
 import type { DatabaseMessage } from '$lib/types/database';
@@ -35,7 +35,9 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 	// a router chat can carry reasoning from an earlier turn before the props
 	// cache is primed, so a model that already produced thinking still qualifies
 	const modelSupportsThinkingFromMessages = $derived.by(() => {
-		const modelId = isRouterMode() ? modelsStore.selectedModelName || conversationModel : null;
+		const modelId = serverStore.isRouterMode
+			? modelsStore.selectedModelName || conversationModel
+			: null;
 
 		if (!modelId) return false;
 
@@ -47,7 +49,7 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		modelsStore.loadedModelIds;
 		modelsStore.propsCacheVersion;
 
-		if (isRouterMode()) {
+		if (serverStore.isRouterMode) {
 			const modelId = modelsStore.selectedModelName || conversationModel;
 
 			return (

@@ -26,8 +26,7 @@
 		conversationsStore,
 		device,
 		isMobile,
-		serverError,
-		serverLoading
+		serverStore
 	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { onDestroy, onMount, tick } from 'svelte';
@@ -49,8 +48,8 @@
 			!chatStore.isLoading
 	);
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
-	let isServerLoading = $derived(serverLoading());
-	let hasPropsError = $derived(!!serverError());
+	let isServerLoading = $derived(serverStore.loading);
+	let hasPropsError = $derived(!!serverStore.error);
 	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!isMobile.current) return '1rem';

@@ -11,7 +11,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, config, isRouterMode, modelsStore } from '$lib/stores';
+	import { chatStore, config, modelsStore, serverStore } from '$lib/stores';
 	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 
@@ -67,7 +67,7 @@
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
-	let isRouter = $derived(isRouterMode());
+	let isRouter = $derived(serverStore.isRouterMode);
 
 	let showRawOutput = $state(false);
 

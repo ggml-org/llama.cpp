@@ -8,10 +8,10 @@
  * demand if they aren't cached yet.
  */
 
-import { activeMessages, chatStore, isRouterMode, modelsStore } from '$lib/stores';
+import { activeMessages, chatStore, modelsStore, serverStore } from '$lib/stores';
 
 export function useChatScreenActiveModel() {
-	const isRouter = $derived(isRouterMode());
+	const isRouter = $derived(serverStore.isRouterMode);
 	const conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);

@@ -169,13 +169,3 @@ class ServerStore {
 }
 
 export const serverStore = new ServerStore();
-
-export const serverProps = () => serverStore.props;
-export const serverLoading = () => serverStore.loading;
-export const serverError = () => serverStore.error;
-export const serverStatus = () => serverStore.status;
-export const serverRole = () => serverStore.role;
-export const defaultParams = () => serverStore.defaultParams;
-export const contextSize = () => serverStore.contextSize;
-export const isRouterMode = () => serverStore.isRouterMode;
-export const isModelMode = () => serverStore.isModelMode;

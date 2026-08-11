@@ -24,7 +24,6 @@
 		config,
 		conversations,
 		isMobile,
-		isRouterMode,
 		mcpStore,
 		modelsStore,
 		serverStore,
@@ -192,7 +191,7 @@
 	let routerModelsFetched = false;
 
 	$effect(() => {
-		const isRouter = isRouterMode();
+		const isRouter = serverStore.isRouterMode;
 		const modelsCount = modelsStore.models.length;
 
 		// Only fetch router models once when we have models loaded and in router mode
@@ -209,7 +208,7 @@
 	$effect(() => {
 		if (!browser) return;
 
-		if (!isRouterMode()) return;
+		if (!serverStore.isRouterMode) return;
 
 		untrack(() => {
 			modelsStore.subscribeStatus();

@@ -70,18 +70,7 @@ export {
 export { modelsStore } from './models.svelte';
 
 // SERVER
-export {
-	serverStore,
-	serverProps,
-	serverLoading,
-	serverError,
-	serverStatus,
-	serverRole,
-	defaultParams,
-	contextSize,
-	isRouterMode,
-	isModelMode
-} from './server.svelte';
+export { serverStore } from './server.svelte';
 
 // SETTINGS / UI PREFERENCES
 export { settingsStore, config, isInitialized } from './settings.svelte';

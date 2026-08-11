@@ -34,7 +34,7 @@ import { agenticStore } from '$lib/stores/agentic.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
@@ -1332,13 +1332,13 @@ class ChatStore {
 		// and reattach all agree, regardless of fresh send vs regenerate passing a resolved model
 		let effectiveModel: string | null | undefined = undefined;
 
-		if (isRouterMode()) {
+		if (serverStore.isRouterMode) {
 			const conversationModel = this.getConversationModel(allMessages);
 
 			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
 
-		if (isRouterMode() && effectiveModel) {
+		if (serverStore.isRouterMode && effectiveModel) {
 			if (!modelsStore.getModelProps(effectiveModel))
 				await modelsStore.fetchModelProps(effectiveModel);
 		}
@@ -1580,7 +1580,7 @@ class ChatStore {
 
 				if (onComplete) onComplete(streamedContent);
 
-				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+				if (serverStore.isRouterMode) modelsStore.fetchRouterModels().catch(console.error);
 
 				// Pre-encode conversation in KV cache for faster next turn
 				if (config().preEncodeConversation) {
@@ -1737,7 +1737,7 @@ class ChatStore {
 
 					if (onComplete) await onComplete(content);
 
-					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+					if (serverStore.isRouterMode) modelsStore.fetchRouterModels().catch(console.error);
 
 					// Generate LLM based title for new conversations (avoids stale reference
 					// issue when user switches conversations while streaming)
@@ -1809,7 +1809,9 @@ class ChatStore {
 		convId: string
 	): Promise<void> {
 		const effectiveModel =
-			isRouterMode() && modelsStore.selectedModelName ? modelsStore.selectedModelName : undefined;
+			serverStore.isRouterMode && modelsStore.selectedModelName
+				? modelsStore.selectedModelName
+				: undefined;
 		const configValue = config();
 		const titlePromptTemplate =
 			typeof configValue.titleGenerationPrompt === 'string' &&
@@ -2664,14 +2666,14 @@ class ChatStore {
 		if (activeState && typeof activeState.contextTotal === 'number' && activeState.contextTotal > 0)
 			return activeState.contextTotal;
 
-		if (isRouterMode()) {
+		if (serverStore.isRouterMode) {
 			const modelContextSize = modelsStore.selectedModelContextSize;
 
 			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
 				return modelContextSize;
 			}
 		} else {
-			const propsContextSize = contextSize();
+			const propsContextSize = serverStore.contextSize;
 
 			if (typeof propsContextSize === 'number' && propsContextSize > 0) {
 				return propsContextSize;
@@ -2790,7 +2792,7 @@ class ChatStore {
 			value !== undefined && value !== null && value !== '';
 		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true };
 
-		if (isRouterMode()) {
+		if (serverStore.isRouterMode) {
 			const modelName = modelsStore.selectedModelName;
 
 			if (modelName) apiOptions.model = modelName;
