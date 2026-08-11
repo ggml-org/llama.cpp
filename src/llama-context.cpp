@@ -7,9 +7,6 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
-#include "llama-memory-hybrid.h"
-#include "llama-memory-hybrid-iswa.h"
-#include "llama-memory-recurrent.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -33,20 +30,6 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
         case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
     }
     throw std::runtime_error("Unsupported ctx type");
-}
-
-static void llama_memory_set_rs_seq(llama_memory_i * memory, uint32_t n_rs_seq) {
-    if (memory == nullptr) {
-        return;
-    }
-
-    if (auto * mem = dynamic_cast<llama_memory_recurrent *>(memory)) {
-        mem->n_rs_seq = n_rs_seq;
-    } else if (auto * mem = dynamic_cast<llama_memory_hybrid *>(memory)) {
-        mem->get_mem_recr()->n_rs_seq = n_rs_seq;
-    } else if (auto * mem = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
-        mem->get_mem_recr()->n_rs_seq = n_rs_seq;
-    }
 }
 
 struct llm_fused_op_probe {
