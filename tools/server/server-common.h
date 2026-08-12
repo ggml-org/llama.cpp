@@ -344,7 +344,8 @@ struct server_slot_stats {
     uint64_t n_prompt_processed = 0;
     uint64_t n_gen              = 0;
 
-    // Speculative decoding stats (mirror server_metrics)
+    // speculative decoding stats
+    // note: the per-position breakdown lives in server_slot, it is not needed in a task result
     uint64_t n_draft_tokens      = 0;
     uint64_t n_draft_accepted    = 0;
     uint64_t n_draft_verif_steps = 0;
@@ -360,9 +361,12 @@ struct server_slot_stats {
         GGML_ASSERT(t_start == 0);
         t_start = ggml_time_us();
     }
-    void update_prompt_last() {
+    void set_prompt_last(int64_t t_us) {
         GGML_ASSERT(t_start > 0);
-        t_prompt_last = ggml_time_us();
+        t_prompt_last = t_us;
+    }
+    void update_prompt_last() {
+        set_prompt_last(ggml_time_us());
     }
     void update_gen_last() {
         GGML_ASSERT(t_prompt_last > 0);
@@ -465,12 +469,6 @@ struct server_metrics {
     uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
 
-    // these are internal counters to track batch processing
-    // llama_decode() is async, so we queue the counting until sync()
-    int64_t  t_decode_start   = 0; // start of the last submitted decode
-    int64_t  t_prompt_start   = 0; // start of the oldest queued prompt decode
-    uint64_t n_prompt_queued  = 0;
-
     void init() {
         t_start = ggml_time_us();
     }
@@ -489,30 +487,6 @@ struct server_metrics {
     void add_prompt_cached(uint64_t n_tokens) {
         n_prompt_cached        += n_tokens;
         n_prompt_cached_bucket += n_tokens;
-    }
-
-    void on_decode_start() {
-        t_decode_start = ggml_time_us();
-    }
-
-    // the batch is submitted, but its compute may not be done yet
-    void queue_prompt(uint64_t n_tokens) {
-        if (n_tokens == 0) {
-            return;
-        }
-        if (n_prompt_queued == 0) {
-            t_prompt_start = t_decode_start;
-        }
-        n_prompt_queued += n_tokens;
-    }
-
-    // call only after the context is synchronized, otherwise the time is meaningless
-    void flush_prompt() {
-        if (n_prompt_queued == 0) {
-            return;
-        }
-        add_prompt(n_prompt_queued, ggml_time_us() - t_prompt_start);
-        n_prompt_queued = 0;
     }
 
 };

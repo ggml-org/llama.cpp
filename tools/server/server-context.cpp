@@ -315,7 +315,8 @@ struct server_slot {
     // not in server_slot_stats to avoid copying to every task result
     std::vector<uint64_t> n_accepted_per_pos;
 
-    std::function<void(int /* id_slot */)> callback_on_release;
+    std::function<void(int /* id_slot */)>   callback_on_release;
+    std::function<void(const server_slot &)> callback_on_reset; // called before reset()
 
     // this is for printing timings with slot progress, not part of metrics
     int64_t t_print_last = 0;
@@ -515,6 +516,8 @@ struct server_slot {
                 prompt_clear();
             }
 
+            callback_on_reset(*this);
+
             reset();
 
             callback_on_release(id);
@@ -575,12 +578,12 @@ struct server_slot {
     void print_timings_pp() const {
         const double t_prompt_processing = stats.t_prompt_ms();
 
-        const double n_prompt_second = stats.n_prompt_tps();
-        const double f_progress = (float) prompt.n_tokens() / task->n_tokens();
-
         if (t_prompt_processing < 3000.0) {
             return;
         }
+
+        const double n_prompt_second = stats.n_prompt_tps();
+        const double f_progress = task->n_tokens() > 0 ? (double) prompt.n_tokens() / task->n_tokens() : 0.0;
 
         SLT_INF(*this, "prompt processing, n_tokens = %6d, progress = %.2f, t = %6.2f s / %.2f tokens per second\n",
                 (int) stats.n_prompt_processed, f_progress, t_prompt_processing / 1e3, n_prompt_second);
@@ -858,6 +861,12 @@ private:
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
     server_metrics metrics;
+
+    // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
+    // note: kept out of server_metrics, which is copied as-is into the task result
+    int64_t  t_decode_start  = 0; // start of the last submitted decode
+    int64_t  t_prompt_start  = 0; // start of the oldest queued prompt decode
+    uint64_t n_prompt_queued = 0;
 
     json json_ui_settings = json::object();
 
@@ -1254,6 +1263,13 @@ private:
 
             slot.callback_on_release = [this](int id_slot) {
                 queue_tasks.pop_deferred_task(id_slot);
+            };
+
+            slot.callback_on_reset = [this](const server_slot & slot) {
+                // flush the generated token stats before reset()
+                if (slot.stats.n_gen > 0) {
+                    metrics_on_prediction(slot);
+                }
             };
 
             slot.reset();
@@ -3350,7 +3366,10 @@ private:
                         }
 
                         // process the mtmd chunk
-                        auto t_now = ggml_time_us();
+                        // note: it submits its own decode, potentially be async
+                        //       so the timing is queued and flushed on the next sync
+                        metrics_pre_decode();
+
                         size_t n_tokens_out = 0;
                         int32_t res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
                         if (res != 0) {
@@ -3359,10 +3378,8 @@ private:
                             slot.release();
                             return; // the slot is done, skip it entirely
                         }
-                        auto t_elapsed = ggml_time_us() - t_now;
 
-                        // process_mtmd_chunk runs its own encode/decode, so we update stats right away
-                        metrics.add_prompt(n_tokens_out, t_elapsed);
+                        metrics_queue_prompt(n_tokens_out);
                         slot.stats.n_prompt_processed += n_tokens_out;
                         slot.stats.update_prompt_last();
 
@@ -3643,9 +3660,6 @@ private:
         iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
-                // the sub-batch is processed, so the prompt timing can be advanced
-                slot.stats.update_prompt_last();
-
                 if (slot.task->params.stream && slot.task->params.return_progress) {
                     send_partial_response(slot, {}, true);
                 }
@@ -3727,7 +3741,6 @@ private:
                 // release slot because of stop condition
                 slot.print_timings();
                 send_final_response(slot);
-                metrics_on_prediction(slot);
                 slot.release();
 
                 return;
@@ -3848,7 +3861,6 @@ private:
                 if (!process_token(result, slot)) {
                     slot.print_timings();
                     send_final_response(slot);
-                    metrics_on_prediction(slot);
                     slot.release();
 
                     return;
@@ -3873,8 +3885,29 @@ private:
     // metrics helpers
     //
 
+    // call before submitting a decode, so that the queued prompt stats can be timed
     void metrics_pre_decode() {
-        metrics.on_decode_start();
+        t_decode_start = ggml_time_us();
+    }
+
+    // the batch is submitted, but its compute may not be done yet
+    void metrics_queue_prompt(uint64_t n_tokens) {
+        if (n_tokens == 0) {
+            return;
+        }
+        if (n_prompt_queued == 0) {
+            t_prompt_start = t_decode_start;
+        }
+        n_prompt_queued += n_tokens;
+    }
+
+    // call only after the context is synchronized, otherwise the time is meaningless
+    void metrics_flush_prompt() {
+        if (n_prompt_queued == 0) {
+            return;
+        }
+        metrics.add_prompt(n_prompt_queued, ggml_time_us() - t_prompt_start);
+        n_prompt_queued = 0;
     }
 
     void metrics_post_decode(int32_t off, int32_t n_tokens) {
@@ -3901,24 +3934,34 @@ private:
             // note: generated tokens will be handled after sampling
         }
 
-        metrics.queue_prompt(n_prompt_tokens);
+        metrics_queue_prompt(n_prompt_tokens);
 
         if (has_output) {
             // sync if we have at least one output in batch
             // so that we can calculate the timings correctly
             llama_synchronize(ctx_tgt);
-            metrics.flush_prompt();
+            metrics_flush_prompt();
+        }
+
+        // advance the prompt timing, but only for the slots that had tokens in this batch
+        // note: after the sync above, so that it reflects the compute and not the submission
+        const int64_t t_now = ggml_time_us();
+        for (int i = off; i < off + n_tokens; ++i) {
+            const auto & t = batch.tokens[i];
+            if (t.is_prompt) {
+                slots[t.id_slot].stats.set_prompt_last(t_now);
+            }
         }
     }
 
     // flush any queued prompt metrics if all slots are now idle
     void metrics_flush_idle() {
-        if (metrics.n_prompt_queued == 0) {
+        if (n_prompt_queued == 0) {
             return;
         }
 
         llama_synchronize(ctx_tgt);
-        metrics.flush_prompt();
+        metrics_flush_prompt();
     }
 
     void metrics_on_prediction(const server_slot & slot) {
@@ -4362,6 +4405,8 @@ void server_routes::init_routes() {
         {
             server_task task(SERVER_TASK_TYPE_METRICS);
             task.id = res->rd.get_new_id();
+            // the gauges are averaged over the window between two scrapes
+            task.metrics_reset_bucket = true;
             res->rd.post_task(std::move(task), true); // high-priority task
         }
 
