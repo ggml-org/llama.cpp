@@ -1099,11 +1099,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "GLU",
 
-    "REGULAR_HADAMARD",
     "QUANTIZE_I8_CONVROT",
 };
 
-static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1217,11 +1216,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "glu(x)",
 
-    "regular_hadamard(x)",
     "quantize_i8_convrot(x)",
 };
 
-static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3298,7 +3296,7 @@ struct ggml_tensor * ggml_mul_mat(
     return result;
 }
 
-struct ggml_tensor * ggml_mul_mat_i8_tensorwise(
+GGML_API struct ggml_tensor * ggml_mul_mat_i8_tensorwise(
         struct ggml_context * ctx,
         struct ggml_tensor  * weight,
         struct ggml_tensor  * input,
@@ -3361,26 +3359,6 @@ void ggml_mul_mat_set_hint(
     const int32_t hint_i32 = (int32_t) hint;
 
     ggml_set_op_params_i32(a, 1, hint_i32);
-}
-
-struct ggml_tensor * ggml_regular_hadamard(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        int                   group_size) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
-    GGML_ASSERT(group_size > 0 && a->ne[0] % group_size == 0);
-
-    int n = group_size;
-    while (n > 1 && n % 4 == 0) {
-        n /= 4;
-    }
-    GGML_ASSERT(n == 1);
-
-    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
-    result->op                  = GGML_OP_REGULAR_HADAMARD;
-    result->src[0]              = a;
-    ggml_set_op_params_i32(result, 0, group_size);
-    return result;
 }
 
 struct ggml_tensor * ggml_quantize_i8_convrot(

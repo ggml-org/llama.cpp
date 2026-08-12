@@ -2180,10 +2180,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_glu(params, tensor);
             } break;
-        case GGML_OP_REGULAR_HADAMARD:
-            {
-                ggml_compute_forward_regular_hadamard(params, tensor);
-            } break;
         case GGML_OP_QUANTIZE_I8_CONVROT:
             {
                 ggml_compute_forward_quantize_i8_convrot(params, tensor);
@@ -2486,7 +2482,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_OUT_PROD:
-        case GGML_OP_REGULAR_HADAMARD:
         case GGML_OP_QUANTIZE_I8_CONVROT:
             {
                 n_tasks = n_threads;

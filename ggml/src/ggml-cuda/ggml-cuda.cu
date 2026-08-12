@@ -2607,9 +2607,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_MUL_MAT_ID:
             ggml_cuda_mul_mat_id(ctx, dst);
             break;
-        case GGML_OP_REGULAR_HADAMARD:
-            GGML_ASSERT(ggml_cuda_op_regular_hadamard(ctx, dst->src[0], dst, ggml_get_op_params_i32(dst, 0)));
-            break;
         case GGML_OP_QUANTIZE_I8_CONVROT:
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
             GGML_ASSERT(ggml_cuda_op_quantize_i8_convrot(ctx, dst->src[0], dst, ggml_get_op_params_i32(dst, 0)));
@@ -5687,14 +5684,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_DIAG:
         case GGML_OP_SOLVE_TRI:
             return true;
-        case GGML_OP_REGULAR_HADAMARD: {
-            const ggml_tensor * src = op->src[0];
-            const int group_size    = ggml_get_op_params_i32(op, 0);
-            return src != nullptr && src->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                ggml_is_contiguous(src) && ggml_is_contiguous(op) && group_size > 0 &&
-                src->ne[0] % group_size == 0 &&
-                (group_size == 4 || group_size == 16 || group_size == 64 || group_size == 256);
-        }
         case GGML_OP_QUANTIZE_I8_CONVROT:
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
             {

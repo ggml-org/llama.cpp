@@ -58,44 +58,6 @@ __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, 
     }
 }
 
-template <int N>
-__global__ void regular_hadamard_cuda(const float * src, float * dst, const int64_t n_groups, const float scale) {
-    const int64_t group = blockIdx.x;
-    const int tid       = threadIdx.x;
-    if (group >= n_groups) {
-        return;
-    }
-
-    __shared__ float values[N];
-    src += group * N;
-    dst += group * N;
-
-    values[tid] = src[tid] * scale;
-    __syncthreads();
-
-#pragma unroll
-    for (int stride = 1; stride < N; stride *= 4) {
-        if (tid < N / 4) {
-            const int base = (tid / stride) * 4 * stride + tid % stride;
-            const int i0   = base;
-            const int i1   = i0 + stride;
-            const int i2   = i1 + stride;
-            const int i3   = i2 + stride;
-            const float a  = values[i0];
-            const float b  = values[i1];
-            const float c  = values[i2];
-            const float d  = values[i3];
-            values[i0]     =  a + b + c - d;
-            values[i1]     =  a + b - c + d;
-            values[i2]     =  a - b + c + d;
-            values[i3]     = -a + b + c + d;
-        }
-        __syncthreads();
-    }
-
-    dst[tid] = values[tid];
-}
-
 bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
     GGML_ASSERT(ggml_are_same_shape(src, dst));
     if (!ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
@@ -132,38 +94,6 @@ bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src,
             return true;
         case 512:
             ggml_cuda_kernel_launch(fwht_cuda<512>, launch_params, src_d, dst_d, rows, scale);
-            return true;
-        default:
-            return false;
-    }
-}
-
-bool ggml_cuda_op_regular_hadamard(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst, int group_size) {
-    GGML_ASSERT(ggml_are_same_shape(src, dst));
-    if (src->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
-        !ggml_is_contiguous(src) || !ggml_is_contiguous(dst) ||
-        group_size <= 0 || ggml_nelements(src) % group_size != 0) {
-        return false;
-    }
-
-    const int64_t n_groups = ggml_nelements(src) / group_size;
-    const float scale      = 1.0f / sqrtf((float) group_size);
-    const float * src_d    = (const float *) src->data;
-    float * dst_d          = (float *) dst->data;
-    cudaStream_t stream    = ctx.stream();
-
-    switch (group_size) {
-        case 4:
-            regular_hadamard_cuda<4><<<n_groups, 4, 0, stream>>>(src_d, dst_d, n_groups, scale);
-            return true;
-        case 16:
-            regular_hadamard_cuda<16><<<n_groups, 16, 0, stream>>>(src_d, dst_d, n_groups, scale);
-            return true;
-        case 64:
-            regular_hadamard_cuda<64><<<n_groups, 64, 0, stream>>>(src_d, dst_d, n_groups, scale);
-            return true;
-        case 256:
-            regular_hadamard_cuda<256><<<n_groups, 256, 0, stream>>>(src_d, dst_d, n_groups, scale);
             return true;
         default:
             return false;

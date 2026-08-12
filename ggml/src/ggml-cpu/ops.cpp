@@ -11919,55 +11919,6 @@ void ggml_compute_forward_fwht(const ggml_compute_params * params, ggml_tensor *
     }
 }
 
-void ggml_compute_forward_regular_hadamard(const ggml_compute_params * params, ggml_tensor * dst) {
-    const ggml_tensor * src = dst->src[0];
-
-    GGML_ASSERT(src->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_is_contiguous(src));
-    GGML_ASSERT(ggml_is_contiguous(dst));
-
-    const int group_size = ggml_get_op_params_i32(dst, 0);
-    GGML_ASSERT(group_size > 0 && src->ne[0] % group_size == 0);
-
-    const int64_t group_count       = ggml_nelements(src) / group_size;
-    const int64_t groups_per_thread = (group_count + params->nth - 1) / params->nth;
-    const int64_t start_group       = params->ith * groups_per_thread;
-    const int64_t end_group         = MIN(start_group + groups_per_thread, group_count);
-    const float scale               = 1.0f / sqrtf((float) group_size);
-
-    const float * src_data = (const float *) src->data;
-    float * dst_data       = (float *) dst->data;
-
-    for (int64_t group = start_group; group < end_group; ++group) {
-        const float * src_group = src_data + group * group_size;
-        float * dst_group       = dst_data + group * group_size;
-
-        for (int i = 0; i < group_size; ++i) {
-            dst_group[i] = src_group[i] * scale;
-        }
-
-        for (int stride = 1; stride < group_size; stride *= 4) {
-            for (int base = 0; base < group_size; base += 4 * stride) {
-                for (int j = 0; j < stride; ++j) {
-                    const int i0 = base + j;
-                    const int i1 = i0 + stride;
-                    const int i2 = i1 + stride;
-                    const int i3 = i2 + stride;
-                    const float a = dst_group[i0];
-                    const float b = dst_group[i1];
-                    const float c = dst_group[i2];
-                    const float d = dst_group[i3];
-                    dst_group[i0] =  a + b + c - d;
-                    dst_group[i1] =  a + b - c + d;
-                    dst_group[i2] =  a - b + c + d;
-                    dst_group[i3] = -a + b + c + d;
-                }
-            }
-        }
-    }
-}
-
 void ggml_compute_forward_quantize_i8_convrot(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src = dst->src[0];
 

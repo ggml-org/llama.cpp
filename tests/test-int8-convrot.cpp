@@ -50,12 +50,7 @@ int main(int argc, char ** argv) {
         true,
     };
     ggml_context * ctx = ggml_init(params);
-    ggml_tensor * x    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 2);
-    ggml_tensor * w    = ggml_new_tensor_2d(ctx, GGML_TYPE_I8, 4, 3);
-    ggml_tensor * rot  = ggml_regular_hadamard(ctx, x, 4);
-    ggml_tensor * out  = ggml_mul_mat(ctx, w, rot);
     ggml_tensor * x256 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 256);
-    ggml_tensor * r256 = ggml_regular_hadamard(ctx, x256, 256);
     ggml_tensor * w256 = ggml_new_tensor_2d(ctx, GGML_TYPE_I8, 256, 4);
     ggml_tensor * ws256 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
     ggml_tensor * b256 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
@@ -75,8 +70,6 @@ int main(int argc, char ** argv) {
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     if (!use_vulkan) {
-        ggml_build_forward_expand(graph, out);
-        ggml_build_forward_expand(graph, r256);
         ggml_build_forward_expand(graph, fused_large_direct);
     }
     ggml_build_forward_expand(graph, fused256);
@@ -111,15 +104,6 @@ int main(int argc, char ** argv) {
     }
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
-    const std::vector<float> x_data = {
-        1.0f, 2.0f, 3.0f, 4.0f,
-        -1.0f, 0.5f, 2.0f, -3.0f,
-    };
-    const std::vector<int8_t> w_data = {
-        1, 2, 3, 4,
-        -2, 1, 0, 2,
-        127, -127, 64, -64,
-    };
     std::vector<float> x256_data(256);
     std::vector<int8_t> w256_data(256 * 4);
     for (int i = 0; i < 256; ++i) {
@@ -147,8 +131,6 @@ int main(int argc, char ** argv) {
         ws_large_data[output] = (float) (output % 11 + 1) / 100.0f;
         b_large_data[output]  = (float) (output % 9 - 4) / 7.0f;
     }
-    ggml_backend_tensor_set(x, x_data.data(), 0, ggml_nbytes(x));
-    ggml_backend_tensor_set(w, w_data.data(), 0, ggml_nbytes(w));
     ggml_backend_tensor_set(x256, x256_data.data(), 0, ggml_nbytes(x256));
     ggml_backend_tensor_set(w256, w256_data.data(), 0, ggml_nbytes(w256));
     ggml_backend_tensor_set(ws256, ws256_data.data(), 0, ggml_nbytes(ws256));
@@ -162,37 +144,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    std::vector<float> rot_data(ggml_nelements(rot));
-    std::vector<float> out_data(ggml_nelements(out));
-    if (!use_vulkan) {
-        ggml_backend_tensor_get(rot, rot_data.data(), 0, ggml_nbytes(rot));
-        ggml_backend_tensor_get(out, out_data.data(), 0, ggml_nbytes(out));
-    }
-
-    const std::vector<float> expected_rot = {
-        1.0f, 2.0f, 3.0f, 4.0f,
-        2.25f, -2.75f, -1.25f, 0.25f,
-    };
-    if (!use_vulkan) {
-        for (size_t i = 0; i < expected_rot.size(); ++i) {
-            if (!nearly_equal(rot_data[i], expected_rot[i])) {
-                std::fprintf(stderr, "regular Hadamard mismatch at %zu: %.8f != %.8f\n", i, rot_data[i], expected_rot[i]);
-                return 1;
-            }
-        }
-    }
-
-    std::vector<float> r256_data(ggml_nelements(r256));
-    if (!use_vulkan) {
-        ggml_backend_tensor_get(r256, r256_data.data(), 0, ggml_nbytes(r256));
-    }
+    std::vector<float> r256_data(256);
     for (int i = 0; i < 256; ++i) {
-        const float expected = regular_hadamard_reference(x256_data, i);
-        if (!use_vulkan && !nearly_equal(r256_data[i], expected)) {
-            std::fprintf(stderr, "regular Hadamard-256 mismatch at %d: %.8f != %.8f\n", i, r256_data[i], expected);
-            return 1;
-        }
-        r256_data[i] = expected;
+        r256_data[i] = regular_hadamard_reference(x256_data, i);
     }
 
     float fused_amax = 0.0f;
@@ -258,38 +212,6 @@ int main(int argc, char ** argv) {
             }
             if (!use_vulkan && !nearly_equal(fused_large_direct_data[index], expected)) {
                 std::fprintf(stderr, "large direct fused INT8 convrot mismatch at %zu: %.8f != %.8f\n", index, fused_large_direct_data[index], expected);
-                return 1;
-            }
-        }
-    }
-
-    std::vector<float> expected_out(6);
-    for (int row = 0; row < 2; ++row) {
-        const float * activation = expected_rot.data() + row * 4;
-        float amax = 0.0f;
-        for (int i = 0; i < 4; ++i) {
-            amax = std::max(amax, std::fabs(activation[i]));
-        }
-        const float scale = amax / 127.0f;
-        int8_t quantized[4];
-        for (int i = 0; i < 4; ++i) {
-            int value = (int) std::lrint(activation[i] / scale);
-            value = std::max(-127, std::min(127, value));
-            quantized[i] = (int8_t) value;
-        }
-        for (int output = 0; output < 3; ++output) {
-            int32_t sum = 0;
-            for (int i = 0; i < 4; ++i) {
-                sum += (int32_t) w_data[output * 4 + i] * (int32_t) quantized[i];
-            }
-            expected_out[row * 3 + output] = (float) sum * scale;
-        }
-    }
-
-    if (!use_vulkan) {
-        for (size_t i = 0; i < expected_out.size(); ++i) {
-            if (!nearly_equal(out_data[i], expected_out[i])) {
-                std::fprintf(stderr, "INT8 matmul mismatch at %zu: %.8f != %.8f\n", i, out_data[i], expected_out[i]);
                 return 1;
             }
         }
