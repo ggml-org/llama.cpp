@@ -74,6 +74,7 @@ struct server_batch {
         llama_token token;
         llama_pos pos;
         bool output;
+        bool is_prompt; // for stats tracking
     };
     std::vector<token> tokens;
     int32_t n_tokens_alloc = 0;
@@ -109,22 +110,22 @@ struct server_batch {
         tokens.reserve(n_tokens_alloc);
     }
 
-    bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output) {
+    bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output, bool is_prompt) {
         GGML_ASSERT(!has_embd); // cannot mix tokens + embd in same batch
         GGML_ASSERT(batch.pos != nullptr);
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        tokens.push_back({ id_slot, token, pos, output });
+        tokens.push_back({ id_slot, token, pos, output, is_prompt });
         return true;
     }
 
-    bool add(int32_t id_slot, const std::vector<float> & embd_in, llama_pos pos, bool output) {
+    bool add(int32_t id_slot, const std::vector<float> & embd_in, llama_pos pos, bool output, bool is_prompt) {
         GGML_ASSERT(batch.pos != nullptr);
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output });
+        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output, is_prompt });
         has_embd = true;
         embd.insert(embd.end(), embd_in.begin(), embd_in.end());
         return true;
@@ -460,9 +461,9 @@ struct server_slot {
             i_batch = batch.size();
 
             if (!inp_embd.empty()) {
-                add_ok &= batch.add(id, inp_embd, prompt.tokens.pos_next(), true);
+                add_ok &= batch.add(id, inp_embd, prompt.tokens.pos_next(), true, false);
             } else {
-                add_ok &= batch.add(id, sampled, prompt.tokens.pos_next(), true);
+                add_ok &= batch.add(id, sampled, prompt.tokens.pos_next(), true, false);
             }
 
             SLT_DBG(*this, "slot decode token, id=%d, n_ctx = %d, n_tokens = %d, truncated = %d\n",
@@ -480,9 +481,9 @@ struct server_slot {
 
             auto pos0 = prompt.tokens.pos_next();
 
-            add_ok &= batch.add(id, sampled, pos0++, true);
+            add_ok &= batch.add(id, sampled, pos0++, true, false);
             for (auto token : spec_draft) {
-                add_ok &= batch.add(this->id, token, pos0++, true);
+                add_ok &= batch.add(this->id, token, pos0++, true, false);
             }
         }
 
@@ -800,16 +801,6 @@ void server_metrics::on_prediction(const server_slot & slot) {
     }
     for (size_t i = 0; i < slot.stats.n_accepted_per_pos.size(); i++) {
         n_accepted_per_pos[i] += slot.stats.n_accepted_per_pos[i];
-    }
-}
-
-void server_metrics::on_decoded(const std::vector<server_slot> & slots) {
-    n_decode++;
-    for (const auto & slot : slots) {
-        if (slot.is_processing()) {
-            n_busy_slots++;
-        }
-        n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
     }
 }
 
@@ -3382,7 +3373,7 @@ private:
 
                     bool has_mtmd = false;
 
-                    // check if we should process the image
+                    // check if we should process the mtmd chunk
                     while (true) {
                         auto cur_token_idx = slot.prompt.n_tokens();
                         if (
@@ -3392,19 +3383,21 @@ private:
                             break;
                         }
 
-                        // process the image
+                        // process the mtmd chunk
                         size_t n_tokens_out = 0;
                         int32_t res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
                         if (res != 0) {
-                            SLT_ERR(slot, "failed to process image, res = %d\n", res);
-                            send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
+                            SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
+                            send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
                             slot.release();
                             continue;
                         }
 
+                        // process_mtmd_chunk runs its own encode/decode, so we update stats right away
                         slot.stats.n_prompt_processed += n_tokens_out;
+                        slot.stats.update_prompt_last();
 
-                        // add the image chunk to cache
+                        // add the mtmd chunk to cache
                         {
                             const auto & chunk = input_tokens.find_chunk(cur_token_idx);
                             slot.prompt.tokens.push_back(chunk.get()); // copy
@@ -3437,11 +3430,10 @@ private:
                         // streaming hook can mirror t_h_nextn into ctx_dft.
                         add_ok &= batch.add(slot.id,
                             cur_tok,
-                            slot.prompt.tokens.pos_next(),
-                            slot.need_embd());
+                            /* pos       = */ slot.prompt.tokens.pos_next(),
+                            /* output    = */ slot.need_embd(),
+                            /* is_prompt = */ true);
                         slot.prompt.tokens.push_back(cur_tok);
-
-                        slot.stats.n_prompt_processed++;
 
                         // break at the last user message, or at user messages at least min step past the last checkpoint
                         if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
@@ -3567,8 +3559,6 @@ private:
 
         const int ret = llama_decode(ctx_tgt, batch_view);
 
-        metrics.on_decoded(slots);
-
         if (ret != 0) {
             {
                 std::string err;
@@ -3617,6 +3607,9 @@ private:
             SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, off = %d, n_batch = %d, ret = %d\n", off, n_batch, ret);
 
             return false; // retry with the updated n_batch
+        } else {
+            // success
+            metrics_on_decoded(off, batch_view.n_tokens);
         }
 
         // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
@@ -3901,6 +3894,25 @@ private:
 
     server_response_reader get_response_reader() {
         return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
+    }
+
+    // metrics helpers
+    void metrics_on_decoded(int32_t off, int32_t n_tokens) {
+        metrics.n_decode++;
+        for (const auto & slot : slots) {
+            if (slot.is_processing()) {
+                metrics.n_busy_slots++;
+            }
+            metrics.n_tokens_max = std::max(metrics.n_tokens_max, (uint64_t) slot.prompt.n_tokens());
+        }
+        // apply enqueued prompt tokens stats from batch
+        for (int i = off; i < off + n_tokens; ++i) {
+            const auto & t = batch.tokens[i];
+            auto & slot = slots[t.id_slot];
+            if (t.is_prompt) {
+                slot.stats.n_prompt_processed++;
+            }
+        }
     }
 };
 

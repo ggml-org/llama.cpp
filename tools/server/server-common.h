@@ -510,6 +510,7 @@ struct server_slot_stats {
     json to_json() const;
 };
 
+// shared between server_context_impl and server_task_result_*
 // unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
 struct server_metrics {
     int64_t t_start = 0;
