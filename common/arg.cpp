@@ -705,10 +705,10 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 // CLI argument parsing functions
 //
 
-// apply options from config files (if present), in increasing order of precedence:
-// system-wide (/etc/llama.cpp/config.ini) then user (${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini)
-// these act as defaults: env variables and CLI arguments both override them
-static void common_params_apply_config_file(common_params & params, llama_example ex) {
+// apply system-level config files (if present); order of precedence:
+// 1. system-wide (/etc/llama.cpp/config.ini)
+// 2. user-level (${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini)
+static void common_params_apply_system_config(common_params & params, llama_example ex) {
     std::vector<std::string> paths;
 
 #if defined(_WIN32)
@@ -722,7 +722,7 @@ static void common_params_apply_config_file(common_params & params, llama_exampl
     try {
         paths.push_back(fs_get_config_directory() + "config.ini");
     } catch (const std::exception & e) {
-        LOG_DBG("could not determine user config directory: %s\n", e.what());
+        LOG_DBG("skip non-existent config file: %s\n", e.what());
     }
 
     std::vector<std::string> found;
@@ -737,8 +737,9 @@ static void common_params_apply_config_file(common_params & params, llama_exampl
     }
 
     common_preset_context ctx(ex);
+    ctx.ignore_unknown_keys = true; // the same config file is shared by all programs
     for (const auto & path : found) {
-        LOG_DBG("loading config file: %s\n", path.c_str());
+        LOG_INF("using system-level config: %s\n", path.c_str());
         common_preset global;
         common_presets presets = ctx.load_from_ini(path, global);
         global.apply_to_params(params);
@@ -756,7 +757,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     common_log_set_verbosity_thold(params.verbosity);
 
     // config file applies first, so env variables and CLI arguments override it
-    common_params_apply_config_file(params, ctx_arg.ex);
+    common_params_apply_system_config(params, ctx_arg.ex);
 
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
