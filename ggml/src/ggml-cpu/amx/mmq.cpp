@@ -208,17 +208,27 @@ inline void ggml_tile_config_init(void) {
         return;
     }
 
-    alignas(64) tile_config_t tc = {};
-    tc.palette_id = 1;
-    tc.start_row = 0;
-    tc.rows[0] = 8;   tc.colsb[0] = 64;
-    tc.rows[1] = 8;   tc.colsb[1] = 64;
-    tc.rows[2] = 16;  tc.colsb[2] = 32;
-    tc.rows[3] = 16;  tc.colsb[3] = 32;
-    tc.rows[4] = 16;  tc.colsb[4] = 64;
-    tc.rows[5] = 16;  tc.colsb[5] = 64;
-    tc.rows[6] = 16;  tc.colsb[6] = 64;
-    tc.rows[7] = 16;  tc.colsb[7] = 64;
+#if defined(__gnu_linux__)
+    // AMX tile-data state (XFEATURE_XTILEDATA=18) is disabled per-thread by
+    // the kernel via XFD to avoid context-switch overhead.  Every thread that
+    // will execute tile instructions must opt in explicitly before the first
+    // tile instruction (_tile_loadconfig/_tile_zero/etc.) is executed.
+    // ARCH_REQ_XCOMP_PERM = 0x1023, XFEATURE_XTILEDATA = 18
+    if (syscall(SYS_arch_prctl, 0x1023, 18) != 0) {
+        fprintf(stderr, "warning: failed to enable AMX XTILEDATA permission for thread\n");
+    }
+#endif
+
+    // Keep the tile config in .rodata so the compiler cannot dead-code-eliminate
+    // the rows/colsb values.  _tile_loadconfig is effectively an opaque void*
+    // consumer, so a stack-allocated local has its row/column data stripped.
+    static const tile_config_t tc = {
+        /* palette_id */ 1,
+        /* start_row  */ 0,
+        /* reserved   */ {},
+        /* colsb      */ {64, 64, 32, 32, 64, 64, 64, 64},
+        /* rows       */ {8, 8, 16, 16, 16, 16, 16, 16},
+    };
 
     _tile_loadconfig(&tc);
     done = true;
