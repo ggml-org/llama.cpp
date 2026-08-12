@@ -222,3 +222,82 @@ def test_slot_erase_text_only_on_multimodal(mmproj_server):
     })
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == prompt_n  # all tokens are processed again
+
+
+#
+# Path containment for --slot-save-path.
+#
+# fs_validate_filename() is a textual filter: it blocks ".." and absolute paths
+# but does not resolve symlinks. A symlink placed inside the configured slot
+# directory therefore used to redirect the save to an arbitrary path, letting a
+# /slots?action=save request truncate and overwrite a file outside that
+# directory. Containment has to be checked on the resolved path.
+#
+
+
+def _plant_symlink_slot_dir(tmp_path):
+    slot_dir = tmp_path / "slots"
+    outside = tmp_path / "outside"
+    slot_dir.mkdir()
+    outside.mkdir()
+
+    victim = outside / "victim.bin"
+    victim.write_bytes(b"ORIGINAL_CONTENT")
+    os.symlink(os.path.join("..", "outside", "victim.bin"), slot_dir / "evil.bin")
+
+    return slot_dir, victim
+
+
+def test_slot_save_rejects_symlink_escape(tmp_path):
+    global server
+    slot_dir, victim = _plant_symlink_slot_dir(tmp_path)
+    server.slot_save_path = str(slot_dir) + os.sep
+    server.start()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "What is the capital of France?",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "evil.bin",
+    })
+    assert res.status_code == 400
+    assert victim.read_bytes() == b"ORIGINAL_CONTENT"
+
+
+def test_slot_restore_rejects_symlink_escape(tmp_path):
+    # The symlink must point at a REAL slot blob, otherwise restore fails on
+    # "not a valid slot file" and the test would pass without the containment
+    # check ever running.
+    global server
+    slot_dir = tmp_path / "slots"
+    outside = tmp_path / "outside"
+    slot_dir.mkdir()
+    outside.mkdir()
+
+    server.slot_save_path = str(slot_dir) + os.sep
+    server.start()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "What is the capital of France?",
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "legit.bin",
+    })
+    assert res.status_code == 200
+
+    # move the valid blob out of the slot directory and link to it from inside
+    os.rename(slot_dir / "legit.bin", outside / "legit.bin")
+    os.symlink(os.path.join("..", "outside", "legit.bin"), slot_dir / "evil.bin")
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "evil.bin",
+    })
+    assert res.status_code == 400
