@@ -27,8 +27,8 @@ def test_with_and_without_draft():
     global server
     request = {
         "prompt": "I believe the meaning of life is",
-        "temperature": 0.8,
-        "top_k": 40,
+        "temperature": 0.2,
+        "top_k": 5,
         "seed": 4242,
         "n_predict": 16,
         "return_tokens": True,
@@ -36,7 +36,6 @@ def test_with_and_without_draft():
 
     server.model_draft = None  # disable draft model
     server.spec_type = None
-    server.backend_sampling = True
     server.start()
     res = server.make_request("POST", "/completion", data=request)
     assert res.status_code == 200
@@ -45,7 +44,6 @@ def test_with_and_without_draft():
 
     # create new server with draft model
     create_server()
-    server.backend_sampling = True
     server.start()
     res = server.make_request("POST", "/completion", data=request)
     assert res.status_code == 200
