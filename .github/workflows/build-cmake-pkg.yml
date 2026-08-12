@@ -21,6 +21,7 @@ jobs:
                 -DLLAMA_BUILD_TOOLS=OFF \
                 -DLLAMA_BUILD_EXAMPLES=OFF \
                 -DLLAMA_BUILD_APP=OFF \
+                -DLLAMA_BUILD_IS_DEV=OFF \
                 -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
           cmake --install build --prefix "$PREFIX" --config Release
