@@ -34,7 +34,7 @@ jobs:
           regexp {set\(LLAMA_VERSION_MAJOR\s+(\d+)\)} $cmakelists -> major
           regexp {set\(LLAMA_VERSION_MINOR\s+(\d+)\)} $cmakelists -> minor
           regexp {set\(LLAMA_VERSION_PATCH\s+(\d+)\)} $cmakelists -> patch
-          set build(version) "$major.$minor.$patch-dev-b$build(number)"
+          set build(version) "$major.$minor.$patch"
 
           set llamaconfig [read [open "$env(LLAMA_CONFIG)" r]]
           set checks [list "set\\(LLAMA_VERSION     \\s+$build(version)\\)" \

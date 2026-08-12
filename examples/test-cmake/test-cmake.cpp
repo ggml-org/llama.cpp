@@ -2,7 +2,8 @@
 #include <cstdio>
 
 int main(void) {
-    printf("[test-cmake] Using llama.cpp version %s\n", llama_version());
+    printf("[test-cmake] version: %s, build: %d (%s)\n",
+           llama_version(), LLAMA_BUILD_NUMBER, LLAMA_BUILD_COMMIT);
     printf("[test-cmake] Initializing backend...\n");
     llama_backend_init();
     printf("[test-cmake] Backend initialized.\n");
