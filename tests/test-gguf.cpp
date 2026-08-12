@@ -99,8 +99,6 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
 }
 
 static bool expect_context_not_null(const enum handcrafted_file_type hft) {
-    // a tensor with a zero-size dimension (0 total elements) is malformed but valid to load:
-    // it must not crash and the loader is expected to accept it
     if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
         return true;
     }
@@ -430,8 +428,6 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
                 helper_write(file, bad_dim);
             }
         } else if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
-            // shape with a zero-size trailing dimension: ne = {ne[0], 0}, i.e. 0 total elements.
-            // ne[0] stays a multiple of the type's block size; ne[1] == 0 is what used to divide by zero.
             const int64_t zero_shape[2] = { shape[0], 0 };
             helper_write(file, zero_shape, 2*sizeof(int64_t));
         } else if (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG){
@@ -466,8 +462,6 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
             ne *= shape[i];
         }
         if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
-            // the crafted tensors have 0 elements, so each occupies 0 bytes: keep the
-            // written offsets consistent with what the loader computes (all zero)
             ne = 0;
         }
 
