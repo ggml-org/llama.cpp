@@ -4354,6 +4354,27 @@ struct test_mul_mat : public test_case {
     }
 };
 
+struct test_mul_mat_large_input : public test_mul_mat {
+    const float b_max;
+
+    test_mul_mat_large_input(ggml_type type_a, int64_t n, float b_max)
+        : test_mul_mat(type_a, GGML_TYPE_F32, 512, n, 256, {1, 1}, {1, 1}), b_max(b_max) {}
+
+    std::string vars() override {
+        return test_mul_mat::vars() + ",b_max=" + std::to_string(b_max);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -b_max, b_max);
+            } else {
+                init_tensor_uniform(t, -0.01f, 0.01f);
+            }
+        }
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -8862,6 +8883,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 5120, {128, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
+
+    test_cases.emplace_back(new test_mul_mat_large_input(GGML_TYPE_Q8_0, 63, 100000.0f));
+    test_cases.emplace_back(new test_mul_mat_large_input(GGML_TYPE_Q8_0, 64, 100000.0f));
+    test_cases.emplace_back(new test_mul_mat_large_input(GGML_TYPE_Q8_0, 64, 1000000.0f));
 
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {

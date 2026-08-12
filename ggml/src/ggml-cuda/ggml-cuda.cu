@@ -1437,6 +1437,8 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
 
     ggml_cuda_pool_alloc<cuda_t> src0_alloc(ctx.pool());
     ggml_cuda_pool_alloc<cuda_t> src1_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<float> src1_gemm_scalars(ctx.pool());
+    bool src1_is_scaled = false;
 
     bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
     bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
@@ -1472,9 +1474,21 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
         src1_alloc.alloc(ggml_nelements(src1));
 
         if (ggml_is_contiguously_allocated(src1)) {
-            const auto convert_func = traits::convert(src1->type);
-            GGML_ASSERT(convert_func != nullptr);
-            convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
+            if constexpr (compute_type == GGML_TYPE_F16) {
+                if (src1->type == GGML_TYPE_F32 && ggml_cuda_info().devices[ctx.device].cc == GGML_CUDA_CC_VOLTA) {
+                    src1_gemm_scalars.alloc(2);
+                    ggml_cuda_f32_to_fp16_scaled((const float *) src1->data, src1_alloc.get(), ggml_nelements(src1), src1_gemm_scalars.get(), main_stream);
+                    src1_is_scaled = true;
+                } else {
+                    const auto convert_func = traits::convert(src1->type);
+                    GGML_ASSERT(convert_func != nullptr);
+                    convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
+                }
+            } else {
+                const auto convert_func = traits::convert(src1->type);
+                GGML_ASSERT(convert_func != nullptr);
+                convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
+            }
             const size_t src1_bs = ggml_blck_size(src1->type);
             s11 *= src1_bs;
             s12 *= src1_bs;
@@ -1525,6 +1539,14 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
             nbd2 /= sizeof(float) / sizeof(cuda_t);
             nbd3 /= sizeof(float) / sizeof(cuda_t);
         }
+    }
+
+    cublasPointerMode_t pointer_mode = CUBLAS_POINTER_MODE_HOST;
+    if (src1_is_scaled) {
+        CUBLAS_CHECK(cublasGetPointerMode(ctx.cublas_handle(), &pointer_mode));
+        CUBLAS_CHECK(cublasSetPointerMode(ctx.cublas_handle(), CUBLAS_POINTER_MODE_DEVICE));
+        alpha = src1_gemm_scalars.get();
+        beta = src1_gemm_scalars.get() + 1;
     }
 
     GGML_ASSERT(ne12 % ne02 == 0);
@@ -1607,6 +1629,10 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 ne23,
                 cu_compute_type,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    }
+
+    if (src1_is_scaled) {
+        CUBLAS_CHECK(cublasSetPointerMode(ctx.cublas_handle(), pointer_mode));
     }
 
     // Convert output back to F32 if needed
