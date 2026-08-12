@@ -68,12 +68,12 @@ json server_slot_stats::to_json() const {
 
         {"prompt_n",               n_prompt_processed},
         {"prompt_ms",              t_prompt_ms()},
-        {"prompt_per_token_ms",    t_prompt_ms() / n_prompt_processed},
+        {"prompt_per_token_ms",    t_prompt_per_token_ms()},
         {"prompt_per_second",      n_prompt_tps()},
 
         {"predicted_n",            n_predict},
         {"predicted_ms",           t_gen_ms()},
-        {"predicted_per_token_ms", t_gen_ms() / n_predict},
+        {"predicted_per_token_ms", t_gen_per_token_ms()},
         {"predicted_per_second",   n_gen_tps()},
     };
 

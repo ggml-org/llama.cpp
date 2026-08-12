@@ -311,6 +311,10 @@ struct server_slot {
 
     server_slot_stats stats;
 
+    // accepted tokens per draft position
+    // not in server_slot_stats to avoid copying to every task result
+    std::vector<uint64_t> n_accepted_per_pos;
+
     std::function<void(int /* id_slot */)> callback_on_release;
 
     // this is for printing timings with slot progress, not part of metrics
@@ -343,6 +347,9 @@ struct server_slot {
         task.reset();
 
         stats = {};
+        n_accepted_per_pos.clear();
+
+        n_predict_max = -1;
 
         llama_set_sampler(ctx_tgt, id, nullptr);
 
@@ -583,10 +590,10 @@ struct server_slot {
         const double t_prompt_processing = stats.t_prompt_ms();
         const double t_token_generation  = stats.t_gen_ms();
 
-        const double t_prompt        = t_prompt_processing / stats.n_prompt_processed;
+        const double t_prompt        = stats.t_prompt_per_token_ms();
         const double n_prompt_second = stats.n_prompt_tps();
 
-        const double t_gen        = t_token_generation / stats.n_predict;
+        const double t_gen        = stats.t_gen_per_token_ms();
         const double n_gen_second = stats.n_gen_tps();
 
         SLT_INF(*this,
@@ -615,11 +622,11 @@ struct server_slot {
 
             std::string acceptance_rates_per_pos;
             if (n_draft_verif_steps > 0) {
-                for (size_t i = 0; i < stats.n_accepted_per_pos.size(); ++i) {
+                for (size_t i = 0; i < n_accepted_per_pos.size(); ++i) {
                     if (i > 0) {
                         acceptance_rates_per_pos += ", ";
                     }
-                    acceptance_rates_per_pos += string_format("%.3f", (double) stats.n_accepted_per_pos[i] / (double) n_draft_verif_steps);
+                    acceptance_rates_per_pos += string_format("%.3f", (double) n_accepted_per_pos[i] / (double) n_draft_verif_steps);
                 }
             }
 
@@ -796,11 +803,11 @@ void server_metrics::on_prediction(const server_slot & slot) {
     n_draft_accepted    += slot.stats.n_draft_accepted;
     n_draft_verif_steps += slot.stats.n_draft_verif_steps;
 
-    if (n_accepted_per_pos.size() < slot.stats.n_accepted_per_pos.size()) {
-        n_accepted_per_pos.resize(slot.stats.n_accepted_per_pos.size(), 0);
+    if (n_accepted_per_pos.size() < slot.n_accepted_per_pos.size()) {
+        n_accepted_per_pos.resize(slot.n_accepted_per_pos.size(), 0);
     }
-    for (size_t i = 0; i < slot.stats.n_accepted_per_pos.size(); i++) {
-        n_accepted_per_pos[i] += slot.stats.n_accepted_per_pos[i];
+    for (size_t i = 0; i < slot.n_accepted_per_pos.size(); i++) {
+        n_accepted_per_pos[i] += slot.n_accepted_per_pos[i];
     }
 }
 
@@ -2009,7 +2016,7 @@ private:
             res->progress.total     = slot.task->n_tokens();
             res->progress.cache     = slot.stats.n_prompt_cached;
             res->progress.processed = slot.prompt.tokens.size();
-            res->progress.time_ms   = slot.stats.t_ellapsed_us() / 1000;
+            res->progress.time_ms   = slot.stats.t_elapsed_us() / 1000;
         }
         if (is_begin) {
             res->is_begin = true;
@@ -3332,7 +3339,8 @@ private:
                         }
                     }
 
-                    slot.stats.update_prompt_last();
+                    // note: the prompt timing is advanced in post_decode(), so it does not cover
+                    //       the tokens added to the batch below
                     slot.print_timings_pp();
 
                     // truncate any tokens that are beyond n_past for this slot
@@ -3390,7 +3398,7 @@ private:
                             SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
                             send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
                             slot.release();
-                            continue;
+                            return; // the slot is done, skip it entirely
                         }
 
                         // process_mtmd_chunk runs its own encode/decode, so we update stats right away
@@ -3608,7 +3616,7 @@ private:
 
             return false; // retry with the updated n_batch
         } else {
-            // success
+            // note: retried decodes are not counted, the metrics only cover evaluated batches
             metrics_on_decoded(off, batch_view.n_tokens);
         }
 
@@ -3672,6 +3680,9 @@ private:
         iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
+                // the sub-batch is processed, so the prompt timing can be advanced
+                slot.stats.update_prompt_last();
+
                 if (slot.task->params.stream && slot.task->params.return_progress) {
                     send_partial_response(slot, {}, true);
                 }
@@ -3844,7 +3855,7 @@ private:
             slot.stats.n_draft_accepted += n_accepted;
             slot.stats.n_draft_verif_steps += 1;
 
-            auto & n_accepted_per_pos = slot.stats.n_accepted_per_pos;
+            auto & n_accepted_per_pos = slot.n_accepted_per_pos;
             if (n_accepted_per_pos.empty()) {
                 n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
             }

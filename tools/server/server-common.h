@@ -459,12 +459,12 @@ struct server_slot_stats {
     uint64_t n_draft_tokens      = 0;
     uint64_t n_draft_accepted    = 0;
     uint64_t n_draft_verif_steps = 0;
-    std::vector<uint64_t> n_accepted_per_pos;
 
     // these are absolute timestamps (in us)
-    uint64_t t_start       = 0;
-    uint64_t t_prompt_last = 0;
-    uint64_t t_gen_last    = 0;
+    // note: must be signed - they are subtracted before the later ones are set
+    int64_t t_start       = 0;
+    int64_t t_prompt_last = 0;
+    int64_t t_gen_last    = 0;
 
     // can only move one direction: start -> prompt -> gen
     void update_prompt_start() {
@@ -481,18 +481,31 @@ struct server_slot_stats {
     }
 
     // these are time durations
-    int64_t t_ellapsed_us() const {
+    int64_t t_elapsed_us() const {
         return ggml_time_us() - t_start;
     }
     double t_prompt_ms() const {
+        if (t_prompt_last == 0) {
+            return 0.0; // the prompt is not processed yet
+        }
         return (t_prompt_last - t_start) / 1000.0;
     }
     double t_gen_ms() const {
-        // clamp to 1 us to avoid division by zero on the caller side
+        if (t_gen_last == 0) {
+            return 0.0; // the generation is not started yet
+        }
+        // clamp to 1 us, the first token can land in the same us as t_prompt_last
         return std::max<int64_t>(1, t_gen_last - t_prompt_last) / 1000.0;
     }
 
     // other derived metrics
+    // note: all of them return 0.0 if the divisor is not known yet
+    double t_prompt_per_token_ms() const {
+        return n_prompt_processed > 0 ? t_prompt_ms() / n_prompt_processed : 0.0;
+    }
+    double t_gen_per_token_ms() const {
+        return n_predict > 0 ? t_gen_ms() / n_predict : 0.0;
+    }
     double n_prompt_tps() const {
         const double t_ms = t_prompt_ms();
         return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_processed : 0.0;
@@ -559,5 +572,4 @@ struct server_metrics {
     // these are implemented in server-context.cpp
     void on_prompt_eval(const server_slot & slot);
     void on_prediction(const server_slot & slot);
-    void on_decoded(const std::vector<server_slot> & slots);
 };
