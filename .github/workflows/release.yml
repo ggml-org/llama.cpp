@@ -774,15 +774,15 @@ jobs:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
 
-      - name: Cache ROCm Installation
-        id: cache-rocm
-        uses: actions/cache@v5
-        with:
-          path: C:\TheRock\build
-          key: rocm-wheels-${{ matrix.ROCM_VERSION }}-multi-arch-${{ runner.os }}
+      # - name: Cache ROCm Installation
+      #   id: cache-rocm
+      #   uses: actions/cache@v5
+      #   with:
+      #     path: C:\TheRock\build
+      #     key: rocm-wheels-${{ matrix.ROCM_VERSION }}-multi-arch-${{ runner.os }}
 
       - name: Setup ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
+        # if: steps.cache-rocm.outputs.cache-hit != 'true'
         uses: ./.github/actions/windows-setup-rocm
         with:
           version: ${{ matrix.ROCM_VERSION }}
@@ -1320,10 +1320,10 @@ jobs:
         with:
           tool-cache: true
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.21
+      #   with:
+      #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
 
       - name: Dependencies
         id: depends
@@ -1379,10 +1379,10 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+      # - name: ccache-clear
+      #   uses: ./.github/actions/ccache-clear
+      #   with:
+      #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
 
       - name: Determine tag name
         id: tag
