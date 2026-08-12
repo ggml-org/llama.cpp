@@ -194,22 +194,28 @@ struct llama_context {
     //
 
     void opt_init(struct llama_model * model, struct llama_opt_params lopt_params);
+    void opt_reset(bool recreate);
+    void opt_dataset_shuffle(ggml_opt_dataset_t dataset, int64_t idata);
 
     // TODO: more flexible combinations of logical/physical batch size and context size
     void opt_epoch(
             ggml_opt_dataset_t      dataset,
             ggml_opt_result_t       result_train,
             ggml_opt_result_t       result_eval,
+            int64_t                 idata_start,
             int64_t                 idata_split,
             ggml_opt_epoch_callback callback_train,
-            ggml_opt_epoch_callback callback_eval);
+            ggml_opt_epoch_callback callback_eval,
+            bool                    shuffle);
 
     void opt_epoch_iter(
             ggml_opt_dataset_t               dataset,
             ggml_opt_result_t                result,
             const std::vector<llama_token> & tokens,
             const std::vector<llama_token> & labels_sparse,
+            const std::vector<llama_opt_critical_token_metadata> * critical_metadata,
             llama_batch                    & batch,
+            float                            reward_scale,
             ggml_opt_epoch_callback          callback,
             bool                             train,
             int64_t                          idata_in_loop,
@@ -350,6 +356,9 @@ private:
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;
+    // Saved init arguments used to recreate opt_ctx on optimizer reset.
+    struct llama_model * opt_model = nullptr;
+    struct llama_opt_params opt_params {};
 
     ggml_threadpool_t threadpool       = nullptr;
     ggml_threadpool_t threadpool_batch = nullptr;

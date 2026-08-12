@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <array>
+#include <bitset>
 #include <cassert>
 
 // bump if necessary
@@ -59,6 +60,8 @@ struct llama_hparams {
     int32_t  router_layer = -1;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
+    bool moe_prune_active = false;
+    std::array<std::bitset<LLAMA_MAX_EXPERTS>, LLAMA_MAX_LAYERS> moe_disabled_experts;
     uint32_t n_rel_attn_bkts = 0;
 
     // TODO: this needs to be reworked

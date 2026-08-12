@@ -11,7 +11,7 @@ layout (binding = 0) buffer X {A_TYPE x[];};
 layout (binding = 1) readonly buffer G {A_TYPE grad[];};
 layout (binding = 2) buffer GM {A_TYPE gradm[];};
 layout (binding = 3) buffer GV {A_TYPE gradv[];};
-layout (binding = 4) readonly buffer P {float params[7];};
+layout (binding = 4) readonly buffer P {float params[8];};
 
 void main() {
     const uint i = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
@@ -27,8 +27,9 @@ void main() {
     const float wd     = params[4];
     const float beta1h = params[5];
     const float beta2h = params[6];
+    const float gclip  = params[7];
 
-    const float gi = grad[i];
+    const float gi = (gclip > 0.0f) ? clamp(grad[i], -gclip, gclip) : grad[i];
     const float gmi = gradm[i]*beta1 +    gi*(1.0f - beta1);
     const float gvi = gradv[i]*beta2 + gi*gi*(1.0f - beta2);
 

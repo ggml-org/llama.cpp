@@ -1291,6 +1291,23 @@ typedef struct {
 
 typedef struct {
     int64_t ne;
+    int32_t ne00;
+    int32_t ne01;
+    int32_t ne02;
+    int32_t ne03;
+    int32_t ne10;
+    int32_t ne11;
+    int32_t ne12;
+    int32_t ne13;
+    int32_t ne0;
+    int32_t ne1;
+    int32_t ne2;
+    int32_t ne3;
+    float   param;
+} ggml_metal_kargs_training;
+
+typedef struct {
+    int64_t ne;
 } ggml_metal_kargs_silu_back;
 
 #endif // GGML_METAL_IMPL

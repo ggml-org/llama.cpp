@@ -33,8 +33,17 @@
 using json = nlohmann::ordered_json;
 
 static std::string format_time(const std::chrono::system_clock::time_point & now, const std::string & format) {
-    auto               time       = std::chrono::system_clock::to_time_t(now);
-    auto               local_time = *std::localtime(&time);
+    const auto time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_time {};
+#ifdef _WIN32
+    if (localtime_s(&local_time, &time) != 0) {
+        return {};
+    }
+#else
+    if (!localtime_r(&time, &local_time)) {
+        return {};
+    }
+#endif
     std::ostringstream ss;
     ss << std::put_time(&local_time, format.c_str());
     auto res = ss.str();

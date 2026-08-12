@@ -831,6 +831,12 @@ void process_shaders() {
         string_to_spv("cpy_f32_" + t, "copy_to_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"S_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
         string_to_spv("cpy_" + t + "_f32", "copy_from_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
     }
+    for (std::string t : {"q3_k", "q4_k"}) {
+        string_to_spv("cpy_f32_" + t, "copy_to_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"S_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+        string_to_spv("cpy_" + t + "_f32", "copy_from_quant_k.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    }
+    string_to_spv("cpy_f32_mxfp4", "copy_to_quant.comp", {{"DATA_A_MXFP4", "1"}, {"S_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    string_to_spv("cpy_mxfp4_f32", "copy_from_quant.comp", {{"DATA_A_MXFP4", "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
     for (auto src : {std::pair{"f32", "float"}, std::pair{"f16", "float16_t"}}) {
         for (std::string dst : {"f32", "f16", "bf16", "q1_0", "q2_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl"}) {
@@ -1040,8 +1046,6 @@ void process_shaders() {
         }
     }
 
-    string_to_spv("out_prod_f32", "out_prod.comp", {});
-
     string_to_spv("timestep_embedding_f32", "timestep_embedding.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
 
     string_to_spv("conv_transpose_1d_f32", "conv_transpose_1d.comp", {{"A_TYPE", "float"},  {"B_TYPE", "float"}, {"D_TYPE", "float"}});
@@ -1068,6 +1072,8 @@ void process_shaders() {
 
     string_to_spv("opt_step_adamw_f32", "opt_step_adamw.comp", merge_maps(base_dict, {{"A_TYPE", "float"}}));
     string_to_spv("opt_step_sgd_f32", "opt_step_sgd.comp", merge_maps(base_dict, {{"A_TYPE", "float"}}));
+    string_to_spv("cross_entropy_loss_f32", "cross_entropy_loss.comp", {});
+    string_to_spv("cross_entropy_loss_back_f32", "cross_entropy_loss_back.comp", {});
 
     string_to_spv("solve_tri_f32", "solve_tri.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
 
@@ -1133,6 +1139,34 @@ void process_shaders() {
     string_to_spv("roll_f32", "roll.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
 
     string_to_spv("add_id_f32", "add_id.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("out_prod_f32", "out_prod.comp", merge_maps(base_dict, {{"DATA_A_F32", "1"}, {"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("out_prod_id_f32", "out_prod_id.comp", {});
+
+    auto out_prod_quant = [&](const std::string & name, const std::string & define) {
+        string_to_spv("out_prod_" + name + "_f32", "out_prod.comp", merge_maps(base_dict, {{define, "1"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    };
+    out_prod_quant("q1_0",    "DATA_A_Q1_0");
+    out_prod_quant("q4_0",    "DATA_A_Q4_0");
+    out_prod_quant("q4_1",    "DATA_A_Q4_1");
+    out_prod_quant("q5_0",    "DATA_A_Q5_0");
+    out_prod_quant("q5_1",    "DATA_A_Q5_1");
+    out_prod_quant("q8_0",    "DATA_A_Q8_0");
+    out_prod_quant("q2_k",    "DATA_A_Q2_K");
+    out_prod_quant("q3_k",    "DATA_A_Q3_K");
+    out_prod_quant("q4_k",    "DATA_A_Q4_K");
+    out_prod_quant("q5_k",    "DATA_A_Q5_K");
+    out_prod_quant("q6_k",    "DATA_A_Q6_K");
+    out_prod_quant("iq1_s",   "DATA_A_IQ1_S");
+    out_prod_quant("iq1_m",   "DATA_A_IQ1_M");
+    out_prod_quant("iq2_xxs", "DATA_A_IQ2_XXS");
+    out_prod_quant("iq2_xs",  "DATA_A_IQ2_XS");
+    out_prod_quant("iq2_s",   "DATA_A_IQ2_S");
+    out_prod_quant("iq3_xxs", "DATA_A_IQ3_XXS");
+    out_prod_quant("iq3_s",   "DATA_A_IQ3_S");
+    out_prod_quant("iq4_nl",  "DATA_A_IQ4_NL");
+    out_prod_quant("iq4_xs",  "DATA_A_IQ4_XS");
+    out_prod_quant("mxfp4",   "DATA_A_MXFP4");
+    out_prod_quant("nvfp4",   "DATA_A_NVFP4");
 
     string_to_spv("multi_add_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"ADD_RMS" , "0"}});
     string_to_spv("multi_add_rms_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"ADD_RMS" , "1"}});

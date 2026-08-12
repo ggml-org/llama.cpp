@@ -5,6 +5,7 @@
 #include "common.h"
 #include "fit.h"
 #include "log.h"
+#include "moe-prune.h"
 #include "llama.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -1254,6 +1255,20 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     pimpl->model.reset(model);
 
+    if (!params.moe_prune_profile.empty()) {
+        try {
+            const common_moe_prune_model_info info = common_moe_prune_inspect_model(params.model.path);
+            const common_moe_prune_profile profile = common_moe_prune_profile_load(params.moe_prune_profile);
+            common_moe_prune_profile_validate(profile, info);
+            common_moe_prune_profile_apply(model, profile);
+            COM_INF("loaded immutable MoE pruning profile: %s\n", params.moe_prune_profile.c_str());
+        } catch (const std::exception & e) {
+            COM_ERR("failed to load MoE pruning profile: %s\n", e.what());
+            pimpl->model.reset();
+            return;
+        }
+    }
+
     if (model_only) {
         return;
     }
@@ -2018,6 +2033,18 @@ static inline bool eq_case_insensitive(char const* a, char const* b) {
 enum ggml_opt_optimizer_type common_opt_get_optimizer(const char * n) {
     if (eq_case_insensitive("adamw", n)) {
         return GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    }
+    if (eq_case_insensitive("adamw_f16", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_F16;
+    }
+    if (eq_case_insensitive("adamw_q8_0", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0;
+    }
+    if (eq_case_insensitive("adamw_q6_k", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K;
+    }
+    if (eq_case_insensitive("adamw_iq4_nl", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL;
     }
     if (eq_case_insensitive("sgd", n)) {
         return GGML_OPT_OPTIMIZER_TYPE_SGD;

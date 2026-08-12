@@ -261,6 +261,10 @@ llama_build_and_test(test-arg-parser.cpp)
 llama_build_and_test(test-model-resolution.cpp)
 # the test serves its repos from an httplib server, and the library links it privately
 target_link_libraries(test-model-resolution PRIVATE cpp-httplib)
+llama_build_and_test(test-moe-prune.cpp)
+target_sources(test-moe-prune PRIVATE ../tools/llama-prune/dataset.cpp ../tools/llama-prune/hard-prune.cpp)
+target_include_directories(test-moe-prune PRIVATE ../tools/llama-prune ${CMAKE_SOURCE_DIR}/ggml/include)
+target_compile_definitions(test-moe-prune PRIVATE LLAMA_PRUNE_TEST_GEMMA_VOCAB="${CMAKE_SOURCE_DIR}/models/ggml-vocab-gemma-4.gguf")
 
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks

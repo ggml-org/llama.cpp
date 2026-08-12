@@ -468,6 +468,172 @@ void quantize_iq4_nl(device const float * src, device block_iq4_nl & dst) {
     dst.d = sumq2 > 0 ? sumqx/sumq2 : d;
 }
 
+void quantize_q3_K(device const float * src, device block_q3_K & dst) {
+#pragma METAL fp math_mode(safe)
+    float scales[16];
+    int quants[QK_K];
+    float max_scale = 0.0f;
+    float max_scale_value = 0.0f;
+
+    for (int j = 0; j < 16; ++j) {
+        float amax = 0.0f;
+        float vmax = 0.0f;
+        for (int l = 0; l < 16; ++l) {
+            const float v = src[16*j + l];
+            if (amax < fabs(v)) {
+                amax = fabs(v);
+                vmax = v;
+            }
+        }
+        scales[j] = vmax / -4.0f;
+        if (max_scale < fabs(scales[j])) {
+            max_scale = fabs(scales[j]);
+            max_scale_value = scales[j];
+        }
+    }
+
+    uint8_t scale_bytes[12] = {};
+    float d_all = 0.0f;
+    if (max_scale != 0.0f) {
+        const float iscale = -32.0f/max_scale_value;
+        d_all = 1.0f/iscale;
+        for (int j = 0; j < 16; ++j) {
+            int l = int(round(iscale*scales[j]));
+            l = min(31, max(-32, l)) + 32;
+            if (j < 8) {
+                scale_bytes[j] = uint8_t(l & 0xF);
+            } else {
+                scale_bytes[j - 8] |= uint8_t((l & 0xF) << 4);
+            }
+            scale_bytes[8 + j % 4] |= uint8_t((uint(l) >> 4) << (2*(j/4)));
+        }
+    }
+
+    for (int j = 0; j < 16; ++j) {
+        const int sc = (j < 8 ? int(scale_bytes[j] & 0xF) : int(scale_bytes[j - 8] >> 4)) |
+            (int((scale_bytes[8 + j % 4] >> (2*(j/4))) & 3) << 4);
+        const float d = d_all * float(sc - 32);
+        for (int l = 0; l < 16; ++l) {
+            const int q = d == 0.0f ? 0 : int(round(src[16*j + l]/d));
+            quants[16*j + l] = min(3, max(-4, q)) + 4;
+        }
+    }
+
+    for (int j = 0; j < 32; ++j) {
+        dst.hmask[j] = 0;
+    }
+    for (int j = 0; j < QK_K; ++j) {
+        if (quants[j] > 3) {
+            dst.hmask[j % 32] |= uint8_t(1 << (j / 32));
+            quants[j] -= 4;
+        }
+    }
+    for (int j = 0; j < QK_K; j += 128) {
+        for (int l = 0; l < 32; ++l) {
+            dst.qs[j/4 + l] = uint8_t(quants[j + l] | (quants[j + l + 32] << 2) |
+                (quants[j + l + 64] << 4) | (quants[j + l + 96] << 6));
+        }
+    }
+    dst.d = d_all;
+    for (int j = 0; j < 12; ++j) {
+        dst.scales[j] = scale_bytes[j];
+    }
+}
+
+void quantize_q4_K(device const float * src, device block_q4_K & dst) {
+#pragma METAL fp math_mode(safe)
+    float scales[8];
+    float mins[8];
+    int quants[QK_K];
+    float max_scale = 0.0f;
+    float max_min = 0.0f;
+
+    for (int j = 0; j < 8; ++j) {
+        float vmin = src[32*j];
+        float vmax = vmin;
+        for (int l = 1; l < 32; ++l) {
+            const float v = src[32*j + l];
+            vmin = min(vmin, v);
+            vmax = max(vmax, v);
+        }
+        mins[j] = max(0.0f, -vmin);
+        scales[j] = (vmax + mins[j])/15.0f;
+        max_scale = max(max_scale, scales[j]);
+        max_min = max(max_min, mins[j]);
+    }
+
+    uint8_t scale_bytes[12] = {};
+    const float d_all = float(half(max_scale/63.0f));
+    const float dmin_all = float(half(max_min/63.0f));
+    dst.d = d_all;
+    dst.dmin = dmin_all;
+
+    for (int j = 0; j < 8; ++j) {
+        const int ls = min(63, int(round(max_scale == 0.0f ? 0.0f : 63.0f*scales[j]/max_scale)));
+        const int lm = min(63, int(round(max_min == 0.0f ? 0.0f : 63.0f*mins[j]/max_min)));
+        if (j < 4) {
+            scale_bytes[j] = uint8_t(ls);
+            scale_bytes[j + 4] = uint8_t(lm);
+        } else {
+            scale_bytes[j + 4] = uint8_t((ls & 0xF) | ((lm & 0xF) << 4));
+            scale_bytes[j - 4] |= uint8_t((ls >> 4) << 6);
+            scale_bytes[j] |= uint8_t((lm >> 4) << 6);
+        }
+    }
+
+    for (int j = 0; j < 8; ++j) {
+        const int ls = j < 4 ? int(scale_bytes[j] & 0x3F) : int((scale_bytes[j + 4] & 0xF) | ((scale_bytes[j - 4] >> 6) << 4));
+        const int lm = j < 4 ? int(scale_bytes[j + 4] & 0x3F) : int((scale_bytes[j + 4] >> 4) | ((scale_bytes[j] >> 6) << 4));
+        const float d = d_all*float(ls);
+        const float dm = dmin_all*float(lm);
+        for (int l = 0; l < 32; ++l) {
+            const int q = d == 0.0f ? 0 : int(round((src[32*j + l] + dm)/d));
+            quants[32*j + l] = min(15, max(0, q));
+        }
+    }
+
+    for (int j = 0; j < QK_K; j += 64) {
+        for (int l = 0; l < 32; ++l) {
+            dst.qs[j/2 + l] = uint8_t(quants[j + l] | (quants[j + l + 32] << 4));
+        }
+    }
+    for (int j = 0; j < 12; ++j) {
+        dst.scales[j] = scale_bytes[j];
+    }
+}
+
+void quantize_mxfp4(device const float * src, device block_mxfp4 & dst) {
+#pragma METAL fp math_mode(safe)
+    float amax = 0.0f;
+    for (int j = 0; j < QK_MXFP4; ++j) {
+        amax = max(amax, fabs(src[j]));
+    }
+
+    const int exponent = amax > 0.0f ? int(floor(log2(amax))) - 2 + 127 : 0;
+    dst.e = uint8_t(clamp(exponent, 0, 255));
+    const float d = e8m0_to_fp32(dst.e);
+
+    for (int j = 0; j < QK_MXFP4/2; ++j) {
+        uint8_t q0 = 0;
+        uint8_t q1 = 0;
+        float err0 = fabs(kvalues_mxfp4_f[0]*d - src[j]);
+        float err1 = fabs(kvalues_mxfp4_f[0]*d - src[QK_MXFP4/2 + j]);
+        for (uint8_t q = 1; q < 16; ++q) {
+            const float cur0 = fabs(kvalues_mxfp4_f[q]*d - src[j]);
+            const float cur1 = fabs(kvalues_mxfp4_f[q]*d - src[QK_MXFP4/2 + j]);
+            if (cur0 < err0) {
+                q0 = q;
+                err0 = cur0;
+            }
+            if (cur1 < err1) {
+                q1 = q;
+                err1 = cur1;
+            }
+        }
+        dst.qs[j] = q0 | (q1 << 4);
+    }
+}
+
 template <typename type4x4>
 void dequantize_q4_1(device const block_q4_1 * xb, short il, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 2);
@@ -8001,6 +8167,9 @@ template [[host_name("kernel_cpy_f32_q4_1")]]   kernel cpy_f_q_t kernel_cpy_f32_
 template [[host_name("kernel_cpy_f32_q5_0")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK5_0,  block_q5_0,   quantize_q5_0>;
 template [[host_name("kernel_cpy_f32_q5_1")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK5_1,  block_q5_1,   quantize_q5_1>;
 template [[host_name("kernel_cpy_f32_iq4_nl")]] kernel cpy_f_q_t kernel_cpy_f32_q<QK4_NL, block_iq4_nl, quantize_iq4_nl>;
+template [[host_name("kernel_cpy_f32_q3_K")]]    kernel cpy_f_q_t kernel_cpy_f32_q<QK_K,    block_q3_K,    quantize_q3_K>;
+template [[host_name("kernel_cpy_f32_q4_K")]]    kernel cpy_f_q_t kernel_cpy_f32_q<QK_K,    block_q4_K,    quantize_q4_K>;
+template [[host_name("kernel_cpy_f32_mxfp4")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK_MXFP4, block_mxfp4,  quantize_mxfp4>;
 
 template<typename T4x4, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread T4x4 &)>
 kernel void kernel_cpy_q_f32(
@@ -8047,6 +8216,9 @@ template [[host_name("kernel_cpy_q4_1_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<
 template [[host_name("kernel_cpy_q5_0_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q5_0, 2, dequantize_q5_0>;
 template [[host_name("kernel_cpy_q5_1_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q5_1, 2, dequantize_q5_1>;
 template [[host_name("kernel_cpy_q8_0_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q8_0, 2, dequantize_q8_0>;
+template [[host_name("kernel_cpy_q3_K_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q3_K, QK_NL, dequantize_q3_K>;
+template [[host_name("kernel_cpy_q4_K_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q4_K, QK_NL, dequantize_q4_K>;
+template [[host_name("kernel_cpy_mxfp4_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_mxfp4, 2, dequantize_mxfp4>;
 
 template [[host_name("kernel_cpy_q1_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q1_0, 8, dequantize_q1_0>;
 template [[host_name("kernel_cpy_q2_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q2_0, 4, dequantize_q2_0>;
@@ -8055,6 +8227,9 @@ template [[host_name("kernel_cpy_q4_1_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<
 template [[host_name("kernel_cpy_q5_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q5_0, 2, dequantize_q5_0>;
 template [[host_name("kernel_cpy_q5_1_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q5_1, 2, dequantize_q5_1>;
 template [[host_name("kernel_cpy_q8_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q8_0, 2, dequantize_q8_0>;
+template [[host_name("kernel_cpy_q3_K_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q3_K, QK_NL, dequantize_q3_K>;
+template [[host_name("kernel_cpy_q4_K_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q4_K, QK_NL, dequantize_q4_K>;
+template [[host_name("kernel_cpy_mxfp4_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_mxfp4, 2, dequantize_mxfp4>;
 
 template<typename T>
 kernel void kernel_concat(
@@ -11195,8 +11370,9 @@ kernel void kernel_opt_step_adamw_f32(
     const float wd     = pars[4];
     const float beta1h = pars[5];
     const float beta2h = pars[6];
+    const float gclip  = pars[7];
 
-    const float gi = g[gid];
+    const float gi = (gclip > 0.0f) ? clamp(g[gid], -gclip, gclip) : g[gid];
     const float gmi = g_m[gid] * beta1 +      gi * (1.0f - beta1);
     const float gvi = g_v[gid] * beta2 + gi * gi * (1.0f - beta2);
 
@@ -11221,6 +11397,230 @@ kernel void kernel_opt_step_sgd_f32(
     }
 
     x[gid] = x[gid] * (1.0f - pars[0] * pars[1]) - pars[0] * g[gid];
+}
+
+kernel void kernel_out_prod_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * src0 [[buffer(1)]],
+        device const float * src1 [[buffer(2)]],
+        device float * dst [[buffer(3)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    uint index = gid;
+    const uint i0 = index % args.ne0; index /= args.ne0;
+    const uint i1 = index % args.ne1; index /= args.ne1;
+    const uint i2 = index % args.ne2; index /= args.ne2;
+    const uint i3 = index;
+
+    const uint a0 = i0 % args.ne00;
+    const uint a2 = i2/(args.ne2/args.ne02);
+    const uint a3 = i3/(args.ne3/args.ne03);
+    const uint b0 = i1 % args.ne10;
+
+    float sum = 0.0f;
+    for (uint k = 0; k < args.ne01; ++k) {
+        const uint ai = ((a3*args.ne02 + a2)*args.ne01 + k)*args.ne00 + a0;
+        const uint bi = ((i3*args.ne12 + i2)*args.ne11 + k)*args.ne10 + b0;
+        sum += src0[ai]*src1[bi];
+    }
+    dst[gid] = sum;
+}
+
+kernel void kernel_out_prod_id_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * src0 [[buffer(1)]],
+        device const float * src1 [[buffer(2)]],
+        device const int32_t * ids [[buffer(3)]],
+        device float * dst [[buffer(4)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    uint index = gid;
+    const uint col = index % args.ne0; index /= args.ne0;
+    const uint row = index % args.ne1; index /= args.ne1;
+    const uint expert = index;
+
+    float sum = 0.0f;
+    for (uint token = 0; token < args.ne02; ++token) {
+        for (uint slot = 0; slot < args.ne01; ++slot) {
+            if (ids[token*args.ne01 + slot] == int(expert)) {
+                sum += src0[(token*args.ne01 + slot)*args.ne00 + col] *
+                       src1[(token*args.ne11 + slot)*args.ne10 + row];
+            }
+        }
+    }
+    dst[gid] = sum;
+}
+
+kernel void kernel_get_rows_back_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * src0 [[buffer(1)]],
+        device const int32_t * ids [[buffer(2)]],
+        device float * dst [[buffer(3)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    uint index = gid;
+    const uint col = index % args.ne0; index /= args.ne0;
+    const uint row = index % args.ne1; index /= args.ne1;
+    const uint batch = index;
+    float sum = 0.0f;
+    for (uint i = 0; i < args.ne10; ++i) {
+        if (ids[batch*args.ne10 + i] == int(row)) {
+            sum += src0[(batch*args.ne01 + i)*args.ne00 + col];
+        }
+    }
+    dst[gid] = sum;
+}
+
+kernel void kernel_repeat_back_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * src0 [[buffer(1)]],
+        device float * dst [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    uint index = gid;
+    const uint i0 = index % args.ne0; index /= args.ne0;
+    const uint i1 = index % args.ne1; index /= args.ne1;
+    const uint i2 = index % args.ne2; index /= args.ne2;
+    const uint i3 = index;
+
+    float sum = 0.0f;
+    for (uint s3 = i3; s3 < args.ne03; s3 += args.ne3) {
+        for (uint s2 = i2; s2 < args.ne02; s2 += args.ne2) {
+            for (uint s1 = i1; s1 < args.ne01; s1 += args.ne1) {
+                for (uint s0 = i0; s0 < args.ne00; s0 += args.ne0) {
+                    sum += src0[((s3*args.ne02 + s2)*args.ne01 + s1)*args.ne00 + s0];
+                }
+            }
+        }
+    }
+    dst[gid] = sum;
+}
+
+kernel void kernel_rms_norm_back_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * grad [[buffer(1)]],
+        device const float * x [[buffer(2)]],
+        device float * dst [[buffer(3)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    const uint ncols = args.ne00;
+    const uint row = gid/ncols;
+    const uint base = row*ncols;
+    float sum_xx = 0.0f;
+    float sum_xg = 0.0f;
+    for (uint col = 0; col < ncols; ++col) {
+        sum_xx += x[base + col]*x[base + col];
+        sum_xg += x[base + col]*grad[base + col];
+    }
+    const float scale_g = rsqrt(sum_xx/float(ncols) + args.param);
+    const float scale_x = -scale_g*sum_xg/(sum_xx + float(ncols)*args.param);
+    dst[gid] = scale_g*grad[gid] + scale_x*x[gid];
+}
+
+kernel void kernel_soft_max_back_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * grad [[buffer(1)]],
+        device const float * y [[buffer(2)]],
+        device float * dst [[buffer(3)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    const uint ncols = args.ne00;
+    const uint base = (gid/ncols)*ncols;
+    float dot = 0.0f;
+    for (uint col = 0; col < ncols; ++col) {
+        dot += y[base + col]*grad[base + col];
+    }
+    dst[gid] = args.param*(grad[gid] - dot)*y[gid];
+}
+
+kernel void kernel_cross_entropy_loss_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * logits [[buffer(1)]],
+        device const float * labels [[buffer(2)]],
+        device float * dst [[buffer(3)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid != 0) {
+        return;
+    }
+
+    const uint nclasses = args.ne00;
+    const uint nrows = args.ne00 > 0 ? args.ne/args.ne00 : 0;
+    float total = 0.0f;
+    for (uint row = 0; row < nrows; ++row) {
+        const uint base = row*nclasses;
+        float labels_sum = 0.0f;
+        float max_logit = -INFINITY;
+        for (uint col = 0; col < nclasses; ++col) {
+            labels_sum += labels[base + col];
+            max_logit = max(max_logit, logits[base + col]);
+        }
+        if (labels_sum == 0.0f) {
+            continue;
+        }
+
+        float sum_exp = 0.0f;
+        for (uint col = 0; col < nclasses; ++col) {
+            sum_exp += exp(logits[base + col] - max_logit);
+        }
+        const float log_sum = log(sum_exp);
+        for (uint col = 0; col < nclasses; ++col) {
+            if (labels[base + col] != 0.0f) {
+                total -= (logits[base + col] - max_logit - log_sum)*labels[base + col];
+            }
+        }
+    }
+    dst[0] = total/float(nrows);
+}
+
+kernel void kernel_cross_entropy_loss_back_f32(
+        constant ggml_metal_kargs_training & args [[buffer(0)]],
+        device const float * grad [[buffer(1)]],
+        device const float * logits [[buffer(2)]],
+        device const float * labels [[buffer(3)]],
+        device float * dst [[buffer(4)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    const uint nclasses = args.ne00;
+    const uint nrows = args.ne/nclasses;
+    const uint base = (gid/nclasses)*nclasses;
+    float labels_sum = 0.0f;
+    float max_logit = -INFINITY;
+    for (uint col = 0; col < nclasses; ++col) {
+        labels_sum += labels[base + col];
+        max_logit = max(max_logit, logits[base + col]);
+    }
+    if (labels_sum == 0.0f) {
+        dst[gid] = 0.0f;
+        return;
+    }
+
+    float sum_exp = 0.0f;
+    for (uint col = 0; col < nclasses; ++col) {
+        sum_exp += exp(logits[base + col] - max_logit);
+    }
+    const float prob = exp(logits[gid] - max_logit)/sum_exp;
+    dst[gid] = (prob*labels_sum - labels[gid])*grad[0]/float(nrows);
 }
 
 template<typename T>

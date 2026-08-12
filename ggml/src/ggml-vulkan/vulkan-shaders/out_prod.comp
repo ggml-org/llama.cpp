@@ -1,6 +1,9 @@
 #version 450
 
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : require
+
+#include "types.glsl"
 
 layout (push_constant) uniform parameter
 {
@@ -12,9 +15,17 @@ layout (push_constant) uniform parameter
     float param1; float param2; int param3;
 } p;
 
-layout (binding = 0) readonly buffer A {float data_a[];};
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+#if defined(A_TYPE_PACKED16)
+layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16[];};
+#endif
+#if defined(A_TYPE_PACKED32)
+layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32[];};
+#endif
 layout (binding = 1) readonly buffer B {float data_b[];};
 layout (binding = 2) writeonly buffer D {float data_d[];};
+
+#include "dequant_funcs.glsl"
 
 uint get_idx() {
     return gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
@@ -24,9 +35,13 @@ uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_boffset() { return (p.misalign_offsets >> 8) & 0xFF; }
 uint get_doffset() { return p.misalign_offsets & 0xFF; }
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
+#ifdef NEEDS_INIT_IQ_SHMEM
+    init_iq_shmem(gl_WorkGroupSize);
+#endif
+
     uint idx = get_idx();
     if (idx >= p.ne) {
         return;
@@ -49,9 +64,27 @@ void main() {
     float sum = 0.0f;
     uint K = p.ne01;
     for (uint k = 0; k < K; k++) {
-        uint aoff = get_aoffset() + a_i3*p.nb03 + a_i2*p.nb02 + k*p.nb01 + a_i0*p.nb00;
         uint boff = get_boffset() + b_i3*p.nb13 + b_i2*p.nb12 + k*p.nb11 + b_i0*p.nb10;
-        sum += data_a[aoff] * data_b[boff];
+#if defined(DATA_A_F32)
+        uint aoff = get_aoffset() + a_i3*p.nb03 + a_i2*p.nb02 + k*p.nb01 + a_i0*p.nb00;
+        const float av = data_a[aoff];
+#else
+        const uint row_offset = get_aoffset() + a_i3*p.nb03 + a_i2*p.nb02 + k*p.nb01;
+        const uint local = a_i0 % QUANT_K;
+        const uint ib = row_offset + a_i0/QUANT_K;
+#if QUANT_R == 2
+        const uint iqs = local < QUANT_K/2 ? local : local - QUANT_K/2;
+        const uint component = local < QUANT_K/2 ? 0 : 1;
+#else
+        const uint iqs = local & ~1u;
+        const uint component = local & 1u;
+#endif
+        vec2 v = dequantize(ib, iqs, 0);
+        const vec2 dm = get_dm(ib, 0);
+        v = v*dm.x + dm.y;
+        const float av = v[component];
+#endif
+        sum += av * data_b[boff];
     }
 
     uint doff = get_doffset() + i3*p.nb23 + i2*p.nb22 + i1*p.nb21 + i0*p.nb20;

@@ -153,6 +153,39 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
+static bool llama_device_is_cuda(ggml_backend_dev_t dev) {
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    return reg && strcmp(ggml_backend_reg_name(reg), "CUDA") == 0;
+}
+
+static bool llama_device_matches(ggml_backend_dev_t lhs, ggml_backend_dev_t rhs) {
+    ggml_backend_dev_props lhs_props;
+    ggml_backend_dev_props rhs_props;
+    ggml_backend_dev_get_props(lhs, &lhs_props);
+    ggml_backend_dev_get_props(rhs, &rhs_props);
+    return lhs_props.device_id && rhs_props.device_id && strcmp(lhs_props.device_id, rhs_props.device_id) == 0;
+}
+
+static bool llama_tensor_split_is_set(const float * tensor_split, size_t n_devices) {
+    return tensor_split && std::any_of(tensor_split, tensor_split + n_devices, [](float value) {
+        return value != 0.0f;
+    });
+}
+
+static void llama_set_tensor_split_by_free_memory(llama_model * model, const std::vector<ggml_backend_dev_t> & devices) {
+    std::vector<float> tensor_split;
+    tensor_split.reserve(devices.size());
+
+    for (ggml_backend_dev_t dev : devices) {
+        size_t free = 0;
+        size_t total = 0;
+        ggml_backend_dev_memory(dev, &free, &total);
+        tensor_split.push_back((float) (free ? free : total));
+    }
+
+    model->set_tensor_split(tensor_split);
+}
+
 // returns true on success
 static bool llama_prepare_model_devices(const llama_model_params & params, llama_model * model) {
     // create list of devices to use with this model
@@ -165,6 +198,10 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
             if (n_devs == 0) {
                 LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR needs >= 1 devices\n", __func__);
                 return false;
+            }
+            if (!llama_tensor_split_is_set(params.tensor_split, n_devs)) {
+                std::vector<ggml_backend_dev_t> devs(params.devices, params.devices + n_devs);
+                llama_set_tensor_split_by_free_memory(model, devs);
             }
             LLAMA_LOG_INFO("%s: creating a Meta device with %zu devices\n", __func__, n_devs);
             for (size_t i = 0; i < n_devs; ++i) {
@@ -198,11 +235,26 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
                     LLAMA_LOG_INFO("%s: skipping %s (%s) for tensor parallelism\n", __func__, ggml_backend_dev_name(dev), ggml_backend_dev_description(dev));
                     continue;
                 }
-                devs.push_back(dev);
+                auto it = std::find_if(devs.begin(), devs.end(), [dev](ggml_backend_dev_t existing) {
+                    return llama_device_matches(existing, dev);
+                });
+                if (it == devs.end()) {
+                    devs.push_back(dev);
+                } else if (llama_device_is_cuda(dev) && !llama_device_is_cuda(*it)) {
+                    *it = dev;
+                }
             }
             if (devs.empty()) {
                 LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR needs >= 1 devices\n", __func__);
                 return false;
+            }
+
+            std::stable_sort(devs.begin(), devs.end(), [](ggml_backend_dev_t lhs, ggml_backend_dev_t rhs) {
+                return llama_device_is_cuda(lhs) && !llama_device_is_cuda(rhs);
+            });
+
+            if (!llama_tensor_split_is_set(params.tensor_split, devs.size())) {
+                llama_set_tensor_split_by_free_memory(model, devs);
             }
 
             LLAMA_LOG_INFO("%s: creating a Meta device for tensor parallelism from %zu devices:\n", __func__, devs.size());
@@ -244,6 +296,15 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
                             });
 
                             if (it != gpus.end()) {
+                                if (llama_device_is_cuda(dev) && !llama_device_is_cuda(it->dev)) {
+                                    LLAMA_LOG_INFO("%s: preferring CUDA device %s (%s) over %s (%s) with the same id %s\n",
+                                            __func__,
+                                            ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
+                                            ggml_backend_dev_name(it->dev), ggml_backend_dev_description(it->dev),
+                                            props.device_id ? props.device_id : "unknown id");
+                                    *it = {false, dev};
+                                    continue;
+                                }
                                 LLAMA_LOG_INFO("%s: skipping device %s (%s) with id %s - already using device %s (%s) with the same id\n",
                                         __func__,
                                         ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
@@ -266,6 +327,10 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
                 }
             }
         }
+
+        std::stable_sort(gpus.begin(), gpus.end(), [](const llama_device & lhs, const llama_device & rhs) {
+            return llama_device_is_cuda(lhs.dev) && !llama_device_is_cuda(rhs.dev);
+        });
 
         // add RPC servers at the front of the list to minimize network transfers
         model->devices.insert(model->devices.begin(), rpc_servers.begin(), rpc_servers.end());
@@ -610,4 +675,3 @@ const char * llama_print_system_info(void) {
 
     return s.c_str();
 }
-

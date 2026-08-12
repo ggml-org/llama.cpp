@@ -1,0 +1,92 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter {
+    uint nclasses;
+    uint nrows;
+} p;
+
+layout(binding = 0) readonly  buffer LOGITS { float logits[]; };
+layout(binding = 1) readonly  buffer LABELS { float labels[]; };
+layout(binding = 2) writeonly buffer DST    { float dst[]; };
+
+shared float reduction[256];
+
+void main() {
+    const uint lid = gl_LocalInvocationID.x;
+    float total = 0.0;
+
+    for (uint row = 0; row < p.nrows; ++row) {
+        const uint base = row*p.nclasses;
+
+        float labels_sum = 0.0;
+        for (uint col = lid; col < p.nclasses; col += 256) {
+            labels_sum += labels[base + col];
+        }
+        reduction[lid] = labels_sum;
+        barrier();
+        for (uint stride = 128; stride > 0; stride >>= 1) {
+            if (lid < stride) {
+                reduction[lid] += reduction[lid + stride];
+            }
+            barrier();
+        }
+        labels_sum = reduction[0];
+        if (labels_sum == 0.0) {
+            continue;
+        }
+
+        float max_logit = -1.0/0.0;
+        for (uint col = lid; col < p.nclasses; col += 256) {
+            max_logit = max(max_logit, logits[base + col]);
+        }
+        reduction[lid] = max_logit;
+        barrier();
+        for (uint stride = 128; stride > 0; stride >>= 1) {
+            if (lid < stride) {
+                reduction[lid] = max(reduction[lid], reduction[lid + stride]);
+            }
+            barrier();
+        }
+        max_logit = reduction[0];
+
+        float sum_exp = 0.0;
+        for (uint col = lid; col < p.nclasses; col += 256) {
+            sum_exp += exp(logits[base + col] - max_logit);
+        }
+        reduction[lid] = sum_exp;
+        barrier();
+        for (uint stride = 128; stride > 0; stride >>= 1) {
+            if (lid < stride) {
+                reduction[lid] += reduction[lid + stride];
+            }
+            barrier();
+        }
+        const float log_sum = log(reduction[0]);
+
+        float row_loss = 0.0;
+        for (uint col = lid; col < p.nclasses; col += 256) {
+            const float label = labels[base + col];
+            if (label != 0.0) {
+                row_loss += (logits[base + col] - max_logit - log_sum)*label;
+            }
+        }
+        reduction[lid] = row_loss;
+        barrier();
+        for (uint stride = 128; stride > 0; stride >>= 1) {
+            if (lid < stride) {
+                reduction[lid] += reduction[lid + stride];
+            }
+            barrier();
+        }
+        if (lid == 0) {
+            total -= reduction[0];
+        }
+        barrier();
+    }
+
+    if (lid == 0) {
+        dst[0] = total/float(p.nrows);
+    }
+}
