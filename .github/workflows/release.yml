@@ -109,6 +109,8 @@ jobs:
             os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
+          - build: 'riscv64'
+            os: ubuntu-24.04-riscv
 
     runs-on: ${{ matrix.os }}
 
@@ -120,7 +122,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        if: ${{ matrix.build != 's390x' }}
+        if: ${{ matrix.build != 's390x' && matrix.build != 'riscv64' }}
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-cpu-${{ matrix.build }}
