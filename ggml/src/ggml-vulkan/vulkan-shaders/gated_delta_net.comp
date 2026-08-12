@@ -118,41 +118,37 @@ void main() {
 
     uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
 
-    // Software pipeline: prefetch token t+1 while computing token t. With only
-    // H*S_V scan chains the kernel is gather-latency bound, so overlapping the
-    // per-token loads with the FMA chain hides most of that latency.
-    uint qk_off = iq3 * sq3 + iq1 * sq1;
-    uint v_off  = seq_id * sv3 + head_id * sv1;
-    uint gb_off = seq_id * sb3 + head_id * sb1;
+    for (uint t = 0; t < n_tokens; t++) {
+        const uint q_off = iq3 * sq3 + t * sq2 + iq1 * sq1;
+        const uint k_off = q_off;
+        const uint v_off = seq_id * sv3 + t * sv2 + head_id * sv1;
+        const uint gb_off = seq_id * sb3 + t * sb2 + head_id * sb1;
+        const FLOAT_TYPE beta_val = FLOAT_TYPE(data_beta[gb_off]);
 
-    FLOAT_TYPE k_reg[ROWS_PER_LANE];
-    FLOAT_TYPE q_reg[ROWS_PER_LANE];
-    FLOAT_TYPE g_exp[ROWS_PER_LANE];
-    FLOAT_TYPE v_val;
-    FLOAT_TYPE beta_val;
-
-    // prologue: load token 0
-    beta_val = FLOAT_TYPE(data_beta[gb_off]);
-    [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-        const uint i = r * LANES_PER_COLUMN + lane;
-        k_reg[r] = FLOAT_TYPE(data_k[qk_off + i]);
-        q_reg[r] = FLOAT_TYPE(data_q[qk_off + i]);
-    }
-    if (KDA == 0) {
-        const FLOAT_TYPE g_val = exp(FLOAT_TYPE(data_g[gb_off]));
-        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-            g_exp[r] = g_val;
-        }
-    } else {
-        const uint g_base = gb_off * S_V;
+        FLOAT_TYPE k_reg[ROWS_PER_LANE];
+        FLOAT_TYPE q_reg[ROWS_PER_LANE];
         [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
             const uint i = r * LANES_PER_COLUMN + lane;
-            g_exp[r] = exp(FLOAT_TYPE(data_g[g_base + i]));
+            k_reg[r] = FLOAT_TYPE(data_k[k_off + i]);
+            q_reg[r] = FLOAT_TYPE(data_q[q_off + i]);
         }
-    }
-    v_val = FLOAT_TYPE(data_v[v_off + col]);
 
-    for (uint t = 0; t < n_tokens; t++) {
+        FLOAT_TYPE g_exp[ROWS_PER_LANE];
+        if (KDA == 0) {
+            const FLOAT_TYPE g_val = exp(FLOAT_TYPE(data_g[gb_off]));
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                g_exp[r] = g_val;
+            }
+        } else {
+            const uint g_base = gb_off * S_V;
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                const uint i = r * LANES_PER_COLUMN + lane;
+                g_exp[r] = exp(FLOAT_TYPE(data_g[g_base + i]));
+            }
+        }
+
+        const FLOAT_TYPE v_val = FLOAT_TYPE(data_v[v_off + col]);
+
         FLOAT_TYPE kv_shard = 0.0;
         [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
             kv_shard += g_exp[r] * s_shard[r] * k_reg[r];
@@ -182,32 +178,6 @@ void main() {
                     data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
                 }
             }
-        }
-
-        // prefetch token t+1
-        if (t + 1 < n_tokens) {
-            qk_off += sq2;
-            v_off  += sv2;
-            gb_off += sb2;
-            beta_val = FLOAT_TYPE(data_beta[gb_off]);
-            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                const uint i = r * LANES_PER_COLUMN + lane;
-                k_reg[r] = FLOAT_TYPE(data_k[qk_off + i]);
-                q_reg[r] = FLOAT_TYPE(data_q[qk_off + i]);
-            }
-            if (KDA == 0) {
-                const FLOAT_TYPE g_val = exp(FLOAT_TYPE(data_g[gb_off]));
-                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                    g_exp[r] = g_val;
-                }
-            } else {
-                const uint g_base = gb_off * S_V;
-                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                    const uint i = r * LANES_PER_COLUMN + lane;
-                    g_exp[r] = exp(FLOAT_TYPE(data_g[g_base + i]));
-                }
-            }
-            v_val = FLOAT_TYPE(data_v[v_off + col]);
         }
     }
 
