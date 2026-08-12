@@ -17,6 +17,10 @@ void llama_model_zamba2::load_arch_hparams(llama_model_loader & ml) {
         case 76: type = LLM_TYPE_7B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
+
+    // Zamba2 uses (head_dim/2)^(-0.5) attention scaling
+    // Ref: transformers/models/zamba2/modeling_zamba2.py Zamba2Attention.__init__
+    hparams.f_attention_scale = 1.0f / sqrtf(float(hparams.n_embd_head_v_full) / 2.0f);
 }
 
 void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
@@ -104,7 +108,7 @@ llama_model_zamba2::graph::graph(const llama_model & model, const llm_graph_para
     // Build hybrid memory (KV cache + recurrent state)
     auto * inp = build_inp_mem_hybrid();
 
-    const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+    const float kq_scale = hparams.f_attention_scale;
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
