@@ -2703,6 +2703,9 @@ private:
 
             if (all_idle) {
                 SRV_TRC("%s", "all slots are idle\n");
+
+                metrics_flush_idle();
+
                 return; // skip further processing
 
             } else {
@@ -3920,6 +3923,16 @@ private:
             llama_synchronize(ctx_tgt);
             metrics.flush_prompt();
         }
+    }
+
+    // flush any queued prompt metrics if all slots are now idle
+    void metrics_flush_idle() {
+        if (metrics.n_prompt_queued == 0) {
+            return;
+        }
+
+        llama_synchronize(ctx_tgt);
+        metrics.flush_prompt();
     }
 
     void metrics_on_prediction(const server_slot & slot) {
