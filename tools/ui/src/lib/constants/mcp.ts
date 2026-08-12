@@ -1,8 +1,8 @@
-import { Zap, Globe, Radio } from '@lucide/svelte';
+import { Globe, Radio, Zap } from '@lucide/svelte';
 import { MCPTransportType } from '$lib/enums';
+import { MimeTypeImage } from '$lib/enums/files.enums';
 import type { ClientCapabilities, Implementation } from '$lib/types';
 import type { Component } from 'svelte';
-import { MimeTypeImage } from '$lib/enums/files.enums';
 
 export const DEFAULT_CLIENT_VERSION = '1.0.0';
 export const MCP_CLIENT_NAME = 'llama-ui-mcp';
@@ -27,11 +27,11 @@ export const MCP_ALLOWED_ICON_MIME_TYPES = new Set([
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 export const DEFAULT_MCP_CONFIG = {
-	protocolVersion: MCP_PROTOCOL_VERSION,
 	capabilities: { tools: { listChanged: true } } as ClientCapabilities,
 	clientInfo: { name: MCP_CLIENT_NAME, version: DEFAULT_CLIENT_VERSION } as Implementation,
-	requestTimeoutSeconds: 300, // 5 minutes for long-running tools
-	connectionTimeoutMs: 10_000 // 10 seconds for connection establishment
+	connectionTimeoutMs: 10_000, // 10 seconds for connection establishment
+	protocolVersion: MCP_PROTOCOL_VERSION,
+	requestTimeoutSeconds: 300 // 5 minutes for long-running tools
 } as const;
 
 export const MCP_SERVER_ID_PREFIX = 'LlamaUI-MCP-Server';
@@ -85,16 +85,16 @@ export const REDACTED_HEADERS = new Set([
 
 /** Human-readable labels for MCP transport types */
 export const MCP_TRANSPORT_LABELS: Record<MCPTransportType, string> = {
-	[MCPTransportType.WEBSOCKET]: 'WebSocket',
+	[MCPTransportType.SSE]: 'SSE',
 	[MCPTransportType.STREAMABLE_HTTP]: 'HTTP',
-	[MCPTransportType.SSE]: 'SSE'
+	[MCPTransportType.WEBSOCKET]: 'WebSocket'
 };
 
 /** Icon components for MCP transport types */
 export const MCP_TRANSPORT_ICONS: Record<MCPTransportType, Component> = {
-	[MCPTransportType.WEBSOCKET]: Zap,
+	[MCPTransportType.SSE]: Radio,
 	[MCPTransportType.STREAMABLE_HTTP]: Globe,
-	[MCPTransportType.SSE]: Radio
+	[MCPTransportType.WEBSOCKET]: Zap
 };
 
 /** Standard SSE endpoint path indicators */

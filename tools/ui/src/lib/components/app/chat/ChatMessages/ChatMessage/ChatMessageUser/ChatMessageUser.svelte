@@ -6,9 +6,9 @@
 		ChatMessageUserBubble
 	} from '$lib/components/app/chat';
 	import { getMessageEditContext } from '$lib/contexts';
+	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
-	import { MessageRole, ChatMessageStatisticsMode } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
@@ -35,19 +35,19 @@
 
 	let {
 		class: className = '',
-		message,
-		siblingInfo = null,
 		deletionInfo,
 		isLastUserMessage = false,
+		message,
 		nextAssistantMessage = null,
-		showDeleteDialog,
-		onEdit,
-		onDelete,
 		onConfirmDelete,
+		onCopy,
+		onDelete,
+		onEdit,
 		onForkConversation,
-		onShowDeleteDialogChange,
 		onNavigateToSibling,
-		onCopy
+		onShowDeleteDialogChange,
+		showDeleteDialog,
+		siblingInfo = null
 	}: Props = $props();
 
 	// Get contexts
@@ -60,13 +60,14 @@
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {
 		const timings = nextAssistantMessage?.timings;
+
 		if (!timings?.prompt_n || !timings?.prompt_ms) return null;
 
 		const agentic = timings.agentic;
 
 		return {
-			promptTokens: agentic ? agentic.llm.prompt_n : timings.prompt_n,
-			promptMs: agentic ? agentic.llm.prompt_ms : timings.prompt_ms
+			promptMs: agentic ? agentic.llm.prompt_ms : timings.prompt_ms,
+			promptTokens: agentic ? agentic.llm.prompt_n : timings.prompt_n
 		};
 	});
 

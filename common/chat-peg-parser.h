@@ -55,6 +55,8 @@ class common_chat_peg_minimax_m3_mapper : public common_chat_peg_mapper {
 struct content_structure;
 struct tool_call_structure;
 
+constexpr size_t COMMON_CHAT_MAX_PERMUTE = 6;
+
 class common_chat_peg_builder : public common_peg_parser_builder {
   public:
     // Tag constants (from former common_chat_peg_base_builder)
@@ -104,6 +106,9 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
 
+
+    // Matches every parser exactly once, in any order.
+    common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
 
     // Return a parser that parses the prefix of a string, up to a given delimiter.
     common_peg_parser prefix(const std::string & s, const std::string & delimiter = {});

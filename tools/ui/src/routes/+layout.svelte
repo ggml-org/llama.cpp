@@ -1,36 +1,33 @@
 <script lang="ts">
 	import '../app.css';
-	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import { onMount } from 'svelte';
-
 	import { SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
-	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
-
-	import { chatStore } from '$lib/stores/chat.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { ModeWatcher } from 'mode-watcher';
-	import { ROUTES } from '$lib/constants/routes';
-	import { RouterService } from '$lib/services/router.service';
-	import { Toaster } from 'svelte-sonner';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { AUTHORIZATION_HEADER, BEARER_PREFIX, TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
+	import { ROUTES } from '$lib/constants/routes';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
-	import { conversations } from '$lib/stores/conversations.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { theme } from '$lib/stores/theme.svelte';
+	import { RouterService } from '$lib/services/router.service';
 	import { buildInfoStore } from '$lib/stores/build-info.svelte';
-
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { conversations } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { theme } from '$lib/stores/theme.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { ModeWatcher } from 'mode-watcher';
+	import { untrack } from 'svelte';
+	import { onMount } from 'svelte';
+	import { Toaster } from 'svelte-sonner';
+	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	let { children } = $props();
 	let innerHeight = $state<number | undefined>();
@@ -53,11 +50,13 @@
 		const dark = theme.isSystemDark;
 
 		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
+
 		if (icoLink) {
 			icoLink.href = dark ? FAVICON_PATHS.ICO_DARK : FAVICON_PATHS.ICO_LIGHT;
 		}
 
 		let svgLink = document.querySelector(FAVICON_SELECTORS.SVG_ANY) as HTMLLinkElement | null;
+
 		if (svgLink) {
 			svgLink.href = dark ? FAVICON_PATHS.SVG_DARK : FAVICON_PATHS.SVG_LIGHT;
 		}
@@ -92,8 +91,8 @@
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
-		navigateToPrevConversation: () => navigateToConversation(-1),
-		navigateToNextConversation: () => navigateToConversation(1)
+		navigateToNextConversation: () => navigateToConversation(1),
+		navigateToPrevConversation: () => navigateToConversation(-1)
 	});
 
 	function checkApiKey() {
@@ -113,8 +112,8 @@
 				page.status !== 403
 			) {
 				const headers: Record<string, string> = {
-					'Content-Type': 'application/json',
-					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`
+					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`,
+					'Content-Type': 'application/json'
 				};
 
 				fetch(`${base}/props`, { headers })
@@ -141,6 +140,7 @@
 	// or ended while it was hidden. snapshot only, no polling
 	function handleVisibilityChange() {
 		if (document.visibilityState !== 'visible') return;
+
 		void chatStore.syncRemoteRunningStreams();
 	}
 
@@ -200,6 +200,7 @@
 	// Live model status and load progress via the /models/sse feed (router mode)
 	$effect(() => {
 		if (!browser) return;
+
 		if (!isRouterMode()) return;
 
 		untrack(() => {
@@ -224,7 +225,6 @@
 		if (!browser) return;
 
 		const mcpServers = mcpStore.getServers();
-
 		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
 
 		if (serversWithUrls.length > 0) {

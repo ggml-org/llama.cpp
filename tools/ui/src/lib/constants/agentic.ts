@@ -34,8 +34,8 @@ export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
 } as const;
 
 export const REASONING_TAGS = {
-	START: '<think>',
-	END: '</think>'
+	END: '</think>',
+	START: '<think>'
 } as const;
 
 /**
@@ -43,12 +43,12 @@ export const REASONING_TAGS = {
  * New messages use structured fields (reasoningContent, toolCalls, toolCallId).
  */
 export const LEGACY_AGENTIC_TAGS = {
-	TOOL_CALL_START: '<<<AGENTIC_TOOL_CALL_START>>>',
-	TOOL_CALL_END: '<<<AGENTIC_TOOL_CALL_END>>>',
-	TOOL_NAME_PREFIX: '<<<TOOL_NAME:',
-	TOOL_ARGS_START: '<<<TOOL_ARGS_START>>>',
+	TAG_SUFFIX: '>>>',
 	TOOL_ARGS_END: '<<<TOOL_ARGS_END>>>',
-	TAG_SUFFIX: '>>>'
+	TOOL_ARGS_START: '<<<TOOL_ARGS_START>>>',
+	TOOL_CALL_END: '<<<AGENTIC_TOOL_CALL_END>>>',
+	TOOL_CALL_START: '<<<AGENTIC_TOOL_CALL_START>>>',
+	TOOL_NAME_PREFIX: '<<<TOOL_NAME:'
 } as const;
 
 /**
@@ -56,20 +56,20 @@ export const LEGACY_AGENTIC_TAGS = {
  * New messages use the dedicated reasoningContent field.
  */
 export const LEGACY_REASONING_TAGS = {
-	START: '<<<reasoning_content_start>>>',
-	END: '<<<reasoning_content_end>>>'
+	END: '<<<reasoning_content_end>>>',
+	START: '<<<reasoning_content_start>>>'
 } as const;
 
 /**
  * @deprecated Legacy regex patterns - only used for migration of old stored messages.
  */
 export const LEGACY_AGENTIC_REGEX = {
-	COMPLETED_TOOL_CALL:
-		/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_START>>>([\s\S]*?)<<<TOOL_ARGS_END>>>([\s\S]*?)<<<AGENTIC_TOOL_CALL_END>>>/g,
-	REASONING_BLOCK: /<<<reasoning_content_start>>>[\s\S]*?<<<reasoning_content_end>>>/g,
-	REASONING_EXTRACT: /<<<reasoning_content_start>>>([\s\S]*?)<<<reasoning_content_end>>>/,
-	REASONING_OPEN: /<<<reasoning_content_start>>>[\s\S]*$/,
 	AGENTIC_TOOL_CALL_BLOCK: /\n*<<<AGENTIC_TOOL_CALL_START>>>[\s\S]*?<<<AGENTIC_TOOL_CALL_END>>>/g,
 	AGENTIC_TOOL_CALL_OPEN: /\n*<<<AGENTIC_TOOL_CALL_START>>>[\s\S]*$/,
-	HAS_LEGACY_MARKERS: /<<<(?:AGENTIC_TOOL_CALL_START|reasoning_content_start)>>>/
+	COMPLETED_TOOL_CALL:
+		/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_START>>>([\s\S]*?)<<<TOOL_ARGS_END>>>([\s\S]*?)<<<AGENTIC_TOOL_CALL_END>>>/g,
+	HAS_LEGACY_MARKERS: /<<<(?:AGENTIC_TOOL_CALL_START|reasoning_content_start)>>>/,
+	REASONING_BLOCK: /<<<reasoning_content_start>>>[\s\S]*?<<<reasoning_content_end>>>/g,
+	REASONING_EXTRACT: /<<<reasoning_content_start>>>([\s\S]*?)<<<reasoning_content_end>>>/,
+	REASONING_OPEN: /<<<reasoning_content_start>>>[\s\S]*$/
 } as const;

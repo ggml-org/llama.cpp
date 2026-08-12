@@ -3,8 +3,8 @@
  * Uses dependency injection pattern to avoid direct component state access.
  */
 
+import { MERMAID_BLOCK_CLASS, MERMAID_SYNTAX_ATTR, MERMAID_WRAPPER_CLASS } from '$lib/constants';
 import { copyCodeToClipboard, copyToClipboard } from '$lib/utils';
-import { MERMAID_WRAPPER_CLASS, MERMAID_BLOCK_CLASS, MERMAID_SYNTAX_ATTR } from '$lib/constants';
 
 export interface PreviewState {
 	previewDialogOpen: boolean;
@@ -37,12 +37,15 @@ export function createHandleCopyClick() {
 		event.stopPropagation();
 
 		const target = event.currentTarget as HTMLButtonElement | null;
+
 		if (!target) return;
 
 		const wrapper = target.closest('.code-block-wrapper');
+
 		if (!wrapper) return;
 
 		const codeElement = wrapper.querySelector<HTMLElement>('code[data-code-id]');
+
 		if (!codeElement) return;
 
 		const rawCode = codeElement.textContent ?? '';
@@ -80,12 +83,15 @@ export function createHandlePreviewClick(previewState: PreviewState) {
 		event.stopPropagation();
 
 		const target = event.currentTarget as HTMLButtonElement | null;
+
 		if (!target) return;
 
 		const wrapper = target.closest('.code-block-wrapper');
+
 		if (!wrapper) return;
 
 		const codeElement = wrapper.querySelector<HTMLElement>('code[data-code-id]');
+
 		if (!codeElement) return;
 
 		const rawCode = codeElement.textContent ?? '';
@@ -105,18 +111,19 @@ export function createHandlePreviewClick(previewState: PreviewState) {
 export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 	return async function handleMermaidClick(event: MouseEvent) {
 		const target = event.target as HTMLElement;
-
 		// Check if clicking on copy or preview button in mermaid block
 		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
 		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
+
 			if (!wrapper) return;
 
 			const preElement = wrapper.querySelector<HTMLElement>(
 				`pre.${MERMAID_BLOCK_CLASS}[${MERMAID_SYNTAX_ATTR}]`
 			);
+
 			if (!preElement) return;
 
 			const mermaidSyntax = preElement.getAttribute(MERMAID_SYNTAX_ATTR) ?? '';
@@ -129,6 +136,7 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 				} catch (error) {
 					console.error('Failed to copy mermaid syntax:', error);
 				}
+
 				return;
 			}
 
@@ -136,18 +144,23 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 				event.preventDefault();
 				event.stopPropagation();
 				const svg = preElement.querySelector('svg');
+
 				if (!svg) return;
+
 				mermaidState.setMermaidPreviewSvgHtml(svg.outerHTML);
 				mermaidState.setMermaidPreviewOpen(true);
+
 				return;
 			}
 		}
 
 		// Otherwise, open preview when clicking on the mermaid diagram itself
 		const mermaidEl = target.closest(`.${MERMAID_BLOCK_CLASS}`);
+
 		if (!mermaidEl) return;
 
 		const svg = mermaidEl.querySelector('svg');
+
 		if (!svg) return;
 
 		mermaidState.setMermaidPreviewSvgHtml(svg.outerHTML);
@@ -162,6 +175,7 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 export function createHandleMermaidPreviewOpenChange(mermaidState: MermaidPreviewState) {
 	return function handleMermaidPreviewOpenChange(open: boolean) {
 		mermaidState.setMermaidPreviewOpen(open);
+
 		if (!open) {
 			mermaidState.setMermaidPreviewSvgHtml('');
 		}
@@ -180,16 +194,20 @@ export function createHandleImageError(
 ) {
 	return async function handleImageError(event: Event) {
 		const img = event.target as HTMLImageElement;
+
 		if (!img) return;
 
 		const blockId = img.closest('[data-block-id]')?.getAttribute('data-block-id');
+
 		if (!blockId) return;
 
 		const block = renderedBlocksState.renderedBlocks.find((b) => b.id === blockId);
+
 		if (!block) return;
 
 		// Skip if already handled
 		if (img.dataset[DATA_ERROR_BOUND_ATTR] === BOOL_TRUE_STRING) return;
+
 		img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
 
 		// Get the fallback HTML and replace the image
@@ -197,19 +215,19 @@ export function createHandleImageError(
 			<span class="image-error-icon">⚠️</span>
 			<span class="image-error-text">Failed to load image</span>
 		</div>`;
-
 		// Replace the img element with fallback in the block's HTML
 		const newHtml = block.html.replace(/img[^>]*src=["']([^"']*)[^>]*>/g, (match, src) => {
 			if (src === img.src) {
 				return fallbackHtml.replace('data-original-src=""', `data-original-src="${src}"`);
 			}
+
 			return match;
 		});
-
 		// Update the block
 		const newBlocks = renderedBlocksState.renderedBlocks.map((b) =>
 			b.id === blockId ? { ...b, html: newHtml } : b
 		);
+
 		renderedBlocksState.setRenderedBlocks(newBlocks);
 	};
 }

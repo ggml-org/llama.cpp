@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { Package } from '@lucide/svelte';
-	import { BadgeInfo, ActionIconCopyToClipboard } from '$lib/components/app';
 	import ModelId from './ModelId.svelte';
+	import { Package } from '@lucide/svelte';
+	import { ActionIconCopyToClipboard, BadgeInfo } from '$lib/components/app';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	interface Props {
 		class?: string;
