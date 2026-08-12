@@ -2432,25 +2432,7 @@ private:
                     res->n_idle_slots        = n_idle_slots;
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
-                    res->t_start             = metrics.t_start;
-
-                    res->prompt_bucket          = metrics.prompt_bucket;
-                    res->predict_bucket         = metrics.predict_bucket;
-                    res->n_prompt_cached_bucket = metrics.n_prompt_cached_bucket;
-
-                    res->prompt          = metrics.prompt;
-                    res->predict         = metrics.predict;
-                    res->n_prompt_cached = metrics.n_prompt_cached;
-
-                    res->n_tokens_max = metrics.n_tokens_max;
-
-                    res->n_decode     = metrics.n_decode;
-                    res->n_busy_slots = metrics.n_busy_slots;
-
-                    res->n_draft_tokens      = metrics.n_draft_tokens;
-                    res->n_draft_accepted    = metrics.n_draft_accepted;
-                    res->n_draft_verif_steps = metrics.n_draft_verif_steps;
-                    res->n_accepted_per_pos  = metrics.n_accepted_per_pos;
+                    res->metrics             = metrics;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -4400,104 +4382,10 @@ void server_routes::init_routes() {
         auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
         GGML_ASSERT(res_task != nullptr);
 
-        // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
-        json all_metrics_def = json {
-            {"counter", {{
-                    {"name",  "prompt_tokens_total"},
-                    {"help",  "Number of prompt tokens processed."},
-                    {"value",  res_task->prompt.count}
-            }, {
-                    {"name",  "prompt_tokens_cached_total"},
-                    {"help",  "Number of prompt tokens reused from the cache."},
-                    {"value",  res_task->n_prompt_cached}
-            }, {
-                    {"name",  "prompt_seconds_total"},
-                    {"help",  "Prompt process time"},
-                    {"value",  res_task->prompt.time / 1.e6}
-            }, {
-                    {"name",  "tokens_predicted_total"},
-                    {"help",  "Number of generation tokens processed."},
-                    {"value",  res_task->predict.count}
-            }, {
-                    {"name",  "tokens_predicted_seconds_total"},
-                    {"help",  "Predict process time"},
-                    {"value",  res_task->predict.time / 1.e6}
-            }, {
-                    {"name",  "n_decode_total"},
-                    {"help",  "Total number of llama_decode() calls"},
-                    {"value",  res_task->n_decode}
-            }, {
-                    {"name",  "n_tokens_max"},
-                    {"help",  "Largest observed n_tokens."},
-                    {"value",  res_task->n_tokens_max}
-            }, {
-                    {"name",  "spec_decode_num_draft_tokens_total"},
-                    {"help",  "Total draft tokens generated"},
-                    {"value",  res_task->n_draft_tokens}
-            }, {
-                    {"name",  "spec_decode_num_accepted_tokens_total"},
-                    {"help",  "Total draft tokens accepted by the target model"},
-                    {"value",  res_task->n_draft_accepted}
-            }, {
-                    {"name",  "spec_decode_num_drafts_total"},
-                    {"help",  "Total speculative decoding verification steps"},
-                    {"value",  res_task->n_draft_verif_steps}
-            }}},
-            {"gauge", {{
-                    {"name",  "prompt_tokens_seconds"},
-                    {"help",  "Average prompt throughput in tokens/s."},
-                    {"value",  res_task->prompt_bucket.n_per_second()}
-            },{
-                    {"name",  "predicted_tokens_seconds"},
-                    {"help",  "Average generation throughput in tokens/s."},
-                    {"value",  res_task->predict_bucket.n_per_second()}
-            },{
-                    {"name",  "requests_processing"},
-                    {"help",  "Number of requests processing."},
-                    {"value",  (uint64_t) res_task->n_processing_slots}
-            },{
-                    {"name",  "requests_deferred"},
-                    {"help",  "Number of requests deferred."},
-                    {"value",  (uint64_t) res_task->n_tasks_deferred}
-            },{
-                    {"name",  "n_busy_slots_per_decode"},
-                    {"help",  "Average number of busy slots per llama_decode() call"},
-                    {"value",  (float) res_task->n_busy_slots / std::max((float) res_task->n_decode, 1.f)}
-            }}}
-        };
-
-        std::stringstream prometheus;
-
-        for (const auto & el : all_metrics_def.items()) {
-            const auto & type        = el.key();
-            const auto & metrics_def = el.value();
-
-            for (const auto & metric_def : metrics_def) {
-                const std::string name = metric_def.at("name");
-                const std::string help = metric_def.at("help");
-
-                auto value = json_value(metric_def, "value", 0.);
-                prometheus << "# HELP llamacpp:" << name << " " << help  << "\n"
-                            << "# TYPE llamacpp:" << name << " " << type  << "\n"
-                            << "llamacpp:"        << name << " " << value << "\n";
-            }
-        }
-
-        // labeled counter: one time series per draft position
-        if (!res_task->n_accepted_per_pos.empty()) {
-            prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
-                          " Accepted tokens per draft position\n"
-                       << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos_total counter\n";
-            for (size_t i = 0; i < res_task->n_accepted_per_pos.size(); i++) {
-                prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\""
-                           << i << "\"} " << res_task->n_accepted_per_pos[i] << "\n";
-            }
-        }
-
-        res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->t_start);
+        res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
         res->content_type = "text/plain; version=0.0.4";
         res->status = 200;
-        res->data = prometheus.str();
+        res->data = res_task->to_metrics();
         return res;
     };
 
