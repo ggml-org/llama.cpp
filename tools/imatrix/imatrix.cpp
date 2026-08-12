@@ -70,13 +70,17 @@ public:
     bool load_imatrix(const char * file_name);
     const std::unordered_map<std::string, Stats> & get_mstats() const { return m_stats; }
 private:
-    std::unordered_map<std::string, Stats> m_stats;
-    common_params                          m_params;
-    std::mutex                             m_mutex;
-    std::vector<std::string>               m_datasets;
-    int32_t                                m_last_chunk = 0;
-    std::vector<char>                      m_src1_data;
-    std::vector<char>                      m_ids; // the expert ids from ggml_mul_mat_id
+    std::unordered_map<std::string, Stats>  m_stats;
+    common_params                           m_params;
+    std::mutex                              m_mutex;
+    std::vector<std::string>                m_datasets;
+    int32_t                                 m_last_chunk = 0;
+    int32_t                                 m_chunk_size = 0;
+    std::vector<char>                       m_src1_data;
+    std::vector<char>                       m_ids; // the expert ids from ggml_mul_mat_id
+    int32_t e_chunk_size() const {
+        return m_chunk_size > 0 ? m_chunk_size : m_params.n_ctx / m_params.n_parallel;
+    }
 };
 
 // remove any prefix and suffixes from the name
@@ -734,8 +738,7 @@ void IMatrixCollector::save_imatrix_legacy(int32_t ncall) const {
     // deterministic tensor name order
     std::sort(to_store.begin(), to_store.end());
 
-    const int32_t chunk_size = m_params.n_ctx / m_params.n_parallel;
-
+    const int32_t chunk_size = e_chunk_size();
     std::ofstream out(fname, std::ios::binary);
     out.write((const char *) &n_entries, sizeof(n_entries));
     for (const auto & name : to_store) {
@@ -878,7 +881,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         gguf_set_arr_str(ctx_gguf, LLM_KV_IMATRIX_DATASETS, datasets.data(), datasets.size());
         // Write the number of chunks the matrix was computed with
         gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_CHUNK_COUNT, m_last_chunk);
-        gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_CHUNK_SIZE, m_params.n_ctx / m_params.n_parallel);
+        gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_CHUNK_SIZE, e_chunk_size());
 
         // Define the schema for the tensor statistics (for use in quantize.cpp)
         const char * stats_schema[] = {"sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain",
@@ -985,52 +988,74 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         return false;
     }
 
-    const int32_t chunk_size = m_params.n_ctx / m_params.n_parallel;
     const bool is_legacy = loaded.is_legacy;
+    if (!is_legacy && loaded.chunk_size > 0) {
+        if (m_chunk_size == 0) { m_chunk_size = loaded.chunk_size; }
+        else if (m_chunk_size != loaded.chunk_size) {
+            LOG_WRN("%s: chunk size mismatch in %s: %d != %d, using %d\n",
+                __func__, file_name, loaded.chunk_size, m_chunk_size, m_chunk_size);
+        }
+    }
+
+    const int32_t chunk_size = e_chunk_size();
 
     for (auto & [name, entry] : loaded.entries) {
         auto & e = m_stats[name];
 
         if (is_legacy) {
-            // Legacy format: sums contain (raw_sum/raw_count)*ncall, counts contain {ncall}
-            // Reconstruct raw form by multiplying by chunk_size
             if (e.values.empty()) {
                 e.values.resize(entry.sums.size(), 0.0f);
                 e.counts.resize(1, 0);
             }
-            for (size_t j = 0; j < entry.sums.size(); ++j) {
-                e.values[j] += entry.sums[j] * chunk_size;
-            }
-            for (size_t j = 0; j < e.counts.size(); ++j) {
-                e.counts[j] += entry.counts[0] * chunk_size;
-            }
+
+            for (size_t j = 0; j < entry.sums.size(); ++j) { e.values[j] += entry.sums[j] * chunk_size; }
+            for (size_t j = 0; j < e.counts.size(); ++j) { e.counts[j] += entry.counts[0] * chunk_size; }
+            e.activations.clear();
         } else {
             // GGUF format: raw sums and counts, accumulate directly
             const int64_t nval    = entry.sums.size();
             const int64_t ncounts = entry.counts.size();
+            const int64_t nact    = entry.activations.size();
+            const bool first_contribution = e.values.empty();
 
-            if (e.values.empty()) {
-                e.values.resize(nval, 0.0f);
-            } else if ((size_t)nval != e.values.size()) {
-                LOG_ERR("%s: mismatched sums size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) nval, e.values.size());
+            if (e.values.empty()) { e.values.resize(nval, 0.0f); }
+            else if ((size_t)nval != e.values.size()) {
+                LOG_ERR("%s: mismatched sums size for %s: %zu != %zu\n",
+                    __func__, name.c_str(), (size_t) nval, e.values.size());
+
                 return false;
             }
 
-            if (e.counts.empty()) {
-                e.counts.resize(ncounts, 0);
-            } else if (e.counts.size() == 1 && ncounts > 1) {
-                e.counts.resize(ncounts, e.counts[0]);
-            } else if ((size_t) ncounts != e.counts.size()) {
-                LOG_ERR("%s: mismatched counts size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) ncounts, e.counts.size());
+            if (e.counts.empty()) { e.counts.resize(ncounts, 0); }
+            else if (e.counts.size() == 1 && ncounts > 1) { e.counts.resize(ncounts, e.counts[0]); }
+            else if ((size_t) ncounts != e.counts.size()) {
+                LOG_ERR("%s: mismatched counts size for %s: %zu != %zu\n",
+                    __func__, name.c_str(), (size_t) ncounts, e.counts.size());
+
                 return false;
             }
 
-            for (int64_t j = 0; j < nval; ++j) {
-                e.values[j] += entry.sums[j];
-            }
-            for (int64_t j = 0; j < ncounts; ++j) {
-                e.counts[j] += entry.counts[j];
-            }
+            for (int64_t j = 0; j < nval; ++j) { e.values[j] += entry.sums[j]; }
+            for (int64_t j = 0; j < ncounts; ++j) { e.counts[j] += entry.counts[j]; }
+
+            if (nact > 0 && (first_contribution || !e.activations.empty())) {
+                if (nact != nval) {
+                    LOG_ERR("%s: mismatched activations size for %s: %zu != %zu\n",
+                        __func__, name.c_str(), (size_t) nact, (size_t) nval);
+
+                    return false;
+                }
+
+                if (e.activations.empty()) { e.activations.resize(nact, 0.0f); }
+                else if ((size_t) nact != e.activations.size()) {
+                    LOG_ERR("%s: mismatched activations size for %s: %zu != %zu\n",
+                        __func__, name.c_str(), (size_t) nact, e.activations.size());
+
+                    return false;
+                }
+
+                for (int64_t j = 0; j < nact; ++j) { e.activations[j] += entry.activations[j]; }
+            } else { e.activations.clear(); }
         }
     }
 
