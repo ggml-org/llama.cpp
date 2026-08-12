@@ -320,7 +320,7 @@ struct server_slot {
 
     // this is for printing timings with slot progress, not part of metrics
     int64_t t_print_last = 0;
-    int32_t n_decoded_last = 0;
+    int32_t n_gen_last = 0;
 
     void reset() {
         SLT_DBG(*this, "%s", "\n");
@@ -347,6 +347,7 @@ struct server_slot {
         task_prev = std::move(task);
         task.reset();
 
+        // note: callback_on_reset() must have run before this, see release()
         stats = {};
         n_accepted_per_pos.clear();
 
@@ -567,18 +568,18 @@ struct server_slot {
         }
 
         const double n_gen_second     = stats.n_gen_tps();
-        const double n_gen_second_win = 1e6 / (t_now - t_print_last) * (stats.n_gen - n_decoded_last);
+        const double n_gen_second_win = 1e6 / (t_now - t_print_last) * (stats.n_gen - n_gen_last);
 
         t_print_last = t_now;
-        n_decoded_last = stats.n_gen;
+        n_gen_last = stats.n_gen;
 
-        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s, tg_3s = %6.2f t/s\n", (int) stats.n_gen, n_gen_second, n_gen_second_win);
+        SLT_INF(*this, "n_gen = %6d, tg = %6.2f t/s, tg_3s = %6.2f t/s\n", (int) stats.n_gen, n_gen_second, n_gen_second_win);
     }
 
     void print_timings_pp() const {
-        const double t_prompt_processing = stats.t_prompt_ms();
+        const double t_prompt_total = stats.t_prompt_ms();
 
-        if (t_prompt_processing < 3000.0) {
+        if (t_prompt_total < 3000.0) {
             return;
         }
 
@@ -586,12 +587,12 @@ struct server_slot {
         const double f_progress = task->n_tokens() > 0 ? (double) prompt.n_tokens() / task->n_tokens() : 0.0;
 
         SLT_INF(*this, "prompt processing, n_tokens = %6d, progress = %.2f, t = %6.2f s / %.2f tokens per second\n",
-                (int) stats.n_prompt_processed, f_progress, t_prompt_processing / 1e3, n_prompt_second);
+                (int) stats.n_prompt_processed, f_progress, t_prompt_total / 1e3, n_prompt_second);
     }
 
     void print_timings() const {
-        const double t_prompt_processing = stats.t_prompt_ms();
-        const double t_token_generation  = stats.t_gen_ms();
+        const double t_prompt_total = stats.t_prompt_ms();
+        const double t_gen_total    = stats.t_gen_ms();
 
         const double t_prompt        = stats.t_prompt_per_token_ms();
         const double n_prompt_second = stats.n_prompt_tps();
@@ -601,15 +602,15 @@ struct server_slot {
 
         SLT_INF(*this,
                 "prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
-                t_prompt_processing, (int) stats.n_prompt_processed, t_prompt, n_prompt_second);
+                t_prompt_total, (int) stats.n_prompt_processed, t_prompt, n_prompt_second);
 
         SLT_INF(*this,
                 "       eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
-                t_token_generation, (int) stats.n_gen, t_gen, n_gen_second);
+                t_gen_total, (int) stats.n_gen, t_gen, n_gen_second);
 
         SLT_INF(*this,
                 "      total time = %10.2f ms / %5d tokens\n",
-                t_prompt_processing + t_token_generation, (int) (stats.n_prompt_processed + stats.n_gen));
+                t_prompt_total + t_gen_total, (int) (stats.n_prompt_processed + stats.n_gen));
 
         SLT_INF(*this,
                 "   graphs reused = %10d\n",
@@ -1823,7 +1824,7 @@ private:
             slot.stop           = STOP_TYPE_LIMIT;
             slot.has_next_token = false;
 
-            SLT_DBG(slot, "stopped due to running out of context capacity, prompt.n_tokens() = %d, task.n_tokens = %d, n_decoded = %d, n_ctx = %d\n",
+            SLT_DBG(slot, "stopped due to running out of context capacity, prompt.n_tokens() = %d, task.n_tokens = %d, n_gen = %d, n_ctx = %d\n",
                     slot.prompt.n_tokens(), slot.task->n_tokens(), (int) slot.stats.n_gen, slot.n_ctx);
         }
 
@@ -1832,7 +1833,7 @@ private:
             slot.stop           = STOP_TYPE_LIMIT;
             slot.has_next_token = false;
 
-            SLT_DBG(slot, "stopped by limit, n_decoded = %d, n_predict = %d\n", (int) slot.stats.n_gen, slot.task->params.n_predict);
+            SLT_DBG(slot, "stopped by limit, n_gen = %d, n_predict = %d\n", (int) slot.stats.n_gen, slot.task->params.n_predict);
         }
 
         if (slot.has_new_line) {
@@ -1856,7 +1857,7 @@ private:
                         // cut the last line
                         slot.generated_text.erase(pos, std::string::npos);
 
-                        SLT_DBG(slot, "stopped by indentation limit, n_decoded = %d, n_indent = %d\n", (int) slot.stats.n_gen, n_indent);
+                        SLT_DBG(slot, "stopped by indentation limit, n_gen = %d, n_indent = %d\n", (int) slot.stats.n_gen, n_indent);
                     }
                 }
 
@@ -1880,7 +1881,7 @@ private:
                 slot.stop           = STOP_TYPE_LIMIT;
                 slot.has_next_token = false;
 
-                SLT_DBG(slot, "stopped by time limit, n_decoded = %d, t_max_predict_ms = %d ms\n", (int) slot.stats.n_gen, (int) slot.task->params.t_max_predict_ms);
+                SLT_DBG(slot, "stopped by time limit, n_gen = %d, t_max_predict_ms = %d ms\n", (int) slot.stats.n_gen, (int) slot.task->params.t_max_predict_ms);
             }
         }
 
@@ -1891,7 +1892,7 @@ private:
             SLT_DBG(slot, "%s", "stopped by EOS\n");
         }
 
-        SLT_DBG(slot, "n_decoded = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
+        SLT_DBG(slot, "n_gen = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
 
         return slot.has_next_token; // continue
     }
@@ -3476,7 +3477,7 @@ private:
                         batch.set_output(batch.size() - 1, true);
 
                         slot.stats.n_gen = 0;
-                        slot.i_batch         = batch.size() - 1;
+                        slot.i_batch     = batch.size() - 1;
 
                         slot.init_sampler();
                     } else {
@@ -3726,7 +3727,7 @@ private:
             if (slot.stats.n_gen == 1) {
                 slot.stats.update_prompt_last();
                 slot.t_print_last = t_now;
-                slot.n_decoded_last = 0;
+                slot.n_gen_last = 0;
             }
 
             slot.stats.update_gen_last();

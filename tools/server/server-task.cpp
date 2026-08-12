@@ -1522,11 +1522,11 @@ std::string server_task_result_metrics::to_metrics() {
         {
             "prompt_tokens_total",
             "Number of prompt tokens processed, excluding cached tokens",
-            metrics.prompt.count
+            (double) metrics.prompt.count
         }, {
             "prompt_tokens_cached_total",
             "Number of prompt tokens reused from the cache",
-            metrics.n_prompt_cached
+            (double) metrics.n_prompt_cached
         }, {
             "prompt_seconds_total",
             "Total time spent processing prompts",
@@ -1534,7 +1534,7 @@ std::string server_task_result_metrics::to_metrics() {
         }, {
             "tokens_predicted_total",
             "Number of generation tokens processed",
-            metrics.predict.count
+            (double) metrics.predict.count
         }, {
             "tokens_predicted_seconds_total",
             "Total time spent generating tokens",
@@ -1542,23 +1542,23 @@ std::string server_task_result_metrics::to_metrics() {
         }, {
             "n_decode_total",
             "Total number of llama_decode() calls, excluding speculative decoding and multimodal decoding",
-            metrics.n_decode
+            (double) metrics.n_decode
         }, {
             "n_tokens_max",
             "Largest observed sequence length (prompt + generation)",
-            metrics.n_tokens_max
+            (double) metrics.n_tokens_max
         }, {
             "spec_decode_num_draft_tokens_total",
             "Speculative: Total draft tokens generated",
-            metrics.n_draft_tokens
+            (double) metrics.n_draft_tokens
         }, {
             "spec_decode_num_accepted_tokens_total",
             "Speculative: Total draft tokens accepted by the target model",
-            metrics.n_draft_accepted
+            (double) metrics.n_draft_accepted
         }, {
             "spec_decode_num_drafts_total",
             "Speculative: Total speculative decoding verification steps",
-            metrics.n_draft_verif_steps
+            (double) metrics.n_draft_verif_steps
         },
     };
 
@@ -1574,15 +1574,15 @@ std::string server_task_result_metrics::to_metrics() {
         }, {
             "requests_processing",
             "Number of requests processing",
-            (uint64_t) n_processing_slots
+            (double) n_processing_slots
         }, {
             "requests_deferred",
             "Number of requests deferred",
-            (uint64_t) n_tasks_deferred
+            (double) n_tasks_deferred
         }, {
             "n_busy_slots_per_decode",
             "Average number of busy slots per llama_decode() call",
-            (float) metrics.n_busy_slots / std::max((float) metrics.n_decode, 1.f)
+            (double) metrics.n_busy_slots / std::max((double) metrics.n_decode, 1.0)
         },
     };
 
@@ -1590,9 +1590,9 @@ std::string server_task_result_metrics::to_metrics() {
 
     auto add_items = [&prometheus](const char * type, const std::vector<metric_item> & items) {
         for (const auto & item : items) {
-            prometheus << "# HELP llamacpp:" << item.name << " " << item.description        << "\n"
-                       << "# TYPE llamacpp:" << item.name << " " << type                    << "\n"
-                       << "llamacpp:"        << item.name << " " << item.value.get<double>() << "\n";
+            prometheus << "# HELP llamacpp:" << item.name << " " << item.description << "\n"
+                       << "# TYPE llamacpp:" << item.name << " " << type             << "\n"
+                       << "llamacpp:"        << item.name << " " << item.value       << "\n";
         }
     };
 

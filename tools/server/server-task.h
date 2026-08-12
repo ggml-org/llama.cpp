@@ -508,7 +508,7 @@ struct server_task_result_metrics : server_task_result {
     struct metric_item {
         std::string name;
         std::string description;
-        json value; // can be int or double
+        double value; // prometheus values are always float64
     };
     std::string to_metrics();
 };

@@ -432,7 +432,8 @@ struct server_metrics {
 
     struct bucket {
         uint64_t count = 0; // number of tokens
-        uint64_t steps = 0; // for generation, this excludes first generated token (logits from prompt batch)
+        uint64_t steps = 0; // number of decode steps,
+                            // this excludes first generated token (logits from prompt batch)
         uint64_t time  = 0; // in microseconds
 
         // the rate uses the decode steps, so that "free" tokens do not inflate it
@@ -447,16 +448,15 @@ struct server_metrics {
         }
     };
 
-    // prompt tokens reused from the cache need no decode, so they only have a count
-
-    // these are reset by reset_bucket()
-    bucket   prompt_bucket;
-    bucket   predict_bucket;
-    uint64_t n_prompt_cached_bucket = 0;
+    // these are reset by reset_bucket(), only the rate is read from them
+    bucket prompt_bucket;
+    bucket predict_bucket;
 
     // metrics below are cumulative since the server started
-    bucket   prompt; // only processed tokens, not cached tokens
-    bucket   predict;
+    bucket prompt; // only processed tokens, cached ones are counted separately below
+    bucket predict;
+
+    // tokens reused from the cache need no decode, so they only have a count
     uint64_t n_prompt_cached = 0;
 
     uint64_t n_tokens_max = 0;
@@ -474,9 +474,8 @@ struct server_metrics {
     }
 
     void reset_bucket() {
-        prompt_bucket          = {};
-        predict_bucket         = {};
-        n_prompt_cached_bucket = 0;
+        prompt_bucket  = {};
+        predict_bucket = {};
     }
 
     void add_prompt(uint64_t n_tokens, uint64_t t_us) {
@@ -485,10 +484,8 @@ struct server_metrics {
     }
 
     void add_prompt_cached(uint64_t n_tokens) {
-        n_prompt_cached        += n_tokens;
-        n_prompt_cached_bucket += n_tokens;
+        n_prompt_cached += n_tokens;
     }
-
 };
 
 //
