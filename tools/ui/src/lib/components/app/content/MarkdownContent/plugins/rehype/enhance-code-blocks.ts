@@ -19,7 +19,14 @@ import {
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
-import { CODE_BLOCK_CLASS } from '$lib/constants';
+
+import {
+	CODE_BLOCK,
+	CODE_BLOCK_CLASS,
+	CODE_BLOCK_ATTR,
+	CODE_BLOCK_TEXT
+} from '$lib/constants';
+
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -43,7 +50,7 @@ export const remarkPreserveCodeMeta: Plugin<[], any> = () => {
 			if (node.meta) {
 				node.data = node.data || {};
 				node.data.hProperties = node.data.hProperties || {};
-				node.data.hProperties['data-meta'] = node.meta;
+				node.data.hProperties[CODE_BLOCK_ATTR.META_DATA] = node.meta;
 			}
 		});
 	};
@@ -68,13 +75,11 @@ function extractLanguage(codeElement: Element): string {
  * Matches patterns like title="app.js", file=app.js, "app.js", `app.js`, or just app.js
  */
 function extractFilenameFromInfo(node: Element, codeElement: Element): string | undefined {
-	const meta = node.properties?.['data-meta'] ?? codeElement.properties?.['data-meta'];
+	const meta = node.properties?.[CODE_BLOCK_ATTR.META_DATA] ?? codeElement.properties?.[CODE_BLOCK_ATTR.META_DATA];
 	if (typeof meta !== 'string') return undefined;
 
 	// Matches a file extension and name, optionally preceded by a key like name=, file=, or title=
-	// and optionally wrapped in quotes or backticks.
-	// Requires the extension to start with a letter to avoid capturing semantic versions like "1.0.0".
-	const regex = /(?:^|\s)(?:[a-zA-Z0-9_-]+=)?["'`]?([^"'`\s]+\.[a-zA-Z][a-zA-Z0-9]{0,6})["'`]?(?:\s|$)/i;
+	const regex = CODE_BLOCK.FILE_NAME_REGEX;
 	const match = meta.match(regex);
 	return match ? match[1] : undefined;
 }
@@ -103,26 +108,26 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 
 			codeElement.properties = {
 				...codeElement.properties,
-				'data-code-id': codeId
+				[CODE_BLOCK_ATTR.CODE_ID]: codeId
 			};
 
 			const actions: Element[] = [
-				createDownloadButton(codeId, 'data-code-id', 'Download'),
-				createCopyButton(codeId, 'data-code-id', 'Copy code')
+				createDownloadButton(codeId, CODE_BLOCK_ATTR.CODE_ID, CODE_BLOCK_TEXT.DOWNLOAD_BTN_TITLE),
+				createCopyButton(codeId, CODE_BLOCK_ATTR.CODE_ID, CODE_BLOCK_TEXT.COPY_BTN_TITLE)
 			];
 
 			if (language.toLowerCase() === 'html') {
-				actions.push(createPreviewButton(codeId, 'data-code-id', 'Preview code'));
+				actions.push(createPreviewButton(codeId, CODE_BLOCK_ATTR.CODE_ID, CODE_BLOCK_TEXT.PREVIEW_TITLE));
 			}
 
-			const header = createBlockHeader(language, codeId, 'data-code-id', actions);
+			const header = createBlockHeader(language, codeId, CODE_BLOCK_ATTR.CODE_ID, actions);
 			const wrapper = createWrapper(
 				header,
 				node,
 				CODE_BLOCK_CLASS.WRAPPER,
 				CODE_BLOCK_CLASS.SCROLL_CONTAINER,
 				{
-					...(filename ? { 'data-filename': filename } : {})
+					...(filename ? { [CODE_BLOCK_ATTR.FILE_NAME] : filename } : {})
 				}
 			);
 

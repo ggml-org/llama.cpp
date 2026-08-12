@@ -26,7 +26,10 @@
 	} from '$lib/components/app';
 	import {
 		BOOL_TRUE_STRING,
+		CODE_BLOCK,
 		CODE_BLOCK_CLASS,
+		CODE_BLOCK_ATTR,
+		CODE_BLOCK_TYPE_TO_EXTENSION_MAP,
 		DATA_ERROR_BOUND_ATTR,
 		DATA_ERROR_HANDLED_ATTR,
 		DIAGRAM_VIEW_MODE_ATTR,
@@ -192,9 +195,9 @@
 	function cleanupEventListeners() {
 		if (!containerRef) return;
 
-		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
-		const downloadButtons = containerRef.querySelectorAll<HTMLButtonElement>('.download-code-btn');
-		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
+		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
+		const downloadButtons = containerRef.querySelectorAll<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`);
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		for (const button of copyButtons) {
 			button.removeEventListener('click', handleCopyClick);
@@ -296,17 +299,7 @@
 		const language = languageLabel?.textContent?.trim() || 'text';
 
 		// Determine extension from md code block
-		const EXTENSION_MAP: Record<string, string> = {
-			python: '.py', py: '.py',
-			javascript: '.js', js: '.js',
-			typescript: '.ts', ts: '.ts',
-			bash: '.sh', sh: '.sh', shell: '.sh',
-			'c++': '.cpp', cpp: '.cpp',
-			yaml: '.yml', yml: '.yml',
-			markdown: '.md', text: '.txt', plaintext: '.txt'
-		};
-
-		let extension = EXTENSION_MAP[language.toLowerCase()] || '';
+		let extension = CODE_BLOCK_TYPE_TO_EXTENSION_MAP[language.toLowerCase()] || '';
 		if (!extension) {
 			const alphanumeric = language.replace(/[^a-z0-9]/gi, '').toLowerCase();
 			extension = alphanumeric ? `.${alphanumeric}` : '.md';
@@ -316,7 +309,7 @@
 		let filename: string | null = null;
 
 		// Priority 1: From data-filename attribute (extracted from code block info string)
-		filename = wrapper?.getAttribute('data-filename') || null;
+		filename = wrapper?.getAttribute(CODE_BLOCK_ATTR.FILE_NAME) || null;
 
 		// Priority 2: Scan preceding elements for potential filenames, climbing the DOM
 		if (!filename && wrapper) {
@@ -349,7 +342,7 @@
 				let candidate: string | null = null;
 
 				// First try if file name is within backticks, quotes, parens, bold
-				const boundaryRegex = /`([^`]+)`|"([^"]+)"|'([^']+)'|\(([^)]+)\)|\*\*([^*]+)\*\*/g;
+				const boundaryRegex = CODE_BLOCK.FILE_NAME_BOUNDARY_REGEX;
 				let match;
 
 				while ((match = boundaryRegex.exec(text)) !== null) {
@@ -359,9 +352,7 @@
 					if (!innerText || !innerText.includes('.')) continue;
 
 					// If we found an extension mapped to the code block type, the boundary string MUST end with it
-					if (extension && !innerText.toLowerCase().endsWith(extension.toLowerCase())) {
-						continue;
-					}
+					if (extension && !innerText.toLowerCase().endsWith(extension.toLowerCase())) continue;
 
 					candidate = innerText;
 				}
@@ -407,11 +398,9 @@
 			const ss = String(now.getSeconds()).padStart(2, '0');
 			const ts = `${y}${m}${d}_${hh}${mm}${ss}`;
 			filename = `llama_${ts}${extension}`;
-		} else {
-			if (!filename.includes('.')) {
-				filename += extension;
-			}
-	}
+		} else if (!filename.includes('.')) {
+			filename += extension;
+		}
 
 		const blob = new Blob([rawCode], { type: 'text/plain' });
 		const url = URL.createObjectURL(blob);
@@ -636,9 +625,9 @@
 		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
 
 		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
-			const downloadButton = wrapper.querySelector<HTMLButtonElement>('.download-code-btn');
-			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
+			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
+			const downloadButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`);
+			const previewButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 			if (downloadButton && downloadButton.dataset.listenerBound !== 'true') {
 				downloadButton.dataset.listenerBound = 'true';
@@ -701,8 +690,8 @@
 		}
 
 		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
-		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
@@ -745,8 +734,8 @@
 		}
 
 		// Check if clicking on copy or preview button in svg block
-		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .copy-code-btn`);
-		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .preview-code-btn`);
+		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
+		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (svgCopyBtn || svgPreviewBtn) {
 			const wrapper = target.closest(`.${SVG.WRAPPER_CLASS}`);

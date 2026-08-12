@@ -316,6 +316,7 @@ div.markdown-user-content :global(.table-wrapper) {
 
 .markdown-content :global(.copy-code-btn),
 .markdown-content :global(.preview-code-btn),
+.markdown-content :global(.download-code-btn),
 .markdown-content :global(.toggle-source-btn) {
 	display: flex;
 	align-items: center;
@@ -329,12 +330,14 @@ div.markdown-user-content :global(.table-wrapper) {
 
 .markdown-content :global(.copy-code-btn:hover),
 .markdown-content :global(.preview-code-btn:hover),
+.markdown-content :global(.download-code-btn:hover),
 .markdown-content :global(.toggle-source-btn:hover) {
 	transform: scale(1.05);
 }
 
 .markdown-content :global(.copy-code-btn:active),
 .markdown-content :global(.preview-code-btn:active),
+.markdown-content :global(.download-code-btn:active),
 .markdown-content :global(.toggle-source-btn:active) {
 	transform: scale(0.95);
 }
