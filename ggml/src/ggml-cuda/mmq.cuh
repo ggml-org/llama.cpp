@@ -1466,6 +1466,50 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
          ntx_fd);
 }
 
+// Types measured to gain from a narrower routed-MoE tile. A type that was not measured keeps
+// the default width.
+static bool ggml_cuda_mmq_moe_tile_type_supported(const ggml_type type, const bool native_fp4) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        // MXFP4 gains on the generic kernels but loses on the native FP4 kernels.
+        case GGML_TYPE_MXFP4:
+            return !native_fp4;
+        default:
+            return false;
+    }
+}
+
+// Tile width to assume for routed MoE, or 0 to keep the default width.
+static int64_t ggml_cuda_mmq_get_moe_ncols(const ggml_type type, const int cc, const int64_t ncols_mean) {
+    if (blackwell_mma_available(cc)) {
+        if (!ggml_cuda_mmq_moe_tile_type_supported(type, /*native_fp4 =*/ true)) {
+            return 0;
+        }
+        return std::min<int64_t>(128, std::max<int64_t>(64, 3*ncols_mean));
+    }
+    // Consumer Ampere (860) through Ada (890) want narrower tiles than Blackwell.
+    // Lower bound is 860 and not GGML_CUDA_CC_AMPERE because sm_80 was not measured
+    const int arch = ggml_cuda_highest_compiled_arch(cc);
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && arch >= 860 && arch < GGML_CUDA_CC_HOPPER) {
+        if (!ggml_cuda_mmq_moe_tile_type_supported(type, /*native_fp4 =*/ false)) {
+            return 0;
+        }
+        return std::min<int64_t>(128, std::max<int64_t>(32, 2*ncols_mean));
+    }
+    return 0;
+}
+
 template <ggml_type type, bool fallback>
 void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     const int    id    = ggml_cuda_get_device();
@@ -1474,6 +1518,15 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
 
     int J_best        = 0;
     int ntiles_J_best = INT_MAX;
+
+    int64_t ncols_picker = args.ncols_max;
+    if (args.expert_bounds) {
+        const int64_t ncols_mean = (args.ncols_dst + args.nchannels_x - 1) / args.nchannels_x;
+        const int64_t ncols_moe  = ggml_cuda_mmq_get_moe_ncols(type, cc, ncols_mean);
+        if (ncols_moe > 0) {
+            ncols_picker = std::min(ncols_picker, ncols_moe);
+        }
+    }
 
     for (int J = 8; J <= 128 && ntiles_J_best > 1; J += 8) {
         const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J, fallback, cc);
@@ -1485,7 +1538,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + config.J - 1) / config.J;
+        const int ntiles_x = (ncols_picker + config.J - 1) / config.J;
 
         if (ntiles_x < ntiles_J_best) {
             J_best = J;
