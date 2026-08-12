@@ -732,19 +732,16 @@ static std::vector<size_t> unicode_regex_split_custom_qwen35(const std::string &
 template <typename CharT>
 static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT> & text, const std::basic_string<CharT> & regex, const std::vector<size_t> & offsets) {
     using BidirIt = typename std::basic_string<CharT>::const_iterator;
-    thread_local std::basic_string<CharT> cached_regex;
-    thread_local std::basic_regex<CharT> cached_expr; // cache compiled regex
+    thread_local std::unordered_map<std::basic_string<CharT>, std::basic_regex<CharT>> cached_regex; // cache compiled regex
 #ifdef _MSC_VER
     // Bypass bug in MSVC: https://github.com/ggml-org/llama.cpp/issues/17830
     constexpr auto regex_flags = std::regex_constants::ECMAScript;
 #else
     constexpr auto regex_flags = std::regex_constants::optimize | std::regex_constants::nosubs;
 #endif
-    if (cached_regex != regex) { // [[unlikely]]
-        cached_regex = regex;
-        cached_expr = std::basic_regex<CharT>(regex, regex_flags);
-    }
-    const auto & expr = cached_expr;
+    if (cached_regex.size() > 1000) cached_regex.clear(); // basic force limit, without ttl
+    auto [_it, inserted] = cached_regex.try_emplace(regex, regex, regex_flags);
+    const auto & expr = _it->second;
     std::vector<size_t> bpe_offsets; // store the offset of each word
     bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
     size_t start = 0;
