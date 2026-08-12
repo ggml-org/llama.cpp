@@ -11,6 +11,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     bool rope_finetuned = true;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
+    hparams.rope_finetuned = rope_finetuned; // needed for round trip save
     std::fill(hparams.rope_pattern.begin(), hparams.rope_pattern.end(), rope_finetuned);
 
     switch (hparams.n_layer()) {
