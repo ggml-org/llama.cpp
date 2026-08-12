@@ -268,6 +268,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_VALUE_RESIDUAL_MIX_LORA_RANK, hparams.n_lora_value_res_mix);
     add_kv(LLM_KV_ATTENTION_GATE_LORA_RANK,          hparams.n_lora_gate);
     add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
+    add_kv(LLM_KV_ATTENTION_ROPE_PATTERN,            hparams.rope_pattern, true);
     add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
     add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,  hparams.is_swa_impl, true);
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
