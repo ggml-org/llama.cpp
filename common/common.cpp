@@ -1019,20 +1019,21 @@ std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
         // Make sure to add trailing slash
-        if (p.back() != DIRECTORY_SEPARATOR) {
+        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
             p += DIRECTORY_SEPARATOR;
         }
         return p;
     };
-    if (getenv("LLAMA_CACHE")) {
-        cache_directory = std::getenv("LLAMA_CACHE");
-    } else {
+    cache_directory = common_get_env("LLAMA_CACHE");
+    if (cache_directory.empty()) {
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
         defined(__OpenBSD__) || defined(__NetBSD__)
-        if (std::getenv("XDG_CACHE_HOME")) {
-            cache_directory = std::getenv("XDG_CACHE_HOME");
-        } else if (std::getenv("HOME")) {
-            cache_directory = std::getenv("HOME") + std::string("/.cache/");
+        const std::string xdg_cache_home = common_get_env("XDG_CACHE_HOME");
+        const std::string home           = common_get_env("HOME");
+        if (!xdg_cache_home.empty()) {
+            cache_directory = xdg_cache_home;
+        } else if (!home.empty()) {
+            cache_directory = home + "/.cache/";
         } else {
 #if defined(__linux__)
             /* no $HOME is defined, fallback to getpwuid */
@@ -1047,9 +1048,16 @@ std::string fs_get_cache_directory() {
 #endif /* defined(__linux__) */
         }
 #elif defined(__APPLE__)
-        cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
+        cache_directory = common_get_env("HOME");
+        if (cache_directory.empty()) {
+            throw std::runtime_error("Failed to find $HOME directory");
+        }
+        cache_directory += "/Library/Caches/";
 #elif defined(_WIN32)
-        cache_directory = std::getenv("LOCALAPPDATA");
+        cache_directory = common_get_env("LOCALAPPDATA");
+        if (cache_directory.empty()) {
+            throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
+        }
 #elif defined(__EMSCRIPTEN__)
         GGML_ABORT("not implemented on this platform");
 #else
@@ -1069,17 +1077,14 @@ std::string fs_get_config_directory() {
         }
         return p;
     };
-    // an env variable set to an empty value is the same as unset
-    [[maybe_unused]] auto getenv_nonempty = [](const char * name) -> const char * {
-        const char * value = std::getenv(name);
-        return (value && value[0]) ? value : nullptr;
-    };
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
         defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
-    if (const char * xdg_config_home = getenv_nonempty("XDG_CONFIG_HOME")) {
+    const std::string xdg_config_home = common_get_env("XDG_CONFIG_HOME");
+    const std::string home            = common_get_env("HOME");
+    if (!xdg_config_home.empty()) {
         config_directory = xdg_config_home;
-    } else if (const char * home = getenv_nonempty("HOME")) {
-        config_directory = home + std::string("/.config/");
+    } else if (!home.empty()) {
+        config_directory = home + "/.config/";
     } else {
 #if defined(__linux__)
         /* no $HOME is defined, fallback to getpwuid */
@@ -1094,11 +1099,10 @@ std::string fs_get_config_directory() {
 #endif
     }
 #elif defined(_WIN32)
-    const char * appdata = getenv_nonempty("APPDATA");
-    if (!appdata) {
+    config_directory = common_get_env("APPDATA");
+    if (config_directory.empty()) {
         throw std::runtime_error("Failed to find %APPDATA% directory");
     }
-    config_directory = appdata;
 #elif defined(__EMSCRIPTEN__)
     // caller decides what to do when there is no config directory
     throw std::runtime_error("not implemented on this platform");
