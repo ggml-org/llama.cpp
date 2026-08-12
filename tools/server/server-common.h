@@ -335,117 +335,8 @@ json format_response_rerank(
         int top_n);
 
 //
-// other utils
+// stats and metrics
 //
-
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top);
-
-std::string safe_json_to_str(const json & data);
-
-std::string tokens_to_str(llama_context * ctx, const llama_tokens & tokens);
-std::string tokens_to_str(const llama_vocab * vocab, const llama_tokens & tokens);
-
-// format incomplete utf-8 multibyte character for output
-std::string tokens_to_output_formatted_string(const llama_context * ctx, const llama_token token);
-
-// format server-sent event (SSE), return the formatted string to send
-// note: if data is a json array, it will be sent as multiple events, one per item
-std::string format_oai_sse(const json & data);
-
-std::string format_oai_resp_sse(const json & data);
-
-// format Anthropic-style SSE with event types
-std::string format_anthropic_sse(const json & data);
-
-bool is_valid_utf8(const std::string & str);
-
-//
-// formatting output responses
-// TODO: move these to server-task.cpp
-//
-
-llama_tokens format_prompt_infill(
-        const llama_vocab * vocab,
-        const json & input_prefix,
-        const json & input_suffix,
-        const json & input_extra,
-        const int n_batch,
-        const int n_predict,
-        const int n_ctx,
-        const bool spm_infill,
-        const llama_tokens & tokens_prompt);
-
-// format rerank task: [BOS]query[EOS][SEP]doc[EOS].
-server_tokens format_prompt_rerank(
-        const struct llama_model * model,
-        const struct llama_vocab * vocab,
-        mtmd_context * mctx,
-        const std::string & query,
-        const std::string & doc);
-
-// simple implementation of a pipe
-// used for streaming data between threads
-template<typename T>
-struct server_pipe {
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::queue<T> queue;
-    std::atomic<bool> writer_closed{false};
-    std::atomic<bool> reader_closed{false};
-
-    // 0 = unbounded (default)
-    // > 0, write() drops the oldest item once the queue is full
-    size_t max_size = 0;
-
-    void close_write() {
-        writer_closed.store(true, std::memory_order_relaxed);
-        cv.notify_all();
-    }
-
-    void close_read() {
-        reader_closed.store(true, std::memory_order_relaxed);
-        cv.notify_all();
-    }
-
-    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
-    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
-    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
-        std::unique_lock<std::mutex> lk(mutex);
-        constexpr auto poll_interval = std::chrono::milliseconds(500);
-        while (true) {
-            if (!queue.empty()) {
-                output = std::move(queue.front());
-                queue.pop();
-                return true;
-            }
-            if (writer_closed.load()) {
-                return false; // clean EOF
-            }
-            if (should_stop && should_stop()) { // a null should_stop means "never stop"
-                if (close_on_stop) {
-                    close_read(); // signal broken pipe to writer
-                }
-                return false; // cancelled / deadline reached
-            }
-            cv.wait_for(lk, poll_interval);
-        }
-    }
-
-    bool write(T && data) {
-        std::lock_guard<std::mutex> lk(mutex);
-        if (reader_closed.load()) {
-            return false; // broken pipe
-        }
-        if (max_size > 0) {
-            while (queue.size() >= max_size) {
-                queue.pop(); // drop oldest to stay bounded
-            }
-        }
-        queue.push(std::move(data));
-        cv.notify_one();
-        return true;
-    }
-};
 
 struct server_slot;
 
@@ -572,4 +463,117 @@ struct server_metrics {
     // these are implemented in server-context.cpp
     void on_prompt_eval(const server_slot & slot);
     void on_prediction(const server_slot & slot);
+};
+
+//
+// other utils
+//
+
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top);
+
+std::string safe_json_to_str(const json & data);
+
+std::string tokens_to_str(llama_context * ctx, const llama_tokens & tokens);
+std::string tokens_to_str(const llama_vocab * vocab, const llama_tokens & tokens);
+
+// format incomplete utf-8 multibyte character for output
+std::string tokens_to_output_formatted_string(const llama_context * ctx, const llama_token token);
+
+// format server-sent event (SSE), return the formatted string to send
+// note: if data is a json array, it will be sent as multiple events, one per item
+std::string format_oai_sse(const json & data);
+
+std::string format_oai_resp_sse(const json & data);
+
+// format Anthropic-style SSE with event types
+std::string format_anthropic_sse(const json & data);
+
+bool is_valid_utf8(const std::string & str);
+
+//
+// formatting output responses
+// TODO: move these to server-task.cpp
+//
+
+llama_tokens format_prompt_infill(
+        const llama_vocab * vocab,
+        const json & input_prefix,
+        const json & input_suffix,
+        const json & input_extra,
+        const int n_batch,
+        const int n_predict,
+        const int n_ctx,
+        const bool spm_infill,
+        const llama_tokens & tokens_prompt);
+
+// format rerank task: [BOS]query[EOS][SEP]doc[EOS].
+server_tokens format_prompt_rerank(
+        const struct llama_model * model,
+        const struct llama_vocab * vocab,
+        mtmd_context * mctx,
+        const std::string & query,
+        const std::string & doc);
+
+// simple implementation of a pipe
+// used for streaming data between threads
+template<typename T>
+struct server_pipe {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<T> queue;
+    std::atomic<bool> writer_closed{false};
+    std::atomic<bool> reader_closed{false};
+
+    // 0 = unbounded (default)
+    // > 0, write() drops the oldest item once the queue is full
+    size_t max_size = 0;
+
+    void close_write() {
+        writer_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    void close_read() {
+        reader_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
+    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
+    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
+        std::unique_lock<std::mutex> lk(mutex);
+        constexpr auto poll_interval = std::chrono::milliseconds(500);
+        while (true) {
+            if (!queue.empty()) {
+                output = std::move(queue.front());
+                queue.pop();
+                return true;
+            }
+            if (writer_closed.load()) {
+                return false; // clean EOF
+            }
+            if (should_stop && should_stop()) { // a null should_stop means "never stop"
+                if (close_on_stop) {
+                    close_read(); // signal broken pipe to writer
+                }
+                return false; // cancelled / deadline reached
+            }
+            cv.wait_for(lk, poll_interval);
+        }
+    }
+
+    bool write(T && data) {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (reader_closed.load()) {
+            return false; // broken pipe
+        }
+        if (max_size > 0) {
+            while (queue.size() >= max_size) {
+                queue.pop(); // drop oldest to stay bounded
+            }
+        }
+        queue.push(std::move(data));
+        cv.notify_one();
+        return true;
+    }
 };
