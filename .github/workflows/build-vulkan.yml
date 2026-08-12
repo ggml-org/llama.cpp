@@ -93,19 +93,13 @@ jobs:
         run: |
           echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
 
-      - name: Use Vulkan SDK Cache
-        uses: actions/cache@v5
-        id: cache-sdk
-        with:
-          path: ./vulkan_sdk
-          key: cache-gha-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
-
       - name: Setup Vulkan SDK
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan
+        id: setup
+        uses: ./.github/actions/unarchive-tar
         with:
+          url: https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_SDK_VERSION }}/linux/vulkan_sdk.tar.xz
           path: ./vulkan_sdk
-          version: ${{ env.VULKAN_SDK_VERSION }}
+          strip: 1
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
