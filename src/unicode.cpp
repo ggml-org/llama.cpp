@@ -2,6 +2,7 @@
 #include "unicode-data.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -145,28 +146,21 @@ static std::vector<unicode_cpt_flags> unicode_cpt_flags_array() {
     return cpt_flags;
 }
 
-static std::unordered_map<uint8_t, std::string> unicode_byte_to_utf8_map() {
-    std::unordered_map<uint8_t, std::string> map;
-    for (int ch = 0x21; ch <= 0x7E; ++ch) {  // u'!' to u'~'
-        assert(0 <= ch && ch < 256);
-        map[ch] = unicode_cpt_to_utf8(ch);
-    }
-    for (int ch = 0xA1; ch <= 0xAC; ++ch) {  // u'¡' to u'¬'
-        assert(0 <= ch && ch < 256);
-        map[ch] = unicode_cpt_to_utf8(ch);
-    }
-    for (int ch = 0xAE; ch <= 0xFF; ++ch) {  // u'®' to u'ÿ'
-        assert(0 <= ch && ch < 256);
-        map[ch] = unicode_cpt_to_utf8(ch);
-    }
-    auto n = 0;
+static std::array<std::string, 256> unicode_byte_to_utf8_map() {
+    std::array<std::string, 256> mapping;
+    int n = 0;
     for (int ch = 0; ch < 256; ++ch) {
-        if (map.find(ch) == map.end()) {
-            map[ch] = unicode_cpt_to_utf8(256 + n);
+        // Printable ASCII: 0x21-0x7E or Latin-1 supplement: 0xA1-0xAC, 0xAE-0xFF
+        if ((ch >= 0x21 && ch <= 0x7E) || (ch >= 0xA1 && ch <= 0xAC) || (ch >= 0xAE && ch <= 0xFF)) {
+            mapping[ch] = unicode_cpt_to_utf8(ch);
+        }
+        // Everything else maps to U+0100+
+        else {
+            mapping[ch] = unicode_cpt_to_utf8(256 + n);
             ++n;
         }
     }
-    return map;
+    return mapping;
 }
 
 static std::unordered_map<std::string, uint8_t> unicode_utf8_to_byte_map() {
@@ -738,13 +732,19 @@ static std::vector<size_t> unicode_regex_split_custom_qwen35(const std::string &
 template <typename CharT>
 static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT> & text, const std::basic_string<CharT> & regex, const std::vector<size_t> & offsets) {
     using BidirIt = typename std::basic_string<CharT>::const_iterator;
+    thread_local std::basic_string<CharT> cached_regex;
+    thread_local std::basic_regex<CharT> cached_expr; // cache compiled regex
 #ifdef _MSC_VER
     // Bypass bug in MSVC: https://github.com/ggml-org/llama.cpp/issues/17830
     constexpr auto regex_flags = std::regex_constants::ECMAScript;
 #else
     constexpr auto regex_flags = std::regex_constants::optimize | std::regex_constants::nosubs;
 #endif
-    std::basic_regex<CharT> expr(regex, regex_flags);
+    if (cached_regex != regex) { // [[unlikely]]
+        cached_regex = regex;
+        cached_expr = std::basic_regex<CharT>(regex, regex_flags);
+    }
+    const auto & expr = cached_expr;
     std::vector<size_t> bpe_offsets; // store the offset of each word
     bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
     size_t start = 0;
@@ -754,7 +754,7 @@ static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT
 
         int64_t start_idx = 0;
         while (it != end) {
-            std::match_results<BidirIt> match = *it;
+            const std::match_results<BidirIt> &match = *it;
             if (match.position() > start_idx) {
                 bpe_offsets.emplace_back(match.position() - start_idx);
             }
@@ -1086,32 +1086,29 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
 //
 
 std::string unicode_cpt_to_utf8(uint32_t cpt) {
-    std::string result;
-
-    if (/* 0x00 <= cpt && */ cpt <= 0x7f) {
-        result.push_back(cpt);
-        return result;
+    if (cpt > 0x10ffff) {
+        throw std::invalid_argument("invalid codepoint");
     }
-    if (0x80 <= cpt && cpt <= 0x7ff) {
-        result.push_back(0xc0 | ((cpt >> 6) & 0x1f));
-        result.push_back(0x80 | (cpt & 0x3f));
-        return result;
-    }
-    if (0x800 <= cpt && cpt <= 0xffff) {
-        result.push_back(0xe0 | ((cpt >> 12) & 0x0f));
-        result.push_back(0x80 | ((cpt >> 6) & 0x3f));
-        result.push_back(0x80 | (cpt & 0x3f));
-        return result;
-    }
-    if (0x10000 <= cpt && cpt <= 0x10ffff) {
-        result.push_back(0xf0 | ((cpt >> 18) & 0x07));
-        result.push_back(0x80 | ((cpt >> 12) & 0x3f));
-        result.push_back(0x80 | ((cpt >> 6) & 0x3f));
-        result.push_back(0x80 | (cpt & 0x3f));
-        return result;
+    if (cpt <= 0x7f) {
+        return std::string(1, (char) cpt);
     }
 
-    throw std::invalid_argument("invalid codepoint");
+    static const uint8_t lead_prefixes[] = {0xc0, 0xe0, 0xf0};
+    static const uint8_t lead_shifts[]   = {6, 12, 18};
+
+    size_t len   = 1 + (cpt > 0x7f) + (cpt > 0x7ff) + (cpt > 0xffff);
+    size_t idx   = len - 2;
+    size_t start = 4 - len;
+
+    char buf[4];
+    buf[3] = 0x80 | (cpt & 0x3f);
+    buf[2] = 0x80 | ((cpt >> 6) & 0x3f);
+    buf[1] = 0x80 | ((cpt >> 12) & 0x3f);
+    buf[0] = 0x80 | ((cpt >> 18) & 0x3f);
+
+    buf[start] = lead_prefixes[idx] | ((cpt >> lead_shifts[idx]) & 0x3f);
+
+    return std::string(buf + start, len);
 }
 
 std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & cpts) {
@@ -1160,8 +1157,8 @@ unicode_cpt_flags unicode_cpt_flags_from_utf8(const std::string & utf8) {
 }
 
 std::string unicode_byte_to_utf8(uint8_t byte) {
-    static std::unordered_map<uint8_t, std::string> map = unicode_byte_to_utf8_map();
-    return map.at(byte);
+    static std::array<std::string, 256> map = unicode_byte_to_utf8_map();
+    return map[byte];
 }
 
 uint8_t unicode_utf8_to_byte(const std::string & utf8) {
