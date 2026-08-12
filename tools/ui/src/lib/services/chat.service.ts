@@ -1,4 +1,5 @@
 import { settingsStore } from '../stores/settings.svelte';
+import { getAudioInputFormat } from '../utils/audio-format';
 import { capImageDataURLSize } from '../utils/cap-img-size';
 import {
 	API_CHAT,
@@ -20,18 +21,12 @@ import {
 import {
 	AttachmentType,
 	ContentPartType,
-	FileTypeAudio,
 	MessageRole,
-	MimeTypeAudio,
 	ReasoningFormat,
 	StreamConnectionState
 } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
-import type {
-	AudioInputFormat,
-	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource
-} from '$lib/types';
+import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import type {
 	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,
@@ -42,23 +37,6 @@ import { isAbortError } from '$lib/utils/abort';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
-
-function getAudioInputFormat(mimeType: string): AudioInputFormat {
-	const normalizedMimeType = mimeType.trim().toLowerCase();
-
-	if (
-		normalizedMimeType === MimeTypeAudio.WAV ||
-		normalizedMimeType === MimeTypeAudio.WAVE ||
-		normalizedMimeType === MimeTypeAudio.X_WAV ||
-		normalizedMimeType === MimeTypeAudio.X_WAVE ||
-		normalizedMimeType === MimeTypeAudio.VND_WAVE ||
-		normalizedMimeType === MimeTypeAudio.X_PN_WAV
-	) {
-		return FileTypeAudio.WAV;
-	}
-
-	return FileTypeAudio.MP3;
-}
 
 interface ResumableStreamState {
 	bytesReceived: number;

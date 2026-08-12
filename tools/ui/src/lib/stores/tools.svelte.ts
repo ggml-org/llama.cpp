@@ -1,4 +1,5 @@
 import {
+	buildReadMediaToolDefinition,
 	buildSandboxToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
@@ -15,6 +16,7 @@ import {
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -168,9 +170,42 @@ class ToolsStore {
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
-		return config().jsSandboxEnabled
-			? [buildSandboxToolDefinition(!!config().symbolicMathEnabled)]
-			: [];
+		const tools: OpenAIToolDefinition[] = [];
+
+		if (config().jsSandboxEnabled) {
+			tools.push(buildSandboxToolDefinition(!!config().symbolicMathEnabled));
+		}
+
+		const readMedia = this.readMediaTool();
+
+		if (readMedia) tools.push(readMedia);
+
+		return tools;
+	}
+
+	/**
+	 * `read_media` runs in the frontend on top of the server's `read_file`, so it
+	 * exists only when that tool is served and the active model can perceive the
+	 * bytes. The server cannot make this call - it does not know which model the
+	 * conversation uses.
+	 */
+	private readMediaTool(): OpenAIToolDefinition | null {
+		const hasReadFile = this._builtinTools.some(
+			(def) => def.function.name === BuiltInTool.READ_FILE
+		);
+
+		if (!hasReadFile) return null;
+
+		const model = selectedModelName() ?? modelsStore.models[0]?.model ?? '';
+
+		if (!model) return null;
+
+		const vision = modelsStore.modelSupportsVision(model);
+		const audio = modelsStore.modelSupportsAudio(model);
+
+		if (!vision && !audio) return null;
+
+		return buildReadMediaToolDefinition(vision, audio);
 	}
 
 	get customTools(): OpenAIToolDefinition[] {

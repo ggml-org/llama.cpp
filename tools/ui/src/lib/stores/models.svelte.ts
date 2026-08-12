@@ -18,7 +18,10 @@ import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-import { getAuthHeaders, TTLCache } from '$lib/utils';
+// deep imports, not the '$lib/utils' barrel: it re-exports modules that reach back
+// into the stores, and going through it here would read a half-built module
+import { getAuthHeaders } from '$lib/utils/api-headers';
+import { TTLCache } from '$lib/utils/cache-ttl';
 import {
 	detectThinkingSupport,
 	detectThinkingSupportWithReason

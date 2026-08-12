@@ -1,6 +1,7 @@
 #include "server-tools.h"
 
 #include "subproc.h"
+#include "base64.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -864,6 +865,7 @@ static bool path_glob_match(const std::string & pattern, const std::string & rel
 //
 
 static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE = 16 * 1024; // 16 KB
+static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64 = 32 * 1024 * 1024; // 32 MB
 
 struct server_tool_read_file : server_tool {
     server_tool_read_file() {
@@ -899,6 +901,8 @@ struct server_tool_read_file : server_tool {
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
         bool append_loc   = json_value(params, "append_loc", false);
+        // comes from the x-resp-type header, the model cannot ask for it
+        bool as_base64    = json_value(params, "resp_type", std::string()) == "base64";
 
         auto io = make_tools_io(params);
 
@@ -906,6 +910,23 @@ struct server_tool_read_file : server_tool {
         if (!io->file_size(path, file_size)) {
             return {{"error", "cannot stat file: " + path}};
         }
+
+        if (as_base64) {
+            if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64) {
+                return {{"error", string_format(
+                    "file too large (%zu bytes, max %zu)",
+                    (size_t)file_size, SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64)}};
+            }
+            std::string content;
+            if (!io->read_file(path, content)) {
+                return {{"error", "failed to open file: " + path}};
+            }
+            return {
+                {"base64",     base64::encode(content.data(), content.size())},
+                {"size_bytes", (size_t) content.size()},
+            };
+        }
+
         if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1) {
             return {{"error", string_format(
                 "file too large (%zu bytes, max %zu). Use start_line/end_line to read a portion.",
@@ -2133,6 +2154,15 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 params["runtime"] = runtime_header;
             } else if (runtime) {
                 params["runtime"] = runtime->spec();
+            }
+
+            // x-resp-type header is only used by read_file for now
+            if (params.contains("resp_type")) {
+                params.erase("resp_type");
+            }
+            auto resp_type = get_header(req.headers, "x-resp-type");
+            if (!resp_type.empty()) {
+                params["resp_type"] = resp_type;
             }
 
             server_tool & tool = find_tool(tools, tool_name, stream);

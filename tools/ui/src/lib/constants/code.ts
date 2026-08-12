@@ -18,6 +18,9 @@ export const TRIM_TRAILING_PADDING_REGEX = /(?:\n[ \t]*)+$/;
 // `C:\foo\bar.txt`. Used wherever a parameter accepts a user-supplied path.
 export const FILE_PATH_SEPARATOR_REGEX = /[\\/]/;
 
+// Separates a file name from its extension, e.g. the '.' in `cover.png`.
+export const FILE_EXTENSION_SEPARATOR = '.';
+
 // Matches the `text:` prefix that file-type identifiers use to denote a
 // plain-text language (e.g. `text:typescript`). Used by tool-call renderers
 // to recover the underlying highlight.js language.

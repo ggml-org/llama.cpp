@@ -50,11 +50,11 @@ export interface AgenticSection {
 }
 
 /**
- * Represents a tool result line that may reference an image attachment
+ * Represents a tool result line that may reference a media attachment (image or audio)
  */
 export type ToolResultLine = {
 	text: string;
-	image?: DatabaseMessageExtraImageFile;
+	media?: DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile;
 };
 
 /**
@@ -301,16 +301,16 @@ export function splitSearchSummaryList(
 	return { lines };
 }
 
-/** Bounded cache for parseToolResultWithImages results. */
+/** Bounded cache for parseToolResultWithMedia results. */
 const TOOL_RESULT_LINES_CACHE_MAX_SIZE = 32;
 const toolResultLinesCache = new Map<string, ToolResultLine[]>();
 
 /**
- * Parse tool result text into lines, matching image attachments by name.
+ * Parse tool result text into lines, matching media attachments (images and audio) by name.
  * Memoized: called per render during streaming on unchanged tool result
  * strings with unchanged extras.
  */
-export function parseToolResultWithImages(
+export function parseToolResultWithMedia(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
@@ -332,12 +332,13 @@ export function parseToolResultWithImages(
 		if (!match || !extras) return { text: line };
 
 		const attachmentName = match[1];
-		const image = extras.find(
-			(e): e is DatabaseMessageExtraImageFile =>
-				e.type === AttachmentType.IMAGE && e.name === attachmentName
+		const media = extras.find(
+			(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
+				(e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO) &&
+				e.name === attachmentName
 		);
 
-		return { image, text: line };
+		return { media, text: line };
 	});
 
 	if (toolResultLinesCache.size >= TOOL_RESULT_LINES_CACHE_MAX_SIZE) {
