@@ -1,9 +1,11 @@
 import { CLI_FLAGS } from './cli-flags.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
+import { MEMORY_ENTRY_LIMIT_BYTES_DEFAULT, MEMORY_GROUPS_DEFAULT } from './memory';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import {
+	Brain,
 	Code,
 	Database,
 	Funnel,
@@ -32,6 +34,7 @@ export const SETTINGS_SECTIONS = {
 	DISPLAY: { slug: 'display', title: 'Display' },
 	GENERAL: { slug: 'general', title: 'General' },
 	IMPORT_EXPORT: { slug: 'import-export', title: 'Import/Export' },
+	MEMORY: { slug: 'memory', title: 'Memory' },
 	SAMPLING_PENALTIES: { slug: 'sampling-penalties', title: 'Sampling & Penalties' },
 	TOOLS: { slug: 'tools', title: 'Tools' }
 } as const;
@@ -42,6 +45,7 @@ export const SETTINGS_SECTION_SLUGS = {
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.slug,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.slug,
+	MEMORY: SETTINGS_SECTIONS.MEMORY.slug,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.slug,
 	TOOLS: SETTINGS_SECTIONS.TOOLS.slug
 } as const;
@@ -52,6 +56,7 @@ export const SETTINGS_SECTION_TITLES = {
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.title,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.title,
+	MEMORY: SETTINGS_SECTIONS.MEMORY.title,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.title,
 	TOOLS: SETTINGS_SECTIONS.TOOLS.title
 } as const;
@@ -344,6 +349,40 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		],
 		slug: SETTINGS_SECTION_SLUGS.AGENTIC,
 		title: SETTINGS_SECTION_TITLES.AGENTIC
+	},
+	// Memory
+	{
+		icon: Brain,
+		settings: [
+			{
+				defaultValue: false,
+				help: 'Expose memory_open, memory_write and memory_drop tools to the model. Entries persist in the browser IndexedDB and are shared across conversations.',
+				key: SETTINGS_KEYS.MEMORY_ENABLED,
+				label: 'Memory tools',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: MEMORY_GROUPS_DEFAULT,
+				dependsOn: SETTINGS_KEYS.MEMORY_ENABLED,
+				help: 'Comma separated list of entry groups. An entry name is group/slug, lowercase alphanumerics and dashes.',
+				key: SETTINGS_KEYS.MEMORY_GROUPS,
+				label: 'Groups',
+				placeholder: MEMORY_GROUPS_DEFAULT,
+				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: MEMORY_ENTRY_LIMIT_BYTES_DEFAULT,
+				dependsOn: SETTINGS_KEYS.MEMORY_ENABLED,
+				help: 'A write that would push an entry past this size is refused.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.MEMORY_ENTRY_LIMIT_BYTES,
+				label: 'Entry size limit (bytes)',
+				placeholder: `${MEMORY_ENTRY_LIMIT_BYTES_DEFAULT}`,
+				type: SettingsFieldType.INPUT
+			}
+		],
+		slug: SETTINGS_SECTION_SLUGS.MEMORY,
+		title: SETTINGS_SECTION_TITLES.MEMORY
 	},
 	// Import/Export
 	{

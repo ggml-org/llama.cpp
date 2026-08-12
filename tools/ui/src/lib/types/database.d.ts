@@ -19,6 +19,17 @@ export interface DatabaseConversation {
 	pinned?: boolean;
 }
 
+export interface ExportedMemory {
+	entries: DatabaseMemoryEntry[];
+}
+
+export interface DatabaseMemoryEntry {
+	name: string;
+	description: string;
+	body: string;
+	updated: number;
+}
+
 export interface DatabaseMessageExtraAudioFile {
 	type: AttachmentType.AUDIO;
 	name: string;

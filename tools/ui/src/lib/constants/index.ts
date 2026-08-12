@@ -58,6 +58,7 @@ export * from './ui.constants';
 export * from './uri-template.constants';
 export * from './url.constants';
 export * from './working-directory.constants';
+export * from './memory';
 export * from './read-media';
 export * from './get-datetime';
 export * from './browser-info';

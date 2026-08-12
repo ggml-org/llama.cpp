@@ -10,7 +10,7 @@
  * the permission/continue/steering gates owned by {@link AgenticGates}.
  */
 
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, MEMORY_TOOL_NAMES, NEWLINE } from '$lib/constants';
 import {
 	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -29,6 +29,7 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import { ChatService } from '$lib/services';
+import { MemoryService } from '$lib/services/memory.service';
 import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
@@ -832,6 +833,8 @@ class AgenticStore {
 									signal,
 									conversationsStore.activeConversation?.cwd
 								);
+							} else if (MEMORY_TOOL_NAMES.has(toolName)) {
+								executionResult = await MemoryService.executeTool(toolName, args);
 							} else {
 								executionResult = await SandboxService.executeTool(toolName, args, signal);
 							}
