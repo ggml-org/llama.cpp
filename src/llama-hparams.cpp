@@ -284,11 +284,6 @@ bool llama_hparams::has_rope(uint32_t il) const {
         return false;
     }
 
-    // If rope_pattern is not set, fall back to rope_finetuned
-    if (rope_pattern[0] == 0 && rope_pattern[1] == 0) {
-        return rope_finetuned;
-    }
-
     if (il < n_layer_all) {
         return rope_pattern[il] != 0;
     }
