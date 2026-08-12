@@ -4929,8 +4929,13 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         const int x = (e && e[0]) ? atoi(e) : 0;
         return (x == 8 || x == 16 || x == 32) ? x : 0;   // 0 = per-gen default
     }();
+    // X2E needs 16 to keep per-lane o_acc at 128B (the compiler spills the
+    // kernel-default width); X1E does not spill, but C=16 is still a measured
+    // +28-30% DK128-GQA4 decode win there (X1-85, kv 4096/8192), neutral on
+    // DK64 / GQA1 / quant-KV.
     const int fa_cl_c_gqa4 = fa_cl_c_env ? fa_cl_c_env
-        : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 16 : 0);
+        : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+           backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E ? 16 : 0);
     const std::string opts_cl_c_gqa4 = fa_cl_c_gqa4
         ? " -D FA_CL_C=" + std::to_string(fa_cl_c_gqa4) : std::string();
     const std::string fa_cl_c_g8_val = std::to_string(fa_cl_c_gqa4 ? fa_cl_c_gqa4 * 2 : 16);
