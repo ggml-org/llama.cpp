@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
+#include <cmath>
 #include <cstdarg>
 #include <filesystem>
 #include <fstream>
@@ -61,6 +62,7 @@ static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
     LLAMA_EXAMPLE_SERVER,
     LLAMA_EXAMPLE_CLI,
+    LLAMA_EXAMPLE_TTS,
 };
 
 static std::string read_file(const std::string & fname) {
@@ -360,7 +362,6 @@ static bool spec_types_is_default(const common_params & params) {
 common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex) {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
-    common_download_hf_plan plan_voc;
     common_download_opts opts;
 
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
@@ -413,11 +414,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
         plan_spec = common_download_get_hf_plan(params.speculative.draft.mparams, opts_spec);
     }
 
-    if (!params.vocoder.model.hf_repo.empty()) {
-        plan_voc = common_download_get_hf_plan(params.vocoder.model, opts);
-    }
-
-    return common_models_handler{plan, plan_spec, plan_voc, opts};
+    return common_models_handler{plan, plan_spec, opts};
 }
 
 bool common_models_handler_is_preset_repo(const common_models_handler & handler) {
@@ -467,7 +464,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 
     auto & plan      = handler.plan;
     auto & plan_spec = handler.plan_spec;
-    auto & plan_voc  = handler.plan_voc;
 
     auto opts = handler.opts; // copy
     opts.callback = callback;
@@ -482,7 +478,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     };
     handle_url(params.model);
     handle_url(params.mmproj);
-    handle_url(params.vocoder.model);
     handle_url(params.speculative.draft.mparams);
 
     // optionally, if docker repo is set, resolve it
@@ -510,14 +505,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         task.opts       = opts;
         tasks.push_back(task);
     }
-    if (!params.vocoder.model.url.empty()) {
-        common_download_task task;
-        task.url        = params.vocoder.model.url;
-        task.local_path = params.vocoder.model.path;
-        task.opts       = opts;
-        tasks.push_back(task);
-    }
-
     bool had_spec_url = false;
     if (!params.speculative.draft.mparams.url.empty()) {
         common_download_task task;
@@ -629,11 +616,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     if (!plan_spec.model_files.empty() && !had_spec_url && !spec_sidecar_found) {
         add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
         had_spec_url = true;
-    }
-
-    // handle vocoder plan (e.g. --hf-repo-v)
-    if (!plan_voc.model_files.empty()) {
-        add_tasks(plan_voc.model_files, plan_voc.primary, params.vocoder.model);
     }
 
     if (!plan.model_files.empty()) {
@@ -1408,6 +1390,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         params.n_parallel = -1;     // auto by default
     } else if (ex == LLAMA_EXAMPLE_TOKENIZE) {
         params.parse_special = true; // parse special tokens by default, like the old tokenize tool
+    } else if (ex == LLAMA_EXAMPLE_TTS) {
+        params.out_file = "output.wav";
+        params.sampling.penalty_repeat = 1.05f;
+        params.sampling.penalty_last_n = -1;
     }
 
     params.use_color = tty_can_use_colors();
@@ -1452,8 +1438,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--version"},
         "show version and build info",
         [](common_params &) {
-            fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
-            fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
+            llama_print_build_info(llama_version());
             exit(0);
         }
     ));
@@ -2070,9 +2055,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sampling());
     add_opt(common_arg(
         {"--repeat-last-n"}, "N",
-        string_format("last n tokens to consider for penalize (default: %d, 0 = disabled, -1 = ctx_size)", params.sampling.penalty_last_n),
+        string_format("last n tokens to consider for penalize (default: %d, 0 = disabled)", params.sampling.penalty_last_n),
         [](common_params & params, int value) {
-            if (value < -1) {
+            if (value < 0) {
                 throw std::runtime_error(string_format("error: invalid repeat-last-n = %d\n", value));
             }
             params.sampling.penalty_last_n = value;
@@ -2084,7 +2069,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--repeat-penalty"}, "N",
         string_format("penalize repeat sequence of tokens (default: %.2f, 1.0 = disabled)", (double)params.sampling.penalty_repeat),
         [](common_params & params, const std::string & value) {
-            params.sampling.penalty_repeat = std::stof(value);
+            const float penalty_repeat = std::stof(value);
+            if (!std::isfinite(penalty_repeat) ||
+                penalty_repeat <= 0.0f ||
+                !std::isfinite(1.0f/penalty_repeat)) {
+                throw std::runtime_error("error: repeat-penalty must be finite and greater than 0\n");
+            }
+            params.sampling.penalty_repeat = penalty_repeat;
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT;
         }
     ).set_sampling());
@@ -2092,14 +2083,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--presence-penalty"}, "N",
         string_format("repeat alpha presence penalty (default: %.2f, 0.0 = disabled)", (double)params.sampling.penalty_present),
         [](common_params & params, const std::string & value) {
-            params.sampling.penalty_present = std::stof(value);
+            const float penalty_present = std::stof(value);
+            if (!std::isfinite(penalty_present)) {
+                throw std::runtime_error("error: presence-penalty must be finite\n");
+            }
+            params.sampling.penalty_present = penalty_present;
         }
     ).set_sampling());
     add_opt(common_arg(
         {"--frequency-penalty"}, "N",
         string_format("repeat alpha frequency penalty (default: %.2f, 0.0 = disabled)", (double)params.sampling.penalty_freq),
         [](common_params & params, const std::string & value) {
-            params.sampling.penalty_freq = std::stof(value);
+            const float penalty_freq = std::stof(value);
+            if (!std::isfinite(penalty_freq)) {
+                throw std::runtime_error("error: frequency-penalty must be finite\n");
+            }
+            params.sampling.penalty_freq = penalty_freq;
         }
     ).set_sampling());
     add_opt(common_arg(
@@ -2129,9 +2128,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sampling());
     add_opt(common_arg(
         {"--dry-penalty-last-n"}, "N",
-        string_format("set DRY penalty for the last n tokens (default: %d, 0 = disable, -1 = context size)", params.sampling.dry_penalty_last_n),
+        string_format("set DRY penalty for the last n tokens (default: %d, 0 = disable)", params.sampling.dry_penalty_last_n),
         [](common_params & params, int value) {
-            if (value < -1) {
+            if (value < 0) {
                 throw std::runtime_error(string_format("error: invalid dry-penalty-last-n = %d\n", value));
             }
             params.sampling.dry_penalty_last_n = value;
@@ -2615,7 +2614,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.mtmd_batch_max_tokens = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MTMD_BATCH_MAX_TOKENS"));
-    if (llama_supports_rpc()) {
+    if (params.is_gen_docs || llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
             "comma-separated list of RPC servers (host:port)",
@@ -2653,14 +2652,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_DIO"));
     add_opt(common_arg(
         {"-lm", "--load-mode"}, "MODE",
-        "model loading mode (default: mmap)\n"
+        "model loading mode (default: auto)\n"
+        "- auto: mmap, unless a device does not support it\n"
         "- none: no special loading mode\n"
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
         "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
         "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
         "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
+            /**/ if (value == "auto")       { params.load_mode = LLAMA_LOAD_MODE_AUTO;       }
+            else if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
             else if (value == "mmap")       { params.load_mode = LLAMA_LOAD_MODE_MMAP;       }
             else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
             else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
@@ -3017,20 +3018,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD, LLAMA_EXAMPLE_TOKENIZE}).set_env("LLAMA_ARG_HF_FILE"));
     add_opt(common_arg(
-        {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
-        "Hugging Face model repository for the vocoder model (default: unused)",
-        [](common_params & params, const std::string & value) {
-            params.vocoder.model.hf_repo = value;
-        }
-    ).set_env("LLAMA_ARG_HF_REPO_V"));
-    add_opt(common_arg(
-        {"-hffv", "--hf-file-v"}, "FILE",
-        "Hugging Face model file for the vocoder model (default: unused)",
-        [](common_params & params, const std::string & value) {
-            params.vocoder.model.hf_file = value;
-        }
-    ).set_env("LLAMA_ARG_HF_FILE_V"));
-    add_opt(common_arg(
         {"-hft", "--hf-token"}, "TOKEN",
         "Hugging Face access token (default: value from HF_TOKEN environment variable)",
         [](common_params & params, const std::string & value) {
@@ -3364,12 +3351,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
-        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime\n"
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime, get_info\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
+    add_opt(common_arg(
+        {"--tools-runtime"}, "OPTION",
+        "experimental: run tools in a separate runtime environment (default: none, use host environment)\n"
+        "available options:\n"
+        "  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit\n"
+        "  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit\n"
+        "  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required\n",
+        [](common_params & params, const std::string & value) {
+            params.server_tools_runtime = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS_RUNTIME"));
     add_opt(common_arg(
         {"--mcp-servers-config"}, "PATH",
         "experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)\n"
@@ -4305,24 +4303,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     //
 
     add_opt(common_arg(
-        {"-mv", "--model-vocoder"}, "FNAME",
-        "vocoder model for audio generation (default: unused)",
+        {"--tts-lang"}, "FNAME",
+        "language (ISO 639-1) for audio generation\n"
+        "see tts/README.md for per-model usage notes",
         [](common_params & params, const std::string & value) {
-            params.vocoder.model.path = value;
+            params.tts_lang = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
-     add_opt(common_arg(
-        {"--tts-use-guide-tokens"},
-        "Use guide tokens to improve TTS word recall",
-        [](common_params & params) {
-            params.vocoder.use_guide_tokens = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_TTS}));
     add_opt(common_arg(
         {"--tts-speaker-file"}, "FNAME",
         "speaker file path for audio generation",
         [](common_params & params, const std::string & value) {
-            params.vocoder.speaker_file = value;
+            params.tts_speaker_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
@@ -4442,16 +4434,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_DEBUG}));
 
     // presets
-    add_opt(common_arg(
-        {"--tts-oute-default"},
-        string_format("use default OuteTTS models (note: can download weights from the internet)"),
-        [](common_params & params) {
-            params.model.hf_repo = "OuteAI/OuteTTS-0.2-500M-GGUF";
-            params.model.hf_file = "OuteTTS-0.2-500M-Q8_0.gguf";
-            params.vocoder.model.hf_repo = "ggml-org/WavTokenizer";
-            params.vocoder.model.hf_file = "WavTokenizer-Large-75-F16.gguf";
-        }
-    ).set_examples({LLAMA_EXAMPLE_TTS}));
 
     add_opt(common_arg(
         {"--embd-gemma-default"},

@@ -1,13 +1,13 @@
-import type { MessageRole } from '$lib/enums';
-import { ToolCallType } from '$lib/enums';
 import type {
 	ApiChatCompletionRequest,
 	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,
 	ApiChatMessageData
 } from './api';
-import type { ChatMessageTimings, ChatMessagePromptProgress } from './chat';
+import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from './database';
+import type { MessageRole } from '$lib/enums';
+import { ToolCallType } from '$lib/enums';
 
 /**
  * Agentic orchestration configuration.
@@ -109,7 +109,8 @@ export interface AgenticFlowCallbacks {
 	createToolResultMessage?: (
 		toolCallId: string,
 		content: string,
-		extras?: DatabaseMessageExtra[]
+		extras?: DatabaseMessageExtra[],
+		toolCwd?: string
 	) => Promise<DatabaseMessage>;
 	/** Update an already-created tool result message. Used while a streaming
 	 *  tool (e.g. exec_shell_command) accumulates output chunks before its

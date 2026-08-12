@@ -1,25 +1,25 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import {
-		Trash2,
-		Pencil,
-		MoreHorizontal,
 		Download,
-		Loader2,
-		Square,
 		GitBranch,
+		ListChecks,
+		Loader2,
+		MoreHorizontal,
+		Pencil,
 		Pin,
 		PinOff,
-		ListChecks
+		Square,
+		Trash2
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { RouterService } from '$lib/services/router.service';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { TruncatedText } from '$lib/components/app';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -40,18 +40,18 @@
 
 	let {
 		conversation,
+		depth = 0,
+		isActive = false,
+		isSelected = false,
+		isSelectionMode = false,
 		onDelete,
 		onEdit,
-		onSelect,
-		onStop,
-		onToggleSelect,
 		onEnterSelectionMode,
-		onSelectionClick,
 		onRowMouseDown,
-		isActive = false,
-		isSelectionMode = false,
-		isSelected = false,
-		depth = 0
+		onSelect,
+		onSelectionClick,
+		onStop,
+		onToggleSelect
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
@@ -99,6 +99,7 @@
 
 	function handleMouseOver() {
 		if (isSelectionMode) return;
+
 		renderActionsDropdown = true;
 	}
 
@@ -112,6 +113,7 @@
 
 	function handleCheckboxClick(event: MouseEvent) {
 		event.stopPropagation();
+
 		if (isSelectionMode) {
 			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
 		} else {
@@ -125,8 +127,10 @@
 
 	function handleCheckboxKeydown(event: KeyboardEvent) {
 		if (event.key !== ' ' && event.key !== 'Enter') return;
+
 		event.stopPropagation();
 		event.preventDefault();
+
 		if (isSelectionMode) {
 			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
 		} else {
@@ -278,9 +282,9 @@
 						icon: Trash2,
 						label: 'Delete',
 						onclick: handleDelete,
-						variant: 'destructive',
+						separator: true,
 						shortcut: ['shift', 'cmd', 'd'],
-						separator: true
+						variant: 'destructive'
 					}
 				]}
 			/>

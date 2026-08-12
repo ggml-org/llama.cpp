@@ -113,6 +113,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_CHAMELEON) {
         n_vocab = 10240;
+    } else if (arch == LLM_ARCH_QWEN3TTS) {
+        n_vocab = 4096; // must be >= the hard-coded codec head size (3072)
     }
 
     const uint32_t n_embd_head = n_embd / n_head;
@@ -190,7 +192,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
-    } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
+    } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MUSE_GLIMMER) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
@@ -215,6 +217,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
+        ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(1));
@@ -408,6 +411,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         return false; // FIXME @ngxson
     }
+    if (arch == LLM_ARCH_GRANITE_SWITCH) {
+        return false; // FIXME adapter fixture
+    }
     if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
         return false; // FIXME Embedding (?) models produce inconsistent results.
     }
@@ -430,10 +436,18 @@ static bool arch_supported(const llm_arch arch) {
 
     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
-    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MINIMAX_M3) {
+    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA) {
         return false;
     }
 #endif // GGML_USE_WEBGPU
+
+    // FIXME: jamba produces incorrect output (~0.55 NMSE vs CPU) on the HIP
+    // backend on RDNA3.5 (gfx1151); the SSM kernels need investigation.
+#ifdef GGML_USE_HIP
+    if (arch == LLM_ARCH_JAMBA) {
+        return false;
+    }
+#endif // GGML_USE_HIP
 
     return true;
 }

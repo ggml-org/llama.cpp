@@ -22,7 +22,122 @@
 #include <cstdlib>
 #include <cstring>
 #include <climits>
+#include <type_traits>
 #include <vector>
+
+// remember to bump this if the serialization format changes
+#define MTMD_SERIALIZATION_VERSION 1
+
+struct mtmd_serialization {
+    // note: using 64-bit here for future-proofing
+    uint64_t version = MTMD_SERIALIZATION_VERSION;
+    std::vector<char> data;
+    size_t read_pos = 0; // cursor used when reading
+
+    // for writing
+    mtmd_serialization(uint64_t version) : version(version) {
+        write(version);
+    }
+
+    // for reading
+    mtmd_serialization(uint64_t version, const char * buf, size_t len) {
+        // copy buf to data
+        data.assign(buf, buf + len);
+        uint64_t ver_in = read<uint64_t>();
+        if (ver_in != version) {
+            throw std::runtime_error("version mismatch");
+        }
+        this->version = ver_in;
+    }
+
+    template <typename T>
+    void write(T value) {
+        static_assert(std::is_trivially_copyable<T>::value && !std::is_same<T, bool>::value,
+            "T must be trivially copyable and not bool");
+        const char * p = reinterpret_cast<const char *>(&value);
+        data.insert(data.end(), p, p + sizeof(T));
+    }
+
+    template <typename T>
+    T read() {
+        static_assert(std::is_trivially_copyable<T>::value && !std::is_same<T, bool>::value,
+            "T must be trivially copyable and not bool");
+        if (read_pos + sizeof(T) > data.size()) {
+            throw std::runtime_error("read OOB");
+        }
+        T value;
+        std::memcpy(&value, data.data() + read_pos, sizeof(T));
+        read_pos += sizeof(T);
+        return value;
+    }
+
+};
+
+template <>
+void mtmd_serialization::write<bool>(bool value) {
+    write<uint8_t>(value ? 1 : 0);
+}
+template <>
+bool mtmd_serialization::read<bool>() {
+    return read<uint8_t>() != 0;
+}
+
+template <>
+void mtmd_serialization::write<std::string>(std::string value) {
+    write<uint64_t>(value.size());
+    data.insert(data.end(), value.begin(), value.end());
+}
+template <>
+std::string mtmd_serialization::read<std::string>() {
+    uint64_t len = read<uint64_t>();
+    if (read_pos + len > data.size()) {
+        throw std::runtime_error("read_string OOB");
+    }
+    std::string str(data.data() + read_pos, len);
+    read_pos += len;
+    return str;
+}
+
+// only mtmd.cpp needs these, so they're implemented here rather than in clip-impl.h
+void clip_image_f32::serialize(mtmd_serialization & ser) const {
+    // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+    // note: buf is intentionally NOT serialized; the loaded clip_image_f32 will always be a placeholder
+    ser.write(add_viewsep);
+    ser.write(add_newline);
+    ser.write((int32_t)nx_);
+    ser.write((int32_t)ny_);
+}
+void clip_image_f32::deserialize(mtmd_serialization & ser) {
+    add_viewsep = ser.read<bool>();
+    add_newline = ser.read<bool>();
+    nx_ = ser.read<int32_t>();
+    ny_ = ser.read<int32_t>();
+    buf.clear(); // always a placeholder after loading
+}
+
+void clip_image_f32_batch::serialize(mtmd_serialization & ser) const {
+    // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+    ser.write(is_audio);
+    ser.write<uint64_t>(entries.size());
+    for (const auto & entry : entries) {
+        entry.serialize(ser);
+    }
+}
+void clip_image_f32_batch::deserialize(mtmd_serialization & ser) {
+    is_audio = ser.read<bool>();
+    uint64_t n = ser.read<uint64_t>();
+    constexpr size_t min_entry_bytes = sizeof(uint8_t) * 2 + sizeof(int32_t) * 2;
+    if (n > (ser.data.size() - ser.read_pos) / min_entry_bytes) {
+        throw std::runtime_error("entries count exceeds buffer size");
+    }
+    entries.clear();
+    entries.reserve(n);
+    for (uint64_t i = 0; i < n; i++) {
+        clip_image_f32 entry;
+        entry.deserialize(ser);
+        entries.push_back(std::move(entry));
+    }
+}
 
 // for still image data, layout is RGBRGBRGB...
 // length of data must be nx * ny * 3 bytes
@@ -83,6 +198,7 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
     MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
     MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_COUNT,     // for validation
 };
 
 struct mtmd_image_tokens {
@@ -136,6 +252,30 @@ struct mtmd_image_tokens {
             id
         };
     }
+
+    void serialize(mtmd_serialization & ser) const {
+        // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+        ser.write(nx);
+        ser.write(ny);
+        ser.write((uint32_t)pos);
+        ser.write(image_idx);
+        ser.write(n_temporal_merge);
+        ser.write(id);
+        batch_f32.serialize(ser);
+    }
+    void deserialize(mtmd_serialization & ser) {
+        nx = ser.read<uint32_t>();
+        ny = ser.read<uint32_t>();
+        uint32_t pos_raw = ser.read<uint32_t>();
+        if (pos_raw >= MTMD_POS_TYPE_COUNT) {
+            throw std::runtime_error("invalid pos type");
+        }
+        pos = (mtmd_pos_type)pos_raw;
+        image_idx = ser.read<uint32_t>();
+        n_temporal_merge = ser.read<uint32_t>();
+        id = ser.read<std::string>();
+        batch_f32.deserialize(ser);
+    }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
 
@@ -160,6 +300,18 @@ struct mtmd_audio_tokens {
             batch_f32.clone(),
             id
         };
+    }
+
+    void serialize(mtmd_serialization & ser) const {
+        // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+        ser.write(n_tokens);
+        ser.write(id);
+        batch_f32.serialize(ser);
+    }
+    void deserialize(mtmd_serialization & ser) {
+        n_tokens = ser.read<uint32_t>();
+        id = ser.read<std::string>();
+        batch_f32.deserialize(ser);
     }
 };
 using mtmd_audio_tokens_ptr = std::unique_ptr<mtmd_audio_tokens>;
@@ -191,6 +343,66 @@ struct mtmd_input_chunk {
             return tokens_audio && tokens_audio->is_placeholder();
         }
         return false;
+    }
+
+    void serialize(mtmd_serialization & ser) const {
+        // remember to bump MTMD_SERIALIZATION_VERSION if this is changed
+        ser.write((uint32_t)type);
+
+        ser.write<uint64_t>(tokens_text.size());
+        for (llama_token tok : tokens_text) {
+            ser.write((int32_t)tok);
+        }
+
+        ser.write(tokens_image != nullptr);
+        if (tokens_image) {
+            tokens_image->serialize(ser);
+        }
+
+        ser.write(tokens_audio != nullptr);
+        if (tokens_audio) {
+            tokens_audio->serialize(ser);
+        }
+    }
+    void deserialize(mtmd_serialization & ser) {
+        uint32_t type_raw = ser.read<uint32_t>();
+        if (type_raw >= MTMD_INPUT_CHUNK_TYPE_COUNT) {
+            throw std::runtime_error("invalid chunk type");
+        }
+        type = (mtmd_input_chunk_type)type_raw;
+
+        uint64_t n_tokens_text = ser.read<uint64_t>();
+        // reject before resize() so a tiny corrupted/malicious buffer can't force a huge allocation
+        if (n_tokens_text > (ser.data.size() - ser.read_pos) / sizeof(int32_t)) {
+            throw std::runtime_error("tokens_text length exceeds buffer size");
+        }
+        tokens_text.resize(n_tokens_text);
+        for (uint64_t i = 0; i < n_tokens_text; i++) {
+            tokens_text[i] = (llama_token)ser.read<int32_t>();
+        }
+
+        if (ser.read<bool>()) {
+            tokens_image = std::make_unique<mtmd_image_tokens>();
+            tokens_image->deserialize(ser);
+        } else {
+            tokens_image.reset();
+        }
+
+        if (ser.read<bool>()) {
+            tokens_audio = std::make_unique<mtmd_audio_tokens>();
+            tokens_audio->deserialize(ser);
+        } else {
+            tokens_audio.reset();
+        }
+
+        // catch buffers where the declared type doesn't match which payload is actually present,
+        // so a mismatched chunk can't slip through and null-deref/abort later in an accessor
+        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE && !tokens_image) {
+            throw std::runtime_error("type is IMAGE but tokens_image is missing");
+        }
+        if (type == MTMD_INPUT_CHUNK_TYPE_AUDIO && !tokens_audio) {
+            throw std::runtime_error("type is AUDIO but tokens_audio is missing");
+        }
     }
 };
 
@@ -261,6 +473,14 @@ struct mtmd_context {
     struct clip_ctx * ctx_v; // vision
     struct clip_ctx * ctx_a; // audio
     std::vector<float> out_embd; // image embedding vector
+
+    // generation context
+    struct clip_ctx * ctx_gen_a; // audio
+    std::vector<int32_t> gen_out_codes; // this frame's 16 sampled codes (GEN_CODE)
+    std::vector<float>   gen_out_feats; // this frame's continuous features, if any (GEN_CODE)
+    std::vector<float>   gen_out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
+    std::vector<float>   gen_out_audio; // decoded PCM samples for the current frame (GEN_WAV)
+    std::vector<uint8_t> gen_out_state; // state to feed into the next GEN_WAV call
 
     bool print_timings;
     int n_threads;
@@ -354,6 +574,7 @@ struct mtmd_context {
         auto res = clip_init(mmproj_fname, ctx_clip_params);
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
+        ctx_gen_a = res.ctx_gen_a;
         if (!ctx_v && !ctx_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
@@ -377,6 +598,15 @@ struct mtmd_context {
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
                 "hint: you may be using wrong mmproj\n",
                 n_embd_text, n_embd_clip));
+        }
+        if (ctx_gen_a) {
+            int n_embd_gen = clip_n_mmproj_embd(ctx_gen_a);
+            if (n_embd_text > 0 && n_embd_text != n_embd_gen) {
+                throw std::runtime_error(string_format(
+                    "mismatch between text model (n_embd = %d) and gen-audio mmproj (n_embd = %d)\n"
+                    "hint: you may be using wrong mmproj\n",
+                    n_embd_text, n_embd_gen));
+            }
         }
         if (ctx_v) {
             init_vision();
@@ -469,6 +699,12 @@ struct mtmd_context {
                     img_beg = "]<]start of image[>[";
                     img_end = "]<]end of image[>[";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_MUSE_GLIMMER:
+                {
+                    img_beg = "<|image_start|>";
+                    img_end = "<|image_end|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_muse_glimmer>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_YOUTUVL:
                 {
@@ -740,6 +976,14 @@ struct mtmd_context {
                     aud_end = "<|mimo_audio_end|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_mimo_audio>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_qwen3tts_spk>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_POCKETTTS_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_pockettts>(ctx_a);
+                } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));
         }
@@ -780,6 +1024,7 @@ struct mtmd_context {
     ~mtmd_context() {
         clip_free(ctx_a);
         clip_free(ctx_v);
+        clip_free(ctx_gen_a);
     }
 
 private:
@@ -1553,6 +1798,181 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->out_embd.data();
 }
 
+//
+// audio generation
+//
+
+mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
+    mtmd_gen_audio_info info{};
+    info.model_variant = "";
+    if (!ctx->ctx_gen_a) {
+        info.type = MTMD_GEN_AUDIO_TYPE_NONE;
+        return info;
+    }
+    info.model_variant = clip_get_hparams(ctx->ctx_gen_a)->gen_model_variant.c_str();
+    switch (clip_get_projector_type(ctx->ctx_gen_a)) {
+        case PROJECTOR_TYPE_QWEN3TTS_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_QWEN3TTS;
+            info.sample_rate = 24000;
+            break;
+        case PROJECTOR_TYPE_POCKETTTS_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_POCKETTTS;
+            info.sample_rate = 24000;
+            break;
+        default:
+            info.type = MTMD_GEN_AUDIO_TYPE_NONE;
+            break;
+    }
+    return info;
+}
+
+mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
+    mtmd_gen_inp inp{};
+    inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+    inp.seed = UINT32_MAX;
+    if (!ctx->ctx_gen_a) {
+        return inp;
+    }
+
+    switch (clip_get_projector_type(ctx->ctx_gen_a)) {
+        case PROJECTOR_TYPE_QWEN3TTS_GEN:
+            // https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/blob/main/generation_config.json
+            inp.top_k = 50;
+            inp.top_p = 1.0f;
+            inp.temp  = 0.9f; // TODO: handle this on graph
+            break;
+        case PROJECTOR_TYPE_POCKETTTS_GEN:
+            // https://github.com/kyutai-labs/pocket-tts/blob/main/pocket_tts/default_parameters.py
+            inp.top_k = 50;
+            inp.top_p = 1.0f;
+            inp.temp  = 0.7f;
+            break;
+        default:
+            break;
+    }
+    return inp;
+}
+
+static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    clip_ctx * ctx_clip = ctx->ctx_gen_a;
+    if (!ctx_clip) {
+        LOG_ERR("%s: model does not support audio generation\n", __func__);
+        return 1;
+    }
+
+    *out = {};
+
+    if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {
+        const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
+
+        clip_image_f32 hidden_state;
+        hidden_state.set_size({(int) n_embd, 1}, false, true);
+        hidden_state.cpy_buf(std::vector<float>(inp->embd, inp->embd + n_embd));
+
+        clip_image_f32_batch batch;
+        batch.is_audio = true;
+        batch.entries.push_back(std::move(hidden_state));
+
+        std::vector<float>   out_embd(n_embd);
+        std::vector<int32_t> out_codes;
+        std::vector<float>   out_feats;
+        bool is_eos = false;
+
+        clip_encode_params params;
+        params.imgs          = &batch;
+        params.n_threads     = ctx->n_threads;
+        params.gen_process   = CLIP_GEN_PROCESS_GEN_CODE;
+        params.out_embd      = &out_embd;
+        params.out_codes     = &out_codes;
+        params.out_feats     = &out_feats;
+        params.code0         = inp->code0;
+        params.top_k         = inp->top_k;
+        params.top_p         = inp->top_p;
+        params.seed          = inp->seed;
+        params.temp          = inp->temp;
+        params.out_is_eos    = &is_eos;
+
+        if (!clip_encode(ctx_clip, &params)) {
+            LOG_ERR("%s: clip_encode failed (gen_code)\n", __func__);
+            return 1;
+        }
+
+        ctx->gen_out_embd  = std::move(out_embd);
+        ctx->gen_out_codes = std::move(out_codes);
+        ctx->gen_out_feats = std::move(out_feats);
+
+        out->embd      = ctx->gen_out_embd.data();
+        out->codes     = ctx->gen_out_codes.data();
+        out->n_codes   = ctx->gen_out_codes.size();
+        out->feats     = ctx->gen_out_feats.data();
+        out->n_feats   = ctx->gen_out_feats.size();
+        out->is_eos    = is_eos;
+        return 0;
+    }
+
+    // MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    const bool has_codes = inp->codes && inp->n_codes > 0;
+    const bool has_feats = inp->feats && inp->n_feats > 0;
+    if (has_codes == has_feats) {
+        LOG_ERR("%s: gen_wav requires exactly one of codes or feats\n", __func__);
+        return 1;
+    }
+    std::vector<int32_t> in_codes;
+    std::vector<float>   in_feats;
+    if (has_codes) {
+        in_codes.assign(inp->codes, inp->codes + inp->n_codes);
+    } else {
+        in_feats.assign(inp->feats, inp->feats + inp->n_feats);
+    }
+    std::vector<uint8_t> in_state;
+    if (inp->state_data) {
+        in_state.assign(inp->state_data, inp->state_data + inp->state_size);
+    }
+
+    // gen_wav has no hidden-state input, the batch entry is an unused placeholder
+    // TODO @ngxson : some models in the future may require hidden-state input, need to update this code later
+    clip_image_f32 dummy;
+    dummy.set_size({1, 1}, false, true);
+    dummy.cpy_buf(std::vector<float>(1, 0.0f));
+
+    clip_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(dummy));
+
+    clip_encode_params params;
+    params.imgs        = &batch;
+    params.n_threads   = ctx->n_threads;
+    params.gen_process = CLIP_GEN_PROCESS_GEN_WAV;
+    // gen_wav draws no randomness, but keep the seed so it does not reseed mid-generation
+    params.seed        = inp->seed;
+    params.codes       = has_codes ? &in_codes : nullptr;
+    params.feats       = has_feats ? &in_feats : nullptr;
+    params.out_audio   = &ctx->gen_out_audio;
+    params.state_in    = inp->state_data ? &in_state : nullptr;
+    params.state_out   = &ctx->gen_out_state;
+
+    if (!clip_encode(ctx_clip, &params)) {
+        LOG_ERR("%s: clip_encode failed (code2wav)\n", __func__);
+        return 1;
+    }
+
+    out->audio      = ctx->gen_out_audio.data();
+    out->n_samples  = ctx->gen_out_audio.size();
+    out->state_data = (const char *) ctx->gen_out_state.data();
+    out->state_size = ctx->gen_out_state.size();
+
+    return 0;
+}
+
+int32_t mtmd_gen_audio_process(mtmd_context * ctx, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
+    try {
+        return mtmd_gen_audio_process_impl(ctx, inp, out);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+        return 1;
+    }
+}
+
 mtmd_batch * mtmd_batch_init(mtmd_context * ctx) {
     return new mtmd_batch(ctx);
 }
@@ -1899,6 +2319,42 @@ mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk) {
 void mtmd_input_chunk_free(mtmd_input_chunk * chunk) {
     if (chunk) {
         delete chunk;
+    }
+}
+
+int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len) {
+    try {
+        mtmd_serialization ser(MTMD_SERIALIZATION_VERSION);
+        chunk->serialize(ser);
+
+        if (expected_out_len) {
+            *expected_out_len = ser.data.size();
+        }
+        if (!out_buf) {
+            // caller is only querying the required size
+            return 0;
+        }
+        if (out_len < ser.data.size()) {
+            LOG_ERR("%s: out_buf is too small, need %zu bytes, got %zu\n", __func__, ser.data.size(), out_len);
+            return -1;
+        }
+        std::memcpy(out_buf, ser.data.data(), ser.data.size());
+        return 0;
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: %s\n", __func__, e.what());
+        return -1;
+    }
+}
+
+mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len) {
+    try {
+        mtmd_serialization ser(MTMD_SERIALIZATION_VERSION, buf, len);
+        mtmd::input_chunk_ptr chunk(new mtmd_input_chunk());
+        chunk->deserialize(ser);
+        return chunk.release();
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: %s\n", __func__, e.what());
+        return nullptr;
     }
 }
 

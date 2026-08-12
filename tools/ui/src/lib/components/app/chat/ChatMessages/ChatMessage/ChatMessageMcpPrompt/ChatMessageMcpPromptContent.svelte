@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { Card } from '$lib/components/ui/card';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { SvelteMap } from 'svelte/reactivity';
-	import { McpPromptVariant } from '$lib/enums';
 	import { TruncatedText } from '$lib/components/app/misc';
+	import { Card } from '$lib/components/ui/card';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { McpPromptVariant } from '$lib/enums';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	interface ContentPart {
 		text: string;
@@ -22,10 +22,10 @@
 
 	let {
 		class: className = '',
-		prompt,
-		variant = McpPromptVariant.MESSAGE,
 		isLoading = false,
-		loadError
+		loadError,
+		prompt,
+		variant = McpPromptVariant.MESSAGE
 	}: Props = $props();
 
 	let hoveredArgKey = $state<string | null>(null);
@@ -35,13 +35,15 @@
 
 	let contentParts = $derived.by((): ContentPart[] => {
 		if (!prompt.content || !hasArguments) {
-			return [{ text: prompt.content || '', argKey: null }];
+			return [{ argKey: null, text: prompt.content || '' }];
 		}
 
 		const parts: ContentPart[] = [];
+
 		let remaining = prompt.content;
 
 		const valueToKey = new SvelteMap<string, string>();
+
 		for (const [key, value] of argumentEntries) {
 			if (value && value.trim()) {
 				valueToKey.set(value, key);
@@ -55,20 +57,21 @@
 
 			for (const value of sortedValues) {
 				const index = remaining.indexOf(value);
+
 				if (index !== -1 && (earliestMatch === null || index < earliestMatch.index)) {
-					earliestMatch = { index, value, key: valueToKey.get(value)! };
+					earliestMatch = { index, key: valueToKey.get(value)!, value };
 				}
 			}
 
 			if (earliestMatch) {
 				if (earliestMatch.index > 0) {
-					parts.push({ text: remaining.slice(0, earliestMatch.index), argKey: null });
+					parts.push({ argKey: null, text: remaining.slice(0, earliestMatch.index) });
 				}
 
-				parts.push({ text: earliestMatch.value, argKey: earliestMatch.key });
+				parts.push({ argKey: earliestMatch.key, text: earliestMatch.value });
 				remaining = remaining.slice(earliestMatch.index + earliestMatch.value.length);
 			} else {
-				parts.push({ text: remaining, argKey: null });
+				parts.push({ argKey: null, text: remaining });
 
 				break;
 			}
