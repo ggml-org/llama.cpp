@@ -6,7 +6,11 @@
 import subprocess
 import os
 
-TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
+# this test utility's own directory, i.e. <repo>/tools/server/tests; the
+# default server-binary fallback is anchored here so it resolves inside the
+# repository regardless of the Python process CWD
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+TMP_DIR = os.path.join(TESTS_DIR, "tmp")
 import re
 import json
 from json import JSONDecodeError
@@ -121,6 +125,11 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    skills: bool = False
+    trust_project_skills: bool = False
+    skill_providers: str | None = None
+    skill_home: str | None = None
+    skill_cwd: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -141,6 +150,8 @@ class ServerProcess:
         }
         if "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
+        if self.skill_home is not None:
+            env["HOME"] = self.skill_home
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
             return
@@ -149,9 +160,16 @@ class ServerProcess:
         elif "LLAMA_SERVER_BIN_PATH" in os.environ:
             server_path = os.environ["LLAMA_SERVER_BIN_PATH"]
         elif os.name == "nt":
-            server_path = "../../../build/bin/Release/llama-server.exe"
+            server_path = os.path.join(TESTS_DIR, "../../../build/bin/Release/llama-server.exe")
         else:
-            server_path = "../../../build/bin/llama-server"
+            server_path = os.path.join(TESTS_DIR, "../../../build/bin/llama-server")
+        # normalize to an absolute path so a fixture-supplied server process
+        # CWD (cwd=self.skill_cwd in Popen below) cannot break resolution;
+        # the default fallback above is anchored to this test utility's
+        # repository location, so it is stable regardless of the Python
+        # process CWD, while explicit server_path/LLAMA_SERVER_BIN_PATH
+        # keep their existing process-CWD-relative behavior
+        server_path = os.path.abspath(server_path)
         server_args = [
             "--host",
             self.server_host,
@@ -283,6 +301,12 @@ class ServerProcess:
             server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
         if self.mcp_servers_json:
             server_args.extend(["--mcp-servers-json", self.mcp_servers_json])
+        if self.skills:
+            server_args.append("--skills")
+        if self.trust_project_skills:
+            server_args.append("--trust-project-skills")
+        if self.skill_providers is not None:
+            server_args.extend(["--skill-providers", self.skill_providers])
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
@@ -308,6 +332,7 @@ class ServerProcess:
             stdout=self._log,
             stderr=self._log if self._log != sys.stdout else sys.stdout,
             env=env,
+            cwd=self.skill_cwd,
         )
         server_instances.add(self)
 

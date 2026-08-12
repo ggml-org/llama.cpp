@@ -192,6 +192,13 @@ static void test(void) {
     assert(params.n_predict == 6789);
     assert(params.n_batch == 9090);
 
+    {
+        common_params skills_params;
+        argv = {"binary_name", "--skill-providers", ".claude,gemini,.claude"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), skills_params, LLAMA_EXAMPLE_SERVER));
+        assert((skills_params.skill_providers == std::vector<std::string>{"claude", "gemini"}));
+    }
+
     // --draft cannot be used outside llama-speculative
     argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
