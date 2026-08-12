@@ -346,19 +346,28 @@ private:
     }
 
     std::string _visit_pattern(const std::string & pattern, const std::string & name) {
-        // "pattern" is an unanchored partial match in JSON Schema: the regex only
-        // has to match *somewhere* in the string, so "^"/"$" are optional.
-        // Synthesise whichever anchor is missing with ".*" rather than rejecting
-        // the schema. A fully anchored pattern is stripped exactly as before.
+        // JSON Schema "pattern" is unanchored; fill missing ^/$ with .*
+        const bool has_start = !pattern.empty() && pattern.front() == '^';
+        bool has_end = false;
+        if (!pattern.empty() && pattern.back() == '$') {
+            size_t n_esc = 0;
+            for (size_t i = pattern.size() - 1; i > 0 && pattern[i - 1] == '\\'; --i) {
+                n_esc++;
+            }
+            has_end = (n_esc % 2 == 0);
+        }
+
         std::string sub_pattern = pattern;
-        if (!sub_pattern.empty() && sub_pattern.front() == '^') {
+        if (has_start) {
             sub_pattern.erase(0, 1);
-        } else {
+        }
+        if (has_end) {
+            sub_pattern.pop_back();
+        }
+        if (!has_start) {
             sub_pattern.insert(0, ".*");
         }
-        if (!sub_pattern.empty() && sub_pattern.back() == '$') {
-            sub_pattern.pop_back();
-        } else {
+        if (!has_end) {
             sub_pattern.append(".*");
         }
         std::unordered_map<std::string, std::string> sub_rule_ids;

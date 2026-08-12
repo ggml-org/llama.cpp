@@ -407,12 +407,24 @@ class SchemaConverter:
             we define sub-rules to keep the output lean.
         '''
 
-        # "pattern" is an unanchored partial match in JSON Schema: the regex only
-        # has to match *somewhere* in the string, so '^'/'$' are optional.
-        # Synthesise whichever anchor is missing with '.*' rather than rejecting
-        # the schema. A fully anchored pattern is stripped exactly as before.
-        pattern = pattern[1:] if pattern.startswith('^') else '.*' + pattern
-        pattern = pattern[:-1] if pattern.endswith('$') else pattern + '.*'
+        # JSON Schema "pattern" is unanchored; fill missing ^/$ with .*
+        has_start = pattern.startswith('^')
+        has_end = False
+        if pattern.endswith('$'):
+            n_esc = 0
+            i = len(pattern) - 2
+            while i >= 0 and pattern[i] == '\\':
+                n_esc += 1
+                i -= 1
+            has_end = n_esc % 2 == 0
+        if has_start:
+            pattern = pattern[1:]
+        if has_end:
+            pattern = pattern[:-1]
+        if not has_start:
+            pattern = '.*' + pattern
+        if not has_end:
+            pattern = pattern + '.*'
         sub_rule_ids = {}
 
         i = 0

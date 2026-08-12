@@ -812,6 +812,33 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "unanchored regexp with escaped dollar",
+        R"""({
+            "type": "string",
+            "pattern": "foo\\$"
+        })""",
+        R"""(
+            dot ::= [^\x0A\x0D]
+            root ::= "\"" (dot* "foo$" dot*) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp escaped dollar at end",
+        R"""({
+            "type": "string",
+            "pattern": "^foo\\$$"
+        })""",
+        R"""(
+            root ::= "\"" ("foo$") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "regexp escapes",
         R"""({
             "type": "string",
