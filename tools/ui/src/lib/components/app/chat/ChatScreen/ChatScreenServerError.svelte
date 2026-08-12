@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
 	import * as Alert from '$lib/components/ui/alert';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { serverError, serverLoading, serverStatus, serverStore } from '$lib/stores/server.svelte';
 
 	let hasError = $derived(!!serverError());

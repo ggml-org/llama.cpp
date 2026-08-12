@@ -31,27 +31,27 @@ IMPORTANT:Identifier 'nerdamer' has already been declared, use it directly`;
  */
 export function buildSandboxToolDefinition(includeSymbolicMath: boolean): OpenAIToolDefinition {
 	return {
-		type: ToolCallType.FUNCTION,
 		function: {
-			name: SANDBOX_TOOL_NAME,
 			description: includeSymbolicMath
 				? `Execute JS in a sandboxed browser worker (no DOM/page access). Top-level await ok; console.log for intermediates; top-level return is captured as result.${NERDAMER_DESCRIPTION}`
 				: 'Execute JS in a sandboxed browser worker (no DOM/page access). Top-level await ok; console.log for intermediates; top-level return is captured as result.',
+			name: SANDBOX_TOOL_NAME,
 			parameters: {
-				type: JsonSchemaType.OBJECT,
 				properties: {
 					code: {
-						type: JsonSchemaType.STRING,
-						description: 'JavaScript source to execute'
+						description: 'JavaScript source to execute',
+						type: JsonSchemaType.STRING
 					},
 					timeout_ms: {
-						type: JsonSchemaType.NUMBER,
-						description: `Execution timeout in milliseconds, default ${SANDBOX_TIMEOUT_MS_DEFAULT}, max ${SANDBOX_TIMEOUT_MS_MAX}`
+						description: `Execution timeout in milliseconds, default ${SANDBOX_TIMEOUT_MS_DEFAULT}, max ${SANDBOX_TIMEOUT_MS_MAX}`,
+						type: JsonSchemaType.NUMBER
 					}
 				},
-				required: ['code']
+				required: ['code'],
+				type: JsonSchemaType.OBJECT
 			}
-		}
+		},
+		type: ToolCallType.FUNCTION
 	};
 }
 

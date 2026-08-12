@@ -1,28 +1,28 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Square, SkipForward } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { ChatService } from '$lib/services';
+	import { SkipForward, Square } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
-		ChatFormActionsAdd,
 		ChatFormActionModels,
 		ChatFormActionRecord,
+		ChatFormActionsAdd,
 		ChatFormActionSubmit,
 		ChatFormContextGauge
 	} from '$lib/components/app';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ROUTES } from '$lib/constants/routes';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
+	import { ChatService } from '$lib/services';
 	import {
 		activeProcessingState,
 		isChatStreaming,
 		isLoading as chatIsLoading
 	} from '$lib/stores/chat.svelte';
+	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		canSend?: boolean;
@@ -51,15 +51,15 @@
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
-		showAddButton = true,
-		showModelSelector = true,
-		uploadedFiles = [],
 		onFileUpload,
+		onMcpPromptClick,
+		onMcpResourcesClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpResourcesClick
+		showAddButton = true,
+		showModelSelector = true,
+		uploadedFiles = []
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
@@ -105,29 +105,39 @@
 		if (!page.params.id) return false;
 
 		const messages = activeMessages() as DatabaseMessage[];
+
 		let totalHistoricalTokens = 0;
+
 		for (const m of messages) {
 			if (m.role !== MessageRole.ASSISTANT) continue;
+
 			const timings = m.timings;
+
 			if (!timings) continue;
+
 			const agenticLlm = timings.agentic?.llm;
+
 			if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
 				totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
 			} else {
 				totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
 			}
 		}
+
 		if (totalHistoricalTokens > 0) return true;
 
 		if (!chatIsLoading() && !isChatStreaming()) return false;
 
 		const processingState = activeProcessingState();
+
 		if (!processingState) return false;
+
 		const livePromptTokens = Math.max(
 			processingState.promptTokens ?? 0,
 			processingState.promptProgress?.processed ?? 0
 		);
 		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
+
 		return livePromptTokens > 0 || liveOutputTokens > 0;
 	});
 </script>
