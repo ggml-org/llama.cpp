@@ -32,9 +32,16 @@ which is a manual workflow.
 The workflow creates an annotated git tag (e.g. `v0.1.0`) and pushes it to the
 remote. No GitHub Release object is created, the tag is the release artifact.
 
+## Building a release
+
+By default, `LLAMA_BUILD_IS_DEV=ON` which appends a `-dev` suffix to `LLAMA_VERSION`,
+marking the build as a nightly/development build. Distributors building from a
+release tag must pass `-DLLAMA_BUILD_IS_DEV=OFF` to produce a clean version string
+(e.g. `0.1.0` instead of `0.1.0-dev`).
+
 ## How releases reach users
-Currently releases are not published to github releases, only nightly/incremental
-builds are available there. The way users can access release are using the following
+Currently releases are not published to github releases, only nightly/development
+builds are available there. The way users can access releases are using the following
 channels:
 
 - **llama-install.sh**  — downloads pre-built binaries built from the release tag.
