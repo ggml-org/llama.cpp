@@ -21,6 +21,7 @@ jobs:
                 -DLLAMA_BUILD_TOOLS=OFF \
                 -DLLAMA_BUILD_EXAMPLES=OFF \
                 -DLLAMA_BUILD_APP=OFF \
+                -DLLAMA_BUILD_IS_DEV=OFF \
                 -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
           cmake --install build --prefix "$PREFIX" --config Release
@@ -29,7 +30,12 @@ jobs:
           tclsh <<'EOF'
           set build(commit)  [string trim [exec git rev-parse --short HEAD]]
           set build(number)  [string trim [exec git rev-list  --count HEAD]]
-          set build(version) "0.0.$build(number)"
+
+          set cmakelists [read [open "CMakeLists.txt" r]]
+          regexp {set\(LLAMA_VERSION_MAJOR\s+(\d+)\)} $cmakelists -> major
+          regexp {set\(LLAMA_VERSION_MINOR\s+(\d+)\)} $cmakelists -> minor
+          regexp {set\(LLAMA_VERSION_PATCH\s+(\d+)\)} $cmakelists -> patch
+          set build(version) "$major.$minor.$patch"
 
           set llamaconfig [read [open "$env(LLAMA_CONFIG)" r]]
           set checks [list "set\\(LLAMA_VERSION     \\s+$build(version)\\)" \

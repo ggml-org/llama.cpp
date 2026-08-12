@@ -2,6 +2,26 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
+### llama.cpp version
+set(LLAMA_VERSION_MAJOR 0)
+set(LLAMA_VERSION_MINOR 1)
+set(LLAMA_VERSION_PATCH 0)
+set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
+
+# whether this is a development/nightly build
+# set this to OFF when making a release from a release tag (vX.Y.Z)
+# ref: https://github.com/ggml-org/ggml/discussions/1579
+option(LLAMA_BUILD_IS_DEV "llama: dev build" ON)
+
+if (LLAMA_BUILD_IS_DEV)
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}-dev")
+else()
+    # TODO: check that the current commit is tagged correctly according to the version specified above
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}")
+endif()
+
+message(STATUS "llama.cpp version: ${LLAMA_VERSION}")
+
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
 
@@ -24,9 +44,6 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(LLAMA_STANDALONE ON)
 
     include(git-vars)
-
-    # configure project version
-    # TODO
 else()
     set(LLAMA_STANDALONE OFF)
 endif()
@@ -139,7 +156,6 @@ endif()
 if (NOT DEFINED LLAMA_BUILD_COMMIT)
     set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
 endif()
-set(LLAMA_INSTALL_VERSION 0.0.${LLAMA_BUILD_NUMBER})
 
 # override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
@@ -275,12 +291,12 @@ configure_package_config_file(
               LLAMA_BIN_INSTALL_DIR )
 
 write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
-    VERSION ${LLAMA_INSTALL_VERSION}
+        ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
+        VERSION ${LLAMA_VERSION}
     COMPATIBILITY SameMajorVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
 configure_file(cmake/llama.pc.in
