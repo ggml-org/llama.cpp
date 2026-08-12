@@ -677,6 +677,12 @@ private:
             optional_props.push_back("*");
         }
 
+        // Empty object schema ({"type":"object","properties":{}}) must not emit
+        // `"{" space  space "}"` — two adjacent space tokens are invalid GBNF.
+        if (required_props.empty() && optional_props.empty()) {
+            return "\"{\" space \"}\"";
+        }
+
         std::string rule = "\"{\" space ";
         for (size_t i = 0; i < required_props.size(); i++) {
             if (i > 0) {
@@ -972,6 +978,12 @@ public:
             std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
             int min_len = schema.contains("minLength") ? schema["minLength"].get<int>() : 0;
             int max_len = schema.contains("maxLength") ? schema["maxLength"].get<int>() : std::numeric_limits<int>::max();
+            // llama-grammar rejects literal repetition counts above MAX_REPETITION_THRESHOLD (2000).
+            // Treat oversized maxLength as unbounded so the combined tool grammar still parses.
+            constexpr int GRAMMAR_MAX_REPETITION_THRESHOLD = 2000;
+            if (max_len > GRAMMAR_MAX_REPETITION_THRESHOLD) {
+                max_len = std::numeric_limits<int>::max();
+            }
             return _add_rule(rule_name, "\"\\\"\" " + build_repetition(char_rule, min_len, max_len) + " \"\\\"\"");
         }
         if (schema_type == "integer" && (schema.contains("minimum") || schema.contains("exclusiveMinimum") || schema.contains("maximum") || schema.contains("exclusiveMaximum"))) {
