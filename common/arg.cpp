@@ -35,6 +35,7 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <system_error>
 #include <thread> // for hardware_concurrency
 #include <vector>
 
@@ -704,11 +705,60 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 // CLI argument parsing functions
 //
 
+// apply config files (if present), a later file overrides an earlier one:
+// 1. system-wide: /etc/llama.cpp/config.ini (%PROGRAMDATA%\llama.cpp\config.ini on windows)
+// 2. user-level: ${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini (%APPDATA%\llama.cpp\config.ini on windows)
+static void common_params_apply_system_config(common_params & params, llama_example ex) {
+    std::vector<std::string> paths;
+
+#if defined(_WIN32)
+    const std::string program_data = common_get_env("PROGRAMDATA");
+    if (!program_data.empty()) {
+        paths.push_back(program_data + "\\llama.cpp\\config.ini");
+    }
+#else
+    paths.push_back("/etc/llama.cpp/config.ini");
+#endif
+
+    try {
+        paths.push_back(fs_get_config_directory() + "config.ini");
+    } catch (const std::exception & e) {
+        LOG_DBG("cannot read user-level config file, skipping: %s\n", e.what());
+    }
+
+    std::vector<std::string> found;
+    for (const auto & path : paths) {
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec)) {
+            found.push_back(path);
+        }
+    }
+    if (found.empty()) {
+        return;
+    }
+
+    common_preset_context ctx(ex);
+    ctx.ignore_unknown_keys = true; // the same config file is shared by all programs
+    for (const auto & path : found) {
+        LOG_INF("using config file: %s\n", path.c_str());
+        common_preset global;
+        common_presets presets = ctx.load_from_ini(path, global);
+        global.apply_to_params(params);
+        auto it = presets.find(COMMON_PRESET_DEFAULT_NAME);
+        if (it != presets.end()) {
+            it->second.apply_to_params(params);
+        }
+    }
+}
+
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
     // setup log directly from params.verbosity: see tools/cli/cli.cpp
     common_log_set_verbosity_thold(params.verbosity);
+
+    // config file applies first, so env variables and CLI arguments override it
+    common_params_apply_system_config(params, ctx_arg.ex);
 
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
