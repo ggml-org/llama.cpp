@@ -13,6 +13,8 @@
 #include <sstream>
 #include <fstream>
 #include <limits>
+#include <cstring>
+#include <type_traits>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -235,6 +237,102 @@ static inline raw_buffer base64_decode(const std::string & encoded_string) {
 // server_tokens implementation
 //
 
+namespace {
+
+constexpr uint32_t SERVER_TOKENS_STATE_VERSION = 1;
+
+uint32_t server_tokens_state_u32(size_t value) {
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Server tokens state is too large");
+    }
+    return value;
+}
+
+class server_tokens_state_writer {
+public:
+    template <typename T>
+    void write(T value) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const auto * ptr = reinterpret_cast<const char *>(&value);
+        data.insert(data.end(), ptr, ptr + sizeof(value));
+    }
+
+    template <typename T>
+    void write(const std::vector<T> & values) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        write(server_tokens_state_u32(values.size()));
+        if (values.empty()) {
+            return;
+        }
+        const auto * ptr = reinterpret_cast<const char *>(values.data());
+        data.insert(data.end(), ptr, ptr + values.size() * sizeof(T));
+    }
+
+    void write_media_chunk(const mtmd_input_chunk * chunk) {
+        size_t chunk_size = 0;
+        if (mtmd_input_chunk_save(chunk, nullptr, 0, &chunk_size) != 0 || chunk_size == 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        std::vector<char> chunk_data(server_tokens_state_u32(chunk_size));
+        if (mtmd_input_chunk_save(chunk, chunk_data.data(), chunk_data.size(), nullptr) != 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        write(chunk_data);
+    }
+
+    std::vector<char> take() {
+        data.resize((data.size() + sizeof(llama_token) - 1) / sizeof(llama_token) * sizeof(llama_token), 0);
+        return std::move(data);
+    }
+
+private:
+    std::vector<char> data;
+};
+
+class server_tokens_state_reader {
+public:
+    server_tokens_state_reader(const char * data, size_t size) : data(data), size(size) {}
+
+    template <typename T>
+    T read() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        if (size - pos < sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        T value;
+        std::memcpy(&value, data + pos, sizeof(value));
+        pos += sizeof(value);
+        return value;
+    }
+
+    template <typename T>
+    std::vector<T> read_vector() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const uint32_t n_values = read<uint32_t>();
+        // reject before resizing, so that a small corrupted payload cannot request a huge allocation
+        if (n_values > remaining() / sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        std::vector<T> values(n_values);
+        if (n_values > 0) {
+            std::memcpy(values.data(), data + pos, values.size() * sizeof(T));
+            pos += values.size() * sizeof(T);
+        }
+        return values;
+    }
+
+    size_t remaining() const {
+        return size - pos;
+    }
+
+private:
+    const char * data;
+    size_t size;
+    size_t pos = 0;
+};
+
+} // namespace
+
 server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : has_mtmd(has_mtmd) {
     for (size_t i = 0; i < mtmd_chunks.size(); ++i) {
         push_back(mtmd_chunks[i]);
@@ -408,6 +506,73 @@ const llama_tokens & server_tokens::get_tokens() const {
     return tokens;
 }
 
+std::vector<char> server_tokens::serialize() const {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    server_tokens_state_writer writer;
+    writer.write((llama_token) LLAMA_TOKEN_NULL);
+    writer.write(SERVER_TOKENS_STATE_VERSION);
+    writer.write(tokens);
+
+    std::vector<uint32_t> media_keys;
+    media_keys.reserve(map_idx_to_media.size());
+    for (const auto & item : map_idx_to_media) {
+        media_keys.push_back(server_tokens_state_u32(item.first));
+    }
+    writer.write(media_keys);
+
+    for (const auto & item : map_idx_to_media) {
+        writer.write_media_chunk(item.second.get());
+    }
+
+    return writer.take();
+}
+
+server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_mtmd) {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    if (packed.empty() || packed[0] != LLAMA_TOKEN_NULL) {
+        // plain token list, as written by older versions
+        return server_tokens(packed, has_mtmd);
+    }
+
+    server_tokens_state_reader reader(reinterpret_cast<const char *>(packed.data()), packed.size() * sizeof(llama_token));
+    reader.read<llama_token>(); // format marker
+    if (reader.read<uint32_t>() != SERVER_TOKENS_STATE_VERSION) {
+        throw std::runtime_error("Unsupported server tokens state version");
+    }
+
+    const llama_tokens tokens = reader.read_vector<llama_token>();
+
+    // the media start indices, followed by the media chunks in the same order
+    const std::vector<uint32_t> media_keys = reader.read_vector<uint32_t>();
+    if (!media_keys.empty() && !has_mtmd) {
+        throw std::runtime_error("Cannot restore media tokens without an mmproj");
+    }
+
+    server_tokens result(tokens, has_mtmd);
+
+    for (const uint32_t key : media_keys) {
+        const size_t start_idx = key;
+        const std::vector<char> chunk_data = reader.read_vector<char>();
+        if (chunk_data.empty()) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+
+        mtmd::input_chunk_ptr chunk(mtmd_input_chunk_load(chunk_data.data(), chunk_data.size()));
+        if (!chunk) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+        result.map_idx_to_media[start_idx] = std::move(chunk);
+    }
+
+    if (reader.remaining() >= sizeof(llama_token)) {
+        throw std::runtime_error("Trailing data in server tokens state");
+    }
+
+    return result;
+}
+
 llama_tokens server_tokens::get_text_tokens() const {
     llama_tokens res;
     res.reserve(tokens.size());
@@ -530,14 +695,28 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    size_t n_media = 0;
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto & t = tokens[i];
         if (t == LLAMA_TOKEN_NULL) {
             try {
                 const auto & chunk = find_chunk(i);
-                size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-                i += n_tokens - 1; // will be +1 by the for loop
+                if (mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                    return false;
+                }
+                const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+                const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+                if (n_tokens == 0 || n_pos <= 0 || n_tokens > tokens.size() - i) {
+                    return false;
+                }
+                for (size_t j = i; j < i + n_tokens; ++j) {
+                    if (tokens[j] != LLAMA_TOKEN_NULL) {
+                        return false;
+                    }
+                }
+                ++n_media;
+                i += n_tokens - 1;
             } catch (const std::exception & e) {
                 return false;
             }
@@ -545,7 +724,7 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
             return false;
         }
     }
-    return true;
+    return n_media == map_idx_to_media.size();
 }
 
 server_tokens server_tokens::clone() const {
