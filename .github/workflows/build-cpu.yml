@@ -21,6 +21,7 @@ on:
     paths: [
       '.github/workflows/build-cpu.yml',
       '.github/workflows/build-cmake-pkg.yml',
+      'ggml/src/ggml-rpc/**',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
