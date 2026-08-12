@@ -90,8 +90,10 @@ function createDefaultSession(): AgenticSession {
 	return {
 		currentTurn: 0,
 		executingToolCallId: null,
+		flowRootMessageId: null,
 		isRunning: false,
 		lastError: null,
+		liveLlm: null,
 		pendingPermissionRequest: null,
 		streamingToolCall: null,
 		totalToolCalls: 0
@@ -205,6 +207,16 @@ class AgenticStore {
 
 	isRunning(conversationId: string): boolean {
 		return this._sessions.get(conversationId)?.isRunning ?? false;
+	}
+
+	// read-only: safe to call from derivations, unlike getSession
+	getLiveLlmTotals(conversationId: string): AgenticSession['liveLlm'] {
+		return this._sessions.get(conversationId)?.liveLlm ?? null;
+	}
+
+	// read-only: safe to call from derivations, unlike getSession
+	getFlowRootMessageId(conversationId: string): string | null {
+		return this._sessions.get(conversationId)?.flowRootMessageId ?? null;
 	}
 
 	currentTurn(conversationId: string): number {
@@ -420,7 +432,15 @@ class AgenticStore {
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
-		const { callbacks, conversationId, messages, options = {}, perChatOverrides, signal } = params;
+		const {
+			callbacks,
+			conversationId,
+			flowRootMessageId,
+			messages,
+			options = {},
+			perChatOverrides,
+			signal
+		} = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
 		this._pendingPermissions.set(conversationId, null);
@@ -479,8 +499,10 @@ class AgenticStore {
 
 		this.updateSession(conversationId, {
 			currentTurn: 0,
+			flowRootMessageId: flowRootMessageId ?? null,
 			isRunning: true,
 			lastError: null,
+			liveLlm: null,
 			totalToolCalls: 0
 		});
 
@@ -506,7 +528,11 @@ class AgenticStore {
 
 			return { error: normalizedError, handled: true };
 		} finally {
-			this.updateSession(conversationId, { isRunning: false });
+			this.updateSession(conversationId, {
+				flowRootMessageId: null,
+				isRunning: false,
+				liveLlm: null
+			});
 
 			if (hasMcpServers) {
 				await mcpStore
@@ -634,6 +660,16 @@ class AgenticStore {
 							if (timings) {
 								capturedTimings = timings;
 								turnTimings = timings;
+
+								// completed turns + in-flight turn live counts
+								this.updateSession(conversationId, {
+									liveLlm: {
+										predicted_ms: agenticTimings.llm.predicted_ms + (timings.predicted_ms ?? 0),
+										predicted_n: agenticTimings.llm.predicted_n + (timings.predicted_n ?? 0),
+										prompt_ms: agenticTimings.llm.prompt_ms + (timings.prompt_ms ?? 0),
+										prompt_n: agenticTimings.llm.prompt_n + (timings.prompt_n ?? 0)
+									}
+								});
 							}
 						},
 						onToolCallChunk: (serialized: string) => {

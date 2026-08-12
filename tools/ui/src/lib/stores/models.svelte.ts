@@ -18,12 +18,14 @@ import { PropsService } from '$lib/services/props.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+// deep imports, not the '$lib/utils' barrel: it re-exports modules that reach back
+// into the stores, and going through it here would read a half-built module
+import { getAuthHeaders } from '$lib/utils/api-headers';
+import { TTLCache } from '$lib/utils/cache-ttl';
 import {
 	detectThinkingSupport,
-	detectThinkingSupportWithReason,
-	getAuthHeaders,
-	TTLCache
-} from '$lib/utils';
+	detectThinkingSupportWithReason
+} from '$lib/utils/chat-template-thinking-detector';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 

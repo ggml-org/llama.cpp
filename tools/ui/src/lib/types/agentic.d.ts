@@ -4,7 +4,11 @@ import type {
 	ApiChatMessageContentPart,
 	ApiChatMessageData
 } from './api';
-import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
+import type {
+	ChatMessageAgenticTimings,
+	ChatMessagePromptProgress,
+	ChatMessageTimings
+} from './chat';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
@@ -79,6 +83,12 @@ export interface AgenticSession {
 	 *  matching tool renderer flip into live-update mode while chunks
 	 *  arrive; cleared when the tool's terminal event lands. */
 	executingToolCallId: string | null;
+	/** Live LLM token totals of the running flow: completed turns plus the
+	 *  in-flight turn's streamed counts; null when idle. */
+	liveLlm: ChatMessageAgenticTimings['llm'] | null;
+	/** ID of the flow's first assistant message (the one the UI groups the
+	 *  whole run under); null when idle. */
+	flowRootMessageId: string | null;
 }
 
 /**
@@ -154,6 +164,8 @@ export interface AgenticFlowOptions {
  */
 export interface AgenticFlowParams {
 	conversationId: string;
+	/** ID of the flow's first assistant message, used to keep its stats live */
+	flowRootMessageId?: string;
 	messages: (ApiChatMessageData | (DatabaseMessage & { extra?: DatabaseMessageExtra[] }))[];
 	options?: AgenticFlowOptions;
 	callbacks: AgenticFlowCallbacks;

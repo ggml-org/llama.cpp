@@ -1672,6 +1672,7 @@ class ChatStore {
 			const agenticResult = await agenticStore.runAgenticFlow({
 				callbacks: streamCallbacks,
 				conversationId: convId,
+				flowRootMessageId: assistantMessage.id,
 				messages: allMessages,
 				options: {
 					...this.getApiOptions(),

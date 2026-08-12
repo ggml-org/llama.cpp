@@ -28,6 +28,9 @@ export { agenticStore } from './agentic.svelte';
 // CONVERSATIONS
 export { conversationsStore } from './conversations.svelte';
 
+// CONTEXT STATS (active conversation context window usage)
+export { contextStatsStore } from './context-stats.svelte';
+
 // MCP
 export { mcpStore } from './mcp.svelte';
 

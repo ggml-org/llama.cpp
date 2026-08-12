@@ -17,7 +17,7 @@ import {
 import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { buildSandboxToolDefinition } from '$lib/utils';
@@ -201,7 +201,7 @@ class ToolsStore {
 
 		if (!hasReadFile) return null;
 
-		const model = selectedModelName() ?? modelsStore.models[0]?.model ?? '';
+		const model = modelsStore.selectedModelName ?? modelsStore.models[0]?.model ?? '';
 
 		if (!model) return null;
 
@@ -211,7 +211,6 @@ class ToolsStore {
 		if (!vision && !audio) return null;
 
 		return buildReadMediaToolDefinition(vision, audio);
-
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
