@@ -1,11 +1,13 @@
 import { CLI_FLAGS } from './cli-flags.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
+import { MEMORY_ENTRY_LIMIT_BYTES_DEFAULT, MEMORY_GROUPS_DEFAULT } from './memory';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import {
 	AlertTriangle,
+	Brain,
 	Code,
 	Database,
 	Funnel,
@@ -35,6 +37,7 @@ export const SETTINGS_SECTION_TITLES = {
 	DISPLAY: 'Display',
 	GENERAL: 'General',
 	IMPORT_EXPORT: 'Import/Export',
+	MEMORY: 'Memory',
 	PENALTIES: 'Penalties',
 	SAMPLING: 'Sampling',
 	TOOLS: 'Tools'
@@ -415,6 +418,42 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 		],
 		slug: SETTINGS_SECTION_SLUGS.GENERAL,
 		title: SETTINGS_SECTION_TITLES.GENERAL
+	},
+	[SETTINGS_SECTION_SLUGS.MEMORY]: {
+		icon: Brain,
+		settings: [
+			{
+				defaultValue: false,
+				help: 'Expose memory_open, memory_write and memory_drop tools to the model. Entries persist in the browser IndexedDB and are shared across conversations.',
+				key: SETTINGS_KEYS.MEMORY_ENABLED,
+				label: 'Memory tools',
+				section: SETTINGS_SECTION_SLUGS.MEMORY,
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: MEMORY_GROUPS_DEFAULT,
+				dependsOn: SETTINGS_KEYS.MEMORY_ENABLED,
+				help: 'Comma separated list of entry groups. An entry name is group/slug, lowercase alphanumerics and dashes.',
+				key: SETTINGS_KEYS.MEMORY_GROUPS,
+				label: 'Groups',
+				placeholder: MEMORY_GROUPS_DEFAULT,
+				section: SETTINGS_SECTION_SLUGS.MEMORY,
+				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: MEMORY_ENTRY_LIMIT_BYTES_DEFAULT,
+				dependsOn: SETTINGS_KEYS.MEMORY_ENABLED,
+				help: 'A write that would push an entry past this size is refused.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.MEMORY_ENTRY_LIMIT_BYTES,
+				label: 'Entry size limit (bytes)',
+				placeholder: `${MEMORY_ENTRY_LIMIT_BYTES_DEFAULT}`,
+				section: SETTINGS_SECTION_SLUGS.MEMORY,
+				type: SettingsFieldType.INPUT
+			}
+		],
+		slug: SETTINGS_SECTION_SLUGS.MEMORY,
+		title: SETTINGS_SECTION_TITLES.MEMORY
 	},
 	[SETTINGS_SECTION_SLUGS.PENALTIES]: {
 		icon: AlertTriangle,
