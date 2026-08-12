@@ -4,6 +4,7 @@
 #include "server-cors-proxy.h"
 #include "server-stream.h"
 #include "server-tools.h"
+#include "server-skills.h"
 
 #include "arg.h"
 #include "build-info.h"
@@ -167,6 +168,15 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     // struct that contains llama context and inference
     server_context ctx_server;
+
+    std::optional<server_skills> skills;
+    if (params.skills) {
+        skills.emplace(server_skills_config{
+            params.skills,
+            params.trust_project_skills,
+            params.skill_providers,
+        }, token_count_callback{});
+    }
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
