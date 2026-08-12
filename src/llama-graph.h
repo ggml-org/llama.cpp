@@ -31,6 +31,9 @@ class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
 class llama_memory_hybrid_iswa_context;
 
+// shorthands
+using llama_samplers = std::map<llama_seq_id, struct llama_sampler *>;
+
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
     LLM_GRAPH_TYPE_DEFAULT,
@@ -709,14 +712,14 @@ public:
 
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
-    llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
+    llm_graph_input_sampling(llama_samplers samplers) :
         samplers(std::move(samplers)) { }
     virtual ~llm_graph_input_sampling() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
     bool can_reuse(const llm_graph_params & params) override;
 
-    std::map<llama_seq_id, llama_sampler *> samplers;
+    llama_samplers samplers;
 };
 
 //
@@ -752,11 +755,11 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
-    std::map<llama_seq_id, llama_sampler *> samplers;
+    llama_samplers samplers;
 
     static bool samplers_equal(
-          const std::map<llama_seq_id, llama_sampler *> & lhs,
-          const std::map<llama_seq_id, llama_sampler *> & rhs) {
+          const llama_samplers & lhs,
+          const llama_samplers & rhs) {
         if (lhs.size() != rhs.size()) {
             return false;
         }
@@ -992,7 +995,7 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
-    std::map<llama_seq_id, llama_sampler *> samplers;
+    llama_samplers samplers;
 
     const llm_graph_cb & cb_func;
 

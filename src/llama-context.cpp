@@ -2393,11 +2393,11 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 }
 
 // pack sampler outputs into as few sequences as possible before using sequences without samplers
-static void ubatch_prepare_reserve(
-              llama_ubatch                            & ubatch,
-              uint32_t                                  n_outputs,
-        const std::map<llama_seq_id, llama_sampler *> & samplers,
-              uint32_t                                  n_outputs_max_per_seq) {
+static void graph_reserve_prepare_ubatch(
+        llama_ubatch         & ubatch,
+        const llama_samplers & samplers,
+        uint32_t               n_outputs,
+        uint32_t               n_outputs_max_per_seq) {
     const uint32_t n_seqs       = ubatch.n_seqs;
     const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
 
@@ -2474,7 +2474,7 @@ llama_context::graph_reserve_result llama_context::graph_reserve(graph_reserve_p
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
     llama_ubatch ubatch = balloc.ubatch_reserve(params.n_tokens/params.n_seqs, params.n_seqs);
 
-    ubatch_prepare_reserve(ubatch, params.n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
+    graph_reserve_prepare_ubatch(ubatch, sampling.samplers, params.n_outputs, cparams.n_outputs_max_per_seq);
 
     auto * res = gf_res_reserve.get();
 
