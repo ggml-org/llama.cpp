@@ -35,7 +35,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--version` | show version and build info |
 | `-cl, --cache-list` | show list of models in cache |
 | `--completion-bash` | print source-able bash completion script for llama.cpp |
-| `-t, --threads N` | number of CPU threads to use during generation (default: -1)<br/>(env: LLAMA_ARG_THREADS) |
+| `-t, --threads N` | number of CPU threads to use during generation (default: -1, -1 = number of math cores)<br/>(env: LLAMA_ARG_THREADS) |
 | `-tb, --threads-batch N` | number of threads to use during batch and prompt processing (default: same as --threads) |
 | `-C, --cpu-mask M` | CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: "") |
 | `-Cr, --cpu-range lo-hi` | range of CPUs for affinity. Complements --cpu-mask |
