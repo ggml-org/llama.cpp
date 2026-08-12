@@ -490,6 +490,7 @@ struct server_task_result_error : server_task_result {
 };
 
 struct server_task_result_metrics : server_task_result {
+    // these are immediate stats, not accumulated (server_metrics is cumulative)
     int n_idle_slots;
     int n_processing_slots;
     int n_tasks_deferred;

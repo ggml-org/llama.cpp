@@ -1513,36 +1513,7 @@ json server_task_result_error::to_json() {
 // server_task_result_metrics
 //
 json server_task_result_metrics::to_json() {
-    return json {
-        { "idle",                            n_idle_slots },
-        { "processing",                      n_processing_slots },
-        { "deferred",                        n_tasks_deferred },
-        { "t_start",                         metrics.t_start },
-
-        { "n_prompt_tokens_processed_total", metrics.prompt.count },
-        { "n_prompt_tokens_cached_total",    metrics.n_prompt_cached },
-        { "t_tokens_generation_total",       metrics.predict.time / 1e3 },
-        { "n_tokens_predicted_total",        metrics.predict.count },
-        { "t_prompt_processing_total",       metrics.prompt.time / 1e3 },
-
-        { "n_tokens_max",                    metrics.n_tokens_max },
-
-        { "n_prompt_tokens_processed",       metrics.prompt_bucket.count },
-        { "n_prompt_tokens_cached",          metrics.n_prompt_cached_bucket },
-        { "t_prompt_processing",             metrics.prompt_bucket.time / 1e3 },
-        { "n_tokens_predicted",              metrics.predict_bucket.count },
-        { "t_tokens_generation",             metrics.predict_bucket.time / 1e3 },
-
-        { "n_decode_total",                  metrics.n_decode },
-        { "n_busy_slots_total",              metrics.n_busy_slots },
-
-        { "n_draft_tokens_total",            metrics.n_draft_tokens },
-        { "n_draft_accepted_total",          metrics.n_draft_accepted },
-        { "n_draft_verif_steps_total",       metrics.n_draft_verif_steps },
-        { "n_accepted_per_pos_total",        metrics.n_accepted_per_pos },
-
-        { "slots",                           slots_data },
-    };
+    return slots_data;
 }
 
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names

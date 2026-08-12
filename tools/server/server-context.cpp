@@ -4435,7 +4435,6 @@ void server_routes::init_routes() {
             return res;
         }
 
-        // TODO: get rid of this dynamic_cast
         auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
         GGML_ASSERT(res_task != nullptr);
 
@@ -4473,7 +4472,6 @@ void server_routes::init_routes() {
             return res;
         }
 
-        // TODO: get rid of this dynamic_cast
         auto * res_task = dynamic_cast<server_task_result_metrics*>(result.get());
         GGML_ASSERT(res_task != nullptr);
 
@@ -4485,7 +4483,7 @@ void server_routes::init_routes() {
             }
         }
 
-        res->ok(res_task->slots_data);
+        res->ok(res_task->to_json());
         return res;
     };
 
