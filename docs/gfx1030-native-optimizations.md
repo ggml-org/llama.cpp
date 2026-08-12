@@ -189,9 +189,4 @@ Use the guarded scripts when collecting reproducible artifacts:
 
 ## Related model preparation
 
-The native paths do not require a special GGUF. The Qwen Q4_0-S8 and MTP calibration work used for the measurements is documented separately:
-
-- [Qwen35 Q4_0-S8 recipe](qwen35-q4-0-s8-recipe.md)
-- [Three-dataset MTP calibration recipe](qwen35-three-dataset-mtp-recipe.md)
-
-Those quantization recipes are independent of the runtime environment variables above.
+The native paths do not require a special GGUF. The separate Qwen Q4S8 quantization, calibration, quality, and benchmark report is maintained in [edwinbrowwn/gguf-q4s8](https://github.com/edwinbrowwn/gguf-q4s8). It is independent of the runtime environment variables above.

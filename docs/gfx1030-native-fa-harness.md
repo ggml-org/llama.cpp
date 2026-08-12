@@ -22,9 +22,10 @@ It preserves relevant RCCL/HIP environment values in the manifest.
 ## Dry run
 
 ```bash
+MODEL=/path/to/model.gguf
 python3 scripts/benchmark-gfx1030-native-fa.py \
-  --model /home/edwin/models/qwen35-q4-0-s8/Qwen3.6-35B-A3B-MTP-Q4S8.gguf \
-  --output-dir /home/edwin/models/gfx1030-native-fa-runs/dry-run \
+  --model "$MODEL" \
+  --output-dir /path/to/gfx1030-native-fa-runs/dry-run \
   --profile
 ```
 
@@ -35,9 +36,10 @@ This prints the exact stock/native, graphs-on/off, correctness, benchmark, and f
 After stopping any server and confirming the GPUs are free:
 
 ```bash
+MODEL=/path/to/model.gguf
 python3 scripts/benchmark-gfx1030-native-fa.py \
-  --model /home/edwin/models/qwen35-q4-0-s8/Qwen3.6-35B-A3B-MTP-Q4S8.gguf \
-  --output-dir /home/edwin/models/gfx1030-native-fa-runs/$(date -u +%Y%m%d-%H%M%S) \
+  --model "$MODEL" \
+  --output-dir /path/to/gfx1030-native-fa-runs/$(date -u +%Y%m%d-%H%M%S) \
   --graphs both --repetitions 3 --prompt-sizes 512,4096,16384 \
   --profile --run --allow-gpu
 ```
