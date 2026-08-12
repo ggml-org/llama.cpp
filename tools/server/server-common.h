@@ -389,13 +389,19 @@ struct server_slot_stats {
         return std::max<int64_t>(1, t_gen_last - t_prompt_last) / 1000.0;
     }
 
+    // number of decode steps spent on generation
+    // the first token is free, it comes from the logits of the last prompt batch
+    uint64_t n_gen_steps() const {
+        return n_predict > 0 ? n_predict - 1 : 0;
+    }
+
     // other derived metrics
     // note: all of them return 0.0 if the divisor is not known yet
     double t_prompt_per_token_ms() const {
         return n_prompt_processed > 0 ? t_prompt_ms() / n_prompt_processed : 0.0;
     }
     double t_gen_per_token_ms() const {
-        return n_predict > 0 ? t_gen_ms() / n_predict : 0.0;
+        return n_gen_steps() > 0 ? t_gen_ms() / n_gen_steps() : 0.0;
     }
     double n_prompt_tps() const {
         const double t_ms = t_prompt_ms();
@@ -403,7 +409,7 @@ struct server_slot_stats {
     }
     double n_gen_tps() const {
         const double t_ms = t_gen_ms();
-        return t_ms > 0.0 ? 1e3 / t_ms * n_predict : 0.0;
+        return t_ms > 0.0 ? 1e3 / t_ms * n_gen_steps() : 0.0;
     }
 
     // false if the slot never started, i.e. the task result carries no stats
@@ -420,15 +426,18 @@ struct server_metrics {
     int64_t t_start = 0;
 
     struct bucket {
-        uint64_t count = 0;
+        uint64_t count = 0; // number of tokens
+        uint64_t steps = 0; // number of decode steps, differs from count for generation
         uint64_t time  = 0; // in milliseconds
 
+        // the rate uses the decode steps, so that free tokens do not inflate it
         double n_per_second() const {
-            return time > 0 ? (double) count / (double) time * 1e3 : 0.0;
+            return time > 0 ? (double) steps / (double) time * 1e3 : 0.0;
         }
 
-        void add(uint64_t n, double t_ms) {
+        void add(uint64_t n, uint64_t n_steps, double t_ms) {
             count += n;
+            steps += n_steps;
             time  += (uint64_t) t_ms;
         }
     };

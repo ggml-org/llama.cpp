@@ -787,8 +787,11 @@ struct server_slot {
 void server_metrics::on_prompt_eval(const server_slot & slot) {
     const double t_ms = slot.stats.t_prompt_ms();
 
-    prompt       .add(slot.stats.n_prompt_processed, t_ms);
-    prompt_bucket.add(slot.stats.n_prompt_processed, t_ms);
+    // every prompt token needs one decode step
+    const uint64_t n = slot.stats.n_prompt_processed;
+
+    prompt       .add(n, n, t_ms);
+    prompt_bucket.add(n, n, t_ms);
 
     n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
 }
@@ -796,8 +799,11 @@ void server_metrics::on_prompt_eval(const server_slot & slot) {
 void server_metrics::on_prediction(const server_slot & slot) {
     const double t_ms = slot.stats.t_gen_ms();
 
-    predict       .add(slot.stats.n_predict, t_ms);
-    predict_bucket.add(slot.stats.n_predict, t_ms);
+    const uint64_t n       = slot.stats.n_predict;
+    const uint64_t n_steps = slot.stats.n_gen_steps();
+
+    predict       .add(n, n_steps, t_ms);
+    predict_bucket.add(n, n_steps, t_ms);
 
     n_draft_tokens      += slot.stats.n_draft_tokens;
     n_draft_accepted    += slot.stats.n_draft_accepted;
