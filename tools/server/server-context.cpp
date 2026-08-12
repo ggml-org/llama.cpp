@@ -780,30 +780,6 @@ struct server_slot {
 };
 
 
-//
-// server_metrics
-//
-
-void server_metrics::on_prediction(const server_slot & slot) {
-    const uint64_t t_us    = slot.stats.t_gen_us();
-    const uint64_t n       = slot.stats.n_gen;
-    const uint64_t n_steps = slot.stats.n_gen_steps();
-
-    predict       .add(n, n_steps, t_us);
-    predict_bucket.add(n, n_steps, t_us);
-
-    n_draft_tokens      += slot.stats.n_draft_tokens;
-    n_draft_accepted    += slot.stats.n_draft_accepted;
-    n_draft_verif_steps += slot.stats.n_draft_verif_steps;
-
-    if (n_accepted_per_pos.size() < slot.n_accepted_per_pos.size()) {
-        n_accepted_per_pos.resize(slot.n_accepted_per_pos.size(), 0);
-    }
-    for (size_t i = 0; i < slot.n_accepted_per_pos.size(); i++) {
-        n_accepted_per_pos[i] += slot.n_accepted_per_pos[i];
-    }
-}
-
 
 //
 // server_context_impl (private implementation)
@@ -3762,7 +3738,7 @@ private:
                 // release slot because of stop condition
                 slot.print_timings();
                 send_final_response(slot);
-                metrics.on_prediction(slot);
+                metrics_on_prediction(slot);
                 slot.release();
 
                 return;
@@ -3883,7 +3859,7 @@ private:
                 if (!process_token(result, slot)) {
                     slot.print_timings();
                     send_final_response(slot);
-                    metrics.on_prediction(slot);
+                    metrics_on_prediction(slot);
                     slot.release();
 
                     return;
@@ -3943,6 +3919,29 @@ private:
             // so that we can calculate the timings correctly
             llama_synchronize(ctx_tgt);
             metrics.flush_prompt();
+        }
+    }
+
+    void metrics_on_prediction(const server_slot & slot) {
+        const uint64_t t_us    = slot.stats.t_gen_us();
+        const uint64_t n       = slot.stats.n_gen;
+        const uint64_t n_steps = slot.stats.n_gen_steps();
+
+        metrics.predict       .add(n, n_steps, t_us);
+        metrics.predict_bucket.add(n, n_steps, t_us);
+
+        metrics.n_draft_tokens      += slot.stats.n_draft_tokens;
+        metrics.n_draft_accepted    += slot.stats.n_draft_accepted;
+        metrics.n_draft_verif_steps += slot.stats.n_draft_verif_steps;
+
+        auto & dst = metrics.n_accepted_per_pos;
+        const auto & src = slot.n_accepted_per_pos;
+
+        if (dst.size() < src.size()) {
+            dst.resize(src.size(), 0);
+        }
+        for (size_t i = 0; i < src.size(); i++) {
+            dst[i] += src[i];
         }
     }
 };

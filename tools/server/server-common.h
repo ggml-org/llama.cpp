@@ -338,8 +338,6 @@ json format_response_rerank(
 // stats and metrics
 //
 
-struct server_slot;
-
 // shared between server_slot and server_task_result_*
 struct server_slot_stats {
     uint64_t n_prompt_cached    = 0;
@@ -507,8 +505,6 @@ struct server_metrics {
         n_prompt_queued = 0;
     }
 
-    // this is implemented in server-context.cpp
-    void on_prediction(const server_slot & slot);
 };
 
 //
