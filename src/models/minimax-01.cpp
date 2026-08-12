@@ -71,11 +71,28 @@ public:
     llm_graph_input_la(const llama_hparams & hparams) : hparams(hparams) {}
 
     void set_input(const llama_ubatch * ubatch) override {
-        // TODO use real token positions here
+        // this operates on assumption that we have an equal ubatch split
+
+        const int64_t n_head = hparams.n_head();
+        const int32_t n_seqs = ubatch->n_seqs;
+        const int32_t n_seqs_unq = ubatch->n_seqs_unq;
+        const int32_t n_tokens = ubatch->n_tokens;
+        const int32_t n_seq_tokens = ubatch->n_seq_tokens;
+
+        std::vector<llama_pos> p0(n_seqs_unq);
+        std::fill(p0.begin(), p0.end(), std::numeric_limits<llama_pos>::max());
+
+        // get lowest token position in a ubatch for each stream
+        for (int i = 0; i < n_tokens; ++i) {
+            llama_seq_id seq_id = ubatch->seq_id[i][0];
+            int32_t seq_idx = ubatch->seq_idx[seq_id];
+            llama_pos pos = ubatch->pos[i];
+            if (p0[seq_idx] > pos) {
+                p0[seq_idx] = pos;
+            }
+        }
 
         if (inp_slopes) {
-            const int64_t n_head = hparams.n_head();
-
             GGML_ASSERT(ggml_backend_buffer_is_host(inp_slopes->buffer));
 
             float * data = (float *) inp_slopes->data;
@@ -89,52 +106,67 @@ public:
         }
 
         if (inp_q_decay) {
-            const int64_t n_head = hparams.n_head();
-            const int64_t n_seq_tokens = ubatch->n_seq_tokens;
-
             GGML_ASSERT(ggml_backend_buffer_is_host(inp_q_decay->buffer));
 
             float * slopes = (float *) inp_slopes->data;
             float * data = (float *) inp_q_decay->data;
 
-            for (int i = 0; i < n_seq_tokens; ++i) {
-                for (int h = 0; h < n_head; ++h) {
-                    data[i * n_head + h] = -slopes[h] * (i + 1);
+            for (int s = 0; s < n_seqs; ++s) {
+                for (int i = 0; i < n_seq_tokens; ++i) {
+                    llama_seq_id seq_id = ubatch->seq_id[s * n_seq_tokens + i][0];
+                    int32_t seq_idx = ubatch->seq_idx[seq_id];
+                    llama_pos pos = ubatch->pos[s * n_seq_tokens + i];
+                    int pos_rel = pos - p0[seq_idx];
+
+                    for (int h = 0; h < n_head; ++h) {
+                        data[seq_idx * n_head * n_seq_tokens + i * n_head + h] = -slopes[h] * (pos_rel + 1);
+                    }
                 }
             }
         }
 
         if (inp_k_decay) {
-            const int64_t n_head = hparams.n_head();
-            const int64_t n_seq_tokens = ubatch->n_seq_tokens;
-
             GGML_ASSERT(ggml_backend_buffer_is_host(inp_k_decay->buffer));
 
             float * slopes = (float *) inp_slopes->data;
             float * data = (float *) inp_k_decay->data;
 
-            for (int i = 0; i < n_seq_tokens; ++i) {
-                for (int h = 0; h < n_head; ++h) {
-                    data[i * n_head + h] = -slopes[h] * (n_seq_tokens - i - 1);
+            for (int s = 0; s < n_seqs; ++s) {
+                for (int i = 0; i < n_seq_tokens; ++i) {
+                    llama_seq_id seq_id = ubatch->seq_id[s * n_seq_tokens + i][0];
+                    int32_t seq_idx = ubatch->seq_idx[seq_id];
+                    llama_pos pos = ubatch->pos[s * n_seq_tokens + i];
+                    int pos_rel = pos - p0[seq_idx];
+
+                    for (int h = 0; h < n_head; ++h) {
+                        data[seq_idx * n_head * n_seq_tokens + i * n_head + h] = -slopes[h] * (n_seq_tokens - pos_rel - 1);
+                    }
                 }
             }
         }
 
         if (inp_diag_decay) {
-            const int64_t n_head = hparams.n_head();
-            const int64_t n_seq_tokens = ubatch->n_seq_tokens;
-
             GGML_ASSERT(ggml_backend_buffer_is_host(inp_diag_decay->buffer));
 
             float * slopes = (float *) inp_slopes->data;
             float * data = (float *) inp_diag_decay->data;
 
-            for (int h = 0; h < n_head; ++h) {
-                for (int j = 0; j < n_seq_tokens; ++j) {
-                    for (int i = 0; i < n_seq_tokens; ++i) {
-                        int index = j - i;
-                        float s_index = index >= 0 ? -slopes[h] * index : -INFINITY;
-                        data[h * n_seq_tokens * n_seq_tokens + j * n_seq_tokens + i] = s_index;
+            for (int s = 0; s < n_seqs; ++s) {
+                for (int h = 0; h < n_head; ++h) {
+                    for (int j = 0; j < n_seq_tokens; ++j) {
+                        llama_seq_id seq_id = ubatch->seq_id[s * n_seq_tokens + j][0];
+                        int32_t seq_idx = ubatch->seq_idx[seq_id];
+                        llama_pos pos_j = ubatch->pos[s * n_seq_tokens + j];
+                        int pos_rel_j = pos_j - p0[seq_idx];
+
+                        for (int i = 0; i < n_seq_tokens; ++i) {
+                            llama_pos pos_i = ubatch->pos[s * n_seq_tokens + i];
+                            int pos_rel_i = pos_i - p0[seq_idx];
+
+                            int index = pos_rel_j - pos_rel_i;
+                            float s_index = index >= 0 ? -slopes[h] * index : -INFINITY;
+                            data[seq_idx * n_head * n_seq_tokens * n_seq_tokens + h * n_seq_tokens * n_seq_tokens + j * n_seq_tokens + i] = s_index;
+                        }
                     }
                 }
             }
@@ -194,15 +226,15 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
     cb(inp->inp_slopes, "slopes", -1);
 
     if (n_seq_tokens != 1) {
-        inp->inp_q_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_head, n_seq_tokens);
+        inp->inp_q_decay = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, n_head, n_seq_tokens, n_seqs);
         ggml_set_input(inp->inp_q_decay);
         cb(inp->inp_q_decay, "q_decay_exp", -1);
 
-        inp->inp_k_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_head, n_seq_tokens);
+        inp->inp_k_decay = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, n_head, n_seq_tokens, n_seqs);
         ggml_set_input(inp->inp_k_decay);
         cb(inp->inp_k_decay, "k_decay_exp", -1);
 
-        inp->inp_diag_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_seq_tokens, n_seq_tokens, n_head);
+        inp->inp_diag_decay = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_seq_tokens, n_seq_tokens, n_head, n_seqs);
         ggml_set_input(inp->inp_diag_decay);
         cb(inp->inp_diag_decay, "diag_decay_exp", -1);
     }
