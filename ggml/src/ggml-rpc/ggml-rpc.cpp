@@ -1903,7 +1903,12 @@ static ggml_backend_buffer_type_t ggml_backend_rpc_device_get_buffer_type(ggml_b
 
 static bool ggml_backend_rpc_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     GGML_UNUSED(dev);
-    GGML_UNUSED(op);
+
+    // Use the non-CUB CUDA limit until RPC can query the remote backend.
+    if ((op->op == GGML_OP_TOP_K || op->op == GGML_OP_ARGSORT) && op->src[0]->ne[0] > 1024) {
+        return false;
+    }
+
     //TODO: call the remote backend and cache the results
     return true;
 }
