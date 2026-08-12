@@ -52,7 +52,6 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
             }
         }
     }
-    
     // This is the improved SPDA gate. Rather than gating Alchemist GPUs from all SPDA features, we instead target only the failing shapes.
     // If the GPU being assessed isn't in the grouping below, it has full access to all SPDA shapes. Otherwise, if it's an Alchemist GPU, we block only the shapes with head sizes that fail.
     // It is much easier to compare the device to a small list of failing cases than to define all the passing ones.
@@ -64,7 +63,6 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     if (!support_spda && K->ne[0] == 64) {
         return false;
     }
-
     // Optional KV-length ceiling (GGML_SYCL_FA_ONEDNN_MAX_KV, 0 = unlimited). Escape hatch:
     // very long sequences make the fused SDPA slow enough to risk the xe driver watchdog on
     // some stacks; past the cap we fall back to the native FA kernel instead.
