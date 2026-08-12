@@ -3,7 +3,7 @@
 // block region - closed, or still OPEN while the user is typing
 // one - plain Enter adds a line instead of submitting the message.
 // The textarea path is covered here end-to-end (the contenteditable
-// consumes the same case locally; see chat-form-contenteditable).
+// consumes the same case locally; see chat-form-input-rich).
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { SETTINGS_KEYS } from '$lib/constants';

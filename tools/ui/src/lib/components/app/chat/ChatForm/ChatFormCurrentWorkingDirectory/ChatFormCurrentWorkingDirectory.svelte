@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
-	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
+	import ChatFormCurrentWorkingDirectoryChip from './ChatFormCurrentWorkingDirectoryChip.svelte';
+	import ChatFormCurrentWorkingDirectoryResultsList from './ChatFormCurrentWorkingDirectoryResultsList.svelte';
 	import { FolderOpen } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Popover from '$lib/components/ui/popover';
@@ -250,7 +250,7 @@
 			// user cancelled - silently ignore; other errors are logged
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 
-			console.error('[ChatFormWorkingDirectory] showDirectoryPicker failed:', err);
+			console.error('[ChatFormCurrentWorkingDirectory] showDirectoryPicker failed:', err);
 		}
 	}
 
@@ -331,7 +331,7 @@
 	onclick={onOpen}
 	{disabled}
 >
-	<ChatFormWorkingDirectoryChip
+	<ChatFormCurrentWorkingDirectoryChip
 		{directory}
 		{homeBase}
 		{disabled}
@@ -372,7 +372,7 @@
 			{#if !fileSearchEnabled}
 				<div class="px-2 py-1.5 text-sm text-muted-foreground">{searchUnavailableMessage}</div>
 			{:else if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
-				<ChatFormWorkingDirectoryResultsList
+				<ChatFormCurrentWorkingDirectoryResultsList
 					results={queryResults}
 					hoveredIndex={nav.hoveredIndex}
 					isSearching={search.isSearching}

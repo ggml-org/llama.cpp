@@ -221,7 +221,7 @@ export {
 	textOffsetToRange,
 	badgeAwareWordJump,
 	leadingBadgeEdgeOffset
-} from './contenteditable-tokenizer';
+} from './chat-form-input-rich-tokenizer';
 
 // Source-space undo/redo history for the chat-form contenteditable
 export { SourceHistory, type SourceHistoryEntry } from './source-history';

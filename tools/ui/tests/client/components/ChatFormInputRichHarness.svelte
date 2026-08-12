@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ChatFormContentEditable from '$lib/components/app/chat/ChatForm/ChatFormContentEditable.svelte';
+	import ChatFormInputRich from '$lib/components/app/chat/ChatForm/ChatFormInput/ChatFormInputRich.svelte';
 	import { untrack } from 'svelte';
 
 	interface Props {
@@ -9,7 +9,7 @@
 	let { value: initial = '' }: Props = $props();
 
 	let value = $state(untrack(() => initial));
-	let inputRef: ChatFormContentEditable | undefined = $state(undefined);
+	let inputRef: ChatFormInputRich | undefined = $state(undefined);
 
 	export function getValue() {
 		return value;
@@ -24,4 +24,4 @@
 	}
 </script>
 
-<ChatFormContentEditable bind:this={inputRef} bind:value />
+<ChatFormInputRich bind:this={inputRef} bind:value />
