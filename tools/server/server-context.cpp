@@ -415,7 +415,7 @@ struct server_slot {
 
     // returns -1 if the generation is limitless
     int32_t n_remaining() const {
-        return n_predict_max == -1 ? -1 : n_predict_max - (int32_t) stats.n_predict;
+        return n_predict_max == -1 ? -1 : n_predict_max - (int32_t) stats.n_gen;
     }
 
     bool has_budget() const {
@@ -553,7 +553,7 @@ struct server_slot {
     }
 
     void print_timings_tg() {
-        if (stats.n_predict < 100) {
+        if (stats.n_gen < 100) {
             return;
         }
 
@@ -564,12 +564,12 @@ struct server_slot {
         }
 
         const double n_gen_second     = stats.n_gen_tps();
-        const double n_gen_second_win = 1e6 / (t_now - t_print_last) * (stats.n_predict - n_decoded_last);
+        const double n_gen_second_win = 1e6 / (t_now - t_print_last) * (stats.n_gen - n_decoded_last);
 
         t_print_last = t_now;
-        n_decoded_last = stats.n_predict;
+        n_decoded_last = stats.n_gen;
 
-        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s, tg_3s = %6.2f t/s\n", (int) stats.n_predict, n_gen_second, n_gen_second_win);
+        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s, tg_3s = %6.2f t/s\n", (int) stats.n_gen, n_gen_second, n_gen_second_win);
     }
 
     void print_timings_pp() const {
@@ -602,11 +602,11 @@ struct server_slot {
 
         SLT_INF(*this,
                 "       eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
-                t_token_generation, (int) stats.n_predict, t_gen, n_gen_second);
+                t_token_generation, (int) stats.n_gen, t_gen, n_gen_second);
 
         SLT_INF(*this,
                 "      total time = %10.2f ms / %5d tokens\n",
-                t_prompt_processing + t_token_generation, (int) (stats.n_prompt_processed + stats.n_predict));
+                t_prompt_processing + t_token_generation, (int) (stats.n_prompt_processed + stats.n_gen));
 
         SLT_INF(*this,
                 "   graphs reused = %10d\n",
@@ -663,7 +663,7 @@ struct server_slot {
                     {"has_next_token", has_next_token},
                     {"has_new_line",   has_new_line},
                     {"n_remain",       n_remaining()},
-                    {"n_decoded",      stats.n_predict},
+                    {"n_decoded",      stats.n_gen},
                 }
             };
 
@@ -786,7 +786,7 @@ struct server_slot {
 
 void server_metrics::on_prediction(const server_slot & slot) {
     const uint64_t t_us    = slot.stats.t_gen_us();
-    const uint64_t n       = slot.stats.n_predict;
+    const uint64_t n       = slot.stats.n_gen;
     const uint64_t n_steps = slot.stats.n_gen_steps();
 
     predict       .add(n, n_steps, t_us);
@@ -1832,15 +1832,15 @@ private:
             slot.has_next_token = false;
 
             SLT_DBG(slot, "stopped due to running out of context capacity, prompt.n_tokens() = %d, task.n_tokens = %d, n_decoded = %d, n_ctx = %d\n",
-                    slot.prompt.n_tokens(), slot.task->n_tokens(), (int) slot.stats.n_predict, slot.n_ctx);
+                    slot.prompt.n_tokens(), slot.task->n_tokens(), (int) slot.stats.n_gen, slot.n_ctx);
         }
 
         // check the limits
-        if (slot.stats.n_predict > 0 && slot.has_next_token && !slot.has_budget()) {
+        if (slot.stats.n_gen > 0 && slot.has_next_token && !slot.has_budget()) {
             slot.stop           = STOP_TYPE_LIMIT;
             slot.has_next_token = false;
 
-            SLT_DBG(slot, "stopped by limit, n_decoded = %d, n_predict = %d\n", (int) slot.stats.n_predict, slot.task->params.n_predict);
+            SLT_DBG(slot, "stopped by limit, n_decoded = %d, n_predict = %d\n", (int) slot.stats.n_gen, slot.task->params.n_predict);
         }
 
         if (slot.has_new_line) {
@@ -1864,7 +1864,7 @@ private:
                         // cut the last line
                         slot.generated_text.erase(pos, std::string::npos);
 
-                        SLT_DBG(slot, "stopped by indentation limit, n_decoded = %d, n_indent = %d\n", (int) slot.stats.n_predict, n_indent);
+                        SLT_DBG(slot, "stopped by indentation limit, n_decoded = %d, n_indent = %d\n", (int) slot.stats.n_gen, n_indent);
                     }
                 }
 
@@ -1888,7 +1888,7 @@ private:
                 slot.stop           = STOP_TYPE_LIMIT;
                 slot.has_next_token = false;
 
-                SLT_DBG(slot, "stopped by time limit, n_decoded = %d, t_max_predict_ms = %d ms\n", (int) slot.stats.n_predict, (int) slot.task->params.t_max_predict_ms);
+                SLT_DBG(slot, "stopped by time limit, n_decoded = %d, t_max_predict_ms = %d ms\n", (int) slot.stats.n_gen, (int) slot.task->params.t_max_predict_ms);
             }
         }
 
@@ -1899,7 +1899,7 @@ private:
             SLT_DBG(slot, "%s", "stopped by EOS\n");
         }
 
-        SLT_DBG(slot, "n_decoded = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_predict, slot.n_remaining(), result.tok, token_str.c_str());
+        SLT_DBG(slot, "n_decoded = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
 
         return slot.has_next_token; // continue
     }
@@ -2018,7 +2018,7 @@ private:
             res->tokens  = { tkn.tok };
         }
 
-        res->n_decoded             = slot.stats.n_predict;
+        res->n_decoded             = slot.stats.n_gen;
         res->n_prompt_tokens       = slot.task->n_tokens();
         res->n_prompt_tokens_cache = slot.stats.n_prompt_cached;
         res->post_sampling_probs   = slot.task->params.post_sampling_probs;
@@ -2067,7 +2067,7 @@ private:
         res->response_fields = std::move(slot.task->params.response_fields);
 
         res->truncated             = slot.truncated;
-        res->n_decoded             = slot.stats.n_predict;
+        res->n_decoded             = slot.stats.n_gen;
         res->n_prompt_tokens       = slot.task->n_tokens();
         res->n_prompt_tokens_cache = slot.stats.n_prompt_cached;
         res->n_tokens_cached       = slot.prompt.n_tokens();
@@ -3490,7 +3490,7 @@ private:
                         // extract the logits only for the last token
                         batch.set_output(batch.size() - 1, true);
 
-                        slot.stats.n_predict = 0;
+                        slot.stats.n_gen = 0;
                         slot.i_batch         = batch.size() - 1;
 
                         slot.init_sampler();
@@ -3603,9 +3603,6 @@ private:
                     // stop, do not retry with smaller batch size
                     throw std::runtime_error(err);
                 }
-            } else {
-                // success, apply batch metrics
-                metrics_post_decode(off, n_batch_tokens);
             }
 
             // retry with half the batch size to try to find a free slot in the KV cache
@@ -3616,6 +3613,9 @@ private:
             SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, off = %d, n_batch = %d, ret = %d\n", off, n_batch, ret);
 
             return false; // retry with the updated n_batch
+        } else {
+            // success, apply batch metrics
+            metrics_post_decode(off, batch_view.n_tokens);
         }
 
         // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
@@ -3739,9 +3739,9 @@ private:
             // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
             const int64_t t_now = ggml_time_us();
 
-            slot.stats.n_predict += 1;
+            slot.stats.n_gen += 1;
 
-            if (slot.stats.n_predict == 1) {
+            if (slot.stats.n_gen == 1) {
                 slot.stats.update_prompt_last();
                 slot.t_print_last = t_now;
                 slot.n_decoded_last = 0;
@@ -3878,7 +3878,7 @@ private:
 
                 // TODO: set result.probs
 
-                slot.stats.n_predict += 1;
+                slot.stats.n_gen += 1;
 
                 if (!process_token(result, slot)) {
                     slot.print_timings();
