@@ -51,7 +51,7 @@ set_target_properties(llama PROPERTIES
 )
 
 target_compile_definitions(llama PRIVATE
-    LLAMA_VERSION="${LLAMA_INSTALL_VERSION}"
+    LLAMA_VERSION="${LLAMA_VERSION}"
     LLAMA_COMMIT="${LLAMA_BUILD_COMMIT}"
 )
 

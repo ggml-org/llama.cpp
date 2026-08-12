@@ -8,6 +8,20 @@ set(LLAMA_VERSION_MINOR 1)
 set(LLAMA_VERSION_PATCH 0)
 set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
 
+# whether this is a development/nightly build
+# set this to OFF when making a release from a release tag (vX.Y.Z)
+# ref: https://github.com/ggml-org/ggml/discussions/1579
+option(LLAMA_BUILD_IS_DEV "llama: dev build" ON)
+
+if (LLAMA_BUILD_IS_DEV)
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}-dev")
+else()
+    # TODO: check that the current commit is tagged correctly according to the version specified above
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}")
+endif()
+
+message(STATUS "llama.cpp version: ${LLAMA_VERSION}")
+
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
 
@@ -142,10 +156,6 @@ endif()
 if (NOT DEFINED LLAMA_BUILD_COMMIT)
     set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
 endif()
-
-set(LLAMA_INSTALL_VERSION ${LLAMA_VERSION_BASE})
-
-message(STATUS "llama.cpp version: ${LLAMA_INSTALL_VERSION}")
 
 # override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
@@ -282,7 +292,7 @@ configure_package_config_file(
 
 write_basic_package_version_file(
         ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
-    VERSION ${LLAMA_INSTALL_VERSION}
+        VERSION ${LLAMA_VERSION}
     COMPATIBILITY SameMajorVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
