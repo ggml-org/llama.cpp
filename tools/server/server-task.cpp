@@ -1550,43 +1550,43 @@ std::string server_task_result_metrics::to_metrics() {
     const std::vector<metric_item> counters = {
         {
             "prompt_tokens_total",
-            "Number of prompt tokens processed.",
+            "Number of prompt tokens processed, excluding cached tokens",
             metrics.prompt.count
         }, {
             "prompt_tokens_cached_total",
-            "Number of prompt tokens reused from the cache.",
+            "Number of prompt tokens reused from the cache",
             metrics.n_prompt_cached
         }, {
             "prompt_seconds_total",
-            "Prompt process time",
+            "Total time spent processing prompts",
             metrics.prompt.time / 1.e6
         }, {
             "tokens_predicted_total",
-            "Number of generation tokens processed.",
+            "Number of generation tokens processed",
             metrics.predict.count
         }, {
             "tokens_predicted_seconds_total",
-            "Predict process time",
+            "Total time spent generating tokens",
             metrics.predict.time / 1.e6
         }, {
             "n_decode_total",
-            "Total number of llama_decode() calls",
+            "Total number of llama_decode() calls, excluding speculative decoding and multimodal decoding",
             metrics.n_decode
         }, {
             "n_tokens_max",
-            "Largest observed n_tokens.",
+            "Largest observed sequence length (prompt + generation)",
             metrics.n_tokens_max
         }, {
             "spec_decode_num_draft_tokens_total",
-            "Total draft tokens generated",
+            "Speculative: Total draft tokens generated",
             metrics.n_draft_tokens
         }, {
             "spec_decode_num_accepted_tokens_total",
-            "Total draft tokens accepted by the target model",
+            "Speculative: Total draft tokens accepted by the target model",
             metrics.n_draft_accepted
         }, {
             "spec_decode_num_drafts_total",
-            "Total speculative decoding verification steps",
+            "Speculative: Total speculative decoding verification steps",
             metrics.n_draft_verif_steps
         },
     };
@@ -1594,19 +1594,19 @@ std::string server_task_result_metrics::to_metrics() {
     const std::vector<metric_item> gauges = {
         {
             "prompt_tokens_seconds",
-            "Average prompt throughput in tokens/s.",
+            "Average prompt throughput in tokens/s",
             metrics.prompt_bucket.n_per_second()
         }, {
             "predicted_tokens_seconds",
-            "Average generation throughput in tokens/s.",
+            "Average generation throughput in tokens/s",
             metrics.predict_bucket.n_per_second()
         }, {
             "requests_processing",
-            "Number of requests processing.",
+            "Number of requests processing",
             (uint64_t) n_processing_slots
         }, {
             "requests_deferred",
-            "Number of requests deferred.",
+            "Number of requests deferred",
             (uint64_t) n_tasks_deferred
         }, {
             "n_busy_slots_per_decode",
