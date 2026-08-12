@@ -14,6 +14,9 @@ export const PREFIX_FILE = 'File: ';
 export const PREFIX_SIZE = 'Size: ';
 export const PREFIX_MIME = 'MIME: ';
 
+/** Byte count of the `Size: ` header line, e.g. `Size: 12345 bytes` -> capture group 1 is `12345`. */
+export const READ_MEDIA_SIZE_REGEX = new RegExp(`^${PREFIX_SIZE}\\s*(\\d+)\\s*bytes`);
+
 /** Image extensions the tool accepts. The server decodes images with stb_image, which has no webp or tiff. */
 export const READ_MEDIA_IMAGE_MIME: Record<string, string> = {
 	gif: MimeTypeImage.GIF,

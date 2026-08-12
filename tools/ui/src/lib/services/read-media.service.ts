@@ -1,5 +1,7 @@
 import { ToolsService } from './tools.service';
 import {
+	FILE_EXTENSION_SEPARATOR,
+	FILE_PATH_SEPARATOR_REGEX,
 	NEWLINE,
 	PREFIX_FILE,
 	PREFIX_MIME,
@@ -19,8 +21,8 @@ export interface ReadMediaCapabilities {
 
 /** Lowercase extension of a path, without the dot. Empty when the file name has none. */
 function fileExtension(path: string): string {
-	const name = path.split(/[\\/]/).pop() ?? '';
-	const dot = name.lastIndexOf('.');
+	const name = path.split(FILE_PATH_SEPARATOR_REGEX).pop() ?? '';
+	const dot = name.lastIndexOf(FILE_EXTENSION_SEPARATOR);
 
 	return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
 }

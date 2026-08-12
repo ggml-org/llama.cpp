@@ -1,5 +1,10 @@
-import { NEWLINE } from '$lib/constants/code';
-import { PREFIX_FILE, PREFIX_MIME, PREFIX_SIZE } from '$lib/constants/read-media';
+import { FILE_PATH_SEPARATOR_REGEX, NEWLINE } from '$lib/constants/code';
+import {
+	PREFIX_FILE,
+	PREFIX_MIME,
+	PREFIX_SIZE,
+	READ_MEDIA_SIZE_REGEX
+} from '$lib/constants/read-media';
 import type { AgenticSection } from '$lib/utils';
 
 export interface ReadMediaMeta {
@@ -35,11 +40,11 @@ export function parseReadMediaMeta(section: AgenticSection): ReadMediaMeta | nul
 
 		if (trimmed.startsWith(PREFIX_FILE)) {
 			path = trimmed.slice(PREFIX_FILE.length).trim();
-			fileName = path.split('/').pop() ?? path;
+			fileName = path.split(FILE_PATH_SEPARATOR_REGEX).pop() ?? path;
 		} else if (trimmed.startsWith(PREFIX_SIZE)) {
-			const match = trimmed.match(new RegExp(`${PREFIX_SIZE}\\s*(\\d+)\\s*bytes`));
+			const match = trimmed.match(READ_MEDIA_SIZE_REGEX);
 
-			if (match) sizeBytes = parseInt(match[1], 10);
+			if (match) sizeBytes = Number(match[1]);
 		} else if (trimmed.startsWith(PREFIX_MIME)) {
 			mimeType = trimmed.slice(PREFIX_MIME.length).trim();
 		}
