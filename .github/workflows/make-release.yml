@@ -3,10 +3,6 @@ name: Make Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Release version (e.g. v0.1.0). Leave empty to use version from CMakeLists.txt'
-        required: false
-        type: string
       dry_run:
         description: 'Dry run - validate without creating the tag'
         required: true
@@ -29,7 +25,7 @@ jobs:
 
       - name: Run release checks
         id: checks
-        run: bash scripts/make-release-checks.sh "${{ github.event.inputs.version }}" ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        run: bash scripts/make-release-checks.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
 

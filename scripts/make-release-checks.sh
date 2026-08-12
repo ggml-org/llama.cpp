@@ -1,8 +1,7 @@
 #!/bin/bash
 # Run all pre-release checks and determine the release version.
 #
-# Usage: make-release-checks.sh [version] [--dry-run]
-#   version:   optional explicit version (e.g. v0.1.0); reads CMakeLists.txt if omitted
+# Usage: make-release-checks.sh [--dry-run]
 #   --dry-run: warn on failures instead of aborting
 #
 # Env (when running in GitHub Actions): GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT
@@ -11,24 +10,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VERSION_ARG=""
 DRY_RUN=false
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
-        -*) echo "Unknown argument: $arg"; exit 1 ;;
-        *)  VERSION_ARG="$arg" ;;
+        *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
 
-if [[ -n "$VERSION_ARG" ]]; then
-    VERSION="$VERSION_ARG"
-else
-    MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
-    MINOR=$(grep "set(LLAMA_VERSION_MINOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
-    PATCH=$(grep "set(LLAMA_VERSION_PATCH" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
-    VERSION="v${MAJOR}.${MINOR}.${PATCH}"
-fi
+MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
+MINOR=$(grep "set(LLAMA_VERSION_MINOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
+PATCH=$(grep "set(LLAMA_VERSION_PATCH" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
+VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 echo "Determined version: ${VERSION}"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
