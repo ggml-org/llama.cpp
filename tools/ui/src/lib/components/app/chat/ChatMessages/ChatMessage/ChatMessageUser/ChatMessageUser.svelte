@@ -5,7 +5,7 @@
 		ChatMessageStatistics,
 		ChatMessageUserBubble
 	} from '$lib/components/app/chat';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, settingsStore } from '$lib/stores';
@@ -25,7 +25,7 @@
 	}: Props = $props();
 
 	// Get contexts
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 	const processingState = useProcessingState();
 
 	const currentConfig = $derived(settingsStore.config);

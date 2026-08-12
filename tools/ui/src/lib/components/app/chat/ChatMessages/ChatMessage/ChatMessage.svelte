@@ -8,21 +8,21 @@
 		ChatMessageUser
 	} from '$lib/components/app/chat';
 	import { REASONING_TAGS, ROUTES, SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
-	import {
-		type ChatMessageDeletionInfo,
-		getChatActionsContext,
-		setChatMessageActionsContext,
-		setMessageEditContext
-	} from '$lib/contexts';
+	import { setChatMessageActionsContext, setChatMessageEditContext } from '$lib/contexts';
 	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { chatStore, conversationsStore, isMobile } from '$lib/stores';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import type {
+		ChatMessageActions,
+		ChatMessageDeletionInfo,
+		DatabaseMessageExtraMcpPrompt
+	} from '$lib/types';
 	import { deriveAgenticSections } from '$lib/utils';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 
 	interface Props {
 		class?: string;
+		chatActions: ChatMessageActions;
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isLastAssistantMessage?: boolean;
@@ -32,6 +32,7 @@
 	}
 
 	let {
+		chatActions,
 		class: className = '',
 		isLastAssistantMessage = false,
 		isLastUserMessage = false,
@@ -40,8 +41,6 @@
 		siblingInfo = null,
 		toolMessages = []
 	}: Props = $props();
-
-	const chatActions = getChatActionsContext();
 
 	let deletionInfo = $state<ChatMessageDeletionInfo | null>(null);
 	// The system message placeholder must never surface as editable content; keeping
@@ -112,7 +111,7 @@
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
 
-	setMessageEditContext({
+	setChatMessageEditContext({
 		cancel: handleCancelEdit,
 		get editedContent() {
 			return editedContent;

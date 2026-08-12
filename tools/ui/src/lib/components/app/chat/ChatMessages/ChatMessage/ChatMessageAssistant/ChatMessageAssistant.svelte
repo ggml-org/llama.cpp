@@ -8,7 +8,7 @@
 		ChatMessageAssistantStatistics,
 		ChatMessageEditForm
 	} from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
@@ -36,7 +36,7 @@
 	}: Props = $props();
 
 	// Get edit context
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const processingState = useProcessingState();

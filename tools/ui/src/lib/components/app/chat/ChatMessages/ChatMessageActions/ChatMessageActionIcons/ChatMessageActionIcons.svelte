@@ -9,7 +9,7 @@
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { Switch } from '$lib/components/ui/switch';
-	import { getChatMessageActionsContext, getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageActionsContext, getChatMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { conversationsStore } from '$lib/stores';
 
@@ -36,7 +36,7 @@
 	}: Props = $props();
 
 	const messageActions = getChatMessageActionsContext();
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	let showForkDialog = $state(false);
 	let forkName = $state('');

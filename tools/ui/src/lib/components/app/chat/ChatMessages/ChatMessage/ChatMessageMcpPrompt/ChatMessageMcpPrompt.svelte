@@ -4,7 +4,7 @@
 		ChatMessageEditForm,
 		ChatMessageMcpPromptContent
 	} from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { McpPromptVariant, MessageRole } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
@@ -17,7 +17,7 @@
 	let { class: className = '', mcpPrompt, message }: Props = $props();
 
 	// Get edit context
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 </script>
 
 <div

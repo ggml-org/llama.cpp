@@ -7,7 +7,8 @@ import type {
 	AttachmentMenuItemId,
 	ChatFormCommandAction,
 	ErrorDialogType,
-	FileMentionEntryType
+	FileMentionEntryType,
+	MessageRole
 } from '$lib/enums';
 import type { Component } from 'svelte';
 
@@ -234,4 +235,112 @@ export interface ChatFormCommand {
 	keywords?: string[];
 	action: ChatFormCommandAction;
 	disabled: boolean;
+}
+
+/**
+ * Data shown in the message delete confirmation dialog.
+ */
+export interface ChatMessageDeletionInfo {
+	totalCount: number;
+	userMessages: number;
+	assistantMessages: number;
+	messageTypes: string[];
+}
+
+/**
+ * Conversation-level message operations owned by ChatMessages (store calls + list
+ * refresh + user-action notification), passed to each ChatMessage as a prop.
+ */
+export interface ChatMessageActions {
+	copy: (message: DatabaseMessage) => void;
+	delete: (message: DatabaseMessage) => void;
+	navigateToSibling: (siblingId: string) => void;
+	editWithBranching: (
+		message: DatabaseMessage,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	) => void;
+	editWithReplacement: (
+		message: DatabaseMessage,
+		newContent: string,
+		shouldBranch: boolean
+	) => void;
+	editUserMessagePreserveResponses: (
+		message: DatabaseMessage,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	) => void;
+	regenerateWithBranching: (message: DatabaseMessage, modelOverride?: string) => void;
+	continueAssistantMessage: (message: DatabaseMessage) => void;
+	forkConversation: (
+		message: DatabaseMessage,
+		options: { name: string; includeAttachments: boolean }
+	) => void;
+}
+
+/**
+ * Per-message actions and state. Set once per message in ChatMessage.svelte and
+ * consumed by its descendants (action icons, branching controls).
+ */
+export interface ChatMessageActionsContext {
+	readonly siblingInfo: ChatMessageSiblingInfo | null;
+	readonly deletionInfo: ChatMessageDeletionInfo | null;
+	readonly showDeleteDialog: boolean;
+	copy: () => void;
+	requestDelete: () => void;
+	confirmDelete: () => void;
+	setShowDeleteDialog: (show: boolean) => void;
+	navigateToSibling: (siblingId: string) => void;
+	forkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
+}
+
+export interface ChatMessageEditState {
+	readonly isEditing: boolean;
+	readonly editedContent: string;
+	readonly editedExtras: DatabaseMessageExtra[];
+	readonly editedUploadedFiles: ChatUploadedFile[];
+	readonly originalContent: string;
+	readonly originalExtras: DatabaseMessageExtra[];
+	readonly showSaveOnlyOption: boolean;
+	readonly showBranchAfterEditOption: boolean;
+	readonly shouldBranchAfterEdit: boolean;
+	readonly messageRole: MessageRole;
+	readonly rawEditContent?: string;
+}
+
+export interface ChatMessageEditActions {
+	setContent: (content: string) => void;
+	setExtras: (extras: DatabaseMessageExtra[]) => void;
+	setUploadedFiles: (files: ChatUploadedFile[]) => void;
+	save: () => void;
+	saveOnly: () => void;
+	cancel: () => void;
+	startEdit: () => void;
+}
+
+export interface ChatMessageAssistantEditActions {
+	setShouldBranchAfterEdit: (value: boolean) => void;
+}
+
+export type ChatMessageEditContext = ChatMessageEditState &
+	ChatMessageEditActions &
+	Partial<ChatMessageAssistantEditActions>;
+
+/**
+ * Actions and capability flags for the ChatForm add-menu. Set once in
+ * ChatFormActions.svelte and consumed by its deep descendants (the add sheet,
+ * dropdown and MCP servers submenu) to avoid relaying them through props.
+ */
+export interface ChatFormActionsContext {
+	readonly disabled: boolean;
+	readonly hasAudioModality: boolean;
+	readonly hasVideoModality: boolean;
+	readonly hasVisionModality: boolean;
+	readonly hasMcpPromptsSupport: boolean;
+	readonly hasMcpResourcesSupport: boolean;
+	onFileUpload?: () => void;
+	onSystemPromptClick?: () => void;
+	onMcpPromptClick?: () => void;
+	onMcpResourcesClick?: () => void;
+	onMcpSettingsClick?: () => void;
 }

@@ -4,7 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
 	import { INPUT_CLASSES } from '$lib/constants';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
 	import { settingsStore } from '$lib/stores';
 	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
@@ -17,7 +17,7 @@
 
 	let { class: className = '', message, textareaElement = $bindable() }: Props = $props();
 
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	function handleEditKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {

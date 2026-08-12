@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
-	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
+	import type { ChatMessageActions } from '$lib/types';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
@@ -22,7 +22,7 @@
 
 	const currentConfig = settingsStore.config;
 
-	setChatActionsContext({
+	const chatActions: ChatMessageActions = {
 		continueAssistantMessage: async (message: DatabaseMessage) => {
 			onUserAction?.();
 			await chatStore.continueAssistantMessage(message.id);
@@ -91,7 +91,7 @@
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 			refreshAllMessages();
 		}
-	});
+	};
 
 	function refreshAllMessages() {
 		const conversation = conversationsStore.activeConversation;
@@ -228,6 +228,7 @@
 	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
 		<ChatMessage
 			class="mx-auto mt-12 w-full max-w-3xl"
+			{chatActions}
 			{message}
 			{toolMessages}
 			{isLastAssistantMessage}

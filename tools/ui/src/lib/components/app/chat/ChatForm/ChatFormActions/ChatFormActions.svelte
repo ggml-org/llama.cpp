@@ -11,6 +11,7 @@
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
+	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
 	import { chatStore, conversationsStore, mcpStore, settingsStore } from '$lib/stores';
@@ -132,6 +133,42 @@
 
 		return livePromptTokens > 0 || liveOutputTokens > 0;
 	});
+
+	setChatFormActionsContext({
+		get disabled() {
+			return disabled;
+		},
+		get hasAudioModality() {
+			return hasAudioModality;
+		},
+		get hasMcpPromptsSupport() {
+			return hasMcpPromptsSupport;
+		},
+		get hasMcpResourcesSupport() {
+			return hasMcpResourcesSupport;
+		},
+		get hasVideoModality() {
+			return hasVideoModality;
+		},
+		get hasVisionModality() {
+			return hasVisionModality;
+		},
+		get onFileUpload() {
+			return onFileUpload;
+		},
+		get onMcpPromptClick() {
+			return onMcpPromptClick;
+		},
+		get onMcpResourcesClick() {
+			return onMcpResourcesClick;
+		},
+		get onMcpSettingsClick() {
+			return () => goto(ROUTES.MCP_SERVERS);
+		},
+		get onSystemPromptClick() {
+			return onSystemPromptClick;
+		}
+	});
 </script>
 
 <div
@@ -140,19 +177,7 @@
 >
 	{#if showAddButton}
 		<div class="mr-auto flex items-center gap-2">
-			<ChatFormActionsAdd
-				{disabled}
-				{hasAudioModality}
-				{hasVideoModality}
-				{hasVisionModality}
-				{hasMcpPromptsSupport}
-				{hasMcpResourcesSupport}
-				{onFileUpload}
-				{onSystemPromptClick}
-				{onMcpPromptClick}
-				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
-			/>
+			<ChatFormActionsAdd />
 		</div>
 	{/if}
 
