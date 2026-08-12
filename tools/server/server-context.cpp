@@ -2724,6 +2724,9 @@ private:
         } catch (const std::exception & e) {
             SRV_ERR("pre_decode() failed: %s\n", e.what());
             abort_all_slots("pre_decode() failed: " + std::string(e.what()));
+
+            // the batch is half-built and not rendered, skip now to avoid UB
+            return;
         }
 
         GGML_ASSERT(batch.slot_batched || batch.size() == 0);
@@ -3920,18 +3923,26 @@ private:
         }
 
         // apply enqueued prompt tokens stats
+        // note: a slot can be released before we get here, which clears its stats
+        //       the tokens were still computed, counted in the global metrics, not in slot
         uint64_t n_prompt_tokens = 0;
         bool     has_output      = false;
 
         for (int i = off; i < off + n_tokens; ++i) {
             const auto & t = batch.tokens[i];
+
+            has_output |= t.output;
+
+            if (!t.is_prompt) {
+                continue; // generated tokens are handled after sampling
+            }
+
+            n_prompt_tokens++;
+
             auto & slot = slots[t.id_slot];
-            if (t.is_prompt) {
-                n_prompt_tokens++;
+            if (slot.stats.is_set()) {
                 slot.stats.n_prompt_processed++;
             }
-            has_output |= t.output;
-            // note: generated tokens will be handled after sampling
         }
 
         metrics_queue_prompt(n_prompt_tokens);
@@ -3943,13 +3954,14 @@ private:
             metrics_flush_prompt();
         }
 
-        // advance the prompt timing, but only for the slots that had tokens in this batch
-        // note: after the sync above, so that it reflects the compute and not the submission
+        // advance the prompt timing of the slots that had tokens in this batch
+        // note: a second pass, it must run after the sync above to reflect the compute
         const int64_t t_now = ggml_time_us();
         for (int i = off; i < off + n_tokens; ++i) {
             const auto & t = batch.tokens[i];
-            if (t.is_prompt) {
-                slots[t.id_slot].stats.set_prompt_last(t_now);
+            auto & slot = slots[t.id_slot];
+            if (t.is_prompt && slot.stats.is_set()) {
+                slot.stats.set_prompt_last(t_now);
             }
         }
     }
