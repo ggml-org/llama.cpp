@@ -381,12 +381,15 @@ struct server_slot_stats {
         }
         return (t_prompt_last - t_start) / 1000.0;
     }
-    double t_gen_ms() const {
+    int64_t t_gen_us() const {
         if (t_gen_last == 0) {
-            return 0.0; // the generation is not started yet
+            return 0; // the generation is not started yet
         }
         // clamp to 1 us, the first token can land in the same us as t_prompt_last
-        return std::max<int64_t>(1, t_gen_last - t_prompt_last) / 1000.0;
+        return std::max<int64_t>(1, t_gen_last - t_prompt_last);
+    }
+    double t_gen_ms() const {
+        return t_gen_us() / 1000.0;
     }
 
     // number of decode steps spent on generation
@@ -427,18 +430,18 @@ struct server_metrics {
 
     struct bucket {
         uint64_t count = 0; // number of tokens
-        uint64_t steps = 0; // number of decode steps, differs from count for generation
-        uint64_t time  = 0; // in milliseconds
+        uint64_t steps = 0; // for generation, this excludes first generated token (logits from prompt batch)
+        uint64_t time  = 0; // in microseconds
 
-        // the rate uses the decode steps, so that free tokens do not inflate it
+        // the rate uses the decode steps, so that "free" tokens do not inflate it
         double n_per_second() const {
-            return time > 0 ? (double) steps / (double) time * 1e3 : 0.0;
+            return time > 0 ? (double) steps / (double) time * 1e6 : 0.0;
         }
 
-        void add(uint64_t n, uint64_t n_steps, double t_ms) {
+        void add(uint64_t n, uint64_t n_steps, uint64_t t_us) {
             count += n;
             steps += n_steps;
-            time  += (uint64_t) t_ms;
+            time  += t_us;
         }
     };
 
@@ -460,6 +463,12 @@ struct server_metrics {
     uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
 
+    // these are internal counters to track batch processing
+    // llama_decode() is async, so we queue the counting until sync()
+    int64_t  t_decode_start   = 0; // start of the last submitted decode
+    int64_t  t_prompt_start   = 0; // start of the oldest queued prompt decode
+    uint64_t n_prompt_queued  = 0;
+
     void init() {
         t_start = ggml_time_us();
     }
@@ -469,8 +478,36 @@ struct server_metrics {
         predict_bucket = {};
     }
 
-    // these are implemented in server-context.cpp
-    void on_prompt_eval(const server_slot & slot);
+    void add_prompt(uint64_t n_tokens, uint64_t t_us) {
+        prompt       .add(n_tokens, n_tokens, t_us);
+        prompt_bucket.add(n_tokens, n_tokens, t_us);
+    }
+
+    void on_decode_start() {
+        t_decode_start = ggml_time_us();
+    }
+
+    // the batch is submitted, but its compute may not be done yet
+    void queue_prompt(uint64_t n_tokens) {
+        if (n_tokens == 0) {
+            return;
+        }
+        if (n_prompt_queued == 0) {
+            t_prompt_start = t_decode_start;
+        }
+        n_prompt_queued += n_tokens;
+    }
+
+    // call only after the context is synchronized, otherwise the time is meaningless
+    void flush_prompt() {
+        if (n_prompt_queued == 0) {
+            return;
+        }
+        add_prompt(n_prompt_queued, ggml_time_us() - t_prompt_start);
+        n_prompt_queued = 0;
+    }
+
+    // this is implemented in server-context.cpp
     void on_prediction(const server_slot & slot);
 };
 

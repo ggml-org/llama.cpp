@@ -784,26 +784,13 @@ struct server_slot {
 // server_metrics
 //
 
-void server_metrics::on_prompt_eval(const server_slot & slot) {
-    const double t_ms = slot.stats.t_prompt_ms();
-
-    // every prompt token needs one decode step
-    const uint64_t n = slot.stats.n_prompt_processed;
-
-    prompt       .add(n, n, t_ms);
-    prompt_bucket.add(n, n, t_ms);
-
-    n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
-}
-
 void server_metrics::on_prediction(const server_slot & slot) {
-    const double t_ms = slot.stats.t_gen_ms();
-
+    const uint64_t t_us    = slot.stats.t_gen_us();
     const uint64_t n       = slot.stats.n_predict;
     const uint64_t n_steps = slot.stats.n_gen_steps();
 
-    predict       .add(n, n_steps, t_ms);
-    predict_bucket.add(n, n_steps, t_ms);
+    predict       .add(n, n_steps, t_us);
+    predict_bucket.add(n, n_steps, t_us);
 
     n_draft_tokens      += slot.stats.n_draft_tokens;
     n_draft_accepted    += slot.stats.n_draft_accepted;
@@ -3398,6 +3385,7 @@ private:
                         }
 
                         // process the mtmd chunk
+                        auto t_now = ggml_time_us();
                         size_t n_tokens_out = 0;
                         int32_t res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
                         if (res != 0) {
@@ -3406,8 +3394,10 @@ private:
                             slot.release();
                             return; // the slot is done, skip it entirely
                         }
+                        auto t_elapsed = ggml_time_us() - t_now;
 
                         // process_mtmd_chunk runs its own encode/decode, so we update stats right away
+                        metrics.add_prompt(n_tokens_out, t_elapsed);
                         slot.stats.n_prompt_processed += n_tokens_out;
                         slot.stats.update_prompt_last();
 
@@ -3550,6 +3540,8 @@ private:
     bool decode(int32_t & n_batch, int32_t off, llama_batch & batch_view) {
         SRV_DBG("n_batch (effective) = %d, off = %d\n", n_batch, off);
 
+        metrics_pre_decode();
+
         if (batch.size() == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
 
@@ -3611,6 +3603,9 @@ private:
                     // stop, do not retry with smaller batch size
                     throw std::runtime_error(err);
                 }
+            } else {
+                // success, apply batch metrics
+                metrics_post_decode(off, n_batch_tokens);
             }
 
             // retry with half the batch size to try to find a free slot in the KV cache
@@ -3621,9 +3616,6 @@ private:
             SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, off = %d, n_batch = %d, ret = %d\n", off, n_batch, ret);
 
             return false; // retry with the updated n_batch
-        } else {
-            // note: retried decodes are not counted, the metrics only cover evaluated batches
-            metrics_on_decoded(off, batch_view.n_tokens);
         }
 
         // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
@@ -3753,7 +3745,6 @@ private:
                 slot.stats.update_prompt_last();
                 slot.t_print_last = t_now;
                 slot.n_decoded_last = 0;
-                metrics.on_prompt_eval(slot);
             }
 
             slot.stats.update_gen_last();
@@ -3913,8 +3904,15 @@ private:
         return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
     }
 
+    //
     // metrics helpers
-    void metrics_on_decoded(int32_t off, int32_t n_tokens) {
+    //
+
+    void metrics_pre_decode() {
+        metrics.on_decode_start();
+    }
+
+    void metrics_post_decode(int32_t off, int32_t n_tokens) {
         metrics.n_decode++;
         for (const auto & slot : slots) {
             if (slot.is_processing()) {
@@ -3922,13 +3920,29 @@ private:
             }
             metrics.n_tokens_max = std::max(metrics.n_tokens_max, (uint64_t) slot.prompt.n_tokens());
         }
-        // apply enqueued prompt tokens stats from batch
+
+        // apply enqueued prompt tokens stats
+        uint64_t n_prompt_tokens = 0;
+        bool     has_output      = false;
+
         for (int i = off; i < off + n_tokens; ++i) {
             const auto & t = batch.tokens[i];
             auto & slot = slots[t.id_slot];
             if (t.is_prompt) {
+                n_prompt_tokens++;
                 slot.stats.n_prompt_processed++;
             }
+            has_output |= t.output;
+            // note: generated tokens will be handled after sampling
+        }
+
+        metrics.queue_prompt(n_prompt_tokens);
+
+        if (has_output) {
+            // sync if we have at least one output in batch
+            // so that we can calculate the timings correctly
+            llama_synchronize(ctx_tgt);
+            metrics.flush_prompt();
         }
     }
 };
@@ -4379,7 +4393,7 @@ void server_routes::init_routes() {
             }, {
                     {"name",  "prompt_seconds_total"},
                     {"help",  "Prompt process time"},
-                    {"value",  res_task->prompt.time / 1.e3}
+                    {"value",  res_task->prompt.time / 1.e6}
             }, {
                     {"name",  "tokens_predicted_total"},
                     {"help",  "Number of generation tokens processed."},
@@ -4387,7 +4401,7 @@ void server_routes::init_routes() {
             }, {
                     {"name",  "tokens_predicted_seconds_total"},
                     {"help",  "Predict process time"},
-                    {"value",  res_task->predict.time / 1.e3}
+                    {"value",  res_task->predict.time / 1.e6}
             }, {
                     {"name",  "n_decode_total"},
                     {"help",  "Total number of llama_decode() calls"},

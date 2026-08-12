@@ -1518,16 +1518,16 @@ json server_task_result_metrics::to_json() {
         { "t_start",                         t_start },
 
         { "n_prompt_tokens_processed_total", prompt.count },
-        { "t_tokens_generation_total",       predict.time },
+        { "t_tokens_generation_total",       predict.time / 1e3 },
         { "n_tokens_predicted_total",        predict.count },
-        { "t_prompt_processing_total",       prompt.time },
+        { "t_prompt_processing_total",       prompt.time / 1e3 },
 
         { "n_tokens_max",                    n_tokens_max },
 
         { "n_prompt_tokens_processed",       prompt_bucket.count },
-        { "t_prompt_processing",             prompt_bucket.time },
+        { "t_prompt_processing",             prompt_bucket.time / 1e3 },
         { "n_tokens_predicted",              predict_bucket.count },
-        { "t_tokens_generation",             predict_bucket.time },
+        { "t_tokens_generation",             predict_bucket.time / 1e3 },
 
         { "n_decode_total",                  n_decode },
         { "n_busy_slots_total",              n_busy_slots },
