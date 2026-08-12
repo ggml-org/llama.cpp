@@ -443,13 +443,17 @@ struct server_metrics {
         }
     };
 
+    // prompt tokens reused from the cache need no decode, so they only have a count
+
     // these are reset by reset_bucket()
-    bucket prompt_bucket;
-    bucket predict_bucket;
+    bucket   prompt_bucket;
+    bucket   predict_bucket;
+    uint64_t n_prompt_cached_bucket = 0;
 
     // metrics below are cumulative since the server started
-    bucket prompt;
-    bucket predict;
+    bucket   prompt; // only processed tokens, not cached tokens
+    bucket   predict;
+    uint64_t n_prompt_cached = 0;
 
     uint64_t n_tokens_max = 0;
 
@@ -472,13 +476,19 @@ struct server_metrics {
     }
 
     void reset_bucket() {
-        prompt_bucket  = {};
-        predict_bucket = {};
+        prompt_bucket          = {};
+        predict_bucket         = {};
+        n_prompt_cached_bucket = 0;
     }
 
     void add_prompt(uint64_t n_tokens, uint64_t t_us) {
         prompt       .add(n_tokens, n_tokens, t_us);
         prompt_bucket.add(n_tokens, n_tokens, t_us);
+    }
+
+    void add_prompt_cached(uint64_t n_tokens) {
+        n_prompt_cached        += n_tokens;
+        n_prompt_cached_bucket += n_tokens;
     }
 
     void on_decode_start() {

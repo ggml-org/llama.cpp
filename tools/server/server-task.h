@@ -499,9 +499,11 @@ struct server_task_result_metrics : server_task_result {
     // note: the fields below mirror server_metrics, keep the names in-sync
     server_metrics::bucket prompt_bucket;
     server_metrics::bucket predict_bucket;
+    uint64_t n_prompt_cached_bucket = 0;
 
     server_metrics::bucket prompt;
     server_metrics::bucket predict;
+    uint64_t n_prompt_cached = 0;
 
     uint64_t n_tokens_max = 0;
 

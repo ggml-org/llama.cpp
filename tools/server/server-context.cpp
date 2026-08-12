@@ -2434,11 +2434,13 @@ private:
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->t_start             = metrics.t_start;
 
-                    res->prompt_bucket  = metrics.prompt_bucket;
-                    res->predict_bucket = metrics.predict_bucket;
+                    res->prompt_bucket          = metrics.prompt_bucket;
+                    res->predict_bucket         = metrics.predict_bucket;
+                    res->n_prompt_cached_bucket = metrics.n_prompt_cached_bucket;
 
-                    res->prompt  = metrics.prompt;
-                    res->predict = metrics.predict;
+                    res->prompt          = metrics.prompt;
+                    res->predict         = metrics.predict;
+                    res->n_prompt_cached = metrics.n_prompt_cached;
 
                     res->n_tokens_max = metrics.n_tokens_max;
 
@@ -3289,6 +3291,8 @@ private:
 
                         slot.stats.n_prompt_cached    = n_past;
                         slot.stats.n_prompt_processed = 0;
+
+                        metrics.add_prompt_cached(n_past);
 
                         slot.prompt.tokens.keep_first(n_past);
 
@@ -4402,6 +4406,10 @@ void server_routes::init_routes() {
                     {"name",  "prompt_tokens_total"},
                     {"help",  "Number of prompt tokens processed."},
                     {"value",  res_task->prompt.count}
+            }, {
+                    {"name",  "prompt_tokens_cached_total"},
+                    {"help",  "Number of prompt tokens reused from the cache."},
+                    {"value",  res_task->n_prompt_cached}
             }, {
                     {"name",  "prompt_seconds_total"},
                     {"help",  "Prompt process time"},
