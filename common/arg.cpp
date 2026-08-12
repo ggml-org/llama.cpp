@@ -705,15 +705,16 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 // CLI argument parsing functions
 //
 
-// apply system-level config files (if present); order of precedence:
-// 1. system-wide (/etc/llama.cpp/config.ini)
-// 2. user-level (${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini)
+// apply config files (if present), a later file overrides an earlier one:
+// 1. system-wide: /etc/llama.cpp/config.ini (%PROGRAMDATA%\llama.cpp\config.ini on windows)
+// 2. user-level: ${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini (%APPDATA%\llama.cpp\config.ini on windows)
 static void common_params_apply_system_config(common_params & params, llama_example ex) {
     std::vector<std::string> paths;
 
 #if defined(_WIN32)
-    if (const char * program_data = std::getenv("PROGRAMDATA")) {
-        paths.push_back(std::string(program_data) + "\\llama.cpp\\config.ini");
+    const std::string program_data = common_get_env("PROGRAMDATA");
+    if (!program_data.empty()) {
+        paths.push_back(program_data + "\\llama.cpp\\config.ini");
     }
 #else
     paths.push_back("/etc/llama.cpp/config.ini");
@@ -722,7 +723,7 @@ static void common_params_apply_system_config(common_params & params, llama_exam
     try {
         paths.push_back(fs_get_config_directory() + "config.ini");
     } catch (const std::exception & e) {
-        LOG_DBG("skip non-existent config file: %s\n", e.what());
+        LOG_DBG("cannot read user-level config file, skipping: %s\n", e.what());
     }
 
     std::vector<std::string> found;
@@ -739,7 +740,7 @@ static void common_params_apply_system_config(common_params & params, llama_exam
     common_preset_context ctx(ex);
     ctx.ignore_unknown_keys = true; // the same config file is shared by all programs
     for (const auto & path : found) {
-        LOG_INF("using system-level config: %s\n", path.c_str());
+        LOG_INF("using config file: %s\n", path.c_str());
         common_preset global;
         common_presets presets = ctx.load_from_ini(path, global);
         global.apply_to_params(params);
